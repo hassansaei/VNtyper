@@ -12,7 +12,23 @@ set -e  # Exit immediately if any command exits with a non-zero status
 # the script's own fallbacks, and the GIT_COMMIT pin would have had no effect on the image
 # it exists to pin (#254). A config that is only read when you happen to be standing in the
 # right directory is worse than no config.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Symlinks are resolved first. `dirname "${BASH_SOURCE[0]}"` is the directory of the *name*
+# the script was invoked by, not of the file. Someone linking this into a directory on PATH
+# -- `/usr/local/bin/install_advntr.sh -> .../dependencies/advntr/install_advntr.sh` -- would
+# otherwise look for the config next to the symlink, find none, and fall through to the
+# built-in defaults. GIT_COMMIT has no built-in default, so the result is an unpinned install
+# of the branch tip: precisely the silent failure the pin exists to prevent (#254).
+script_source="${BASH_SOURCE[0]}"
+while [ -L "$script_source" ]; do
+    script_dir="$(cd -P "$(dirname "$script_source")" && pwd)"
+    script_source="$(readlink "$script_source")"
+    # A relative link target is relative to the directory holding the link.
+    case "$script_source" in
+        /*) ;;
+        *) script_source="$script_dir/$script_source" ;;
+    esac
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$script_source")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/install_advntr.cfg"
 
 # Resolve -c/--config *before* sourcing anything, so an explicit config replaces the shipped
@@ -57,6 +73,19 @@ CONDA_ENV=${CONDA_ENV:-""}
 GIT_REPO=${GIT_REPO:-"https://github.com/berntpopp/adVNTR.git"}
 GIT_BRANCH=${GIT_BRANCH:-"main"}
 GIT_COMMIT=${GIT_COMMIT:-""}
+
+# An unpinned install is allowed -- the script has to work for someone who copied it out on
+# its own -- but it must never be quiet. Building the branch tip is the failure the pin
+# exists to prevent, and a build that does it without saying so looks exactly like one that
+# honoured the pin.
+if [ -z "$GIT_COMMIT" ]; then
+    echo "WARNING: no GIT_COMMIT pin is set; building the tip of branch '$GIT_BRANCH'." >&2
+    echo "         VNtyper cites exact line numbers from a pinned adVNTR revision, and a" >&2
+    echo "         branch tip is not guaranteed to still match them." >&2
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "         No configuration file was found at $CONFIG_FILE." >&2
+    fi
+fi
 
 # Function to display help message
 function display_help() {

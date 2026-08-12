@@ -2034,3 +2034,59 @@ class TestShippedConfig:
         assert bundle["release_tag"] == "refs-v1"
         assert bundle["common_asset"] == "vntyper-references-refs-v1-muc1.tar.gz"
         assert bundle["common_asset_sha256"]
+
+
+class _FailAfterFirstWrite:
+    """A file handle that accepts one write and then behaves like a full disk."""
+
+    def __init__(self, handle):
+        self._handle = handle
+        self._written = 0
+
+    def write(self, text):
+        if self._written:
+            raise OSError(28, "No space left on device")
+        self._written += 1
+        return self._handle.write(text)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self._handle.close()
+        return False
+
+
+def test_a_merge_that_fails_part_way_leaves_no_partial_fasta(tmp_path, monkeypatch):
+    """The one path that could route around ``expected_sha256`` entirely.
+
+    ``merge_pairwise_motifs`` writes straight to the final name, and ``open("w")`` truncates
+    before the first write. ``run_derivations`` verifies the digest only after the function
+    *returns*, so an exception part-way through -- a full disk is the realistic one -- leaves
+    a short FASTA under the expected name that nothing ever checks. Installation merges
+    rather than replaces, so it would be carried into the next run as though it had been
+    produced correctly.
+
+    ``derive_region_fasta`` already discards its own truncated output for this reason; the
+    literal derivation was the gap.
+    """
+    seed = tmp_path / "MUC1_motifs_Rev_com.fa"
+    seed.write_text(">a\nAAAA\n>b\nCCCC\n", encoding="utf-8")
+    filters = tmp_path / "filter_config.json"
+    filters.write_text("{}", encoding="utf-8")
+    destination = tmp_path / "merged.fa"
+
+    original_open = Path.open
+
+    def exploding_open(self, *args, **kwargs):
+        handle = original_open(self, *args, **kwargs)
+        if self != destination:
+            return handle
+        return _FailAfterFirstWrite(handle)
+
+    monkeypatch.setattr(Path, "open", exploding_open)
+
+    with pytest.raises(OSError, match="No space left"):
+        install_references.merge_pairwise_motifs(seed, filters, destination)
+
+    assert not destination.exists(), "a partially written derivation must not survive its own failure"

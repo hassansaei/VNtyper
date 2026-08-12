@@ -30,6 +30,7 @@ These tests pin the rule rather than the one entry.
 
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -37,15 +38,29 @@ pytestmark = pytest.mark.unit
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "vntyper" / "scripts" / "install_references_config.json"
 
-#: Hosts a reference file may legitimately be fetched from: this project's data repository,
-#: and the three upstream genome providers.
+#: Hosts a reference file may legitimately be fetched from, as ``(hostname, path prefix)``:
+#: this project's data repository, and the three upstream genome providers.
+#:
+#: Matched against the parsed hostname, never as a substring of the whole URL. A substring
+#: test accepts ``https://evil.invalid/raw.githubusercontent.com/berntpopp/vntyper-data/x``,
+#: whose host is ``evil.invalid`` and whose allowed-looking part is just path. That is the
+#: shape of the mistake this file exists to catch, so it must not be the shape of the check.
 ALLOWED_SOURCES = (
-    "raw.githubusercontent.com/berntpopp/vntyper-data/",
-    "https://github.com/berntpopp/vntyper-data/",
-    "hgdownload.soe.ucsc.edu/",
-    "ftp.ncbi.nlm.nih.gov/",
-    "ftp.ensembl.org/",
+    ("raw.githubusercontent.com", "/berntpopp/vntyper-data/"),
+    ("github.com", "/berntpopp/vntyper-data/"),
+    ("hgdownload.soe.ucsc.edu", "/"),
+    ("ftp.ncbi.nlm.nih.gov", "/"),
+    ("ftp.ensembl.org", "/"),
 )
+
+
+def _is_allowed(url: str) -> bool:
+    """Whether ``url``'s host is an allowed source, and its path is under that source."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        return False
+    return any(parsed.hostname == hostname and parsed.path.startswith(prefix) for hostname, prefix in ALLOWED_SOURCES)
+
 
 #: The code repository. Nothing under it may be a reference-data source.
 CODE_REPOSITORY = "hassansaei/VNtyper"
@@ -84,9 +99,38 @@ def test_no_reference_file_is_sourced_from_the_code_repository():
 
 def test_every_source_url_names_an_allowed_host():
     """Positive form of the same rule, so a *new* unexpected host is also caught."""
-    unexpected = [url for url in _every_url(_config()) if not any(allowed in url for allowed in ALLOWED_SOURCES)]
+    unexpected = [url for url in _every_url(_config()) if not _is_allowed(url)]
 
     assert unexpected == [], f"unrecognised reference source host: {unexpected}"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.invalid/raw.githubusercontent.com/berntpopp/vntyper-data/seeds/x.fa",
+        "https://hgdownload.soe.ucsc.edu.evil.invalid/goldenPath/hg19/chr1.fa.gz",
+        "https://raw.githubusercontent.com/someone-else/vntyper-data/seeds/x.fa",
+        "http://raw.githubusercontent.com.evil.invalid/berntpopp/vntyper-data/x",
+    ],
+)
+def test_a_lookalike_url_is_not_an_allowed_host(url):
+    """The check must read the host, not scan the string.
+
+    Each of these contains an allowed source verbatim and is served by somebody else. A
+    substring test passes all four, which would make
+    ``test_every_source_url_names_an_allowed_host`` a test of nothing in the one case it
+    exists for: a reference URL quietly repointed at an attacker.
+    """
+    assert not _is_allowed(url)
+
+
+def test_the_real_config_urls_are_accepted_by_that_same_check():
+    """Guards the opposite failure: a host check so strict it rejects everything would make
+    the negative test above pass for the wrong reason."""
+    urls = _every_url(_config())
+
+    assert urls, "the config must declare source URLs"
+    assert all(_is_allowed(url) for url in urls)
 
 
 def test_no_raw_file_entry_is_also_a_derivation_output():

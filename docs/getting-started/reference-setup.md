@@ -152,7 +152,7 @@ retyping the region from the config. **Do not do that.** A hand-cut region is un
 a wrong one produces a reference that is subtly incorrect rather than obviously broken.
 
 A derivation whose source genome is absent is **skipped**, not failed — a tree holding only
-hg19 legitimately derives only the hg19 region. The closing line then says so, instead of
+hg19 legitimately derives only the hg19 region. The closing lines then say so, instead of
 reporting a blanket success:
 
 ```text
@@ -160,12 +160,20 @@ Deriving reference files from 1 installed genome(s) in /path/to/references: hg19
 Skipping muc1_region_hg38.fa: its source 'hg38' is not in this run's reference selection. Install it later with --references hg38.
 Derived muc1_region_hg19.fa from chr1.hg19.fa at chr1:155158000-155163000
 Derived All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa from MUC1_motifs_Rev_com.fa and filter_config.json
-Derived and verified 2 of 3 reference file(s) in /path/to/references. Not rebuilt, and therefore not verified: muc1_region_hg38.fa -- the source genome is not installed. Anything already at those paths was left exactly as it was found.
+Derived and verified 2 of 3 reference file(s) in /path/to/references. Not rebuilt, because the source genome is not installed: muc1_region_hg38.fa.
+Of those, already present and matching their committed digests: muc1_region_hg38.fa
 ```
 
-That last sentence is the point of the distinction: a skipped derivation writes nothing, but a
-file may still be at that path from an earlier install, and `--derive-only` did not read it.
-It is not a claim that the file is correct.
+**A file it could not rebuild is still checked.** Its digest is committed and the file is
+small, so there is no reason to leave it unread — answering "are my derived files right?" with
+silence for exactly the files that could not be rebuilt, and then exiting 0, would be the
+weakest useful thing the command could do. If such a file is missing rather than stale, the
+last line reads `Of those, missing from the tree: …` and names the genome to install.
+
+If it is present but does **not** match, it is deleted and the run fails, exactly as for a
+freshly derived file that fails its digest. A wrong reference produces a plausible result
+rather than an obvious failure, so leaving it in place is not an option — and this run cannot
+rebuild it.
 
 `--derive-only` cannot be combined with `--from-source`; the latter already derives.
 

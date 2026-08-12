@@ -63,18 +63,6 @@ def test_the_installer_checks_out_the_pinned_revision():
     assert "git checkout" in installer, "the installer must actually check the revision out"
 
 
-def test_a_missing_pinned_revision_aborts_rather_than_using_the_branch_tip():
-    """Silently falling back to the branch tip is the exact failure the pin prevents.
-
-    The build would report success while having compiled a tree nobody chose -- and the
-    evidence comment would then be describing code that is not installed.
-    """
-    installer = INSTALLER.read_text(encoding="utf-8")
-    checkout_block = installer[installer.index("GIT_COMMIT") :]
-
-    assert "exit 1" in checkout_block, "a failed checkout of the pinned revision must abort the install"
-
-
 def test_the_branch_is_the_forks_default():
     """The fork's default branch used to be `master` while VNtyper installed `enhanced_hmm`,
     so the default branch was not the code that runs. `main` now carries that work.
@@ -190,15 +178,70 @@ def test_a_config_path_that_does_not_exist_is_refused(tmp_path):
 
 
 @requires_bash
+def test_a_symlinked_invocation_still_finds_the_shipped_pin(tmp_path):
+    """``dirname "${BASH_SOURCE[0]}"`` is the directory of the *name*, not of the file.
+
+    Linking the script onto PATH -- ``/usr/local/bin/install_advntr.sh`` pointing here -- is
+    an ordinary thing to do. Without resolving the link, the config is looked for beside the
+    symlink, is not found, and every value falls through to the built-in defaults. GIT_COMMIT
+    has no built-in default, so the install silently becomes unpinned and builds the branch
+    tip: the exact failure the pin exists to prevent, reached by a route that looks like
+    normal use.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    link = bin_dir / "install_advntr.sh"
+    link.symlink_to(INSTALLER)
+    stop_here = tmp_path / "already-installed"
+    stop_here.mkdir()
+
+    result = subprocess.run(
+        ["bash", str(link), "-d", str(stop_here)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=60,
+        check=False,
+    )
+
+    assert _cfg_value("GIT_COMMIT") in result.stdout, "the pin must survive a symlinked invocation"
+    assert "no GIT_COMMIT pin is set" not in result.stderr
+
+
+@requires_bash
+def test_an_unpinned_install_warns_rather_than_proceeding_quietly(tmp_path):
+    """An unpinned install stays possible -- the script must work for someone who copied it
+    out on its own -- but never quietly. A build that takes the branch tip without saying so
+    is indistinguishable from one that honoured the pin.
+    """
+    lone = tmp_path / "install_advntr.sh"
+    lone.write_text(INSTALLER.read_text(encoding="utf-8"), encoding="utf-8")
+    stop_here = tmp_path / "already-installed"
+    stop_here.mkdir()
+
+    result = subprocess.run(
+        ["bash", str(lone), "-d", str(stop_here)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=60,
+        check=False,
+    )
+
+    assert "no GIT_COMMIT pin is set" in result.stderr
+    assert "No configuration file was found" in result.stderr
+
+
+@requires_bash
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is not available")
 def test_an_absent_pinned_revision_actually_aborts_the_install(tmp_path):
     """The abort path, executed rather than grepped for.
 
-    ``test_a_missing_pinned_revision_aborts_rather_than_using_the_branch_tip`` reads the
-    script as text and would pass on any ``exit 1`` anywhere below the first mention of
-    GIT_COMMIT -- including one in an unrelated branch, or in a comment. This clones a real
-    (local, offline) repository and pins a revision that is not in it, so the only way to
-    reach a zero exit is for the fallback-to-branch-tip failure to be real.
+    This replaced a test that sliced the script from the first textual ``GIT_COMMIT`` to EOF
+    and asserted ``exit 1`` appeared somewhere in it -- which any unrelated ``exit 1`` below
+    that point satisfied. Here a real (local, offline) repository is cloned and a revision
+    that is not in it is pinned, so the only way to reach a zero exit is for the
+    fallback-to-branch-tip failure to be real.
     """
     origin = tmp_path / "origin"
     origin.mkdir()

@@ -16,6 +16,7 @@ Every output is still checked against its committed `expected_sha256`, so this i
 verification on a cheaper path, not a way to produce unverified bytes.
 """
 
+import hashlib
 import logging
 
 import pytest
@@ -84,9 +85,10 @@ def test_derive_only_passes_exactly_the_present_genomes_as_the_selection(tmp_pat
     assert set(seen["refs"]) == {"hg19"}
 
 
-def test_derive_only_preflights_the_literal_seeds_before_deriving(tmp_path, monkeypatch):
-    """Missing seeds must be reported as missing seeds, not as a checksum mismatch on an
-    output built from nothing."""
+def test_the_preflight_runs_before_any_derivation(tmp_path, monkeypatch):
+    """Ordering only -- both collaborators are stubbed, so this proves nothing about the
+    preflight's own logic. ``test_a_missing_seed_is_refused_before_anything_is_rebuilt``
+    below exercises that against the real function."""
     order: list[str] = []
 
     def derive(*args, **kwargs):
@@ -99,6 +101,46 @@ def test_derive_only_preflights_the_literal_seeds_before_deriving(tmp_path, monk
     install_references.derive_only(_config(), tmp_path)
 
     assert order == ["preflight", "derive"]
+
+
+def test_a_missing_seed_is_refused_before_anything_is_rebuilt(tmp_path, monkeypatch):
+    """``--derive-only`` downloads nothing, so a seed that merely *could* be fetched is as
+    missing as one that could not.
+
+    The shared preflight exempts downloadable seeds, because ``--from-source`` fetches them
+    later in the same run. Carrying that exemption into this mode exempts a seed from a fetch
+    that will never happen: the run rebuilds both region FASTAs and only then fails on a seed
+    whose absence was knowable at the start.
+
+    The assertion is that ``run_derivations`` is never reached, not merely that *something*
+    raised. ``run_derivations`` raises for a missing seed too, with the same message from the
+    same helper, so matching on the message alone passes either way -- which is how this test
+    read on its first draft.
+    """
+    config = {
+        "own_repository_references": {
+            "raw_files": [{"target_path": "MUC1_motifs_Rev_com.fa", "source_sha256": "a" * 64}]
+        },
+        "derivations": [
+            {
+                "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+                "kind": "literal",
+                "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+                "expected_sha256": "b" * 64,
+            }
+        ],
+    }
+    (tmp_path / "filter_config.json").write_text("{}", encoding="utf-8")
+    reached: list[str] = []
+    monkeypatch.setattr(install_references, "run_derivations", lambda *a, **k: reached.append("derived") or [])
+
+    with pytest.raises(RuntimeError, match="MUC1_motifs_Rev_com.fa"):
+        install_references.derive_only(config, tmp_path)
+
+    assert reached == [], "the missing seed must be caught by the preflight, before any derivation runs"
+
+    # The same config passes the from-source preflight, where the seed does get fetched.
+    install_references._preflight_literal_seeds(config, tmp_path, allow_downloadable=True)
 
 
 def test_derive_only_downloads_nothing(tmp_path, monkeypatch):
@@ -117,11 +159,16 @@ def test_derive_only_downloads_nothing(tmp_path, monkeypatch):
     install_references.derive_only(_config(), tmp_path)
 
 
-def _config_with_two_shark_derivations() -> dict:
+#: sha256 of ">good\nACGT\n", so a fixture can be made to match or mismatch on purpose.
+GOOD_BYTES = ">good\nACGT\n"
+GOOD_DIGEST = hashlib.sha256(GOOD_BYTES.encode("utf-8")).hexdigest()
+
+
+def _config_with_two_shark_derivations(hg38_digest: str = GOOD_DIGEST) -> dict:
     config = _config()
     config["derivations"] = [
-        {"output": "muc1_region_hg19.fa", "kind": "shark", "from": "hg19"},
-        {"output": "muc1_region_hg38.fa", "kind": "shark", "from": "hg38"},
+        {"output": "muc1_region_hg19.fa", "kind": "shark", "from": "hg19", "expected_sha256": GOOD_DIGEST},
+        {"output": "muc1_region_hg38.fa", "kind": "shark", "from": "hg38", "expected_sha256": hg38_digest},
     ]
     return config
 
@@ -129,16 +176,14 @@ def _config_with_two_shark_derivations() -> dict:
 def test_a_skipped_derivation_is_not_reported_as_verified(tmp_path, monkeypatch, caplog):
     """The summary must not claim a digest match for a derivation that was skipped.
 
-    A skip writes nothing, so no unverified file is *produced*. But a file may still sit at
-    that path from an earlier install, and this run never read it. Reporting a blanket
-    success would assert that those bytes match their committed digest on the strength of
-    nothing -- the same defect as inferring samtools' exit status from a file's existence
-    (#255). What is skipped has to be named.
+    A skip writes nothing, so no unverified file is *produced*. But reporting a blanket
+    success would assert a digest match on the strength of nothing -- the same defect as
+    inferring samtools' exit status from a file's existence (#255). What was not rebuilt
+    has to be named as not rebuilt.
     """
     (tmp_path / "alignment").mkdir()
     (tmp_path / "alignment" / "chr1.hg19.fa").write_text(">chr1\nACGT\n", encoding="utf-8")
-    # A stale leftover from an earlier install, whose source genome is no longer present.
-    (tmp_path / "muc1_region_hg38.fa").write_text(">stale\nAAAA\n", encoding="utf-8")
+    (tmp_path / "muc1_region_hg38.fa").write_text(GOOD_BYTES, encoding="utf-8")
 
     monkeypatch.setattr(install_references, "_preflight_literal_seeds", lambda *a, **k: None)
     monkeypatch.setattr(install_references, "run_derivations", lambda *a, **k: ["muc1_region_hg19.fa"])
@@ -146,8 +191,55 @@ def test_a_skipped_derivation_is_not_reported_as_verified(tmp_path, monkeypatch,
     with caplog.at_level(logging.INFO):
         install_references.derive_only(_config_with_two_shark_derivations(), tmp_path)
 
-    assert "not verified: muc1_region_hg38.fa" in caplog.text
+    assert "Not rebuilt" in caplog.text and "muc1_region_hg38.fa" in caplog.text
     assert "verified all" not in caplog.text, "a run that skipped a derivation must not claim all of them"
+
+
+def test_a_file_that_cannot_be_rebuilt_is_still_checked_against_its_digest(tmp_path, monkeypatch, caplog):
+    """The command's whole purpose is answering "are my derived files right?".
+
+    Answering with silence for exactly the files it could not rebuild, while exiting 0, is
+    the weakest useful thing it could do. The digest is committed and the file is small.
+    """
+    (tmp_path / "muc1_region_hg38.fa").write_text(GOOD_BYTES, encoding="utf-8")
+    monkeypatch.setattr(install_references, "_preflight_literal_seeds", lambda *a, **k: None)
+    monkeypatch.setattr(install_references, "run_derivations", lambda *a, **k: ["muc1_region_hg19.fa"])
+
+    with caplog.at_level(logging.INFO):
+        install_references.derive_only(_config_with_two_shark_derivations(), tmp_path)
+
+    assert "already present and matching their committed digests: muc1_region_hg38.fa" in caplog.text
+
+
+def test_a_stale_file_that_cannot_be_rebuilt_is_discarded_rather_than_left(tmp_path, monkeypatch):
+    """The case the check exists for, and the one that reaches a genotyping run if missed.
+
+    A tree that lost its hg38 genome but kept a `muc1_region_hg38.fa` from an older install
+    would otherwise carry that file forward silently. A wrong reference produces a plausible
+    result rather than an obvious failure, so it is discarded, exactly as `run_derivations`
+    discards a derived output that fails its digest.
+    """
+    stale = tmp_path / "muc1_region_hg38.fa"
+    stale.write_text(">stale\nAAAA\n", encoding="utf-8")
+    monkeypatch.setattr(install_references, "_preflight_literal_seeds", lambda *a, **k: None)
+    monkeypatch.setattr(install_references, "run_derivations", lambda *a, **k: ["muc1_region_hg19.fa"])
+
+    with pytest.raises(ValueError, match="muc1_region_hg38.fa"):
+        install_references.derive_only(_config_with_two_shark_derivations(), tmp_path)
+
+    assert not stale.exists(), "a reference that fails its digest must not be left in the tree"
+
+
+def test_a_file_that_cannot_be_rebuilt_and_is_absent_is_reported_as_missing(tmp_path, monkeypatch, caplog):
+    """Absent is not a digest failure -- there is nothing wrong in the tree, only nothing
+    there. The message has to name the genome that would let it be rebuilt."""
+    monkeypatch.setattr(install_references, "_preflight_literal_seeds", lambda *a, **k: None)
+    monkeypatch.setattr(install_references, "run_derivations", lambda *a, **k: ["muc1_region_hg19.fa"])
+
+    with caplog.at_level(logging.INFO):
+        install_references.derive_only(_config_with_two_shark_derivations(), tmp_path)
+
+    assert "missing from the tree: muc1_region_hg38.fa" in caplog.text
 
 
 def test_deriving_every_configured_file_does_report_all_of_them(tmp_path, monkeypatch, caplog):
@@ -192,9 +284,10 @@ def test_run_derivations_reports_only_what_it_verified(tmp_path):
     assert not (tmp_path / "muc1_region_hg38.fa").exists(), "a skip must not write anything"
 
 
-def test_derive_only_and_from_source_are_mutually_exclusive():
-    """Both build the derived files, but --derive-only deliberately downloads nothing.
-    Accepting both would make one of them silently meaningless."""
+def test_the_parser_accepts_both_flags_and_leaves_the_refusal_to_the_handler():
+    """Named for what it checks. The refusal itself is
+    ``test_combining_derive_only_with_from_source_is_a_usage_error`` below; this only pins
+    where that refusal lives, so the two are not both assumed to be somebody else's job."""
     from vntyper.scripts.cli_parser import build_parser
 
     parser = build_parser()
