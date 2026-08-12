@@ -98,6 +98,83 @@ Rebuild from upstream sources instead of the published bundle (slower; fetches t
 vntyper install-references -d ./references --from-source
 ```
 
+## Downloaded files and derived files
+
+Not every file in the reference tree is downloaded. Three are **derived** — built locally from
+files that were downloaded — and knowing which is which matters when a tree ends up
+incomplete.
+
+| File | How it is produced | From |
+| --- | --- | --- |
+| `alignment/chr1.<assembly>.fa` (×6) | downloaded | UCSC, NCBI RefSeq, Ensembl |
+| `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `filter_config.json` | downloaded (seeds) | `berntpopp/vntyper-data`, pinned by commit |
+| `vntr_db_advntr/*.db` | downloaded | `berntpopp/vntyper-data` |
+| **`muc1_region_hg19.fa`** | **derived** | `samtools faidx chr1.hg19.fa chr1:155158000-155163000` |
+| **`muc1_region_hg38.fa`** | **derived** | `samtools faidx chr1.hg38.fa chr1:155184000-155194000` |
+| **`All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`** | **derived** | merged from `MUC1_motifs_Rev_com.fa` + `filter_config.json` |
+
+Every reference file's source of truth is
+[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data) or an upstream genome
+provider — never this repository. The derivation rules, the exact regions and the expected
+checksum of every derived output live in `vntyper/scripts/install_references_config.json`.
+
+**The two ordinary paths already handle this.** The published bundle ships the derived files
+pre-built, and `--from-source` builds them at the end of its run. You do not normally think
+about the distinction.
+
+### Rebuilding just the derived files
+
+`--derive-only` rebuilds the three derived files from genomes and seeds already on disk. It
+**downloads nothing**:
+
+```bash
+vntyper install-references -d /path/to/references --derive-only
+```
+
+```text
+Deriving reference files from 6 installed genome(s): GRCh37, GRCh38, hg19, hg19_ensembl, hg38, hg38_ensembl
+  ✓ verified muc1_region_hg19.fa
+  ✓ verified muc1_region_hg38.fa
+  ✓ verified All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
+Derived reference files are present and match their committed digests.
+```
+
+Each output is checked against its committed checksum, exactly as on the other two paths — so
+this is the same verification on a cheaper path, not a way to produce unverified files.
+
+Use it when a tree has its genomes and seeds but is missing a derived file. Without it the
+only remedy was a full `--from-source` run, which re-downloads and BWA-indexes six chromosome
+FASTAs to rebuild three small ones — so in practice people ran `samtools faidx` by hand,
+retyping the region from the config. **Do not do that.** A hand-cut region is unverified, and
+a wrong one produces a reference that is subtly incorrect rather than obviously broken.
+
+A derivation whose source genome is absent is **skipped**, not failed — a tree holding only
+hg19 legitimately derives only the hg19 region, and the message names what to install to get
+the rest.
+
+`--derive-only` cannot be combined with `--from-source`; the latter already derives.
+
+### Checking a tree is complete
+
+Every path the pipeline reads is declared in `vntyper/config.json` under `reference_data`, so
+a tree can be checked against it directly:
+
+```bash
+python -c "
+import json, os
+paths = json.load(open('vntyper/config.json'))['reference_data']
+missing = [(k, v) for k, v in paths.items() if v and not os.path.exists(v)]
+print(f'{len(paths) - len(missing)}/{len(paths)} present')
+for key, path in missing:
+    print(f'  MISSING {key}: {path}')
+"
+```
+
+An incomplete tree fails in a way that looks like a code fault rather than a setup one: with
+`All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa` absent, Kestrel **exits 0 having
+written no VCF**, and the pipeline correctly refuses to report that as a negative result. If
+you see that, check the tree before debugging the pipeline.
+
 ## Output Directory Structure
 
 After installation, the reference directory looks like this:

@@ -154,6 +154,11 @@ def handle_install_references(
         log_level_value: Unused; present for the uniform handler signature.
         log_file_str: Unused; present for the uniform handler signature.
     """
+    if args.derive_only and args.from_source:
+        # Both build the derived files, but --derive-only deliberately downloads nothing.
+        # Accepting both would make one of them silently meaningless.
+        parser.error("--derive-only cannot be combined with --from-source; --from-source already derives")
+
     if args.release_spec and not args.from_source:
         # Silently ignoring a flag the user typed is worse than refusing it: only the
         # source path reads a release spec, so without --from-source the pinned URLs and
@@ -169,6 +174,7 @@ def handle_install_references(
         references_to_process=args.references,
         from_source=args.from_source,
         release_spec_path=args.release_spec,
+        derive_only_mode=args.derive_only,
     )
     sys.exit(0)
 

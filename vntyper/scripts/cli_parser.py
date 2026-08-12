@@ -326,6 +326,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser_install.add_argument(
+        "--derive-only",
+        action="store_true",
+        help=(
+            "Rebuild only the derived reference files from what is already installed, without "
+            "downloading anything. Three files are derived rather than downloaded: the two MUC1 "
+            "region FASTAs, cut from an installed chromosome with samtools faidx, and the merged "
+            "MUC1 motif FASTA built from two seeds. Each is verified against its committed "
+            "checksum. Use this when a tree has its genomes and seeds but is missing a derived "
+            "file: a full --from-source run would re-download and re-index six chromosomes to "
+            "rebuild three small ones."
+        ),
+    )
+    parser_install.add_argument(
         "--from-source",
         action="store_true",
         help=(

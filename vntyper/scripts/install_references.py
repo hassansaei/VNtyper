@@ -1417,6 +1417,77 @@ def install_from_source(
     return installed
 
 
+def installed_reference_map(install_config: dict[str, Any], output_dir: Path) -> dict[str, Path]:
+    """Map every configured reference id to its installed FASTA, keeping only what exists.
+
+    The install paths are declared per reference as ``installed_path``, so this reads the
+    same field the installers write rather than reconstructing a filename.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Reference tree to inspect.
+
+    Returns:
+        dict[str, Path]: Reference id to installed FASTA, for the ids actually present.
+    """
+    found: dict[str, Path] = {}
+    for group in ("ucsc_references", "ncbi_references", "ensembl_references"):
+        for ref_id, spec in install_config.get(group, {}).items():
+            installed = spec.get("installed_path")
+            if not installed:
+                continue
+            fasta = output_dir / installed
+            if fasta.is_file():
+                found[ref_id] = fasta
+    return found
+
+
+def derive_only(install_config: dict[str, Any], output_dir: Path) -> None:
+    """Rebuild the derived reference files from what is already on disk. No network.
+
+    Three files in the reference tree are *derived* rather than downloaded: the two MUC1
+    region FASTAs, cut out of an installed chromosome with ``samtools faidx``, and the
+    merged MUC1 motif FASTA, built from two seeds. The published bundle ships them
+    pre-built and ``--from-source`` builds them at the end of its run, so on the two
+    ordinary paths they are already correct.
+
+    This exists for the case in between, which had no command at all: a tree whose genomes
+    and seeds are present but whose derived files are missing or suspect. Recovering that
+    previously meant a full ``--from-source`` run, which re-downloads and BWA-indexes six
+    chromosome FASTAs to regenerate three small files -- so in practice it was done by hand,
+    with `samtools faidx` typed from the config, and by hand is exactly where an unverified
+    reference file comes from.
+
+    Every output is still checked against its committed ``expected_sha256`` by
+    :func:`run_derivations`, so this is not a way to produce unverified bytes; it is the
+    same verification on a cheaper path.
+
+    A derivation whose source genome is absent is skipped with a message naming what to
+    install, not failed -- a tree holding only hg19 legitimately derives only the hg19
+    region.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: An existing reference tree.
+
+    Raises:
+        RuntimeError: If a literal derivation's seeds are missing, or a derivation's
+            output does not match its committed digest.
+    """
+    references = installed_reference_map(install_config, output_dir)
+    logger.info(
+        "Deriving reference files from %d installed genome(s) in %s: %s",
+        len(references),
+        output_dir,
+        ", ".join(sorted(references)) or "none",
+    )
+    _preflight_literal_seeds(install_config, output_dir)
+    # `selected` is the set of genomes actually present: a derivation whose source is absent
+    # is out of scope for this tree, which is the skip-not-fail case run_derivations handles.
+    run_derivations(install_config, output_dir, references, set(references))
+    logger.info("Derived reference files are present and match their committed digests.")
+
+
 def _install_source_seeds(
     install_config: dict[str, Any],
     output_dir: Path,
@@ -1940,6 +2011,7 @@ def main(
     references_to_process: list[str] | None = None,
     from_source: bool = False,
     release_spec_path: Path | None = None,
+    derive_only_mode: bool = False,
 ):
     """
     Main function to execute the install_references process.
@@ -1972,6 +2044,13 @@ def main(
     install_config_path = script_dir / "install_references_config.json"
 
     install_config = load_install_config(install_config_path)
+
+    if derive_only_mode:
+        # Nothing is downloaded and nothing is indexed: this rebuilds the three derived
+        # files from genomes and seeds already on disk, verifying each against its
+        # committed digest. Returns before any installer runs.
+        derive_only(install_config, output_dir)
+        return
 
     ucsc_refs = install_config.get("ucsc_references", {})
     ncbi_refs = install_config.get("ncbi_references", {})

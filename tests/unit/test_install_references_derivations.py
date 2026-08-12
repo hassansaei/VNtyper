@@ -1861,6 +1861,7 @@ class TestCliSurface:
             threads=4,
             aligners=None,
             references=None,
+            derive_only=False,
             from_source=True,
             release_spec=Path("spec.json"),
         )
@@ -1885,6 +1886,7 @@ class TestCliSurface:
             threads=4,
             aligners=None,
             references=None,
+            derive_only=False,
             from_source=False,
             release_spec=Path("spec.json"),
         )
@@ -1908,6 +1910,7 @@ class TestCliSurface:
             threads=4,
             aligners=None,
             references=None,
+            derive_only=False,
             from_source=False,
             release_spec=Path("spec.json"),
         )
