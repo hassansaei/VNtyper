@@ -308,14 +308,73 @@ Expected: 11 failures on each side, `comm` reporting no regressions, and
 
 ---
 
+### Task 5: Close the patient-input-tree guard bypass
+
+The same command exposes a second defect: `validate_alignment_output_root()` compares pathnames only, so one host directory mounted at two container paths defeats it. The identical layout with a **single** mount was already rejected, so this is a bypass, not a policy change.
+
+**Files:**
+- Modify: `vntyper/scripts/alignment_target_io.py` (new `_aliased_input_ancestor`, wired into `validate_alignment_output_root`)
+- Test: `tests/unit/test_alignment_pipeline_input_safety.py`
+- Docs: `README.md`, `docs/user-guide/docker.md`
+
+- [x] **Step 1: Write the failing test**
+
+A symlinked alias cannot express this — `resolve()` already unifies symlinks, so such a test passes on the old code. The distinguishing property is two real pathnames with one inode, which only a mount provides, so the unit test injects exactly that at the layer the code consults and Step 4 proves the real mount.
+
+```python
+    real_samefile = os.path.samefile
+    aliased = {str(patient.resolve()), str(output_mount.resolve())}
+
+    def one_host_directory_two_mounts(left: str | Path, right: str | Path) -> bool:
+        pair = {str(Path(left).resolve()), str(Path(right).resolve())}
+        if pair == aliased:
+            return True
+        return real_samefile(left, right)
+
+    with mock.patch(
+        "vntyper.scripts.alignment_target_io.os.path.samefile",
+        side_effect=one_host_directory_two_mounts,
+    ):
+        with pytest.raises(ValueError, match="same directory as the patient input tree"):
+            validate_alignment_output_root(output_root, alignment, "cram")
+```
+
+Add a companion asserting the documented separate-directory layout is still accepted, so the inode check cannot regress into rejecting everything.
+
+- [x] **Step 2: Run it to verify it fails**
+
+Expected: `Failed: DID NOT RAISE ValueError`.
+
+- [x] **Step 3: Compare by inode, not by name**
+
+```python
+def _aliased_input_ancestor(root_absolute: Path, input_trees: tuple[Path, ...]) -> tuple[Path, Path] | None:
+    for ancestor in (root_absolute, *root_absolute.parents):
+        for input_tree in input_trees:
+            if ancestor != input_tree and _same_file(ancestor, input_tree):
+                return ancestor, input_tree
+    return None
+```
+
+Wire it in after the existing lexical loop and reject with a message naming **both** pathnames — the whole difficulty is that they look unrelated.
+
+- [x] **Step 4: Prove it against real bind mounts, not simulated ones**
+
+```bash
+docker run --rm -v .:/opt/vntyper/input -v .:/opt/vntyper/output …        # expect the rejection
+docker run --rm -v .:/opt/vntyper/input -v ./results:/opt/vntyper/output … # expect success
+```
+
+- [x] **Step 5: Update the usage instructions**
+
+`README.md` and the `docs/user-guide/docker.md` volume-mount section must state the requirement, show the rejected form and the accepted one. Note the contract test `test_current_container_commands_use_only_the_rolling_ghcr_main_image`: every ```bash block on those surfaces containing `docker run` must name `ghcr.io/hassansaei/vntyper:main`, so write complete commands, not elided ones.
+
+---
+
 ## Self-review
 
-**Spec coverage.** Spec §3.1 (stop self-replacing) is Task 1; §3.2 (prove every installed view) is Task 2; §2 (measured evidence) is Task 3 Step 2; §4 is explicitly out of scope and filed separately.
+**Spec coverage.** Spec §3.1 (stop self-replacing) is Task 1; §3.2 (prove every installed view) is Task 2; §2 (measured evidence) is Task 3 Step 2; §4 (the patient-input-tree guard bypass) is Task 5.
 
 **Placeholders.** None — every step carries the real code and the real command.
 
-**Type consistency.** `consumer_reachable_identity` returns `tuple[tuple[int, int] | None, str | None]` in Task 2 Step 3 and is compared against `self._descriptor_identity` / `self._identity`, both `tuple[int, int] | None`, in Step 4. `_retain_generated_entry` is the name used in both its definition and its call site.
-
-## Out of scope
-
-`validate_alignment_output_root()` compares container paths only, so with the same host directory bind-mounted twice the output root sits inside the patient input tree and the guard does not fire — `os.path.samefile(input_mount, output_mount)` is `True` while the lexical and `resolve()` forms differ. Real, but a different defect from #238; it needs its own issue and its own decision about whether firing the guard would break existing operator workflows.
+**Type consistency.** `consumer_reachable_identity` returns `tuple[tuple[int, int] | None, str | None]` in Task 2 Step 3 and is compared against `self._descriptor_identity` / `self._identity`, both `tuple[int, int] | None`, in Step 4. `_retain_generated_entry` is the name used in both its definition and its call site. `_aliased_input_ancestor` returns `tuple[Path, Path] | None` and its caller unpacks exactly that pair.

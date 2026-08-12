@@ -47,8 +47,47 @@ docker run -w /opt/vntyper --rm \
 
 | Host Path | Container Path | Purpose |
 |-----------|----------------|---------|
-| Input directory | `/opt/vntyper/input` | BAM/FASTQ files |
+| Input directory | `/opt/vntyper/input` | BAM/CRAM/FASTQ files |
 | Output directory | `/opt/vntyper/output` | Pipeline results |
+
+!!! warning "Input and output must be two different host directories"
+    VNtyper never writes into the directory holding the patient alignment. Mounting one
+    host directory at both container paths puts the output root inside the input tree,
+    and the run is rejected:
+
+    ```
+    Alignment output root must stay outside the patient input tree:
+    /opt/vntyper/output/sample lies under /opt/vntyper/output, which is the same
+    directory as the patient input tree /opt/vntyper/input.
+    Give the run separate input and output directories.
+    ```
+
+    This fires even though the two container paths look different, because the check
+    compares the directories themselves rather than their names. Do **not** do this:
+
+    ```bash
+    # rejected: one host directory mounted at both paths
+    docker run -w /opt/vntyper --rm \
+        --user $(id -u):$(id -g) \
+        -v "$PWD":/opt/vntyper/input \
+        -v "$PWD":/opt/vntyper/output \
+        ghcr.io/hassansaei/vntyper:main \
+        vntyper pipeline --cram /opt/vntyper/input/sample.cram \
+        -o /opt/vntyper/output/sample/
+    ```
+
+    Mount separate directories instead. A `results/` subdirectory beside the data is
+    fine, as long as it is not the directory the alignment itself sits in:
+
+    ```bash
+    docker run -w /opt/vntyper --rm \
+        --user $(id -u):$(id -g) \
+        -v "$PWD":/opt/vntyper/input \
+        -v "$PWD/results":/opt/vntyper/output \
+        ghcr.io/hassansaei/vntyper:main \
+        vntyper pipeline --cram /opt/vntyper/input/sample.cram \
+        -o /opt/vntyper/output/sample/
+    ```
 
 ## Verify Installation
 

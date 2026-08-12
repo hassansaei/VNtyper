@@ -1,6 +1,7 @@
 """Alignment-mode pipeline setup must not overwrite operator-owned inputs."""
 
 import json
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import pipeline as pipeline_module
-from vntyper.scripts.alignment_target_io import protect_alignment_inputs
+from vntyper.scripts.alignment_target_io import protect_alignment_inputs, validate_alignment_output_root
 from vntyper.scripts.pipeline_alignment import prepare_input_alignment_preflight
 
 pytestmark = pytest.mark.unit
@@ -335,3 +336,47 @@ def test_unrelated_output_hardlink_is_rejected_before_mkdir_or_pipeline_work(
     create_dirs.assert_not_called()
     for stage in harness.stages.values():
         stage.assert_not_called()
+
+
+def test_an_output_root_aliasing_the_input_tree_through_a_second_mount_is_rejected(tmp_path: Path) -> None:
+    """Two bind mounts of one host directory left the guard comparing different names (#238).
+
+    The lexical and ``resolve()`` forms both differ, so only inode identity can see that
+    the run would write inside the patient input tree.
+    """
+    patient = tmp_path / "patient"
+    patient.mkdir()
+    alignment = patient / "sample.cram"
+    alignment.write_bytes(b"operator-owned")
+    output_mount = tmp_path / "output-mount"
+    output_mount.mkdir()
+    output_root = output_mount / "sample.cram_v2"
+
+    real_samefile = os.path.samefile
+    aliased = {str(patient.resolve()), str(output_mount.resolve())}
+
+    def one_host_directory_two_mounts(left: str | Path, right: str | Path) -> bool:
+        pair = {str(Path(left).resolve()), str(Path(right).resolve())}
+        if pair == aliased:
+            return True
+        return real_samefile(left, right)
+
+    with (
+        mock.patch(
+            "vntyper.scripts.alignment_target_io.os.path.samefile",
+            side_effect=one_host_directory_two_mounts,
+        ),
+        pytest.raises(ValueError, match="same directory as the patient input tree"),
+    ):
+        validate_alignment_output_root(output_root, alignment, "cram")
+
+
+def test_an_output_root_on_an_unrelated_mount_is_still_accepted(tmp_path: Path) -> None:
+    """The inode check must not reject the documented separate-directory layout."""
+    patient = tmp_path / "patient"
+    patient.mkdir()
+    alignment = patient / "sample.cram"
+    alignment.write_bytes(b"operator-owned")
+    output_root = tmp_path / "results" / "sample.cram_v2"
+
+    validate_alignment_output_root(output_root, alignment, "cram")

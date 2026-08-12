@@ -146,6 +146,14 @@ docker run -w /opt/vntyper --rm \
     -o /opt/vntyper/output/filename/
 ```
 
+> **Input and output must be two different host directories:**  
+> VNtyper never writes into the directory holding the patient alignment, so mounting one
+> host directory at both `/opt/vntyper/input` and `/opt/vntyper/output` is rejected with
+> `Alignment output root must stay outside the patient input tree`. The check compares the
+> directories themselves, not their names, so `-v .:/opt/vntyper/input -v .:/opt/vntyper/output`
+> fails even though the two container paths differ. Mount a separate directory — for
+> example `-v "$PWD":/opt/vntyper/input -v "$PWD/results":/opt/vntyper/output`.
+
 > **Important Host Volume Permissions Note:**  
 > When mounting host directories into the container (using the `-v` flag), please ensure that the host directories (e.g., `/local/input/folder/` and `/local/output/folder/`) have the appropriate permissions so that they are writable by the container's non-root user.
 >

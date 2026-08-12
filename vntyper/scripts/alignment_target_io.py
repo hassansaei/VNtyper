@@ -33,6 +33,28 @@ def _same_file(left: Path, right: Path) -> bool:
         return False
 
 
+def _aliased_input_ancestor(root_absolute: Path, input_trees: tuple[Path, ...]) -> tuple[Path, Path] | None:
+    """Find the output-root ancestor that is the patient input tree under another name.
+
+    Pathname comparison cannot see a directory mounted at two places: both the lexical
+    and ``resolve()`` forms differ while the inode is one and the same, which is how a
+    run mounting one host directory as both input and output wrote inside the patient
+    tree without the guard firing (#238).
+
+    Args:
+        root_absolute: Absolute or resolved output-root variant.
+        input_trees: Logical and resolved directories holding the alignment.
+
+    Returns:
+        The aliasing ``(ancestor, input tree)`` pair, or ``None`` when they are distinct.
+    """
+    for ancestor in (root_absolute, *root_absolute.parents):
+        for input_tree in input_trees:
+            if ancestor != input_tree and _same_file(ancestor, input_tree):
+                return ancestor, input_tree
+    return None
+
+
 def _protected_alignment_paths(input_path: str | Path, file_format: str) -> tuple[Path, ...]:
     paths = [_absolute(input_path)]
     paths.extend(
@@ -492,10 +514,20 @@ def validate_alignment_output_root(
     root_variants = (root_absolute, root_absolute.resolve(strict=False))
     logical_input_tree = _absolute(input_path).parent
     resolved_input_tree = _absolute(input_path).resolve(strict=False).parent
+    input_trees = (logical_input_tree, resolved_input_tree)
     for root_variant in root_variants:
-        for input_tree in (logical_input_tree, resolved_input_tree):
+        for input_tree in input_trees:
             if root_variant == input_tree or input_tree in root_variant.parents:
                 _reject(f"Alignment output root must stay outside the patient input tree: {root}")
+    for root_variant in root_variants:
+        alias = _aliased_input_ancestor(root_variant, input_trees)
+        if alias is not None:
+            ancestor, input_tree = alias
+            _reject(
+                f"Alignment output root must stay outside the patient input tree: {root} lies under "
+                f"{ancestor}, which is the same directory as the patient input tree {input_tree}. "
+                "Give the run separate input and output directories."
+            )
 
     if os.path.lexists(root) and not root.is_dir():
         _reject(f"Alignment output root must be a directory: {root}")

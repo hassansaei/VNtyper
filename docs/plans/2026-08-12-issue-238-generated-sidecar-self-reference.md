@@ -110,9 +110,45 @@ This layer does not fix #238 on its own — §2.4 shows the hardlink cannot be c
 the reporter's mount layout — but it converts any future "installed view is unusable"
 into one actionable line at install time.
 
-## 4. Out of scope, filed separately
+## 4. The second defect the same command exposes
 
-`validate_alignment_output_root()` compares container paths only, so with the same host
-directory bind-mounted twice the output root sits inside the patient input tree and the
-guard does not fire — measured: `os.path.samefile(input_mount, output_mount)` is `True`
-while the lexical and `resolve()` forms differ. Real, but a different defect from #238.
+`validate_alignment_output_root()` compared pathnames only — the lexical form and
+`resolve()` — never `os.path.samefile`, which lives in the same module and is used
+elsewhere in it. A directory mounted at two container paths has two different names and
+one inode, so the patient-input-tree guard silently did not fire and the run wrote its
+output tree inside the directory holding the patient alignment.
+
+The bypass is an accident of the mount layout, not a policy: the identical layout with a
+**single** mount (`-v .:/data`, `--cram /data/x.cram -o /data/out`) was already rejected,
+because there the lexical comparison sees `/data` among `/data/out`'s parents.
+
+### 4.1 Measured
+
+```
+same st_dev across the two bind mounts: True
+os.path.samefile(input_mount, output_mount): True
+container-path guard would compare: /opt/vntyper/output/run vs /opt/vntyper/input
+resolve(output_run): /opt/vntyper/output/run
+resolve(input dir):  /opt/vntyper/input
+```
+
+### 4.2 The fix
+
+`_aliased_input_ancestor()` walks the output root and its parents and compares each
+against the logical and resolved input trees by inode. A hit is rejected with a message
+naming both pathnames, because the whole difficulty is that they look unrelated:
+
+```
+Alignment output root must stay outside the patient input tree:
+/opt/vntyper/output/NTI_test.cram_v2.0.12 lies under /opt/vntyper/output, which is the
+same directory as the patient input tree /opt/vntyper/input.
+Give the run separate input and output directories.
+```
+
+Verified against real bind mounts, not simulated ones: the reporter's command shape is
+now rejected with exactly that message, and the documented separate-directory layout
+(`-v "$PWD":/opt/vntyper/input -v "$PWD/results":/opt/vntyper/output`) completes with
+`Pipeline finished successfully`.
+
+Both the `README.md` and `docs/user-guide/docker.md` volume-mount sections now state the
+requirement, show the rejected form, and show the accepted one.
