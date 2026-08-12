@@ -298,6 +298,17 @@ def calculate_vntr_coverage(
         strings and recomputes the same verdict (#172).
     """
     samtools_path = config["tools"]["samtools"]
+    # Parse and bound the region BEFORE samtools runs, not after. `depth -a` writes one row
+    # per declared base, so a reversed or oversized region exhausts disk before Python ever
+    # allocates anything -- validating it ten lines further down, after `run_command`, is too
+    # late to prevent the failure it is meant to catch (#224).
+    #
+    # This raises outside the `try` below, so an invalid region propagates as the ValueError
+    # `parse_region_length` raises rather than being re-wrapped as "Error calculating coverage
+    # summary". That is the more accurate report: a misconfigured region is a configuration
+    # error, not a failure to summarise. `pipeline_coverage` closes the alignment plan in a
+    # `finally`, so cleanup is unaffected by the change of type.
+    total_region_length = parse_region_length(region)
     coverage_output = Path(output_dir) / f"{output_name}_vntr_coverage.txt"
     depth_command = build_samtools_depth_command(
         samtools_path=samtools_path,
@@ -319,7 +330,6 @@ def calculate_vntr_coverage(
         raise RuntimeError("VNTR coverage calculation failed.")
 
     try:
-        total_region_length = parse_region_length(region)
         coverage_values = read_depth_values(coverage_output)
         stats = summarise_coverage(coverage_values, total_region_length)
 

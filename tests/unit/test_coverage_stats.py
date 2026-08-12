@@ -31,6 +31,7 @@ import pytest
 from vntyper.scripts.coverage_stats import (
     COVERAGE_COLUMNS,
     COVERAGE_METRIC_COLUMNS,
+    MAX_REGION_SPAN_BASES,
     format_coverage_summary,
     parse_region_length,
     read_depth_values,
@@ -245,12 +246,72 @@ def test_the_closed_form_identity_reconciles_old_and_new_means(values, length):
     assert stats["mean"] == pytest.approx(old_mean * (1 - old_percent / 100))
 
 
-def test_a_region_shorter_than_the_depth_file_does_not_invent_negative_padding():
-    """Degenerate but reachable if a region string and a BAM disagree."""
-    stats = summarise_coverage([10, 20, 30, 40], total_region_length=2)
+def test_a_region_shorter_than_the_depth_file_is_refused():
+    """#224. Was ``..._does_not_invent_negative_padding``, which asserted the four observed
+    values simply stand and used only non-zero depths -- so it never exercised
+    ``percent_uncovered`` and the impossible value it produces was masked entirely.
 
-    assert stats["mean"] == 25.0, "no padding is added; the four observed values stand"
-    assert stats["uncovered_bases"] == 0
+    Under ``samtools depth -a`` the row count is the region span, so a longer file means the
+    depth table and the region string genuinely disagree and there is no correct statistic to
+    return. Padding is for a SHORT file; a long one is refused.
+    """
+    with pytest.raises(ValueError, match="4 rows for a region of 2 bases"):
+        summarise_coverage([10, 20, 30, 40], total_region_length=2)
+
+
+def test_an_overlong_depth_list_is_refused_rather_than_reporting_over_100_percent():
+    """#224: the value that made this worth fixing. Four uncovered positions in a two-base
+    region reported ``percent_uncovered: 200.0`` -- a number no consumer should ever see."""
+    with pytest.raises(ValueError, match="4 rows for a region of 2 bases"):
+        summarise_coverage([0, 0, 0, 0], total_region_length=2)
+
+
+def test_a_reversed_region_is_refused_rather_than_reporting_a_negative_length():
+    """#224: ``chr1:2000-1000`` returned -999, and -999 reached the report under a PASS
+    verdict, because ``percent_uncovered`` short-circuits to 0 whenever the length is <= 0
+    and 0 is below every configured threshold."""
+    with pytest.raises(ValueError, match="end 1000 is before start 2000"):
+        parse_region_length("chr1:2000-1000")
+
+
+def test_a_region_starting_below_one_is_refused():
+    """Coordinates are 1-based; a 0 or negative start is not a region."""
+    with pytest.raises(ValueError, match="start 0 is below 1"):
+        parse_region_length("chr1:0-500")
+
+
+def test_a_region_wider_than_the_bound_is_refused_naming_the_configured_value():
+    """#224: the bound exists because disk, not memory, is the first failure mode.
+
+    ``samtools depth -a -r chr1:1-250000000`` emitted roughly 48 million rows and exhausted
+    30 GB before Python allocated anything. The message must name the configured region so an
+    operator can find it in their config file.
+    """
+    with pytest.raises(ValueError, match=r"chr1:1-250000000"):
+        parse_region_length("chr1:1-250000000")
+
+
+def test_the_span_bound_is_inclusive():
+    """Exactly at the bound is accepted; one base wider is not."""
+    assert parse_region_length(f"chr1:1-{MAX_REGION_SPAN_BASES}") == MAX_REGION_SPAN_BASES
+
+    with pytest.raises(ValueError, match="above the"):
+        parse_region_length(f"chr1:1-{MAX_REGION_SPAN_BASES + 1}")
+
+
+def test_an_invalid_region_raises_rather_than_being_swallowed_into_zero(caplog):
+    """The validation must sit OUTSIDE ``parse_region_length``'s parsing ``try``.
+
+    That block catches ``(ValueError, IndexError)`` and returns 0, so a validation raise
+    placed inside it would be degraded to a silent zero-length region -- which is the exact
+    failure mode being fixed rather than a fallback. If this test ever reports 0 instead of
+    raising, the guard has been moved back inside the ``try``.
+    """
+    with caplog.at_level(logging.ERROR, logger=COVERAGE_STATS_LOGGER), pytest.raises(ValueError):
+        parse_region_length("chr1:5000-1000")
+
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert errors, "an invalid region must be logged at ERROR, not silently degraded"
 
 
 def test_a_single_covered_position_reports_a_zero_standard_deviation():
