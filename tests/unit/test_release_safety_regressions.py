@@ -139,11 +139,10 @@ def test_only_exact_main_push_may_publish_release_authoritative_application_tags
 
 def test_release_contract_documents_nightly_immutability_and_legacy_alias_migration() -> None:
     """The reviewed safety correction must remain in every governing contract."""
-    paths = (
-        ROOT / "AGENTS.md",
-        ROOT / "docs" / "superpowers" / "specs" / "2026-08-10-milestone-6-release-and-naming-design.md",
-        ROOT / "docs" / "superpowers" / "plans" / "2026-08-10-milestone-6-release-and-naming-plan.md",
-    )
+    # AGENTS.md alone. This used to also read the milestone-6 release design and plan, which
+    # were contributor working documents and are no longer tracked. AGENTS.md is the governing
+    # contract an agent or maintainer actually reads.
+    paths = (ROOT / "AGENTS.md",)
     for path in paths:
         text = " ".join(path.read_text(encoding="utf-8").split())
         assert "scheduled and manual Docker validation never publish application tags" in text
@@ -154,38 +153,18 @@ def test_release_contract_documents_nightly_immutability_and_legacy_alias_migrat
         assert "full: true" not in text
 
 
-def test_program_design_distinguishes_job_authority_from_pr_write_paths() -> None:
-    """The permission model must describe preserved Docker job authority without claiming false exclusivity."""
-    text = " ".join(
-        (ROOT / "docs" / "superpowers" / "specs" / "2026-08-10-milestone-6-program-design.md")
-        .read_text(encoding="utf-8")
-        .split()
-    )
-    assert "build-and-test` retains its existing job-level `packages: write`" in text
-    assert "PR execution contains no application-image registry-write step" in text
-    assert "same-repository missing-base bootstrap" in text
-    assert "main Docker publisher alone receives `packages: write`" not in text
-
-
-def test_release_spec_and_plan_use_fail_closed_manifest_and_repository_bound_downloads() -> None:
-    """Executable release guidance must match the proven registry and repository boundaries."""
-    paths = (
-        ROOT / "docs" / "superpowers" / "specs" / "2026-08-10-milestone-6-release-and-naming-design.md",
-        ROOT / "docs" / "superpowers" / "plans" / "2026-08-10-milestone-6-release-and-naming-plan.md",
-    )
-    for path in paths:
-        contents = path.read_text(encoding="utf-8")
-        assert "{{.Manifest.Digest}}" not in contents
-        lines = contents.splitlines()
-        for index, line in enumerate(lines):
-            if "gh run download" not in line:
-                continue
-            command = line.strip()
-            cursor = index
-            while command.endswith("\\"):
-                cursor += 1
-                command = f"{command} {lines[cursor].strip()}"
-            assert '--repo "$GITHUB_REPOSITORY"' in command
+# Two tests stood here and were removed with the planning documents they read.
+#
+# `test_program_design_distinguishes_job_authority_from_pr_write_paths` asserted prose in
+# `docs/superpowers/specs/2026-08-10-milestone-6-program-design.md`, and
+# `test_release_spec_and_plan_use_fail_closed_manifest_and_repository_bound_downloads`
+# asserted prose in that milestone's design and plan. Both read *only* untracked working
+# documents -- there was no shipped artifact left to assert against, unlike the contract
+# above, which AGENTS.md still carries.
+#
+# The behaviour they were proxies for is pinned directly by the workflow tests in this module,
+# which read `.github/workflows/*.yml` -- the executable artifact rather than a description of
+# it. That was always the stronger test.
 
 
 def test_main_push_publication_shell_still_pushes_main_and_short_sha_tags(tmp_path: Path) -> None:

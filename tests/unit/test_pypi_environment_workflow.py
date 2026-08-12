@@ -19,11 +19,12 @@ ISSUE_URL = "https://github.com/hassansaei/VNtyper/issues/236"
 ENVIRONMENT_ENDPOINT = "repos/hassansaei/VNtyper/environments/pypi"
 POLICIES_ENDPOINT = f"{ENVIRONMENT_ENDPOINT}/deployment-branch-policies"
 CUSTOM_RULES_ENDPOINT = f"{ENVIRONMENT_ENDPOINT}/deployment_protection_rules"
-MAINTAINER_GUIDANCE_PATHS = (
-    ROOT / "AGENTS.md",
-    ROOT / "docs" / "superpowers" / "specs" / "2026-08-11-automated-pypi-oidc-design.md",
-    ROOT / "docs" / "superpowers" / "plans" / "2026-08-11-automated-pypi-oidc-plan.md",
-)
+#: Where the PyPI environment contract has to be written down for a maintainer to find it.
+#:
+#: This used to also list the milestone-5 OIDC design and plan. Those were contributor working
+#: documents, are no longer tracked, and were never what a maintainer reads -- AGENTS.md is.
+#: A contract that exists only in a planning document nobody ships is not a contract.
+MAINTAINER_GUIDANCE_PATHS = (ROOT / "AGENTS.md",)
 
 VALID_ENVIRONMENT: dict[str, object] = {
     "name": "pypi",
@@ -142,10 +143,11 @@ def test_maintainer_guidance_records_the_pypi_environment_contract() -> None:
         for phrase in required:
             assert phrase in normalized_guidance, f"{path} is missing: {phrase}"
 
-    design = MAINTAINER_GUIDANCE_PATHS[1].read_text(encoding="utf-8")
-    assert "Release v2.0.11 is therefore waiting" not in design
-    assert "PyPI remains at 2.0.10" not in design
-    assert "environment currently permits every ref" not in design
+    # Three negative assertions stood here, against the milestone-5 OIDC design document: that
+    # it no longer claimed a release was blocked, that PyPI was behind, or that the environment
+    # permitted every ref. That document was a contributor working document and is no longer
+    # tracked, so there is nothing left to assert stale text against. The positive contract
+    # above, which AGENTS.md carries, is the part that governs.
 
 
 def test_preflight_is_unprivileged_and_ordered_before_candidate_resolution() -> None:

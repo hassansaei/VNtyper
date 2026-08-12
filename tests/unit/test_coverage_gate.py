@@ -261,4 +261,14 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert "three untested lines moved it 0.03" not in agents
     assert "dedicated ratchet change" in normalized_agents
     assert "sustained by the Python 3.10–3.13 matrix" in normalized_agents
-    assert "  superpowers/" in mkdocs
+    # `docs/` is strictly the published site now. Planning artifacts used to live under
+    # `docs/superpowers/` and `docs/plans/` and be excluded from the build here; they live in
+    # the untracked `.planning/` workspace instead, so there is nothing left to exclude and
+    # `exclude_docs:` is gone. Pin the invariant that replaced it: a page under `docs/` is a
+    # published page.
+    assert not any(line.startswith("exclude_docs:") for line in mkdocs.splitlines()), (
+        "docs/ must contain nothing that is excluded from the site"
+    )
+    docs_root = Path(__file__).resolve().parents[2] / "docs"
+    assert not (docs_root / "superpowers").exists()
+    assert not (docs_root / "plans").exists()
