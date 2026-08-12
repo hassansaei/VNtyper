@@ -244,3 +244,76 @@ def test_main_dispatches_only_the_selected_handler(
 
     assert gate.main(argv) == statuses[selected]
     assert calls == [(selected, forwarded)]
+
+
+# ---------------------------------------------------------------------------
+# The declared command delta (#262)
+# ---------------------------------------------------------------------------
+
+
+def test_compare_does_not_expect_a_command_delta_by_default() -> None:
+    """The gate keeps its existing meaning unless the caller declares otherwise."""
+    args = gate.build_parser().parse_args(["compare", "--before-root", "/b", "--after-root", "/a"])
+
+    assert args.expect_command_delta is False
+
+
+def test_the_expect_command_delta_flag_is_parsed() -> None:
+    args = gate.build_parser().parse_args(
+        ["compare", "--before-root", "/b", "--after-root", "/a", "--expect-command-delta"]
+    )
+
+    assert args.expect_command_delta is True
+
+
+def _stub_compare(monkeypatch: pytest.MonkeyPatch, verdict: str) -> list[dict[str, Any]]:
+    """Make ``cmd_compare`` reach ``compare_sides`` with everything else stubbed out.
+
+    Args:
+        monkeypatch: pytest's patcher.
+        verdict: The verdict the stubbed comparison returns.
+
+    Returns:
+        list[dict[str, Any]]: The keyword arguments each ``compare_sides`` call received.
+    """
+    seen: list[dict[str, Any]] = []
+
+    def fake_compare_sides(*args: object, **kwargs: Any) -> dict[str, Any]:
+        seen.append(kwargs)
+        return {"verdict": verdict}
+
+    monkeypatch.setattr(gate.runner, "load_side", lambda root: {"tree": "/t", "revision": {"head": "a" * 40}})
+    monkeypatch.setattr(gate.admissibility, "check_sides_opposed", lambda *a, **k: [])
+    monkeypatch.setattr(gate.admissibility, "verify_revision", lambda *a, **k: [])
+    monkeypatch.setattr(gate.compare, "compare_sides", fake_compare_sides)
+    monkeypatch.setattr(gate.compare, "render_text", lambda result: "")
+    return seen
+
+
+def test_the_flag_reaches_compare_sides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A flag the comparison never sees would be a mode nobody can use."""
+    seen = _stub_compare(monkeypatch, "IDENTICAL")
+    args = gate.build_parser().parse_args(
+        ["compare", "--before-root", str(tmp_path), "--after-root", str(tmp_path), "--expect-command-delta"]
+    )
+
+    gate.cmd_compare(args)
+
+    assert seen == [{"expect_command_delta": True}]
+
+
+def test_a_declared_command_delta_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_compare(monkeypatch, "IDENTICAL")
+    args = gate.build_parser().parse_args(
+        ["compare", "--before-root", str(tmp_path), "--after-root", str(tmp_path), "--expect-command-delta"]
+    )
+
+    assert gate.cmd_compare(args) == 0
+
+
+def test_an_undeclared_command_delta_still_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flag changes the exit status and nothing else about the gate's judgement."""
+    _stub_compare(monkeypatch, "DELTAS")
+    args = gate.build_parser().parse_args(["compare", "--before-root", str(tmp_path), "--after-root", str(tmp_path)])
+
+    assert gate.cmd_compare(args) == 1

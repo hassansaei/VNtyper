@@ -227,6 +227,27 @@ def read_report(path: Path, rules: list[Rule]) -> dict[str, Any] | None:
     }
 
 
+def read_lines(path: Path, rules: list[Rule]) -> list[str] | None:
+    """Read a headerless text artefact as its normalised lines, in file order.
+
+    ``output.bed`` is the reason this exists. :func:`read_tsv` cannot read it: BED
+    carries no header, so the first variant row would be taken for one and every
+    comparison would silently be over one fewer row than the file has.
+
+    Args:
+        path: The file.
+        rules: The normalisation rules for this side.
+
+    Returns:
+        list[str] | None: The lines, or None if the file does not exist. A file that
+        exists and is empty reads as ``[]``, which is deliberately not the same value:
+        a run that wrote nothing and a run that never wrote are different runs.
+    """
+    if not path.is_file():
+        return None
+    return [normalise.apply(line, rules) for line in path.read_text(encoding="utf-8", errors="replace").splitlines()]
+
+
 def read_pipeline_case(output_dir: Path, log_dir: Path, rules: list[Rule]) -> dict[str, Any]:
     """Read every artefact the gate compares for one per-sample run.
 
@@ -247,6 +268,7 @@ def read_pipeline_case(output_dir: Path, log_dir: Path, rules: list[Rule]) -> di
     kestrel_pre = read_tsv(output_dir / "kestrel" / "kestrel_pre_result.tsv", rules)
     advntr = read_tsv(output_dir / "advntr" / "output_adVNTR_result.tsv", rules)
     coverage = read_tsv(output_dir / "coverage" / "coverage_summary.tsv", rules)
+    output_bed = read_lines(output_dir / "kestrel" / "output.bed", rules)
     report = read_report(output_dir / "summary_report.html", rules)
 
     commands: list[str] = []
@@ -281,6 +303,7 @@ def read_pipeline_case(output_dir: Path, log_dir: Path, rules: list[Rule]) -> di
         "kestrel_pre_result": kestrel_pre,
         "advntr_result": advntr,
         "coverage_summary": coverage,
+        "output_bed": output_bed,
         "screening_summary": (report or {}).get("screening"),
         "cross_match_summary": (report or {}).get("cross_match"),
         "report_tables": (report or {}).get("tables"),

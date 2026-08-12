@@ -825,6 +825,10 @@ def _compare_args(before: Path, after: Path, **overrides):
         "expect_before_sha": None,
         "expect_after_sha": None,
         "require_clean": False,
+        # Defaults to the gate's historical meaning: any command-stream delta is fatal.
+        # These tests are about admissibility and revision recording, not about #262's
+        # declared-delta mode, so they must keep measuring the undeclared behaviour.
+        "expect_command_delta": False,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)

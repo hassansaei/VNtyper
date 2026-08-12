@@ -189,6 +189,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Refuse if either side's vntyper/, docker/ or scripts/ had uncommitted changes when it ran.",
     )
+    parser_compare.add_argument(
+        "--expect-command-delta",
+        action="store_true",
+        help=(
+            "Declare that the executed command stream changes on purpose, so a delta in it is "
+            "reported but does not fail the gate. Every other delta stays fatal. Read the "
+            "reported delta: a declaration nobody checks attests nothing."
+        ),
+    )
 
     return parser
 
@@ -400,6 +409,10 @@ def cmd_compare(args: argparse.Namespace) -> int:
         genuinely opposed, or whose recorded revisions disagree with what the caller
         expected, are refused before any artefact is read - a comparison of a tree against
         itself is not a passing gate, it is the absence of one.
+
+        With ``--expect-command-delta`` a delta in ``executed_commands`` alone still
+        reaches ``IDENTICAL``. It is reported either way; the flag moves only the exit
+        status, so the delta remains something a human has to read and accept.
     """
     before_root = args.before_root.resolve()
     after_root = args.after_root.resolve()
@@ -459,6 +472,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         normalise.manifest(after_rules),
         before_rules,
         after_rules,
+        expect_command_delta=args.expect_command_delta,
     )
     text = compare.render_text(result)
 
