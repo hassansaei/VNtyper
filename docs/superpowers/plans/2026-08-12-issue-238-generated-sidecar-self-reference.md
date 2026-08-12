@@ -313,7 +313,7 @@ Expected: 11 failures on each side, `comm` reporting no regressions, and
 The same command exposes a second defect: `validate_alignment_output_root()` compares pathnames only, so one host directory mounted at two container paths defeats it. The identical layout with a **single** mount was already rejected, so this is a bypass, not a policy change.
 
 **Files:**
-- Modify: `vntyper/scripts/alignment_target_io.py` (new `_aliased_input_ancestor`, wired into `validate_alignment_output_root`)
+- Modify: `vntyper/scripts/alignment_target_io.py` (new `_aliased_ancestor`, wired into `validate_alignment_output_root`)
 - Test: `tests/unit/test_alignment_pipeline_input_safety.py`
 - Docs: `README.md`, `docs/user-guide/docker.md`
 
@@ -348,7 +348,7 @@ Expected: `Failed: DID NOT RAISE ValueError`.
 - [x] **Step 3: Compare by inode, not by name**
 
 ```python
-def _aliased_input_ancestor(root_absolute: Path, input_trees: tuple[Path, ...]) -> tuple[Path, Path] | None:
+def _aliased_ancestor(root_absolute: Path, input_trees: tuple[Path, ...]) -> tuple[Path, Path] | None:
     for ancestor in (root_absolute, *root_absolute.parents):
         for input_tree in input_trees:
             if ancestor != input_tree and _same_file(ancestor, input_tree):
@@ -377,4 +377,4 @@ docker run --rm -v .:/opt/vntyper/input -v ./results:/opt/vntyper/output … # e
 
 **Placeholders.** None — every step carries the real code and the real command.
 
-**Type consistency.** `consumer_reachable_identity` returns `tuple[tuple[int, int] | None, str | None]` in Task 2 Step 3 and is compared against `self._descriptor_identity` / `self._identity`, both `tuple[int, int] | None`, in Step 4. `_retain_generated_entry` is the name used in both its definition and its call site. `_aliased_input_ancestor` returns `tuple[Path, Path] | None` and its caller unpacks exactly that pair.
+**Type consistency.** `consumer_reachable_identity` returns `tuple[tuple[int, int] | None, str | None]` in Task 2 Step 3 and is compared against `self._descriptor_identity` / `self._identity`, both `tuple[int, int] | None`, in Step 4. `_retain_generated_entry` is the name used in both its definition and its call site. `_aliased_ancestor` returns `tuple[Path, Path] | None` and its caller unpacks exactly that pair.

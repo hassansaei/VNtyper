@@ -134,7 +134,7 @@ resolve(input dir):  /opt/vntyper/input
 
 ### 4.2 The fix
 
-`_aliased_input_ancestor()` walks the output root and its parents and compares each
+`_aliased_ancestor()` walks the output root and its parents and compares each
 against the logical and resolved input trees by inode. A hit is rejected with a message
 naming both pathnames, because the whole difficulty is that they look unrelated:
 
