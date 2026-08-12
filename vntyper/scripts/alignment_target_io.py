@@ -33,25 +33,25 @@ def _same_file(left: Path, right: Path) -> bool:
         return False
 
 
-def _aliased_input_ancestor(root_absolute: Path, input_trees: tuple[Path, ...]) -> tuple[Path, Path] | None:
-    """Find the output-root ancestor that is the patient input tree under another name.
+def _aliased_ancestor(path: Path, directories: tuple[Path, ...]) -> tuple[Path, Path] | None:
+    """Find the ancestor of ``path`` that is one of ``directories`` under another name.
 
     Pathname comparison cannot see a directory mounted at two places: both the lexical
     and ``resolve()`` forms differ while the inode is one and the same, which is how a
     run mounting one host directory as both input and output wrote inside the patient
-    tree without the guard firing (#238).
+    tree without any containment guard firing (#238).
 
     Args:
-        root_absolute: Absolute or resolved output-root variant.
-        input_trees: Logical and resolved directories holding the alignment.
+        path: Absolute or resolved path whose ancestry is inspected, itself included.
+        directories: Directory variants that ``path`` must not sit inside.
 
     Returns:
-        The aliasing ``(ancestor, input tree)`` pair, or ``None`` when they are distinct.
+        The aliasing ``(ancestor, directory)`` pair, or ``None`` when they are distinct.
     """
-    for ancestor in (root_absolute, *root_absolute.parents):
-        for input_tree in input_trees:
-            if ancestor != input_tree and _same_file(ancestor, input_tree):
-                return ancestor, input_tree
+    for ancestor in (path, *path.parents):
+        for directory in directories:
+            if ancestor != directory and _same_file(ancestor, directory):
+                return ancestor, directory
     return None
 
 
@@ -266,6 +266,14 @@ def _validate_operator_inputs_outside_output(
     for protected in protected_paths:
         if any(_is_within(protected, root) for root in root_variants):
             _reject(f"Operator-owned input is inside pipeline output root: {protected}")
+        # Names alone cannot see the output root mounted at a second path (#238).
+        alias = _aliased_ancestor(protected, root_variants)
+        if alias is not None:
+            ancestor, root = alias
+            _reject(
+                f"Operator-owned input is inside pipeline output root: {protected} lies under "
+                f"{ancestor}, which is the same directory as the output root {root}."
+            )
     return protected_paths
 
 
@@ -520,7 +528,7 @@ def validate_alignment_output_root(
             if root_variant == input_tree or input_tree in root_variant.parents:
                 _reject(f"Alignment output root must stay outside the patient input tree: {root}")
     for root_variant in root_variants:
-        alias = _aliased_input_ancestor(root_variant, input_trees)
+        alias = _aliased_ancestor(root_variant, input_trees)
         if alias is not None:
             ancestor, input_tree = alias
             _reject(

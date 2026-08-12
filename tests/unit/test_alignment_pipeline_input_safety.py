@@ -380,3 +380,39 @@ def test_an_output_root_on_an_unrelated_mount_is_still_accepted(tmp_path: Path) 
     output_root = tmp_path / "results" / "sample.cram_v2"
 
     validate_alignment_output_root(output_root, alignment, "cram")
+
+
+def test_an_operator_input_inside_an_aliased_output_root_is_rejected(tmp_path: Path) -> None:
+    """The reverse containment check was lexical too: one directory, two names (#238).
+
+    The alignment lives elsewhere so the patient-input-tree guard stays quiet and only
+    the operator-input containment check can reject this BED.
+    """
+    patient = tmp_path / "patient"
+    patient.mkdir()
+    alignment = patient / "sample.cram"
+    alignment.write_bytes(b"operator-owned")
+    beds = tmp_path / "beds"
+    beds.mkdir()
+    bed = beds / "targets.bed"
+    bed.write_text("chr1\t1\t2\n", encoding="utf-8")
+    results = tmp_path / "results"
+    results.mkdir()
+
+    real_samefile = os.path.samefile
+    aliased = {str(beds.resolve()), str(results.resolve())}
+
+    def one_host_directory_two_mounts(left: str | Path, right: str | Path) -> bool:
+        pair = {str(Path(left).resolve()), str(Path(right).resolve())}
+        if pair == aliased:
+            return True
+        return real_samefile(left, right)
+
+    with (
+        mock.patch(
+            "vntyper.scripts.alignment_target_io.os.path.samefile",
+            side_effect=one_host_directory_two_mounts,
+        ),
+        pytest.raises(ValueError, match="same directory as the output root"),
+    ):
+        protect_alignment_inputs(results, alignment, "cram", bed, None, MINIMAL_CONFIG, "hg38")

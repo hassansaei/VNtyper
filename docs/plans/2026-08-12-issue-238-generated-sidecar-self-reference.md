@@ -150,5 +150,23 @@ now rejected with exactly that message, and the documented separate-directory la
 (`-v "$PWD":/opt/vntyper/input -v "$PWD/results":/opt/vntyper/output`) completes with
 `Pipeline finished successfully`.
 
+### 4.3 All three containment guards, not one
+
+The same lexical-only comparison appears at three boundaries, and fixing only the first
+leaves the invariant broken:
+
+| Guard | Direction | Consequence of the name-only miss |
+| --- | --- | --- |
+| `validate_alignment_output_root` | output root inside the patient input tree | the run writes its whole output tree beside the patient data |
+| `_validate_operator_inputs_outside_output` | operator input inside the output root | a BED or reference can be overwritten by pipeline artifacts |
+| `validate_pipeline_log_destination` | pipeline log inside the patient input tree | runs **before** the log directory is created, so a miss leaves an empty directory in the patient tree even when a later guard refuses the run |
+
+Measured before the third fix: the reporter's command shape was refused, yet an empty
+`c3/` directory remained in the patient input directory. Measured after: two rejected
+runs (CRAM and BAM) leave the input directory byte-for-byte identical, with no directory
+created at all.
+
+### 4.4 Usage instructions
+
 Both the `README.md` and `docs/user-guide/docker.md` volume-mount sections now state the
 requirement, show the rejected form, and show the accepted one.

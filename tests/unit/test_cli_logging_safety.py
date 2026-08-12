@@ -12,6 +12,7 @@ from unittest import mock
 import pytest
 
 from vntyper import cli
+from vntyper.scripts.cli_logging_safety import validate_pipeline_log_destination
 
 pytestmark = pytest.mark.unit
 
@@ -710,3 +711,48 @@ class TestAConfiguredButNotYetInstalledBwaReferenceIsStillProtected:
         )
 
         validate_pipeline_log_destination(str(log_file), args, config)  # must not raise
+
+
+def test_a_log_directory_aliasing_the_input_tree_is_rejected_before_it_is_created(tmp_path: Path) -> None:
+    """One host directory mounted twice must be refused before any mkdir (#238).
+
+    This guard runs before the log directory exists, so a name-only miss here leaves an
+    empty directory inside the patient input tree even when the run is then refused.
+    """
+    patient = tmp_path / "patient"
+    patient.mkdir()
+    alignment = patient / "sample.cram"
+    alignment.write_bytes(b"operator-owned")
+    output_mount = tmp_path / "output-mount"
+    output_mount.mkdir()
+    log_path = output_mount / "run" / "pipeline.log"
+    args = argparse.Namespace(
+        command="pipeline",
+        cram=str(alignment),
+        bam=None,
+        fastq1=None,
+        fastq2=None,
+        bed_file=None,
+        reference_fasta=None,
+        reference_assembly="hg38",
+    )
+
+    real_samefile = os.path.samefile
+    aliased = {str(patient.resolve()), str(output_mount.resolve())}
+
+    def one_host_directory_two_mounts(left: str | Path, right: str | Path) -> bool:
+        pair = {str(Path(left).resolve()), str(Path(right).resolve())}
+        if pair == aliased:
+            return True
+        return real_samefile(left, right)
+
+    with (
+        mock.patch(
+            "vntyper.scripts.cli_logging_safety.os.path.samefile",
+            side_effect=one_host_directory_two_mounts,
+        ),
+        pytest.raises(ValueError, match="same directory as the input tree"),
+    ):
+        validate_pipeline_log_destination(log_path, args, {})
+
+    assert not log_path.parent.exists()
