@@ -360,3 +360,78 @@ class TestConfigLoading:
         path.write_text('{"advntr_settings": {"vid": 1}}')
 
         assert advntr.load_advntr_config(str(path)) == {"advntr_settings": {"vid": 1}}
+
+
+
+class TestThreadsInheritThePipelineValue:
+    """``"threads": null`` means inherit ``--threads``; an integer overrides it.
+
+    Before adVNTR 2.0.0 this would have been a false affordance: ``-t`` set only
+    ``settings.CORES``, which nothing on the ``genotype -fs`` path read (#215, #254).
+    2.0.0 moved the Viterbi DP into a ``nogil`` block and threaded the read loop, so the
+    flag now has an effect and the pipeline's value is worth passing through.
+    """
+
+    def test_null_threads_inherit_the_pipeline_value(self, inputs, captured_command, monkeypatch):
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"threads": None, "output_format": "vcf", "vid": 25561,
+             "additional_commands": "-aln"},
+        )
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output",
+                          MAIN_CONFIG, pipeline_threads=12)
+
+        assert captured_command[0]["command"].endswith("-t 12 -aln")
+
+    def test_an_explicit_thread_count_overrides_the_pipeline_value(
+        self, inputs, captured_command, monkeypatch
+    ):
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"threads": 3, "output_format": "vcf", "vid": 25561,
+             "additional_commands": "-aln"},
+        )
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output",
+                          MAIN_CONFIG, pipeline_threads=12)
+
+        assert captured_command[0]["command"].endswith("-t 3 -aln")
+
+    def test_a_missing_threads_key_still_raises(self, inputs, monkeypatch):
+        """``null`` is not the same as absent; a partial mapping is unsupported input."""
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
+        )
+
+        with pytest.raises(KeyError):
+            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output",
+                              MAIN_CONFIG, pipeline_threads=4)
+
+    def test_the_shipped_config_uses_null_so_the_cli_wins(self):
+        """If this becomes an integer again, ``--threads`` silently stops reaching adVNTR."""
+        config = advntr.load_advntr_config()
+
+        assert config["advntr_settings"]["threads"] is None
+
+    def test_the_default_is_one_so_callers_that_do_not_pass_it_are_unchanged(
+        self, inputs, captured_command, monkeypatch
+    ):
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"threads": None, "output_format": "vcf", "vid": 25561,
+             "additional_commands": "-aln"},
+        )
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        assert captured_command[0]["command"].endswith("-t 1 -aln")

@@ -108,7 +108,8 @@ def advntr_output_extension(settings: dict) -> str:
     return ".vcf" if settings["output_format"] == "vcf" else ".tsv"
 
 
-def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
+def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None,
+               pipeline_threads=1):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from advntr_config.
 
@@ -118,6 +119,8 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
         output (str): Directory where the results will be saved.
         output_name (str): Base name for the output files.
         config (dict): Main configuration dictionary.
+        pipeline_threads (int): The pipeline's ``--threads``. Used only when
+            ``advntr_settings['threads']`` is ``null``, which means "inherit".
 
     Returns:
         int: Return code indicating success (0) or failure (non-zero).
@@ -134,16 +137,27 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     # replaces -- that flag loads the main config.json, while `load_advntr_config` defaults to the
     # packaged advntr_config.json independently of it.) (#247)
     #
-    # The thread count is 1 because adVNTR's `-t` is a genuine no-op for the invocation
-    # VNtyper makes, not because 1 is fast. `-t` sets only `settings.CORES`
-    # (advntr_commands.py:72-74), whose three readers are VNTR model construction
-    # (models.py:66,69,72,74) and two PacBio-only functions (vntr_finder.py:870,889). VNtyper
-    # runs `genotype -fs` on short reads, routing through advntr_commands.py:139-144 ->
-    # genome_analyzer.py:211, where there is no Process, Pool or CORES at all. Recorded in
-    # a0a2563 (2024-12-24) and re-verified against berntpopp/adVNTR 1.3.3 while closing #215.
-    # Do not "fix" this by wiring `--threads` into it: the command would change and the
-    # runtime would not, which is a false affordance.
-    threads = advntr_settings["threads"]
+    # `-t` is real as of adVNTR 2.0.0. This comment replaces one that said the opposite,
+    # and the opposite was true at the time: `-t` set only `settings.CORES`
+    # (advntr_commands.py:72-74), whose readers were VNTR model construction
+    # (models.py:66,69,72,74) and two PacBio-only functions (vntr_finder.py:870,889) --
+    # none on the `genotype -fs` path VNtyper uses. Wiring `--threads` to it then would
+    # have changed the command without changing the runtime, which is why #215 was closed
+    # as resolved-by-investigation and why #254 pinned the commit.
+    #
+    # adVNTR 2.0.0 moved the Viterbi DP into a `nogil` block and threaded the read loop,
+    # so `-t N` now genuinely parallelises decoding: measured 203.3 s -> 1.71 s at `-t 16`
+    # on example_7a61_hg19_subset.bam, with an identical selection digest at every thread
+    # count. Do not restore the old wording without also re-pinning GIT_COMMIT to a
+    # pre-2.0.0 revision.
+    #
+    # `null` means "inherit the pipeline's --threads"; an explicit integer overrides it.
+    # A missing key still raises, because a partial mapping is not supported input.
+    #
+    # Note `--jobs J` x `-t T` oversubscribes. The golden-cohort runner already models
+    # that with a separate `advntr_case_threads` knob, which remains the control.
+    configured_threads = advntr_settings["threads"]
+    threads = pipeline_threads if configured_threads is None else configured_threads
 
     # Retrieve additional command parts from advntr_settings, if available
     additional_commands = advntr_settings.get("additional_commands", "-aln")
