@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 from vntyper.scripts import report_formatting as rf
+from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.coverage_stats import COVERAGE_COLUMNS
 
 pytestmark = pytest.mark.unit
@@ -421,3 +422,75 @@ def test_a_malformed_fragment_is_logged_at_warning(caplog) -> None:
     with caplog.at_level(logging.WARNING):
         rf.js_json_literal("not json", rf.EMPTY_TABLE_JSON)
     assert any("could not be parsed as JSON" in r.getMessage() for r in caplog.records)
+
+
+class TestCoverageNullToken:
+    """Reading a summary whose #222 columns were never measured.
+
+    Two separate hazards, and the second is the dangerous one: an absent figure
+    must not become ``0`` (which reads as *no coverage was seen*), and a figure
+    that is present but unreadable must not let the QC gate render a verdict on
+    the half it could parse.
+    """
+
+    @staticmethod
+    def _row(**overrides):
+        row = dict.fromkeys(COVERAGE_COLUMNS, "1")
+        row.update(
+            {
+                "mean": "120.00",
+                "percent_uncovered": "1.00",
+                "coverage_qc": "PASS",
+                "depth_counting_policy": "samtools-depth-a/v1",
+            }
+        )
+        row.update(overrides)
+        return [row]
+
+    def test_the_not_measured_token_parses_to_none_not_zero(self):
+        """`NA` is what a `--custom-regions` run writes; zero would be a claim."""
+        stats = rf.parse_coverage_stats(self._row(vntr_array_depth_sum="NA", vntr_flank_mean_depth="NA"))
+
+        assert stats["vntr_array_depth_sum"] is None
+        assert stats["vntr_flank_mean_depth"] is None
+
+    def test_an_absent_column_still_parses_the_rest(self):
+        """A summary written before #222 has no such column at all."""
+        row = self._row()
+        del row[0]["vntr_array_depth_sum"]
+
+        stats = rf.parse_coverage_stats(row)
+
+        assert stats["vntr_array_depth_sum"] is None
+        assert stats["mean"] == 120.00
+        assert stats["coverage_qc"] == "PASS"
+
+    def test_one_unreadable_column_does_not_discard_the_qc_verdict(self):
+        """The loop used to abort on the first bad value, losing every later field.
+
+        `coverage_qc` is the last column, so a single malformed number anywhere
+        ahead of it took the verdict with it.
+        """
+        stats = rf.parse_coverage_stats(self._row(vntr_array_length="not-a-number"))
+
+        assert stats["vntr_array_length"] is None
+        assert stats["coverage_qc"] == "PASS"
+        assert stats["mean"] == 120.00
+
+    def test_an_unreadable_mean_is_not_judged_on_the_other_metric(self):
+        """The false-PASS path, found in adversarial review of the plan.
+
+        An unparseable mean with an acceptable uncovered percentage must not
+        render a passing verdict: the gate would be reporting on a number it
+        could not read.
+        """
+        stats = rf.parse_coverage_stats(self._row(mean="corrupt"))
+
+        # Both dropped, not just the unreadable one: that is what makes the existing
+        # "neither metric was measured" rule fire instead of a verdict on half the input.
+        assert stats["mean"] is None
+        assert stats["percent_uncovered"] is None
+
+        verdict = evaluate_coverage_qc(stats["mean"], stats["percent_uncovered"], 100.0, 50.0)
+
+        assert verdict.status == COVERAGE_QC_NOT_EVALUATED

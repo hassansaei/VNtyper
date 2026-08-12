@@ -26,8 +26,10 @@ from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 from vntyper.scripts.coverage_stats import (
     format_coverage_summary,
     parse_region_length,
+    read_depth_positions,
     read_depth_values,
     summarise_coverage,
+    vntr_geometry,
 )
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.utils import run_command
@@ -256,6 +258,21 @@ def process_bam_to_fastq(
     )
 
 
+def _region_is_window(region: str, window: tuple[int, int]) -> bool:
+    """Is this region string exactly the configured VNTR window?
+
+    Compared by coordinates rather than by string, because the contig prefix varies with
+    the reference's naming convention (``chr1``, ``1``, ``NC_000001.11``) while the window
+    does not. A mismatch means an operator-supplied region, not a naming difference.
+    """
+    _, _, coords = region.rpartition(":")
+    start, _, end = coords.partition("-")
+    try:
+        return (int(start), int(end)) == window
+    except ValueError:
+        return False
+
+
 def calculate_vntr_coverage(
     bam_file,
     region,
@@ -266,6 +283,7 @@ def calculate_vntr_coverage(
     summary_filename=None,
     reference_path=None,
     index_path=None,
+    assembly_config=None,
 ):
     """
     Calculate the coverage over the VNTR region using samtools depth and write a TSV summary.
@@ -281,6 +299,9 @@ def calculate_vntr_coverage(
             Defaults to "<output_name>_summary.tsv" in output_dir.
         reference_path (str or Path, optional): Proven reference FASTA for CRAM decoding.
         index_path (str or Path, optional): Exact retained BAI or CRAI for custom-index depth.
+        assembly_config (dict, optional): The ``bam_processing.assemblies`` entry for this
+            run. Supplies ``vntr_array_coords``, without which the build-comparable columns
+            are recorded as not-measured rather than computed (#222).
 
     Returns:
         dict: Exactly the keys in :data:`~vntyper.scripts.coverage_stats.COVERAGE_COLUMNS`
@@ -343,8 +364,45 @@ def calculate_vntr_coverage(
         raise RuntimeError("VNTR coverage calculation failed.")
 
     try:
-        coverage_values = read_depth_values(coverage_output)
-        stats = summarise_coverage(coverage_values, total_region_length)
+        # The build-comparable columns are slices of this same depth table, never a second
+        # `samtools depth` call: two calls over one BAM could disagree, and a wider one would
+        # read outside the region CRAM preflight proved a reference against.
+        #
+        # Geometry is used only when the region actually is the configured VNTR window. A
+        # `--custom-regions` or `--bed-file` run resolves a different region, and the array
+        # coordinates do not describe it - so those runs record the columns as not-measured
+        # rather than reporting figures for an interval nobody asked about (#222).
+        geometry = vntr_geometry(assembly_config) if assembly_config else None
+        if geometry is not None and not _region_is_window(region, geometry.window):
+            logger.info(
+                "Coverage region %s is not the configured VNTR window %s-%s, so the "
+                "build-comparable columns are recorded as not measured.",
+                region,
+                geometry.window[0],
+                geometry.window[1],
+            )
+            geometry = None
+
+        if geometry is None:
+            coverage_values = read_depth_values(coverage_output)
+            stats = summarise_coverage(coverage_values, total_region_length)
+        else:
+            pairs = read_depth_positions(coverage_output)
+            coverage_values = [depth for _, depth in pairs]
+            depth_at = dict(pairs)
+            # `.get(..., 0)` mirrors `summarise_coverage`'s own zero-padding: a depth table
+            # truncated at a contig end is short, and the missing positions are uncovered.
+            array_depths = [depth_at.get(position, 0) for position in range(geometry.array[0], geometry.array[1] + 1)]
+            flank_depths = [
+                depth_at.get(position, 0) for start, end in geometry.flank for position in range(start, end + 1)
+            ]
+            stats = summarise_coverage(
+                coverage_values,
+                total_region_length,
+                array_depths=array_depths,
+                flank_depths=flank_depths,
+                flank_bases=geometry.flank_bases,
+            )
 
         thresholds = config.get("thresholds", {})
         # `.get` with the shipped defaults rather than `[...]`: `--config-path` replaces

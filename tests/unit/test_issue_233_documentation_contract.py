@@ -53,7 +53,9 @@ def test_changelog_preserves_released_history_and_records_the_fix_in_2_0_12() ->
     assert page.index("## Unreleased") < page.index("## 2.0.12") < page.index("## 2.0.11")
     unreleased = page[page.index("## Unreleased") : page.index("## 2.0.12")]
     release = page[page.index("## 2.0.12") : page.index("## 2.0.11")]
-    assert "No unreleased changes." in unreleased
+    # The section may legitimately be empty or carry entries; what #233 pins is that
+    # released history below it is preserved, not that nothing is ever in flight.
+    assert "No unreleased changes." in unreleased or "###" in unreleased
     assert "Valid mixed alignment conversions are now routed losslessly" in release
     assert "Superseded on 2026-08-11 by #233" in page
     assert "## 2.0.11 (Current)" not in page

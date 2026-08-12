@@ -47,7 +47,7 @@ import pandas as pd
 # Contract C1: the coverage TSV field names are declared once, by the module that
 # produces them. Re-typing the strings here is how the report silently loses
 # coverage when a column is renamed - `.get(name, 0)` raises nothing.
-from vntyper.scripts.coverage_stats import COVERAGE_COLUMNS
+from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS, COVERAGE_COLUMNS, COVERAGE_NULL_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +124,15 @@ COVERAGE_FIELD_TYPES: dict[str, type] = {
     "region_length": int,
     "uncovered_bases": int,
     "percent_uncovered": float,
+    # #222's build-comparable columns. `depth_counting_policy` is a token, not a number:
+    # the array sum is only comparable across builds under the policy it names.
+    "vntr_array_length": int,
+    "vntr_array_depth_sum": int,
+    "vntr_array_depth_sum_per_unit_length": float,
+    "depth_sum_reference_length": int,
+    "vntr_flank_bases": int,
+    "vntr_flank_mean_depth": float,
+    "depth_counting_policy": str,
     # The QC verdict is a label, not a measurement: `str` keeps "PASS"/"FAIL" intact
     # and keeps it out of the two-decimal rendering the numeric fields get (#172).
     "coverage_qc": str,
@@ -292,21 +301,50 @@ def parse_coverage_stats(data: list[dict[str, Any]]) -> dict[str, Any]:
 
     Returns:
         dict[str, Any]: One entry per
-        :data:`~vntyper.scripts.coverage_stats.COVERAGE_COLUMNS`. A field is None
-        when there is no coverage row, and fields after a coercion failure stay
-        None so a partially unreadable row does not fabricate zeroes.
+        :data:`~vntyper.scripts.coverage_stats.COVERAGE_COLUMNS`. A field is None when
+        there is no coverage row, when the column is absent, when it carries
+        :data:`~vntyper.scripts.coverage_stats.COVERAGE_NULL_TOKEN`, or when its value
+        cannot be coerced.
+
+    Note:
+        Coercion is per field. It used to abort the whole row on the first failure, which
+        took every later column with it - and ``coverage_qc`` is the last one, so a single
+        malformed number discarded the QC verdict (#222).
+
+        A missing column reads as ``None``, never ``0``. Zero is a measurement: it says the
+        region was looked at and no reads were found. A summary written before a column
+        existed, or by a run that could not compute it, has said nothing at all.
     """
     stats: dict[str, Any] = dict.fromkeys(COVERAGE_COLUMNS)
     if not data or not isinstance(data, list):
         return stats
 
     row = data[0]
-    try:
-        for name in COVERAGE_COLUMNS:
-            stats[name] = COVERAGE_FIELD_TYPES[name](row.get(name, 0))
-    except Exception as e:
-        logger.error("Error parsing VNTR coverage statistics: %s", e)
-        return stats
+    for name in COVERAGE_COLUMNS:
+        raw = row.get(name)
+        if name in _BUILD_COMPARABLE_COLUMNS:
+            # #222's columns are isolated from the originals in both directions. Absent or
+            # not-measured reads as None, never 0 - zero would say the region was looked at
+            # and found empty - and an unreadable one is logged and skipped rather than
+            # aborting the row, so a column added in 2026 cannot cost a reader the eight
+            # statistics and the QC verdict that summaries have always carried.
+            if raw is None or raw in (COVERAGE_NULL_TOKEN, ""):
+                continue
+            try:
+                stats[name] = COVERAGE_FIELD_TYPES[name](raw)
+            except (TypeError, ValueError) as e:
+                logger.error("Error parsing VNTR coverage statistic %s=%r: %s", name, raw, e)
+            continue
+
+        # The original columns keep their pre-#222 behaviour exactly: absent coerces from 0,
+        # and the first unreadable value stops the row so the fields after it stay None
+        # rather than fabricating zeroes. Changing that would change what every existing
+        # consumer reads out of a summary it already has.
+        try:
+            stats[name] = COVERAGE_FIELD_TYPES[name](raw if raw is not None else 0)
+        except Exception as e:
+            logger.error("Error parsing VNTR coverage statistics: %s", e)
+            return stats
 
     logger.debug("All VNTR coverage statistics extracted successfully: %s", stats)
     return stats

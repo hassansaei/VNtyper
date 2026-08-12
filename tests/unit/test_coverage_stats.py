@@ -29,13 +29,19 @@ import logging
 import pytest
 
 from vntyper.scripts.coverage_stats import (
+    _BUILD_COMPARABLE_COLUMNS,
     COVERAGE_COLUMNS,
     COVERAGE_METRIC_COLUMNS,
+    DEPTH_COUNTING_POLICY,
+    DEPTH_SUM_REFERENCE_LENGTH,
     MAX_REGION_SPAN_BASES,
+    VNTR_FLANK_BASES,
     format_coverage_summary,
     parse_region_length,
+    read_depth_positions,
     read_depth_values,
     summarise_coverage,
+    vntr_geometry,
 )
 
 # Mark all tests in this module as unit tests
@@ -73,6 +79,17 @@ def test_the_coverage_columns_are_the_frozen_lowercase_schema():
         "region_length",
         "uncovered_bases",
         "percent_uncovered",
+        # Appended by #222. Mean depth over the window is ~2.7x higher on GRCh37 than
+        # GRCh38 for the same sample, because the assemblies represent different amounts
+        # of the repeat array; these are what let a reader compare anything across builds.
+        # `coverage_qc` stays last: it is a verdict, not a measurement.
+        "vntr_array_length",
+        "vntr_array_depth_sum",
+        "vntr_array_depth_sum_per_unit_length",
+        "depth_sum_reference_length",
+        "vntr_flank_bases",
+        "vntr_flank_mean_depth",
+        "depth_counting_policy",
         "coverage_qc",
     )
 
@@ -108,8 +125,10 @@ def test_the_tsv_header_and_row_are_the_exact_region_wide_bytes():
     stats["coverage_qc"] = "FAIL"
 
     assert format_coverage_summary(stats) == (
-        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\tcoverage_qc\n"
-        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\tFAIL\n"
+        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\t"
+        "vntr_array_length\tvntr_array_depth_sum\tvntr_array_depth_sum_per_unit_length\t"
+        "depth_sum_reference_length\tvntr_flank_bases\tvntr_flank_mean_depth\tdepth_counting_policy\tcoverage_qc\n"
+        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tFAIL\n"
     )
 
 
@@ -149,6 +168,15 @@ def test_the_returned_dictionary_keeps_the_pre_extraction_types():
         "region_length": 1501,
         "uncovered_bases": 1498,
         "percent_uncovered": pytest.approx(99.80013324450367),
+        # #222's columns are None, not 0, when no array is configured: zero would read
+        # as "no coverage was seen" rather than "this run did not record it".
+        "vntr_array_length": None,
+        "vntr_array_depth_sum": None,
+        "vntr_array_depth_sum_per_unit_length": None,
+        "depth_sum_reference_length": None,
+        "vntr_flank_bases": None,
+        "vntr_flank_mean_depth": None,
+        "depth_counting_policy": None,
     }
     assert isinstance(stats["median"], int)
     assert isinstance(stats["min"], int)
@@ -457,6 +485,214 @@ def test_end_to_end_over_a_synthetic_depth_file(tmp_path):
     assert stats["uncovered_bases"] == 8
     assert stats["percent_uncovered"] == pytest.approx(40.0)
     assert format_coverage_summary(stats) == (
-        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\tcoverage_qc\n"
-        "3.90\t2.50\t4.27\t0\t12\t20\t8\t40.00\tFAIL\n"
+        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\t"
+        "vntr_array_length\tvntr_array_depth_sum\tvntr_array_depth_sum_per_unit_length\t"
+        "depth_sum_reference_length\tvntr_flank_bases\tvntr_flank_mean_depth\tdepth_counting_policy\tcoverage_qc\n"
+        "3.90\t2.50\t4.27\t0\t12\t20\t8\t40.00\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tFAIL\n"
     )
+
+
+class TestReadDepthPositions:
+    """``read_depth_positions`` keeps the position column that ``read_depth_values`` drops.
+
+    The array total and the flank mean are sub-intervals of the depth table, so a
+    reader that returns depths alone cannot produce either (#222). This is the
+    reason the reading path grew a second function rather than the summariser
+    growing a second argument.
+    """
+
+    def test_positions_and_depths_are_returned_in_file_order(self, tmp_path):
+        """The pairs are the first and third columns, order preserved."""
+        depth_file = tmp_path / "depth.txt"
+        depth_file.write_text("chr1\t155161000\t12\nchr1\t155161001\t0\nchr1\t155161002\t7\n", encoding="utf-8")
+
+        assert read_depth_positions(depth_file) == [
+            (155161000, 12),
+            (155161001, 0),
+            (155161002, 7),
+        ]
+
+    def test_blank_lines_are_skipped_rather_than_failing(self, tmp_path):
+        """``samtools depth`` output can end with a newline; that is not a malformed row."""
+        depth_file = tmp_path / "depth.txt"
+        depth_file.write_text("chr1\t100\t5\n\nchr1\t101\t6\n\n", encoding="utf-8")
+
+        assert read_depth_positions(depth_file) == [(100, 5), (101, 6)]
+
+    def test_a_short_row_names_the_file_and_line(self, tmp_path):
+        """A truncated depth table must say where it broke.
+
+        ``read_depth_values`` documents ``ValueError`` here but actually raises
+        ``IndexError`` from the bare subscript, with no file or line in the message.
+        This function is held to the documented contract instead.
+        """
+        depth_file = tmp_path / "depth.txt"
+        depth_file.write_text("chr1\t100\t5\nchr1\t101\n", encoding="utf-8")
+
+        with pytest.raises(ValueError) as excinfo:
+            read_depth_positions(depth_file)
+
+        assert "depth.txt" in str(excinfo.value)
+        assert ":2" in str(excinfo.value)
+
+    def test_a_non_integer_depth_names_the_file_and_line(self, tmp_path):
+        """Same contract for an unparseable depth."""
+        depth_file = tmp_path / "depth.txt"
+        depth_file.write_text("chr1\t100\t5\nchr1\t101\tdeep\n", encoding="utf-8")
+
+        with pytest.raises(ValueError) as excinfo:
+            read_depth_positions(depth_file)
+
+        assert "depth.txt" in str(excinfo.value)
+        assert ":2" in str(excinfo.value)
+
+
+class TestVntrGeometry:
+    """The array/flank geometry, and the containment rules that keep it honest.
+
+    Measured on the paired fixtures (#222): a *symmetric* error in the array
+    bounds costs ~1% in the cross-build comparison, while a one-sided error of
+    140 bp costs 17.5%. So the flank is derived from the array rather than
+    configured separately - it cannot fall out of symmetry by hand - and the
+    containment assertions below are what stop a silently degraded figure.
+    """
+
+    @staticmethod
+    def _assembly(bam="155158000-155163000", window="155160500-155162000", array="155161000-155161810"):
+        return {"chromosome": 1, "bam_region_coords": bam, "vntr_region_coords": window, "vntr_array_coords": array}
+
+    def test_the_flank_is_symmetric_about_the_array(self):
+        """Equal width either side, immediately abutting, never overlapping the array."""
+        geometry = vntr_geometry(self._assembly())
+
+        left, right = geometry.flank
+        assert left == (155161000 - VNTR_FLANK_BASES, 155160999)
+        assert right == (155161811, 155161810 + VNTR_FLANK_BASES)
+        assert left[1] - left[0] == right[1] - right[0] == VNTR_FLANK_BASES - 1
+
+    def test_the_widened_span_covers_the_window_and_both_flanks(self):
+        """One `samtools depth` call has to serve all three slices."""
+        geometry = vntr_geometry(self._assembly())
+
+        assert geometry.span[0] <= min(geometry.window[0], geometry.flank[0][0])
+        assert geometry.span[1] >= max(geometry.window[1], geometry.flank[1][1])
+
+    @pytest.mark.parametrize("assembly", ["GRCh37", "GRCh38"])
+    def test_the_shipped_geometry_resolves_and_stays_inside_its_window(self, assembly):
+        """Read out of the shipped `config.json`, not a fixture copy of it.
+
+        Adversarial review of the PR caught this asserting hardcoded tuples, which
+        meant editing `config.json` alone could not fail it. Every figure is a slice
+        of the window's depth table, so a flank outside the window would silently be
+        zero-depth padding rather than sequence.
+        """
+        import json
+        from pathlib import Path
+
+        shipped = json.loads(Path("vntyper/config.json").read_text(encoding="utf-8"))
+        entry = shipped["bam_processing"]["assemblies"][assembly]
+
+        geometry = vntr_geometry(entry)
+
+        assert geometry is not None, f"{assembly} carries no vntr_array_coords"
+        window_start, window_end = (int(part) for part in entry["vntr_region_coords"].split("-"))
+        bam_start, bam_end = (int(part) for part in entry["bam_region_coords"].split("-"))
+        assert window_start <= geometry.flank[0][0]
+        assert geometry.flank[1][1] <= window_end
+        assert bam_start <= geometry.flank[0][0] and geometry.flank[1][1] <= bam_end
+
+    def test_an_array_outside_the_window_is_refused(self):
+        """A configuration error must stop the run, not produce a plausible number."""
+        with pytest.raises(ValueError, match="vntr_array_coords"):
+            vntr_geometry(self._assembly(array="155159000-155159500"))
+
+    def test_a_reversed_array_is_refused(self):
+        with pytest.raises(ValueError, match="vntr_array_coords"):
+            vntr_geometry(self._assembly(array="155161810-155161000"))
+
+    def test_an_absent_array_coordinate_yields_no_geometry(self):
+        """`--custom-regions` and pre-#222 configs carry no array; that is not an error."""
+        assembly = self._assembly()
+        del assembly["vntr_array_coords"]
+
+        assert vntr_geometry(assembly) is None
+
+    def test_a_flank_that_would_leave_the_extracted_region_is_refused(self):
+        """Guards the case the shipped config happens to satisfy today."""
+        with pytest.raises(ValueError, match="bam_region_coords"):
+            vntr_geometry(self._assembly(bam="155160900-155162000"))
+
+
+class TestBuildComparableColumns:
+    """The array sum and flank mean, and the guarantee that adding them moved nothing.
+
+    Mean depth over the configured window is about 2.7x higher on GRCh37 than
+    GRCh38 for the same sample, because GRCh37's assembly represents roughly 13.5
+    repeat units against GRCh38's 58 and the same reads pile onto whichever copies
+    exist (#222). These columns are what let a reader compare anything at all.
+    """
+
+    WINDOW = [10] * 100
+
+    def test_the_derived_columns_are_none_when_no_array_is_configured(self):
+        """A tree with no `vntr_array_coords` still reports the eight it always did."""
+        stats = summarise_coverage(self.WINDOW, 100)
+
+        for column in _BUILD_COMPARABLE_COLUMNS:
+            assert stats[column] is None, column
+        assert stats["mean"] == 10
+
+    def test_the_array_sum_is_over_the_array_alone(self):
+        """Hand-computed, so a refactor that silently included flank fails here."""
+        stats = summarise_coverage(self.WINDOW, 100, array_depths=[3, 4, 5], flank_depths=[2, 2])
+
+        assert stats["vntr_array_depth_sum"] == 12
+        assert stats["vntr_array_length"] == 3
+
+    def test_the_per_unit_figure_is_the_sum_over_one_fixed_length(self):
+        """The same constant for both builds is what makes the figure comparable."""
+        stats = summarise_coverage(self.WINDOW, 100, array_depths=[3, 4, 5], flank_depths=[2, 2])
+
+        assert stats["vntr_array_depth_sum_per_unit_length"] == 12 / DEPTH_SUM_REFERENCE_LENGTH
+        assert stats["depth_sum_reference_length"] == DEPTH_SUM_REFERENCE_LENGTH
+
+    def test_the_flank_mean_is_the_mean_of_the_flank_depths(self):
+        stats = summarise_coverage(self.WINDOW, 100, array_depths=[3], flank_depths=[4, 6, 8, 2], flank_bases=2)
+
+        assert stats["vntr_flank_mean_depth"] == 5.0
+
+    def test_the_reported_flank_width_is_per_side_not_the_concatenated_length(self):
+        """The flank is two intervals; reporting 2N would misstate the geometry.
+
+        Caught in adversarial review of the plan: the first implementation reported
+        ``len(flank_depths)``, which is both sides together, against a design that
+        defines the field as width per side.
+        """
+        stats = summarise_coverage(self.WINDOW, 100, array_depths=[3], flank_depths=[4, 6, 8, 2], flank_bases=2)
+
+        assert stats["vntr_flank_bases"] == 2
+
+    def test_the_counting_policy_is_recorded_beside_the_sum(self):
+        """The sum is not policy-independent: it collapses to 0.31-0.55 under MAPQ >= 1.
+
+        Emitting the token is what stops the number being read as a general
+        property rather than one of this pipeline's counting policy.
+        """
+        stats = summarise_coverage(self.WINDOW, 100, array_depths=[3], flank_depths=[2])
+
+        assert stats["depth_counting_policy"] == DEPTH_COUNTING_POLICY
+
+    def test_adding_the_columns_did_not_move_any_existing_statistic(self):
+        """The additive claim, asserted rather than assumed.
+
+        Same depths, with and without the array and flank arguments: every
+        pre-existing key must be identical. This is the whole basis for not
+        re-baselining historical coverage numbers.
+        """
+        values = [0, 5, 7, 7, 0, 12, 3]
+        without = summarise_coverage(values, 7)
+        with_extra = summarise_coverage(values, 7, array_depths=[5, 7], flank_depths=[3, 4])
+
+        for column in COVERAGE_METRIC_COLUMNS:
+            if column not in _BUILD_COMPARABLE_COLUMNS:
+                assert without[column] == with_extra[column], column

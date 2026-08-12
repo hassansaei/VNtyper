@@ -588,6 +588,16 @@ def generate_summary_report(
         """Render a coverage figure, or say it was not calculated."""
         return value if value is not None else NOT_CALCULATED
 
+    def _rounded(value):
+        """Two decimal places, server-side.
+
+        The cohort template runs `applyRounding` over every table it initialises and
+        strips trailing zeroes, so a figure left to the browser renders differently
+        online and offline (#242). Rounding here makes the printed value a property of
+        the run rather than of the reader's network.
+        """
+        return None if value is None else round(value, 2)
+
     context = {
         "kestrel_highlight": kestrel_html,
         "advntr_highlight": advntr_html,
@@ -617,6 +627,17 @@ def generate_summary_report(
         "vntr_region_length": shown(coverage["region_length"]),
         "vntr_uncovered_bases": shown(coverage["uncovered_bases"]),
         "percent_vntr_uncovered": shown(coverage["percent_uncovered"]),
+        # #222. Two figures with different standing, so they are labelled differently in the
+        # template rather than sitting beside the window mean as if interchangeable:
+        # the flank depth is comparable between assemblies without qualification, while the
+        # array sum is comparable only under the counting policy printed with it.
+        "vntr_flank_mean_depth": shown(_rounded(coverage["vntr_flank_mean_depth"])),
+        "vntr_flank_bases": shown(coverage["vntr_flank_bases"]),
+        "vntr_array_length": shown(coverage["vntr_array_length"]),
+        "vntr_array_depth_sum": shown(coverage["vntr_array_depth_sum"]),
+        "vntr_array_depth_sum_per_unit_length": shown(_rounded(coverage["vntr_array_depth_sum_per_unit_length"])),
+        "depth_sum_reference_length": shown(coverage["depth_sum_reference_length"]),
+        "depth_counting_policy": shown(coverage["depth_counting_policy"]),
         "coverage_qc": coverage_qc.status,
         "percent_vntr_uncovered_icon": uncovered_icon,
         "percent_vntr_uncovered_color": uncovered_color,

@@ -63,15 +63,18 @@
     "bwa_index_extensions": [".amb", ".ann", ".bwt", ".pac", ".sa"]
   },
   "bam_processing": {
+    "_comment_vntr_array_coords": "vntr_array_coords is the repeat array itself, without flank, and it differs in length between the builds because the assemblies represent different amounts of it: GRCh37 carries roughly 13.5 60-bp units, GRCh38 roughly 58. For the same sample that makes mean depth over the ARRAY about 4.3x higher on GRCh37 (measured 4.257-4.339 across the seven paired fixtures, against 3481/811 = 4.29 predicted), and mean depth over the wider vntr_region_coords window about 2.7x higher (2.498-2.888) because that window also carries flank, whose depth does not scale with repeat count (#222). Both bounds were derived by ONE procedure applied identically to both assemblies - scanning the region FASTA in 120 bp windows at 30 bp step for GC > 0.65 and 60 bp self-identity > 0.85 - because the array-sum comparison tolerates a symmetric error (moving both outward by 100 bp keeps it within 1.1% of unity) but not a one-sided one (widening GRCh37 alone by 140 bp moves it to 1.175). Re-derive both together or neither. These bounds are heuristic, not an authoritative annotation.",
     "assemblies": {
       "GRCh37": {
         "bam_region_coords": "155158000-155163000",
         "vntr_region_coords": "155160500-155162000",
+        "vntr_array_coords": "155161000-155161810",
         "chromosome": 1
       },
       "GRCh38": {
         "bam_region_coords": "155184000-155194000",
         "vntr_region_coords": "155188000-155192500",
+        "vntr_array_coords": "155188530-155192010",
         "chromosome": 1
       }
     },
