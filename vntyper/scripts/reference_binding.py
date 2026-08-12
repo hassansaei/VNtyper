@@ -204,8 +204,12 @@ class _InodeView:
             message = f"Refusing to remove a replaced CRAM reference view: {self._destination}"
             logger.error(message)
             raise RuntimeError(message)
-        with suppress(OSError):
+        try:
             os.unlink(self._destination)
+        except OSError as error:
+            message = f"Unable to withdraw an unreachable CRAM reference view {self._destination}: {error}"
+            logger.error(message)
+            raise RuntimeError(message) from error
 
     def _install_proc_link(self) -> bool:
         if not self._proc_target_is_exact():

@@ -126,8 +126,14 @@ class AlignmentBinding:
             message = f"Refusing to replace an alignment view that changed while it was being proven: {destination}"
             logger.error(message)
             raise RuntimeError(message)
-        with suppress(OSError):
+        try:
             os.unlink(destination)
+        except OSError as error:
+            # Suppressing this would let the fallback run against a pathname still holding
+            # an unrecorded symlink, which a failed hardlink install would then strand.
+            message = f"Unable to withdraw an unreachable alignment view {destination}: {error}"
+            logger.error(message)
+            raise RuntimeError(message) from error
 
     def _install_proc_view(self, destination: Path) -> bool:
         try:

@@ -782,3 +782,28 @@ def test_a_failed_fallback_after_an_unreachable_view_leaves_nothing_behind(tmp_p
         assert list(view.parent.iterdir()) == []
     finally:
         binding.close()
+
+
+def test_a_withdrawal_that_cannot_unlink_fails_closed_instead_of_falling_back(tmp_path: Path) -> None:
+    """Falling back over a pathname still holding an unrecorded symlink would strand it."""
+    alignment = tmp_path / "input.cram"
+    alignment.write_bytes(b"CRAM input")
+    view = tmp_path / "run" / "input.cram"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+
+    try:
+        with (
+            patch(
+                "vntyper.scripts.alignment_binding.consumer_reachable_identity",
+                return_value=(None, "Too many levels of symbolic links (errno 40)"),
+            ),
+            patch(
+                "vntyper.scripts.alignment_binding.os.unlink",
+                side_effect=OSError(errno.EACCES, "permission denied"),
+            ),
+            pytest.raises(RuntimeError, match="Unable to withdraw an unreachable alignment view"),
+        ):
+            binding.install_view(view)
+    finally:
+        binding.close()
