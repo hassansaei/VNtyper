@@ -42,7 +42,7 @@ This scans each directory for `pipeline_summary.json`, extracts Kestrel and adVN
 
 ## Pseudonymization
 
-Protect sample identities by replacing directory names with pseudonyms:
+Replace directory names with pseudonyms, so identifiers do not appear in the report tables:
 
 ```bash
 vntyper cohort -i results/sample1/ results/sample2/ -o cohort_output/ \

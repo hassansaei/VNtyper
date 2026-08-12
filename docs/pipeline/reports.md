@@ -26,7 +26,7 @@ An interpretive text block summarizes the combined result. The summary is genera
 - adVNTR result category (positive, negative, not performed)
 - Quality metrics pass/fail status
 
-The screening summary provides actionable guidance, including recommendations for orthogonal validation when appropriate.
+The screening summary states what the combined evidence supports, including where orthogonal validation is recommended.
 
 **Cross-Match Summary**
 
