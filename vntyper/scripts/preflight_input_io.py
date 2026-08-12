@@ -46,6 +46,33 @@ def _open_nonblocking(path: str | Path) -> int:
     return os.open(path, flags)
 
 
+def consumer_reachable_identity(path: str | Path) -> tuple[tuple[int, int] | None, str | None]:
+    """Return the inode a child process reaches by opening an installed run-local view.
+
+    The installer's own checks inspect the descriptor and the directory entry. Neither
+    proves that the published pathname resolves, which is the only thing an external
+    tool can use (#238).
+
+    Args:
+        path: Installed run-local view pathname handed to external tools.
+
+    Returns:
+        The reached ``(device, inode)`` and ``None``, or ``None`` and an actionable
+        reason when the pathname cannot be opened at all.
+    """
+    try:
+        descriptor = _open_nonblocking(path)
+    except OSError as error:
+        return None, f"{error.strerror} (errno {error.errno})"
+    try:
+        metadata = os.fstat(descriptor)
+    except OSError as error:
+        return None, f"{error.strerror} (errno {error.errno})"
+    finally:
+        os.close(descriptor)
+    return (metadata.st_dev, metadata.st_ino), None
+
+
 def regular_file_unavailable_reason(path: str | Path, *, description: str) -> str | None:
     """Inspect one byte without allowing a FIFO or device open to block.
 

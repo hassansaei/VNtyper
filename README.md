@@ -130,21 +130,29 @@ vntyper --config-path /path/to/config.json pipeline \
 
 ### 2. Running VNtyper with Docker
 
-Docker image for VNtyper 2 is provided and can be pulled and used as follows. The current `main` image is rolling and unreleased. The stable `latest` and immutable `vX.Y.Z` and `X.Y.Z` aliases become available only after the first gated release. Docker Hub artifacts are legacy, frozen, and unsupported.
+Docker image for VNtyper 2 is provided and can be pulled and used as follows. Released images are published to GHCR as `latest` (the newest release), the immutable `vX.Y.Z` and `X.Y.Z` tags naming one exact release, and the moving `X` and `X.Y` series tags. Pin `vX.Y.Z` for a reproducible run. The `main` tag is rolling and tracks the default branch. Docker Hub artifacts are legacy, frozen, and unsupported.
 
 ```bash
 # pull the docker image
-docker pull ghcr.io/hassansaei/vntyper:main
+docker pull ghcr.io/hassansaei/vntyper:latest
 
 # run the pipeline using the docker image
 docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    ghcr.io/hassansaei/vntyper:main \
+    ghcr.io/hassansaei/vntyper:latest \
     vntyper pipeline \
     --bam /opt/vntyper/input/filename.bam \
     -o /opt/vntyper/output/filename/
 ```
+
+> **Input and output must be two different host directories:**  
+> VNtyper never writes into the directory holding the patient alignment, so mounting one
+> host directory at both `/opt/vntyper/input` and `/opt/vntyper/output` is rejected with
+> `Alignment output root must stay outside the patient input tree`. The check compares the
+> directories themselves, not their names, so `-v .:/opt/vntyper/input -v .:/opt/vntyper/output`
+> fails even though the two container paths differ. Mount a separate directory — for
+> example `-v "$PWD":/opt/vntyper/input -v "$PWD/results":/opt/vntyper/output`.
 
 > **Important Host Volume Permissions Note:**  
 > When mounting host directories into the container (using the `-v` flag), please ensure that the host directories (e.g., `/local/input/folder/` and `/local/output/folder/`) have the appropriate permissions so that they are writable by the container's non-root user.
@@ -164,7 +172,7 @@ docker run -w /opt/vntyper --rm \
 >    docker run --user $(id -u):$(id -g) -w /opt/vntyper --rm \
 >      -v /local/input/folder/:/opt/vntyper/input \
 >      -v /local/output/folder/:/opt/vntyper/output \
->      ghcr.io/hassansaei/vntyper:main \
+>      ghcr.io/hassansaei/vntyper:latest \
 >      vntyper pipeline \
 >      --bam /opt/vntyper/input/filename.bam \
 >      -o /opt/vntyper/output/filename/
@@ -176,7 +184,7 @@ An Apptainer image can be generated from the Docker image as follows:
 
 ```bash
 # create the apptainer sif image
-apptainer pull docker://ghcr.io/hassansaei/vntyper:main
+apptainer pull docker://ghcr.io/hassansaei/vntyper:latest
 
 # run the pipeline using the apptainer image
 apptainer run --pwd /opt/vntyper \

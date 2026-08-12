@@ -33,6 +33,28 @@ def _same_file(left: Path, right: Path) -> bool:
         return False
 
 
+def _aliased_ancestor(path: Path, directories: tuple[Path, ...]) -> tuple[Path, Path] | None:
+    """Find the ancestor of ``path`` that is one of ``directories`` under another name.
+
+    Pathname comparison cannot see a directory mounted at two places: both the lexical
+    and ``resolve()`` forms differ while the inode is one and the same, which is how a
+    run mounting one host directory as both input and output wrote inside the patient
+    tree without any containment guard firing (#238).
+
+    Args:
+        path: Absolute or resolved path whose ancestry is inspected, itself included.
+        directories: Directory variants that ``path`` must not sit inside.
+
+    Returns:
+        The aliasing ``(ancestor, directory)`` pair, or ``None`` when they are distinct.
+    """
+    for ancestor in (path, *path.parents):
+        for directory in directories:
+            if ancestor != directory and _same_file(ancestor, directory):
+                return ancestor, directory
+    return None
+
+
 def _protected_alignment_paths(input_path: str | Path, file_format: str) -> tuple[Path, ...]:
     paths = [_absolute(input_path)]
     paths.extend(
@@ -244,6 +266,14 @@ def _validate_operator_inputs_outside_output(
     for protected in protected_paths:
         if any(_is_within(protected, root) for root in root_variants):
             _reject(f"Operator-owned input is inside pipeline output root: {protected}")
+        # Names alone cannot see the output root mounted at a second path (#238).
+        alias = _aliased_ancestor(protected, root_variants)
+        if alias is not None:
+            ancestor, root = alias
+            _reject(
+                f"Operator-owned input is inside pipeline output root: {protected} lies under "
+                f"{ancestor}, which is the same directory as the output root {root}."
+            )
     return protected_paths
 
 
@@ -492,10 +522,20 @@ def validate_alignment_output_root(
     root_variants = (root_absolute, root_absolute.resolve(strict=False))
     logical_input_tree = _absolute(input_path).parent
     resolved_input_tree = _absolute(input_path).resolve(strict=False).parent
+    input_trees = (logical_input_tree, resolved_input_tree)
     for root_variant in root_variants:
-        for input_tree in (logical_input_tree, resolved_input_tree):
+        for input_tree in input_trees:
             if root_variant == input_tree or input_tree in root_variant.parents:
                 _reject(f"Alignment output root must stay outside the patient input tree: {root}")
+    for root_variant in root_variants:
+        alias = _aliased_ancestor(root_variant, input_trees)
+        if alias is not None:
+            ancestor, input_tree = alias
+            _reject(
+                f"Alignment output root must stay outside the patient input tree: {root} lies under "
+                f"{ancestor}, which is the same directory as the patient input tree {input_tree}. "
+                "Give the run separate input and output directories."
+            )
 
     if os.path.lexists(root) and not root.is_dir():
         _reject(f"Alignment output root must be a directory: {root}")

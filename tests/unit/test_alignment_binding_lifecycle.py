@@ -706,3 +706,115 @@ def test_proc_and_cross_filesystem_hardlink_unavailable_refuses_before_index_wor
 
     capture.assert_not_called()
     assert alignment.read_bytes() == b"original alignment"
+
+
+def test_unreachable_proc_view_falls_back_to_a_hardlink(tmp_path: Path) -> None:
+    """#238: a view a consumer cannot open through its own pathname is never published."""
+    alignment = tmp_path / "input.cram"
+    alignment.write_bytes(b"CRAM input")
+    view = tmp_path / "run" / "input.cram"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+    try:
+        with patch(
+            "vntyper.scripts.alignment_binding.consumer_reachable_identity",
+            return_value=(None, "Too many levels of symbolic links (errno 40)"),
+        ):
+            binding.install_view(view)
+
+        assert not view.is_symlink()
+        assert view.stat(follow_symlinks=False).st_ino == alignment.stat().st_ino
+        assert view.read_bytes() == b"CRAM input"
+    finally:
+        binding.close()
+    assert not os.path.lexists(view)
+
+
+def test_an_alignment_view_replaced_while_being_proven_is_not_handed_to_the_fallback(tmp_path: Path) -> None:
+    """The hardlink install must never atomically replace somebody else's entry."""
+    alignment = tmp_path / "input.cram"
+    alignment.write_bytes(b"CRAM input")
+    intruder = tmp_path / "intruder"
+    intruder.write_bytes(b"not ours")
+    view = tmp_path / "run" / "input.cram"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+
+    def replace_then_report_unreachable(path: str | Path) -> tuple[None, str]:
+        os.replace(intruder, path)
+        return None, "Too many levels of symbolic links (errno 40)"
+
+    try:
+        with (
+            patch(
+                "vntyper.scripts.alignment_binding.consumer_reachable_identity",
+                side_effect=replace_then_report_unreachable,
+            ),
+            pytest.raises(RuntimeError, match="owned alignment view was replaced"),
+        ):
+            binding.install_view(view)
+
+        assert view.read_bytes() == b"not ours"
+    finally:
+        # Teardown refuses too: a replaced entry is never removed, at any point in the
+        # binding's life, and the descriptor is preserved rather than released blindly.
+        with pytest.raises(RuntimeError, match="owned alignment view was replaced"):
+            binding.close()
+
+    assert view.read_bytes() == b"not ours"
+
+
+def test_a_failed_fallback_after_an_unreachable_view_leaves_nothing_behind(tmp_path: Path) -> None:
+    """A stranded, unrecorded proc symlink would outlive the binding that installed it."""
+    alignment = tmp_path / "input.cram"
+    alignment.write_bytes(b"CRAM input")
+    view = tmp_path / "run" / "input.cram"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+
+    try:
+        with (
+            patch(
+                "vntyper.scripts.alignment_binding.consumer_reachable_identity",
+                return_value=(None, "Too many levels of symbolic links (errno 40)"),
+            ),
+            patch("vntyper.scripts.alignment_binding.os.link", side_effect=OSError(errno.EXDEV, "cross-device link")),
+            pytest.raises(RuntimeError, match="hardlink could not be created"),
+        ):
+            binding.install_view(view)
+
+        assert not os.path.lexists(view)
+        assert list(view.parent.iterdir()) == []
+    finally:
+        binding.close()
+
+
+def test_a_withdrawal_that_cannot_unlink_fails_closed_instead_of_falling_back(tmp_path: Path) -> None:
+    """Falling back over a pathname still holding an unrecorded symlink would strand it."""
+    alignment = tmp_path / "input.cram"
+    alignment.write_bytes(b"CRAM input")
+    view = tmp_path / "run" / "input.cram"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+
+    try:
+        with (
+            patch(
+                "vntyper.scripts.alignment_binding.consumer_reachable_identity",
+                return_value=(None, "Too many levels of symbolic links (errno 40)"),
+            ),
+            patch(
+                "vntyper.scripts.alignment_binding.os.unlink",
+                side_effect=OSError(errno.EACCES, "permission denied"),
+            ),
+            pytest.raises(RuntimeError, match="Unable to remove owned alignment view"),
+        ):
+            binding.install_view(view)
+
+        # Ownership must survive the failed withdrawal so teardown retries it; otherwise
+        # the descriptor is released behind a dangling entry nobody owns.
+        assert binding.view_path == str(view)
+    finally:
+        binding.close()
+
+    assert not os.path.lexists(view)

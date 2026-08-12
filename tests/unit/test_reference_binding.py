@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import shlex
@@ -247,22 +248,37 @@ def test_preflight_probes_and_retains_the_opened_reference_and_fai_inodes(tmp_pa
 
 
 def test_generated_fai_is_bound_before_the_coverage_probe_reopens_it(tmp_path: Path) -> None:
-    """Deferring FAI binding until all probes finish leaves the depth probe unbound."""
+    """Deferring FAI binding until all probes finish leaves the depth probe unbound.
+
+    The coverage probe must see the retained inode under its own name: one link, not a
+    replaced entry pointing back at this process's descriptor for it (#238).
+    """
     reference = _reference(tmp_path / "reference.fa")
-    observed_bound_state: list[tuple[bool, bytes]] = []
+    observed_bound_state: list[tuple[int, bytes]] = []
+    order: list[str] = []
+    unbound_binder = ReferenceBinding.bind_generated_sidecars
+
+    def spy_bind(binding: ReferenceBinding) -> None:
+        order.append("bind")
+        unbound_binder(binding)
 
     def capture(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
         arguments = shlex.split(command)
         if "-T" in arguments:
+            order.append("target-probe")
             candidate = Path(arguments[arguments.index("-T") + 1])
             Path(f"{candidate}.fai").write_text("chr1\t4\t6\t4\t5\n", encoding="utf-8")
         if "--reference" in arguments:
+            order.append("coverage-probe")
             candidate = Path(arguments[arguments.index("--reference") + 1])
             index = Path(f"{candidate}.fai")
-            observed_bound_state.append((index.is_symlink(), index.read_bytes()))
+            observed_bound_state.append((index.stat(follow_symlinks=False).st_nlink, index.read_bytes()))
         return True, "decoded"
 
-    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=capture):
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=capture),
+        patch.object(ReferenceBinding, "bind_generated_sidecars", spy_bind),
+    ):
         resolved, source, uncovered, binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(reference)),),
@@ -280,7 +296,8 @@ def test_generated_fai_is_bound_before_the_coverage_probe_reopens_it(tmp_path: P
     try:
         assert resolved is not None
         assert (source, uncovered) == ("cli", ())
-        assert observed_bound_state == [(True, b"chr1\t4\t6\t4\t5\n")]
+        assert order == ["target-probe", "bind", "coverage-probe"]
+        assert observed_bound_state == [(1, b"chr1\t4\t6\t4\t5\n")]
     finally:
         assert binding is not None
         binding.close()
@@ -374,3 +391,162 @@ def test_one_replaced_sidecar_does_not_skip_other_reference_cleanup(tmp_path: Pa
     assert binding.is_open is False
     fai_view.unlink()
     binding.close()
+
+
+def test_generated_sidecar_keeps_its_name_instead_of_linking_to_its_own_descriptor(
+    tmp_path: Path,
+) -> None:
+    """#238: a sidecar replaced by a link to its own FD only resolves where procfs jumps dentries."""
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    binding = ReferenceBinding(str(reference), str(output), "sample", 1)
+    try:
+        generated = Path(f"{binding.consumer_path}.fai")
+        generated.write_text("chr1\t4\t6\t4\t5\n", encoding="utf-8")
+
+        binding.bind_generated_sidecars()
+
+        assert not generated.is_symlink()
+        assert generated.stat(follow_symlinks=False).st_nlink == 1
+        assert generated.read_text(encoding="utf-8") == "chr1\t4\t6\t4\t5\n"
+    finally:
+        binding.close()
+    assert not os.path.lexists(output / ".sample_reference_1")
+
+
+def test_a_reference_view_replaced_while_being_proven_is_never_removed(tmp_path: Path) -> None:
+    """The reachability fallback must not unlink an entry this binding did not install."""
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    intruder = tmp_path / "intruder"
+    intruder.write_bytes(b"not ours")
+
+    def replace_then_report_unreachable(path: str | Path) -> tuple[None, str]:
+        os.replace(intruder, path)
+        return None, "Too many levels of symbolic links (errno 40)"
+
+    with (
+        patch(
+            "vntyper.scripts.reference_binding.consumer_reachable_identity",
+            side_effect=replace_then_report_unreachable,
+        ),
+        pytest.raises(RuntimeError, match="Refusing to remove replaced CRAM reference view"),
+    ):
+        ReferenceBinding(str(reference), str(output), "sample", 1)
+
+    assert (output / ".sample_reference_1" / "reference.fa").read_bytes() == b"not ours"
+
+
+def test_a_retained_sidecar_records_the_inode_it_validated_not_a_later_read(tmp_path: Path) -> None:
+    """A replacement landing right after validation must never be adopted as owned.
+
+    Recording used to re-read the pathname, so an entry swapped in between the two reads
+    became the recorded owner and teardown would then unlink it.
+    """
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    intruder = tmp_path / "intruder"
+    intruder.write_bytes(b"not ours")
+    binding = ReferenceBinding(str(reference), str(output), "sample", 1)
+    generated = Path(f"{binding.consumer_path}.fai")
+    generated.write_text("chr1\t4\t6\t4\t5\n", encoding="utf-8")
+    real_lstat = os.lstat
+    reads = {"count": 0}
+
+    def replace_right_after_validation(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        result = real_lstat(path, *args, **kwargs)
+        if str(path) == str(generated):
+            reads["count"] += 1
+            if reads["count"] == 2:
+                intruder.replace(generated)
+        return result
+
+    with patch("vntyper.scripts.reference_binding.os.lstat", side_effect=replace_right_after_validation):
+        binding.bind_generated_sidecars()
+
+    with pytest.raises(RuntimeError, match="Refusing to remove replaced CRAM reference view"):
+        binding.close()
+
+    assert generated.read_bytes() == b"not ours"
+
+
+def test_a_failed_install_still_has_an_owner_that_retries_its_removal(tmp_path: Path) -> None:
+    """Construction opens the inode before installing, so a failed install is still owned.
+
+    When the install itself raised from inside ``__init__`` there was no reachable owner
+    left, so the entry stayed and its private directory could not be removed.
+    """
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    real_unlink = os.unlink
+    failures = {"count": 0}
+
+    def unlink_failing_once(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(path) == str(output / ".sample_reference_1" / "reference.fa") and failures["count"] == 0:
+            failures["count"] += 1
+            raise OSError(errno.EIO, "transient I/O error")
+        return real_unlink(path, *args, **kwargs)
+
+    with (
+        patch(
+            "vntyper.scripts.reference_binding.consumer_reachable_identity",
+            return_value=(None, "Too many levels of symbolic links (errno 40)"),
+        ),
+        patch("vntyper.scripts.reference_binding.os.unlink", side_effect=unlink_failing_once),
+        pytest.raises(RuntimeError),
+    ):
+        ReferenceBinding(str(reference), str(output), "sample", 1)
+
+    assert failures["count"] == 1
+    assert not os.path.lexists(output / ".sample_reference_1")
+
+
+def test_a_published_symlink_that_cannot_be_identified_is_withdrawn(tmp_path: Path) -> None:
+    """Ownership cannot be recorded without an identity, so the entry must not survive."""
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    consumer_path = output / ".sample_reference_1" / "reference.fa"
+    real_lstat = os.lstat
+
+    def fail_on_the_published_entry(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(path) == str(consumer_path):
+            raise OSError(errno.EIO, "transient I/O error")
+        return real_lstat(path, *args, **kwargs)
+
+    with (
+        patch("vntyper.scripts.reference_binding.os.lstat", side_effect=fail_on_the_published_entry),
+        pytest.raises(RuntimeError, match="published run-local reference view could not be identified"),
+    ):
+        ReferenceBinding(str(reference), str(output), "sample", 1)
+
+    assert not os.path.lexists(consumer_path)
+    assert not os.path.lexists(output / ".sample_reference_1")
+
+
+def test_a_published_hardlink_is_owned_before_its_temporary_name_is_removed(tmp_path: Path) -> None:
+    """The destination is published by os.link, so a later failure must find it owned."""
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    consumer_path = output / ".sample_reference_1" / "reference.fa"
+    real_unlink = os.unlink
+
+    def fail_the_temporary_unlink(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if ".tmp" in str(path):
+            raise OSError(errno.EIO, "transient I/O error")
+        return real_unlink(path, *args, **kwargs)
+
+    with (
+        patch("vntyper.scripts.reference_binding.consumer_reachable_identity", return_value=(None, "unreachable")),
+        patch("vntyper.scripts.reference_binding.os.unlink", side_effect=fail_the_temporary_unlink),
+        pytest.raises(RuntimeError, match="Unable to retain CRAM reference input"),
+    ):
+        ReferenceBinding(str(reference), str(output), "sample", 1)
+
+    # Owned before the failing unlink, so teardown removed it rather than stranding it.
+    assert not os.path.lexists(consumer_path)

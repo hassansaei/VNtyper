@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import multiprocessing
@@ -17,6 +18,7 @@ import pytest
 
 from vntyper.scripts import alignment_preflight
 from vntyper.scripts.pipeline_alignment import build_alignment_preflight_kwargs, prepare_alignment_target
+from vntyper.scripts.preflight_input_io import consumer_reachable_identity
 
 pytestmark = pytest.mark.unit
 
@@ -212,3 +214,51 @@ def test_shipped_config_declares_the_default_preflight_text_limit() -> None:
     config = json.loads((Path(__file__).parents[2] / "vntyper" / "config.json").read_text(encoding="utf-8"))
 
     assert config["utils"]["preflight_text_max_bytes"] == 1048576
+
+
+def test_consumer_reachable_identity_reports_the_inode_a_child_would_open(tmp_path: Path) -> None:
+    """The published pathname is the only thing an external tool can use (#238)."""
+    payload = tmp_path / "reference.fa"
+    payload.write_text(">chr1\nACGT\n", encoding="utf-8")
+    link = tmp_path / "view.fa"
+    link.symlink_to(payload)
+    expected = payload.stat()
+
+    assert consumer_reachable_identity(payload) == ((expected.st_dev, expected.st_ino), None)
+    assert consumer_reachable_identity(link) == ((expected.st_dev, expected.st_ino), None)
+
+
+def test_consumer_reachable_identity_names_a_self_referential_entry(tmp_path: Path) -> None:
+    """An entry that points at itself is exactly the #238 failure a consumer hits."""
+    looping = tmp_path / "reference.fa.fai"
+    looping.symlink_to(looping)
+
+    identity, reason = consumer_reachable_identity(looping)
+
+    assert identity is None
+    assert reason is not None
+    assert f"errno {errno.ELOOP}" in reason
+
+
+def test_consumer_reachable_identity_reports_a_missing_pathname(tmp_path: Path) -> None:
+    """A pathname that cannot be opened yields an actionable reason, never an exception."""
+    identity, reason = consumer_reachable_identity(tmp_path / "absent.fa")
+
+    assert identity is None
+    assert reason is not None
+    assert f"errno {errno.ENOENT}" in reason
+
+
+def test_consumer_reachable_identity_closes_its_descriptor_when_fstat_fails(tmp_path: Path) -> None:
+    """A probe that cannot stat what it opened must still release the descriptor."""
+    payload = tmp_path / "reference.fa"
+    payload.write_text(">chr1\nACGT\n", encoding="utf-8")
+    before = len(os.listdir("/proc/self/fd"))
+
+    with patch("vntyper.scripts.preflight_input_io.os.fstat", side_effect=OSError(errno.EIO, "I/O error")):
+        identity, reason = consumer_reachable_identity(payload)
+
+    assert identity is None
+    assert reason is not None
+    assert f"errno {errno.EIO}" in reason
+    assert len(os.listdir("/proc/self/fd")) == before

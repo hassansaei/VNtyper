@@ -172,8 +172,11 @@ class PrivateReferenceCache:
             return False
         destination = self._destination(digest)
         self._ensure_parent(destination)
+        # Own the view before it installs anything: a failed install then still has a
+        # reachable owner that can retry its exact-entry removal.
         binding = _InodeView(source, destination)
         self._entries[digest] = binding
+        binding.install()
         try:
             matches = _digest_file(destination).lower() == digest.lower()
             if not matches:
@@ -233,6 +236,7 @@ class PrivateReferenceCache:
                 active_path.unlink()
             else:
                 self._entries[active_digest] = _InodeView(active_path, active_path, generated=True)
+                self._entries[active_digest].install()
             active_contig = None
             active_digest = None
             active_path = None

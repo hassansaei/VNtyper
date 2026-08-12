@@ -48,21 +48,21 @@ with an explicit "base image does not exist" error rather than silently using a 
 
 ### **Pull Pre-built Image**
 
-The GHCR `main` image is rolling and unreleased. Until the first gated release, it is
-the only published image documented for current use. Stable aliases (`latest`,
-`vX.Y.Z`, and `X.Y.Z`) become runnable only after that release gate succeeds. The
-legacy Docker Hub image is frozen and unsupported; it is retained only as historical
+Released images are published to GHCR as `latest` (the newest release), the immutable
+`vX.Y.Z` and `X.Y.Z` tags naming one exact release, and the moving `X` and `X.Y` series
+tags. Pin `vX.Y.Z` for a reproducible run. The `main` tag is rolling and tracks the
+default branch. The legacy Docker Hub image is frozen and unsupported; it is retained only as historical
 prose, not as an installation source.
 
 ```bash
-# Rolling, unreleased image from GitHub Container Registry
-docker pull ghcr.io/hassansaei/vntyper:main
+# Latest released image from GitHub Container Registry
+docker pull ghcr.io/hassansaei/vntyper:latest
 ```
 
 ### **Generate Apptainer Image**
 
 ```bash
-apptainer pull docker://ghcr.io/hassansaei/vntyper:main
+apptainer pull docker://ghcr.io/hassansaei/vntyper:latest
 ```
 
 ## **Testing the Build**
@@ -98,13 +98,13 @@ pytest tests/docker/test_docker_pipeline.py::test_docker_container_health -v
 
 ```bash
 # Check VNtyper version
-docker run --rm ghcr.io/hassansaei/vntyper:main vntyper --version
+docker run --rm ghcr.io/hassansaei/vntyper:latest vntyper --version
 
 # Check Java runtime
-docker run --rm ghcr.io/hassansaei/vntyper:main java -version
+docker run --rm ghcr.io/hassansaei/vntyper:latest java -version
 
 # Check bioinformatics tools
-docker run --rm ghcr.io/hassansaei/vntyper:main samtools --version
+docker run --rm ghcr.io/hassansaei/vntyper:latest samtools --version
 ```
 
 ## **Configuration**
@@ -142,7 +142,7 @@ Run docker interactively:
    docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    ghcr.io/hassansaei/vntyper:main \
+    ghcr.io/hassansaei/vntyper:latest \
     vntyper pipeline --bam /local/input/folder/filename.bam \
     -o /local/output/folder/filename/
 ```
@@ -167,7 +167,7 @@ Start the FastAPI server by running the container:
 docker run -d -p 8000:8000 \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    ghcr.io/hassansaei/vntyper:main
+    ghcr.io/hassansaei/vntyper:latest
 ```
 
 #### **2. Submit a Job via API**

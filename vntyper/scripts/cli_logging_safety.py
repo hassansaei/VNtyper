@@ -151,5 +151,17 @@ def validate_pipeline_log_destination(
         protected_variants = (protected_absolute, protected_absolute.resolve(strict=False))
         if any(log_variant in protected_variants for log_variant in log_variants) or _same_file(log_path, protected):
             raise ValueError(f"Pipeline log file aliases operator-owned input: {log_path}")
-    if any(_is_within(log_variant, tree) for log_variant in log_variants for tree in _alignment_input_trees(args)):
+    input_trees = _alignment_input_trees(args)
+    if any(_is_within(log_variant, tree) for log_variant in log_variants for tree in input_trees):
         raise ValueError(f"Pipeline log file is inside an operator-owned input tree: {log_path}")
+    # Names alone cannot see one host directory mounted at two container paths, and this
+    # check runs before the log directory is created, so a lexical-only miss here leaves
+    # an empty directory inside the patient input tree even when the run is refused (#238).
+    for log_variant in log_variants:
+        for ancestor in (log_variant, *log_variant.parents):
+            for tree in input_trees:
+                if ancestor != tree and _same_file(ancestor, tree):
+                    raise ValueError(
+                        f"Pipeline log file is inside an operator-owned input tree: {log_path} lies under "
+                        f"{ancestor}, which is the same directory as the input tree {tree}."
+                    )

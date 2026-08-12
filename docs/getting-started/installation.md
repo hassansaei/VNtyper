@@ -63,12 +63,14 @@ VNtyper 2 requires the following to be installed on your system:
     Pull the current image from GitHub Container Registry:
 
     ```bash
-    docker pull ghcr.io/hassansaei/vntyper:main
+    docker pull ghcr.io/hassansaei/vntyper:latest
     ```
 
-    The `main` tag is rolling and unreleased. The stable `latest` and immutable
-    `vX.Y.Z` and `X.Y.Z` aliases become available only after the first gated
-    release. Docker Hub artifacts are legacy, frozen, and unsupported.
+    Released images are published to GHCR as `latest` (the newest release), the
+    immutable `vX.Y.Z` and `X.Y.Z` tags naming one exact release, and the moving `X`
+    and `X.Y` series tags. Pin `vX.Y.Z` for a reproducible run. The `main` tag is
+    rolling and tracks the default branch. Docker Hub artifacts are legacy, frozen,
+    and unsupported.
 
     Or build from source:
 

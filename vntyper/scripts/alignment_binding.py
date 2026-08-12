@@ -10,6 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from vntyper.scripts.alignment_index_binding import AlignmentIndexBinding
+from vntyper.scripts.preflight_input_io import consumer_reachable_identity
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,22 @@ class AlignmentBinding:
             # False deliberately routes through the verified hardlink install,
             # whose atomic replace self-heals that entry. Do not unlink the
             # destination here: another actor may already have replaced it.
+            return False
+        reachable, reason = consumer_reachable_identity(destination)
+        if reachable != self._descriptor_identity:
+            # An installed view an external tool cannot open through its own pathname is
+            # not a view (#238). Withdraw it before the fallback runs, so the hardlink
+            # install's atomic replace cannot overwrite an entry this binding does not
+            # own and a failed fallback strands nothing. Record ownership first: if the
+            # withdrawal cannot complete, it must survive so close() retries the same
+            # identity-checked removal rather than leaving a dangling entry behind the
+            # released descriptor.
+            self._record_view(destination, installed_stat, "symlink")
+            self._remove_owned_view()
+            logger.warning(
+                f"Run-local alignment view {destination} does not reach the bound alignment "
+                f"through its own pathname ({reason or 'identity mismatch'}); using a hardlink view instead."
+            )
             return False
         self._record_view(destination, installed_stat, "symlink")
         return True
