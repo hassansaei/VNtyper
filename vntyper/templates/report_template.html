@@ -212,7 +212,14 @@
         
         <!-- Basic coverage view (default) -->
         <div id="basicCoverageView">
-            <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon|safe }}</p>
+            <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon|safe }}
+                <br><small>Over {{ vntr_region_length }} bp, as this assembly represents the
+                region. <strong>Not comparable with another assembly's mean</strong> &mdash; the
+                builds contain different amounts of the repeat array.</small></p>
+            <p><strong>Flank depth:</strong> {{ vntr_flank_mean_depth }}
+                <br><small>Mean depth over {{ vntr_flank_bases }} bp of unique sequence either side
+                of the repeat array. This is the figure to compare between assemblies, because
+                unique sequence measures the sample rather than the reference.</small></p>
         </div>
         
         <!-- Detailed coverage view (hidden by default) -->
