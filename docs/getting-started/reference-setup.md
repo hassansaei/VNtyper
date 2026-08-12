@@ -107,11 +107,17 @@ incomplete.
 | File | How it is produced | From |
 | --- | --- | --- |
 | `alignment/chr1.<assembly>.fa` (×6) | downloaded | UCSC, NCBI RefSeq, Ensembl |
-| `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `filter_config.json` | downloaded (seeds) | `berntpopp/vntyper-data`, pinned by commit |
+| `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa` | downloaded (seeds) | `berntpopp/vntyper-data`, pinned by commit |
+| `filter_config.json` | downloaded (seed) — **`--from-source` only**, see below | `berntpopp/vntyper-data`, pinned by commit |
 | `vntr_db_advntr/*.db` | downloaded | `berntpopp/vntyper-data` |
 | **`muc1_region_hg19.fa`** | **derived** | `samtools faidx chr1.hg19.fa chr1:155158000-155163000` |
 | **`muc1_region_hg38.fa`** | **derived** | `samtools faidx chr1.hg38.fa chr1:155184000-155194000` |
 | **`All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`** | **derived** | merged from `MUC1_motifs_Rev_com.fa` + `filter_config.json` |
+
+`filter_config.json` is the one seed a **bundle-installed tree does not have**. The bundle
+ships the merged motif FASTA pre-built, so nothing on that path ever needs the filter rules,
+and they are not staged beside it. Only `--from-source`, which builds that FASTA itself,
+downloads it. This matters for `--derive-only` below.
 
 Reference **bytes** are hosted outside this repository — VNtyper's own seeds in
 [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data), the genomes at UCSC,
