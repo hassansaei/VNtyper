@@ -18,6 +18,8 @@ commit that introduced the pin.
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -99,3 +101,136 @@ def test_the_config_is_resolved_beside_the_script_not_in_the_working_directory()
 
     assert "BASH_SOURCE" in installer, "the config must be resolved relative to the script"
     assert 'CONFIG_FILE="install_advntr.cfg"' not in installer, "a bare relative name resolves against the CWD"
+
+
+# --- Behaviour, by running the installer ------------------------------------------------
+#
+# Everything above reads the script as text, which cannot tell a live `git checkout` from one
+# sitting in a comment. These run it. The installer prints its settings and then refuses an
+# existing --install-dir without --overwrite, so it reports what it resolved and exits before
+# it would clone: no network, no git, deterministic.
+
+requires_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not available")
+
+
+def _resolved_settings(tmp_path: Path, *args: str) -> str:
+    """Run the installer far enough to print its settings, and no further."""
+    stop_here = tmp_path / "already-installed"
+    stop_here.mkdir()
+
+    result = subprocess.run(
+        ["bash", str(INSTALLER), "-d", str(stop_here), *args],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 1, f"expected the existing-directory refusal, got {result.returncode}: {result.stderr}"
+    assert "already exists" in result.stdout, "the run must stop before cloning"
+    return result.stdout
+
+
+@requires_bash
+def test_the_shipped_pin_reaches_a_run_started_from_another_directory(tmp_path):
+    """The whole point of resolving beside the script, checked by running it from elsewhere.
+
+    ``docker/Dockerfile.base`` runs ``bash /tmp/advntr/install_advntr.sh`` with the build's
+    working directory somewhere else entirely. Reading the script's text cannot show that the
+    shipped config is actually picked up there; running it from an unrelated cwd can.
+    """
+    settings = _resolved_settings(tmp_path)
+
+    assert _cfg_value("GIT_COMMIT") in settings, "the shipped pin must reach a run started elsewhere"
+    assert _cfg_value("GIT_BRANCH") in settings
+    assert _cfg_value("GIT_REPO") in settings
+
+
+@requires_bash
+def test_an_explicit_config_replaces_the_shipped_one_rather_than_layering_over_it(tmp_path):
+    """``-c`` has to win completely, not partially.
+
+    Sourcing the shipped config first and letting ``-c`` override afterwards leaks every
+    value the caller's file does not set. GIT_COMMIT is the one that matters: a ``-c`` that
+    selects a different branch would clone that branch and then check out *this* repository's
+    pinned commit on top of it -- silently building a tree the caller did not choose -- or
+    abort claiming their pinned revision is missing when they pinned nothing.
+
+    This is only a hazard because the default now resolves beside the script and therefore
+    always exists. Before that it was a bare relative name that usually matched nothing.
+    """
+    override = tmp_path / "local.cfg"
+    override.write_text('GIT_REPO="https://example.invalid/fork.git"\nGIT_BRANCH="my-branch"\n', encoding="utf-8")
+
+    settings = _resolved_settings(tmp_path, "-c", str(override))
+
+    assert "my-branch" in settings, "the override's branch must be used"
+    assert "example.invalid" in settings, "the override's repository must be used"
+    assert _cfg_value("GIT_COMMIT") not in settings, (
+        "the shipped commit pin leaked into a run configured by --config; "
+        "it would be checked out on top of the caller's branch"
+    )
+
+
+@requires_bash
+def test_a_config_path_that_does_not_exist_is_refused(tmp_path):
+    """Silently falling back to the shipped config would build something other than asked."""
+    result = subprocess.run(
+        ["bash", str(INSTALLER), "-c", str(tmp_path / "nope.cfg")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "not found" in result.stdout + result.stderr
+
+
+@requires_bash
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not available")
+def test_an_absent_pinned_revision_actually_aborts_the_install(tmp_path):
+    """The abort path, executed rather than grepped for.
+
+    ``test_a_missing_pinned_revision_aborts_rather_than_using_the_branch_tip`` reads the
+    script as text and would pass on any ``exit 1`` anywhere below the first mention of
+    GIT_COMMIT -- including one in an unrelated branch, or in a comment. This clones a real
+    (local, offline) repository and pins a revision that is not in it, so the only way to
+    reach a zero exit is for the fallback-to-branch-tip failure to be real.
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path),
+    }
+    (origin / "README").write_text("x\n", encoding="utf-8")
+    for command in (["init", "-b", "main"], ["add", "-A"], ["commit", "-m", "c"]):
+        subprocess.run(["git", *command], cwd=origin, env=env, check=True, capture_output=True)
+
+    absent = "0" * 40
+    override = tmp_path / "local.cfg"
+    override.write_text(
+        f'GIT_REPO="{origin}"\nGIT_BRANCH="main"\nGIT_COMMIT="{absent}"\n',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(INSTALLER), "-c", str(override), "-d", str(tmp_path / "build")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode != 0, "an absent pinned revision must not build the branch tip"
+    assert absent in result.stderr, "the abort must name the revision it could not find"
+    assert "Refusing to build against the branch tip" in result.stderr

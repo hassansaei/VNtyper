@@ -15,7 +15,37 @@ set -e  # Exit immediately if any command exits with a non-zero status
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/install_advntr.cfg"
 
-# If that configuration file exists, source it.
+# Resolve -c/--config *before* sourcing anything, so an explicit config replaces the shipped
+# one instead of layering on top of it.
+#
+# This became load-bearing when the default above stopped being a bare relative name. That
+# name usually matched nothing, so `-c mine.cfg` was in practice the only file sourced. The
+# script-adjacent default always exists, so sourcing it first and letting `-c` override
+# afterwards would leak every value the caller's file does not happen to set -- GIT_COMMIT
+# above all. A `-c` that sets only GIT_BRANCH would then clone the caller's branch and check
+# out this repository's pinned commit on top of it, silently building a tree they did not
+# choose, or abort reporting that *their* pin is missing when they set no pin at all. The
+# shipped config is a complete set of values, not a base layer.
+config_override=""
+config_flag_seen=false
+for ((i = 1; i <= $#; i++)); do
+    case "${!i}" in
+        -c|--config)
+            config_flag_seen=true
+            next=$((i + 1))
+            config_override="${!next}"
+            ;;
+    esac
+done
+if [ "$config_flag_seen" = true ]; then
+    if [ -z "$config_override" ] || [ ! -f "$config_override" ]; then
+        echo "Configuration file $config_override not found."
+        exit 1
+    fi
+    CONFIG_FILE="$config_override"
+fi
+
+# Source exactly one configuration file: the explicit one, or the shipped default.
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 fi
@@ -36,7 +66,10 @@ function display_help() {
     echo "  -e, --env              Name of the conda environment to activate (optional)."
     echo "  -d, --install-dir      Directory where adVNTR will be installed (default: \$INSTALL_DIR)."
     echo "  -o, --overwrite        Overwrite the installation directory if it exists."
-    echo "  -c, --config           Path to configuration file (default: install_advntr.cfg)."
+    echo "  -c, --config           Path to configuration file. Replaces the config shipped"
+    echo "                         beside this script rather than layering over it, so it"
+    echo "                         must set every variable it wants to differ from the"
+    echo "                         built-in fallbacks below."
     echo "  -h, --help             Display this help message."
     echo ""
     echo "Config file variables:"
@@ -44,6 +77,8 @@ function display_help() {
     echo "  INSTALL_DIR : Directory for installation."
     echo "  GIT_REPO    : Git repository URL for adVNTR."
     echo "  GIT_BRANCH  : Git branch to clone."
+    echo "  GIT_COMMIT  : Exact revision to check out after cloning. This, not GIT_BRANCH,"
+    echo "                determines the tree that is built. Empty means the branch tip."
     exit 0
 }
 
@@ -62,14 +97,9 @@ while [[ "$#" -gt 0 ]]; do
             OVERWRITE=true
             ;;
         -c|--config)
-            CONFIG_FILE="$2"
+            # Already resolved and sourced above, before the defaults were applied. Consume
+            # its value here so the rest of the parse stays aligned.
             shift
-            if [ -f "$CONFIG_FILE" ]; then
-                source "$CONFIG_FILE"
-            else
-                echo "Configuration file $CONFIG_FILE not found."
-                exit 1
-            fi
             ;;
         -h|--help)
             display_help
@@ -87,6 +117,9 @@ echo "  Install directory: $INSTALL_DIR"
 echo "  Overwrite if exists: $OVERWRITE"
 echo "  Git repository: $GIT_REPO"
 echo "  Git branch: $GIT_BRANCH"
+# Printed because it, not the branch, decides the tree that gets built. A pin nobody can see
+# in the build log is a pin nobody checks.
+echo "  Git commit pin: ${GIT_COMMIT:-<none: branch tip>}"
 if [ -n "$CONDA_ENV" ]; then
     echo "  Conda environment to activate: $CONDA_ENV"
 else
