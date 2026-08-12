@@ -46,6 +46,38 @@ def _assert_kestrel_allele_contract(ref, alt, snv_length, source_path):
     raise ValueError(msg)
 
 
+def _assert_empty_allele_contract(ref, alt, source_path):
+    """
+    Reject a VCF record with an empty REF or ALT allele.
+
+    Every VCF record has both alleles. A record missing one is truncated, and it is the one
+    malformed shape this function's caller would otherwise **discard in silence**: the indel
+    test is ``len(ref) != len(alt)``, and two empty alleles are equal, so such a record is
+    classified as a substitution and dropped. A Kestrel VCF whose records were all truncated
+    that way would produce two valid-header-but-empty derived files, pass every header check,
+    and be reported as a confident ``Negative`` (#223).
+
+    Args:
+        ref (str): Reference allele from the record.
+        alt (str): Alternate allele from the record.
+        source_path (str): Path of the VCF being read, for the error message.
+
+    Raises:
+        ValueError: If either allele is empty.
+    """
+    if ref and alt:
+        return
+
+    msg = (
+        f"Truncated VCF record in {source_path}: REF={ref!r} and ALT={alt!r}, and a record must "
+        "carry both alleles. Two empty alleles compare equal, so this record would be classified "
+        "as a substitution and dropped without a trace -- and a file of them would be reported as "
+        "a negative genotype rather than as the malformed output it is."
+    )
+    logger.error(msg)
+    raise ValueError(msg)
+
+
 def filter_vcf(input_path, output_path):
     """
     Filter a VCF file to extract indels (insertions and deletions) and write them to a new file.
@@ -78,6 +110,7 @@ def filter_vcf(input_path, output_path):
                 indel_file.write(line)
             else:
                 _, _, _, ref, alt, *_ = line.split("\t")
+                _assert_empty_allele_contract(ref, alt, input_path)
                 _assert_kestrel_allele_contract(ref, alt, snv_length, input_path)
                 if len(ref) != len(alt):
                     indel_file.write(line)

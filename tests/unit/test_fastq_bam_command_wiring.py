@@ -794,3 +794,70 @@ def test_align_and_sort_emits_the_single_input_bwa_form(tmp_path):
         f"set -o pipefail; bwa mem -t 4 {reference} /data/single.fq.gz | "
         f"samtools view -@ 4 -b | samtools sort -@ 4 -o {sorted_bam}"
     )
+
+
+def test_an_invalid_region_is_refused_before_samtools_runs(tmp_path, monkeypatch):
+    """#224: the ordering is the fix, not the validation.
+
+    ``samtools depth -a`` writes one row per *declared* base, so an oversized region exhausts
+    disk before Python allocates anything. Validating after ``run_command`` would catch the
+    bad value only once the damage was done. This asserts the command was never built or run --
+    coverage alone cannot prove the ordering, only that the line executed.
+    """
+    launched = []
+    monkeypatch.setattr(fastq_bam_processing, "run_command", lambda *a, **k: launched.append(a) or True)
+
+    with pytest.raises(ValueError, match="above the"):
+        fastq_bam_processing.calculate_vntr_coverage(
+            bam_file=tmp_path / "in.bam",
+            region="chr1:1-250000000",
+            threads=1,
+            config={"tools": {"samtools": "samtools"}},
+            output_dir=tmp_path,
+            output_name="coverage",
+        )
+
+    assert launched == [], "samtools ran for a region that should have been refused first"
+
+
+def test_a_reversed_region_is_refused_before_samtools_runs(tmp_path, monkeypatch):
+    """`samtools depth -r chr1:2000-1000` exits 1 anyway, but the refusal should not depend on
+    that -- ``parse_region_length`` is public and reachable without samtools at all."""
+    launched = []
+    monkeypatch.setattr(fastq_bam_processing, "run_command", lambda *a, **k: launched.append(a) or True)
+
+    with pytest.raises(ValueError, match="is before start"):
+        fastq_bam_processing.calculate_vntr_coverage(
+            bam_file=tmp_path / "in.bam",
+            region="chr1:2000-1000",
+            threads=1,
+            config={"tools": {"samtools": "samtools"}},
+            output_dir=tmp_path,
+            output_name="coverage",
+        )
+
+    assert launched == []
+
+
+def test_an_unparseable_region_never_reaches_samtools(tmp_path, monkeypatch):
+    """#224: the span bound is worthless if a region without an end can walk past it.
+
+    ``parse_region_length`` degrades an unparseable region to 0 and only warns, which is its
+    documented contract. But ``samtools -r`` accepts a bare contig, so passing ``chr1`` through
+    unchecked emits chromosome-wide depth -- recreating the exact disk exhaustion the bound
+    exists to prevent, through the one input the bound cannot measure.
+    """
+    launched = []
+    monkeypatch.setattr(fastq_bam_processing, "run_command", lambda *a, **k: launched.append(a) or True)
+
+    with pytest.raises(ValueError, match="could not be parsed into coordinates"):
+        fastq_bam_processing.calculate_vntr_coverage(
+            bam_file=tmp_path / "in.bam",
+            region="chr1",
+            threads=1,
+            config={"tools": {"samtools": "samtools"}},
+            output_dir=tmp_path,
+            output_name="coverage",
+        )
+
+    assert launched == [], "a region with no end reached samtools"

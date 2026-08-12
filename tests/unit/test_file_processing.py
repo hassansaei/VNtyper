@@ -225,3 +225,21 @@ def test_a_multi_base_ref_insertion_is_routed_to_the_insertion_file(tmp_path):
     filter_indel_vcf(str(path), str(ins), str(dele))
     assert len(_rows(ins)) == 1
     assert _rows(dele) == []
+
+
+def test_a_record_with_empty_alleles_is_refused_not_silently_dropped(tmp_path):
+    """#223: the one malformed shape ``filter_vcf`` would otherwise discard without a trace.
+
+    The indel test is ``len(ref) != len(alt)``, and two empty alleles compare equal -- so a
+    truncated record is classified as a substitution and dropped. A file of them yields two
+    valid-header-but-empty derived VCFs, passes every header check, and is reported as a
+    confident negative.
+    """
+    src = tmp_path / "output.vcf"
+    src.write_text(
+        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t1\t.\t\t\t.\t.\tDP=1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must carry both alleles"):
+        filter_vcf(str(src), str(tmp_path / "out_indel.vcf"))

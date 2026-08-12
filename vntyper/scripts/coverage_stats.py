@@ -31,10 +31,14 @@ depth where there happened to be reads, which is not a property of the region an
 systematically too high exactly where coverage was patchy.
 
 ``samtools depth`` is called with ``-a`` (:func:`command_builders.build_samtools_depth_command`),
-so the depth table already spans the whole region and the zeros are real rows.
-``uncovered_bases`` counts them rather than deriving them by subtraction, which is what
-makes the two changes one change: under ``-a``, ``region_length - len(values)`` is 0 for
+so the depth table normally spans the whole region and the zeros are real rows.
+``uncovered_bases`` counts those zero rows rather than deriving them by subtraction, which is
+what makes the two changes one change: under ``-a``, ``region_length - len(values)`` is 0 for
 every sample.
+
+Normally, not always. A region truncated at a contig end legitimately yields a *short* file,
+which is why :func:`summarise_coverage` pads a short input rather than rejecting it. A file
+*longer* than its own region is incoherent under either convention, and is refused (#224).
 
 Functions:
     parse_region_length: Region string to inclusive base count
@@ -79,6 +83,22 @@ COVERAGE_COLUMNS: tuple[str, ...] = COVERAGE_METRIC_COLUMNS + ("coverage_qc",)
 #: Columns rendered with two decimal places; the rest are written as-is.
 _TWO_DECIMAL_COLUMNS = frozenset({"mean", "median", "stdev", "percent_uncovered"})
 
+#: Largest region span :func:`parse_region_length` accepts, in bases.
+#:
+#: Not a configuration key, deliberately. ``--config-path`` replaces the whole config rather
+#: than merging it (AGENTS.md trap 2), so a new key can go missing - and a sanity bound that
+#: aborts a run when its own key is absent is a worse failure than the one it guards. The MUC1
+#: VNTR regions are 1501 and 4501 bp, so this carries three orders of magnitude of headroom.
+#:
+#: The bound exists because ``samtools depth -a`` writes one row per *declared* base, which
+#: makes the depth **file** unbounded as well as the list built from it: ``chr1:1-250000000``
+#: emitted roughly 48 million rows and exhausted 30 GB of disk before Python allocated
+#: anything. Disk is the first failure mode here, not memory - Python's own share is about 16
+#: bytes per declared base, or 3.8 GiB for that region. That is why
+#: ``fastq_bam_processing.calculate_vntr_coverage`` parses the region *before* it runs
+#: samtools rather than after (#224).
+MAX_REGION_SPAN_BASES: int = 10_000_000
+
 
 def parse_region_length(region: str) -> int:
     """
@@ -92,11 +112,19 @@ def parse_region_length(region: str) -> int:
     Returns:
         int: ``end - start + 1``, or ``0`` if the string cannot be parsed.
 
+    Raises:
+        ValueError: If the region parses but its coordinates are impossible - a start below
+            1, an end before the start, or a span above :data:`MAX_REGION_SPAN_BASES`.
+
     Warning:
-        A malformed region degrades to ``0`` rather than raising. That is the
-        pre-existing behaviour and it is preserved, but it means
-        ``percent_uncovered`` is then reported as ``0`` for a sample whose region
-        could not be read at all. The WARNING log is the only signal.
+        A region that cannot be *parsed at all* still degrades to ``0`` rather than raising.
+        That is the pre-existing behaviour and it is preserved, but it means
+        ``percent_uncovered`` is then reported as ``0`` for a sample whose region could not be
+        read at all. The WARNING log is the only signal.
+
+        That is deliberately distinct from the ``ValueError`` above: "could not be parsed" and
+        "parsed to something impossible" are different states, and only the second is a value
+        somebody configured (#224).
 
     Examples:
         >>> parse_region_length("chr1:155160500-155162000")
@@ -117,12 +145,41 @@ def parse_region_length(region: str) -> int:
 
         start_pos = int(pos_range[0])
         end_pos = int(pos_range[1])
-        total_region_length = end_pos - start_pos + 1
-        logger.debug(f"VNTR region total length: {total_region_length} bp")
-        return total_region_length
     except (ValueError, IndexError) as e:
         logger.warning(f"Could not parse region string: {e}. Setting region length to 0.")
         return 0
+
+    # This validation sits OUTSIDE the `try` above on purpose. That block catches
+    # `(ValueError, IndexError)` and returns 0, so a raise placed inside it would be caught
+    # by its own handler and degraded to a silent zero-length region -- which is the failure
+    # mode being fixed, not a fallback. "Could not be parsed" and "parsed to something
+    # impossible" are different states and must stay different (#224).
+    if start_pos < 1:
+        msg = f"Invalid region {region!r}: start {start_pos} is below 1. Region coordinates are 1-based."
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if end_pos < start_pos:
+        msg = (
+            f"Invalid region {region!r}: end {end_pos} is before start {start_pos}. A reversed region "
+            "yields a negative length, which is then reported beside a passing coverage verdict."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    total_region_length = end_pos - start_pos + 1
+    if total_region_length > MAX_REGION_SPAN_BASES:
+        msg = (
+            f"Configured region {region!r} spans {total_region_length} bases, above the "
+            f"{MAX_REGION_SPAN_BASES} limit. `samtools depth -a` writes one row per base in the "
+            "region, so this exhausts disk before any coverage summary is produced. The MUC1 VNTR "
+            "regions are 1501 and 4501 bp."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    logger.debug(f"VNTR region total length: {total_region_length} bp")
+    return total_region_length
 
 
 def read_depth_values(depth_file: str | Path) -> list[int]:
@@ -170,6 +227,10 @@ def summarise_coverage(coverage_values: list[int], total_region_length: int) -> 
         ``uncovered_bases`` are ``int``.
 
     Raises:
+        ValueError: If ``coverage_values`` is longer than a positive
+            ``total_region_length``. The depth table and the region string then disagree, and
+            every statistic would be computed over more bases than the region it describes -
+            ``percent_uncovered`` alone can exceed 100 (#224).
         RuntimeError: If ``coverage_values`` is empty. Under ``-a`` an empty depth
             table can only mean the region matched no contig at all - a wrong
             contig name, or a region past the end of the chromosome - because a
@@ -185,6 +246,23 @@ def summarise_coverage(coverage_values: list[int], total_region_length: int) -> 
     """
     if not coverage_values:
         raise RuntimeError("No coverage data found.")
+
+    # `absent` below pads a SHORT list up to the region. A LONG one has no correct summary:
+    # every statistic would be computed over a base set larger than the region it claims to
+    # describe, and `percent_uncovered` alone can exceed 100 -- `summarise_coverage([0]*4, 2)`
+    # reported 200.0. Clamping would invent a number instead of refusing one.
+    #
+    # Guarded on a positive length because 0 does not mean "a zero-base region", it means the
+    # region string could not be parsed at all, and an unknown region cannot be compared
+    # against a row count. `summarise_coverage([10, 20], 0)` is a pinned contract (#224).
+    if total_region_length > 0 and len(coverage_values) > total_region_length:
+        msg = (
+            f"The depth table carries {len(coverage_values)} rows for a region of {total_region_length} "
+            "bases. There is no correct summary to return: every statistic would cover more bases than "
+            "the region it describes, and percent_uncovered would exceed 100."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
 
     # `samtools depth -a` emits one row per position in the region, zeros included, so
     # `coverage_values` *is* the region. A file written without `-a` - a legacy artefact,

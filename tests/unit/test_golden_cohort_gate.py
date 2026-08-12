@@ -167,7 +167,7 @@ def test_cmd_run_converts_the_side_record_to_status(
         marker="vntyper.scripts.marker",
         expect_marker="present",
         threads=4,
-        advntr_threads=8,
+        advntr_case_threads=8,
         jobs=2,
         timeout=60,
         no_cohort=False,

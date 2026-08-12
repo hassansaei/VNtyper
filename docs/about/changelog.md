@@ -6,7 +6,44 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.14 (Current)
+## 2.0.15 (Current)
+
+**Stop claiming more than we know.** Five defects in which VNtyper stated something it
+had not established.
+
+### Fixed
+
+- **A Kestrel VCF that cannot be parsed no longer produces a `Negative` (#223).** A run
+  that exited 0 having lost its `#CHROM` header discarded every indel record it carried
+  and reported a confident negative genotype, with no error logged at all. The zero-byte
+  case is the mild one; the severe one converts a positive into a negative. Each
+  configured k-mer size is now tried, and a run where none produces a usable VCF fails
+  loudly. A valid header with no records is still a legitimate negative and is unchanged.
+- **`summarise_coverage` refuses a depth table longer than its region (#224).** It
+  previously reported percentages above 100 -- four uncovered positions in a two-base
+  region gave `percent_uncovered: 200.0`. Region coordinates are also validated *before*
+  `samtools depth` runs, so a reversed or oversized region fails immediately instead of
+  writing an unbounded depth file; a reversed region used to reach the report as a
+  negative length beside a passing coverage verdict.
+- **The adVNTR thread count and output format come from configuration alone (#247).**
+  Both code fallbacks contradicted the shipped `advntr_config.json`, so dropping either
+  key changed the emitted command silently.
+
+### Changed
+
+- The golden-cohort harness option `--advntr-threads` is now `--advntr-case-threads`,
+  and the `side.json` key with it (#247). The value is unchanged. The old name read as
+  the thread count adVNTR received, which was never true: adVNTR runs at `-t 1` from its
+  own configuration and never sees the CLI value.
+- `docs/pipeline/scoring-and-confidence.md` describes what a confidence tier says about
+  the evidence rather than what a reader should do with it (#250). VNtyper is research
+  use only, which that page previously contradicted five times.
+- `--pseudonymize-samples` and the cohort documentation state what the pseudonym does
+  **not** protect against (#227): the digest is unsalted and unkeyed, so a shared report
+  must be treated as identifying. Documentation only; the digest is unchanged.
+- Planning documents are no longer tracked. `docs/` is now strictly the published site.
+
+## 2.0.14
 
 **CRAM runs fail under Docker with `Too many levels of symbolic links` (#238).**
 

@@ -91,7 +91,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser_pipeline.add_argument("--bam", type=str, help="Path to the BAM file.")
     parser_pipeline.add_argument("--cram", type=str, help="Path to the CRAM file.")
     parser_pipeline.add_argument("--reference-fasta", type=Path, help="Path to the reference FASTA for CRAM decoding.")
-    parser_pipeline.add_argument("--threads", type=int, default=None, help="Number of threads to use.")
+    parser_pipeline.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Number of threads to use. Applies to alignment, samtools and fastp; adVNTR ignores it, "
+        "because its -t flag has no effect on the short-read frameshift genotyping VNtyper runs.",
+    )
     parser_pipeline.add_argument(
         "--reference-assembly",
         type=str,
@@ -271,8 +277,12 @@ def build_parser() -> argparse.ArgumentParser:
         const="sample_",
         default=None,
         help=(
-            "Pseudonymize sample names to protect sensitive information. "
-            "Optionally provide a basename for pseudonyms (default is 'sample_')."
+            "Replace sample names with a prefix plus a truncated SHA-256 digest of the name. "
+            "Optionally provide a basename for pseudonyms (default is 'sample_'). This is "
+            "obfuscation for readability, not a privacy control: the digest is unsalted and "
+            "unkeyed, so where sample names are drawn from a guessable set anyone holding the "
+            "report can recover them by testing candidates at one hash each. Treat a shared "
+            "report as identifying."
         ),
     )
 
@@ -356,7 +366,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Reference assembly used (hg19, hg38, GRCh37, GRCh38, hg19_ncbi, hg38_ncbi, hg19_ensembl, hg38_ensembl).",
     )
-    parser_online.add_argument("--threads", type=int, default=None, help="Number of threads to use.")
+    parser_online.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Number of threads to use. Applies to alignment, samtools and fastp; adVNTR ignores it, "
+        "because its -t flag has no effect on the short-read frameshift genotyping VNtyper runs.",
+    )
     parser_online.add_argument(
         "--email",
         type=str,

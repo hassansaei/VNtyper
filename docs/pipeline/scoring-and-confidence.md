@@ -68,10 +68,10 @@ The thresholds are defined in `kestrel_config.json`:
 
 ### Confidence Levels
 
-| Level | Criteria | Clinical Interpretation |
+| Level | Criteria | What the evidence supports |
 |-------|----------|------------------------|
 | **High_Precision*** | Alt depth >= 100 **and** Depth Score **> 0.00515** | Very high confidence call; strong supporting evidence |
-| **High_Precision** | Alt depth >= 21 and < 100, **and** Depth Score **> 0.00515** | High confidence call suitable for clinical consideration |
+| **High_Precision** | Alt depth >= 21 and < 100, **and** Depth Score **> 0.00515** | High confidence call: both calibrated thresholds are met |
 | **Low_Precision** | Depth Score anywhere in the **closed** band `0.00469 <= Depth Score <= 0.00515`, at **any** alt depth; **or** alt depth <= 20 with Depth Score > 0.00515 | Variant detected but with marginal evidence; requires independent validation |
 | **Negative** | Depth Score < 0.00469, or undefined (active-region depth of 0 -> NaN) | Signal below noise threshold; variant is likely an artifact |
 
@@ -197,12 +197,12 @@ else, a demotion at this boundary can change which variant is reported for a sam
 that carries more than one. `tests/unit/test_confidence_boundaries.py` pins both the
 label and that selection consequence.
 
-## Clinical Interpretation
+## Interpreting the confidence levels
 
-The confidence level directly informs clinical decision-making:
+The confidence level describes how much evidence supports the call:
 
-- **High_Precision / High_Precision***: The variant call is supported by sufficient evidence for clinical reporting, though orthogonal validation (e.g., SNaPshot for dupC, long-read sequencing for complex variants) is recommended per clinical guidelines.
-- **Low_Precision**: The variant signal is present but marginal. Independent validation is essential before clinical action.
+- **High_Precision / High_Precision***: Both calibrated thresholds are met. Orthogonal validation (e.g., SNaPshot for dupC, long-read sequencing for complex variants) is recommended before the call is relied on.
+- **Low_Precision**: The depth score falls inside the closed calibration band, or the alternate depth is at or below 20. Independent validation is essential before the call is relied on.
 - **Negative**: No evidence of a pathogenic VNTR variant above the noise floor.
 
 ## Reference

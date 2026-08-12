@@ -22,7 +22,7 @@ vntyper [global-options] cohort
 | `-o, --output-dir` | path | (required) | Output directory for the aggregated summary |
 | `--summary-file` | string | `cohort_summary.html` | Name of the cohort summary report file |
 | `--summary-formats` | string | `""` | Comma-separated list of additional summary output formats to generate (supported: `csv`, `tsv`, `json`). HTML is always generated |
-| `--pseudonymize-samples` | string (optional value) | — | Pseudonymize sample names to protect sensitive information. When used without a value, defaults to the basename `sample_`. Optionally provide a custom basename |
+| `--pseudonymize-samples` | string (optional value) | — | Replace sample names with a prefix plus a truncated SHA-256 digest. Obfuscation for readability, **not** a privacy control -- the digest is unsalted and unkeyed, so guessable names are recoverable from the report alone; see [Cohort analysis](../user-guide/cohort-analysis.md#what-pseudonymization-does-not-protect-against). Defaults to the basename `sample_`; optionally provide a custom basename |
 
 One of `-i/--input-dirs` or `--input-file` is required.
 

@@ -217,7 +217,7 @@ fastp.json
 
 # Design-critique snapshots written by the impeccable skill. They are a local
 # backlog keyed to one developer's run, not a shared artifact; the reviewed
-# outcome belongs in docs/superpowers/ and in the issue, which are tracked.
+# outcome belongs in the pull request and the issue, which are permanent.
 .impeccable/
 
 # local clone of the upstream adVNTR source tree (installed, not vendored)
@@ -228,3 +228,17 @@ plan/
 forbidden_strings.txt
 reference/forbidden_strings.txt
 .ci-local-venv/
+
+# Contributor working documents are neither project history nor documentation. `docs/`
+# is strictly the published mkdocs site; design specs, implementation plans, execution
+# prompts and milestone gate artifacts live in `.planning/`, untracked -- conventionally
+# `specs/`, `plans/`, `prompts/` and `milestones/` beneath it. A fresh clone has no such
+# directory, so nothing tracked may depend on its contents. The durable record of *why* a
+# change was made is the commit message, the pull request and the GitHub issue -- all
+# permanent, and all reachable by someone who does not have this directory.
+#
+# Both entries are deliberate. `.planning/` is unanchored: no level of the tree should
+# carry one. `/specs/` is root-anchored so that it cannot also match a `specs/`
+# directory nested somewhere legitimate.
+.planning/
+/specs/

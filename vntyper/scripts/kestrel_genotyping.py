@@ -38,6 +38,7 @@ from vntyper.scripts.confidence_assignment import (
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
+from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.motif_processing import (
     load_additional_motifs,
     load_muc1_reference,
@@ -252,14 +253,42 @@ def run_kestrel(
         logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
 
         if vcf_path.is_file():
-            # Convert the intermediate SAM→BAM (for debugging or IGV)
-            sam_file = os.path.join(output_dir, "output.sam")
-            convert_sam_to_bam_and_index(sam_file, output_dir)
+            problem = describe_unusable_vcf(vcf_path)
+            if problem is None:
+                # Convert the intermediate SAM→BAM (for debugging or IGV)
+                sam_file = os.path.join(output_dir, "output.sam")
+                convert_sam_to_bam_and_index(sam_file, output_dir)
 
-            # Postprocess final output
-            process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
-            completed = True
-            break  # Stop after the first successful k-mer size
+                # Postprocess final output
+                process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
+                completed = True
+                break  # Stop after the first successful k-mer size
+
+            # A VCF nothing can parse is the same kind of event as no VCF at all: Kestrel
+            # exited 0 and produced nothing this stage can read. Treat it the same way and let
+            # the next configured k-mer size try. Aborting here would contradict the deliberate
+            # fall-through below, and the terminal raise still catches the case where every
+            # k-mer size fails -- so no path reaches a manufactured negative either way (#223).
+            logger.warning(
+                f"Kestrel exited successfully for k-mer size {kmer_size} and wrote {vcf_path}, but "
+                f"{problem}. Removing it and trying the next configured k-mer size."
+            )
+            # `vcf_path` is the same path for every k-mer size, so a stale unusable file would
+            # be re-examined by the next iteration and reported against the wrong k-mer size.
+            # The removal is guarded because it must not become a *new* way to leave the loop:
+            # an unhandled OSError here would escape as a bare filesystem error, skipping the
+            # terminal RuntimeError that is this function's whole contract.
+            try:
+                vcf_path.unlink()
+            except OSError as exc:
+                msg = (
+                    f"Kestrel wrote an unusable VCF to {vcf_path} for k-mer size {kmer_size} ({problem}), "
+                    f"and it could not be removed ({exc}). Continuing would test the same unusable file "
+                    "against the next k-mer size and report the result against the wrong one."
+                )
+                logger.error(msg)
+                raise RuntimeError(msg) from exc
+            continue
 
         # Exit status 0 with no VCF is the silent path #212 is about. Say so, then let the
         # next configured k-mer size try.
@@ -267,8 +296,10 @@ def run_kestrel(
 
     if not completed:
         msg = (
-            "Kestrel produced no VCF for any configured k-mer size, so no result file was written. "
-            "Reporting this as a negative would manufacture a confident negative genotype. See issue #212."
+            "Kestrel produced no usable VCF for any configured k-mer size, so no result file was "
+            "written. Every configured k-mer size either wrote no VCF at all, or wrote one that could "
+            "not be parsed into records. Reporting this as a negative would manufacture a confident "
+            "negative genotype. See issues #212 and #223."
         )
         logger.error(msg)
         raise RuntimeError(msg)
@@ -373,6 +404,28 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     output_ins = os.path.join(output_dir, "output_insertion.vcf")
     output_del = os.path.join(output_dir, "output_deletion.vcf")
     filter_indel_vcf(indel_vcf, output_ins, output_del)
+
+    # The derived files can fail independently of the raw VCF, and `read_vcf_without_comments`
+    # converts any read failure into an empty frame -- which four lines below is the `Negative`
+    # placeholder. This is the second half of #223: "Kestrel ran and found nothing" and "Kestrel
+    # produced nothing readable" must not render identically. Kestrel has already succeeded by
+    # this point, so there is nothing left to retry and this raises rather than falling through.
+    #
+    # `read_vcf_without_comments` itself is deliberately untouched. Its empty-frame fallback is
+    # a reviewed disposition (`scripts/ble001_policy.json`, preserved-no-authorized-alternative)
+    # with tests asserting it as correct, so the check belongs at the call site instead.
+    #
+    # A valid header with zero records passes: that is the legitimate empty result, and it must
+    # still reach `output_empty_result` below.
+    for derived_vcf in (output_ins, output_del):
+        problem = describe_unusable_vcf(derived_vcf)
+        if problem is not None:
+            msg = (
+                f"Kestrel's derived VCF {derived_vcf} cannot be parsed: {problem}. Reporting this as a "
+                "negative would manufacture a confident negative genotype. See issue #223."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
 
     # Step 5) Read the insertion & deletion VCFs
     header = generate_header(reference_vntr)

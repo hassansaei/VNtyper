@@ -166,7 +166,7 @@ class TestSettingsComeFromTheDerivedGlobal:
         self, inputs, captured_command, monkeypatch, output_format, expected_extension
     ):
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(advntr, "advntr_settings", {"output_format": output_format})
+        monkeypatch.setattr(advntr, "advntr_settings", {"output_format": output_format, "threads": 1})
 
         advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
 
@@ -195,17 +195,70 @@ class TestSettingsComeFromTheDerivedGlobal:
 
         assert "-vid 25561" in captured_command[0]["command"]
 
-    def test_the_defaults_apply_when_the_settings_global_is_empty(self, inputs, captured_command, monkeypatch):
+    def test_an_empty_settings_global_raises_rather_than_applying_defaults(self, inputs, captured_command, monkeypatch):
+        """#247: was ``test_the_defaults_apply_when_the_settings_global_is_empty``.
+
+        Those defaults contradicted the shipped configuration -- ``threads`` defaulted to 8
+        while advntr_config.json sets 1, and ``output_format`` defaulted to "tsv" while it sets
+        "vcf" -- so dropping either key changed the emitted command with no error at all.
+        Configuration is authoritative now, as for the calibration constants in
+        confidence_assignment.py:108-111, and a partial configuration fails loudly.
+        """
         db_file, sorted_bam, output = inputs
         monkeypatch.setattr(advntr, "advntr_settings", {})
 
+        with pytest.raises(KeyError, match="threads"):
+            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        assert captured_command == [], "no command may be emitted with an unconfigured thread count"
+
+    def test_a_missing_output_format_raises_rather_than_flipping_the_extension(
+        self, inputs, captured_command, monkeypatch
+    ):
+        """The second mismatch, which #247 does not name: the fallback was "tsv" while
+        advntr_config.json ships "vcf"."""
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(advntr, "advntr_settings", {"threads": 1})
+
+        with pytest.raises(KeyError, match="output_format"):
+            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        assert captured_command == []
+
+    def test_the_shipped_configuration_emits_one_thread(self, inputs, captured_command):
+        """The pin is deliberate and is not a performance oversight: adVNTR's -t sets only
+        settings.CORES, which nothing on the `genotype -fs` short-read path reads (#215)."""
+        db_file, sorted_bam, output = inputs
+
         advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
 
-        command = captured_command[0]["command"]
-        assert "-vid 25561" in command
-        assert "-t 8" in command
-        assert command.endswith("-aln")
-        assert "output_adVNTR.tsv" in command, "the default output_format is tsv"
+        assert "-t 1" in captured_command[0]["command"]
+
+
+class TestOutputExtensionIsDerivedInOnePlace:
+    """#247: pipeline.py repeated advntr_genotyping.py's ``.get("output_format", "tsv")``
+    fallback, so the producer of the adVNTR output path and its consumer could drift apart."""
+
+    @pytest.mark.parametrize(
+        ("output_format", "expected"),
+        [("vcf", ".vcf"), ("tsv", ".tsv"), ("anything-else", ".tsv")],
+    )
+    def test_the_extension_follows_the_mapping_it_is_given(self, output_format, expected):
+        assert advntr.advntr_output_extension({"output_format": output_format}) == expected
+
+    def test_a_missing_key_raises_rather_than_defaulting(self):
+        with pytest.raises(KeyError, match="output_format"):
+            advntr.advntr_output_extension({})
+
+    def test_it_reads_its_argument_and_not_the_module_global(self, monkeypatch):
+        """The mapping is a parameter on purpose. run_advntr reads the import-time
+        advntr_settings global while pipeline.py calls load_advntr_config() again and derives
+        its own -- two independently loaded states. A helper that read the global would let
+        the two disagree while appearing to share one source of truth.
+        """
+        monkeypatch.setattr(advntr, "advntr_settings", {"output_format": "tsv"})
+
+        assert advntr.advntr_output_extension({"output_format": "vcf"}) == ".vcf"
 
 
 class TestInputValidation:

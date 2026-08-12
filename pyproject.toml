@@ -166,10 +166,11 @@ target-version = "py310"
 # Ruff 0.16 began formatting Python fenced inside Markdown. Nothing asked it to, and the
 # result was a repository where `make format-check` passed while `ruff format --check .`
 # reported four files - `docs/development/ci-followups.md`, `reference/README.md`,
-# `reference/generate_vntr_reference.py` and a `specs/` design document. That is a trap
-# for anyone who runs the obvious command instead of the Makefile target, and it cannot be
-# resolved by reformatting: `reference/` is a base-image content-hash input (see `exclude`
-# below), and rewriting a committed `specs/` document to satisfy a formatter is churn.
+# `reference/generate_vntr_reference.py` and a design document (then under a top-level
+# `specs/`, since untracked). That is a trap for anyone who runs the obvious command
+# instead of the Makefile target, and it cannot be resolved by reformatting: `reference/`
+# is a base-image content-hash input (see `exclude` below), and rewriting a committed
+# design document to satisfy a formatter is churn.
 #
 # What this line gives up, stated rather than hidden: the Markdown files under
 # `RUFF_PATHS` are no longer formatted, though 0.16 had started doing it. Measure the
