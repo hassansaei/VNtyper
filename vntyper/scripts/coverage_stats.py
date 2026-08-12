@@ -198,11 +198,58 @@ def read_depth_values(depth_file: str | Path) -> list[int]:
         list[int]: The third column of every non-blank line, in file order.
 
     Raises:
-        ValueError: If a line has fewer than three fields or a non-integer depth.
+        IndexError: If a line has fewer than three fields. The bare subscript below
+            is what raises, so the message names neither the file nor the line; use
+            :func:`read_depth_positions` where that matters.
+        ValueError: If the depth column is not an integer.
         OSError: If the file cannot be read.
     """
     with open(depth_file) as f:
         return [int(line.strip().split("\t")[2]) for line in f if line.strip()]
+
+
+def read_depth_positions(depth_file: str | Path) -> list[tuple[int, int]]:
+    """
+    Read ``(position, depth)`` pairs out of a ``samtools depth`` output file.
+
+    :func:`read_depth_values` discards the position column, which is enough for
+    statistics over the whole region but not for a sub-interval of it. The VNTR
+    array total and the flank mean are both sub-intervals (#222), so they are
+    sliced from these pairs rather than from a second ``samtools depth`` call -
+    two calls over the same BAM could disagree, and would double the I/O on the
+    hot path.
+
+    Args:
+        depth_file (str | Path): Path to the depth table.
+
+    Returns:
+        list[tuple[int, int]]: The 1-based position and depth of every non-blank
+        line, in file order.
+
+    Raises:
+        ValueError: If a line has fewer than three fields, or a non-integer
+            position or depth. The message names the file and the 1-based line
+            number, because a truncated depth table is otherwise very hard to
+            place.
+        OSError: If the file cannot be read.
+    """
+    pairs: list[tuple[int, int]] = []
+    with open(depth_file) as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 3:
+                msg = f"{depth_file}:{number}: expected 3 tab-separated fields, found {len(fields)}"
+                logger.error(msg)
+                raise ValueError(msg)
+            try:
+                pairs.append((int(fields[1]), int(fields[2])))
+            except ValueError as exc:
+                msg = f"{depth_file}:{number}: position and depth must be integers, found {fields[1]!r} and {fields[2]!r}"
+                logger.error(msg)
+                raise ValueError(msg) from exc
+    return pairs
 
 
 def summarise_coverage(coverage_values: list[int], total_region_length: int) -> dict:

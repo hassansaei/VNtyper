@@ -34,6 +34,7 @@ from vntyper.scripts.coverage_stats import (
     MAX_REGION_SPAN_BASES,
     format_coverage_summary,
     parse_region_length,
+    read_depth_positions,
     read_depth_values,
     summarise_coverage,
 )
@@ -460,3 +461,58 @@ def test_end_to_end_over_a_synthetic_depth_file(tmp_path):
         "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\tcoverage_qc\n"
         "3.90\t2.50\t4.27\t0\t12\t20\t8\t40.00\tFAIL\n"
     )
+
+
+class TestReadDepthPositions:
+    """``read_depth_positions`` keeps the position column that ``read_depth_values`` drops.
+
+    The array total and the flank mean are sub-intervals of the depth table, so a
+    reader that returns depths alone cannot produce either (#222). This is the
+    reason the reading path grew a second function rather than the summariser
+    growing a second argument.
+    """
+
+    def test_positions_and_depths_are_returned_in_file_order(self, tmp_path):
+        """The pairs are the first and third columns, order preserved."""
+        depth_file = tmp_path / "depth.txt"
+        depth_file.write_text("chr1\t155161000\t12\nchr1\t155161001\t0\nchr1\t155161002\t7\n", encoding="utf-8")
+
+        assert read_depth_positions(depth_file) == [
+            (155161000, 12),
+            (155161001, 0),
+            (155161002, 7),
+        ]
+
+    def test_blank_lines_are_skipped_rather_than_failing(self, tmp_path):
+        """``samtools depth`` output can end with a newline; that is not a malformed row."""
+        depth_file = tmp_path / "depth.txt"
+        depth_file.write_text("chr1\t100\t5\n\nchr1\t101\t6\n\n", encoding="utf-8")
+
+        assert read_depth_positions(depth_file) == [(100, 5), (101, 6)]
+
+    def test_a_short_row_names_the_file_and_line(self, tmp_path):
+        """A truncated depth table must say where it broke.
+
+        ``read_depth_values`` documents ``ValueError`` here but actually raises
+        ``IndexError`` from the bare subscript, with no file or line in the message.
+        This function is held to the documented contract instead.
+        """
+        depth_file = tmp_path / "depth.txt"
+        depth_file.write_text("chr1\t100\t5\nchr1\t101\n", encoding="utf-8")
+
+        with pytest.raises(ValueError) as excinfo:
+            read_depth_positions(depth_file)
+
+        assert "depth.txt" in str(excinfo.value)
+        assert ":2" in str(excinfo.value)
+
+    def test_a_non_integer_depth_names_the_file_and_line(self, tmp_path):
+        """Same contract for an unparseable depth."""
+        depth_file = tmp_path / "depth.txt"
+        depth_file.write_text("chr1\t100\t5\nchr1\t101\tdeep\n", encoding="utf-8")
+
+        with pytest.raises(ValueError) as excinfo:
+            read_depth_positions(depth_file)
+
+        assert "depth.txt" in str(excinfo.value)
+        assert ":2" in str(excinfo.value)
