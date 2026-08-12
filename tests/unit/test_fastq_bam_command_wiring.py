@@ -863,3 +863,135 @@ def test_an_unparseable_region_never_reaches_samtools(tmp_path, monkeypatch):
         )
 
     assert launched == [], "a region with no end reached samtools"
+
+
+GRCH37_ASSEMBLY = {
+    "chromosome": 1,
+    "bam_region_coords": "155158000-155163000",
+    "vntr_region_coords": "155160500-155162000",
+    "vntr_array_coords": "155161000-155161810",
+}
+
+
+def _depth_rows(default: int, array_depth: int, flank_depth: int) -> str:
+    """A depth table over the whole GRCh37 window with distinguishable regions.
+
+    The three depths differ so an off-by-one or a slice taken from the wrong
+    interval changes the totals rather than passing by coincidence.
+    """
+    array = (155161000, 155161810)
+    flank_left = (155161000 - 190, 155160999)
+    flank_right = (155161811, 155161810 + 190)
+    rows = []
+    for position in range(155160500, 155162001):
+        if array[0] <= position <= array[1]:
+            depth = array_depth
+        elif flank_left[0] <= position <= flank_left[1] or flank_right[0] <= position <= flank_right[1]:
+            depth = flank_depth
+        else:
+            depth = default
+        rows.append(f"chr1\t{position}\t{depth}")
+    return "\n".join(rows) + "\n"
+
+
+def _run_coverage(tmp_path, depth_text, region, assembly_config):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    depth_file = tmp_path / "cov_vntr_coverage.txt"
+
+    def fake_run_command(command, log_file, critical=False, cwd=None):
+        Path(log_file).write_text("")
+        depth_file.write_text(depth_text)
+        return True
+
+    with patch.object(fastq_bam_processing, "run_command", fake_run_command):
+        return fastq_bam_processing.calculate_vntr_coverage(
+            bam_file="/data/sample.bam",
+            region=region,
+            threads=4,
+            config=CONFIG,
+            output_dir=str(tmp_path),
+            output_name="cov",
+            assembly_config=assembly_config,
+        )
+
+
+def test_the_build_comparable_columns_are_sliced_from_the_right_intervals(tmp_path):
+    """The caller, not just the summariser (#222).
+
+    Adversarial review of the plan made the point that a synthetic
+    ``summarise_coverage`` test proves nothing about which positions the caller
+    hands it. Here the array, the flank and the rest of the window carry three
+    different depths, so a slice taken from the wrong interval - or shifted by
+    one base - changes the arithmetic instead of passing by luck.
+    """
+    stats = _run_coverage(tmp_path, _depth_rows(default=1, array_depth=7, flank_depth=3),
+                          "chr1:155160500-155162000", GRCH37_ASSEMBLY)
+
+    assert stats["vntr_array_length"] == 811
+    assert stats["vntr_array_depth_sum"] == 811 * 7
+    assert stats["vntr_flank_bases"] == 190
+    assert stats["vntr_flank_mean_depth"] == pytest.approx(3.0)
+    assert stats["depth_sum_reference_length"] == 3481
+    assert stats["depth_counting_policy"] == "samtools-depth-a/v1"
+
+
+def test_only_one_depth_command_is_run_for_all_three_intervals(tmp_path):
+    """One `samtools depth` pass, sliced - never a second call.
+
+    Two calls over one BAM could disagree, and a wider one would read outside the
+    region CRAM preflight proved a reference against.
+    """
+    commands = []
+    depth_file = tmp_path / "cov_vntr_coverage.txt"
+
+    def recording_run_command(command, log_file, critical=False, cwd=None):
+        commands.append(command)
+        Path(log_file).write_text("")
+        depth_file.write_text(_depth_rows(default=1, array_depth=7, flank_depth=3))
+        return True
+
+    with patch.object(fastq_bam_processing, "run_command", recording_run_command):
+        fastq_bam_processing.calculate_vntr_coverage(
+            bam_file="/data/sample.bam",
+            region="chr1:155160500-155162000",
+            threads=4,
+            config=CONFIG,
+            output_dir=str(tmp_path),
+            output_name="cov",
+            assembly_config=GRCH37_ASSEMBLY,
+        )
+
+    assert len(commands) == 1, f"expected exactly one depth command, got {commands}"
+    assert "155160500-155162000" in commands[0], "the depth call must stay on the configured window"
+
+
+def test_the_eight_original_statistics_are_unchanged_by_the_new_columns(tmp_path):
+    """The additive claim, through the real call site.
+
+    Same depth table with and without the assembly config: the eight statistics
+    and the verdict must be identical. This is the whole basis for not restating
+    any historical coverage number.
+    """
+    depth_text = _depth_rows(default=1, array_depth=7, flank_depth=3)
+
+    without = _run_coverage(tmp_path / "a", depth_text, "chr1:155160500-155162000", None)
+    with_extra = _run_coverage(tmp_path / "b", depth_text, "chr1:155160500-155162000", GRCH37_ASSEMBLY)
+
+    for column in ("mean", "median", "stdev", "min", "max", "region_length", "uncovered_bases",
+                   "percent_uncovered", "coverage_qc"):
+        assert without[column] == with_extra[column], column
+
+
+def test_an_operator_supplied_region_records_not_measured_rather_than_a_wrong_figure(tmp_path):
+    """`--custom-regions` and `--bed-file` resolve a region the array does not describe.
+
+    Reporting array figures for an interval nobody asked about would be worse
+    than reporting none, so the columns record as not measured.
+    """
+    rows = "".join(f"chr1\t{position}\t5\n" for position in range(155160000, 155160501))
+
+    stats = _run_coverage(tmp_path, rows, "chr1:155160000-155160500", GRCH37_ASSEMBLY)
+
+    assert stats["vntr_array_depth_sum"] is None
+    assert stats["vntr_flank_mean_depth"] is None
+    assert stats["mean"] == pytest.approx(5.0)
