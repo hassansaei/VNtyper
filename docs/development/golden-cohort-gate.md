@@ -498,7 +498,9 @@ untouched by it. No presentation delta in run 3 is unattributed.
 
 The matrix, probes and comparison are run 2's, reproduced. Three deviations, none of which
 touches what is compared: `--threads 4` (8 for the adVNTR cases, as run 2's driver
-specified) and six cases concurrent; the baseline worktree lived under the run's own
+specified -- that wider value reached alignment, samtools and fastp; **adVNTR itself always
+ran at `-t 1`** from its own configuration and never saw the CLI value, see #247) and six
+cases concurrent; the baseline worktree lived under the run's own
 scratch directory rather than beside run 2's; and the launcher additionally records
 executed commands, which is an observation, not a change to the run.
 

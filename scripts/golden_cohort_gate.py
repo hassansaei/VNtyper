@@ -169,7 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_run.add_argument("--marker", required=True)
     parser_run.add_argument("--expect-marker", required=True, choices=["present", "absent"])
     parser_run.add_argument("--threads", type=int, default=4)
-    parser_run.add_argument("--advntr-threads", type=int, default=8)
+    parser_run.add_argument("--advntr-case-threads", type=int, default=8)
     parser_run.add_argument("--jobs", type=int, default=1)
     parser_run.add_argument("--timeout", type=int, default=5400)
 
@@ -378,7 +378,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         marker=args.marker,
         expect_marker=args.expect_marker == "present",
         threads=args.threads,
-        advntr_threads=args.advntr_threads,
+        advntr_case_threads=args.advntr_case_threads,
         jobs=args.jobs,
         timeout=args.timeout,
         skip_cohort=args.no_cohort,

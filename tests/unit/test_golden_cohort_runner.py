@@ -130,7 +130,7 @@ def _run_side(tmp_path: Path, cases, records, revision=CLEAN_REVISION):
             marker="vntyper.scripts.cohort_rules",
             expect_marker=True,
             threads=4,
-            advntr_threads=8,
+            advntr_case_threads=8,
             jobs=1,
             timeout=60,
             skip_cohort=True,
@@ -170,7 +170,7 @@ def _argv(case, tmp_path: Path):
     Returns:
         list[str]: The argument list.
     """
-    return runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_threads=8)
+    return runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_case_threads=8)
 
 
 @pytest.mark.parametrize("group", ["base", "nonfast", "advntr"])
@@ -233,7 +233,7 @@ def test_a_cram_case_launches_with_a_complete_per_case_scan_config(tmp_path: Pat
     del case["bam"]
 
     config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
-    argv = runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_threads=8, config_path=config_path)
+    argv = runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_case_threads=8, config_path=config_path)
 
     assert effective_mode == "indexed"
     assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == "indexed"
@@ -246,7 +246,7 @@ def test_a_cram_case_places_global_config_before_pipeline_and_current_cli_accept
     case = _case("b178_indexed_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="indexed")
     del case["bam"]
 
-    argv = runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_threads=8, config_path=config_path)
+    argv = runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_case_threads=8, config_path=config_path)
     parsed = build_parser().parse_args(argv)
 
     assert argv[:3] == ["--config-path", str(config_path), "pipeline"]
@@ -400,7 +400,7 @@ def test_runner_preserves_side_wrapped_a178_scan_declarations_before_applying_an
             marker="vntyper.scripts.alignment_contract",
             expect_marker=True,
             threads=4,
-            advntr_threads=8,
+            advntr_case_threads=8,
             jobs=1,
             timeout=60,
             skip_cohort=True,
@@ -457,6 +457,29 @@ def test_a_side_records_the_revision_it_ran(tmp_path: Path) -> None:
     on_disk = json.loads((tmp_path / "run" / "side.json").read_text(encoding="utf-8"))
     assert on_disk["revision"]["head"] == "e" * 40
     assert on_disk["revision"]["dirty_relevant"] is False
+
+
+def test_a_side_does_not_record_a_thread_count_advntr_never_received(tmp_path: Path) -> None:
+    """#247: the recorded key was ``advntr_threads``, which reads as the count adVNTR ran at.
+
+    It was never that. The value is a pipeline-wide ``--threads`` for cases that also run
+    adVNTR, and it reaches alignment, samtools and fastp; adVNTR takes its own ``-t`` from
+    ``advntr_config.json``, which is 1, and never sees the CLI value. Because ``side.json`` is
+    cited as evidence for the conditions a gate run happened under, the machine record is the
+    half that mattered most -- correcting only the prose would have left it still claiming it.
+
+    Args:
+        tmp_path: pytest's per-test directory.
+    """
+    cases = [_case("a")]
+    record = _run_side(tmp_path, cases, {"a": _ok_record("a")})
+
+    assert "advntr_threads" not in record, "the old name claims a count adVNTR never received"
+    assert "advntr_case_threads" in record
+
+    on_disk = json.loads((tmp_path / "run" / "side.json").read_text(encoding="utf-8"))
+    assert "advntr_threads" not in on_disk
+    assert on_disk["advntr_case_threads"] == record["advntr_case_threads"]
 
 
 def test_a_side_whose_cases_all_met_their_expectations_says_so(tmp_path: Path) -> None:
@@ -618,7 +641,7 @@ def test_parallel_results_retain_matrix_case_order(tmp_path: Path) -> None:
             marker="vntyper.scripts.cohort_rules",
             expect_marker=True,
             threads=4,
-            advntr_threads=8,
+            advntr_case_threads=8,
             jobs=2,
             timeout=60,
             skip_cohort=True,
@@ -651,7 +674,7 @@ def test_cohort_execution_is_skipped_only_when_requested(tmp_path: Path) -> None
                     marker="vntyper.scripts.cohort_rules",
                     expect_marker=True,
                     threads=4,
-                    advntr_threads=8,
+                    advntr_case_threads=8,
                     jobs=1,
                     timeout=60,
                     skip_cohort=skip_cohort,
