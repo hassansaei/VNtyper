@@ -69,23 +69,35 @@ class Settings:
 
     def cohort_retention_days(self) -> int:
         """
-        Effective cohort lifetime, clamped so a cohort never outlives its members' archives.
+        Cohort lifetime, bounded by the archive window.
+
+        **This bounds the gap; it does not close it.** Equal *durations* are not equal
+        *expiry timestamps*: ``extend_cohort_retention`` resets the cohort TTL to this
+        duration from *now* on every job completion and every cohort analysis, while each
+        archive ages from its own file timestamp. A cohort whose second member finishes on
+        day 2 is open until day 5 while its first member's archive became
+        cleanup-eligible on day 3, so ``/cohort-status/`` can still list a member whose
+        download is gone.
+
+        What this changes is the size of that window -- from up to 11 days to at most one
+        archive window -- not its existence. Closing it means either deriving the cohort
+        deadline from its *oldest* member rather than its newest, or filtering
+        ``/cohort-status/`` to members whose archives still exist. Both are design changes
+        beyond a retention bound.
 
         A cohort is openable for ``COHORT_RETENTION_DAYS`` while each member's ``.zip`` is
         reclaimed at ``MAX_RESULT_AGE_DAYS`` (``tasks.delete_old_results``). With the shipped
-        14 and 3 that leaves an 11-day window in which ``/cohort-status/`` lists member job
-        ids whose ``/download/{job_id}/`` returns 404 -- a cohort page advertising downloads
-        that do not work.
+        14 and 3 that left an 11-day window in which ``/cohort-status/`` listed member job ids
+        whose ``/download/{job_id}/`` returned 404.
 
-        It is worse than a static comparison suggests: ``extend_cohort_retention`` fires on
-        every job completion and every cohort analysis, so an actively-used cohort rolls its
-        TTL forward from its *most recent* job while each archive ages out on a fixed clock
-        from *its own* creation. An active cohort can stay open with almost none of its
-        members intact.
+        A WARNING names both configured values when the bound bites, so an operator who set
+        14 learns that 14 is not what they got.
 
-        Clamping is the honest resolution -- the alternative, documenting the gap, leaves the
-        page listing broken downloads. A WARNING names both configured values when the clamp
-        bites, so an operator who set 14 learns that 14 is not what they got.
+        Note ``extend_cohort_retention`` calls Redis ``EXPIRE``, which *sets* a TTL rather
+        than only extending one, so an existing cohort is shortened to this value the next
+        time any of its jobs completes -- including from a failure path. Cohorts that see no
+        further activity keep whatever TTL they were given, so a deployment migrates
+        unevenly.
 
         Returns:
             int: ``min(COHORT_RETENTION_DAYS, MAX_RESULT_AGE_DAYS)``.

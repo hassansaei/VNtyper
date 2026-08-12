@@ -1,4 +1,4 @@
-"""The retention window, and the invariant that a cohort never outlives its members.
+"""The retention window, and the bound on how far a cohort can outlive its members.
 
 `/download/{job_id}/` requires no credential, so `MAX_RESULT_AGE_DAYS` *is* the exposure
 window for a completed job: the id is the capability. Shortening it is a mitigation for
@@ -8,9 +8,14 @@ the invariant, not the number.
 The clamp matters because the two lifetimes are driven differently.
 `tasks.delete_old_results` reclaims each archive on a fixed clock from *its own* creation,
 while `extend_cohort_retention` fires on every job completion and every cohort analysis, so
-an actively-used cohort rolls its TTL forward from its *most recent* job. Comparing the two
-constants understates the gap: an active cohort can stay openable with almost none of its
-members' archives intact, listing downloads that 404.
+an actively-used cohort rolls its TTL forward from its *most recent* job. So equalising the
+two durations **bounds** the gap -- from up to 11 days to at most one archive window -- and
+does not close it. A cohort whose second member finishes on day 2 is open until day 5 while
+its first member became cleanup-eligible on day 3.
+
+Closing it means deriving the cohort deadline from its *oldest* member, or filtering
+`/cohort-status/` to members whose archives still exist. Both are design changes beyond a
+retention bound, and neither is attempted here.
 
 ``docker`` is put on ``sys.path`` by ``tests/unit/web/conftest.py``, which pytest imports
 before this module, so ``app.config`` is importable here.
@@ -40,12 +45,17 @@ def _settings(cohort_days: int, archive_days: int) -> Settings:
     return settings
 
 
-def test_a_cohort_never_outlives_the_archives_it_lists():
-    """The invariant, stated independently of the shipped numbers.
+def test_a_configured_cohort_lifetime_is_bounded_by_the_archive_window():
+    """Named for what it checks, which is arithmetic on two durations.
 
-    Days 3 to 14 were a window in which ``/cohort-status/`` listed member job ids whose
-    ``/download/{job_id}/`` returned 404 -- a cohort page advertising downloads that do not
-    work.
+    An earlier version of this test was called
+    ``test_a_cohort_never_outlives_the_archives_it_lists`` and asserted exactly this line.
+    It did not test that: equal *durations* are not equal *expiry timestamps*, because the
+    cohort TTL is reset to this duration from *now* on every job completion while each
+    archive ages from its own timestamp. Naming a test for a property it does not verify is
+    the defect this whole change set exists to remove, so the name was corrected rather than
+    the assertion strengthened -- strengthening it would require a Redis TTL clock and
+    staggered archives, which is a different test.
     """
     assert _settings(cohort_days=14, archive_days=3).cohort_retention_days() == 3
 
@@ -80,12 +90,19 @@ def test_the_clamp_names_both_configured_values_when_it_bites(caplog):
     assert "3" in warnings[0]
 
 
-def test_the_shipped_defaults_satisfy_the_invariant():
-    """A regression guard on the shipped pair rather than on either number alone.
+def test_the_shipped_default_window_is_three_days():
+    """Pin the number, not only the relation.
 
-    This is deliberately not `== 3`: the window is an operational decision that may move
-    again, while "a cohort outlives its members" is always wrong.
+    An earlier version asserted only ``effective <= maximum``, which stays green if the
+    default reverts to 7 -- so it could not catch the regression it existed to prevent. The
+    window is an operational decision and may move again; when it does, this line moves with
+    it deliberately rather than silently.
     """
+    assert Settings().MAX_RESULT_AGE_DAYS == 3
+
+
+def test_the_shipped_pair_is_internally_consistent():
+    """The relation, kept separately from the number so each failure names its own cause."""
     settings = Settings()
 
     assert settings.cohort_retention_days() <= settings.MAX_RESULT_AGE_DAYS

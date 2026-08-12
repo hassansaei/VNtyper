@@ -381,8 +381,20 @@ def run_vntyper_job(
             subject = "VNtyper Job Completed Successfully"
             # The email used to state no deadline at all. That was already an omission; with a
             # shorter window it becomes a misleading one, because the recipient has no way to
-            # know the link expires before they next look. It also names the one property of
-            # the link that matters: it is a capability, not an authenticated route (#189).
+            # know the results may be gone before they next look.
+            #
+            # It says "about N days", not "stops working after N days", because the latter
+            # would be false. `MAX_RESULT_AGE_DAYS` is a *cleanup eligibility* threshold, not
+            # an enforced deadline: `delete_old_results` runs once daily at 00:00 UTC
+            # (celery_app.py) and removes an archive only once its timestamp is past the
+            # cutoff, and `/download/{job_id}/` performs no age check at all -- it serves
+            # whatever still exists. A job finishing at 00:01 is therefore retrievable for
+            # nearly N+1 days, and a deletion that errors leaves the file in place. Promising
+            # a hard deadline the service does not enforce would be a new false claim rather
+            # than a fix for an old one.
+            #
+            # It also names the property of the link that matters: it is a capability, not an
+            # authenticated route (#189).
             retention_days = settings.MAX_RESULT_AGE_DAYS
             if cohort_key:
                 cohort_id = cohort_key.split(":", 1)[1]
@@ -391,18 +403,20 @@ def run_vntyper_job(
                 <p>Job ID: <strong>{job_id}</strong></p>
                 <p>Cohort ID: <strong>{cohort_id}</strong></p>
                 <p>You can download your results <a href="{download_url}">here</a>.</p>
-                <p>This link stops working after {retention_days} days, when the results are
-                deleted from the server. Anyone with the link can use it until then, so treat
-                it as confidential.</p>
+                <p>Results are deleted from the server about {retention_days} days after
+                completion, so download them before then. Until they are deleted, anyone with
+                this link can retrieve them -- it carries no password, so treat it as
+                confidential.</p>
                 """
             else:
                 content = f"""
                 <p>Your VNtyper job has been completed successfully.</p>
                 <p>Job ID: <strong>{job_id}</strong></p>
                 <p>You can download your results <a href="{download_url}">here</a>.</p>
-                <p>This link stops working after {retention_days} days, when the results are
-                deleted from the server. Anyone with the link can use it until then, so treat
-                it as confidential.</p>
+                <p>Results are deleted from the server about {retention_days} days after
+                completion, so download them before then. Until they are deleted, anyone with
+                this link can retrieve them -- it carries no password, so treat it as
+                confidential.</p>
                 """
             send_email_task.delay(to_email=email, subject=subject, content=content)
             logger.info(f"Triggered email sending to {email} with download link")
