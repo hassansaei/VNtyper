@@ -10,14 +10,18 @@ edit_uri: edit/main/docs/
 
 copyright: Copyright &copy; 2023–2026 Hassan Saei, Bernt Popp
 
-# Implementation specs and plans live beside the code they describe, but they are
-# working documents for contributors -- not part of the published site. Excluding them
-# here keeps `mkdocs build --strict` honest about the pages that *are* published, and
-# keeps the `macros` plugin from Jinja-templating prose that legitimately contains
-# `{#...}` (a GitHub issue list such as `{#209, #178}` is a Jinja comment to it).
-exclude_docs: |
-  plans/
-  superpowers/
+# `docs/` is strictly the published site. Implementation specs, plans and execution
+# prompts are contributor working documents and live in the untracked `.planning/`
+# workspace instead -- see `.planning/README.md`. They used to sit under `docs/plans/`
+# and `docs/superpowers/` and be excluded here; keeping them out of `docs/` entirely is
+# the simpler invariant, and it removes the `macros` hazard at the source rather than
+# suppressing it. (That plugin Jinja-templates every page, so prose legitimately
+# containing `{#...}` -- a GitHub issue list such as `{#209, #178}` -- fails the build as
+# an unterminated comment. Planning documents are full of exactly that.)
+#
+# No `exclude_docs:` key is needed while nothing under `docs/` is unpublished. Adding one
+# back would mean a page is shipping in the source tree but not on the site; put it in
+# `.planning/` instead.
 
 theme:
   name: material

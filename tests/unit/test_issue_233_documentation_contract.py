@@ -1,3 +1,21 @@
+"""Documentation contracts for #233, over *published* documentation only.
+
+Three tests were removed when planning documents left the repository. They asserted
+that historical design documents under `docs/superpowers/specs/` and `docs/plans/`
+led with a dated supersession note, so that a reader meeting an old design was told
+its routing policy had been replaced. Those documents now live in the untracked
+`.planning/` workspace (see `.planning/README.md`) and are not shipped, not built by
+mkdocs, and not reachable by a reader of the site -- so there is no longer a reader to
+mislead, and nothing for a repository test to hold.
+
+What survives here is the half that was always about published output: the changelog
+and the golden-cohort page state the current routing policy, and AGENTS.md states the
+contracts an agent has to honour. Those are read by people who never see `.planning/`.
+
+The changelog assertions below were previously entangled with the two planning
+documents in one loop. They are kept, applied to the changelog alone.
+"""
+
 from pathlib import Path
 
 import pytest
@@ -5,65 +23,29 @@ import pytest
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
-INTRODUCER = "2b4597d8b57f8986f008baad6c2505359cebea76"
-ORACLE_INVERSION = "52c4146596fef2d1e2402991fbab062ba8021889"
-DATE = "2026-08-11"
 
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_historical_designs_lead_with_the_dated_issue_233_supersession() -> None:
-    for relative, historical_phrase in (
-        (
-            "docs/superpowers/specs/2026-08-10-milestone-6-harness-matrix-design.md",
-            "intentionally failing mixed",
-        ),
-        (
-            "docs/plans/2026-08-08-milestone-4-cram-input-robustness-spec.md",
-            "is **rejected**",
-        ),
-    ):
-        page = _read(relative)
-        note = page.index("Superseded routing policy")
-        assert note < page.index(historical_phrase)
-        supersession = page[note : note + 1_500]
-        assert DATE in supersession
-        assert f"`{INTRODUCER}` introduced" in supersession
-        assert f"`{ORACLE_INVERSION}` later" in supersession
-        assert "nine BAM and one adVNTR" in supersession
+def test_changelog_states_the_current_lossless_selection_and_invalid_parity_policy() -> None:
+    """The published record of #233 must name the policy, not merely that it changed.
 
-
-def test_current_policy_names_lossless_selection_and_invalid_parity() -> None:
-    milestone_6 = _read("docs/superpowers/specs/2026-08-10-milestone-6-harness-matrix-design.md")
-    milestone_4 = _read("docs/plans/2026-08-08-milestone-4-cram-input-robustness-spec.md")
+    Previously this also scanned two planning documents in the same loop; they are no
+    longer tracked. The changelog is the shipped statement and keeps every assertion.
+    """
     changelog = _read("docs/about/changelog.md")
-    current_sections = (
-        milestone_6[milestone_6.index("Superseded routing policy") : milestone_6.index("## Purpose")],
-        milestone_4[milestone_4.index("Superseded routing policy") : milestone_4.index("---")],
-        changelog[changelog.index("## 2.0.12") : changelog.index("## 2.0.11")],
-    )
-    normalized_sections = tuple(" ".join(section.split()) for section in current_sections)
-    for section in normalized_sections:
-        assert "singleton" in section
-        assert "`other`" in section
-        assert "every non-empty" in section
-        assert "exactly once" in section
-        assert "one Kestrel" in section
-        assert "Unequal or one-sided" in section
-        assert "invalid" in section
-    assert "R1/R2/other/single order" in normalized_sections[0]
-    assert "R1/R2/other/single order" in normalized_sections[1]
-    assert "not concatenated or recompressed" in normalized_sections[1]
-    assert "not concatenated or recompressed" in normalized_sections[2]
+    section = " ".join(changelog[changelog.index("## 2.0.12") : changelog.index("## 2.0.11")].split())
 
-
-def test_docker_quick_is_named_as_a_real_b178_success_sentinel() -> None:
-    page = _read("docs/superpowers/specs/2026-08-10-milestone-6-harness-matrix-design.md")
-    assert "example_b178_hg19_subset_default" in page
-    assert "Docker quick" in page
-    assert "required success sentinel" in page
+    assert "singleton" in section
+    assert "`other`" in section
+    assert "every non-empty" in section
+    assert "exactly once" in section
+    assert "one Kestrel" in section
+    assert "Unequal or one-sided" in section
+    assert "invalid" in section
+    assert "not concatenated or recompressed" in section
 
 
 def test_changelog_preserves_released_history_and_records_the_fix_in_2_0_12() -> None:

@@ -648,8 +648,15 @@ summary | release-summary | none | always records success, failure, skipped jobs
   - What actually breaks the build on an unregistered page is usually the `macros`
     plugin, which Jinja-templates every page: prose containing `{#...}` (a list of GitHub
     issues such as `{#209, #178}` is enough) fails as an unterminated comment.
-  Contributor working documents that are not meant to be published belong in
-  `docs/plans/`, which `mkdocs.yml` lists under `exclude_docs:`. Excluded pages are
-  neither rendered nor templated, so they carry no nav entry and no macro hazard. Add new
-  non-published directories there rather than to `nav:`.
+  **`docs/` is strictly the published site — put nothing else there.** Contributor
+  working documents (design specs, implementation plans, execution prompts, milestone
+  gate artifacts) belong in the untracked `.planning/` workspace; see
+  `.planning/README.md` for its layout. They used to live in `docs/plans/` and
+  `docs/superpowers/` behind `exclude_docs:`, and that key is now gone: while every page
+  under `docs/` is published, there is nothing to exclude. A document kept out of the
+  build is also kept out of the macro hazard above, which is most of why planning prose
+  does not belong under `docs/` — it is full of `{#...}` issue lists.
+
+  Because `.planning/` is untracked, **the durable record of why a change was made is the
+  commit message, the pull request and the issue** — not a file only the author has.
 - Never claim tests pass without showing the command output.
