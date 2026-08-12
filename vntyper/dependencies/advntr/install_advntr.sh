@@ -4,10 +4,18 @@
 
 set -e  # Exit immediately if any command exits with a non-zero status
 
-# Default configuration file (can be overridden with -c/--config)
-CONFIG_FILE="install_advntr.cfg"
+# Default configuration file (can be overridden with -c/--config).
+#
+# Resolved **beside this script**, not in the working directory. The image copies the whole
+# directory to /tmp/advntr/ and runs `bash /tmp/advntr/install_advntr.sh` from elsewhere, so
+# a bare relative name meant the shipped config was never sourced -- the build silently used
+# the script's own fallbacks, and the GIT_COMMIT pin would have had no effect on the image
+# it exists to pin (#254). A config that is only read when you happen to be standing in the
+# right directory is worse than no config.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/install_advntr.cfg"
 
-# If a configuration file exists in the current directory, source it.
+# If that configuration file exists, source it.
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 fi

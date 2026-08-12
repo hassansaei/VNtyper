@@ -492,3 +492,31 @@ def test_a_successful_conversion_still_deletes_the_sam(tmp_path, monkeypatch):
 
     assert kg.convert_sam_to_bam_and_index(str(sam), str(tmp_path)) == str(tmp_path / "output.bam")
     assert not sam.exists()
+
+
+def test_an_attempt_that_writes_no_vcf_also_leaves_no_sam(tmp_path, monkeypatch):
+    """The second discard path. Kestrel can exit 0 having written no VCF at all, and that
+    branch retried without removing anything -- but it may still have written a SAM before
+    giving up, and every attempt shares that path."""
+    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    vcf = tmp_path / "output.vcf"
+    sam = tmp_path / "output.sam"
+    launches = []
+    converted = []
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        launches.append(command)
+        if len(launches) == 1:
+            sam.write_text("@HD\tVN:1.6\nFIRST-ATTEMPT\n", encoding="utf-8")  # no VCF at all
+        else:
+            vcf.write_text(USABLE_VCF, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda s, o: converted.append(Path(s).exists()))
+    monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
+
+    _run(vcf, tmp_path)
+
+    assert len(launches) == 2
+    assert converted == [False], "a no-VCF attempt's SAM survived into the successful one"

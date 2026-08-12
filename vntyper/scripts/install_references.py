@@ -1496,9 +1496,8 @@ def _install_source_seeds(
 ) -> None:
     """Fetch the common seed files, skipping anything a derivation produces.
 
-    ``All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`` is still listed as a
-    downloadable raw file, but it is derived now, so fetching it first would be a
-    wasted round trip over a file that is about to be overwritten.
+    ``All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`` is derived, not downloaded, so
+    fetching it would be a wasted round trip. Its `raw_files` entry was removed with the dead URL it carried (#253) over a file that is about to be overwritten.
 
     Args:
         install_config: The parsed install_references_config.json.

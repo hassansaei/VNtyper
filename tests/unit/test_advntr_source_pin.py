@@ -85,3 +85,17 @@ def test_the_branch_is_the_forks_default():
 
 def test_the_pinned_repository_is_the_fork_the_evidence_came_from():
     assert _cfg_value("GIT_REPO") == "https://github.com/berntpopp/adVNTR.git"
+
+
+def test_the_config_is_resolved_beside_the_script_not_in_the_working_directory():
+    """The image copies this directory to /tmp/advntr/ and runs the script from elsewhere.
+
+    A bare relative `install_advntr.cfg` was therefore never sourced there: the build used
+    the script's own fallbacks, so the GIT_COMMIT pin would have had no effect on the very
+    image it exists to pin. A config read only when you happen to be standing in the right
+    directory is worse than no config, because it looks like it applied.
+    """
+    installer = INSTALLER.read_text(encoding="utf-8")
+
+    assert "BASH_SOURCE" in installer, "the config must be resolved relative to the script"
+    assert 'CONFIG_FILE="install_advntr.cfg"' not in installer, "a bare relative name resolves against the CWD"

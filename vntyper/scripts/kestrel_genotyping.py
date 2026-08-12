@@ -158,6 +158,48 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     return bam_file
 
 
+def _discard_attempt_artifacts(output_dir, kmer_size, reason, vcf_path=None):
+    """Remove what a discarded k-mer attempt left behind, so the next one starts clean.
+
+    Every configured k-mer size writes to the same ``output.vcf`` and the same
+    ``output.sam``. Both discard paths need this: the unusable-VCF branch, and the branch
+    where Kestrel exits 0 having written no VCF at all -- that one has no VCF to remove but
+    may still have written a SAM before giving up.
+
+    Isolation is the point rather than a demonstrated corruption. The pinned Kestrel opens
+    its haplotype output through Java's truncating ``FileOutputStream``, so an attempt that
+    reaches SAM initialisation overwrites the file anyway; the gap is an attempt that exits
+    before reaching it, whose predecessor's SAM would then be converted into ``output.bam``
+    by a later successful attempt -- the alignment the report's IGV track shows (#255).
+
+    Args:
+        output_dir (str): Directory the attempt wrote into.
+        kmer_size (int): The k-mer size being discarded, for the message.
+        reason (str): Why the attempt is being discarded, for the message.
+        vcf_path (pathlib.Path, optional): The VCF to remove. ``None`` when there is none.
+
+    Raises:
+        RuntimeError: If an artefact exists and cannot be removed. This must not become a
+            new way to leave the loop silently: carrying the file into the next attempt
+            would report it against the wrong k-mer size.
+    """
+    stale_paths = [path for path in (vcf_path, Path(output_dir) / "output.sam") if path is not None]
+    for stale in stale_paths:
+        try:
+            stale.unlink()
+        except FileNotFoundError:
+            # Kestrel need not have written it. Absent is the desired state, not an error.
+            continue
+        except OSError as exc:
+            msg = (
+                f"Kestrel's attempt at k-mer size {kmer_size} was discarded because {reason}, and "
+                f"{stale} could not be removed ({exc}). Continuing would carry that file into the "
+                "next k-mer size and report it against the wrong one."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg) from exc
+
+
 def run_kestrel(
     vcf_path,
     output_dir,
@@ -301,25 +343,17 @@ def run_kestrel(
             # Both removals are guarded because neither may become a *new* way to leave the
             # loop: an unhandled OSError would escape as a bare filesystem error, skipping the
             # terminal RuntimeError that is this function's whole contract.
-            for stale in (vcf_path, Path(output_dir) / "output.sam"):
-                try:
-                    stale.unlink()
-                except FileNotFoundError:
-                    # Kestrel need not have written a SAM at all. Absent is the desired state.
-                    continue
-                except OSError as exc:
-                    msg = (
-                        f"Kestrel wrote an unusable VCF to {vcf_path} for k-mer size {kmer_size} "
-                        f"({problem}), and {stale} could not be removed ({exc}). Continuing would carry "
-                        "that file into the next k-mer size and report it against the wrong one."
-                    )
-                    logger.error(msg)
-                    raise RuntimeError(msg) from exc
+            _discard_attempt_artifacts(output_dir, kmer_size, reason=problem, vcf_path=vcf_path)
             continue
 
         # Exit status 0 with no VCF is the silent path #212 is about. Say so, then let the
         # next configured k-mer size try.
+        #
+        # This branch discards an attempt too, so it needs the same artefact isolation as the
+        # unusable-VCF branch above: there is no VCF to remove, but Kestrel may still have
+        # written a SAM before giving up, and every attempt shares that path (#255).
         logger.warning(f"Kestrel exited successfully for k-mer size {kmer_size} but wrote no VCF to {vcf_path}.")
+        _discard_attempt_artifacts(output_dir, kmer_size, reason="it wrote no VCF")
 
     if not completed:
         msg = (

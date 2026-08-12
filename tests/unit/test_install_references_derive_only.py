@@ -127,3 +127,45 @@ def test_the_flag_exists_and_defaults_to_off():
     args = build_parser().parse_args(["install-references", "-d", "refs"])
 
     assert args.derive_only is False
+
+
+def test_combining_derive_only_with_from_source_is_a_usage_error(tmp_path):
+    """Refused rather than silently ignored. Both build the derived files, but
+    --derive-only deliberately downloads nothing, so honouring both would make one of them
+    meaningless. Usage errors exit 2, as argparse does."""
+    import argparse
+
+    from vntyper.scripts import cli_handlers
+
+    parser = argparse.ArgumentParser()
+    args = argparse.Namespace(
+        output_dir=tmp_path,
+        config_path=None,
+        skip_indexing=False,
+        threads=1,
+        aligners=None,
+        references=None,
+        derive_only=True,
+        from_source=True,
+        release_spec=None,
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_handlers.handle_install_references(args, {}, parser, 0, None)
+
+    assert excinfo.value.code == 2
+
+
+def test_main_takes_the_derive_only_path_and_installs_nothing(tmp_path, monkeypatch):
+    """`main` must return after deriving: reaching an installer would download."""
+    called: list[str] = []
+    monkeypatch.setattr(install_references, "derive_only", lambda cfg, out: called.append("derived"))
+    monkeypatch.setattr(
+        install_references,
+        "install_from_bundle",
+        lambda *a, **k: called.append("downloaded"),
+    )
+
+    install_references.main(output_dir=tmp_path, derive_only_mode=True)
+
+    assert called == ["derived"], "derive-only must not reach an installer"
