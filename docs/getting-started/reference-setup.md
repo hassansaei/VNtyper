@@ -126,49 +126,51 @@ about the distinction.
 
 ### Rebuilding just the derived files
 
-`--derive-only` rebuilds the three derived files from genomes and seeds already on disk. It
-**downloads nothing**:
+`--derive-only` rebuilds the derived files from what is already on disk. It **downloads
+nothing**:
 
 ```bash
 vntyper install-references -d /path/to/references --derive-only
 ```
 
+Below is a real run against the tree the Docker image ships (message text only; the actual
+output carries the usual timestamp and logger prefixes):
+
 ```text
-Deriving reference files from 6 installed genome(s) in /path/to/references: GRCh37, GRCh38, hg19, hg19_ensembl, hg38, hg38_ensembl
+Deriving reference files from 6 installed genome(s) in /opt/vntyper/reference: GRCh37, GRCh38, hg19, hg19_ensembl, hg38, hg38_ensembl
+Skipping All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa: seed(s) filter_config.json are not in this tree. The published bundle ships this file pre-built and does not stage its seeds beside it, so this is the normal shape of a bundle-installed tree rather than a fault.
+  ✓ verified muc1_region_hg19.fa
 Derived muc1_region_hg19.fa from chr1.hg19.fa at chr1:155158000-155163000
+  ✓ verified muc1_region_hg38.fa
 Derived muc1_region_hg38.fa from chr1.hg38.fa at chr1:155184000-155194000
-Derived All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa from MUC1_motifs_Rev_com.fa and filter_config.json
-Derived and verified all 3 reference file(s) against their committed digests.
+Derived and verified 2 of 3 reference file(s) in /opt/vntyper/reference. Not rebuilt in this tree: All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa.
+  ✓ verified All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
+Of those, already present and matching their committed digests: All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
 ```
+
+On a tree that also has the seeds — one built by `--from-source`, which stages them — the
+motif FASTA is rebuilt too and the closing line is
+`Derived and verified all 3 reference file(s) against their committed digests.`
 
 Each output is checked against its committed checksum, exactly as on the other two paths — so
 this is the same verification on a cheaper path, not a way to produce unverified files. A
 derived file that does not match is deleted rather than left in the tree, and the run fails.
 
-Use it when a tree has its genomes and seeds but is missing a derived file. Without it the
-only remedy was a full `--from-source` run, which re-downloads and BWA-indexes six chromosome
-FASTAs to rebuild three small ones — so in practice people ran `samtools faidx` by hand,
-retyping the region from the config. **Do not do that.** A hand-cut region is unverified, and
-a wrong one produces a reference that is subtly incorrect rather than obviously broken.
+Use it when a tree is missing or has a suspect derived file. Without it the only remedy was a
+full `--from-source` run, which re-downloads and BWA-indexes six chromosome FASTAs to rebuild
+three small ones — so in practice people ran `samtools faidx` by hand, retyping the region
+from the config. **Do not do that.** A hand-cut region is unverified, and a wrong one produces
+a reference that is subtly incorrect rather than obviously broken.
 
-A derivation whose source genome is absent is **skipped**, not failed — a tree holding only
-hg19 legitimately derives only the hg19 region. The closing lines then say so, instead of
-reporting a blanket success:
-
-```text
-Deriving reference files from 1 installed genome(s) in /path/to/references: hg19
-Skipping muc1_region_hg38.fa: its source 'hg38' is not in this run's reference selection. Install it later with --references hg38.
-Derived muc1_region_hg19.fa from chr1.hg19.fa at chr1:155158000-155163000
-Derived All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa from MUC1_motifs_Rev_com.fa and filter_config.json
-Derived and verified 2 of 3 reference file(s) in /path/to/references. Not rebuilt, because the source genome is not installed: muc1_region_hg38.fa.
-Of those, already present and matching their committed digests: muc1_region_hg38.fa
-```
+**A derivation this tree cannot rebuild is skipped, not failed** — for either reason. A tree
+holding only hg19 legitimately derives only the hg19 region, and as above, a bundle-installed
+tree legitimately has no `filter_config.json`. In both cases the skip is named, not silent.
 
 **A file it could not rebuild is still checked.** Its digest is committed and the file is
 small, so there is no reason to leave it unread — answering "are my derived files right?" with
 silence for exactly the files that could not be rebuilt, and then exiting 0, would be the
 weakest useful thing the command could do. If such a file is missing rather than stale, the
-last line reads `Of those, missing from the tree: …` and names the genome to install.
+last line reads `Of those, missing from the tree: …` and names what to install.
 
 If it is present but does **not** match, it is deleted and the run fails, exactly as for a
 freshly derived file that fails its digest. A wrong reference produces a plausible result

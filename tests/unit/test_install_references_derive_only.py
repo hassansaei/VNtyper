@@ -85,62 +85,84 @@ def test_derive_only_passes_exactly_the_present_genomes_as_the_selection(tmp_pat
     assert set(seen["refs"]) == {"hg19"}
 
 
-def test_the_preflight_runs_before_any_derivation(tmp_path, monkeypatch):
-    """Ordering only -- both collaborators are stubbed, so this proves nothing about the
-    preflight's own logic. ``test_a_missing_seed_is_refused_before_anything_is_rebuilt``
-    below exercises that against the real function."""
-    order: list[str] = []
+def _bundle_tree_config() -> dict:
+    """The shape a bundle-installed tree actually has, which is what the image ships.
 
-    def derive(*args, **kwargs):
-        order.append("derive")
-        return []
-
-    monkeypatch.setattr(install_references, "_preflight_literal_seeds", lambda *a, **k: order.append("preflight"))
-    monkeypatch.setattr(install_references, "run_derivations", derive)
-
-    install_references.derive_only(_config(), tmp_path)
-
-    assert order == ["preflight", "derive"]
-
-
-def test_a_missing_seed_is_refused_before_anything_is_rebuilt(tmp_path, monkeypatch):
-    """``--derive-only`` downloads nothing, so a seed that merely *could* be fetched is as
-    missing as one that could not.
-
-    The shared preflight exempts downloadable seeds, because ``--from-source`` fetches them
-    later in the same run. Carrying that exemption into this mode exempts a seed from a fetch
-    that will never happen: the run rebuilds both region FASTAs and only then fails on a seed
-    whose absence was knowable at the start.
-
-    The assertion is that ``run_derivations`` is never reached, not merely that *something*
-    raised. ``run_derivations`` raises for a missing seed too, with the same message from the
-    same helper, so matching on the message alone passes either way -- which is how this test
-    read on its first draft.
+    The published bundle ships the merged motif FASTA pre-built and does **not** stage
+    ``filter_config.json`` beside it, so the literal derivation has no seeds and never will.
     """
-    config = {
-        "own_repository_references": {
-            "raw_files": [{"target_path": "MUC1_motifs_Rev_com.fa", "source_sha256": "a" * 64}]
-        },
+    return {
+        "ucsc_references": {"hg19": {"installed_path": "alignment/chr1.hg19.fa"}},
+        "own_repository_references": {"raw_files": [{"target_path": "filter_config.json", "source_sha256": "a" * 64}]},
         "derivations": [
             {
                 "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
                 "kind": "literal",
                 "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
-                "expected_sha256": "b" * 64,
+                "expected_sha256": GOOD_DIGEST,
             }
         ],
     }
+
+
+def test_a_literal_derivation_without_its_seeds_is_skipped_not_failed(tmp_path, caplog):
+    """The regression a run inside the Docker image found.
+
+    ``run_derivations`` raises for a literal derivation whose seeds are absent, which is
+    right for ``--from-source``: it stages the seeds itself, so a missing one is a real
+    fault. ``--derive-only`` stages nothing, so on a bundle-installed tree -- the tree the
+    image carries, and the commonest in existence -- an absent ``filter_config.json`` is
+    simply that tree's shape. Failing there made the command unusable exactly where it would
+    most often be reached for.
+
+    It is skipped like a shark derivation whose genome is absent, and the file already at
+    that path is verified, so nothing is taken on trust.
+    """
+    (tmp_path / "MUC1_motifs_Rev_com.fa").write_text(">seed\nAC\n", encoding="utf-8")
+    (tmp_path / "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa").write_text(GOOD_BYTES, encoding="utf-8")
+
+    with caplog.at_level(logging.INFO):
+        install_references.derive_only(_bundle_tree_config(), tmp_path)
+
+    assert "seed(s) filter_config.json are not in this tree" in caplog.text
+    assert "already present and matching their committed digests" in caplog.text
+
+
+def test_a_skipped_literal_derivation_still_has_its_output_verified(tmp_path):
+    """Skipping must not become a way to carry a wrong reference forward.
+
+    The seeds being absent is why it cannot be rebuilt; it is not a reason to stop looking
+    at what is there. A bundle-installed tree whose motif FASTA was corrupted would
+    otherwise pass this command silently.
+    """
+    stale = tmp_path / "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa"
+    stale.write_text(">stale\nTTTT\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa"):
+        install_references.derive_only(_bundle_tree_config(), tmp_path)
+
+    assert not stale.exists()
+
+
+def test_a_literal_derivation_with_its_seeds_present_is_still_built(tmp_path, monkeypatch):
+    """The counterpart, so the skip above is a branch rather than the only behaviour.
+
+    Without this, filtering out *every* literal derivation would leave both tests green.
+    """
+    config = _bundle_tree_config()
+    (tmp_path / "MUC1_motifs_Rev_com.fa").write_text(">seed\nAC\n", encoding="utf-8")
     (tmp_path / "filter_config.json").write_text("{}", encoding="utf-8")
-    reached: list[str] = []
-    monkeypatch.setattr(install_references, "run_derivations", lambda *a, **k: reached.append("derived") or [])
+    handed: list[list] = []
 
-    with pytest.raises(RuntimeError, match="MUC1_motifs_Rev_com.fa"):
-        install_references.derive_only(config, tmp_path)
+    def record(cfg, out, refs, selected):
+        handed.append(cfg.get("derivations", []))
+        return [spec["output"] for spec in cfg.get("derivations", [])]
 
-    assert reached == [], "the missing seed must be caught by the preflight, before any derivation runs"
+    monkeypatch.setattr(install_references, "run_derivations", record)
 
-    # The same config passes the from-source preflight, where the seed does get fetched.
-    install_references._preflight_literal_seeds(config, tmp_path, allow_downloadable=True)
+    install_references.derive_only(config, tmp_path)
+
+    assert handed == [config["derivations"]], "a literal derivation whose seeds are present must be built"
 
 
 def test_derive_only_downloads_nothing(tmp_path, monkeypatch):

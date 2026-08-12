@@ -937,7 +937,7 @@ def _downloadable_seed_names(install_config: dict[str, Any]) -> set[str]:
     return {entry.get("target_path") for entry in own_repo_refs.get("raw_files", []) if entry.get("target_path")}
 
 
-def _preflight_literal_seeds(install_config: dict[str, Any], output_dir: Path, allow_downloadable: bool = True) -> None:
+def _preflight_literal_seeds(install_config: dict[str, Any], output_dir: Path) -> None:
     """Fail on a missing, non-downloadable literal-derivation seed before any genome runs.
 
     :func:`run_derivations` already names a missing ``filter_config.json`` well, but only
@@ -955,21 +955,19 @@ def _preflight_literal_seeds(install_config: dict[str, Any], output_dir: Path, a
     unstaged ``output_dir`` too - it only still raises for a seed that names no download
     source at all in whatever ``install_config`` a caller supplies.
 
+    ``--derive-only`` does not call this. It downloads and stages nothing, so an absent seed
+    there is the tree's shape rather than a fault, and :func:`derive_only` skips such a
+    derivation and verifies whatever is already at its path instead.
+
     Args:
         install_config: The parsed install_references_config.json.
         output_dir: Reference tree being populated.
-        allow_downloadable: Whether a seed that *can* be downloaded later in the same run
-            may be absent now. True for ``--from-source``, which fetches the seeds after
-            the genome loop. False for ``--derive-only``, which downloads nothing: there,
-            exempting a downloadable seed exempts it from a fetch that will never happen,
-            and the run gets as far as rebuilding the region FASTAs before failing on a
-            seed that was already known to be missing.
 
     Raises:
-        RuntimeError: If a ``literal`` derivation names a seed that is not present and,
-            under ``allow_downloadable``, will not be fetched.
+        RuntimeError: If a ``literal`` derivation names a non-downloadable seed that is
+            not present.
     """
-    downloadable = _downloadable_seed_names(install_config) if allow_downloadable else set()
+    downloadable = _downloadable_seed_names(install_config)
     for spec in install_config.get("derivations", []):
         if spec.get("kind") != "literal":
             continue
@@ -1518,8 +1516,9 @@ def _verify_files_that_could_not_be_rebuilt(skipped: list[dict[str, Any]], outpu
         )
     if absent:
         logger.warning(
-            "Of those, missing from the tree: %s. Install the source genome with "
-            "`vntyper install-references --references <id>`, or use the published bundle.",
+            "Of those, missing from the tree: %s. Install what it is built from -- the source "
+            "genome with `vntyper install-references --references <id>`, or the seeds -- and "
+            "run this again, or install the published bundle, which ships them pre-built.",
             ", ".join(absent),
         )
 
@@ -1544,10 +1543,16 @@ def derive_only(install_config: dict[str, Any], output_dir: Path) -> None:
     :func:`run_derivations`, so this is not a way to produce unverified bytes; it is the
     same verification on a cheaper path.
 
-    A derivation whose source genome is absent is skipped with a message naming what to
-    install, not failed -- a tree holding only hg19 legitimately derives only the hg19
-    region. The closing summary names what was not rebuilt rather than reporting a blanket
-    success, and whatever is already at those paths is verified against the same committed
+    **A derivation this tree cannot rebuild is skipped, not failed** -- for either reason,
+    a missing source genome or missing seeds. A tree holding only hg19 legitimately derives
+    only the hg19 region; and the published bundle ships the merged motif FASTA pre-built
+    without staging ``filter_config.json`` beside it, so on the tree the Docker image
+    actually carries, the literal derivation has no seeds and never will. Failing there
+    would make this command unusable on the commonest tree in existence -- which is what it
+    did until a run inside the image showed it.
+
+    Skipping is safe because it is not silence. The closing summary names what was not
+    rebuilt, and whatever is already at those paths is verified against the same committed
     digest by :func:`_verify_files_that_could_not_be_rebuilt`, so a stale file left by an
     earlier install is caught here rather than by a genotyping run months later.
 
@@ -1556,7 +1561,6 @@ def derive_only(install_config: dict[str, Any], output_dir: Path) -> None:
         output_dir: An existing reference tree.
 
     Raises:
-        RuntimeError: If a literal derivation's seeds are missing.
         ValueError: If a derivation's output, or a file already present at the path of a
             derivation this tree cannot rebuild, does not match its committed digest.
     """
@@ -1567,14 +1571,32 @@ def derive_only(install_config: dict[str, Any], output_dir: Path) -> None:
         output_dir,
         ", ".join(sorted(references)) or "none",
     )
-    # Nothing here downloads, so a seed that only *could* be fetched is as missing as one
-    # that could not. Say so now rather than after rebuilding the region FASTAs.
-    _preflight_literal_seeds(install_config, output_dir, allow_downloadable=False)
-    # `selected` is the set of genomes actually present: a derivation whose source is absent
-    # is out of scope for this tree, which is the skip-not-fail case run_derivations handles.
-    derived = run_derivations(install_config, output_dir, references, set(references))
 
+    # `run_derivations` skips a *shark* derivation whose source is outside `selected` and
+    # raises for a *literal* one whose seeds are absent -- correct for `--from-source`, which
+    # stages the seeds itself and so knows a missing one is a real fault. Nothing here
+    # downloads or stages anything, so an absent seed is this tree's shape rather than a
+    # fault. Filter those out first; the scope rule for genomes stays where it is, because
+    # duplicating it here is how the two would drift.
     specs = install_config.get("derivations", [])
+    runnable = []
+    for spec in specs:
+        missing_seeds = [name for name in spec.get("from_seeds", []) if not (output_dir / name).is_file()]
+        if spec.get("kind") == "literal" and missing_seeds:
+            logger.info(
+                "Skipping %s: seed(s) %s are not in this tree. The published bundle ships this "
+                "file pre-built and does not stage its seeds beside it, so this is the normal "
+                "shape of a bundle-installed tree rather than a fault.",
+                spec["output"],
+                ", ".join(missing_seeds),
+            )
+            continue
+        runnable.append(spec)
+
+    # `selected` is the set of genomes actually present, which routes a derivation whose
+    # source is absent down run_derivations' skip path instead of its hard-error path.
+    derived = run_derivations({**install_config, "derivations": runnable}, output_dir, references, set(references))
+
     skipped = [spec for spec in specs if spec["output"] not in derived]
     if not skipped:
         logger.info(
@@ -1584,8 +1606,7 @@ def derive_only(install_config: dict[str, Any], output_dir: Path) -> None:
         return
 
     logger.warning(
-        "Derived and verified %d of %d reference file(s) in %s. Not rebuilt, because the "
-        "source genome is not installed: %s.",
+        "Derived and verified %d of %d reference file(s) in %s. Not rebuilt in this tree: %s.",
         len(derived),
         len(specs),
         output_dir,
