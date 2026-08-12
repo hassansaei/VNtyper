@@ -6,7 +6,46 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.13 (Current)
+## 2.0.14 (Current)
+
+**CRAM runs fail under Docker with `Too many levels of symbolic links` (#238).**
+
+Every Docker user whose CRAM reference has no `.fai` beside it is affected on 2.0.10
+through 2.0.13, including `ghcr.io/hassansaei/vntyper:latest`.
+
+CRAM preflight retained the reference index htslib generates by opening it and then
+replacing that same pathname with a symlink to `/proc/<pid>/fd/<n>` — a descriptor whose
+own recorded path *is* the pathname just replaced. The entry pointed at itself:
+
+```
+reference.fa.fai -> /proc/22/fd/7
+/proc/22/fd/7    -> …/reference.fa.fai (deleted)
+```
+
+Linux tolerates that because it jumps straight to the descriptor's directory entry; a
+container runtime that resolves procfd links by re-walking the link text closes the cycle
+and every consumer that opens the index gets `ELOOP`. It is the only binding whose source
+and destination are the same path, which is why a reference *with* a shipped `.fai`
+decoded fine in the same run. The entry is now retained under its own name rather than
+replaced, and both binding classes additionally prove an installed run-local view can be
+opened through its published pathname before handing it to samtools.
+
+**Input and output must be two different host directories.**
+
+The same report exposed a second defect. Three containment guards compared pathnames only
+and never `os.path.samefile`, so one host directory mounted at two container paths —
+`-v .:/opt/vntyper/input -v .:/opt/vntyper/output` — defeated all three: the run wrote its
+output tree inside the directory holding the patient alignment, operator BEDs and
+references inside the output root went unprotected, and the log-path guard, which runs
+before the log directory is created, left a directory in the patient tree even when a
+later guard refused the run. All three now compare by inode and name both pathnames in
+the rejection.
+
+This is a bypass, not a new policy: the identical layout with a *single* mount was already
+rejected. Runs using the documented separate-directory layout are unaffected. `README.md`
+and the Docker user guide now state the requirement and show both forms.
+
+## 2.0.13
 
 **One reference resolver, and reference data from verified bundles (#217, #163, #152, #193).**
 
