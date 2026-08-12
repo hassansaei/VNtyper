@@ -271,8 +271,12 @@ def build_parser() -> argparse.ArgumentParser:
         const="sample_",
         default=None,
         help=(
-            "Pseudonymize sample names to protect sensitive information. "
-            "Optionally provide a basename for pseudonyms (default is 'sample_')."
+            "Replace sample names with a prefix plus a truncated SHA-256 digest of the name. "
+            "Optionally provide a basename for pseudonyms (default is 'sample_'). This is "
+            "obfuscation for readability, not a privacy control: the digest is unsalted and "
+            "unkeyed, so where sample names are drawn from a guessable set anyone holding the "
+            "report can recover them by testing candidates at one hash each. Treat a shared "
+            "report as identifying."
         ),
     )
 
