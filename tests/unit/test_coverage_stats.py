@@ -32,11 +32,13 @@ from vntyper.scripts.coverage_stats import (
     COVERAGE_COLUMNS,
     COVERAGE_METRIC_COLUMNS,
     MAX_REGION_SPAN_BASES,
+    VNTR_FLANK_BASES,
     format_coverage_summary,
     parse_region_length,
     read_depth_positions,
     read_depth_values,
     summarise_coverage,
+    vntr_geometry,
 )
 
 # Mark all tests in this module as unit tests
@@ -516,3 +518,76 @@ class TestReadDepthPositions:
 
         assert "depth.txt" in str(excinfo.value)
         assert ":2" in str(excinfo.value)
+
+
+class TestVntrGeometry:
+    """The array/flank geometry, and the containment rules that keep it honest.
+
+    Measured on the paired fixtures (#222): a *symmetric* error in the array
+    bounds costs ~1% in the cross-build comparison, while a one-sided error of
+    140 bp costs 17.5%. So the flank is derived from the array rather than
+    configured separately - it cannot fall out of symmetry by hand - and the
+    containment assertions below are what stop a silently degraded figure.
+    """
+
+    @staticmethod
+    def _assembly(bam="155158000-155163000", window="155160500-155162000", array="155161000-155161810"):
+        return {"chromosome": 1, "bam_region_coords": bam, "vntr_region_coords": window, "vntr_array_coords": array}
+
+    def test_the_flank_is_symmetric_about_the_array(self):
+        """Equal width either side, immediately abutting, never overlapping the array."""
+        geometry = vntr_geometry(self._assembly())
+
+        left, right = geometry.flank
+        assert left == (155161000 - VNTR_FLANK_BASES, 155160999)
+        assert right == (155161811, 155161810 + VNTR_FLANK_BASES)
+        assert left[1] - left[0] == right[1] - right[0] == VNTR_FLANK_BASES - 1
+
+    def test_the_widened_span_covers_the_window_and_both_flanks(self):
+        """One `samtools depth` call has to serve all three slices."""
+        geometry = vntr_geometry(self._assembly())
+
+        assert geometry.span[0] <= min(geometry.window[0], geometry.flank[0][0])
+        assert geometry.span[1] >= max(geometry.window[1], geometry.flank[1][1])
+
+    @pytest.mark.parametrize(
+        "assembly,expected",
+        [
+            ("GRCh37", ("155158000-155163000", "155160500-155162000", "155161000-155161810")),
+            ("GRCh38", ("155184000-155194000", "155188000-155192500", "155188530-155192010")),
+        ],
+    )
+    def test_the_shipped_geometry_fits_inside_the_extracted_region(self, assembly, expected):
+        """The flank must be inside `bam_region_coords`, because that is all the BAM holds.
+
+        Asserted against the shipped config rather than a fixture, so shrinking
+        `bam_region_coords` or moving an array bound fails here rather than
+        silently producing a flank of zero-depth padding.
+        """
+        bam, window, array = expected
+        geometry = vntr_geometry(self._assembly(bam=bam, window=window, array=array))
+
+        bam_start, bam_end = (int(part) for part in bam.split("-"))
+        assert bam_start <= geometry.flank[0][0]
+        assert geometry.flank[1][1] <= bam_end
+
+    def test_an_array_outside_the_window_is_refused(self):
+        """A configuration error must stop the run, not produce a plausible number."""
+        with pytest.raises(ValueError, match="vntr_array_coords"):
+            vntr_geometry(self._assembly(array="155159000-155159500"))
+
+    def test_a_reversed_array_is_refused(self):
+        with pytest.raises(ValueError, match="vntr_array_coords"):
+            vntr_geometry(self._assembly(array="155161810-155161000"))
+
+    def test_an_absent_array_coordinate_yields_no_geometry(self):
+        """`--custom-regions` and pre-#222 configs carry no array; that is not an error."""
+        assembly = self._assembly()
+        del assembly["vntr_array_coords"]
+
+        assert vntr_geometry(assembly) is None
+
+    def test_a_flank_that_would_leave_the_extracted_region_is_refused(self):
+        """Guards the case the shipped config happens to satisfy today."""
+        with pytest.raises(ValueError, match="bam_region_coords"):
+            vntr_geometry(self._assembly(bam="155160900-155162000"))

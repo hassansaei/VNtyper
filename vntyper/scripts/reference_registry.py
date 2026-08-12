@@ -45,6 +45,7 @@ class CoordinateSystemDict(TypedDict):
     chromosome: int
     bam_region_coords: str
     vntr_region_coords: str
+    vntr_array_coords: str
 
 
 # =============================================================================
@@ -56,11 +57,13 @@ COORDINATE_SYSTEMS = {
         "chromosome": 1,
         "bam_region_coords": "155158000-155163000",
         "vntr_region_coords": "155160500-155162000",
+        "vntr_array_coords": "155161000-155161810",
     },
     "GRCh38": {
         "chromosome": 1,
         "bam_region_coords": "155184000-155194000",
         "vntr_region_coords": "155188000-155192500",
+        "vntr_array_coords": "155188530-155192010",
     },
 }
 

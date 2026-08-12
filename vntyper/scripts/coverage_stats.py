@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import statistics
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,43 @@ COVERAGE_COLUMNS: tuple[str, ...] = COVERAGE_METRIC_COLUMNS + ("coverage_qc",)
 
 #: Columns rendered with two decimal places; the rest are written as-is.
 _TWO_DECIMAL_COLUMNS = frozenset({"mean", "median", "stdev", "percent_uncovered"})
+
+#: Width of the unique flank sampled either side of the VNTR array, per side.
+#:
+#: The flank is *derived* from the array rather than configured, because the failure that
+#: matters is asymmetry, not imprecision. Measured on the paired fixtures (#222): moving both
+#: array bounds outward by 100 bp changes the cross-build comparison by 1.1%, while moving one
+#: build's bound alone by 140 bp changes it by 17.5%. A configured flank could drift out of
+#: symmetry; a derived one cannot.
+VNTR_FLANK_BASES = 500
+
+#: The fixed length ``vntr_array_depth_sum_per_unit_length`` is expressed over.
+#:
+#: GRCh38's array length. Any constant makes the figure comparable across builds - the point is
+#: that it is the *same* constant for both - but this one keeps the number depth-shaped and
+#: leaves GRCh38's value equal to its own array mean.
+DEPTH_SUM_REFERENCE_LENGTH = 3481
+
+#: What counting policy the depth figures were produced under.
+#:
+#: Emitted beside the array sum because that sum is **not** policy-independent. Measured on the
+#: paired fixtures (#222), the GRCh37:GRCh38 ratio of the array sum is 0.992-1.011 under the
+#: defaults below and 0.308-0.552 under ``-Q 1``: the equality survives only because every
+#: primary alignment is counted regardless of mapping quality. GRCh37's array is a collapsed
+#: near-consensus core whose reads are genuinely multi-mapping at MAPQ 0, so filtering removes
+#: far more from it than from GRCh38.
+#:
+#: Bump this token if :func:`command_builders.build_samtools_depth_command` ever gains or loses
+#: a filtering flag. The policy it names is ``samtools depth -a`` with no ``-q``/``-Q``: primary
+#: and supplementary alignments, MAPQ 0 included, secondary and duplicates excluded, deletions
+#: excluded, overlapping mates counted twice.
+DEPTH_COUNTING_POLICY = "samtools-depth-a/v1"
+
+#: What a coverage column holds when the run could not produce it.
+#:
+#: Distinct from ``0``, which reads as *no coverage was seen*. A tree with no
+#: ``vntr_array_coords`` - ``--custom-regions``, or any config predating #222 - records this.
+COVERAGE_NULL_TOKEN = "NA"
 
 #: Largest region span :func:`parse_region_length` accepts, in bases.
 #:
@@ -180,6 +218,104 @@ def parse_region_length(region: str) -> int:
 
     logger.debug(f"VNTR region total length: {total_region_length} bp")
     return total_region_length
+
+
+@dataclass(frozen=True)
+class VntrGeometry:
+    """The intervals one ``samtools depth`` pass has to serve.
+
+    Attributes:
+        window: The configured ``vntr_region_coords``, inclusive. Every pre-existing
+            statistic is computed over this and nothing else, so widening the depth
+            call does not move any of them.
+        array: The repeat array itself, without flank.
+        flank: Left and right unique-sequence intervals, symmetric about ``array``.
+        span: The union the depth command is run over.
+    """
+
+    window: tuple[int, int]
+    array: tuple[int, int]
+    flank: tuple[tuple[int, int], tuple[int, int]]
+    span: tuple[int, int]
+    flank_bases: int
+
+
+def _parse_coords(value: str, key: str) -> tuple[int, int]:
+    """Parse a ``start-end`` coordinate string into an inclusive pair."""
+    parts = str(value).split("-")
+    if len(parts) != 2:
+        msg = f"{key} must be 'start-end', found {value!r}"
+        logger.error(msg)
+        raise ValueError(msg)
+    try:
+        start, end = int(parts[0]), int(parts[1])
+    except ValueError as exc:
+        msg = f"{key} must be two integers, found {value!r}"
+        logger.error(msg)
+        raise ValueError(msg) from exc
+    if start < 1 or end < start:
+        msg = f"{key} must be an ascending 1-based interval, found {value!r}"
+        logger.error(msg)
+        raise ValueError(msg)
+    return start, end
+
+
+def vntr_geometry(assembly_config: dict, flank_bases: int = VNTR_FLANK_BASES) -> VntrGeometry | None:
+    """
+    Resolve the array and flank intervals for one assembly, or ``None`` if unconfigured.
+
+    Returns ``None`` rather than raising when ``vntr_array_coords`` is absent: a tree
+    predating #222, or a run with ``--custom-regions``, legitimately has no array and must
+    still produce the eight statistics it always did. The caller records the derived
+    columns as :data:`COVERAGE_NULL_TOKEN` in that case.
+
+    Every other inconsistency *does* raise. A misconfigured interval yields a plausible
+    number rather than an obvious failure, which is the outcome #222 exists to prevent.
+
+    Args:
+        assembly_config (dict): One entry from ``bam_processing.assemblies``.
+        flank_bases (int): Width per side. Defaults to :data:`VNTR_FLANK_BASES`.
+
+    Returns:
+        VntrGeometry | None: The intervals, or ``None`` when no array is configured.
+
+    Raises:
+        ValueError: If the array is malformed, is not inside ``vntr_region_coords``, or if
+            the derived flank would leave ``bam_region_coords`` - the extracted BAM holds
+            nothing outside that, so such a flank would be measuring zero-depth padding.
+    """
+    raw_array = assembly_config.get("vntr_array_coords")
+    if not raw_array:
+        return None
+
+    window = _parse_coords(assembly_config["vntr_region_coords"], "vntr_region_coords")
+    bam_region = _parse_coords(assembly_config["bam_region_coords"], "bam_region_coords")
+    array = _parse_coords(raw_array, "vntr_array_coords")
+
+    if array[0] < window[0] or array[1] > window[1]:
+        msg = f"vntr_array_coords {raw_array} is not inside vntr_region_coords {assembly_config['vntr_region_coords']}"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if flank_bases < 1:
+        msg = f"flank_bases must be positive, found {flank_bases}"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    left = (array[0] - flank_bases, array[0] - 1)
+    right = (array[1] + 1, array[1] + flank_bases)
+
+    if left[0] < bam_region[0] or right[1] > bam_region[1]:
+        msg = (
+            f"a {flank_bases} bp flank around vntr_array_coords {raw_array} spans "
+            f"{left[0]}-{right[1]}, which leaves bam_region_coords "
+            f"{assembly_config['bam_region_coords']}; the extracted BAM holds nothing outside it"
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    span = (min(window[0], left[0]), max(window[1], right[1]))
+    return VntrGeometry(window=window, array=array, flank=(left, right), span=span, flank_bases=flank_bases)
 
 
 def read_depth_values(depth_file: str | Path) -> list[int]:
