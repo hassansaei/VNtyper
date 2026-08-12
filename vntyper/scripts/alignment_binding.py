@@ -95,8 +95,12 @@ class AlignmentBinding:
         self._view_identity = (installed_stat.st_dev, installed_stat.st_ino, stable_ctime)
         self._view_kind = kind
 
-    def _require_own_symlink(self, destination: Path, installed_stat: os.stat_result) -> None:
-        """Refuse to hand a replaced entry to the fallback install.
+    def _remove_own_symlink(self, destination: Path, installed_stat: os.stat_result) -> None:
+        """Withdraw the exact unreachable symlink installed here, never a replacement.
+
+        Removing it before the fallback runs keeps a failed hardlink install from
+        stranding an unrecorded entry, and stops the fallback's atomic replace from
+        overwriting an entry this binding does not own.
 
         Args:
             destination: Pathname whose just-installed proc symlink failed its proof.
@@ -122,6 +126,8 @@ class AlignmentBinding:
             message = f"Refusing to replace an alignment view that changed while it was being proven: {destination}"
             logger.error(message)
             raise RuntimeError(message)
+        with suppress(OSError):
+            os.unlink(destination)
 
     def _install_proc_view(self, destination: Path) -> bool:
         try:
@@ -148,10 +154,11 @@ class AlignmentBinding:
         reachable, reason = consumer_reachable_identity(destination)
         if reachable != self._descriptor_identity:
             # An installed view an external tool cannot open through its own pathname is
-            # not a view (#238). Falling back lets the hardlink install atomically replace
-            # this entry, so first prove the entry is still the one just installed:
-            # replacing somebody else's entry is exactly what teardown refuses to do.
-            self._require_own_symlink(destination, installed_stat)
+            # not a view (#238). Withdraw it before the fallback runs: that proves the
+            # entry is still the one installed here rather than letting the hardlink
+            # install's atomic replace overwrite somebody else's, and it leaves nothing
+            # unrecorded behind if the fallback itself fails.
+            self._remove_own_symlink(destination, installed_stat)
             logger.warning(
                 f"Run-local alignment view {destination} does not reach the bound alignment "
                 f"through its own pathname ({reason or 'identity mismatch'}); using a hardlink view instead."

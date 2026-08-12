@@ -757,3 +757,28 @@ def test_an_alignment_view_replaced_while_being_proven_is_not_handed_to_the_fall
         assert view.read_bytes() == b"not ours"
     finally:
         binding.close()
+
+
+def test_a_failed_fallback_after_an_unreachable_view_leaves_nothing_behind(tmp_path: Path) -> None:
+    """A stranded, unrecorded proc symlink would outlive the binding that installed it."""
+    alignment = tmp_path / "input.cram"
+    alignment.write_bytes(b"CRAM input")
+    view = tmp_path / "run" / "input.cram"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+
+    try:
+        with (
+            patch(
+                "vntyper.scripts.alignment_binding.consumer_reachable_identity",
+                return_value=(None, "Too many levels of symbolic links (errno 40)"),
+            ),
+            patch("vntyper.scripts.alignment_binding.os.link", side_effect=OSError(errno.EXDEV, "cross-device link")),
+            pytest.raises(RuntimeError, match="hardlink could not be created"),
+        ):
+            binding.install_view(view)
+
+        assert not os.path.lexists(view)
+        assert list(view.parent.iterdir()) == []
+    finally:
+        binding.close()
