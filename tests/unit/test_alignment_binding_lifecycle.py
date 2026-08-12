@@ -706,3 +706,25 @@ def test_proc_and_cross_filesystem_hardlink_unavailable_refuses_before_index_wor
 
     capture.assert_not_called()
     assert alignment.read_bytes() == b"original alignment"
+
+
+def test_unreachable_proc_view_falls_back_to_a_hardlink(tmp_path: Path) -> None:
+    """#238: a view a consumer cannot open through its own pathname is never published."""
+    alignment = tmp_path / "input.cram"
+    alignment.write_bytes(b"CRAM input")
+    view = tmp_path / "run" / "input.cram"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+    try:
+        with patch(
+            "vntyper.scripts.alignment_binding.consumer_reachable_identity",
+            return_value=(None, "Too many levels of symbolic links (errno 40)"),
+        ):
+            binding.install_view(view)
+
+        assert not view.is_symlink()
+        assert view.stat(follow_symlinks=False).st_ino == alignment.stat().st_ino
+        assert view.read_bytes() == b"CRAM input"
+    finally:
+        binding.close()
+    assert not os.path.lexists(view)

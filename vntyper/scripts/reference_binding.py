@@ -11,6 +11,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from vntyper.scripts.preflight_input_io import (
+    consumer_reachable_identity,
     read_bounded_regular_text,
     regular_file_unavailable_reason,
     try_read_bounded_regular_text,
@@ -134,7 +135,7 @@ class _InodeView:
             self._identity = (metadata.st_dev, metadata.st_ino)
             self._proc_target = f"/proc/{os.getpid()}/fd/{descriptor}"
             if generated:
-                self._replace_generated_entry()
+                self._retain_generated_entry()
             else:
                 self._install_source_view(source)
         except OSError as error:
@@ -168,25 +169,26 @@ class _InodeView:
         self._destination_identity = (metadata.st_dev, metadata.st_ino)
         self._destination_kind = kind
 
-    def _install_proc_link(self, *, replace: bool) -> bool:
+    def _remove_own_symlink(self) -> None:
+        with suppress(OSError):
+            if os.readlink(self._destination) == self._proc_target:
+                os.unlink(self._destination)
+
+    def _install_proc_link(self) -> bool:
         if not self._proc_target_is_exact():
             return False
         assert self._proc_target is not None
-        if not replace:
-            try:
-                os.symlink(self._proc_target, self._destination)
-            except OSError:
-                return False
-            self._record_destination("symlink")
-            return True
-
-        temporary = self._temporary_path()
         try:
-            os.symlink(self._proc_target, temporary)
-            os.replace(temporary, self._destination)
+            os.symlink(self._proc_target, self._destination)
         except OSError:
-            with suppress(OSError):
-                os.unlink(temporary)
+            return False
+        reachable, reason = consumer_reachable_identity(self._destination)
+        if reachable != self._identity:
+            logger.warning(
+                f"Run-local reference view {self._destination} does not reach the bound reference "
+                f"through its own pathname ({reason or 'identity mismatch'}); using a hardlink view instead."
+            )
+            self._remove_own_symlink()
             return False
         self._record_destination("symlink")
         return True
@@ -194,7 +196,7 @@ class _InodeView:
     def _install_source_view(self, source: str | Path) -> None:
         if os.path.lexists(self._destination):
             raise OSError(f"run-local reference view already exists: {self._destination}")
-        if self._install_proc_link(replace=False):
+        if self._install_proc_link():
             return
         if os.path.lexists(self._destination):
             raise OSError(f"run-local reference view already exists: {self._destination}")
@@ -212,12 +214,15 @@ class _InodeView:
             raise
         self._record_destination("regular")
 
-    def _replace_generated_entry(self) -> None:
+    def _retain_generated_entry(self) -> None:
+        # The entry already *is* the retained inode, so it is only recorded, never
+        # replaced. Substituting a link to this descriptor would point the name at an
+        # unlinked copy of itself, leaving an entry that resolves only where procfs
+        # jumps dentries rather than re-walking the link text (#238). It also protects
+        # nothing extra: whoever could replace the name could replace the link.
         metadata = os.lstat(self._destination)
         if not stat.S_ISREG(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != self._identity:
             raise OSError("generated reference sidecar changed before it could be retained")
-        if self._install_proc_link(replace=True):
-            return
         self._record_destination("regular")
 
     def _remove_destination(self) -> None:

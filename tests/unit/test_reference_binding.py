@@ -247,9 +247,13 @@ def test_preflight_probes_and_retains_the_opened_reference_and_fai_inodes(tmp_pa
 
 
 def test_generated_fai_is_bound_before_the_coverage_probe_reopens_it(tmp_path: Path) -> None:
-    """Deferring FAI binding until all probes finish leaves the depth probe unbound."""
+    """Deferring FAI binding until all probes finish leaves the depth probe unbound.
+
+    The coverage probe must see the retained inode under its own name: one link, not a
+    replaced entry pointing back at this process's descriptor for it (#238).
+    """
     reference = _reference(tmp_path / "reference.fa")
-    observed_bound_state: list[tuple[bool, bytes]] = []
+    observed_bound_state: list[tuple[int, bytes]] = []
 
     def capture(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
         arguments = shlex.split(command)
@@ -259,7 +263,7 @@ def test_generated_fai_is_bound_before_the_coverage_probe_reopens_it(tmp_path: P
         if "--reference" in arguments:
             candidate = Path(arguments[arguments.index("--reference") + 1])
             index = Path(f"{candidate}.fai")
-            observed_bound_state.append((index.is_symlink(), index.read_bytes()))
+            observed_bound_state.append((index.stat(follow_symlinks=False).st_nlink, index.read_bytes()))
         return True, "decoded"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=capture):
@@ -280,7 +284,7 @@ def test_generated_fai_is_bound_before_the_coverage_probe_reopens_it(tmp_path: P
     try:
         assert resolved is not None
         assert (source, uncovered) == ("cli", ())
-        assert observed_bound_state == [(True, b"chr1\t4\t6\t4\t5\n")]
+        assert observed_bound_state == [(1, b"chr1\t4\t6\t4\t5\n")]
     finally:
         assert binding is not None
         binding.close()
@@ -374,3 +378,25 @@ def test_one_replaced_sidecar_does_not_skip_other_reference_cleanup(tmp_path: Pa
     assert binding.is_open is False
     fai_view.unlink()
     binding.close()
+
+
+def test_generated_sidecar_keeps_its_name_instead_of_linking_to_its_own_descriptor(
+    tmp_path: Path,
+) -> None:
+    """#238: a sidecar replaced by a link to its own FD only resolves where procfs jumps dentries."""
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    binding = ReferenceBinding(str(reference), str(output), "sample", 1)
+    try:
+        generated = Path(f"{binding.consumer_path}.fai")
+        generated.write_text("chr1\t4\t6\t4\t5\n", encoding="utf-8")
+
+        binding.bind_generated_sidecars()
+
+        assert not generated.is_symlink()
+        assert generated.stat(follow_symlinks=False).st_nlink == 1
+        assert generated.read_text(encoding="utf-8") == "chr1\t4\t6\t4\t5\n"
+    finally:
+        binding.close()
+    assert not os.path.lexists(output / ".sample_reference_1")
