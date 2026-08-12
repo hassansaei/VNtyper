@@ -41,17 +41,70 @@ class Settings:
     # API Base URL
     API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
 
+    # How long a completed job's result archive stays retrievable, in days.
+    #
+    # `/download/{job_id}/` requires no credential (#189), so this value *is* the exposure
+    # window for a completed job: the id is the capability. Shortening it does not fix that
+    # design, and is not claimed to -- it reduces exposure duration, not exposure.
+    #
+    # 3 days rather than 7, chosen from what the code assumes about collection rather than by
+    # feel: `vntyper online` polls for at most 4 hours
+    # (`online_mode.DEFAULT_POLL_TIMEOUT_SECONDS`) and then gives up, and `config.json` has no
+    # `api_settings` block overriding it, so the CLI path never needs days. The binding case is
+    # a person opening the completion email later, and 3 days covers submit-Friday,
+    # download-Monday.
+    MAX_RESULT_AGE_DAYS: int = int(os.getenv("MAX_RESULT_AGE_DAYS", 3))
+
     # Cohort configurations
+    #
+    # Read `COHORT_RETENTION_DAYS` through `cohort_retention_days()` rather than directly: a
+    # cohort must not outlive the archives it lists. See that method for why.
     COHORT_RETENTION_DAYS: int = int(os.getenv("COHORT_RETENTION_DAYS", 14))  # Default to 14 days
     PASSWORD_HASH_SCHEME: str = "bcrypt"
-
-    # Max result age for cleanup
-    MAX_RESULT_AGE_DAYS: int = int(os.getenv("MAX_RESULT_AGE_DAYS", 7))
 
     # Usage statistics configurations
     USAGE_REDIS_DB: int = int(os.getenv("USAGE_REDIS_DB", 4))
     USAGE_DATA_RETENTION_DAYS: int = int(os.getenv("USAGE_DATA_RETENTION_DAYS", 30))
     USAGE_DATA_RETENTION_SECONDS: int = USAGE_DATA_RETENTION_DAYS * 86400
+
+    def cohort_retention_days(self) -> int:
+        """
+        Effective cohort lifetime, clamped so a cohort never outlives its members' archives.
+
+        A cohort is openable for ``COHORT_RETENTION_DAYS`` while each member's ``.zip`` is
+        reclaimed at ``MAX_RESULT_AGE_DAYS`` (``tasks.delete_old_results``). With the shipped
+        14 and 3 that leaves an 11-day window in which ``/cohort-status/`` lists member job
+        ids whose ``/download/{job_id}/`` returns 404 -- a cohort page advertising downloads
+        that do not work.
+
+        It is worse than a static comparison suggests: ``extend_cohort_retention`` fires on
+        every job completion and every cohort analysis, so an actively-used cohort rolls its
+        TTL forward from its *most recent* job while each archive ages out on a fixed clock
+        from *its own* creation. An active cohort can stay open with almost none of its
+        members intact.
+
+        Clamping is the honest resolution -- the alternative, documenting the gap, leaves the
+        page listing broken downloads. A WARNING names both configured values when the clamp
+        bites, so an operator who set 14 learns that 14 is not what they got.
+
+        Returns:
+            int: ``min(COHORT_RETENTION_DAYS, MAX_RESULT_AGE_DAYS)``.
+        """
+        if self.COHORT_RETENTION_DAYS <= self.MAX_RESULT_AGE_DAYS:
+            return self.COHORT_RETENTION_DAYS
+
+        # `logging.getLogger` rather than the module-level `logger`, which is defined below
+        # this class: that name resolves at call time and so would work, but depending on
+        # definition order from inside a class body is a trap for whoever moves either one.
+        logging.getLogger(__name__).warning(
+            "COHORT_RETENTION_DAYS=%s outlives MAX_RESULT_AGE_DAYS=%s, so a cohort would stay "
+            "openable after its members' result archives were deleted. Clamping cohort retention "
+            "to %s days.",
+            self.COHORT_RETENTION_DAYS,
+            self.MAX_RESULT_AGE_DAYS,
+            self.MAX_RESULT_AGE_DAYS,
+        )
+        return self.MAX_RESULT_AGE_DAYS
 
 
 settings = Settings()

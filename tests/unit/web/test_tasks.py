@@ -801,9 +801,14 @@ def test_a_successful_job_with_a_cohort_joins_it_and_extends_its_retention(
     )
 
     redis_mocks.cohort.sadd.assert_called_once_with("cohort:my-cohort:jobs", "job-1")
+    # `cohort_retention_days()`, not the raw `COHORT_RETENTION_DAYS`: a cohort must not
+    # outlive the archives it lists, so the configured value is clamped to
+    # `MAX_RESULT_AGE_DAYS`. Asserting the raw constant here would pass while the task
+    # extended a cohort past its members' expiry, which is the defect being closed.
     retention_spy.assert_called_once_with(
-        redis_mocks.cohort, "cohort:my-cohort", tasks.settings.COHORT_RETENTION_DAYS * 86400
+        redis_mocks.cohort, "cohort:my-cohort", tasks.settings.cohort_retention_days() * 86400
     )
+    assert tasks.settings.cohort_retention_days() <= tasks.settings.MAX_RESULT_AGE_DAYS
     email_kwargs = no_email_task.delay.call_args.kwargs
     assert "Cohort ID: <strong>my-cohort</strong>" in email_kwargs["content"]
 

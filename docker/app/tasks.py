@@ -379,6 +379,11 @@ def run_vntyper_job(
         # Send success email if provided
         if email:
             subject = "VNtyper Job Completed Successfully"
+            # The email used to state no deadline at all. That was already an omission; with a
+            # shorter window it becomes a misleading one, because the recipient has no way to
+            # know the link expires before they next look. It also names the one property of
+            # the link that matters: it is a capability, not an authenticated route (#189).
+            retention_days = settings.MAX_RESULT_AGE_DAYS
             if cohort_key:
                 cohort_id = cohort_key.split(":", 1)[1]
                 content = f"""
@@ -386,12 +391,18 @@ def run_vntyper_job(
                 <p>Job ID: <strong>{job_id}</strong></p>
                 <p>Cohort ID: <strong>{cohort_id}</strong></p>
                 <p>You can download your results <a href="{download_url}">here</a>.</p>
+                <p>This link stops working after {retention_days} days, when the results are
+                deleted from the server. Anyone with the link can use it until then, so treat
+                it as confidential.</p>
                 """
             else:
                 content = f"""
                 <p>Your VNtyper job has been completed successfully.</p>
                 <p>Job ID: <strong>{job_id}</strong></p>
                 <p>You can download your results <a href="{download_url}">here</a>.</p>
+                <p>This link stops working after {retention_days} days, when the results are
+                deleted from the server. Anyone with the link can use it until then, so treat
+                it as confidential.</p>
                 """
             send_email_task.delay(to_email=email, subject=subject, content=content)
             logger.info(f"Triggered email sending to {email} with download link")
@@ -458,7 +469,7 @@ def run_vntyper_job(
         # Extend cohort TTL if necessary
         if cohort_key:
             try:
-                extend_cohort_retention(redis_cohort_client, cohort_key, settings.COHORT_RETENTION_DAYS * 86400)
+                extend_cohort_retention(redis_cohort_client, cohort_key, settings.cohort_retention_days() * 86400)
             except Exception as e:
                 logger.error(f"Error extending retention for cohort {cohort_key}: {e}")
 
@@ -639,7 +650,7 @@ def run_cohort_analysis_job(
                 extend_cohort_retention(
                     redis_cohort_client,
                     cohort_key(cohort_id),
-                    settings.COHORT_RETENTION_DAYS * 86400,
+                    settings.cohort_retention_days() * 86400,
                 )
             except Exception as e:
                 logger.error(f"Error extending retention for cohort {cohort_id}: {e}")
