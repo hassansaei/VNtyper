@@ -50,7 +50,11 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env - see docker/.env.example}
-      - MAX_RESULT_AGE_DAYS=7
+      # Interpolated, not literal: .env.example documents both of these as operator
+      # knobs, and a hardcoded value here meant setting them in .env configured
+      # nothing. The defaults are the shipped values, so behaviour is unchanged.
+      - MAX_RESULT_AGE_DAYS=${MAX_RESULT_AGE_DAYS:-3}
+      - COHORT_RETENTION_DAYS=${COHORT_RETENTION_DAYS:-3}
     volumes:
       - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
       - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
@@ -80,7 +84,11 @@ services:
     command: celery -A app.celery_app worker --loglevel=info
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env - see docker/.env.example}
-      - MAX_RESULT_AGE_DAYS=7
+      # Interpolated, not literal: .env.example documents both of these as operator
+      # knobs, and a hardcoded value here meant setting them in .env configured
+      # nothing. The defaults are the shipped values, so behaviour is unchanged.
+      - MAX_RESULT_AGE_DAYS=${MAX_RESULT_AGE_DAYS:-3}
+      - COHORT_RETENTION_DAYS=${COHORT_RETENTION_DAYS:-3}
     volumes:
       - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
       - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
@@ -104,7 +112,11 @@ services:
     command: celery -A app.celery_app beat --loglevel=info
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env - see docker/.env.example}
-      - MAX_RESULT_AGE_DAYS=7
+      # Interpolated, not literal: .env.example documents both of these as operator
+      # knobs, and a hardcoded value here meant setting them in .env configured
+      # nothing. The defaults are the shipped values, so behaviour is unchanged.
+      - MAX_RESULT_AGE_DAYS=${MAX_RESULT_AGE_DAYS:-3}
+      - COHORT_RETENTION_DAYS=${COHORT_RETENTION_DAYS:-3}
     volumes:
       - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
       - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output

@@ -801,11 +801,27 @@ def test_a_successful_job_with_a_cohort_joins_it_and_extends_its_retention(
     )
 
     redis_mocks.cohort.sadd.assert_called_once_with("cohort:my-cohort:jobs", "job-1")
+    # `cohort_retention_days()`, not the raw `COHORT_RETENTION_DAYS`: a cohort must not
+    # outlive the archives it lists, so the configured value is clamped to
+    # `MAX_RESULT_AGE_DAYS`. Asserting the raw constant here would pass while the task
+    # extended a cohort past its members' expiry, which is the defect being closed.
     retention_spy.assert_called_once_with(
-        redis_mocks.cohort, "cohort:my-cohort", tasks.settings.COHORT_RETENTION_DAYS * 86400
+        redis_mocks.cohort, "cohort:my-cohort", tasks.settings.cohort_retention_days() * 86400
     )
+    assert tasks.settings.cohort_retention_days() <= tasks.settings.MAX_RESULT_AGE_DAYS
     email_kwargs = no_email_task.delay.call_args.kwargs
     assert "Cohort ID: <strong>my-cohort</strong>" in email_kwargs["content"]
+    # The completion email stated no deadline at all, which became misleading once the window
+    # shortened. It says "about N days" rather than naming a hard cutoff, because
+    # MAX_RESULT_AGE_DAYS is a cleanup-eligibility threshold and not an enforced deadline:
+    # the sweep runs daily and /download/ performs no age check, so a job finishing just
+    # after the sweep is retrievable for nearly N+1 days.
+    # Whitespace-normalised: the body is a wrapped triple-quoted f-string, so phrases span
+    # newlines and a raw substring test would pass or fail on the wrap position.
+    content = " ".join(email_kwargs["content"].split())
+    assert f"about {tasks.settings.MAX_RESULT_AGE_DAYS} days" in content
+    assert "stops working after" not in content, "the service enforces no such deadline"
+    assert "anyone with this link can retrieve them" in content, "the link is a capability, and must say so"
 
 
 def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_directory(

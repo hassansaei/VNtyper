@@ -41,17 +41,82 @@ class Settings:
     # API Base URL
     API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
 
+    # How long a completed job's result archive stays retrievable, in days.
+    #
+    # `/download/{job_id}/` requires no credential (#189), so this value *is* the exposure
+    # window for a completed job: the id is the capability. Shortening it does not fix that
+    # design, and is not claimed to -- it reduces exposure duration, not exposure.
+    #
+    # 3 days rather than 7, chosen from what the code assumes about collection rather than by
+    # feel: `vntyper online` polls for at most 4 hours
+    # (`online_mode.DEFAULT_POLL_TIMEOUT_SECONDS`) and then gives up, and `config.json` has no
+    # `api_settings` block overriding it, so the CLI path never needs days. The binding case is
+    # a person opening the completion email later, and 3 days covers submit-Friday,
+    # download-Monday.
+    MAX_RESULT_AGE_DAYS: int = int(os.getenv("MAX_RESULT_AGE_DAYS", 3))
+
     # Cohort configurations
+    #
+    # Read `COHORT_RETENTION_DAYS` through `cohort_retention_days()` rather than directly: a
+    # cohort must not outlive the archives it lists. See that method for why.
     COHORT_RETENTION_DAYS: int = int(os.getenv("COHORT_RETENTION_DAYS", 14))  # Default to 14 days
     PASSWORD_HASH_SCHEME: str = "bcrypt"
-
-    # Max result age for cleanup
-    MAX_RESULT_AGE_DAYS: int = int(os.getenv("MAX_RESULT_AGE_DAYS", 7))
 
     # Usage statistics configurations
     USAGE_REDIS_DB: int = int(os.getenv("USAGE_REDIS_DB", 4))
     USAGE_DATA_RETENTION_DAYS: int = int(os.getenv("USAGE_DATA_RETENTION_DAYS", 30))
     USAGE_DATA_RETENTION_SECONDS: int = USAGE_DATA_RETENTION_DAYS * 86400
+
+    def cohort_retention_days(self) -> int:
+        """
+        Cohort lifetime, bounded by the archive window.
+
+        **This bounds the gap; it does not close it.** Equal *durations* are not equal
+        *expiry timestamps*: ``extend_cohort_retention`` resets the cohort TTL to this
+        duration from *now* on every job completion and every cohort analysis, while each
+        archive ages from its own file timestamp. A cohort whose second member finishes on
+        day 2 is open until day 5 while its first member's archive became
+        cleanup-eligible on day 3, so ``/cohort-status/`` can still list a member whose
+        download is gone.
+
+        What this changes is the size of that window -- from up to 11 days to at most one
+        archive window -- not its existence. Closing it means either deriving the cohort
+        deadline from its *oldest* member rather than its newest, or filtering
+        ``/cohort-status/`` to members whose archives still exist. Both are design changes
+        beyond a retention bound.
+
+        A cohort is openable for ``COHORT_RETENTION_DAYS`` while each member's ``.zip`` is
+        reclaimed at ``MAX_RESULT_AGE_DAYS`` (``tasks.delete_old_results``). With the shipped
+        14 and 3 that left an 11-day window in which ``/cohort-status/`` listed member job ids
+        whose ``/download/{job_id}/`` returned 404.
+
+        A WARNING names both configured values when the bound bites, so an operator who set
+        14 learns that 14 is not what they got.
+
+        Note ``extend_cohort_retention`` calls Redis ``EXPIRE``, which *sets* a TTL rather
+        than only extending one, so an existing cohort is shortened to this value the next
+        time any of its jobs completes -- including from a failure path. Cohorts that see no
+        further activity keep whatever TTL they were given, so a deployment migrates
+        unevenly.
+
+        Returns:
+            int: ``min(COHORT_RETENTION_DAYS, MAX_RESULT_AGE_DAYS)``.
+        """
+        if self.COHORT_RETENTION_DAYS <= self.MAX_RESULT_AGE_DAYS:
+            return self.COHORT_RETENTION_DAYS
+
+        # `logging.getLogger` rather than the module-level `logger`, which is defined below
+        # this class: that name resolves at call time and so would work, but depending on
+        # definition order from inside a class body is a trap for whoever moves either one.
+        logging.getLogger(__name__).warning(
+            "COHORT_RETENTION_DAYS=%s outlives MAX_RESULT_AGE_DAYS=%s, so a cohort would stay "
+            "openable after its members' result archives were deleted. Clamping cohort retention "
+            "to %s days.",
+            self.COHORT_RETENTION_DAYS,
+            self.MAX_RESULT_AGE_DAYS,
+            self.MAX_RESULT_AGE_DAYS,
+        )
+        return self.MAX_RESULT_AGE_DAYS
 
 
 settings = Settings()

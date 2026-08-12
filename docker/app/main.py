@@ -331,7 +331,7 @@ def create_cohort(
             redis_cohort_client,
             alias=alias,
             passphrase=passphrase,
-            retention_seconds=settings.COHORT_RETENTION_DAYS * 86400,
+            retention_seconds=settings.cohort_retention_days() * 86400,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
