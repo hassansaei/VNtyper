@@ -24,7 +24,7 @@ produced nothing readable" must not render identically to it.
 
 import pytest
 
-from vntyper.scripts.file_processing import describe_unusable_vcf
+from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 
 pytestmark = pytest.mark.unit
 

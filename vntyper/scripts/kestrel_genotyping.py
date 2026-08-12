@@ -35,9 +35,10 @@ from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.confidence_assignment import (
     calculate_depth_score_and_assign_confidence,
 )
-from vntyper.scripts.file_processing import describe_unusable_vcf, filter_indel_vcf, filter_vcf
+from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
+from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.motif_processing import (
     load_additional_motifs,
     load_muc1_reference,
