@@ -20,7 +20,7 @@ If adVNTR was run, its results appear in a separate table showing VID, variant s
 
 **Screening Summary**
 
-An interpretive text block summarizes the clinical significance of the combined results. The summary is generated from a rule-based system defined in `report_config.json` that considers:
+An interpretive text block summarizes the combined result. The summary is generated from a rule-based system defined in `report_config.json` that considers:
 
 - Kestrel result category (High_Precision, Low_Precision, flagged variants, negative)
 - adVNTR result category (positive, negative, not performed)

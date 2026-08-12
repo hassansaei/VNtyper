@@ -12,7 +12,7 @@ Extracted from ``generate_report.py`` (861 LOC, 4% covered) under AGENTS.md rule
 :class:`ScreeningSummary` out. No filesystem beyond reading the packaged config,
 no rendering.
 
-**The clinical text is config-driven and must stay that way** (AGENTS.md). Nothing
+**The interpretive text is config-driven and must stay that way** (AGENTS.md). Nothing
 here composes, rewords or conditions a sentence; it computes a state and reads the
 message for that state out of the configuration. A state with no configured
 message falls back to ``screening_summary_default`` -- which is why

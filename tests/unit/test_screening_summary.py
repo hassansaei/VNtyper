@@ -20,7 +20,7 @@ Two failure modes are covered here that a per-rule test would miss:
   matrix test below walks the full cross product of reachable states and fails
   on any positive state that falls through.
 
-The clinical text itself is config-driven and stays that way (AGENTS.md): no
+The interpretive text itself is config-driven and stays that way (AGENTS.md): no
 assertion here pins the wording of a message, only which state gets one.
 """
 
