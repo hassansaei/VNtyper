@@ -323,7 +323,13 @@ def test_unindexed_read_only_reference_uses_a_run_local_index_for_every_consumer
         assert plan.reference_path is not None
         assert plan.reference_path != str(reference)
         assert Path(plan.reference_path).is_symlink()
-        assert Path(f"{plan.reference_path}.fai").is_symlink()
+        # The generated index is retained under its own name, not replaced by a link to
+        # this process's descriptor for it, which would point the entry at itself (#238).
+        generated_index = Path(f"{plan.reference_path}.fai")
+        assert not generated_index.is_symlink()
+        assert generated_index.stat(follow_symlinks=False).st_nlink == 1
+        assert generated_index.read_text(encoding="utf-8").startswith("chr1\t")
+        assert not Path(f"{reference}.fai").exists()
     finally:
         if plan is not None:
             plan.close()
