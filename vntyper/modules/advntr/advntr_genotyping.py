@@ -272,12 +272,39 @@ def derive_indel_columns(df: pd.DataFrame) -> pd.DataFrame:
 # are asserted to agree, on pure AND mixed states, by
 # tests/unit/test_frameshift_convention_parity.py.
 #
-# CARRIED OVER UNCHANGED, and not established here: Deletion_length is
-# Variant.str.count("D") -- a count of the letter D anywhere in the State string -- used
-# above as a count of deleted *bases*. The two coincide only if every D in a State is one
-# deletion part removing exactly one base. That is the existing behaviour on both sides of
-# this change: the sign repair neither depends on it nor ratifies it. It is filed as an
-# open question against #192 (docs/development/ci-followups.md, section B8).
+# WHY Deletion_length = Variant.str.count("D") IS A COUNT OF DELETED BASES (#202, settled
+# 2026-08-12 against adVNTR at berntpopp/adVNTR@05fd98a, branch enhanced_hmm -- the exact
+# revision vntyper/dependencies/advntr/install_advntr.cfg pins, verified byte-identical to
+# the installed advntr-1.3.3 egg).
+#
+# The subtraction above mixes two quantities that LOOK like different units: Insertion_len
+# is a summed bp count (every LEN token, #192) and Deletion_length is a count of D
+# characters. They are the same unit, because one D token always removes exactly one base:
+#
+#   1. One delete state per reference column, by construction. profile_hmm.py:39-47 emits
+#      one 'D' + index per single gap character; hmm_utils.py:507 builds one
+#      State(None, name='D%s_%s') per match column. State(None, ...) is silent -- it emits
+#      nothing and skips exactly one column.
+#   2. Delete states have NO self-loop, insert states do. hmm_utils.py:542,674 add
+#      insert->itself transitions, which is precisely why an I token needs _LEN{k}. The
+#      only D transition, hmm_utils.py:551,683, is delete_states[i-1] -> delete_states[i],
+#      i.e. it advances a column. Deleting k bases therefore visits k distinct states.
+#   3. The State string encodes a k-base deletion as k '&'-joined D tokens.
+#      vntr_finder.py:606-612 joins consecutive D events; every _LEN write site
+#      (vntr_finder.py:587,594,625,633,656; hmm_alignment.py:322,330,372,385,412) is
+#      guarded by startswith("I"). No branch anywhere appends a length to a D.
+#   4. adVNTR itself counts it this way: hmm_alignment.py:63-64 renders exactly one '-'
+#      per D state, and its own commented-out reference implementation at
+#      hmm_alignment.py:128-132 is literally `detected_mutation.count("D")`.
+#
+# So the two arms are consistent and no bp/event conversion is missing. Do not "fix" this
+# by parsing a length out of a D token -- there is none to parse.
+#
+# KNOWN LIMITATION, opposite direction, and NOT a VNtyper defect: adVNTR's
+# mutation_count_temp (vntr_finder.py:487) is keyed by state name and reset per read, not
+# per repeat unit. One read spanning two RUs of the same pattern that deletes the same
+# column in both emits that D token once, so count("D") can UNDERSTATE such a case. That is
+# a representational limit of the State string, upstream of anything here.
 
 
 def advntr_processing_del(df):
