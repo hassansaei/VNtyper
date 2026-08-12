@@ -837,3 +837,27 @@ def test_a_reversed_region_is_refused_before_samtools_runs(tmp_path, monkeypatch
         )
 
     assert launched == []
+
+
+def test_an_unparseable_region_never_reaches_samtools(tmp_path, monkeypatch):
+    """#224: the span bound is worthless if a region without an end can walk past it.
+
+    ``parse_region_length`` degrades an unparseable region to 0 and only warns, which is its
+    documented contract. But ``samtools -r`` accepts a bare contig, so passing ``chr1`` through
+    unchecked emits chromosome-wide depth -- recreating the exact disk exhaustion the bound
+    exists to prevent, through the one input the bound cannot measure.
+    """
+    launched = []
+    monkeypatch.setattr(fastq_bam_processing, "run_command", lambda *a, **k: launched.append(a) or True)
+
+    with pytest.raises(ValueError, match="could not be parsed into coordinates"):
+        fastq_bam_processing.calculate_vntr_coverage(
+            bam_file=tmp_path / "in.bam",
+            region="chr1",
+            threads=1,
+            config={"tools": {"samtools": "samtools"}},
+            output_dir=tmp_path,
+            output_name="coverage",
+        )
+
+    assert launched == [], "a region with no end reached samtools"

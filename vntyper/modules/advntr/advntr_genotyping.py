@@ -94,9 +94,16 @@ def advntr_output_extension(settings: dict) -> str:
         :func:`run_advntr` reads the import-time :data:`advntr_settings`, while
         ``pipeline.py`` calls :func:`load_advntr_config` a second time and derives its own
         local mapping. Those are two independently loaded states, and this extension is
-        derived by both -- the producer of the output path and its consumer. A helper that
-        read the global would let the two disagree while appearing to share a single source
-        of truth, which is the drift this function exists to remove (#247).
+        derived by both -- the producer of the output path and its consumer.
+
+        Taking the mapping as a parameter does **not** merge those two states, and this
+        function should not be read as claiming it does. What it removes is the *duplicated
+        derivation*: the rule turning ``output_format`` into an extension existed twice, once
+        here and once inlined in ``pipeline.py``, so the two could drift apart in a way no
+        test would catch. Now there is one rule, applied to whichever mapping the caller
+        actually used, and each caller's mapping is visible at its call site. Both loads read
+        the same packaged file, so they agree in practice; unifying the loads themselves would
+        change which configuration ``pipeline.py`` reads and is a separate change (#247).
     """
     return ".vcf" if settings["output_format"] == "vcf" else ".tsv"
 
@@ -122,8 +129,10 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     # while advntr_config.json sets 1, and `output_format` defaulted to "tsv" while it sets
     # "vcf" -- so dropping either key changed the emitted command with no error at all. That
     # is the pattern already rejected for the calibration constants in
-    # confidence_assignment.py:108-111. `--config-path` replaces the whole config rather than
-    # merging it, so a partial config is not supported input and failing loudly is right (#247).
+    # confidence_assignment.py:108-111. A partial mapping is not supported input, so failing
+    # loudly beats emitting a command nobody chose. (Note this sidecar is NOT what `--config-path`
+    # replaces -- that flag loads the main config.json, while `load_advntr_config` defaults to the
+    # packaged advntr_config.json independently of it.) (#247)
     #
     # The thread count is 1 because adVNTR's `-t` is a genuine no-op for the invocation
     # VNtyper makes, not because 1 is fast. `-t` sets only `settings.CORES`

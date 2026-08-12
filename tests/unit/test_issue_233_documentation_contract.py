@@ -4,7 +4,7 @@ Three tests were removed when planning documents left the repository. They asser
 that historical design documents under `docs/superpowers/specs/` and `docs/plans/`
 led with a dated supersession note, so that a reader meeting an old design was told
 its routing policy had been replaced. Those documents now live in the untracked
-`.planning/` workspace (see `.planning/README.md`) and are not shipped, not built by
+`.planning/` workspace, which is gitignored, and are not shipped, not built by
 mkdocs, and not reachable by a reader of the site -- so there is no longer a reader to
 mislead, and nothing for a repository test to hold.
 

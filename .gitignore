@@ -231,10 +231,11 @@ reference/forbidden_strings.txt
 
 # Contributor working documents are neither project history nor documentation. `docs/`
 # is strictly the published mkdocs site; design specs, implementation plans, execution
-# prompts and milestone gate artifacts live in `.planning/`, untracked. See
-# `.planning/README.md`. The durable record of *why* a change was made is the commit
-# message, the pull request and the GitHub issue -- all permanent, and all reachable by
-# someone who does not have this directory.
+# prompts and milestone gate artifacts live in `.planning/`, untracked -- conventionally
+# `specs/`, `plans/`, `prompts/` and `milestones/` beneath it. A fresh clone has no such
+# directory, so nothing tracked may depend on its contents. The durable record of *why* a
+# change was made is the commit message, the pull request and the GitHub issue -- all
+# permanent, and all reachable by someone who does not have this directory.
 #
 # Both entries are deliberate. `.planning/` is unanchored: no level of the tree should
 # carry one. `/specs/` is root-anchored so that it cannot also match a `specs/`

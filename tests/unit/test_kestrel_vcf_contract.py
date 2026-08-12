@@ -183,3 +183,19 @@ def test_a_header_whose_columns_are_misspelled_is_refused(tmp_path):
     path.write_text(META + "#CHROM\tPOSITION\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n", encoding="utf-8")
 
     assert describe_unusable_vcf(path) is not None
+
+
+def test_undecodable_bytes_are_reported_rather_than_raising(tmp_path):
+    """The contract is that this function *returns a reason*.
+
+    Letting a ``UnicodeDecodeError`` escape would hand the caller an exception it does not
+    expect, from the one function whose job is to classify unreadable Kestrel output. Corrupt
+    bytes where a VCF should be are exactly the condition being detected.
+    """
+    path = tmp_path / "output.vcf"
+    path.write_bytes(b"##fileformat=VCFv4.2\n\xff\xfe\x00 not utf-8\n")
+
+    reason = describe_unusable_vcf(path)
+
+    assert reason is not None
+    assert "could not be read" in reason

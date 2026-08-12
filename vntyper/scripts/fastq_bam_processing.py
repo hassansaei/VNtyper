@@ -309,6 +309,19 @@ def calculate_vntr_coverage(
     # error, not a failure to summarise. `pipeline_coverage` closes the alignment plan in a
     # `finally`, so cleanup is unaffected by the change of type.
     total_region_length = parse_region_length(region)
+    if total_region_length <= 0:
+        # `parse_region_length` degrades an unparseable region to 0 and only warns, which is
+        # its documented contract and is right for a pure function. It is NOT sufficient here:
+        # `samtools -r` accepts a bare contig, so passing `chr1` through unchecked emits
+        # chromosome-wide depth and recreates the exact disk exhaustion the span bound exists
+        # to prevent. The bound has to be enforced where the command is launched (#224).
+        msg = (
+            f"Region {region!r} could not be parsed into coordinates, so its span cannot be bounded. "
+            "Refusing to run `samtools depth` on it: a region without an end is unbounded, and "
+            "`depth -a` writes one row per base in whatever it is given."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
     coverage_output = Path(output_dir) / f"{output_name}_vntr_coverage.txt"
     depth_command = build_samtools_depth_command(
         samtools_path=samtools_path,

@@ -650,8 +650,10 @@ summary | release-summary | none | always records success, failure, skipped jobs
     issues such as `{#209, #178}` is enough) fails as an unterminated comment.
   **`docs/` is strictly the published site — put nothing else there.** Contributor
   working documents (design specs, implementation plans, execution prompts, milestone
-  gate artifacts) belong in the untracked `.planning/` workspace; see
-  `.planning/README.md` for its layout. They used to live in `docs/plans/` and
+  gate artifacts) belong in an untracked `.planning/` workspace, conventionally
+  `specs/`, `plans/`, `prompts/` and `milestones/` beneath it. That directory is
+  gitignored, so **a fresh clone does not have one** and nothing may depend on its
+  contents. They used to live in `docs/plans/` and
   `docs/superpowers/` behind `exclude_docs:`, and that key is now gone: while every page
   under `docs/` is published, there is nothing to exclude. A document kept out of the
   build is also kept out of the macro hazard above, which is most of why planning prose

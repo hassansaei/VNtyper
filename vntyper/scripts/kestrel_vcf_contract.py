@@ -115,7 +115,12 @@ def describe_unusable_vcf(vcf_path: str | Path) -> str | None:
                 if line.startswith("##") or not line.strip():
                     continue
                 records_before_header += 1
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError is caught alongside OSError deliberately. This function's contract
+        # is that it *returns a reason*; letting a decode error escape would hand the caller an
+        # exception it does not expect, from a function whose whole job is to classify
+        # unreadable output. Corrupt bytes where a VCF should be is exactly the condition being
+        # detected, not an unexpected one (#223).
         return f"it could not be read ({exc})"
 
     if records_before_header:
