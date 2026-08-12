@@ -54,6 +54,21 @@ After alignment, the pipeline computes per-base coverage over the VNTR region us
 
 **Every statistic is computed over the region, not over the positions that carry reads.** The `-a` flag makes `samtools depth` emit a row for every position in the region, zero-depth ones included, and a depth table written without it is padded back to the region with zeros before anything is computed. A sample covered at 30x across 10% of the VNTR therefore reports a mean of 3, and `min` is `0` wherever any position is uncovered. Before VNtyper 2.0.8 the mean divided by the number of covered positions and reported 30 -- the depth where there happened to be reads, which is not a property of the region and was systematically too high exactly where coverage was patchy.
 
+### Comparing coverage between assemblies
+
+**Mean coverage over the VNTR region is not comparable between GRCh37 and GRCh38.** Measured on the same sample aligned to both, it runs about **4.3x higher on GRCh37**.
+
+That is not a defect in either number. The two assemblies represent different amounts of the repeat array -- roughly 13.5 60-bp units in GRCh37 against roughly 58 in GRCh38 -- and a sample's reads pile onto whichever copies the reference happens to contain. Concentrating the same reads onto a quarter of the sequence quadruples the depth. Harmonising the configured windows would not change this, because the difference is in the reference, not in the window.
+
+Three columns exist so a reader can compare something, and they do not carry equal weight:
+
+- **`vntr_flank_mean_depth`** -- mean depth over unique sequence flanking the array, `vntr_flank_bases` per side. This is the figure to compare. Unique sequence has no repeat copies to distribute reads between, so it measures the sample rather than the assembly, and it is unchanged by mapping-quality or overlap filtering.
+- **`vntr_array_depth_sum`** and **`vntr_array_depth_sum_per_unit_length`** -- summed depth over the array, and that sum over the fixed `depth_sum_reference_length`. Comparable between assemblies **only** under the counting policy named in `depth_counting_policy`, and the qualification is not decorative: under `samtools depth` defaults the two builds agree to within 1%, and requiring `MAPQ >= 1` moves them to a ratio of 0.31-0.55. The equality holds because every primary alignment is counted whatever its mapping quality, and GRCh37's array is a collapsed near-consensus core whose reads are genuinely ambiguous.
+
+A run whose coverage region is not the configured VNTR window -- `--custom-regions`, `--bed-file` -- records all of these as `NA`. The array coordinates do not describe an operator-supplied interval, so no figure is reported for one. `NA` rather than `0`: zero would say the region was examined and no reads were found.
+
+The array bounds are heuristic rather than an authoritative annotation, and both were derived by one procedure applied identically to both assemblies. That symmetry is what matters -- moving both outward by 100 bp changes the comparison by about 1%, while moving one build's bound alone by 140 bp changes it by 17.5%.
+
 These metrics are written to `coverage_summary.tsv` and are used in the final report for quality assessment. A mean VNTR coverage below the configured threshold (default: 100x), or an uncovered fraction above its own (default: 50%), fails the report's coverage QC.
 
 ## BAM Header Analysis

@@ -4,7 +4,34 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Added
+
+- **Coverage figures that can be compared between assemblies (#222).** Mean coverage over the
+  VNTR region is about **4.3x higher on GRCh37 than GRCh38 for the same sample**, because the
+  two assemblies represent different amounts of the repeat array -- roughly 13.5 60-bp units
+  against roughly 58 -- and the same reads pile onto whichever copies exist. Nothing in the
+  output said so, and harmonising the configured windows would not have fixed it: the
+  difference is in the reference, not the window.
+
+  `coverage_summary.tsv` gains `vntr_flank_mean_depth`, which measures unique flanking sequence
+  and is therefore a property of the sample rather than of the assembly, alongside
+  `vntr_array_depth_sum`, `vntr_array_depth_sum_per_unit_length` and the geometry and counting
+  policy each was measured under. The array figures are comparable between builds **only** under
+  the policy named in `depth_counting_policy` -- they agree to within 1% under `samtools depth`
+  defaults and diverge to a ratio of 0.31-0.55 under `MAPQ >= 1` -- and that token is emitted so
+  the number cannot be read as a general property.
+
+  **No existing value changes.** The eight statistics, the QC gate and genotyping are untouched.
+  A run whose region is not the configured VNTR window records the new columns as `NA` rather
+  than `0`, because zero would claim the region was examined and found empty.
+
+### Fixed
+
+- **A malformed coverage column no longer discards the ones after it.** `parse_coverage_stats`
+  coerced every column in one block and returned on the first failure; `coverage_qc` is the last
+  column, so a single bad number took the QC verdict with it. The original columns keep their
+  previous behaviour exactly; the columns added above are isolated so neither can cost a reader
+  the other.
 
 ## 2.0.16 (Current)
 
