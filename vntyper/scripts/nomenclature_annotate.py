@@ -17,6 +17,7 @@ Research use only.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -28,6 +29,7 @@ from vntyper.scripts.nomenclature import (
     reconcile,
     render,
 )
+from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate, refine
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +90,15 @@ def _cells(call: Nomenclature) -> dict[str, Any]:
     }
 
 
-def annotate_kestrel_frame(frame: pd.DataFrame) -> pd.DataFrame:
+def annotate_kestrel_frame(frame: pd.DataFrame, output_dir: str | Path | None = None) -> pd.DataFrame:
     """Add the nomenclature columns to a Kestrel result frame.
 
     Args:
         frame: The final Kestrel frame, as written to ``kestrel_result.tsv``.
+        output_dir: The Kestrel output directory, when the reads are available. Given
+            one, rows the VCF cannot resolve are refined against ``output.bam`` --
+            the rescue path that recovers a delins. Omitted, the VCF result stands
+            and no BAM is opened.
 
     Returns:
         pd.DataFrame: A copy with the five columns appended. The negative-run frame
@@ -103,22 +109,82 @@ def annotate_kestrel_frame(frame: pd.DataFrame) -> pd.DataFrame:
         return frame
 
     annotated = frame.copy()
-    cells: list[dict[str, Any]] = []
-    for _, row in annotated.iterrows():
-        if _is_negative(row):
-            cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
-            continue
-        try:
-            call = from_kestrel(str(row["Motifs"]), int(row["POS"]), str(row["REF"]), str(row["ALT"]))
-        except (TypeError, ValueError):
-            logger.debug("Kestrel row not translatable to nomenclature: %s", dict(row))
-            cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
-            continue
-        cells.append(_cells(reconcile(call)))
+    rescuer = _open_rescuer(output_dir)
+    locus = _read_locus(output_dir)
+
+    try:
+        cells: list[dict[str, Any]] = []
+        for _, row in annotated.iterrows():
+            if _is_negative(row):
+                cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
+                continue
+            try:
+                call = from_kestrel(str(row["Motifs"]), int(row["POS"]), str(row["REF"]), str(row["ALT"]))
+            except (TypeError, ValueError):
+                logger.debug("Kestrel row not translatable to nomenclature: %s", dict(row))
+                cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
+                continue
+
+            merged = reconcile(call)
+            # VCF primary, BAM refines. The BAM is consulted only for candidates, so
+            # the common path never opens it.
+            if rescuer is not None and locus is not None and is_candidate(merged):
+                contig, position = locus
+                consensus = rescuer.rescue(contig, position)
+                if consensus is not None:
+                    merged = refine(merged, from_bam(contig, consensus))
+            cells.append(_cells(merged))
+    finally:
+        if rescuer is not None:
+            rescuer.close()
 
     for column in NOMENCLATURE_COLUMNS:
         annotated[column] = [cell[column] for cell in cells]
     return annotated
+
+
+def _open_rescuer(output_dir: str | Path | None) -> BamRescuer | None:
+    """Build a rescuer for a sample, or ``None`` when the reads are unavailable.
+
+    Args:
+        output_dir: The Kestrel output directory.
+
+    Returns:
+        BamRescuer | None: A rescuer owning one handle for the whole frame. The
+        handle is opened lazily on first use, so building this costs nothing when no
+        row turns out to be a candidate.
+    """
+    if output_dir is None:
+        return None
+    bam = Path(output_dir) / "output.bam"
+    if not bam.is_file():
+        return None
+    return BamRescuer(bam)
+
+
+def _read_locus(output_dir: str | Path | None) -> tuple[str, int] | None:
+    """Read the called locus from ``output.bed``.
+
+    Args:
+        output_dir: The Kestrel output directory.
+
+    Returns:
+        tuple[str, int] | None: ``(pair name, 1-based position)``, or ``None`` when
+        the BED is absent or malformed.
+    """
+    if output_dir is None:
+        return None
+    bed = Path(output_dir) / "output.bed"
+    if not bed.is_file():
+        return None
+    fields = bed.read_text().split()
+    if len(fields) < 2:
+        return None
+    try:
+        return fields[0], int(fields[1])
+    except ValueError:
+        logger.debug("output.bed did not carry a numeric position: %r", fields[:2])
+        return None
 
 
 def annotate_advntr_frame(frame: pd.DataFrame) -> pd.DataFrame:

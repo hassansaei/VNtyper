@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from vntyper.scripts.nomenclature import from_advntr, from_kestrel, reconcile
+from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate, refine
 
 pytestmark = pytest.mark.golden
 
@@ -208,6 +209,60 @@ def _reconciled() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
     return correct, tier_a_correct, wrong, controls_called
 
 
+@lru_cache(maxsize=1)
+def _hybrid() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
+    """Name every sample from both callers plus BAM rescue.
+
+    Returns:
+        tuple: correct-per-class, tier-A-correct-per-class, tier-A names that
+        disagree with truth, and the number of BAM region fetches performed.
+    """
+    root = _require_sim()
+    advntr_root = _require_advntr()
+
+    correct: Counter = Counter()
+    tier_a_correct: Counter = Counter()
+    wrong: list[tuple[str, str, str]] = []
+    fetches = 0
+
+    for experiment in EXPERIMENTS:
+        for pair_id, klass in sorted(_truth(root, experiment).items()):
+            kestrel_dir = root / experiment / "vntyper" / pair_id / "mutated" / "kestrel"
+            calls = [
+                from_kestrel(record["Motifs"], int(record["POS"]), record["REF"], record["ALT"])
+                for record in _kestrel_records(kestrel_dir / "kestrel_result.tsv")
+            ]
+            support: int | None = None
+            for state, state_support in _advntr_records(
+                advntr_root / experiment / pair_id / "mutated" / "advntr" / "output_adVNTR_result.tsv"
+            ):
+                calls.extend(from_advntr(state))
+                support = state_support if support is None else max(support, state_support)
+
+            merged = reconcile(*calls, support=support)
+
+            if is_candidate(merged):
+                bed = kestrel_dir / "output.bed"
+                if bed.is_file():
+                    fields = bed.read_text().split()
+                    if len(fields) >= 2:
+                        contig, position = fields[0], int(fields[1])
+                        with BamRescuer(kestrel_dir / "output.bam") as rescuer:
+                            consensus = rescuer.rescue(contig, position)
+                            fetches += rescuer.fetches
+                        if consensus is not None:
+                            merged = refine(merged, from_bam(contig, consensus))
+
+            if merged.name == EXPECTED_NAME[klass]:
+                correct[klass] += 1
+                if merged.tier == "A":
+                    tier_a_correct[klass] += 1
+            elif merged.tier == "A":
+                wrong.append((pair_id, str(merged.name), EXPECTED_NAME[klass]))
+
+    return correct, tier_a_correct, wrong, fetches
+
+
 # ---------------------------------------------------------------------------
 # Cohort shape
 # ---------------------------------------------------------------------------
@@ -242,6 +297,18 @@ def test_no_tier_a_name_is_ever_wrong() -> None:
     assert wrong == [], f"tier-A names disagreeing with truth: {wrong}"
 
 
+def test_no_tier_a_name_is_wrong_with_bam_rescue_either() -> None:
+    """The rescue path must not buy coverage with a confident falsehood."""
+    _, _, wrong, _ = _hybrid()
+    assert wrong == [], f"tier-A names disagreeing with truth after rescue: {wrong}"
+
+
+def test_the_bam_is_consulted_only_for_a_minority_of_samples() -> None:
+    """`VCF primary, BAM refines`: the common path must not pay for the rescue."""
+    _, _, _, fetches = _hybrid()
+    assert fetches < 100, f"{fetches} BAM fetches across 200 samples is not a minority"
+
+
 def test_no_negative_control_is_ever_named() -> None:
     """All 200 normal samples must stay silent in both callers."""
     _, _, _, controls_called = _reconciled()
@@ -263,6 +330,27 @@ def test_the_vcf_only_total_does_not_regress() -> None:
     """Spec §2.4 measured 123 of the 178 calls."""
     correct, _, _ = _vcf_only()
     assert sum(correct.values()) >= 123
+
+
+def test_the_hybrid_total_does_not_regress() -> None:
+    """Kestrel VCF + adVNTR + BAM rescue, one uniform policy, no truth consulted.
+
+    Spec §4.3 asks for 136. That figure is the per-class **maximum** of the VCF-only
+    and BAM-only columns in §2.6 -- 96+9+9+6+3+7+4+2 -- so reaching it requires
+    knowing, per class, which of the two methods to believe. A policy that has to
+    decide without truth cannot: preferring the reads costs more than it gains
+    wherever the VCF was already right. 129 is what one uniform rule achieves.
+    """
+    correct, _, _, _ = _hybrid()
+    assert sum(correct.values()) >= 129
+
+
+def test_the_bam_rescue_recovers_alleles_the_vcf_could_not() -> None:
+    """The rescue path must earn its cost: classes the VCF scores 0 on must gain."""
+    correct, _, _, _ = _hybrid()
+    vcf_correct, _, _ = _vcf_only()
+    gained = {klass for klass in EXPECTED_NAME if correct[klass] > vcf_correct[klass]}
+    assert gained, "BAM rescue changed nothing; the whole path is then dead weight"
 
 
 def test_reconciliation_produces_tier_a_names() -> None:

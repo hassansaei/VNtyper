@@ -39,6 +39,7 @@ __all__ = [
     "Nomenclature",
     "ambiguity_interval",
     "from_advntr",
+    "name_coding_pair_edit",
     "from_kestrel",
     "name_edit",
     "normalise",
@@ -876,8 +877,40 @@ def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
         coding_end = pair_length + 1 - pos
         inserted = revcomp(alt)
 
+    return name_coding_pair_edit(motifs, pair, coding_start, coding_end, inserted, net, "kestrel_vcf")
+
+
+def name_coding_pair_edit(
+    motifs: str,
+    pair: str,
+    coding_start: int,
+    coding_end: int,
+    inserted: str,
+    net: int,
+    source: str,
+) -> Nomenclature:
+    """Name an edit already expressed in coding-frame pair coordinates.
+
+    Shared by the VCF and BAM paths so the two cannot drift: a name recovered from
+    the reads must be produced by exactly the machinery that names a VCF record,
+    or the two would disagree for reasons that have nothing to do with the evidence.
+
+    Args:
+        motifs: The ``<L>-<R>`` pair label.
+        pair: The 120 bp plus-strand pair sequence.
+        coding_start: 1-based inclusive start on the coding pair.
+        coding_end: 1-based inclusive end; ``coding_start - 1`` for an insertion.
+        inserted: Inserted bases, already in the coding frame.
+        net: Change in length.
+        source: The caller this came from.
+
+    Returns:
+        Nomenclature: The named record; tier C when it cannot be placed.
+    """
+    pair_length = len(pair)
+
     if not 1 <= coding_start <= pair_length + 1:
-        return _undetermined("insertion" if net > 0 else "deletion", net, "kestrel_vcf", ())
+        return _undetermined("insertion" if net > 0 else "deletion", net, source, ())
 
     # Normalise in the 120 bp pair frame FIRST, so a shift may legally cross the unit
     # junction, and only then assign the unit (spec §3.2). Order matters: a delGCCCA
@@ -915,7 +948,7 @@ def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
 
     upper = UNIT_LENGTH + 1 if end < start else UNIT_LENGTH
     if not 1 <= start <= upper:
-        return _undetermined("insertion" if net > 0 else "deletion", net, "kestrel_vcf", junction_flags)
+        return _undetermined("insertion" if net > 0 else "deletion", net, source, junction_flags)
 
     # A span still crossing the junction after normalisation cannot be projected onto
     # a single 60 bp unit, so it is named against the coding pair and anchored on the
@@ -964,5 +997,5 @@ def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
         ambiguity=window,
         repeat_form=tract,
         net_length=net,
-        source="kestrel_vcf",
+        source=source,
     )

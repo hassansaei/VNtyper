@@ -563,7 +563,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     # Name the variants before writing. Doing it here rather than in a later stage is
     # what makes one edit reach every surface: the TSV below, the pipeline summary
     # built from this same frame, and the HTML report all inherit the columns.
-    processed_df = annotate_kestrel_frame(processed_df)
+    processed_df = annotate_kestrel_frame(processed_df, output_dir)
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
