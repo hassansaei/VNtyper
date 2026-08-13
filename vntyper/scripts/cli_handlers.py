@@ -34,6 +34,7 @@ from vntyper.scripts.online_mode import run_online_mode
 from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.reference_registry import get_reference_source, physical_reference_id, reference_keys
 from vntyper.scripts.reference_resolution import ResolvedReference, resolve_from_mapping
+from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 
 logger = logging.getLogger(__name__)
 
@@ -474,6 +475,11 @@ def handle_pipeline(
         sample_name_is_explicit=sample_name_is_explicit,
         log_file=log_file_str,  # Pass the correctly determined log_file
         summary_formats=summary_formats,  # New parameter passed
+        # An ordinary run never goes through `vntyper report`, so this is the only
+        # route `--report-igv` has to the generator for the reports most people get.
+        # `getattr` guards a direct `handle_pipeline()` call whose namespace predates
+        # the option (#242).
+        report_igv=getattr(args, "report_igv", DEFAULT_REPORT_IGV),
     )
 
 

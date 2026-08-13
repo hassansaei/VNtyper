@@ -32,6 +32,7 @@ from typing import Any
 from vntyper.scripts.artifact_names import select_best_vcf_file
 from vntyper.scripts.cli_handlers import get_conf
 from vntyper.scripts.generate_report import generate_summary_report
+from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 
 logger = logging.getLogger(__name__)
 
@@ -252,4 +253,8 @@ def handle_report(
         vcf_file=resolve_vcf_file(args.output_dir, args.input_dir, getattr(args, "vcf_file", None)),
         config=config,
         sample_name=getattr(args, "sample_name", None),
+        # How the report carries its alignment browser. `getattr` guards a direct
+        # `handle_report()` call whose namespace predates `--report-igv`, the same way
+        # `--vcf-file` and `--sample-name` are guarded above.
+        report_igv=getattr(args, "report_igv", DEFAULT_REPORT_IGV),
     )

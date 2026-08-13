@@ -12,6 +12,7 @@ vntyper [global-options] report
     [--bed-file <file>] [--bam-file <file>] [--reference-fasta <file>]
     [--flanking <int>]
     [-s <name>]
+    [--report-igv {embedded,sidecar,off}]
 ```
 
 ## Arguments
@@ -26,6 +27,36 @@ vntyper [global-options] report
 | `--reference-fasta` | path | (from config) | Path to the reference FASTA file for IGV reports. Falls back to `muc1_reference_vntr` in config if not provided |
 | `--flanking` | int | `50` | Flanking region size for IGV reports |
 | `-s, --sample-name` | string | (derived) | What the report calls its sample, in the title, the heading and the header block |
+| `--report-igv` | choice | `embedded` | How the report carries its alignment browser. See [The alignment browser](#the-alignment-browser) |
+
+## The alignment browser
+
+The report is a file people archive, forward and reopen years later, so it carries
+everything it needs. igv.js 3.0.2 is vendored inside VNtyper, stored gzipped, and
+written into the report base64-encoded; the browser expands it with
+`DecompressionStream`. **No mode fetches anything from the network** — not the library,
+not a stylesheet, not a font, and not igv.js's own genome registry, which is switched
+off explicitly.
+
+| Value | What the report is | Size |
+|-------|--------------------|------|
+| `embedded` (default) | One file, and a complete alignment browser. | ~560 KB with alignments |
+| `sidecar` | No library in the report; `igv_report.html` beside it is the alignment browser, and it is self-contained too (`create_report --standalone`). | ~75 KB, plus the sidecar |
+| `off` | No alignment browser at all; `create_report` is not run. | ~75 KB |
+
+A report for a run with no alignment data carries no library in any mode and is ~75 KB.
+
+The report's Provenance block states the version and the **SHA-256 of the decompressed
+library**, in full, so it can be checked against upstream. That digest is verified in
+Python at render time, over the exact bytes the document later evaluates. It is
+deliberately not re-checked in the browser: `crypto.subtle` is unavailable on `file://`
+in several engines, and an archived report is opened from `file://` more often than
+not, so a runtime check would be one that silently does not run on the machines it was
+written for.
+
+If a reader's browser predates `DecompressionStream` (Chrome 80, Safari 16.4, Firefox
+113), the alignment panel says so in words and the variant tables stand unchanged. No
+state of this report is blank space.
 
 ## Naming the sample
 

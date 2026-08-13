@@ -14,6 +14,7 @@ vntyper [global-options] pipeline
     [--advntr-max-coverage <int>]
     [--archive-results] [--archive-format <format>]
     [--summary-formats <formats>]
+    [--report-igv {embedded,sidecar,off}]
 ```
 
 ## Input Options
@@ -72,6 +73,27 @@ The `shark` module is not supported in BAM/CRAM mode; use FASTQ mode or remove t
 | `--archive-results` | flag | off | Create an archive of the results folder after pipeline completion |
 | `--archive-format` | choice | `zip` | Format of the archive: `zip` or `tar.gz` |
 | `--summary-formats` | string | `""` | Comma-separated list of additional summary output formats to generate (supported: `csv`, `tsv`). JSON is always generated |
+| `--report-igv` | choice | `embedded` | How the report carries its alignment browser: `embedded`, `sidecar` or `off`. See [Report Options](#report-options) |
+
+## Report Options
+
+The HTML report is written by the same code whether it comes from `vntyper pipeline` or
+from `vntyper report`, so `--report-igv` means the same thing on both and defaults to
+the same value.
+
+| Value | What the report is | Size |
+|-------|--------------------|------|
+| `embedded` (default) | One file. igv.js travels inside it, gzipped, and expands when the report is opened. No second file, no network. | ~560 KB with alignments |
+| `sidecar` | The summary report carries no library and points at `igv_report.html`, written beside it. That file is self-contained too. | ~75 KB, plus the sidecar |
+| `off` | No alignment browser is produced at all, and `create_report` is not run. | ~75 KB |
+
+A report for a run with no alignment data is ~75 KB whatever the mode: the library is
+written only when there is a session for it to show.
+
+**Neither report fetches anything.** Every mode produces a document that resolves
+nothing off-machine — no CDN, no fonts, no genome registry. That is measured in a real
+browser rather than asserted, because the request that used to escape came from inside
+the minified igv.js bundle rather than from any tag in the document.
 
 ## Examples
 

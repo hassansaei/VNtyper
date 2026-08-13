@@ -41,6 +41,7 @@ from vntyper.scripts.reference_resolution import resolve_from_mapping
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
+from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)
 from vntyper.scripts.summary import (
@@ -113,6 +114,7 @@ def run_pipeline(
     sample_name_is_explicit=False,
     log_file=None,
     summary_formats=None,  # New parameter: list of additional summary output formats (e.g., ['csv', 'tsv'])
+    report_igv=DEFAULT_REPORT_IGV,
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -156,6 +158,11 @@ def run_pipeline(
         log_file (str, optional): Path to the log file.
         summary_formats (list, optional): Additional summary output formats to generate.
             Supported formats are 'csv' and 'tsv'. JSON summary is always generated.
+        report_igv (str, optional): How the report carries its alignment browser -
+            one of `report_assets.REPORT_IGV_MODES`. Threaded through from
+            `--report-igv` on the `pipeline` subcommand, because an ordinary run
+            reaches `generate_summary_report` here rather than through
+            `vntyper report` (#242).
 
     Raises:
         ValueError: Various input validation errors.
@@ -657,6 +664,7 @@ def run_pipeline(
             flanking=config.get("default_values", {}).get("flanking", 50),
             vcf_file=vcf_file,  # Can be .gz, .vcf, or None - handled gracefully
             config=config,
+            report_igv=report_igv,
         )
         logger.info(f"Summary report generated: {report_file}")
 

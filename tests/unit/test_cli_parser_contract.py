@@ -54,6 +54,12 @@ TOP_LEVEL_CONTRACT: dict[str, ParserRow] = {
 
 ASSEMBLY_CHOICES = ("GRCh37", "GRCh38", "hg19", "hg19_ensembl", "hg19_ncbi", "hg38", "hg38_ensembl", "hg38_ncbi")
 
+#: ``--report-igv``'s choices, stated here as literals rather than imported from
+#: ``report_assets``. This is the contract table: a row that asks the implementation
+#: what it implements agrees with whatever it implements, including with a mode
+#: silently added or removed.
+REPORT_IGV_CHOICES = ("embedded", "sidecar", "off")
+
 SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
     "pipeline": {
         "advntr_max_coverage": (("--advntr-max-coverage",), "_StoreAction", "int", None, False, None, None),
@@ -81,6 +87,11 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
             None,
         ),
         "reference_fasta": (("--reference-fasta",), "_StoreAction", "Path", None, False, None, None),
+        # Declared on `pipeline` as well as on `report`, and with the same default,
+        # because an ordinary run reaches the report generator through `run_pipeline`
+        # and never through the `report` subcommand. Two defaults would mean the same
+        # run produced different artifacts depending on which subcommand rendered it.
+        "report_igv": (("--report-igv",), "_StoreAction", "str", "embedded", False, REPORT_IGV_CHOICES, None),
         "sample_name": (("-s", "--sample-name"), "_StoreAction", "str", None, False, None, None),
         "summary_formats": (("--summary-formats",), "_StoreAction", "str", "", False, None, None),
         "threads": (("--threads",), "_StoreAction", "int", None, False, None, None),
@@ -93,6 +104,8 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "output_dir": (("-o", "--output-dir"), "_StoreAction", "str", None, True, None, None),
         "reference_fasta": (("--reference-fasta",), "_StoreAction", "Path", None, False, None, None),
         "report_file": (("--report-file",), "_StoreAction", "str", None, False, None, None),
+        # Spelled and defaulted exactly as `pipeline`'s; see the note there.
+        "report_igv": (("--report-igv",), "_StoreAction", "str", "embedded", False, REPORT_IGV_CHOICES, None),
         # Spelled exactly as `pipeline`'s, deliberately: it is the same fact about
         # a run, and two spellings would be two options to remember.
         "sample_name": (("-s", "--sample-name"), "_StoreAction", "str", None, False, None, None),
