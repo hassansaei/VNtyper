@@ -149,6 +149,12 @@ version = {attr = "vntyper.version.__version__"}
 ]
 "vntyper" = [
     "config.json",
+    # Every file under vntyper/templates/ is named here, not matched by a glob, so
+    # adding one is a deliberate packaging decision rather than an accident of the
+    # pattern. `_report_base.html` was missing until #242: a wheel built without it
+    # raised TemplateNotFound at render time for *both* reports, and nothing caught
+    # it because an editable checkout always has the file on disk.
+    "templates/_report_base.html",
     "templates/report_template.html",
     "templates/cohort_summary_template.html",
     "dependencies/kestrel/*.jar",

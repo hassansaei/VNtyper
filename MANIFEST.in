@@ -5,7 +5,13 @@ include LICENSE
 # Include the main config file
 include vntyper/config.json
 
-# Include the templates
+# Include the templates. `_report_base.html` is the shared token layer both of the
+# other two `{% include %}`, so a distribution without it renders neither report:
+# Jinja2 raises TemplateNotFound at render time, not at import, so nothing that only
+# imports the package notices. Every file under vntyper/templates/ has to be named
+# here and in pyproject's package-data; tests/unit/test_packaging_consistency.py
+# fails on one that is not.
+include vntyper/templates/_report_base.html
 include vntyper/templates/report_template.html
 include vntyper/templates/cohort_summary_template.html
 
