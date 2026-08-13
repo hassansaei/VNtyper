@@ -35,6 +35,7 @@ SUMMARY_SCHEMA_VERSION = 1
 def start_summary(
     version=None,
     input_files=None,
+    sample_name=None,
     reference_assembly_requested=None,
     reference_key_used=None,
     reference_path=None,
@@ -65,6 +66,14 @@ def start_summary(
     Args:
         version (str, optional): vntyper version. Defaults to "unknown" if not provided.
         input_files (dict, optional): Dictionary of input files. Defaults to empty dict.
+        sample_name (str, optional): What the run calls this sample - the same string
+            Kestrel embeds in its outputs and VCF header. Recorded verbatim, including
+            the literal ``"sample"`` placeholder ``cli_handlers`` falls back to when it
+            can resolve nothing: this is the run's own record of what it used, and
+            deciding whether a value counts as a name belongs to the consumer, not
+            here. Without it the HTML report had no way to reach the operator's
+            ``--sample-name`` and derived a different name from the input basename, so
+            one run produced two identities (#242).
         reference_assembly_requested (str, optional): The ``--reference-assembly`` label
             the run was asked for. Recorded regardless of input type: even a BAM/CRAM
             run that reads no reference file still uses this to select the correct
@@ -84,14 +93,15 @@ def start_summary(
 
     Returns:
         dict: A summary dictionary with its schema version, pipeline start timestamp,
-        version, input files, the effective reference selection, a placeholder for the
-        region the run resolves later, and an empty steps list.
+        version, input files, the run's sample name, the effective reference selection,
+        a placeholder for the region the run resolves later, and an empty steps list.
     """
     return {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
+        "sample_name": sample_name,
         "reference_assembly_requested": reference_assembly_requested,
         "reference_key_used": reference_key_used,
         "reference_path": reference_path,

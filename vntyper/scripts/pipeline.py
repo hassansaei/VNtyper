@@ -261,6 +261,10 @@ def run_pipeline(
         summary = start_summary(
             version=VERSION,
             input_files=input_files,
+            # The same string Kestrel embeds below, so the report and the VCF cannot
+            # name the same run differently (#242). `start_summary` runs before any
+            # step, so this is on disk from the first `record_step` onwards.
+            sample_name=sample_name,
             reference_assembly_requested=reference_assembly,
             reference_key_used=reference_provenance.key_used,
             reference_path=reference_provenance.path,

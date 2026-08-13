@@ -469,10 +469,15 @@ def generate_summary_report(
 
     # Who this report is about (#242). Every report was titled "Summary Report",
     # so two of them were indistinguishable in two browser tabs and a printed one
-    # carried no identity at all. An explicit `--sample-name` wins; otherwise the
-    # name is derived from the summary's own `input_files`, which is why the
-    # pipeline needs no new argument to get a named report.
-    resolved_sample_name = resolve_sample_name(sample_name, *input_file_names(input_files))
+    # carried no identity at all. Three levels: an explicit `--sample-name` here,
+    # then the name the *run* recorded - the same string Kestrel embedded, so the
+    # report and the VCF cannot disagree - then a derivation from `input_files`,
+    # which is what every summary written before the field existed still uses.
+    resolved_sample_name = resolve_sample_name(
+        sample_name,
+        *input_file_names(input_files),
+        recorded=pipeline_summary.get("sample_name"),
+    )
     logger.info("Report sample name resolved to %r.", resolved_sample_name)
 
     # How the run's reference was actually resolved (#163) - the BWA reference for

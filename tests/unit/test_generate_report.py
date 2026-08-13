@@ -1354,6 +1354,13 @@ INPUT_SHAPES = [
 def _provenance_block(html: str) -> str:
     """The provenance section of the rendered report, and nothing else.
 
+    The extraction stops at the first ``</div>``, which is only the end of the
+    block while the block contains no nested ``<div>``. If one is ever added, this
+    would silently return a prefix and every negative assertion made against it -
+    ``"hg19" not in ...`` above all - would pass by looking at less and less of the
+    report. That is a guard quietly becoming a no-op, so it is checked rather than
+    assumed.
+
     Args:
         html: The rendered report.
 
@@ -1362,7 +1369,13 @@ def _provenance_block(html: str) -> str:
     """
     start = html.index('id="provenance"')
     end = html.index("</div>", start)
-    return html[start:end]
+    block = html[start:end]
+    assert "<div" not in block, (
+        "the provenance block now contains a nested <div>, so this extraction stops at the "
+        "inner closing tag; every negative assertion made against the block is now vacuous. "
+        "Parse the block properly rather than deleting this check."
+    )
+    return block
 
 
 @pytest.mark.parametrize("inputs", INPUT_SHAPES)
@@ -1411,6 +1424,46 @@ def test_an_explicit_sample_name_wins_over_the_input_files(tmp_path) -> None:
 
     assert "<title>MUC1 VNTR report — PATIENT_042" in html
     assert _labeled_value(html, "Sample") == "PATIENT_042"
+
+
+def test_the_report_uses_the_name_the_run_recorded_for_itself(tmp_path) -> None:
+    """`vntyper pipeline -s PATIENT_042 --bam foo.bam` labels Kestrel's outputs
+    and its VCF header `PATIENT_042`. Until the run recorded that name, the report
+    could not see it and titled itself `foo` -- one run, two identities, in the
+    artefact that gets forwarded."""
+    write_summary(tmp_path, input_files={"bam": "foo.bam"}, sample_name="PATIENT_042")
+
+    html = render(tmp_path)
+
+    assert "<title>MUC1 VNTR report — PATIENT_042</title>" in html
+    assert _labeled_value(html, "Sample") == "PATIENT_042"
+    # The file it ran on is still stated; the two are different facts.
+    assert _labeled_value(html, "Input Files") == "foo.bam"
+
+
+def test_an_explicit_sample_name_beats_the_one_the_run_recorded(tmp_path) -> None:
+    write_summary(tmp_path, input_files={"bam": "foo.bam"}, sample_name="PATIENT_042")
+
+    html = render(tmp_path, sample_name="RENAMED")
+
+    assert _labeled_value(html, "Sample") == "RENAMED"
+
+
+def test_the_recorded_placeholder_name_does_not_displace_the_derivation(tmp_path) -> None:
+    """`cli_handlers` records the literal `"sample"` when it resolved nothing.
+    A report titled `sample` beside an input file that names the sample perfectly
+    well is a placeholder winning over a fact."""
+    write_summary(tmp_path, input_files={"fastq1": "S1_R1.fastq.gz"}, sample_name="sample")
+
+    assert _labeled_value(render(tmp_path), "Sample") == "S1"
+
+
+def test_a_legacy_summary_with_no_recorded_name_derives_one_as_before(tmp_path) -> None:
+    """Every archived run predates the field. Adding a level above the derivation
+    must not change what those reports are called."""
+    write_summary(tmp_path, input_files={"fastq1": "S1_R1.fastq.gz", "fastq2": "S1_R2.fastq.gz"})
+
+    assert _labeled_value(render(tmp_path), "Sample") == "S1"
 
 
 def test_a_summary_with_no_input_files_still_names_the_report(tmp_path) -> None:
@@ -1588,4 +1641,39 @@ def test_the_pipeline_puts_the_resolved_region_on_disk_before_the_report_reads_i
     html = render(report_dir)
 
     assert "chr1:155,158,000-155,163,000" in _provenance_block(html)
+    # The harness passes the literal `"sample"` placeholder, so this is also the
+    # end-to-end proof that it falls through to the input basename (`in.bam`).
     assert "<title>MUC1 VNTR report — in</title>" in html
+
+
+def test_the_operators_sample_name_survives_the_run_into_the_report(tmp_path) -> None:
+    """`-s` on `vntyper pipeline`, end to end, through what the pipeline wrote.
+
+    ``start_summary`` runs before any step, so the name is on disk from the first
+    ``record_step`` onwards -- the same write-ordering the resolved region needed,
+    with no new plumbing.
+    """
+    from tests.support.pipeline_harness import run_pipeline_under_harness
+
+    run_dir = tmp_path / "run"
+    captured: dict[str, str] = {}
+
+    def _capture(*args, **kwargs):
+        captured["summary"] = (run_dir / "pipeline_summary.json").read_text(encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        run_dir,
+        sample_name="PATIENT_042",
+        stage_side_effects={"generate_summary_report": _capture},
+    )
+    assert harness.error is None
+
+    assert json.loads(captured["summary"])["sample_name"] == "PATIENT_042"
+    # The same string the run handed Kestrel, so the report and the VCF agree.
+    assert harness.kwargs("run_kestrel")["sample_name"] == "PATIENT_042"
+
+    report_dir = tmp_path / "rendered"
+    report_dir.mkdir()
+    (report_dir / "pipeline_summary.json").write_text(captured["summary"], encoding="utf-8")
+
+    assert "<title>MUC1 VNTR report — PATIENT_042</title>" in render(report_dir)

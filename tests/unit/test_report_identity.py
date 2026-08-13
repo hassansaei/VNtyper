@@ -33,6 +33,7 @@ from vntyper.scripts.report_identity import (
     format_run_timestamp,
     input_file_names,
     recorded_or_not,
+    recorded_sample_name,
     resolve_sample_name,
 )
 
@@ -136,6 +137,71 @@ def test_a_blank_explicit_name_does_not_win() -> None:
 
 def test_an_explicit_name_is_stripped_but_otherwise_untouched() -> None:
     assert resolve_sample_name("  PATIENT 042  ") == "PATIENT 042"
+
+
+# ---------------------------------------------------------------------------
+# The three levels of precedence
+# ---------------------------------------------------------------------------
+
+
+def test_the_run_s_own_name_beats_the_basename_derivation() -> None:
+    """Level 2. `vntyper pipeline -s PATIENT_042 --bam foo.bam` embedded
+    `PATIENT_042` in Kestrel's outputs and its VCF header while the report was
+    titled `foo` -- one run, two identities, in the artefact people forward."""
+    assert resolve_sample_name(None, "foo.bam", recorded="PATIENT_042") == "PATIENT_042"
+
+
+def test_an_explicit_name_beats_the_run_s_own() -> None:
+    """Level 1. Someone re-reporting an archived run gets the last word."""
+    assert resolve_sample_name("RENAMED", "foo.bam", recorded="PATIENT_042") == "RENAMED"
+
+
+@pytest.mark.parametrize("recorded", [None, "", "   "])
+def test_a_summary_with_no_recorded_name_falls_through_to_the_derivation(recorded) -> None:
+    """Level 3, and the regression risk that matters: every summary written
+    before the field existed has no level 2 at all and must resolve exactly as
+    it did before."""
+    assert resolve_sample_name(None, "S1_R1.fastq.gz", recorded=recorded) == "S1"
+
+
+def test_the_placeholder_name_does_not_win(caplog) -> None:
+    """`cli_handlers` falls back to the literal `"sample"` when it can resolve
+    nothing, and the run embeds that. It is the absence of a name, not a name,
+    so it must not displace a basename that names the sample perfectly well."""
+    with caplog.at_level(logging.INFO, logger="vntyper.scripts.report_identity"):
+        assert resolve_sample_name(None, "S1_R1.fastq.gz", recorded="sample") == "S1"
+
+    assert "placeholder" in caplog.text
+
+
+def test_an_explicit_name_still_wins_over_the_placeholder_rule() -> None:
+    """An explicit value at render time is unambiguous in a way a recorded one is
+    not, so `vntyper report --sample-name sample` is honoured."""
+    assert resolve_sample_name("sample", "S1_R1.fastq.gz", recorded="PATIENT_042") == "sample"
+
+
+def test_the_run_s_own_name_wins_even_when_the_mates_disagree() -> None:
+    """The disagreeing-mate fallback is level 3; it never overrides level 2."""
+    assert resolve_sample_name(None, "a.fq", "b.fq", recorded="PATIENT_042") == "PATIENT_042"
+
+
+def test_the_run_s_own_name_is_used_when_there_are_no_input_files_at_all() -> None:
+    assert resolve_sample_name(None, recorded="PATIENT_042") == "PATIENT_042"
+
+
+@pytest.mark.parametrize(
+    "recorded,expected",
+    [
+        ("PATIENT_042", "PATIENT_042"),
+        ("  PATIENT_042  ", "PATIENT_042"),
+        ("sample", None),
+        ("", None),
+        ("   ", None),
+        (None, None),
+    ],
+)
+def test_the_recorded_name_predicate(recorded, expected) -> None:
+    assert recorded_sample_name(recorded) == expected
 
 
 # ---------------------------------------------------------------------------

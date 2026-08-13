@@ -34,7 +34,8 @@ recorded, or say that nothing was**:
 
 Functions:
     derive_sample_name: One input basename to the sample it names
-    resolve_sample_name: An explicit name, or the fallback over the run's inputs
+    recorded_sample_name: The name a run recorded, if it recorded one at all
+    resolve_sample_name: Explicit name, then the run's own, then the fallback
     input_file_names: The file names an ``input_files`` mapping records
     format_input_files: The ``input_files`` mapping as one displayed line
     format_region: A resolved region span, with thousands separators
@@ -61,6 +62,22 @@ NOT_RECORDED = "not recorded by this run"
 #: The sample name for a run whose summary names no input files at all. A blank
 #: title names nobody, which is the defect rather than a smaller version of it.
 UNNAMED_SAMPLE = "unnamed sample"
+
+#: Recorded sample names that mean "nothing was chosen" rather than naming anything.
+#:
+#: ``cli_handlers.py`` resolves ``--sample-name`` to an explicit value, else a
+#: BAM/CRAM/FASTQ1 stem, else the literal ``"sample"`` -- and the run then embeds
+#: whichever it got in Kestrel's outputs. Only the last of those is a placeholder,
+#: and the summary records the resolved string without saying which branch produced
+#: it, so the value is all a consumer has to go on.
+#:
+#: Letting ``"sample"`` win would put a placeholder in the title of a report whose
+#: input basename names the sample perfectly well, so it falls through to
+#: :func:`derive_sample_name` instead. The cost is that an operator who literally
+#: runs ``--sample-name sample`` gets the derived name; ``vntyper report
+#: --sample-name sample`` still overrides it, because an explicit value at render
+#: time is unambiguous in a way a recorded one is not.
+PLACEHOLDER_SAMPLE_NAMES: tuple[str, ...] = ("sample",)
 
 #: What this report is a report of. Descriptive, not a claim about its use:
 #: VNtyper is research use only and the interpretive text is config-driven.
@@ -136,18 +153,59 @@ def derive_sample_name(basename: str) -> str:
     return stem
 
 
-def resolve_sample_name(explicit: str | None, *sources: str | Path) -> str:
+def recorded_sample_name(recorded: object) -> str | None:
+    """The name a run recorded for itself, when it recorded one at all.
+
+    Args:
+        recorded: The summary's ``sample_name``. Absent from every summary
+            written before #242, and :data:`PLACEHOLDER_SAMPLE_NAMES` for a run
+            that resolved nothing.
+
+    Returns:
+        str | None: The recorded name, or None when the summary predates the
+        field, left it blank, or carries only a placeholder.
+    """
+    if recorded is None:
+        return None
+    text = str(recorded).strip()
+    if not text:
+        return None
+    if text in PLACEHOLDER_SAMPLE_NAMES:
+        logger.info(
+            "The summary's recorded sample name is the placeholder %r, which is the absence of a name; "
+            "deriving one from the input files instead.",
+            text,
+        )
+        return None
+    return text
+
+
+def resolve_sample_name(explicit: str | None, *sources: str | Path, recorded: object = None) -> str:
     """Choose the name the report calls its sample.
 
-    An explicit ``--sample-name`` always wins. Otherwise every source is put
-    through :func:`derive_sample_name` and the result is used only when they all
-    agree; mates whose stems disagree fall back to the first basename verbatim,
-    because naming one of the two would present a guess as a decision.
+    Three levels, in this order:
+
+    1. an explicit ``--sample-name`` given to ``vntyper report``;
+    2. the ``sample_name`` the *run* recorded in ``pipeline_summary.json`` -- the
+       same string Kestrel embedded in its outputs and VCF header, so preferring
+       it is what stops one run carrying two identities (#242);
+    3. :func:`derive_sample_name` over the run's input files.
+
+    Level 3 is not a lesser version of level 2: a summary written before the field
+    existed has no level 2 at all, and every archived run resolves through it
+    exactly as it did before. See :data:`PLACEHOLDER_SAMPLE_NAMES` for why a
+    recorded ``"sample"`` is treated as level 2 being absent.
+
+    At level 3 every source is put through :func:`derive_sample_name` and the
+    result is used only when they all agree; mates whose stems disagree fall back
+    to the first basename verbatim, because naming one of the two would present a
+    guess as a decision.
 
     Args:
         explicit: The ``--sample-name`` value, or None. A blank string is not a
             name and does not win.
         *sources: The run's input files, in the order the summary records them.
+        recorded: The summary's own ``sample_name``, if it has one.
 
     Returns:
         str: The sample name, or :data:`UNNAMED_SAMPLE` when there is nothing to
@@ -155,6 +213,10 @@ def resolve_sample_name(explicit: str | None, *sources: str | Path) -> str:
     """
     if explicit is not None and str(explicit).strip():
         return str(explicit).strip()
+
+    from_run = recorded_sample_name(recorded)
+    if from_run is not None:
+        return from_run
 
     basenames = [os.path.basename(str(source)).strip() for source in sources]
     basenames = [name for name in basenames if name]
