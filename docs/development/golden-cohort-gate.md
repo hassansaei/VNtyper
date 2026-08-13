@@ -946,7 +946,7 @@ and was verified. The next run taken from two real checkouts can pin both.
 
 **The baseline shares the candidate's `reference/` tree.** The extraction carries tracked
 files only, and the adVNTR VNTR database is an installed artefact resolved at the relative
-path `reference/vntr_db_advntr/<assembly>_muc1.db` (trap 7: paths are relative to the
+path `reference/vntr_db_advntr_v2/<assembly>_muc1.db` (trap 7: paths are relative to the
 process CWD, and each side runs with cwd set to its own tree). The first attempt failed
 because of this, and the new expectation check named all six affected cases rather than
 comparing them as `absent_both` — which is what the pre-1.1.0 harness would have done.

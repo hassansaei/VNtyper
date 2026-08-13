@@ -32,7 +32,7 @@ with in a way a loose `SHA256SUMS` sitting beside it would also fail to reflect.
 `--from-source` rebuilds every requested reference from its original upstream source (UCSC,
 NCBI, Ensembl) rather than fetching the bundle. It is slower — it downloads and BWA-indexes
 up to six chromosome FASTAs itself — and it needs four seed files that VNtyper itself does
-not carry: `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `vntr_db_advntr.zip` and
+not carry: `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `vntr_db_advntr_v2.zip` and
 `filter_config.json`. All four are fetched automatically from
 [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data)'s `seeds/` directory
 (pinned to an immutable commit in `install_references_config.json`, never a mutable branch)
@@ -109,7 +109,7 @@ incomplete.
 | `alignment/chr1.<assembly>.fa` (×6) | downloaded | UCSC, NCBI RefSeq, Ensembl |
 | `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa` | downloaded (seeds) | `berntpopp/vntyper-data`, pinned by commit |
 | `filter_config.json` | downloaded (seed) — **`--from-source` only**, see below | `berntpopp/vntyper-data`, pinned by commit |
-| `vntr_db_advntr/*.db` | downloaded | `berntpopp/vntyper-data` |
+| `vntr_db_advntr_v2/*.db` | downloaded | `berntpopp/vntyper-data` |
 | **`muc1_region_hg19.fa`** | **derived** | `samtools faidx chr1.hg19.fa chr1:155158000-155163000` |
 | **`muc1_region_hg38.fa`** | **derived** | `samtools faidx chr1.hg38.fa chr1:155184000-155194000` |
 | **`All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`** | **derived** | merged from `MUC1_motifs_Rev_com.fa` + `filter_config.json` |
@@ -221,7 +221,7 @@ references/
     chr1.hg19.fa.sa
     chr1.hg38.fa             # hg38 chromosome 1 sequence (extracted)
     chr1.hg38.fa.*           # BWA index files
-  vntr_db_advntr/            # both adVNTR databases, always installed
+  vntr_db_advntr_v2/         # both adVNTR databases, always installed
     hg19_muc1.db
     hg38_muc1.db
   muc1_region_hg19.fa        # SHARK's GRCh37-coordinate region FASTA
