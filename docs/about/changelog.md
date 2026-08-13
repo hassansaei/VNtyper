@@ -2,6 +2,10 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
+## Unreleased
+
+No unreleased changes.
+
 ## 2.0.20 (Current)
 
 **MUC1 variants are reported by their literature name, with an explicit confidence
