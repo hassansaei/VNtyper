@@ -167,6 +167,17 @@ def test_tier_b_renders_the_event_but_never_a_bare_number() -> None:
     assert "duplication" in text
 
 
+def test_a_locus_with_nothing_to_say_does_not_claim_a_frameshift() -> None:
+    """`frameshift +0` is not a frameshift.
+
+    It is what a locus with no usable call reduces to, and printing it states
+    something untrue about a locus we know nothing about. On the benchmark 11 of
+    the 200 samples rendered this.
+    """
+    assert render(reconcile()) == "allele undetermined"
+    assert "frameshift" not in render(reconcile())
+
+
 def test_tier_c_renders_a_frameshift_statement_with_no_number() -> None:
     undetermined = Nomenclature(
         name=None,

@@ -658,7 +658,12 @@ def render(call: Nomenclature) -> str:
         return call.name
 
     if call.tier == "C" or not call.name:
-        sign = "+" if call.net_length >= 0 else "-"
+        # A net length change of zero is not a frameshift, so saying "frameshift +0"
+        # states something untrue about a locus we in fact know nothing about. It is
+        # what a locus with no usable call at all reduces to.
+        if call.net_length == 0:
+            return "allele undetermined"
+        sign = "+" if call.net_length > 0 else "-"
         return f"frameshift {sign}{abs(call.net_length)}, allele undetermined"
 
     text = call.event
