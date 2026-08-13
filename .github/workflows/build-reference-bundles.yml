@@ -187,7 +187,7 @@ jobs:
           spec="data/${RELEASE_SPEC_PATH}"
           mkdir -p refs
           cp data/seeds/MUC1_motifs_Rev_com.fa data/seeds/code-adVNTR_RUs.fa refs/
-          cp data/seeds/vntr_db_advntr.zip data/seeds/filter_config.json refs/
+          cp data/seeds/vntr_db_advntr_v2.zip data/seeds/filter_config.json refs/
           python -m vntyper.scripts.verify_seeds --spec "$spec" --seeds data/seeds
           python builder/scripts/bundle_release.py --check-spec-only \
             --refs refs --spec "$spec" --tag "$RELEASE_TAG" --out dist \

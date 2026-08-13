@@ -21,7 +21,9 @@ re-raises the recorded exception instead, so a broken stub is visible.
 
 from __future__ import annotations
 
+import atexit
 import logging
+import tempfile
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
@@ -33,9 +35,73 @@ from vntyper.scripts.alignment_contract import AlignmentPlan
 
 logger = logging.getLogger(__name__)
 
+
 #: Minimal configuration ``run_pipeline`` reads. Every key here is one the pipeline
 #: dereferences without ``.get`` (AGENTS.md trap 2), so dropping one is a ``KeyError``
 #: deep inside the run rather than a clear failure.
+def _minimal_advntr_model(path: Path) -> str:
+    """Write a real single-row v2 model at `path`.
+
+    The pipeline validates the resolved adVNTR model before running, because the fetch
+    window comes from the model's own content and a wrong one produces confident
+    results over part of the locus (#268). That is a genuine precondition of the
+    orchestration, so the harness satisfies it with a real file rather than stubbing
+    the check away -- the same reason it does not stub `record_step`.
+    """
+    import sqlite3
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    database = sqlite3.connect(str(path))
+    database.execute(
+        "CREATE TABLE vntrs_v2(id INTEGER PRIMARY KEY, nonoverlapping TEXT, "
+        "chromosome TEXT, ref_start INTEGER, gene_name TEXT, annotation TEXT, "
+        "pattern TEXT, left_flanking TEXT, right_flanking TEXT, repeats TEXT, "
+        "scaled_score REAL DEFAULT 0, ref_end INTEGER)"
+    )
+    database.execute(
+        "INSERT INTO vntrs_v2 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            25561,
+            "True",
+            "chr1",
+            155188507,
+            "MUC1",
+            "Coding",
+            "A" * 60,
+            "L" * 500,
+            "R" * 500,
+            ",".join(["A" * 60] * 3),
+            0.0,
+            155192032,
+        ),
+    )
+    database.commit()
+    database.close()
+    return str(path)
+
+
+# Registered for cleanup rather than left on disk: a module-level mkdtemp survives the
+# session otherwise, and a test suite should not litter /tmp.
+_MODEL_TMP = tempfile.TemporaryDirectory(prefix="vntyper-harness-advntr-")
+atexit.register(_MODEL_TMP.cleanup)
+_MODEL_DIR = Path(_MODEL_TMP.name)
+
+
+def advntr_stub(version: str, directory: Path = _MODEL_DIR) -> str:
+    """An executable that answers `--version` with `version`.
+
+    The pipeline probes the configured adVNTR before running, so the harness needs a
+    command that answers. It has to be a real executable rather than a shell one-liner:
+    the probe splits the command into an argv list and runs it without a shell, so
+    nothing can be commented out and the appended `--version` reaches the program. The
+    name contains "advntr" because that is how the shared probe picks its parser.
+    """
+    path = directory / f"advntr-{version}"
+    path.write_text(f'#!/bin/sh\necho "{version}"\n')
+    path.chmod(0o755)
+    return str(path)
+
+
 MINIMAL_CONFIG: dict[str, Any] = {
     "tools": {
         "samtools": "samtools",
@@ -43,13 +109,14 @@ MINIMAL_CONFIG: dict[str, Any] = {
         "bwa": "bwa",
         "kestrel": "kestrel.jar",
         "java_path": "java",
+        "advntr": advntr_stub("2.0.4"),
     },
     "reference_data": {
         "muc1_reference_vntr": "/refs/muc1.fa",
         "bwa_reference_hg19": "/refs/hg19.fa",
         "bwa_reference_hg38": "/refs/hg38.fa",
-        "advntr_reference_vntr_hg19": "/refs/advntr_hg19.db",
-        "advntr_reference_vntr_hg38": "/refs/advntr_hg38.db",
+        "advntr_reference_vntr_hg19": _minimal_advntr_model(_MODEL_DIR / "advntr_hg19.db"),
+        "advntr_reference_vntr_hg38": _minimal_advntr_model(_MODEL_DIR / "advntr_hg38.db"),
     },
     "bam_processing": {"bam_region_hg19": "chr1:155158000-155163000"},
     "default_values": {"flanking": 50},

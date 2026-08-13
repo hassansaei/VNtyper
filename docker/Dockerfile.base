@@ -129,7 +129,7 @@ ENV PYTHONPATH=/opt/ir
 RUN conda run -n vntyper python -m vntyper.scripts.install_references \
         --output-dir /opt/refs \
         --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl && \
-    test -d /opt/refs/vntr_db_advntr || { echo "adVNTR database missing"; exit 1; } && \
+    test -d /opt/refs/vntr_db_advntr_v2 || { echo "adVNTR database missing"; exit 1; } && \
     test -f /opt/refs/muc1_region_hg19.fa || { echo "SHARK hg19 region missing"; exit 1; } && \
     test -f /opt/refs/muc1_region_hg38.fa || { echo "SHARK hg38 region missing"; exit 1; } && \
     rm -rf /opt/ir

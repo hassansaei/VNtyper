@@ -525,6 +525,11 @@ def run_pipeline(
                     process_advntr_output,
                     run_advntr,
                 )
+                from vntyper.modules.advntr.model_provenance import (
+                    describe_model,
+                    detect_advntr_version,
+                    require_compatible_advntr,
+                )
             except ImportError as exc:
                 logger.error(f"adVNTR module import failed: {exc}")
                 sys.exit(1)
@@ -549,6 +554,23 @@ def run_pipeline(
                 raise ValueError("adVNTR reference path not found in configuration.")
 
             logger.debug(f"adVNTR reference set to: {advntr_reference}")
+
+            # Which model a run resolved decides which reads adVNTR can ever see: the
+            # fetch window comes from the model's own content. Validate before running,
+            # because the failure mode is a confident result over a truncated locus
+            # rather than an error (#268).
+            advntr_model = describe_model(advntr_reference)
+            require_compatible_advntr(advntr_model, detect_advntr_version(config))
+            # Top-level, not inside record_step: this is run state, and a step record is
+            # not where state belongs.
+            summary["advntr_model"] = advntr_model
+            logger.info(
+                "adVNTR model %s (%s), window %s bp over %s",
+                advntr_model["sha256"][:12],
+                advntr_model["schema_version"],
+                advntr_model["window_bp"],
+                advntr_model["genomic_interval"],
+            )
 
             max_cov = module_args.get("advntr", {}).get("max_coverage")
             sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
