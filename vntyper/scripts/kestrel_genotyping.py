@@ -37,7 +37,7 @@ from vntyper.scripts.confidence_assignment import (
 )
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
-from vntyper.scripts.kestrel_counting import remove_count_artifacts
+from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, remove_count_artifacts
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.motif_processing import (
@@ -268,7 +268,7 @@ def run_kestrel(
     java_opts_call = kestrel_settings.get("java_opts_call", "-XX:+UseSerialGC")
     split_counting = kestrel_settings.get("split_counting", True)
     keep_ikc = kestrel_settings.get("keep_ikc", False)
-    kanalyze_path = config["tools"].get("kanalyze", "vntyper/dependencies/kestrel/kanalyze.jar")
+    kanalyze_path = config["tools"].get("kanalyze", DEFAULT_KANALYZE_PATH)
 
     # #212: a pre-existing output.vcf used to skip the whole stage and `return`, which
     # also skipped the two statements that turn a VCF into a result. Re-running into a

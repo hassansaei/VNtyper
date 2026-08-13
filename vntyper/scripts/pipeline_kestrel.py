@@ -70,9 +70,18 @@ def run_kestrel_stage(
     # from ``config``. The import is function-local only to keep this module importable
     # on its own; ``pipeline`` already imports both.
     from vntyper.scripts import kestrel_genotyping
+    from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
 
+    # Both conditions, not just the setting. `plan_kestrel_invocations` splits only when
+    # `split_counting` is true **and** a kanalyze path is configured, so a replacement
+    # config with `"kanalyze": ""` counts internally while `split_counting` is still
+    # true. Reading only the setting would record "split" for a run that did not split,
+    # which is worse than recording nothing: the field exists to attribute a result to
+    # the code that produced it.
     settings = kestrel_genotyping.kestrel_config.get("kestrel_settings", {})
-    summary["kestrel_counting_mode"] = "split" if settings.get("split_counting", True) else "internal"
+    kanalyze_path = config.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH)
+    splitting = bool(settings.get("split_counting", True)) and bool(kanalyze_path)
+    summary["kestrel_counting_mode"] = "split" if splitting else "internal"
 
     kestrel_dir = Path(dirs["kestrel"])
     tools = cast(Mapping[str, Any], config["tools"])

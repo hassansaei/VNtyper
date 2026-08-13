@@ -23,9 +23,11 @@ import pytest
 
 from vntyper.scripts import kestrel_genotyping as kg
 from vntyper.scripts.kestrel_command import CALL_ONLY_OPTIONS, construct_kestrel_command
-from vntyper.scripts.kestrel_counting import attempt_directory, ikc_path
+from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, attempt_directory, ikc_path
 
 pytestmark = pytest.mark.unit
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 USABLE_VCF = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
 
@@ -522,3 +524,78 @@ def test_the_recorded_mode_follows_the_kill_switch(tmp_path, monkeypatch):
     )
 
     assert summary["kestrel_counting_mode"] == "internal"
+
+
+# ---------------------------------------------------------------------------
+# The shipped kestrel_config.json values (#262)
+# ---------------------------------------------------------------------------
+
+
+def test_the_shipped_config_pins_every_new_counting_setting():
+    """Every behavioural test above supplies its own settings or exercises a .get default.
+
+    That leaves the shipped JSON unpinned: `keep_ikc: true` slipping in would retain a
+    multi-gigabyte IKC on every production run with the whole suite still green, and
+    `split_counting: false` would silently ship the legacy path. The shipped values are
+    the ones users get, so they are asserted directly.
+    """
+    settings = kg.load_kestrel_config()["kestrel_settings"]
+
+    assert settings["split_counting"] is True
+    assert settings["keep_ikc"] is False
+    assert settings["java_opts_count"] == ""
+    assert settings["java_opts_call"] == "-XX:+UseSerialGC"
+    # Load-bearing: 4g measured +1.2s with 1.9x the CPU, and the count step peaks near
+    # 7.7GB at -d16.
+    assert settings["java_memory"] == "12g"
+    # Empty is what makes the allowlist a no-op for the shipped configuration.
+    assert settings["additional_settings"] == ""
+
+
+def test_the_shipped_config_produces_a_two_step_plan(tmp_path):
+    """The real config, not a hand-built one, must actually select the split path."""
+    from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
+
+    settings = kg.load_kestrel_config()["kestrel_settings"]
+    arguments = KestrelCommandArguments(
+        kestrel_path="k.jar",
+        reference_vntr="r.fa",
+        vcf_out=str(tmp_path / "out.vcf"),
+        java_path="java",
+        java_memory=settings["java_memory"],
+        max_align_states=settings["max_align_states"],
+        max_hap_states=settings["max_hap_states"],
+        log_level="INFO",
+        sample_name="s",
+        additional_settings=settings["additional_settings"],
+        java_opts_call=settings["java_opts_call"],
+        java_opts_count=settings["java_opts_count"],
+        kanalyze_path=DEFAULT_KANALYZE_PATH,
+        threads=8,
+        split_counting=settings["split_counting"],
+    )
+
+    (invocation,) = plan_kestrel_invocations(
+        fastq_files=("r1.fq",),
+        kmer_sizes=settings["kmer_sizes"],
+        output_dir=tmp_path,
+        command_arguments=arguments,
+    )
+
+    assert invocation.count_command is not None
+    assert "-m ikc" in invocation.count_command
+    assert "-f ikc" in invocation.command
+    assert invocation.attempt_dir is not None
+
+
+def test_the_shipped_pipeline_config_declares_the_kanalyze_jar():
+    """The runner falls back to a default, but the shipped config should be explicit.
+
+    Derived from `tools.kestrel`'s directory it would be silently wrong the moment an
+    operator relocated the Kestrel jar, which is why it is its own entry.
+    """
+    import json
+
+    config = json.loads((REPO_ROOT / "vntyper" / "config.json").read_text(encoding="utf-8"))
+
+    assert config["tools"]["kanalyze"] == DEFAULT_KANALYZE_PATH

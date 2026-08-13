@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 #: open and makes the file self-describing on disk.
 IKC_FILENAME = "kestrel_kmers.ikc"
 
+#: Where ``kanalyze.jar`` ships. The single source for this default, so the runner and
+#: the provenance recorder cannot disagree about whether a run will split.
+DEFAULT_KANALYZE_PATH = "vntyper/dependencies/kestrel/kanalyze.jar"
+
 
 def attempt_directory(output_dir: str | Path, kmer_size: int) -> Path:
     """Return the directory one k-mer attempt owns.
