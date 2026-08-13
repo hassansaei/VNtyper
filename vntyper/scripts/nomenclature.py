@@ -42,6 +42,8 @@ __all__ = [
     "from_kestrel",
     "name_edit",
     "normalise",
+    "reconcile",
+    "render",
     "repeat_form",
     "revcomp",
 ]
@@ -527,6 +529,119 @@ def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ..
         net_length=net_length,
         source=source,
     )
+
+
+#: Reads supporting a call below which tier A is withheld. The benchmark's
+#: `output.bam` splits reads across many pair records, so per-locus support is often
+#: 1-3 even where `Estimated_Depth_AlternateVariant` aggregates to tens; a name is
+#: only as good as the reads under it.
+MIN_SUPPORT_FOR_TIER_A = 5
+
+
+def reconcile(*calls: Nomenclature, support: int | None = None) -> Nomenclature:
+    """Combine independent callers into one result, and decide its tier.
+
+    Tier A is the only tier that emits a bare number, so it is the only tier that can
+    state a confident falsehood. It therefore requires evidence no single caller can
+    supply: two independent sources agreeing after normalisation, a motif context
+    matching canonical X, and support at or above
+    :data:`MIN_SUPPORT_FOR_TIER_A`. Anything less keeps the number internal.
+
+    The benchmark is why the bar is here. Kestrel places the whole ``insG`` family
+    one position 3' of truth, and its ``insG_pos58`` records collapse onto the C-tract
+    expansion; both look clean in isolation. Only a second caller separates them.
+
+    Args:
+        *calls: Translations of the same locus from different sources.
+        support: Reads supporting the call, when known. ``None`` means unknown, which
+            is not the same as sufficient.
+
+    Returns:
+        Nomenclature: The reconciled call. Tier C when nothing was supplied or the
+        callers disagree on the event class.
+    """
+    usable = [call for call in calls if call is not None]
+    if not usable:
+        return _undetermined("unknown", 0, "reconciled", ())
+
+    primary = next((call for call in usable if call.source == "kestrel_vcf"), usable[0])
+    flags = set(primary.flags)
+    for call in usable:
+        flags.update(call.flags)
+
+    named = [call for call in usable if call.name is not None]
+    events = {call.event for call in usable}
+
+    # Disagreement on the event class means the two callers are not describing one
+    # allele. Naming either would be picking a winner without grounds.
+    if len(events) > 1:
+        flags.add(FLAG_CALLER_DISAGREEMENT)
+        net = primary.net_length
+        return _undetermined("unknown", net, "reconciled", tuple(sorted(flags)))
+
+    agree = len({call.name for call in named}) == 1 and len(named) > 1
+    independent = len({call.source for call in usable}) > 1
+    if named and not agree and len(named) > 1:
+        flags.add(FLAG_CALLER_DISAGREEMENT)
+
+    if support is not None and support < MIN_SUPPORT_FOR_TIER_A:
+        flags.add(FLAG_LOW_READ_SUPPORT)
+
+    tier = "B"
+    if (
+        agree
+        and independent
+        and support is not None
+        and support >= MIN_SUPPORT_FOR_TIER_A
+        and FLAG_MOTIF_CONTEXT_DIVERGES not in flags
+        and FLAG_SEQUENCE_UNDETERMINED not in flags
+        and FLAG_CALLER_DISAGREEMENT not in flags
+    ):
+        tier = "A"
+
+    if not named:
+        return _undetermined(primary.event, primary.net_length, "reconciled", tuple(sorted(flags)))
+
+    chosen = named[0]
+    return Nomenclature(
+        name=chosen.name,
+        event=chosen.event,
+        unit=chosen.unit,
+        tier=tier,
+        flags=tuple(sorted(flags)),
+        ambiguity=chosen.ambiguity,
+        repeat_form=chosen.repeat_form,
+        net_length=chosen.net_length,
+        source="reconciled" if independent else chosen.source,
+    )
+
+
+def render(call: Nomenclature) -> str:
+    """Render a call as display text, showing only what its tier permits.
+
+    The tier ladder is an emission rule, not just metadata: tier A shows the bare
+    name, tier B shows the event and its ambiguity window but never a bare number,
+    and tier C states the frameshift and stops. This function is the single place
+    that rule is applied, so no surface can bypass it by reading ``name`` directly.
+
+    Args:
+        call: The reconciled call.
+
+    Returns:
+        str: Display text.
+    """
+    if call.tier == "A" and call.name:
+        return call.name
+
+    if call.tier == "C" or not call.name:
+        sign = "+" if call.net_length >= 0 else "-"
+        return f"frameshift {sign}{abs(call.net_length)}, allele undetermined"
+
+    text = call.event
+    if call.ambiguity:
+        low, high = call.ambiguity
+        text = f"{text} in {low}_{high}"
+    return f"{text}, position-ambiguous"
 
 
 _ADVNTR_STATE = re.compile(r"^(?P<kind>[ID])(?P<pos>\d+)_(?P<ru>\d+)(?:_(?P<base>[ACGT])_LEN(?P<length>\d+))?$")
