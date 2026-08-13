@@ -52,7 +52,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -97,6 +97,37 @@ class ScreeningSummary:
     advntr_result: str
     quality_metrics_pass: bool
     matched_rule: bool
+
+    @property
+    def emphasis(self) -> Literal["finding", "no-finding", "indeterminate"]:
+        """How the report should style this state.
+
+        ``matched_rule`` is checked first and wins over ``is_positive``: a state with
+        no configured rule is genuinely unknown, not a negative -- that is what
+        ``matched_rule`` exists to distinguish (see the module docstring).
+        ``quality_metrics_pass`` never appears in this expression -- call status, QC
+        status and rule-match status are orthogonal. The rule table already describes
+        a positive call with failing coverage QC as a finding, and ``is_positive`` is
+        derived from the algorithm calls independently of QC by design; letting failed
+        QC downgrade a matched positive rule to "indeterminate" would silently
+        reclassify a confirmed pathogenic call with poor coverage as "state unknown",
+        contradicting both the rule table and ``is_positive``.
+
+        In practice ``matched_rule`` is False only through the ``except Exception``
+        path in :func:`build_screening_summary`: every one of the 40 reachable
+        ``(kestrel_result, advntr_result, quality_metrics_pass)`` combinations
+        resolves to a configured rule (``tests/unit/test_screening_summary.py::
+        test_every_reachable_state_has_its_own_message``). So ``"indeterminate"`` is
+        genuinely exceptional and cannot mislabel an ordinary all-negative report.
+
+        Returns:
+            Literal["finding", "no-finding", "indeterminate"]: The emphasis to apply.
+        """
+        if self.matched_rule is False:
+            return "indeterminate"
+        if self.is_positive:
+            return "finding"
+        return "no-finding"
 
 
 def load_report_config() -> dict[str, Any]:

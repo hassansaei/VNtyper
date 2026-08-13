@@ -339,9 +339,27 @@
           positive style on whichever messages happened to contain that word,
           "No variant detected by either genotyping method" among them.
           `tests/unit/test_generate_report.py` pins this.
+
+          `data-state` carries the full three-way state (`finding` / `no-finding` /
+          `indeterminate`) rather than the two-way `summary_is_positive` boolean, so a
+          report whose state matched no configured rule is distinguishable from a
+          genuine negative (#242 I2) instead of rendering identically to one.
         #}
-        <p class="summary-box {% if summary_is_positive %}summary-positive{% endif %}">
+        <p class="summary-box {% if summary_is_positive %}summary-positive{% endif %}"
+           data-state="{{ screening_state.emphasis }}">
             {{ summary_text|safe }}
+        </p>
+        {#
+          The provenance line: the raw state `summary_text` was computed from, spelled
+          out in existing pipeline vocabulary so I2 is visible to a reader, not only to
+          a test. `advntr_result` is the literal "none" when adVNTR never ran, which is
+          not the same as "negative" (ran and found nothing), so it is worded from
+          `advntr_available` rather than printed raw.
+        #}
+        <p class="screening-provenance">
+            Kestrel: {{ screening_state.kestrel_result }} &middot;
+            adVNTR: {% if advntr_available %}{{ screening_state.advntr_result }}{% else %}not performed{% endif %}
+            &middot; Coverage QC: {{ coverage_qc }}
         </p>
 
         {% if cross_match_message and advntr_available %}

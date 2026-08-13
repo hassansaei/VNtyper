@@ -306,6 +306,80 @@ def test_every_rule_has_a_non_empty_message(report_config) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ScreeningSummary.emphasis -- how the report should style the state
+# ---------------------------------------------------------------------------
+
+
+def _summary(
+    *,
+    is_positive: bool,
+    matched_rule: bool,
+    quality_metrics_pass: bool = True,
+    text: str = "message",
+    kestrel_result: str = "High_Precision",
+    advntr_result: str = ss.NOT_PERFORMED,
+) -> "ss.ScreeningSummary":
+    """Build a `ScreeningSummary` with only the axes each test cares about named."""
+    return ss.ScreeningSummary(
+        text=text,
+        is_positive=is_positive,
+        kestrel_result=kestrel_result,
+        advntr_result=advntr_result,
+        quality_metrics_pass=quality_metrics_pass,
+        matched_rule=matched_rule,
+    )
+
+
+def test_an_unmatched_rule_is_indeterminate_not_negative() -> None:
+    """`matched_rule` is the reason this property exists: a state with no configured
+    rule is unknown, not a negative (see the module docstring)."""
+    summary = _summary(is_positive=False, matched_rule=False)
+    assert summary.emphasis == "indeterminate"
+
+
+def test_an_unmatched_rule_stays_indeterminate_even_when_positive() -> None:
+    """The other ordering: `matched_rule is False` wins over `is_positive` too.
+
+    Both algorithms called positive but no rule covers the combination is exactly the
+    case `matched_rule` exists to catch -- it must not be reported as a finding just
+    because `is_positive` happens to be True.
+    """
+    summary = _summary(is_positive=True, matched_rule=False)
+    assert summary.emphasis == "indeterminate"
+
+
+def test_a_matched_positive_rule_is_a_finding() -> None:
+    summary = _summary(is_positive=True, matched_rule=True)
+    assert summary.emphasis == "finding"
+
+
+def test_a_matched_negative_rule_is_a_no_finding() -> None:
+    summary = _summary(is_positive=False, matched_rule=True)
+    assert summary.emphasis == "no-finding"
+
+
+def test_a_finding_with_failing_quality_metrics_is_still_a_finding() -> None:
+    """QC is orthogonal to emphasis. It never suppresses a call.
+
+    The rule table describes exactly this combination as a pathogenic finding with
+    low-quality metrics (report_config.json), and ``is_positive`` is derived from the
+    algorithm calls independently of QC by design (screening_summary.py). An earlier
+    draft of this plan let failed QC force "indeterminate", which would have silently
+    reclassified a confirmed pathogenic call with poor coverage as "state unknown" --
+    contradicting the rule table, which describes exactly that combination as a
+    finding with low-quality metrics, and contradicting ``is_positive`` itself.
+    """
+    summary = _summary(is_positive=True, matched_rule=True, quality_metrics_pass=False)
+    assert summary.emphasis == "finding"
+
+
+def test_a_no_finding_with_failing_quality_metrics_is_still_a_no_finding() -> None:
+    """The mirror case: failing QC does not manufacture a finding either."""
+    summary = _summary(is_positive=False, matched_rule=True, quality_metrics_pass=False)
+    assert summary.emphasis == "no-finding"
+
+
+# ---------------------------------------------------------------------------
 # build_screening_summary, driven the way the report drives it
 # ---------------------------------------------------------------------------
 
@@ -448,7 +522,14 @@ def test_widening_the_quality_axis_cannot_change_positivity(report_config) -> No
 
 
 def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
-    """An internal screening dependency failure yields the explicit unavailable state."""
+    """An internal screening dependency failure yields the explicit unavailable state.
+
+    This is also the only path through `build_screening_summary` that leaves
+    `matched_rule` False in practice: all 40 reachable (kestrel_result, advntr_result,
+    quality_metrics_pass) combinations resolve to a configured rule (see
+    `test_every_reachable_state_has_its_own_message`), so `emphasis == "indeterminate"`
+    is genuinely exceptional and cannot mislabel an ordinary all-negative report.
+    """
     with (
         mock.patch.object(ss, "compute_algorithm_result", side_effect=RuntimeError("boom")),
         caplog.at_level(logging.ERROR, logger="vntyper.scripts.screening_summary"),
@@ -461,6 +542,7 @@ def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
     assert summary.advntr_result == ""
     assert summary.quality_metrics_pass is False
     assert summary.matched_rule is False
+    assert summary.emphasis == "indeterminate"
     records = [record for record in caplog.records if record.name == "vntyper.scripts.screening_summary"]
     assert [record.levelno for record in records] == [logging.ERROR]
 

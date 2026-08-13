@@ -375,6 +375,40 @@ def test_a_run_with_no_results_at_all_is_not_styled_as_a_finding(tmp_path) -> No
     assert "summary-positive" not in summary_box_classes(render(tmp_path))
 
 
+def test_the_screening_state_reaches_the_report(positive_summary) -> None:
+    """I2: the computed screening state must reach the template, not just `is_positive`.
+
+    `positive_summary` is Kestrel-High_Precision, adVNTR-absent, well-covered -- so
+    this also pins the exact provenance line's wording for the common case.
+    """
+    html = render(positive_summary)
+    assert 'data-state="finding"' in html
+    assert "Kestrel: High_Precision" in html
+    assert "adVNTR: not performed" in html
+    assert "Coverage QC: PASS" in html
+
+
+def test_a_negative_screening_state_carries_the_no_finding_state(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, []),
+        tabular_step(summary_steps.STEP_ADVNTR, []),
+    )
+    html = render(tmp_path)
+    assert 'data-state="no-finding"' in html
+    assert "Kestrel: negative" in html
+    assert "adVNTR: negative" in html
+
+
+def test_the_provenance_line_never_prints_the_not_performed_token_raw(positive_summary) -> None:
+    """`advntr_result` is the literal `"none"` when the stage never ran -- distinct
+    from `"negative"`, which means it ran and found nothing. The provenance line must
+    render this as words a reader understands, not the raw internal token."""
+    html = render(positive_summary)
+    assert "adVNTR: none" not in html
+
+
 def test_the_template_no_longer_decides_emphasis_from_the_message_text() -> None:
     """Pinned at the template, because the substring test is the kind of thing
     that gets reintroduced by someone reading the rendered output."""

@@ -659,6 +659,16 @@ def generate_summary_report(
         "sequencing_str": fastp.sequencing,
         "summary_text": screening.text,
         "summary_is_positive": screening.is_positive,
+        # The full computed screening state, not just `is_positive` - so a report
+        # whose state matched no rule (`emphasis == "indeterminate"`) is distinguishable
+        # from a genuine negative rather than rendering identically (#242 I2).
+        "screening_state": {
+            "kestrel_result": screening.kestrel_result,
+            "advntr_result": screening.advntr_result,
+            "quality_metrics_pass": screening.quality_metrics_pass,
+            "matched_rule": screening.matched_rule,
+            "emphasis": screening.emphasis,
+        },
         "cross_match_message": cross_match_message,
         "cross_match_is_positive": cross_match_is_positive,
     }
