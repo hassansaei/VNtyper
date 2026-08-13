@@ -3,6 +3,7 @@
 import logging
 import os
 import re
+import shlex
 import subprocess as sp
 
 import numpy as np
@@ -108,7 +109,234 @@ def advntr_output_extension(settings: dict) -> str:
     return ".vcf" if settings["output_format"] == "vcf" else ".tsv"
 
 
-def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
+def resolve_advntr_threads(settings, pipeline_threads):
+    """Return the ``-t`` value for a settings mapping and the pipeline's ``--threads``.
+
+    ``null`` means *inherit the pipeline value*; an integer overrides it. Both are
+    validated here rather than being interpolated into a command string and left for
+    adVNTR to reject, because adVNTR's own message (``threads cannot be less than 1``,
+    ``advntr_commands.py:72-73``) names neither the key nor the file the bad value came
+    from.
+
+    Args:
+        settings (dict): An ``advntr_settings`` mapping.
+        pipeline_threads (int): The pipeline's resolved ``--threads``.
+
+    Returns:
+        int: A positive thread count.
+
+    Raises:
+        KeyError: If ``threads`` is absent. A partial mapping is not supported input --
+            the same rule ``output_format`` follows -- and ``null`` is not the same as
+            missing: ``null`` is an explicit request to inherit.
+        ValueError: If either value is not a positive integer.
+    """
+    if "threads" not in settings:
+        raise KeyError(
+            "advntr_settings is missing 'threads'. A partial mapping is not supported "
+            "input: set an integer to pin the thread count, or null to inherit the "
+            "pipeline's --threads. See vntyper/modules/advntr/advntr_config.json."
+        )
+
+    configured = settings["threads"]
+    source = "advntr_settings['threads']"
+    if configured is None:
+        configured = pipeline_threads
+        source = "the pipeline's --threads (advntr_settings['threads'] is null)"
+
+    # bool is an int subclass, and True would silently become one thread.
+    if isinstance(configured, bool) or not isinstance(configured, int):
+        raise ValueError(f"{source} must be an integer, got {configured!r} ({type(configured).__name__})")
+    if configured < 1:
+        raise ValueError(f"{source} must be at least 1, got {configured}")
+    return configured
+
+
+#: Every spelling adVNTR declares for an option ``run_advntr`` sets itself
+#: (``advntr/__main__.py`` at the pinned revision: ``-a/--alignment_file``, ``-o/--outfile``,
+#: ``-fs/--frameshift``, ``-m/--models``, ``-t/--threads``, ``-vid/--vntr_id`` and
+#: ``--working_directory``).
+MANAGED_ADVNTR_OPTIONS = frozenset(
+    {
+        "-a",
+        "--alignment_file",
+        "-o",
+        "--outfile",
+        "-fs",
+        "--frameshift",
+        "-m",
+        "--models",
+        "-t",
+        "--threads",
+        "-vid",
+        "--vntr_id",
+        "--working_directory",
+    }
+)
+
+#: What owns each managed option, so a refusal can say what to set instead of only what to
+#: remove.
+MANAGED_ADVNTR_OPTION_OWNERS = {
+    "-t": "advntr_settings['threads']",
+    "--threads": "advntr_settings['threads']",
+    "-vid": "advntr_settings['vid']",
+    "--vntr_id": "advntr_settings['vid']",
+    "-o": "the output directory and sample name run_advntr is called with",
+    "--outfile": "the output directory and sample name run_advntr is called with",
+    "-m": "run_advntr's db_file argument",
+    "--models": "run_advntr's db_file argument",
+    "-a": "run_advntr's sorted_bam argument",
+    "--alignment_file": "run_advntr's sorted_bam argument",
+    "--working_directory": "run_advntr's output argument",
+    "-fs": "the fixed `genotype -fs` mode this module runs",
+    "--frameshift": "the fixed `genotype -fs` mode this module runs",
+}
+
+#: Every other option adVNTR's ``genotype`` subparser declares -- the ones this module does
+#: not set, and which ``additional_commands`` therefore exists to carry.
+#:
+#: ``-h``/``--help`` are deliberately absent: adVNTR would print help and exit zero without
+#: genotyping anything.
+ADVNTR_EXTRA_OPTIONS = frozenset(
+    {
+        "-r",
+        "--reference_filename",
+        "-f",
+        "--fasta",
+        "-p",
+        "--pacbio",
+        "-n",
+        "--nanopore",
+        "--outfmt",
+        "--vid_file",
+        "--append",
+        "--noref_aln",
+        "--min_read_length",
+        "-e",
+        "--expansion",
+        "-c",
+        "--coverage",
+        "--haploid",
+        "-naive",
+        "--naive",
+        "-u",
+        "--update",
+        "--fullru",
+        "-aln",
+        "--aln",
+    }
+)
+
+#: What argparse treats as a negative number rather than an option string.
+_NEGATIVE_NUMBER = re.compile(r"^-\d+$|^-\d*\.\d+$")
+
+
+def advntr_option_token(token):
+    """Return the option spelling ``token`` is, or ``None`` if it is a value.
+
+    Only the exact spelling is returned -- ``--opt=value`` yields ``--opt``, and nothing
+    else is normalised. That is the point: see :func:`resolve_additional_commands` for why
+    this is an allow-list rather than a pattern match.
+
+    Args:
+        token (str): One ``shlex``-split word of ``additional_commands``.
+
+    Returns:
+        str | None: The option spelling, or ``None`` if the word is a value.
+    """
+    if not token.startswith("-") or _NEGATIVE_NUMBER.match(token):
+        return None
+    return token.split("=", 1)[0] if token.startswith("--") else token
+
+
+def resolve_additional_commands(settings):
+    """Return ``additional_commands``, refusing any option this module already sets.
+
+    ``additional_commands`` is interpolated verbatim *after* every option
+    :func:`run_advntr` builds, and adVNTR parses the result with argparse, which lets the
+    last occurrence of an option win. A fragment repeating a managed option therefore
+    replaces a value VNtyper chose, silently and after validation: measured against a
+    parser built from adVNTR's own declarations, each of ``--threads 3``, ``-t3``,
+    ``--threads=3``, ``--thr 3`` and ``--thread 3`` overrides an earlier ``-t 12``.
+
+    That is what made :func:`resolve_advntr_threads` decorative -- it rejects 0, negatives,
+    bools and non-integers, and then a fragment saying ``--threads 0`` hands adVNTR exactly
+    the value it refused. ``-o`` and ``-m`` are worse: ``pipeline.py`` reconstructs the
+    output path independently and reads the file back, so a redirected artefact is a
+    missing result rather than a relocated one.
+
+    The rule is an **allow-list**, and that is not fastidiousness. The first version of this
+    guard pattern-matched against the managed options -- exact spellings, ``--opt=value``,
+    long abbreviations, and a one-character short option carrying an attached value. It
+    therefore had to reimplement argparse's option matching, and it missed two whole
+    classes, both measured against a parser built from adVNTR's own declarations:
+
+    * **single-dash flag groups.** ``consume_optional`` decomposes them, so a zero-argument
+      short option consumes its first character and re-forms ``'-' + tail``. Every one of
+      ``-p``, ``-n``, ``-e``, ``-u`` is a free prefix: ``-pt3`` set threads to 3, and
+      ``-po /elsewhere.vcf`` redirected the artefact.
+    * **single-dash abbreviation.** ``allow_abbrev`` applies to these too, and no ``-v`` is
+      declared, so ``-v 99999`` and ``-vi 99999`` both reach ``-vid``.
+
+    So a word starting with ``-`` must now be an option adVNTR declares *and* one this
+    module does not set. Abbreviations, attached values and flag groups are all refused
+    because none of them is an exact declared spelling -- fail-closed by construction
+    rather than by enumeration. It over-rejects only spellings argparse itself would
+    accept for a permitted option (``-c30``); those fail loudly and are re-spelled.
+
+    Unlike ``threads`` and ``output_format``, a missing key is not an error here. Those two
+    are authoritative because their old fallbacks *contradicted* the shipped file (#247);
+    this default is ``-aln``, which is what advntr_config.json ships.
+
+    Args:
+        settings (dict): An ``advntr_settings`` mapping.
+
+    Returns:
+        str: The fragment, unchanged. Validated as ``shlex`` reads it -- ``run_command``
+        hands the assembled string to bash, which additionally expands ``$``, backticks and
+        ``$'...'``, so this is not a claim about shell metacharacters. The fragment is
+        operator-controlled configuration, not user input.
+
+    Raises:
+        ValueError: If the fragment does not parse as shell words, if any word is an option
+            :func:`run_advntr` sets itself, or if any word is not an option adVNTR declares.
+    """
+    additional = settings.get("additional_commands", "-aln")
+
+    try:
+        tokens = shlex.split(additional)
+    except ValueError as exc:
+        raise ValueError(
+            f"advntr_settings['additional_commands'] is not a parseable command fragment ({exc}): "
+            f"{additional!r}. It is interpolated into a string run under `bash -c`, so an "
+            "unbalanced quote would surface as a shell syntax error inside adVNTR's log."
+        ) from exc
+
+    for token in tokens:
+        option = advntr_option_token(token)
+        if option is None:
+            continue
+        if option in MANAGED_ADVNTR_OPTIONS:
+            owner = MANAGED_ADVNTR_OPTION_OWNERS[option]
+            raise ValueError(
+                f"advntr_settings['additional_commands'] contains {token!r}, which is adVNTR's "
+                f"{option} -- an option run_advntr already sets. adVNTR parses with argparse, where "
+                f"the last occurrence wins, so this would silently override {owner}. Set that instead, "
+                "and keep additional_commands for flags adVNTR alone owns (such as -aln)."
+            )
+        if option not in ADVNTR_EXTRA_OPTIONS:
+            raise ValueError(
+                f"advntr_settings['additional_commands'] contains {token!r}, which adVNTR's `genotype` "
+                "does not declare as an option. Abbreviations, attached values and single-dash flag "
+                "groups are refused even when argparse would accept them, because each is a way to "
+                "reach an option run_advntr sets -- `-pt3` sets the thread count and `-v` reaches "
+                "-vid. Spell the option out in full, one word per option."
+            )
+
+    return additional
+
+
+def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipeline_threads=1):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from advntr_config.
 
@@ -118,9 +346,23 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
         output (str): Directory where the results will be saved.
         output_name (str): Base name for the output files.
         config (dict): Main configuration dictionary.
+        pipeline_threads (int): The pipeline's ``--threads``. Used only when
+            ``advntr_settings['threads']`` is ``null``, which means "inherit".
 
     Returns:
         int: Return code indicating success (0) or failure (non-zero).
+
+    Raises:
+        ValueError: From :func:`resolve_advntr_threads` or
+            :func:`resolve_additional_commands`, for a configured value this module refuses.
+            Deliberately not turned into a return code: ``pipeline.py`` ignores this
+            function's return value, so a ``1`` here would let the run proceed to
+            ``process_advntr_output`` on a file nothing wrote, while ``cli.py`` catches
+            ``ValueError`` and exits 1 with the message.
+        KeyError: From :func:`resolve_advntr_threads` or :func:`advntr_output_extension`,
+            for a *missing* configuration key. ``cli.py`` does not catch this, so a partial
+            mapping surfaces as a traceback rather than a clean exit -- the same shape
+            ``output_format`` already had.
     """
     advntr_path = config["tools"]["advntr"]
 
@@ -134,19 +376,31 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     # replaces -- that flag loads the main config.json, while `load_advntr_config` defaults to the
     # packaged advntr_config.json independently of it.) (#247)
     #
-    # The thread count is 1 because adVNTR's `-t` is a genuine no-op for the invocation
-    # VNtyper makes, not because 1 is fast. `-t` sets only `settings.CORES`
-    # (advntr_commands.py:72-74), whose three readers are VNTR model construction
-    # (models.py:66,69,72,74) and two PacBio-only functions (vntr_finder.py:870,889). VNtyper
-    # runs `genotype -fs` on short reads, routing through advntr_commands.py:139-144 ->
-    # genome_analyzer.py:211, where there is no Process, Pool or CORES at all. Recorded in
-    # a0a2563 (2024-12-24) and re-verified against berntpopp/adVNTR 1.3.3 while closing #215.
-    # Do not "fix" this by wiring `--threads` into it: the command would change and the
-    # runtime would not, which is a false affordance.
-    threads = advntr_settings["threads"]
+    # `-t` is real as of adVNTR 2.0.0. This comment replaces one that said the opposite,
+    # and the opposite was true at the time: `-t` set only `settings.CORES`
+    # (advntr_commands.py:72-74), whose readers were VNTR model construction
+    # (models.py:66,69,72,74) and two PacBio-only functions (vntr_finder.py:870,889) --
+    # none on the `genotype -fs` path VNtyper uses. Wiring `--threads` to it then would
+    # have changed the command without changing the runtime, which is why #215 was closed
+    # as resolved-by-investigation and why #254 pinned the commit.
+    #
+    # adVNTR 2.0.0 moved the Viterbi DP into a `nogil` block and threaded the read loop,
+    # so `-t N` now genuinely parallelises decoding: measured 203.3 s -> 1.71 s at `-t 16`
+    # on example_7a61_hg19_subset.bam, with an identical selection digest at every thread
+    # count. Do not restore the old wording without also re-pinning GIT_COMMIT to a
+    # pre-2.0.0 revision.
+    #
+    # `null` means "inherit the pipeline's --threads"; an explicit integer overrides it.
+    # A missing key still raises, because a partial mapping is not supported input.
+    #
+    # Note `--jobs J` x `-t T` oversubscribes. The golden-cohort runner already models
+    # that with a separate `advntr_case_threads` knob, which remains the control.
+    threads = resolve_advntr_threads(advntr_settings, pipeline_threads)
 
-    # Retrieve additional command parts from advntr_settings, if available
-    additional_commands = advntr_settings.get("additional_commands", "-aln")
+    # Extra flags for adVNTR, refusing any option this function already sets. See
+    # `resolve_additional_commands`: argparse lets the last occurrence win, so an
+    # unchecked fragment overrides the thread count validated one line above.
+    additional_commands = resolve_additional_commands(advntr_settings)
 
     # Determine the output extension. Shared with pipeline.py, which reconstructs this path.
     output_ext = advntr_output_extension(advntr_settings)

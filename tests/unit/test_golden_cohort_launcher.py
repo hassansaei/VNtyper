@@ -372,3 +372,135 @@ print(json.dumps({{"records": records, "survived": second.returncode == 0}}))
         "records": [{"command": "tool 'a b'", "shell": True}],
         "survived": True,
     }
+
+
+# --- Attribute markers -------------------------------------------------------------------
+#
+# The marker has to be present on one side and absent on the other, and `admissibility`
+# refuses two sides that expected the same state. A branch that only *modifies* files
+# therefore has nothing to name: #259 adds no module at all -- even
+# `tests/unit/test_advntr_command.py`, which it grows by 116 lines, already exists on main.
+# Both candidate module markers resolve on both sides, so neither can distinguish them.
+#
+# `module:attribute` gives such a branch a marker without inventing a throwaway module for
+# the PR to carry, and it is a *stronger* witness than a sibling module would be: it is
+# reached through the same import machinery as the code under test.
+
+#: Present on the candidate side of #259 and absent on `origin/main`.
+ATTRIBUTE_MARKER = "vntyper.modules.advntr.advntr_genotyping:resolve_advntr_threads"
+
+
+def test_parse_marker_splits_an_attribute_from_its_module() -> None:
+    assert launcher.parse_marker(ATTRIBUTE_MARKER) == (
+        "vntyper.modules.advntr.advntr_genotyping",
+        "resolve_advntr_threads",
+    )
+
+
+def test_parse_marker_leaves_a_bare_module_alone() -> None:
+    assert launcher.parse_marker("vntyper.scripts.pipeline_guards") == ("vntyper.scripts.pipeline_guards", None)
+
+
+@pytest.mark.parametrize("marker", ["vntyper.scripts.pipeline_guards:", ":resolve_advntr_threads", ":"])
+def test_parse_marker_refuses_a_half_written_marker(marker: str) -> None:
+    """A marker with an empty half must not quietly degrade into a module check.
+
+    That degradation is the dangerous one: `--marker mod:` would check only `mod`, which
+    exists on both sides, and the gate would then compare two sides it had "verified".
+    """
+    with pytest.raises(ValueError, match="marker"):
+        launcher.parse_marker(marker)
+
+
+def test_resolve_reports_a_present_attribute_marker() -> None:
+    info = launcher.resolve(REPO_ROOT, ATTRIBUTE_MARKER)
+
+    assert info["marker_present"] is True
+    assert info["error"] is None
+
+
+def test_resolve_reports_an_absent_attribute_as_absent_and_not_as_an_error() -> None:
+    """This is the baseline side's answer, and it must be a clean False.
+
+    An absent attribute reported as an error would make every `before` run abort with
+    EXIT_ABORT rather than run, which reads as a broken harness rather than a working one.
+    """
+    module, _ = launcher.parse_marker(ATTRIBUTE_MARKER)
+
+    info = launcher.resolve(REPO_ROOT, f"{module}:no_such_function")
+
+    assert info["marker_present"] is False
+    assert info["error"] is None
+    # The attribute is what made it absent, not a mistyped module: the same module answers
+    # present on its own, and would answer present on both sides of the comparison.
+    assert launcher.resolve(REPO_ROOT, module)["marker_present"] is True
+
+
+def test_resolve_reports_an_attribute_whose_module_cannot_be_imported() -> None:
+    info = launcher.resolve(REPO_ROOT, "missing_golden_cohort_parent.marker:thing")
+
+    assert info["marker_present"] is False
+    assert str(info["error"]).startswith("import_module(missing_golden_cohort_parent.marker): ModuleNotFoundError:")
+
+
+def test_resolve_reports_a_malformed_marker_rather_than_treating_it_as_a_module() -> None:
+    info = launcher.resolve(REPO_ROOT, "vntyper.scripts.pipeline_guards:")
+
+    assert info["marker_present"] is False
+    assert "ValueError" in str(info["error"])
+
+
+def test_a_bare_module_marker_is_still_answered_without_importing_the_module() -> None:
+    """`find_spec` executes nothing, and bare markers must keep that property.
+
+    Runs 1-3 used `vntyper.scripts.pipeline_guards`; importing a marker module would change
+    what those runs measured, because the import happens before `vntyper.cli.main`
+    configures logging.
+    """
+    module = "vntyper.scripts.pipeline_guards"
+    sys.modules.pop(module, None)
+
+    assert launcher.marker_is_present(module) is True
+    assert module not in sys.modules, "a bare module marker must not be imported"
+
+
+def test_launch_aborts_when_the_marker_itself_cannot_be_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`resolve` recorded marker-resolution failures and nothing consumed the record.
+
+    A marker whose module raises on import reported `marker_state=absent`, which is
+    indistinguishable from a genuinely absent attribute. On the side that expects the
+    marker absent -- the baseline -- the run then proceeded with its witness void while the
+    launch line asserted it held. The attribute form makes this newly reachable: a bare
+    module's `find_spec` cannot fail this way for a module that exists.
+    """
+    resolution = _resolution(tmp_path, False)
+    resolution["error"] = "import_module(boom): RuntimeError: deps missing"
+    monkeypatch.setattr(launcher, "resolve", lambda *_args, **_kwargs: resolution)
+
+    code = launcher.launch(
+        tree=tmp_path, side="before", marker="boom:anything", expect_marker=False, commands_log=None, argv=[]
+    )
+
+    assert code == launcher.EXIT_ABORT
+    assert "marker-unresolvable" in capsys.readouterr().out
+
+
+def test_launch_still_runs_when_the_marker_resolved_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The abort above must key on the error, not on the marker being absent."""
+    monkeypatch.setattr(launcher, "resolve", lambda *_args, **_kwargs: _resolution(tmp_path, False))
+    monkeypatch.setattr(launcher, "_run_cli", lambda _argv: 0, raising=False)
+
+    code = launcher.launch(
+        tree=tmp_path, side="before", marker="mod:attr", expect_marker=False, commands_log=None, argv=["--help"]
+    )
+
+    assert code != launcher.EXIT_ABORT
+
+
+def test_parse_marker_refuses_more_than_one_colon() -> None:
+    """`partition` would give ('a.b', 'c:d'), and `hasattr(mod, 'c:d')` is always False --
+    so a mistyped marker reads as absent rather than as the error it is."""
+    with pytest.raises(ValueError, match="marker"):
+        launcher.parse_marker("a.b:c:d")

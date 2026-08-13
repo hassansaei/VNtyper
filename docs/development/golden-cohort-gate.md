@@ -1116,3 +1116,102 @@ successful artifact. The retained evidence is bound by these SHA-256 digests:
 | baseline `side.json` | `d3b17029f55c4a610d708764bf4b9c5298f2caad3f0f3114ce532b79b43b41a3` |
 | candidate `side.json` | `8a0c1a0460934cecf9db19b659c7f219f964bf685bf5f818bf12b2b3b69bac10` |
 | both matrix snapshots | `6f09f9350d152ab1b69aa07cf2096aad895a01cca08f23c297608cf772029dd0` |
+
+## Run 8 — `c74e9e5` → `74fcbe0`, adVNTR 2.0.x and real `--threads` (#259)
+
+Harness `1.4.0`. Both sides were clean worktrees, both launches recorded their revision, and
+all **85 runs on each side verified their package resolution**. The attestation-grade matrix
+comprised 78 pipeline cases, three probes and four cohorts. No case was blocked, no
+expectation was unmet, and no run timed out.
+
+**This is the first run whose marker names an attribute rather than a module.** #259 adds no
+new module — even `tests/unit/test_advntr_command.py`, which it grows by 116 lines, already
+exists on `main` — so no module distinguishes the two sides, and `admissibility` refuses two
+sides that expected the same marker state. The marker was
+`vntyper.modules.advntr.advntr_genotyping:resolve_advntr_threads`, absent on the baseline and
+present on the candidate. The probe recorded `unpinned_script_leaked: true` on **both** trees,
+which is the editable-finder failure the launch wrapper exists to prevent, observed rather
+than assumed.
+
+### What this run actually compares
+
+Both sides ran the **same installed adVNTR, 2.0.2**, from the same `envadvntr` environment,
+and read the same `reference/` set. So this gate is not a comparison of adVNTR 1.x against
+2.x — that equivalence is the fork's own evidence (Tier 1 byte-identical decoding against the
+pristine `05fd98a` kernel, and seven of eight whole-BAM `genotype -fs` runs with identical VCF
+and `-aln` sidecars).
+
+The branch ships a pin to **2.0.3**, one release later than the gate ran, and that is stated
+rather than glossed. 2.0.3 is code-review follow-up whose diff against 2.0.2 changes **no
+executable line under `advntr/` or `hmm/`** — `git diff v2.0.2..v2.0.3 -- advntr/ hmm/`
+touches one file, `advntr/read_selection.py`, and only inside a docstring. Everything else is
+`scripts/`, `advntr_harness/`, `tests/`, CI and prose, none of which is on the genotype path
+or even shipped in the installed egg. Tier 1 byte-equivalence and the Tier 3 selection digest
+`3d4d3ec6…` are unchanged. Re-running the cohort would therefore re-measure an identical
+binary; it was not re-run, and this paragraph is the reason.
+
+What this gate isolates is the VNtyper-side change, and it isolates it exactly: the baseline's
+`advntr_config.json` pins `"threads": 1`, the candidate's sets `"threads": null`, meaning
+*inherit*. The three adVNTR cases therefore ran adVNTR at **`-t 1` on the baseline and `-t 8`
+on the candidate**. The question this run answers is the only one that matters for #259:
+**does running adVNTR's decoder across eight threads change a genotype?**
+
+### Every genotype artefact is unchanged
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `advntr_result` | 0 | 3 |
+| `kestrel_result` | 0 | 77 |
+| `kestrel_pre_result` | 0 | 75 |
+| `coverage_summary` | 0 | 77 |
+| `screening_summary` | 0 | 77 |
+| `report_tables` | 0 | 77 |
+| `cross_match_summary` | 0 | 3 |
+| every `cohort_*` artefact | 0 | 3–4 each |
+| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
+| `placed_unmapped_guard_count` | 0 | 81 |
+| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
+| `exit_code` | 0 | 85 |
+| `executed_commands` | 79 | 81 |
+
+### The one real delta, and the 76 that are noise
+
+The verdict is `DELTAS` and the command exits 1, because `executed_commands` differs in 79 of
+81 cases. That is expected here and is not a caveat — it is the change.
+
+Of those 79, **76 carry nothing but `/proc/<pid>/fd/N` and temporary-file suffix noise**:
+normalising both sides' commands for the pid and the eight-character `mkstemp` suffix makes
+them compare equal. This is the same delta class runs 4, 5 and 7 recorded.
+
+The remaining three are the adVNTR cases, and after the same normalisation exactly one
+command still differs in each:
+
+```
+a5c1_hg19_advntr   before: … -t 1 -aln      after: … -t 8 -aln
+b178_hg19_advntr   before: … -t 1 -aln      after: … -t 8 -aln
+dfc3_hg19_advntr   before: … -t 1 -aln      after: … -t 8 -aln
+```
+
+So the gate is non-vacuous in the way that matters: it demonstrably exercised the changed
+branch — the thread count genuinely reached adVNTR — and `advntr_result` came back identical
+on all three cases anyway.
+
+### What run 8 does not attest
+
+* It does not compare adVNTR versions. Both sides ran 2.0.2.
+* It says nothing about thread counts other than 1 and 8, and nothing about `--jobs J` × `-t T`
+  oversubscription, which the runner models with a separate `advntr_case_threads` knob.
+* The three adVNTR cases run at `--advntr-max-coverage 300`. A deeper locus is not covered
+  here; adVNTR 2.0.2's own measurements put peak RSS at 936.6 MB for a 50,619-read BAM at
+  `-t 16`.
+* `cohort_sample_order_raw` remains uncompared for the version-bounded reasons recorded above.
+
+The retained evidence is bound by these SHA-256 digests:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `result.json` | `3979e774ccaed31e8877f7c2441980849a59a1b44b5fb95bcf6a4082cb992751` |
+| `result.md` | `a62a0fa5d6064ba6fc4c64c1719c3d3f0b55a0ed30540a7f50f7f769eff943a3` |
+| baseline `side.json` | `5321f9206405b77ccf4a198603b1ad1ca1b2f628105aba7a38f8cadaeaddb075` |
+| candidate `side.json` | `c8f583664a48615116573697ce1d3114ec45a13482fdf183d7c5d2e757f79335` |
+| both matrix snapshots | `241aeaf5aa64b8f684848f271e9d1a45e422ba41825adda9ee67b6a32cd7ac68` |

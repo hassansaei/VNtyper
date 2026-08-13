@@ -317,7 +317,7 @@ def check_sides_opposed(
     before_marker, after_marker = before_side.get("marker"), after_side.get("marker")
     if before_marker != after_marker:
         problems.append(
-            f"the two sides used different marker modules ({before_marker!r} vs {after_marker!r}), so neither "
+            f"the two sides used different markers ({before_marker!r} vs {after_marker!r}), so neither "
             "side's resolution proof says anything about the other"
         )
     before_expect, after_expect = before_side.get("expect_marker"), after_side.get("expect_marker")

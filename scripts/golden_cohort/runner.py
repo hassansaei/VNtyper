@@ -1,6 +1,6 @@
 """Execute one side of the comparison.
 
-One side is one source tree plus one expectation about the marker module. Every case is a
+One side is one source tree plus one expectation about the marker. Every case is a
 separate process, launched through :mod:`golden_cohort.launcher` so that which package it
 resolved is recorded before it does any work, and every process writes into its own
 directory under the side's run root.
@@ -212,7 +212,7 @@ def _run_one(
         argv: The ``vntyper`` argument list.
         tree: The side's source tree.
         side: ``before`` or ``after``.
-        marker: The marker module name.
+        marker: The marker, as a module name or ``module:attribute``.
         expect_marker: Whether the marker must be present on this side.
         output_dir: Where the case writes, so its required artefacts can be checked.
         log_dir: Where to write the logs, the command record and ``result.json``.
@@ -382,7 +382,7 @@ def run_side(
         tree: The side's source tree.
         run_root: Where this side's outputs and logs go.
         side: ``before`` or ``after``.
-        marker: The marker module name.
+        marker: The marker, as a module name or ``module:attribute``.
         expect_marker: Whether the marker must be present on this side.
         threads: ``--threads`` for ordinary cases.
         advntr_case_threads: ``--threads`` for cases that also run adVNTR. Reaches alignment,
@@ -525,7 +525,7 @@ def _run_cohorts(
         logs_root: Where per-case logs go.
         tree: The side's source tree.
         side: ``before`` or ``after``.
-        marker: The marker module name.
+        marker: The marker, as a module name or ``module:attribute``.
         expect_marker: Whether the marker must be present on this side.
         timeout: Per-case timeout in seconds.
 
