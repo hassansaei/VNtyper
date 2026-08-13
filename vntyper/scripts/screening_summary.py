@@ -15,10 +15,9 @@ no rendering.
 **The interpretive text is config-driven and must stay that way** (AGENTS.md). Nothing
 here composes, rewords or conditions a sentence; it computes a state and reads the
 message for that state out of the configuration. A state with no configured
-message falls back to ``screening_summary_default`` -- which is why
-``ScreeningSummary.matched_rule`` exists: a report can otherwise announce a
-negative screening for a sample two algorithms called positive, with nothing in
-the output to show a rule was missing.
+message is marked by ``ScreeningSummary.matched_rule`` and presented with
+``UNAVAILABLE_SUMMARY_MESSAGE``: otherwise the fallback default could announce a
+negative screening for a sample two algorithms called positive.
 
 The state has three axes:
 
@@ -193,9 +192,9 @@ class ScreeningSummary:
 
     Attributes:
         text: The message the report may present. It is the matched rule's message, or
-            the fallback default, or :data:`UNAVAILABLE_SUMMARY_MESSAGE` when
-            :attr:`state_is_established` is False - a message chosen by matching a state
-            the run never established is not evidence about the sample.
+            :data:`UNAVAILABLE_SUMMARY_MESSAGE` when :attr:`state_is_established` or
+            ``matched_rule`` is False. A message chosen for an unestablished state, and
+            a fallback chosen because no rule exists, are not evidence about the sample.
         is_positive: Whether either algorithm reported a finding. Drives the
             template's emphasis; computed from the state, never from ``text``.
         kestrel_result: The computed Kestrel state value.
@@ -239,7 +238,7 @@ class ScreeningSummary:
 
         The two algorithms are treated differently, and the asymmetry is read off the
         configuration rather than chosen. ``advntr_result`` has a value for a stage that
-        never ran -- :data:`NOT_PERFORMED` -- and eight of the forty configured rules are
+        never ran -- :data:`NOT_PERFORMED` -- and ten of the forty configured rules are
         keyed on it, so an absent adVNTR stage is a state the table covers *in words*.
         ``kestrel_result`` has no such value: a Kestrel stage that produced nothing hands
         :func:`compute_algorithm_result` an empty frame, which returns the block's
@@ -648,7 +647,7 @@ def build_screening_summary(
             segments = tuple(default_message.split(SEGMENT_SEPARATOR))
             logger.warning(
                 "No screening rule covers kestrel_result=%r, advntr_result=%r, quality_metrics_pass=%r; "
-                "falling back to the default message.",
+                "the report will withhold the default message.",
                 kestrel_result,
                 advntr_result,
                 quality_metrics_pass,
@@ -682,19 +681,17 @@ def build_screening_summary(
         advntr_execution=advntr_execution,
         segments=segments,
     )
-    # The rule matched a state one of the stages never established, so its message is not
-    # evidence about this sample - it is the sentence configured for a state the run did
-    # not reach. Withholding it is the only honest option, and the vocabulary for saying so
-    # already exists. The state axes above are left exactly as computed: they are what the
-    # provenance line and the tests are about, and rewriting them would hide the reason.
-    if not summary.state_is_established:
+    # A message is evidence only when a rule matched a state every stage established.
+    # Withholding anything else is the only honest option, and the vocabulary for saying
+    # so already exists. The state axes above are left exactly as computed: they are what
+    # the provenance line and tests are about, and rewriting them would hide the reason.
+    if not summary.state_is_established or not summary.matched_rule:
         logger.warning(
-            "Withholding the configured screening message: kestrel_execution=%r, advntr_execution=%r. "
-            "The rule for kestrel_result=%r, advntr_result=%r matched a state this run did not establish.",
+            "Withholding the screening message: kestrel_execution=%r, advntr_execution=%r, matched_rule=%r. "
+            "The computed state was not established or no configured rule described it.",
             kestrel_execution,
             advntr_execution,
-            kestrel_result,
-            advntr_result,
+            matched_rule,
         )
         summary = replace(summary, text=UNAVAILABLE_SUMMARY_MESSAGE, segments=(UNAVAILABLE_SUMMARY_MESSAGE,))
 

@@ -553,8 +553,7 @@ def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
 
 
 def test_a_state_with_no_rule_warns_rather_than_going_quiet(caplog, report_config) -> None:
-    """The fallback is indistinguishable from a real negative in the HTML, so
-    the only trace it leaves is this log line."""
+    """An uncovered state keeps its axes but withholds the misleading fallback."""
     stripped = {**report_config, "screening_summary_rules": []}
     with caplog.at_level(logging.WARNING, logger="vntyper.scripts.screening_summary"):
         summary = ss.build_screening_summary(
@@ -562,8 +561,13 @@ def test_a_state_with_no_rule_warns_rather_than_going_quiet(caplog, report_confi
         )
 
     assert summary.matched_rule is False
-    assert summary.text == report_config["screening_summary_default"]
+    assert summary.text == ss.UNAVAILABLE_SUMMARY_MESSAGE
+    assert summary.segments == (ss.UNAVAILABLE_SUMMARY_MESSAGE,)
+    assert summary.kestrel_result == "High_Precision"
+    assert summary.advntr_result == ss.NOT_PERFORMED
+    assert summary.quality_metrics_pass is True
     assert summary.is_positive is True, "the state is still positive even with no message for it"
+    assert summary.emphasis == "indeterminate"
     assert any(record.levelno >= logging.WARNING for record in caplog.records)
 
 
@@ -620,7 +624,7 @@ def test_a_failed_stage_outranks_a_positive_call(kestrel: str, advntr: str) -> N
 def test_an_advntr_stage_that_was_never_asked_to_run_is_not_a_failure() -> None:
     """An adVNTR-less run is the commonest run there is, and the rule table covers it.
 
-    Eight of the forty rules are keyed on ``advntr_result == "none"`` and say in words
+    Ten of the forty rules are keyed on ``advntr_result == "none"`` and say in words
     that the stage was not performed, so the state *is* established. Treating this like a
     failure would make every adVNTR-less report indeterminate.
     """
@@ -748,6 +752,13 @@ ALL_RULES = ss.load_report_config()["screening_summary_rules"]
 def test_the_shipped_rule_table_is_loaded() -> None:
     """Guard the guard: an empty table makes every parametrised assertion below vacuous."""
     assert len(ALL_RULES) == 40
+
+
+def test_ten_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
+    """Five Kestrel states times two coverage-QC states, derived from conditions."""
+    not_performed_rules = [rule for rule in ALL_RULES if rule["conditions"]["advntr_result"] == ss.NOT_PERFORMED]
+
+    assert len(not_performed_rules) == 10
 
 
 @pytest.mark.parametrize("rule", ALL_RULES, ids=rule_id)

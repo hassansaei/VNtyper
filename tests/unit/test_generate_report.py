@@ -652,6 +652,22 @@ def chip_value(html: str, label: str) -> str:
     return " ".join(match.group(1).split())
 
 
+def chip_tone(html: str, label: str) -> str:
+    """The tone of one masthead chip, selected by its visible label.
+
+    Args:
+        html: The rendered report.
+        label: The chip's visible label.
+
+    Returns:
+        str: The chip's ``data-tone`` value.
+    """
+    pattern = rf'<li class="chip" data-tone="\s*([^"\s]+)">\s*<span class="chip-label">{re.escape(label)}</span>'
+    match = re.search(pattern, masthead(html), re.DOTALL)
+    assert match, f"the masthead has no {label!r} chip with a tone"
+    return match.group(1)
+
+
 def chip_labels(html: str) -> list[str]:
     """Every chip label in the masthead, in scan order."""
     return re.findall(r'<span class="chip-label">(.*?)</span>', masthead(html), re.DOTALL)
@@ -903,7 +919,7 @@ def test_the_coverage_gate_is_chipped_as_unevaluated_rather_than_passing(tmp_pat
     html = render(tmp_path)
 
     assert chip_value(html, "Coverage QC") == "NOT_EVALUATED"
-    assert 'data-tone="none"' in masthead(html)
+    assert chip_tone(html, "Coverage QC") == "none"
 
 
 def test_a_failing_coverage_gate_is_chipped_as_a_caution(tmp_path) -> None:
@@ -932,6 +948,7 @@ def test_a_state_with_no_configured_rule_says_so_in_the_chip_row(tmp_path, monke
 
     assert chip_value(html, "Screening rule") == "Not configured"
     assert masthead_state(html) == "indeterminate"
+    assert screening_message(html) == "No summary available."
 
 
 def test_an_ordinary_report_carries_no_screening_rule_chip(positive_summary) -> None:
@@ -989,6 +1006,7 @@ def test_the_provenance_line_never_prints_the_not_performed_token_raw(positive_s
     from `"negative"`, which means it ran and found nothing. The provenance line must
     render this as words a reader understands, not the raw internal token."""
     html = render(positive_summary)
+    assert "adVNTR: not performed" in visible_text(masthead(html))
     assert "adVNTR: none" not in html
 
 
@@ -1074,22 +1092,29 @@ def _stage_step(step_name: str, execution: str, tmp_path: Path) -> dict | None:
     return unreadable_step(step_name, tmp_path / "gone" / "result.tsv")
 
 
-#: What the report must say about each stage in each execution state, in the two places
-#: that used to be able to disagree: the stage's own section, and the raw-state provenance
-#: line. Only ``empty`` may read as a negative - that is the one state in which the stage
-#: established one.
+#: What the report must say about each stage in each execution state. The matrix reads all
+#: four surfaces from one document: stage section, provenance line, masthead headline and
+#: chip row. Only ``empty`` may read as a negative - that is the one state in which the
+#: stage established one.
 NEGATIVE_SENTENCE = {"Kestrel": "No variant detected by Kestrel", "adVNTR": "No pathogenic variants"}
 
 STAGE_EXECUTIONS: dict[str, dict[str, Any]] = {
-    "called": {"provenance": None, "section": None, "reads_as_a_negative": False},
+    "called": {
+        "provenance": None,
+        "section": None,
+        "chip": {"Kestrel": "High precision", "adVNTR": "Positive"},
+        "reads_as_a_negative": False,
+    },
     "empty": {
         "provenance": None,
         "section": {"Kestrel": "No variant detected by Kestrel in this sample.", "adVNTR": "No pathogenic variants"},
+        "chip": {"Kestrel": "Negative", "adVNTR": "Negative"},
         "reads_as_a_negative": True,
     },
     "absent": {
         "provenance": "not performed",
         "section": {"Kestrel": "Kestrel genotyping was not performed", "adVNTR": "adVNTR genotyping was not performed"},
+        "chip": {"Kestrel": "Not performed", "adVNTR": "Not performed"},
         "reads_as_a_negative": False,
     },
     "failed": {
@@ -1098,6 +1123,7 @@ STAGE_EXECUTIONS: dict[str, dict[str, Any]] = {
             "Kestrel": "Kestrel genotyping ran, but its result file is missing or could not be read",
             "adVNTR": "adVNTR genotyping ran, but its result file is missing or could not be read",
         },
+        "chip": {"Kestrel": "Not available", "adVNTR": "Not available"},
         "reads_as_a_negative": False,
     },
 }
@@ -1105,7 +1131,7 @@ STAGE_EXECUTIONS: dict[str, dict[str, Any]] = {
 #: Which combinations leave the screening state unestablished, and therefore leave the
 #: rule-selected message unusable. It is not symmetric, and the asymmetry comes from the
 #: configuration rather than from a preference: ``advntr_result`` has a value for a stage
-#: that never ran (``none``, keyed on by eight of the forty rules), while ``kestrel_result``
+#: that never ran (``none``, keyed on by ten of the forty rules), while ``kestrel_result``
 #: has none - an absent or unreadable Kestrel stage computes the block's ``default``,
 #: which is the same ``negative`` a stage that genotyped and called nothing produces.
 UNESTABLISHED_KESTREL = ("absent", "failed")
@@ -1147,6 +1173,9 @@ def test_a_stage_that_established_nothing_is_never_reported_as_a_negative(
 
     for label, execution in (("Kestrel", kestrel_execution), ("adVNTR", advntr_execution)):
         expected = STAGE_EXECUTIONS[execution]
+        assert chip_value(html, label) == expected["chip"][label], (
+            f"the {label} chip does not state its {execution} execution state"
+        )
         if expected["provenance"] is not None:
             assert f"{label}: {expected['provenance']}" in text, (
                 f"the provenance line does not say {label} was {expected['provenance']!r}"
@@ -1168,6 +1197,21 @@ def test_a_stage_that_established_nothing_is_never_reported_as_a_negative(
         assert message == UNAVAILABLE_SUMMARY_MESSAGE, (
             f"the rule-selected message is still presented as authoritative: {message!r}"
         )
+
+
+def test_concordance_is_not_assessable_without_two_performed_stages_even_if_cross_match_exists(tmp_path) -> None:
+    """The execution guard, isolated from the separate cross-match-availability guard."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "Yes"}]),
+    )
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "adVNTR") == "Not performed"
+    assert chip_value(html, "Concordance") == "Not assessable"
 
 
 def test_an_unreadable_advntr_step_says_so_rather_than_reporting_nothing_found(tmp_path) -> None:
