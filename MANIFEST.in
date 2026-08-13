@@ -15,6 +15,12 @@ include vntyper/templates/_report_base.html
 include vntyper/templates/report_template.html
 include vntyper/templates/cohort_summary_template.html
 
+# Include the vendored igv.js and its provenance/licence notice. The report embeds
+# the gzip and prints its SHA-256; a distribution without it cannot render an
+# alignment browser at all.
+include vntyper/assets/igv-3.0.2.min.js.gz
+include vntyper/assets/NOTICE.md
+
 # Include all JAR files in the dependencies/kestrel directory
 recursive-include vntyper/dependencies/kestrel *.jar
 

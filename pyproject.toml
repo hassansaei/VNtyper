@@ -157,6 +157,11 @@ version = {attr = "vntyper.version.__version__"}
     "templates/_report_base.html",
     "templates/report_template.html",
     "templates/cohort_summary_template.html",
+    # The vendored igv.js, gzipped, and the notice recording where it came from,
+    # under what licence, and with which digests. Named one by one for the same
+    # reason the templates are.
+    "assets/igv-3.0.2.min.js.gz",
+    "assets/NOTICE.md",
     "dependencies/kestrel/*.jar",
     "modules/shark/shark_config.json",
     "modules/advntr/advntr_config.json",
