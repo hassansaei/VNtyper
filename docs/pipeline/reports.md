@@ -10,17 +10,21 @@ The sample report (`summary_report.html`) is generated at the end of each pipeli
 
 **Variant Summary Table**
 
-The Kestrel results are displayed in a sortable table with columns for motif, variant type, position, REF/ALT alleles, motif sequence, depth metrics, depth score, confidence level, and flag status. Confidence labels are color-coded:
+The Kestrel results are displayed in a sortable table with columns for motif, variant type, position, REF/ALT alleles, motif sequence, depth metrics, depth score, confidence level, and flag status. Confidence is written as a labelled pill rather than encoded only by an alert colour:
 
-- High_Precision / High_Precision* -- highlighted in red (positive finding)
-- Low_Precision -- highlighted in orange (requires validation)
-- Negative -- no color (no variant detected)
+- High_Precision / High_Precision* -- high-precision call
+- Low_Precision -- lower-precision call
+- Negative -- no variant detected
 
 If adVNTR was run, its results appear in a separate table showing VID, variant state, supporting read count, mean coverage, p-value, repeat unit, REF/ALT, and flag status.
 
 **Screening Summary**
 
-The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The text is generated from a rule-based system defined in `report_config.json` that considers:
+The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The chips state the Kestrel result, adVNTR result, concordance and Coverage QC; an unmatched configuration also gets a **Screening rule: Not configured** chip. They use existing pipeline vocabulary such as **High precision**, **Not performed**, **Not assessable**, **PASS** and **FAIL**.
+
+**The masthead produces no verdict word.** Its internal `finding`, `no-finding` and `indeterminate` emphasis states select styling only and are never printed as labels. The words a reader sees come from the pipeline state and the configured interpretive message.
+
+The text is generated from a rule-based system defined in `report_config.json` that considers:
 
 - Kestrel result category (High_Precision, Low_Precision, flagged variants, negative)
 - adVNTR result category (positive, negative, not performed)
@@ -29,6 +33,8 @@ The report opens with a masthead: who the report is about, the computed state as
 The screening summary states what the combined evidence supports, including where orthogonal validation is recommended. Each configured message is stored both verbatim (`message`) and as the ordered parts it is rendered in (`segments`); the two are kept in step by a round-trip check, and a configuration supplying only `message` still renders.
 
 A stage that ran without producing a readable result is reported as neither a positive nor a negative. When either genotyping stage is in that state, the configured message is withheld -- it was selected by matching a state the run never established -- and the masthead is drawn in its indeterminate state instead.
+
+Immediately after the message, a screening-provenance line repeats the raw evidence in words: Kestrel state, adVNTR state and Coverage QC. The report's separate **Provenance** block records the requested and detected assemblies, analysed region and summary schema version. For an older run that did not persist one of those fields, the value is **not recorded by this run**; VNtyper does not guess from the current configuration.
 
 **Cross-Match Summary**
 
@@ -67,6 +73,18 @@ The report embeds an interactive IGV genome browser view using the [igv-reports]
 - **FASTA reference** -- MUC1 VNTR reference sequence
 
 The flanking region parameter (default: 50 bp) controls how much sequence context is shown around each variant position. This is configurable in `config.json` under `default_values.flanking`.
+
+`--report-igv` controls how this view is packaged:
+
+| Mode | Result |
+|------|--------|
+| `embedded` (default) | The verified, compressed igv.js library and the alignment session are carried in `summary_report.html`. |
+| `sidecar` | The summary stays small and a self-contained `igv_report.html` is written beside it. |
+| `off` | No alignment browser is generated; the result tables remain complete. |
+
+In the last verification specimen, the self-contained report measured **78,365 bytes without alignment data** and **575,641 bytes with embedded alignment data**. The old report fetched **2,002,405 bytes** over 11 CDN tags in addition to its file. These figures describe the measured specimen rather than a fixed size guarantee; sample content changes the final byte count.
+
+The embedded library is expanded with `DecompressionStream`. This sets a 2023 cross-browser floor for the alignment panel: Chrome 80+, Safari 16.4+ or Firefox 113+. An older browser receives an authored explanation, while the tables and all variant evidence remain available.
 
 !!! info "VCF compression"
     If bcftools is installed, the INDEL VCF is compressed and sorted for optimal IGV performance. If bcftools is unavailable, the uncompressed VCF is used. The report generation handles both cases gracefully.

@@ -8,7 +8,8 @@ results/
 ├── pipeline_summary.csv         # Optional (--summary-formats csv)
 ├── pipeline_summary.tsv         # Optional (--summary-formats tsv)
 ├── pipeline.log                 # Pipeline execution log
-├── summary_report.html          # HTML report with IGV visualization
+├── summary_report.html          # Self-contained HTML report (IGV mode is configurable)
+├── igv_report.html              # Optional self-contained sidecar (--report-igv sidecar)
 ├── predefined_regions_<assembly>.bed  # Region BED file (e.g., hg19, hg38)
 ├── kestrel/
 │   ├── kestrel_result.tsv       # Final genotyping result
@@ -68,9 +69,10 @@ Confidence is assigned based on empirically validated depth score thresholds fro
 
 ## How summary_report.html Displays Numbers
 
-Every figure in the per-sample HTML report is now written into the file by VNtyper.
+Every numeric column in the per-sample HTML report is now formatted server-side and
+written into the file by VNtyper.
 Until the fix for issue #242 the report shipped a small script that rewrote every numeric
-cell of every table to four decimal places in the reader's browser, so the number on
+cell of every table with `toFixed(4)` in the reader's browser, so the number on
 screen depended on whether three content delivery networks were reachable -- the archived
 file said one thing to a reader online and another to a reader offline.
 
@@ -85,7 +87,7 @@ these are the columns whose text differs.
 | Kestrel | `Depth_Score` | `0.01` | `0.010012` | Six decimal places. The confidence calibration is stated to five (0.00469 and 0.00515), so four was coarser than the thresholds the value is judged against, and a score of 0.00001234 printed as `0` |
 | adVNTR | `VID`, `NumberOfSupportingReads`, `POS` | `25561`, `14`, `67` | unchanged | Whole numbers, no decimals |
 | adVNTR | `MeanCoverage` | `98.5`, `40` | `98.50`, `40.00` | Always two decimal places, so every mean states the same precision |
-| adVNTR | `Pvalue` | `0`, `0.0001` | `1e-09`, `0.000123` | Three significant figures. Rounding to four decimals displayed a highly significant p-value as zero |
+| adVNTR | `Pvalue` | `0`, `0.0001` | `1e-09`, `0.000123` | Three significant figures. The old `toFixed(4)` displayed `1e-9` as `0` |
 
 ### The Kestrel table's column order changed
 
@@ -111,9 +113,24 @@ Two further display changes in the same release:
   *Highlight flagged values*: it changes emphasis and removes nothing. A row-count line
   above each table states how many rows are shown out of how many exist. The
   [cohort report](cohort-analysis.md) keeps its show/hide filter, where hiding flagged
-  rows across many samples is a triage aid rather than a way to lose a patient's result.
+  rows across many samples is a triage aid rather than a way to hide one sample's evidence.
   Note that the cohort report still rounds its numbers in the browser; that is tracked
   separately.
+
+## summary_report.html Artifact Modes
+
+`--report-igv embedded` (the default) produces one self-contained report. `sidecar`
+writes a small summary plus a self-contained `igv_report.html`, and `off` omits the
+alignment browser without removing any table row. The last verification specimen was
+**78,365 bytes without alignment data** and **575,641 bytes with embedded alignment
+data**, compared with **2,002,405 bytes** fetched by the previous report's 11 CDN tags.
+These are measured specimen sizes, not fixed limits; the tables and other sample content
+also contribute to the file.
+
+Embedded alignment viewing uses the browser's `DecompressionStream` support, with a
+2023 cross-browser floor of Chrome 80+, Safari 16.4+ or Firefox 113+. On an older
+browser, the alignment panel explains the limitation and the complete variant tables
+remain readable.
 
 ## Pipeline Summary JSON
 

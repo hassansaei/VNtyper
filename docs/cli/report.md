@@ -40,11 +40,15 @@ off explicitly.
 
 | Value | What the report is | Size |
 |-------|--------------------|------|
-| `embedded` (default) | One file, and a complete alignment browser. | ~560 KB with alignments |
-| `sidecar` | No library in the report; `igv_report.html` beside it is the alignment browser, built from VNtyper's verified vendored igv.js with no network request. | ~75 KB, plus the sidecar |
-| `off` | No alignment browser at all; `create_report` is not run. | ~75 KB |
+| `embedded` (default) | One file, and a complete alignment browser. | 575,641 B with alignment data in the verification specimen |
+| `sidecar` | No library in the summary; `igv_report.html` beside it is the alignment browser, built from VNtyper's verified vendored igv.js with no network request. | Summary remains near the no-alignment size, plus the sidecar |
+| `off` | No alignment browser at all; the complete result tables remain. | 78,365 B in the no-alignment specimen |
 
-A report for a run with no alignment data carries no library in any mode and is ~75 KB.
+A report for a run with no alignment data carries no library in any mode. The last
+verification specimen measured **78,365 bytes without alignment data** and **575,641
+bytes with embedded alignment data**, against **2,002,405 bytes** fetched over 11 CDN
+tags by the old report. These numbers are measurements to be refreshed for a release,
+not size guarantees; sample content also affects the artifact.
 
 The report's Provenance block states the version and the **SHA-256 of the decompressed
 library**, in full, so it can be checked against upstream. That digest is verified in
@@ -54,9 +58,32 @@ in several engines, and an archived report is opened from `file://` more often t
 not, so a runtime check would be one that silently does not run on the machines it was
 written for.
 
-If a reader's browser predates `DecompressionStream` (Chrome 80, Safari 16.4, Firefox
-113), the alignment panel says so in words and the variant tables stand unchanged. No
-state of this report is blank space.
+The embedded mode has a 2023 cross-browser floor because it requires
+`DecompressionStream`: Chrome 80+, Safari 16.4+ or Firefox 113+. On an older browser,
+the alignment panel says so in words and the variant tables stand unchanged. No state
+of this report is blank space.
+
+## Reading and printing the report
+
+The masthead names the sample and presents labelled Kestrel, adVNTR, concordance and
+Coverage QC chips before the configured interpretive text. It deliberately produces
+**no verdict word**: the internal emphasis state changes styling only. A screening-
+provenance line then spells out the Kestrel state, adVNTR state and Coverage QC using
+pipeline vocabulary. Coordinate fields absent from an older summary read **not recorded
+by this run** rather than being guessed from today's configuration.
+
+The per-sample report never hides a variant row. Flag highlighting can change emphasis,
+but it cannot filter the evidence. Flag filtering remains available in the cohort report
+as a multi-sample triage affordance.
+
+For print, result tables and the full motif sequence are expanded and interactive controls
+are omitted. Chromium repeats identity through `@page` margin boxes; a first-page document
+block supplies the identity in browsers that do not implement those boxes, so Chromium
+shows both on page 1. The report opens print-relevant sections expanded and scripting
+temporarily reopens any the reader collapsed. With scripting disabled, a section that the
+reader collapsed prints without its contents; print the report as it opens. See
+[Printing and archiving](../pipeline/reports.md#printing-and-archiving) for the full
+limitations.
 
 ## Naming the sample
 
