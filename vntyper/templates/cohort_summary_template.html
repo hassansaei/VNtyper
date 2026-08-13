@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- Without this a phone lays the page out at 980px and scales it down (#242).
+       Both report templates were missing it. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cohort Summary Report</title>
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
@@ -32,17 +35,82 @@
       background-color: #fff;
       border: 1px solid #ddd;
     }
+
+    /* The flag switch. The input is the control: `appearance: none` and a box,
+       rather than a Bootstrap `custom-control-input` that is invisible until
+       Bootstrap's stylesheet arrives from a CDN. Same treatment as the
+       per-sample report, so the two reports are operated the same way (#242). */
+    .controls { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; align-items: center; margin-bottom: 1rem; }
+    .switch { display: inline-flex; align-items: center; gap: .5rem; cursor: pointer; margin-bottom: 0; }
+    .switch input {
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      width: 2.25rem;
+      height: 1.25rem;
+      border: 1px solid #767676;
+      border-radius: 999px;
+      background: #eeeeee;
+      position: relative;
+      cursor: pointer;
+      flex: none;
+    }
+    .switch input::after {
+      content: "";
+      position: absolute;
+      inset: 2px auto 2px 2px;
+      width: 0.875rem;
+      border-radius: 999px;
+      background: #595959;
+      transition: transform .12s ease, background .12s ease;
+    }
+    .switch input:checked { background: #d7e9ec; border-color: #0f5d6b; }
+    .switch input:checked::after { transform: translateX(1rem); background: #0f5d6b; }
+    .switch-label { font-size: 0.95rem; }
+
+    /* Focus that cannot be seen is focus that cannot be used. Neither template
+       styled this at all. */
+    .switch input:focus-visible,
+    summary:focus-visible,
+    button:focus-visible,
+    a:focus-visible {
+      outline: 3px solid #0f5d6b;
+      outline-offset: 2px;
+    }
+
+    /* A reader who asked their operating system for less motion gets none. */
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
+  <!-- The report is the main landmark: no navigation, no aside, no footer, so a
+       screen reader user skipping to the content lands on the report itself. -->
+  <main class="container">
     <h1>Cohort Summary Report</h1>
     <p><strong>Report Date:</strong> {{ report_date }}</p>
     <!-- Custom switch for toggling flagged values, aligned to the left.
-         Default state is unchecked (flagged rows hidden) -->
-    <div class="custom-control custom-switch text-left mb-3">
-      <input type="checkbox" class="custom-control-input" id="toggleFlagged">
-      <label class="custom-control-label" for="toggleFlagged">Show flagged values</label>
+         Default state is unchecked (flagged rows hidden).
+
+         Hiding flagged rows is defensible here and nowhere else: cohort triage
+         across samples is a different read from a single-patient report, which is
+         why the per-sample switch changes emphasis only (#242, precondition P4).
+
+         The label's text is rewritten when the switch changes, so the text lives
+         in its own `<span>` - rewriting the `<label>` itself would delete the
+         input nested inside it. -->
+    <div class="controls">
+      <label class="switch" for="toggleFlagged">
+        <input type="checkbox" id="toggleFlagged">
+        <span class="switch-label" id="toggleFlaggedLabel">Show flagged values</span>
+      </label>
     </div>
 
     <h2>Kestrel Results</h2>
@@ -79,7 +147,7 @@
       {{ additional_stats | safe }}
     </div>
     {% endif %}
-  </div>
+  </main>
 
   <!-- jQuery -->
   <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
@@ -153,10 +221,16 @@
           // .text() takes a text node, so neither goes through an HTML parse --
           // which is what undid the server's escaping when this was built by
           // concatenating into a markup string and calling .html().
+          // The mark is a glyph and a colour, so on its own it says nothing to a
+          // screen reader and nothing in greyscale beyond the ✓/✖ shape. `role`
+          // plus `aria-label` give it the reason in words; the tooltip stays for
+          // the pointer (#242).
           var isClean = (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "");
           var $mark = $('<span>')
               .attr('data-toggle', 'tooltip')
               .attr('title', originalText)
+              .attr('role', 'img')
+              .attr('aria-label', originalText)
               .css({ 'color': isClean ? 'green' : 'red', 'font-size': '16px' })
               .text(isClean ? '✓' : '✖');
           $flagCell.empty().append($mark);
@@ -189,7 +263,9 @@
       $('#toggleFlagged').change(function() {
         var isChecked = $(this).prop('checked');
         var newLabel = isChecked ? "Hide flagged values" : "Show flagged values";
-        $('label[for="toggleFlagged"]').text(newLabel);
+        // The span, not the label: the label wraps the input, and rewriting its
+        // text would delete the control it names.
+        $('#toggleFlaggedLabel').text(newLabel);
         $('table').DataTable().draw();
       });
     });

@@ -121,9 +121,46 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved once, and the reason is recorded here because a changed fingerprint with
-#: no explanation should be read as the worst case:
+#: It has moved twice, and each reason is recorded here because a changed fingerprint with
+#: no explanation should be read as the worst case.
 #:
+#: Move 2 (#242, task 4 - accessibility)
+#: -------------------------------------
+#: * **Old**: ``9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645``
+#: * **New**: ``9c31e01d5c4fe1792bad4824a1a4e32cb94c4edd325ff53154f5be9970c1a761``
+#:
+#: **Cause: the page skeleton changed; no rendered value did.** The canonical document is
+#: 443 lines and ``[SKELETON]`` starts at line 151. Every hunk of the before/after diff
+#: begins at line 155 or later, so ``[TABLES]``, ``[CHART-VALUES]``, ``[CHART-LABELS]``,
+#: ``[CHART-TOTALS]`` and ``[IMAGES]`` are byte-identical: the three rendered tables, both
+#: donut charts' segment values, labels and centre totals, and the image counts, all
+#: unchanged. Five hunks, all of them markup the reader never reads as data:
+#:
+#: 1. ``<meta name="viewport" content="width=device-width, initial-scale=1">`` - absent
+#:    from both templates, so a 390px phone laid the page out at 980px;
+#: 2. a new stylesheet block: the ``.switch`` treatment (``appearance: none`` on the input
+#:    itself), a ``:focus-visible`` outline, and a ``prefers-reduced-motion`` rule;
+#: 3. ``<div class="container">`` became ``<main class="container">`` - the page had no
+#:    landmark at all;
+#: 4. the flag switch: the Bootstrap ``custom-control-input``/``custom-control-label``
+#:    pair became a ``<label class="switch" for="toggleFlagged">`` wrapping the input and
+#:    a ``<span class="switch-label" id="toggleFlaggedLabel">``. The id exists because the
+#:    switch's handler rewrites that text, and rewriting the ``<label>`` would delete the
+#:    input nested inside it;
+#: 5. the matching ``</div>`` became ``</main>``.
+#:
+#: The `role="img"`/`aria-label` added to the flag mark in ``updateFlagColumn`` does *not*
+#: appear in this diff: ``_skeleton`` replaces every script body with ``<SCRIPT-BODY>``, so
+#: the oracle cannot see it. ``tests/unit/test_template_escaping.py`` is what still holds
+#: that function's two escaping properties.
+#:
+#: **The cohort report's filtering, searching and paging are deliberately untouched.**
+#: Hiding flagged rows is defensible for triage across samples and indefensible for a
+#: single-patient read (#242, precondition P4), which is why only the per-sample report
+#: lost its filter.
+#:
+#: Move 1 (a fixture correction)
+#: -----------------------------
 #: * **Old**: ``d82eb3745e5a8f1f118659d8e5853492ad1b5b7b2b424be11a54e1c79c1c28ee``
 #: * **New**: ``9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645``
 #:
@@ -146,7 +183,7 @@ pytestmark = pytest.mark.unit
 #: **Re-derived, and it did not move, when the two cohort defects were fixed** (the
 #: in-place annotation and the non-deterministic sample order). It was re-derived twice
 #: under `PYTHONHASHSEED=0` and `PYTHONHASHSEED=12345` in separate interpreters and both
-#: produced `9889773a...`, which is the value already recorded above. Each fix was also
+#: produced `9889773a...`, which is move 1's result above. Each fix was also
 #: applied on its own and neither moved it. That is the expected result rather than a
 #: surprise, and it says something worth keeping:
 #:
@@ -171,7 +208,7 @@ pytestmark = pytest.mark.unit
 #: neither. The evidence for that fix is
 #: `test_cohort_inputs.py::test_processes_with_different_hash_seeds_discover_the_same_order`,
 #: which spawns five interpreters under five seeds, and it covers directory inputs only.
-EXPECTED_FINGERPRINT = "9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645"
+EXPECTED_FINGERPRINT = "9c31e01d5c4fe1792bad4824a1a4e32cb94c4edd325ff53154f5be9970c1a761"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")

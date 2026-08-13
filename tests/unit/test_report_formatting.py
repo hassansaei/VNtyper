@@ -195,16 +195,29 @@ def test_select_display_columns_does_not_mutate_its_input() -> None:
 
 # ---------------------------------------------------------------------------
 # Confidence colouring
+#
+# Both literals below gained an underline in #242's accessibility pass, and the
+# two underline styles differ from one another on purpose. Red and orange are the
+# same grey in print, in greyscale and to a reader with a red-green deficiency, and
+# both values were already bold - so the hue was the entire difference between a
+# high-precision and a low-precision call beyond the label itself. The hues are
+# unchanged here; correcting `orange` on white (roughly 2:1) is the contrast work
+# later in the same plan. `test_report_presentation.py` asserts the rule these
+# literals are an instance of.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("value", ["High_Precision", "High_Precision*"])
-def test_high_precision_is_red(value) -> None:
-    assert rf.confidence_html(value) == f'<span style="color:red;font-weight:bold;">{value}</span>'
+def test_high_precision_is_red_and_solid_underlined(value) -> None:
+    assert rf.confidence_html(value) == (
+        f'<span style="color:red;font-weight:bold;text-decoration:underline solid;">{value}</span>'
+    )
 
 
-def test_low_precision_is_orange() -> None:
-    assert rf.confidence_html("Low_Precision") == '<span style="color:orange;font-weight:bold;">Low_Precision</span>'
+def test_low_precision_is_orange_and_dotted_underlined() -> None:
+    assert rf.confidence_html("Low_Precision") == (
+        '<span style="color:orange;font-weight:bold;text-decoration:underline dotted;">Low_Precision</span>'
+    )
 
 
 def test_an_unstyled_confidence_passes_through() -> None:

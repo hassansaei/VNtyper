@@ -170,9 +170,13 @@ def test_the_flag_switch_emphasises_without_removing_anything(
 ) -> None:
     """Ticking "Highlight flagged values" changes styling and nothing else.
 
-    The switch is operated through its ``<label>`` rather than the input: the
-    template hides every bare checkbox so that its CSS-only accordions work, and a
-    label click is how the reader operates it in both passes.
+    The switch is operated through its ``<label>``, which is how a pointer reaches
+    it. It used to be the *only* way: the template hid every bare checkbox so that
+    its CSS-only accordions could work, which left the input itself unreachable by
+    keyboard and absent from the accessibility tree. That is fixed, and the
+    keyboard path is measured in ``test_keyboard_operability.py``; this check is
+    about what the switch does, not how it is reached, so it keeps clicking the
+    label.
     """
     page = open_report(rendered_report, offline=offline)
     _require_online(page, failed_requests, error_responses, offline=offline)

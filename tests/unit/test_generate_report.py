@@ -272,8 +272,16 @@ def test_the_kestrel_display_columns_key_on_the_annotated_motif() -> None:
 
 
 def test_the_confidence_column_is_colour_coded(positive_summary) -> None:
+    """The literal carries an underline since #242's accessibility pass.
+
+    Red and orange are the same grey in print, in greyscale and to a reader with a
+    red-green deficiency, and both confidence values were bold - so the hue was the
+    whole of the difference between a high-precision and a low-precision call. The
+    underline style is the non-colour half of that distinction; the hues themselves
+    are unchanged. See `tests/unit/test_report_presentation.py`.
+    """
     html = render(positive_summary)
-    assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in html
+    assert '<span style="color:red;font-weight:bold;text-decoration:underline solid;">High_Precision</span>' in html
 
 
 def test_a_negative_run_renders_its_placeholder_row(tmp_path) -> None:
@@ -313,7 +321,9 @@ def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -
     assert len(display_frame) == len(matching_frame) == 1
     assert matching_frame.loc[0, "Confidence"] == "High_Precision"
     assert matching_frame.loc[0, "Motif Sequence"] == "<untrusted>"
-    assert display_frame.loc[0, "Confidence"] == '<span style="color:red;font-weight:bold;">High_Precision</span>'
+    assert display_frame.loc[0, "Confidence"] == (
+        '<span style="color:red;font-weight:bold;text-decoration:underline solid;">High_Precision</span>'
+    )
     assert display_frame.loc[0, "Motif Sequence"] == "&lt;untrusted&gt;"
     assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
         (logging.WARNING, "Could not convert 'Depth Score' to numeric: bad depth")
@@ -830,9 +840,14 @@ def test_the_pipeline_log_is_escaped(positive_summary) -> None:
 
 def test_escaping_does_not_neuter_the_status_icons(positive_summary) -> None:
     """The icons are pre-built HTML fragments we construct ourselves. Turning
-    autoescaping on without marking them would print the span markup as text."""
+    autoescaping on without marking them would print the span markup as text.
+
+    The literal gained `role="img"` and a name in #242's accessibility pass: a bare
+    `&#10004;` is announced as its code point or skipped, so the `Status` column
+    read as empty to a screen reader while looking complete on screen.
+    """
     html = render(positive_summary)
-    assert '<span style="color:green;font-weight:bold;">&#10004;</span>' in html
+    assert '<span style="color:green;font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>' in html
     assert "&lt;span style=" not in html
 
 
@@ -845,7 +860,7 @@ def test_escaping_does_not_neuter_the_screening_message(positive_summary) -> Non
 def test_escaping_does_not_neuter_the_results_tables(positive_summary) -> None:
     html = render(positive_summary)
     assert 'id="kestrel_table"' in html
-    assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in html
+    assert '<span style="color:red;font-weight:bold;text-decoration:underline solid;">High_Precision</span>' in html
 
 
 def test_escaping_does_not_neuter_the_igv_script_block(positive_summary) -> None:

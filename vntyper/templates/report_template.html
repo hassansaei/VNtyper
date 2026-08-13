@@ -2,6 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!--
+      Without this a phone lays the page out at 980px and scales it down: a 390px
+      device rendered the 12.8px body text at an effective ~5.1px (#242). Both
+      report templates were missing it.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ report_title_prefix }} — {{ sample_name }}</title>
     <!-- Include Bootstrap CSS for styling -->
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
@@ -84,62 +90,154 @@
             color: #444;
             margin: 0.25em 0 0.75em 0;
         }
-        /* Accordion style */
-        .wrap-collabsible {
+        /*
+          Disclosures are native. This used to be a hidden checkbox, a `<label>`
+          styled to look like a header, and a sibling `<div>` whose `max-height`
+          was animated from 0 - which needed `input[type='checkbox'] {display:
+          none}` to work, an unscoped rule that took all four of the page's
+          interactive inputs out of the focus order and out of the accessibility
+          tree at once (#242). `<details>` is focusable, is announced with its
+          open/closed state, is opened by find-in-page and is opened by printing.
+          None of that was true of the thing it replaces.
+        */
+        details {
             margin-bottom: 1.2rem;
+            border: 1px solid #ccc;
+            border-radius: 7px;
+            background: #fff;
         }
-        input[type='checkbox'] {
-            display: none;
-        }
-        .lbl-toggle {
-            display: block;
+        summary {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            cursor: pointer;
             font-weight: bold;
             font-family: monospace;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             text-transform: uppercase;
-            text-align: left;
-            padding: 1rem;
-            color: black;
             background: #dddddd;
-            cursor: pointer;
-            border-radius: 7px;
-            transition: all 0.25s ease-out;
+            border-radius: 6px;
+            list-style: none;
         }
-        .lbl-toggle:hover {
-            color: blue;
-        }
-        .lbl-toggle::before {
-            content: ' ';
-            display: inline-block;
-            border-top: 5px solid transparent;
-            border-bottom: 5px solid transparent;
-            border-left: 5px solid currentColor;
-            vertical-align: middle;
-            margin-right: .7rem;
-            transform: translateY(-2px);
-            transition: transform .2s ease-out;
-        }
-        .toggle:checked + .lbl-toggle::before {
-            transform: rotate(90deg) translateX(-3px);
-        }
-        .collapsible-content {
-            max-height: 0px;
-            overflow: auto;
-            transition: max-height .25s ease-in-out;
-        }
-        .toggle:checked + .lbl-toggle + .collapsible-content {
-            max-height: 350px;
-        }
-        .toggle:checked + .lbl-toggle {
-            border-bottom-right-radius: 0;
+        details[open] > summary {
             border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
         }
-        .collapsible-content .content-inner {
-            background: rgba(250, 224, 66, .2);
-            border-bottom: 1px solid rgba(250, 224, 66, .45);
-            border-bottom-left-radius: 7px;
-            border-bottom-right-radius: 7px;
-            padding: .5rem 1rem;
+        summary:hover {
+            color: #00248f;
+        }
+        /* The default marker is replaced, not removed: the triangle below is the
+           same affordance drawn where the flex layout can place it. */
+        summary::-webkit-details-marker {
+            display: none;
+        }
+        summary::before {
+            content: "";
+            width: 0;
+            height: 0;
+            border: 5px solid transparent;
+            border-left-color: currentColor;
+            transition: transform .2s ease-out;
+            flex: none;
+        }
+        details[open] > summary::before {
+            transform: rotate(90deg) translateX(-2px);
+        }
+        .details-body {
+            padding: .5rem 1rem 1rem;
+            max-height: 350px;
+            overflow: auto;
+        }
+        /*
+          The switches. The input itself is the switch - `appearance: none` and a
+          box, rather than a hidden input with a `<label>` drawing a fake one from
+          its pseudo-elements. That is what makes it focusable, announced, and the
+          same control online and offline: it no longer depends on Bootstrap's
+          stylesheet having reached the reader.
+        */
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .5rem 1.5rem;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .switch {
+            display: inline-flex;
+            align-items: center;
+            gap: .5rem;
+            cursor: pointer;
+            margin-bottom: 0;
+        }
+        .switch input {
+            appearance: none;
+            -webkit-appearance: none;
+            margin: 0;
+            width: 2.25rem;
+            height: 1.25rem;
+            border: 1px solid #767676;
+            border-radius: 999px;
+            background: #eeeeee;
+            position: relative;
+            cursor: pointer;
+            flex: none;
+        }
+        .switch input::after {
+            content: "";
+            position: absolute;
+            inset: 2px auto 2px 2px;
+            width: 0.875rem;
+            border-radius: 999px;
+            background: #595959;
+            transition: transform .12s ease, background .12s ease;
+        }
+        .switch input:checked {
+            background: #d7e9ec;
+            border-color: #0f5d6b;
+        }
+        .switch input:checked::after {
+            transform: translateX(1rem);
+            background: #0f5d6b;
+        }
+        .switch-label {
+            font-size: 0.95rem;
+        }
+        /* Focus that cannot be seen is focus that cannot be used. Nothing in this
+           file styled it before, and on a `display: none` input there was no box
+           for the engine's default ring to be drawn around either. */
+        .switch input:focus-visible,
+        summary:focus-visible,
+        button:focus-visible,
+        a:focus-visible {
+            outline: 3px solid #0f5d6b;
+            outline-offset: 2px;
+        }
+        /* Per-row control of the IGV variant table. `<tr onclick>` had no keyboard
+           path at all; a real button brings Enter, Space and a focus ring free. */
+        .variant-select {
+            font: inherit;
+            padding: .1rem .6rem;
+            border: 1px solid #767676;
+            border-radius: 4px;
+            background: #ffffff;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #variant_table tr[aria-selected="true"] .variant-select {
+            font-weight: bold;
+        }
+        /* A reader who asked their operating system for less motion gets none.
+           The disclosure triangle and the switch knob are the only things that
+           move, and neither carries information. */
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation: none !important;
+                transition: none !important;
+                scroll-behavior: auto !important;
+            }
         }
         .summary-box {
             border: 2px solid #666;
@@ -177,7 +275,10 @@
     <script src="https://cdn.jsdelivr.net/npm/igv@3.0.2/dist/igv.min.js"></script>
 </head>
 <body>
-    <div class="container">
+    <!-- The whole report is the main landmark: there is no navigation, no aside
+         and no footer, so a screen reader user skipping to the content should
+         land on the report itself. There was no landmark at all before (#242). -->
+    <main class="container">
         <!--
           The report says who and what it is, in the browser tab, on screen and on
           the first printed page. `<title>` and `<h1>` used to be the constant
@@ -238,8 +339,14 @@
                 {% if alignment_pipeline %}
                     <p><strong>Alignment pipeline:</strong> {{ alignment_pipeline }}</p>
                 {% endif %}
+                {#
+                  The one genuinely urgent thing the report says. It was a red
+                  paragraph, so a reader who was not looking at it - or who does
+                  not see the red - was told nothing. `role="alert"` puts it in
+                  front of them, and "Warning:" carries the same meaning in words.
+                #}
                 {% if header_warning %}
-                    <p style="color: red;"><strong>Warning:</strong> {{ header_warning }}</p>
+                    <p style="color: red;" role="alert"><strong>Warning:</strong> {{ header_warning }}</p>
                 {% endif %}
             </div>
         {% endif %}
@@ -254,16 +361,23 @@
           switch now changes emphasis only, and there is no code path in this file
           that can hide a results row. (The cohort report keeps its filter: hiding
           flagged rows is defensible for triage across samples.)
+
+          Both switches were `display: none` inputs with a Bootstrap `<label>`
+          drawing the control from its pseudo-elements, so neither could be
+          reached by keyboard and neither was in the accessibility tree. The input
+          is now the control. The `for` attribute is kept even though the label
+          wraps it: an explicit association is what a screen reader reads the name
+          from, and it does not depend on the nesting surviving a future edit.
         -->
-        <div class="d-flex">
-            <div class="custom-control custom-switch text-left mb-3 mr-4">
-                <input type="checkbox" class="custom-control-input" id="highlightFlagged">
-                <label class="custom-control-label" for="highlightFlagged">Highlight flagged values</label>
-            </div>
-            <div class="custom-control custom-switch text-left mb-3">
-                <input type="checkbox" class="custom-control-input" id="toggleDetailedCoverage">
-                <label class="custom-control-label" for="toggleDetailedCoverage">Show detailed coverage</label>
-            </div>
+        <div class="controls">
+            <label class="switch" for="highlightFlagged">
+                <input type="checkbox" id="highlightFlagged">
+                <span class="switch-label">Highlight flagged values</span>
+            </label>
+            <label class="switch" for="toggleDetailedCoverage">
+                <input type="checkbox" id="toggleDetailedCoverage">
+                <span class="switch-label">Show detailed coverage</span>
+            </label>
         </div>
 
         <!-- Coverage Section -->
@@ -460,29 +574,35 @@
 
         <h2>IGV Alignment Visualization</h2>
         <div id="container" style="display: flex; flex-direction: column">
-            <div id="tableContainer" class="wrap-collabsible">
-                <input id="collapsible" class="toggle" type="checkbox" checked>
-                <label for="collapsible" class="lbl-toggle">Variants</label>
-                <div class="collapsible-content">
+            {#
+              `aria-labelledby` points at the summary, so the disclosure's group
+              takes its name from the words already on screen and cannot drift from
+              them. Chromium does not derive a group name from `<summary>` on its
+              own, and an unnamed group is one a screen-reader user cannot tell
+              from any other region of the page.
+            #}
+            <details id="variantsDisclosure" aria-labelledby="variantsToggle" open>
+                <summary id="variantsToggle">Variants</summary>
+                <div class="details-body">
                     <div id="tableSelectorDiv"></div>
                 </div>
-            </div>
+            </details>
             <div id="igvContainer">
                 <div id="igvDiv"></div>
             </div>
         </div>
 
         <h2>Pipeline Log</h2>
-        <div class="wrap-collabsible">
-            <input id="logToggle" class="toggle" type="checkbox">
-            <label for="logToggle" class="lbl-toggle">Show/Hide Log</label>
-            <div class="collapsible-content">
-                <div class="content-inner">
-                    <pre>{{ log_content }}</pre>
-                </div>
+        {# "Show/Hide Log" was an instruction to the reader about a control that
+           did not announce itself. `<details>` announces its own state, so the
+           summary is now the name of the thing rather than the verb. #}
+        <details id="logDisclosure" aria-labelledby="logToggle">
+            <summary id="logToggle">Pipeline log</summary>
+            <div class="details-body">
+                <pre>{{ log_content }}</pre>
             </div>
-        </div>
-    </div>
+        </details>
+    </main>
 
     <!-- jQuery and DataTables scripts -->
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
@@ -492,24 +612,35 @@
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
 
     <!--
-      The flag-highlight switch, in its own script element and deliberately not
-      jQuery. Both matter: a reader with no network still gets the switch, because
-      the flag cells it styles are already in the file, and a `$` that never loaded
-      throws at the top of the block below - which would take every statement after
-      it down with it, this handler included.
+      Both switches, in their own script element and deliberately not jQuery. Both
+      facts matter: a reader with no network still gets them, because everything
+      they act on is already in the file, and a `$` that never loaded throws at the
+      top of whichever block it is in - which takes every statement after it in
+      that block down with it. "Show detailed coverage" was in the jQuery block and
+      was therefore a control that focused, ticked and did nothing for a reader
+      whose browser could not reach the CDN.
     -->
     <script>
         document.addEventListener("DOMContentLoaded", function () {
             var highlight = document.getElementById("highlightFlagged");
-            if (!highlight) {
-                return;
+            if (highlight) {
+                highlight.addEventListener("change", function () {
+                    var tables = document.querySelectorAll(".table-container table");
+                    for (var i = 0; i < tables.length; i++) {
+                        tables[i].classList.toggle("highlight-flagged", highlight.checked);
+                    }
+                });
             }
-            highlight.addEventListener("change", function () {
-                var tables = document.querySelectorAll(".table-container table");
-                for (var i = 0; i < tables.length; i++) {
-                    tables[i].classList.toggle("highlight-flagged", highlight.checked);
-                }
-            });
+
+            var detailed = document.getElementById("toggleDetailedCoverage");
+            var basicView = document.getElementById("basicCoverageView");
+            var detailedView = document.getElementById("detailedCoverageView");
+            if (detailed && basicView && detailedView) {
+                detailed.addEventListener("change", function () {
+                    basicView.style.display = detailed.checked ? "none" : "";
+                    detailedView.style.display = detailed.checked ? "" : "none";
+                });
+            }
         });
     </script>
 
@@ -549,25 +680,29 @@
                     { "width": "150px", "targets": "_all" }
                 ]
             });
-
-            // Handle toggling between basic and detailed coverage views
-            $('#toggleDetailedCoverage').change(function() {
-                if($(this).prop('checked')) {
-                    $('#basicCoverageView').hide();
-                    $('#detailedCoverageView').show();
-                } else {
-                    $('#basicCoverageView').show();
-                    $('#detailedCoverageView').hide();
-                }
-            });
         });
+    </script>
 
+    <!--
+      The IGV variant table, in a third script element and with no jQuery in it.
+      It used to sit underneath the block above, so a `$` that never resolved threw
+      before any of it ran: offline, the variant table was never built and the "no
+      alignment view" message was never written either. Splitting the block is what
+      makes the table a property of the file rather than of the reader's network.
+    -->
+    <script>
         const tableJson = {{ table_json | safe }};
         const sessionDictionary = {{ session_dictionary | safe }};
 
         let igvBrowser;
 
         document.addEventListener("DOMContentLoaded", function () {
+            // The variant list is evidence this file already carries, so it is
+            // built whether or not igv.js loads. It used to be built inside
+            // `igv.createBrowser(...).then(...)`, which meant a reader with no
+            // network got no variant list either - the same "you see this only if
+            // a CDN answered" shape as the rest of #242.
+            initTable();
             // No IGV report was generated for this sample: tableJson and
             // sessionDictionary fall back to empty literals, and igv.createBrowser
             // would throw on an undefined sessionURL and abort the rest of the
@@ -581,6 +716,14 @@
         });
 
         function initIGV() {
+            // igv.js comes from a CDN. When it did not arrive, say so instead of
+            // throwing: the variant table above stands on its own.
+            if (typeof igv === "undefined") {
+                document.getElementById("igvContainer").innerHTML =
+                    "<p><em>The alignment viewer could not be loaded, so it is not shown. " +
+                    "The variant table above is complete without it.</em></p>";
+                return;
+            }
             const igvDiv = document.getElementById("igvDiv");
             const options = {
                 sessionURL: sessionDictionary["0"],
@@ -591,20 +734,96 @@
 
             igv.createBrowser(igvDiv, options).then(function (browser) {
                 igvBrowser = browser;
-                initTable();
             });
         }
 
+        // What the per-row control says. The word is the control's visible text and
+        // the first word of its accessible name, so which variant is showing is
+        // carried by text and not by the highlight colour alone.
+        const VARIANT_SELECT_LABEL = "Show";
+        const VARIANT_SELECTED_LABEL = "Showing";
+
+        function describeVariantRow(headers, rowData) {
+            // Column 0 is igv-reports' unique id, which is plumbing rather than
+            // evidence; the rest names the variant the control loads.
+            const parts = [];
+            for (let j = 1; j < headers.length; j++) {
+                parts.push(headers[j] + " " + rowData[j]);
+            }
+            return parts.join(", ");
+        }
+
+        function setVariantButtonState(button, isSelected) {
+            if (!button) {
+                return;
+            }
+            const verb = isSelected ? VARIANT_SELECTED_LABEL : VARIANT_SELECT_LABEL;
+            button.textContent = verb;
+            // The visible word starts the accessible name (WCAG 2.5.3), and the
+            // variant follows it so a screen reader announces which row this is.
+            button.setAttribute("aria-label", verb + " in the alignment view: " + button.dataset.variant);
+        }
+
+        function selectVariantRow(selected) {
+            const all = document.querySelectorAll("#variant_table tbody tr");
+            for (let i = 0; i < all.length; i++) {
+                all[i].classList.remove("selected");
+                all[i].setAttribute("aria-selected", "false");
+                setVariantButtonState(all[i].querySelector(".variant-select"), false);
+            }
+            selected.classList.add("selected");
+            selected.setAttribute("aria-selected", "true");
+            setVariantButtonState(selected.querySelector(".variant-select"), true);
+
+            const session = sessionDictionary[selected.id.substring(4)];
+            // The alignment view is optional and the variant list is not, so the
+            // selection moves whether or not there is a browser to load into.
+            if (igvBrowser && session) {
+                igvBrowser.loadSession({ url: session });
+            }
+        }
+
+        function moveVariantFocus(button, offset) {
+            // `role="grid"` promises arrow-key movement between rows. Every control
+            // stays a Tab stop as well, deliberately: a roving tabindex would make
+            // all but one of them unreachable by Tab alone, which is the defect
+            // this change exists to remove.
+            const buttons = document.querySelectorAll("#variant_table .variant-select");
+            for (let i = 0; i < buttons.length; i++) {
+                if (buttons[i] === button) {
+                    buttons[(i + offset + buttons.length) % buttons.length].focus();
+                    return;
+                }
+            }
+        }
+
         function initTable() {
+            const headers = tableJson.headers || [];
+            const variants = tableJson.rows || [];
+            const selectorDiv = document.getElementById("tableSelectorDiv");
+            if (!variants.length) {
+                selectorDiv.innerHTML =
+                    "<p><em>This run produced no IGV variant table.</em></p>";
+                return;
+            }
+
             const table = document.createElement("table");
             table.id = "variant_table";
+            // `aria-selected` is only meaningful on a row inside a grid, and the
+            // grid is what makes "which variant am I on" a fact in the
+            // accessibility tree rather than a background colour.
+            table.setAttribute("role", "grid");
+            table.setAttribute("aria-label", "Variants; choose one to show it in the alignment view");
             table.style.width = "100%";
-            document.getElementById("tableSelectorDiv").appendChild(table);
+            selectorDiv.appendChild(table);
 
             const thead = document.createElement('thead');
             table.appendChild(thead);
             const headerRow = thead.insertRow(0);
-            const headers = tableJson.headers;
+            const selectHeader = document.createElement("th");
+            selectHeader.scope = "col";
+            selectHeader.textContent = "Alignment";
+            headerRow.appendChild(selectHeader);
             // #216: tableJson is igv-reports' variant table, built from VNtyper's
             // own BED and VCF -- its values (e.g. the motif record name) are
             // sample-derived, so they are written as text, never parsed as markup.
@@ -623,28 +842,41 @@
 
             const tbody = document.createElement('tbody');
             table.appendChild(tbody);
-            const tableRows = tableJson.rows;
-            for (let i = 0; i < tableRows.length; i++) {
-                const rowData = tableRows[i];
+            for (let i = 0; i < variants.length; i++) {
+                const rowData = variants[i];
                 const unique_id = rowData[0];
                 const row = document.createElement("tr");
                 row.id = "row_" + unique_id;
+                row.setAttribute("role", "row");
+                row.setAttribute("aria-selected", "false");
                 tbody.appendChild(row);
 
-                if (i === 0) row.classList.add("selected");
-
-                row.onclick = function (event) {
-                    const list = document.getElementById("variant_table").getElementsByTagName("tr");
-                    for (let i = 0; i < list.length; i++) {
-                        list[i].classList.remove("selected");
+                // The control, not the row. Assigning a click handler to the row
+                // gave it no keyboard path, no accessible name and no state, and
+                // it read the row id off `event.target.parentElement` - which is
+                // the row only when the click landed on a cell, so a click on the
+                // row's own padding threw. A button has none of those problems.
+                const selectCell = document.createElement("td");
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "variant-select";
+                button.id = "variantSelect_" + unique_id;
+                button.dataset.variant = describeVariantRow(headers, rowData);
+                setVariantButtonState(button, false);
+                button.addEventListener("click", function () {
+                    selectVariantRow(row);
+                });
+                button.addEventListener("keydown", function (event) {
+                    if (event.key === "ArrowDown") {
+                        event.preventDefault();
+                        moveVariantFocus(button, 1);
+                    } else if (event.key === "ArrowUp") {
+                        event.preventDefault();
+                        moveVariantFocus(button, -1);
                     }
-                    const rowID = event.target.parentElement.id;
-                    const row = document.getElementById(rowID);
-                    row.classList.add("selected");
-                    const uniqueId = rowID.substring(4);
-                    const session = sessionDictionary[uniqueId];
-                    igvBrowser.loadSession({ url: session });
-                };
+                });
+                selectCell.appendChild(button);
+                row.appendChild(selectCell);
 
                 for (let j = 1; j < headers.length; j++) {
                     const cell = document.createElement("td");
@@ -652,6 +884,10 @@
                     cell.textContent = rowData[j];
                 }
             }
+
+            // The first variant is what the alignment view opens on, so it is the
+            // one the table reports as selected.
+            selectVariantRow(tbody.rows[0]);
         }
     </script>
 </body>

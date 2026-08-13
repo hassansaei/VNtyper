@@ -61,10 +61,19 @@ from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS, COVERAGE_C
 logger = logging.getLogger(__name__)
 
 #: Red warning triangle, shown when a metric fails its threshold.
-WARNING_ICON = '<span style="color:red;font-weight:bold;">&#9888;</span>'
+#:
+#: Both glyphs carry an accessible name (#242). A bare ``&#9888;`` in a table cell
+#: is announced as its code point or skipped entirely, so the ``Status`` column of
+#: the fastp table read as empty to a screen reader while looking complete on
+#: screen. ``role="img"`` is what makes the browser use ``aria-label`` as the
+#: element's name instead of its text. The names are deliberately about the mark
+#: rather than about the direction of the comparison: ``OK_ICON`` is also what a
+#: metric that was never measured renders as (:data:`MISSING_AS_OK`), so a name
+#: like "within the cutoff" would be false there.
+WARNING_ICON = '<span style="color:red;font-weight:bold;" role="img" aria-label="Warning">&#9888;</span>'
 
 #: Green tick, shown when a metric passes its threshold.
-OK_ICON = '<span style="color:green;font-weight:bold;">&#10004;</span>'
+OK_ICON = '<span style="color:green;font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>'
 
 #: What a metric with no value at all renders as. The coverage rows show a tick
 #: (the report has always treated "not calculated" as "not a problem"); the fastp
@@ -196,10 +205,21 @@ FLAG_FLAGGED_CLASS = "flag-flagged"
 FLAG_CLEAN_CLASS = "flag-clean"
 
 #: Inline style per ``Confidence`` value. A value not listed renders unstyled.
+#:
+#: Each hue is paired with an underline style, so the distinction between a
+#: high-precision and a low-precision call is not carried by colour alone (#242):
+#: red and orange are the same grey in print, in greyscale and to a reader with a
+#: red-green deficiency, and both values were bold, so the hue was the whole of the
+#: difference beyond the label. The label itself is text either way.
+#:
+#: The hues are unchanged here on purpose. ``orange`` on white is roughly 2:1, well
+#: under the 4.5:1 a body-text colour needs, and correcting that is the contrast
+#: work later in this plan rather than something to fold into an accessibility
+#: change that is about keyboard operation.
 CONFIDENCE_STYLES: dict[str, str] = {
-    "Low_Precision": "color:orange;font-weight:bold;",
-    "High_Precision": "color:red;font-weight:bold;",
-    "High_Precision*": "color:red;font-weight:bold;",
+    "Low_Precision": "color:orange;font-weight:bold;text-decoration:underline dotted;",
+    "High_Precision": "color:red;font-weight:bold;text-decoration:underline solid;",
+    "High_Precision*": "color:red;font-weight:bold;text-decoration:underline solid;",
 }
 
 #: How each coverage field is coerced for display. The keys must be exactly
