@@ -703,9 +703,16 @@
 
         <h2>Kestrel Identified Variants</h2>
         {#
-          Three states, and they are three different facts (#242). A table of calls;
-          a run that genotyped and called nothing; and a summary with no Kestrel step
-          in it at all, which `vntyper report` can legitimately be handed.
+          Four states, and they are four different facts (#242). A table of calls; a
+          run that genotyped and called nothing; a run whose Kestrel step is recorded
+          but produced no readable result (#212); and a summary with no Kestrel step in
+          it at all, which `vntyper report` can legitimately be handed.
+
+          The unreadable case is checked before the negative and says in words that it
+          is not one. A stage that failed has established nothing about the sample, so
+          a report that renders it as "no variant detected" states a negative the run
+          never reached - which is the defect this whole issue exists to remove, in the
+          one place a reader would never think to doubt it.
 
           `escaped_table_html` returns "" for an empty frame, and that empty string is
           what this branches on - `to_html` on one produces a headerless, bodyless
@@ -727,7 +734,10 @@
             <div class="table-container">
                 {{ kestrel_highlight | safe }}
             </div>
-        {% elif kestrel_available %}
+        {% elif kestrel_result_unreadable %}
+            <p class="empty-state">Kestrel genotyping ran, but its result file is missing or could not be
+                read. No Kestrel result is shown, and this is not a negative.</p>
+        {% elif kestrel_step_recorded %}
             <p class="empty-state">No variant detected by Kestrel in this sample.</p>
         {% else %}
             <p class="empty-state">Kestrel genotyping was not performed for this sample.</p>

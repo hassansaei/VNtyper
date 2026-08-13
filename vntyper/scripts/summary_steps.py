@@ -15,6 +15,14 @@ Note that ``parsed_result`` is not uniformly shaped: tsv/csv steps produce
 ``{"comments": [...], "data": [...]}`` while json steps (BAM Header Parsing)
 produce the raw object. ``get_step_data`` returns ``[]`` for the latter; use
 ``get_step_result`` when you want the whole object.
+
+A step has **three** states and not two, which is what :func:`get_step_state`
+exists to say. "Recorded" is not "produced a readable result": ``record_step``
+writes the record either way, and when the result file is absent it swallows the
+``FileNotFoundError`` into ``md5sum=None`` and lets ``parse_tsv`` turn the failure
+into a comment on an empty ``data`` list -- which is exactly what a stage that
+legitimately found nothing produces (#212). Every consumer that asks only whether
+the step is present therefore renders a failed stage as a negative result.
 """
 
 import logging
@@ -37,6 +45,59 @@ STEP_NAMES: Final[frozenset[str]] = frozenset(
         STEP_CROSS_MATCH,
     }
 )
+
+
+#: The step is not in the summary at all: the stage was never asked to run.
+STEP_ABSENT: Final[str] = "absent"
+
+#: The step is recorded and its result was read. An empty result is a result: a
+#: ``kestrel_result.tsv`` carrying a header and no rows is what a run that genotyped
+#: and called nothing writes, and it is read perfectly well.
+STEP_READ: Final[str] = "read"
+
+#: The step is recorded and its result could not be read. Distinct from both of the
+#: above and reportable as neither: the stage ran, so it was not "not performed", and
+#: nothing was read, so nothing about the sample was established.
+STEP_UNREADABLE: Final[str] = "unreadable"
+
+
+def get_step_state(summary: dict[str, Any], step_name: str) -> str:
+    """Say which of the three states a step is in.
+
+    The signals are structural, and each is a shape ``summary.record_step`` writes:
+
+    * ``result_file_missing`` -- added when the path the stage was supposed to have
+      written does not exist (#212). Until now nothing read it;
+    * a ``parsed_result`` that is not a mapping -- ``record_step`` initialises the key
+      to ``None`` and only parsing replaces it, so ``None`` (or the key's absence in a
+      hand-built summary) means no result was parsed at all;
+    * a ``parsed_result`` carrying an ``error`` key -- ``record_step``'s parse-failure
+      and unsupported-file-type shapes.
+
+    ``parse_tsv``'s own failure path is deliberately **not** matched: it records the
+    failure as a *comment* on an otherwise ordinary result, and recognising it would
+    mean string-matching "Error parsing TSV file" against text a legitimate comment
+    could carry. The case that produces it is the missing file, which the first signal
+    already covers.
+
+    Args:
+        summary: A parsed ``pipeline_summary.json`` mapping.
+        step_name: One of the ``STEP_*`` step-name constants.
+
+    Returns:
+        str: :data:`STEP_ABSENT`, :data:`STEP_UNREADABLE` or :data:`STEP_READ`.
+    """
+    step = get_step(summary, step_name)
+    if step is None:
+        return STEP_ABSENT
+    if step.get("result_file_missing"):
+        logger.warning("Step %r recorded a missing result file; its result is not a negative.", step_name)
+        return STEP_UNREADABLE
+    result = step.get("parsed_result")
+    if not isinstance(result, dict) or "error" in result:
+        logger.warning("Step %r recorded no readable result; its result is not a negative.", step_name)
+        return STEP_UNREADABLE
+    return STEP_READ
 
 
 def get_step(summary: dict[str, Any], step_name: str) -> dict[str, Any] | None:

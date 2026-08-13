@@ -16,6 +16,7 @@ IGV generation is never triggered -- ``bed_file`` is left unset, so
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -399,28 +400,132 @@ def test_an_absent_kestrel_step_does_not_emit_a_zero_column_table(tmp_path) -> N
     assert "Kestrel genotyping was not performed" in visible_text(html)
 
 
-def test_the_two_kestrel_empty_states_do_not_read_alike(tmp_path) -> None:
-    """ "Kestrel ran and called nothing" and "Kestrel did not run" are different facts.
+#: What ``record_step`` writes when a stage's result file is absent (#212). Built by
+#: calling the real recorder rather than by hand: the flag is the only structural
+#: evidence that "the step produced nothing" is not "the step found nothing", and a
+#: hand-written imitation of it would let the writer change shape without this noticing.
+_STEP_START = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).replace(tzinfo=None)
+_STEP_END = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc).replace(tzinfo=None)
+
+
+def unreadable_kestrel_step(missing_result_file: Path) -> dict:
+    """Record a Kestrel step whose result file does not exist, the way a run would.
+
+    Args:
+        missing_result_file: A path that is not there.
+
+    Returns:
+        dict: The step mapping ``record_step`` produced.
+    """
+    from vntyper.scripts.summary import record_step
+
+    summary: dict = {"steps": []}
+    record_step(
+        summary,
+        summary_steps.STEP_KESTREL,
+        str(missing_result_file),
+        "tsv",
+        "java -jar kestrel.jar",
+        _STEP_START,
+        _STEP_END,
+    )
+    return summary["steps"][0]
+
+
+def test_a_kestrel_result_file_that_is_missing_is_not_reported_as_a_negative(tmp_path) -> None:
+    """#212's other half, closed on the report side.
+
+    ``record_step`` flags the step ``result_file_missing`` because ``md5sum`` swallows
+    the ``FileNotFoundError`` and ``parse_tsv`` turns it into a comment and an empty
+    ``data`` list - which is exactly what a run that legitimately found nothing
+    produces. Nothing read that flag, so the report rendered the two identically; and
+    once the empty state was authored, the failure rendered as the *sentence* "No
+    variant detected by Kestrel in this sample."
+
+    A report that states a negative the run never established is the defect this whole
+    issue exists to remove, so the third state is rendered as its own.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        unreadable_kestrel_step(tmp_path / "kestrel" / "kestrel_result.tsv"),
+        input_files={"bam": "NEG1.bam"},
+    )
+
+    text = visible_text(render(tmp_path))
+
+    assert "No variant detected by Kestrel" not in text, "a step that produced nothing is reported as a negative"
+    assert "Kestrel genotyping was not performed" not in text, "the step did run; saying otherwise is a second claim"
+    assert "result file is missing or could not be read" in text
+    assert "this is not a negative" in text
+
+
+@pytest.mark.parametrize(
+    ("parsed_result", "case"),
+    [
+        (None, "record_step's initial value, left in place when parsing never ran"),
+        ({"error": "Error parsing file: boom"}, "record_step's parse-failure shape"),
+        ({"error": "Unsupported file type for result parsing: bed"}, "record_step's unsupported-type shape"),
+    ],
+    ids=["null", "parse-error", "unsupported-type"],
+)
+def test_a_kestrel_step_that_could_not_be_read_is_not_reported_as_a_negative(
+    tmp_path, parsed_result, case: str
+) -> None:
+    """Every shape ``record_step`` can leave behind when it did not get a result.
+
+    The missing-file flag is the common one; these are the others, and each is
+    recognised structurally rather than by the wording of a message.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        {"step": summary_steps.STEP_KESTREL, "parsed_result": parsed_result},
+    )
+
+    text = visible_text(render(tmp_path))
+
+    assert "No variant detected by Kestrel" not in text, f"{case} is reported as a negative"
+    assert "result file is missing or could not be read" in text
+
+
+def test_the_three_kestrel_states_do_not_read_alike(tmp_path) -> None:
+    """Ran and called nothing, did not run, could not be read: three facts, three states.
 
     This is the same distinction #223 drew for an unreadable derived VCF and the one
     ``screening_summary.NOT_PERFORMED`` draws for adVNTR: a stage that was never asked
-    to run has said nothing, and a report that renders it as a negative is asserting
-    something the run never established.
+    to run has said nothing, a stage whose result could not be read has said nothing
+    either, and a report that renders either as a negative is asserting something the
+    run never established.
+
+    Each sentence is checked against *both* of the others, so collapsing any two of the
+    three back into one fails here rather than passing quietly.
     """
-    ran = tmp_path / "ran"
-    absent = tmp_path / "absent"
-    ran.mkdir()
-    absent.mkdir()
-    negative_summary(ran)
-    write_summary(absent, tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]))
+    states = {}
+    for name in ("ran", "absent", "unreadable"):
+        directory = tmp_path / name
+        directory.mkdir()
+        states[name] = directory
+    negative_summary(states["ran"])
+    write_summary(states["absent"], tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]))
+    write_summary(
+        states["unreadable"],
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        unreadable_kestrel_step(tmp_path / "gone.tsv"),
+    )
 
-    ran_text = visible_text(render(ran))
-    absent_text = visible_text(render(absent))
+    sentences = {
+        "ran": "No variant detected by Kestrel",
+        "absent": "Kestrel genotyping was not performed",
+        "unreadable": "result file is missing or could not be read",
+    }
+    rendered = {name: visible_text(render(directory)) for name, directory in states.items()}
 
-    assert "No variant detected by Kestrel" in ran_text
-    assert "Kestrel genotyping was not performed" not in ran_text
-    assert "Kestrel genotyping was not performed" in absent_text
-    assert "No variant detected by Kestrel" not in absent_text
+    for name, text in rendered.items():
+        assert sentences[name] in text, f"the {name} state does not say so"
+        for other, sentence in sentences.items():
+            if other != name:
+                assert sentence not in text, f"the {name} state also reads as the {other} state"
 
 
 def test_suppressing_the_placeholder_leaves_the_screening_state_alone(tmp_path) -> None:

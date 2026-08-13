@@ -76,14 +76,17 @@ from vntyper.scripts.screening_summary import build_screening_summary, load_repo
 # records. A typo does not fail - it silently drops a report section (AGENTS.md
 # trap 5), so they are named, never spelled out.
 from vntyper.scripts.summary_steps import (
+    STEP_ABSENT,
     STEP_ADVNTR,
     STEP_BAM_HEADER,
     STEP_COVERAGE,
     STEP_CROSS_MATCH,
     STEP_KESTREL,
+    STEP_UNREADABLE,
     get_step,
     get_step_data,
     get_step_result,
+    get_step_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -560,6 +563,13 @@ def generate_summary_report(
         percent_vntr_uncovered_threshold,
     )
 
+    # Three states, not two. "Recorded" is not "produced a readable result": when
+    # `kestrel_result.tsv` is absent, `record_step` flags the step `result_file_missing`
+    # and still records it with an empty `data` list (#212) - the same shape a run that
+    # genotyped and called nothing produces. Asking only whether the step is present
+    # therefore renders a failed stage as a negative, which is a claim the run never
+    # established. This is the first consumer of that flag.
+    kestrel_state = get_step_state(pipeline_summary, STEP_KESTREL)
     kestrel_df, kestrel_df_raw = build_kestrel_frames(get_step_data(pipeline_summary, STEP_KESTREL))
 
     advntr_available = get_step(pipeline_summary, STEP_ADVNTR) is not None
@@ -687,11 +697,17 @@ def generate_summary_report(
 
     context = {
         "kestrel_highlight": kestrel_html,
-        # Whether the step ran at all, which is not the same fact as whether it found
-        # anything: `vntyper report` renders a supplied summary (#207) that need not
-        # carry the step, and a report that renders "did not run" as "found nothing"
-        # asserts something the run never established.
-        "kestrel_available": get_step(pipeline_summary, STEP_KESTREL) is not None,
+        # The two facts the empty states branch on, both derived from the computed
+        # state rather than from the shape of the data - which is what conflated them.
+        # `vntyper report` renders a supplied summary (#207) that need not carry the
+        # step at all, and a run whose Kestrel stage failed carries one that produced
+        # nothing; rendering either as "found nothing" asserts something the run never
+        # established. (adVNTR still asks only whether its step is recorded. Its
+        # section already words the absent case as a disjunction rather than as a
+        # negative, so the same conflation there is not the same defect - but it is the
+        # same shape, and it is worth closing separately.)
+        "kestrel_step_recorded": kestrel_state != STEP_ABSENT,
+        "kestrel_result_unreadable": kestrel_state == STEP_UNREADABLE,
         # The visible/total statement beside each table, counted here from the frame.
         # DataTables' own "Showing 1 to 3 of 3 entries" footer is switched off: it is
         # a second count that contradicts this one whenever a CDN fails (#242). It is
