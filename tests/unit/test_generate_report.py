@@ -967,3 +967,265 @@ def test_the_same_summary_recorded_by_this_version_is_taken_at_face_value(tmp_pa
     html = render(tmp_path)
 
     assert _coverage_qc_cell(html) == "PASS", "a current summary's mean is already region-wide"
+
+
+# ---------------------------------------------------------------------------
+# No per-sample result row is ever hidden - issue #242
+# ---------------------------------------------------------------------------
+
+PER_SAMPLE_TEMPLATE = TEMPLATE_DIR / "report_template.html"
+
+#: Constructs that take a row out of the reader's view. Deliberately shape-based
+#: rather than name-based: banning the literal `toggleFlagged` would be satisfied by
+#: renaming it. ``.remove(`` is matched only with empty parentheses, so
+#: ``classList.remove("selected")`` - which removes a class, not an element - does not
+#: register.
+_ROW_HIDING_VERB = re.compile(
+    r"""
+      removeChild\s*\(
+    | \.remove\s*\(\s*\)
+    | \.detach\s*\(
+    | \.hide\s*\(
+    | \.filter\s*\(
+    | style\.display\s*=\s*['"]\s*none
+    | classList\.add\s*\(\s*['"](?:d-none|hidden|invisible)
+    | setAttribute\s*\(\s*['"]hidden
+    | \.hidden\s*=\s*true
+    """,
+    re.VERBOSE,
+)
+
+#: Words that mean the surrounding statement is talking about a table row. A verb
+#: from the list above is only an offence when it is applied to one of these.
+_ROW_SUBJECT = re.compile(r"\b(?:tr|nTr|aoData|row|rows|tbody|dataIndex)\b", re.IGNORECASE)
+
+#: A CSS declaration block that makes its subject unreadable.
+_CSS_HIDES = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden")
+
+#: ``tr`` as an element selector - not as part of ``.tr-thing`` or ``#tr``.
+_CSS_ROW_SELECTOR = re.compile(r"(?<![\w.#-])tr(?![\w-])")
+
+
+def _style_blocks(source: str) -> list[str]:
+    """Return the contents of every ``<style>`` element."""
+    return re.findall(r"<style[^>]*>(.*?)</style>", source, re.DOTALL)
+
+
+def test_no_per_sample_result_row_enters_a_hiding_path() -> None:
+    """No construct in the per-sample template can take a results row off the page.
+
+    The defect issue #242 is named after is not that a flag is styled badly; it is
+    that the row the screening summary narrates is *removed from the DOM* by a
+    client-side DataTables predicate before the reader sees the table. This is the
+    invariant that stops it coming back under another name.
+
+    **What this can see.** Four shapes, over the template source text: DataTables'
+    ``ext.search`` row-visibility hook; its ``paging`` and ``searching`` options,
+    which hide rows just as effectively; a JavaScript statement pairing a removal or
+    hiding verb with a word meaning "row"; and a CSS rule that hides ``tr``.
+
+    **What this cannot see.** It is a tripwire, not a behavioural test - the unit
+    tier has no JavaScript engine. It cannot evaluate an expression, so a hiding
+    call assembled from string fragments, spread across lines, or reached through an
+    alias (``var f = el.remove; f.call(row)``) escapes it, as does any construct
+    whose shape is not one of the four. ``tests/browser/test_flagged_rows.py``
+    measures the visible row count in a real browser and is what actually proves the
+    rows are there; this exists so that a *renamed* filter fails in the tier
+    everybody runs.
+    """
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "$.fn.dataTable" in source or "DataTable(" in source, (
+        "the template no longer initialises DataTables at all; these assertions would be vacuous"
+    )
+    assert "ext.search" not in source, (
+        "the per-sample report registers a DataTables row-visibility filter, which removes rows from the DOM"
+    )
+    assert '"paging": false' in source, "DataTables paging hides every row past the first page"
+    assert '"searching": false' in source, "DataTables searching hides every row that does not match"
+
+    offenders = [
+        (number, line.strip())
+        for number, line in enumerate(source.splitlines(), start=1)
+        if _ROW_HIDING_VERB.search(line) and _ROW_SUBJECT.search(line)
+    ]
+    assert offenders == [], f"the per-sample template applies a hiding construct to a row: {offenders}"
+
+    hidden_rows = [
+        (selector.strip(), body.strip())
+        for block in _style_blocks(source)
+        for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", block)
+        if _CSS_ROW_SELECTOR.search(selector) and _CSS_HIDES.search(body)
+    ]
+    assert hidden_rows == [], f"the per-sample template hides table rows with CSS: {hidden_rows}"
+
+    inline = re.findall(r"<tr[^>]*style=\"[^\"]*(?:display\s*:\s*none|visibility\s*:\s*hidden)", source)
+    assert inline == [], f"the per-sample template hides a row with an inline style: {inline}"
+
+
+def test_the_flag_switch_highlights_rather_than_filters() -> None:
+    """P4: hiding flagged rows is defensible for cohort triage and indefensible for
+    a single-patient read, so the per-sample switch changes emphasis only."""
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'id="highlightFlagged"' in source
+    assert "Highlight flagged values" in source
+    assert "toggleFlagged" not in source, "the per-sample report no longer has a show/hide flagged switch"
+    assert "Show flagged values" not in source
+
+
+def test_the_highlight_switch_survives_a_script_that_never_loaded() -> None:
+    """The handler must not share a ``<script>`` element with the jQuery code.
+
+    A ``$`` that never resolved throws at the top of its block and takes every
+    statement after it down with it, so a handler appended to that block works only
+    for readers whose browser reached the CDN - which is the shape of defect this
+    whole change is removing.
+    """
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+    blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", source, re.DOTALL)
+
+    owning = [block for block in blocks if "highlightFlagged" in block]
+    assert len(owning) == 1, f"expected exactly one script block to handle the switch, found {len(owning)}"
+    assert "$(" not in owning[0], "the highlight handler shares its block with jQuery code that can throw first"
+
+
+def test_the_cohort_report_keeps_its_own_filter() -> None:
+    """Scope boundary, pinned: this change is per-sample only (precondition P4)."""
+    cohort = (TEMPLATE_DIR / "cohort_summary_template.html").read_text(encoding="utf-8")
+
+    assert "ext.search" in cohort, "the cohort filter was removed; that is a separate, reviewed decision"
+    assert "toggleFlagged" in cohort
+
+
+# ---------------------------------------------------------------------------
+# Every displayed number is computed on the server - issue #242
+# ---------------------------------------------------------------------------
+
+ADVNTR_ROW = {
+    "VID": 25561,
+    "Variant": "I22_G_LEN1",
+    "NumberOfSupportingReads": 14,
+    "MeanCoverage": 98.5,
+    "Pvalue": 1e-09,
+    "RU": "CGCGG",
+    "POS": 67,
+    "REF": "G",
+    "ALT": "GG",
+    "Flag": "Not flagged",
+}
+
+#: A Kestrel row whose every numeric column discriminates between the rounding rules.
+PRECISE_KESTREL_ROW = {**KESTREL_ROW, "Depth_Score": 0.010012}
+
+
+def test_no_displayed_number_is_computed_in_the_browser() -> None:
+    """``applyRounding`` rewrote every numeric cell of every initialised table."""
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "applyRounding" not in source
+    assert "roundValue" not in source
+    assert "toFixed" not in source
+
+
+def test_the_reader_is_not_shown_a_row_count_the_browser_computed() -> None:
+    """DataTables' "Showing 1 to 3 of 3 entries" footer is a second, contradictory
+    count that only exists when the CDNs resolve."""
+    assert '"info": false' in PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def both_tables(tmp_path):
+    """A run with both algorithms reporting, at discriminating precision."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [PRECISE_KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [ADVNTR_ROW]),
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("column", "displayed"),
+    [
+        ("POS", ">67<"),
+        ("Estimated_Depth_AlternateVariant", ">120<"),
+        ("Estimated_Depth_Variant_ActiveRegion", ">12000<"),
+        ("Depth_Score", ">0.010012<"),
+        ("VID", ">25561<"),
+        ("NumberOfSupportingReads", ">14<"),
+        ("MeanCoverage", ">98.50<"),
+        ("Pvalue", ">1e-09<"),
+    ],
+)
+def test_each_numeric_column_reaches_the_html_already_formatted(both_tables, column, displayed) -> None:
+    """The string the reader sees is in the file, not assembled by a script."""
+    assert displayed in render(both_tables), f"{column} is not rendered as {displayed!r}"
+
+
+def test_a_p_value_is_not_destroyed_by_rounding(both_tables) -> None:
+    """``parseFloat((1e-9).toFixed(4)).toString()`` is ``"0"``: the online report
+    displayed a highly significant adVNTR p-value as zero."""
+    html = render(both_tables)
+
+    assert ">0<" not in html.split("<h2>adVNTR Identified Variants</h2>")[1].split("</table>")[0]
+
+
+# ---------------------------------------------------------------------------
+# The flag cell says why - issue #242
+# ---------------------------------------------------------------------------
+
+
+def _kestrel_table(html: str) -> str:
+    """Return the Kestrel table's markup."""
+    start = html.index('id="kestrel_table"')
+    return html[start : html.index("</table>", start)]
+
+
+def test_a_flagged_row_states_its_reason_in_the_table(tmp_path) -> None:
+    """The reason used to live only in a Bootstrap ``title`` on a glyph, so it was
+    invisible in print, invisible to a screen reader and absent when jQuery failed."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Flag": "Low_Depth"}]),
+    )
+
+    from vntyper.scripts.report_formatting import FLAG_WARNING_GLYPH
+
+    table = _kestrel_table(render(tmp_path))
+
+    assert "Low_Depth" in table
+    assert FLAG_WARNING_GLYPH in table
+
+
+def test_an_unflagged_row_is_marked_as_clean(positive_summary) -> None:
+    from vntyper.scripts.report_formatting import FLAG_OK_GLYPH
+
+    table = _kestrel_table(render(positive_summary))
+
+    assert "Not flagged" in table
+    assert FLAG_OK_GLYPH in table
+
+
+def test_the_kestrel_table_states_how_many_rows_are_shown(tmp_path) -> None:
+    """Rendered in Python from the frame, so it cannot contradict the table."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(
+            summary_steps.STEP_KESTREL,
+            [KESTREL_ROW, {**KESTREL_ROW, "Motif": "6", "Flag": "Low_Depth", "Depth_Score": 0.008}],
+        ),
+    )
+
+    assert "Showing 2 of 2 Kestrel rows; 1 flagged." in render(tmp_path)
+
+
+def test_the_advntr_table_states_how_many_rows_are_shown(both_tables) -> None:
+    assert "Showing 1 of 1 adVNTR row; none flagged." in render(both_tables)
+
+
+def test_a_run_with_no_advntr_table_makes_no_advntr_count_claim(positive_summary) -> None:
+    assert "adVNTR row" not in render(positive_summary)

@@ -59,7 +59,15 @@ def test_no_template_concatenates_a_variable_into_parsed_markup(template: Path) 
     assert offenders == [], f"{template} splices a variable into markup that gets reparsed: {offenders}"
 
 
-@pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
+#: Templates that still build the flag cell in the browser. The per-sample report no
+#: longer does: #242 moved that rendering to ``report_formatting.flag_html``, so the
+#: reason is text in the file rather than a tooltip assembled by a script, and the
+#: two checks below have nothing left to look at there. They are not weakened for the
+#: cohort report, which keeps ``updateFlagColumn`` and therefore keeps the sink.
+CLIENT_SIDE_FLAG_TEMPLATES = (Path("vntyper/templates/cohort_summary_template.html"),)
+
+
+@pytest.mark.parametrize("template", CLIENT_SIDE_FLAG_TEMPLATES, ids=lambda p: p.name)
 def test_the_flag_tooltip_title_is_set_through_attr(template: Path) -> None:
     source = template.read_text(encoding="utf-8")
     assert ".attr('title', originalText)" in source, (
@@ -67,11 +75,25 @@ def test_the_flag_tooltip_title_is_set_through_attr(template: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
+@pytest.mark.parametrize("template", CLIENT_SIDE_FLAG_TEMPLATES, ids=lambda p: p.name)
 def test_the_flag_cell_is_emptied_before_the_mark_is_appended(template: Path) -> None:
     """``.empty().append()`` replaces the cell's content without an HTML parse."""
     source = template.read_text(encoding="utf-8")
     assert "$flagCell.empty().append(" in source, f"{template} must rebuild the flag cell with DOM APIs"
+
+
+def test_the_per_sample_flag_cell_is_no_longer_built_in_the_browser() -> None:
+    """The other half of narrowing the two checks above: the sink is gone, not moved.
+
+    ``report_formatting.flag_html`` escapes the value and the table names ``Flag`` in
+    ``html_columns``, so ``escape_frame_cells`` escapes every other cell -- the same
+    per-column exemption the ``Confidence`` span already had.
+    """
+    source = Path("vntyper/templates/report_template.html").read_text(encoding="utf-8")
+
+    assert "updateFlagColumn" not in source
+    assert "data-original" not in source
+    assert "tooltip" not in source
 
 
 def test_the_igv_variant_table_writes_text_not_markup() -> None:

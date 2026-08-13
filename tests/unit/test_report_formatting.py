@@ -14,6 +14,7 @@ by running the whole pipeline:
 
 import json
 import logging
+from dataclasses import dataclass
 
 import pandas as pd
 import pytest
@@ -494,3 +495,279 @@ class TestCoverageNullToken:
         verdict = evaluate_coverage_qc(stats["mean"], stats["percent_uncovered"], 100.0, 50.0)
 
         assert verdict.status == COVERAGE_QC_NOT_EVALUATED
+
+
+# ---------------------------------------------------------------------------
+# Server-side number formatting - issue #242
+# ---------------------------------------------------------------------------
+#
+# Until #242 the report shipped a jQuery ``applyRounding()`` that rewrote **every**
+# numeric cell of **every** initialised table to four decimal places and then
+# stripped trailing zeroes. It ran in the reader's browser, so the number on screen
+# was a property of the reader's network rather than of the run, and it was
+# table-agnostic, so it applied one rule to a genomic position, a depth score and a
+# p-value alike.
+#
+# The baseline below was captured from a report rendered by this repository and
+# opened in chromium with the three CDNs reachable, **before** ``applyRounding`` was
+# removed. ``online`` is what that reader saw; ``server`` is what the report now
+# writes into the file. Where they differ the divergence is deliberate and named.
+
+
+@dataclass(frozen=True)
+class NumericRendering:
+    """One value's pre-#242 online rendering beside its rendering now.
+
+    Attributes:
+        table: ``kestrel`` or ``advntr`` - which format table declares the column.
+        column: The result column name.
+        stored: The value as it appears in ``pipeline_summary.json``.
+        online: What the browser displayed for it before #242, measured.
+        server: What the report renders for it now.
+        divergence: Why the two differ, or "" when they agree.
+    """
+
+    table: str
+    column: str
+    stored: object
+    online: str
+    server: str
+    divergence: str = ""
+
+    def __repr__(self) -> str:
+        return f"{self.table}.{self.column}={self.stored!r}"
+
+
+NUMERIC_RENDERINGS = (
+    # -- Kestrel ---------------------------------------------------------------
+    NumericRendering("kestrel", "POS", 67, "67", "67"),
+    NumericRendering("kestrel", "Estimated_Depth_AlternateVariant", 120, "120", "120"),
+    NumericRendering("kestrel", "Estimated_Depth_Variant_ActiveRegion", 12000, "12000", "12000"),
+    NumericRendering(
+        "kestrel",
+        "Depth_Score",
+        0.010012,
+        "0.01",
+        "0.010012",
+        "the confidence thresholds are 0.00469 and 0.00515, so four decimal places is coarser "
+        "than the calibration the number is judged against",
+    ),
+    NumericRendering(
+        "kestrel",
+        "Depth_Score",
+        0.00001234,
+        "0",
+        "0.000012",
+        "four decimal places rendered a real depth score as the value 0",
+    ),
+    # -- adVNTR ----------------------------------------------------------------
+    NumericRendering("advntr", "VID", 25561, "25561", "25561"),
+    NumericRendering("advntr", "NumberOfSupportingReads", 14, "14", "14"),
+    NumericRendering("advntr", "POS", 67, "67", "67"),
+    NumericRendering("advntr", "MeanCoverage", 132.45, "132.45", "132.45"),
+    NumericRendering(
+        "advntr",
+        "MeanCoverage",
+        98.5,
+        "98.5",
+        "98.50",
+        "trailing zeroes are kept so every mean states the same precision",
+    ),
+    NumericRendering(
+        "advntr",
+        "Pvalue",
+        1e-09,
+        "0",
+        "1e-09",
+        "four decimal places destroyed a highly significant p-value, displaying it as 0",
+    ),
+    NumericRendering(
+        "advntr",
+        "Pvalue",
+        0.0001234,
+        "0.0001",
+        "0.000123",
+        "three significant figures keep the value rather than truncating it at four decimals",
+    ),
+    NumericRendering("advntr", "Pvalue", 0.04999, "0.05", "0.05"),
+)
+
+#: Which declaration in ``report_formatting`` governs each table.
+FORMAT_TABLES = {"kestrel": "KESTREL_CELL_FORMATS", "advntr": "ADVNTR_CELL_FORMATS"}
+
+
+def rendered_cell(case: NumericRendering) -> str:
+    """Render one stored value through the formatter its column declares.
+
+    Args:
+        case: The recorded rendering.
+
+    Returns:
+        str: The cell text the report writes.
+    """
+    formats = getattr(rf, FORMAT_TABLES[case.table])
+    frame = pd.DataFrame({case.column: [case.stored]})
+    return str(rf.format_number_columns(frame, formats).loc[0, case.column])
+
+
+@pytest.mark.parametrize("case", NUMERIC_RENDERINGS, ids=repr)
+def test_each_numeric_column_renders_the_string_recorded_for_it(case: NumericRendering) -> None:
+    """Every displayed number is produced here, by the column's declared formatter."""
+    assert rendered_cell(case) == case.server
+
+
+@pytest.mark.parametrize("case", [c for c in NUMERIC_RENDERINGS if not c.divergence], ids=repr)
+def test_a_column_with_no_named_divergence_still_reads_as_it_did_online(case: NumericRendering) -> None:
+    """Where the browser's rule was harmless, the server reproduces it exactly."""
+    assert rendered_cell(case) == case.online
+
+
+@pytest.mark.parametrize("case", [c for c in NUMERIC_RENDERINGS if c.divergence], ids=repr)
+def test_every_divergence_from_the_online_rendering_is_a_declared_one(case: NumericRendering) -> None:
+    """A rendering may only differ from the measured baseline with a recorded reason."""
+    assert rendered_cell(case) != case.online, (
+        f"{case} no longer diverges from the online rendering; drop the recorded reason: {case.divergence}"
+    )
+
+
+def test_every_displayed_column_declares_how_its_value_is_rendered() -> None:
+    """A new display column must state its formatter rather than inherit a default."""
+    assert set(rf.KESTREL_CELL_FORMATS) == set(rf.KESTREL_DISPLAY_COLUMNS)
+    assert set(rf.ADVNTR_CELL_FORMATS) == set(rf.ADVNTR_DISPLAY_COLUMNS)
+
+
+def test_every_declared_format_names_a_real_formatter() -> None:
+    declared = set(rf.KESTREL_CELL_FORMATS.values()) | set(rf.ADVNTR_CELL_FORMATS.values())
+    assert declared <= set(rf.CELL_FORMATTERS), f"undefined formats: {sorted(declared - set(rf.CELL_FORMATTERS))}"
+
+
+def test_an_undeclared_numeric_column_fails_loudly(caplog) -> None:
+    """The point of the per-column table: silence is the failure mode being removed."""
+    caplog.set_level(logging.ERROR, logger=rf.logger.name)
+    frame = pd.DataFrame({"POS": [67], "Novel_Score": [1.5]})
+
+    with pytest.raises(ValueError, match="Novel_Score"):
+        rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS)
+
+    assert any("Novel_Score" in record.getMessage() for record in caplog.records)
+
+
+def test_a_non_numeric_placeholder_passes_through_untouched() -> None:
+    """``output_empty_result`` writes the string "None" into every numeric column."""
+    frame = pd.DataFrame({"POS": ["None"], "Depth_Score": ["None"]})
+
+    formatted = rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS)
+
+    assert formatted.loc[0, "POS"] == "None"
+    assert formatted.loc[0, "Depth_Score"] == "None"
+
+
+def test_a_missing_value_is_not_rendered_as_a_number() -> None:
+    frame = pd.DataFrame({"Depth_Score": [float("nan")]})
+
+    formatted = rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS)
+
+    assert pd.isna(formatted.loc[0, "Depth_Score"])
+
+
+@pytest.mark.parametrize("cells", [[True], [True, "not a number"]], ids=["numpy-bool", "python-bool"])
+def test_a_boolean_is_not_silently_rendered_as_a_digit(cells: list) -> None:
+    """``bool`` is a ``numbers.Integral``, so rendering it would print True as ``1``
+    and change what the cell says. Both spellings are covered because the dtype
+    decides which one pandas hands out: a bool column yields ``numpy.bool_``, and a
+    mixed column yields the Python ``bool`` the explicit guard exists for."""
+    formatted = rf.format_number_columns(pd.DataFrame({"POS": cells}), rf.KESTREL_CELL_FORMATS)
+
+    assert bool(formatted.loc[0, "POS"]) is True
+    assert not isinstance(formatted.loc[0, "POS"], str)
+
+
+def test_an_absent_value_passes_through_rather_than_becoming_a_number() -> None:
+    formatted = rf.format_number_columns(pd.DataFrame({"POS": [None]}), rf.KESTREL_CELL_FORMATS)
+
+    assert formatted.loc[0, "POS"] is None
+
+
+def test_formatting_does_not_mutate_its_input() -> None:
+    frame = pd.DataFrame({"POS": [67.0]})
+
+    rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS)
+
+    assert frame.loc[0, "POS"] == 67.0
+
+
+def test_a_column_absent_from_the_frame_is_skipped() -> None:
+    """A negative Kestrel run carries neither the depth columns nor ``Flag``."""
+    frame = pd.DataFrame({"POS": [67]})
+
+    assert list(rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS).columns) == ["POS"]
+
+
+# ---------------------------------------------------------------------------
+# The flag cell - issue #242
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("clean", ["Not flagged", "Not applicable", ""])
+def test_a_clean_flag_renders_the_passing_glyph(clean: str) -> None:
+    markup = rf.flag_html(clean)
+
+    assert rf.FLAG_OK_GLYPH in markup
+    assert rf.FLAG_WARNING_GLYPH not in markup
+    assert rf.FLAG_FLAGGED_CLASS not in markup
+
+
+def test_a_flagged_value_renders_the_reason_as_text() -> None:
+    """The reason must survive print, a screen reader and a failed script load -
+    which a ``title`` attribute on a bare glyph does not."""
+    markup = rf.flag_html("Low_Depth")
+
+    assert "Low_Depth" in markup
+    assert rf.FLAG_WARNING_GLYPH in markup
+    assert rf.FLAG_FLAGGED_CLASS in markup
+    assert "title=" not in markup, "the reason is text in the cell, not a hover-only attribute"
+
+
+def test_a_flag_value_is_escaped_before_it_becomes_markup() -> None:
+    """``Flag`` reaches the report out of a supplied ``pipeline_summary.json`` (#207)."""
+    markup = rf.flag_html("<img src=x onerror=alert(1)>")
+
+    assert "<img" not in markup
+    assert "&lt;img src=x onerror=alert(1)&gt;" in markup
+
+
+def test_a_non_string_flag_is_stringified_rather_than_dropped() -> None:
+    assert "1" in rf.flag_html(1)
+
+
+# ---------------------------------------------------------------------------
+# The row-count statement - issue #242
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("total", "flagged", "expected"),
+    [
+        (3, 2, "Showing 3 of 3 Kestrel rows; 2 flagged."),
+        (1, 0, "Showing 1 of 1 Kestrel row; none flagged."),
+        (1, 1, "Showing 1 of 1 Kestrel row; 1 flagged."),
+        (0, 0, "Showing 0 of 0 Kestrel rows; none flagged."),
+    ],
+)
+def test_the_row_count_statement_says_how_many_rows_are_shown(total: int, flagged: int, expected: str) -> None:
+    """Rendered from the frame in Python, never read back out of DataTables' footer."""
+    assert rf.row_count_statement(total, flagged, noun="Kestrel") == expected
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        (pd.DataFrame({"Flag": ["Not flagged", "Low_Depth", "Not applicable"]}), 1),
+        (pd.DataFrame({"Flag": ["Not flagged"]}), 0),
+        (pd.DataFrame({"Flag": [""]}), 0),
+        (pd.DataFrame({"Motif": ["5"]}), 0),
+        (pd.DataFrame(), 0),
+    ],
+)
+def test_flagged_row_count_counts_only_the_rows_carrying_a_reason(frame: pd.DataFrame, expected: int) -> None:
+    assert rf.flagged_row_count(frame) == expected

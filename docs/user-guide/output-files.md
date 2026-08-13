@@ -66,6 +66,40 @@ Confidence is assigned based on empirically validated depth score thresholds fro
 !!! tip
     A result with confidence `Negative` means no MUC1-VNTR frameshift variant was detected -- it does not necessarily mean the sample is truly negative.
 
+## How summary_report.html Displays Numbers
+
+Every figure in the per-sample HTML report is now written into the file by VNtyper.
+Until the fix for issue #242 the report shipped a small script that rewrote every numeric
+cell of every table to four decimal places in the reader's browser, so the number on
+screen depended on whether three content delivery networks were reachable -- the archived
+file said one thing to a reader online and another to a reader offline.
+
+Removing that script changes the printed form of some columns. **No value changed; only
+its rendering did.** The `kestrel_result.tsv`, `pipeline_summary.json` and adVNTR TSV
+outputs are untouched, and remain the source to parse. If you scrape the HTML report,
+these are the columns whose text differs.
+
+| Table | Column | Displayed before | Displayed now | Why |
+|-------|--------|------------------|---------------|-----|
+| Kestrel | `POS`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion` | `67`, `120`, `12000` | unchanged | Whole numbers, no decimals |
+| Kestrel | `Depth_Score` | `0.01` | `0.010012` | Six decimal places. The confidence calibration is stated to five (0.00469 and 0.00515), so four was coarser than the thresholds the value is judged against, and a score of 0.00001234 printed as `0` |
+| adVNTR | `VID`, `NumberOfSupportingReads`, `POS` | `25561`, `14`, `67` | unchanged | Whole numbers, no decimals |
+| adVNTR | `MeanCoverage` | `98.5`, `40` | `98.50`, `40.00` | Always two decimal places, so every mean states the same precision |
+| adVNTR | `Pvalue` | `0`, `0.0001` | `1e-09`, `0.000123` | Three significant figures. Rounding to four decimals displayed a highly significant p-value as zero |
+
+Two further display changes in the same release:
+
+- **The `Flag` column shows the reason in words**, beside a tick or a cross, instead of a
+  glyph whose reason appeared only in a hover tooltip. The reason is therefore in the
+  printed page, readable by a screen reader, and present when scripts do not run.
+- **Flagged variant rows are never hidden.** The per-sample report's switch is now
+  *Highlight flagged values*: it changes emphasis and removes nothing. A row-count line
+  above each table states how many rows are shown out of how many exist. The
+  [cohort report](cohort-analysis.md) keeps its show/hide filter, where hiding flagged
+  rows across many samples is a triage aid rather than a way to lose a patient's result.
+  Note that the cohort report still rounds its numbers in the browser; that is tracked
+  separately.
+
 ## Pipeline Summary JSON
 
 The `pipeline_summary.json` file records each pipeline step with timestamps, output paths, and parsed results. It is used by the [cohort analysis](cohort-analysis.md) module to aggregate results across samples.

@@ -38,16 +38,23 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
+    ADVNTR_CELL_FORMATS,
     ADVNTR_DISPLAY_COLUMNS,
     EMPTY_SESSION_DICTIONARY,
     EMPTY_TABLE_JSON,
+    KESTREL_DISPLAY_CELL_FORMATS,
     KESTREL_DISPLAY_COLUMNS,
     MISSING_AS_OK,
     confidence_html,
     escape_frame_cells,
+    escaped_table_html,
     extract_igv_fragments,
+    flag_html,
+    flagged_row_count,
+    format_number_columns,
     js_json_literal,
     parse_coverage_stats,
+    row_count_statement,
     select_display_columns,
     summarise_fastp,
     threshold_icon,
@@ -72,6 +79,10 @@ logger = logging.getLogger(__name__)
 
 #: Shown when a coverage figure could not be computed.
 NOT_CALCULATED = "Not calculated"
+
+#: How each results table names itself in its visible/total row-count statement.
+KESTREL_ROW_NOUN = "Kestrel"
+ADVNTR_ROW_NOUN = "adVNTR"
 
 
 def load_pipeline_summary(summary_file_path):
@@ -267,13 +278,24 @@ def build_kestrel_frames(kestrel_data):
         frame = frame.sort_values(by="Depth Score", ascending=False)
 
     matching_frame = frame.copy()
+
+    # Every displayed number is produced here, by the formatter its column declares.
+    # The browser used to do it, table-agnostically and only when three CDNs
+    # resolved, so the same file read differently online and offline (#242). The
+    # matching frame is copied first and keeps the unformatted values, because the
+    # screening rules compare against them.
+    frame = format_number_columns(frame, KESTREL_DISPLAY_CELL_FORMATS)
+
     if "Confidence" in frame.columns:
         frame["Confidence"] = frame["Confidence"].apply(confidence_html)
+    if "Flag" in frame.columns:
+        frame["Flag"] = frame["Flag"].apply(flag_html)
 
     # The table is rendered with escape=False so the colour-coded Confidence span
-    # survives, which means every other cell has to be escaped here. `Confidence`
-    # is excluded because `confidence_html` has already escaped its own value.
-    frame = escape_frame_cells(frame, html_columns=("Confidence",))
+    # and the Flag glyph survive, which means every other cell has to be escaped
+    # here. Those two are excluded because `confidence_html` and `flag_html` have
+    # already escaped their own values.
+    frame = escape_frame_cells(frame, html_columns=("Confidence", "Flag"))
 
     logger.debug("Kestrel data extracted from summary and formatted.")
     return frame, matching_frame
@@ -545,6 +567,7 @@ def generate_summary_report(
     )
     logger.debug("Kestrel results converted to HTML.")
 
+    advntr_row_summary = ""
     if not advntr_available:
         advntr_html = "<p>adVNTR genotyping was not performed.</p>"
         logger.debug("adVNTR was not performed; adding message to report.")
@@ -552,10 +575,17 @@ def generate_summary_report(
         advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
         logger.debug("adVNTR was performed but no variants identified; adding negative message.")
     else:
-        advntr_html = advntr_df.to_html(
+        # Rendered from a copy: `advntr_df` itself is what the screening rules match
+        # on (`VID`, `Flag`), so it has to keep the unformatted values.
+        advntr_display = format_number_columns(advntr_df, ADVNTR_CELL_FORMATS)
+        if "Flag" in advntr_display.columns:
+            advntr_display["Flag"] = advntr_display["Flag"].apply(flag_html)
+        advntr_html = escaped_table_html(
+            advntr_display,
             classes="table table-bordered table-striped hover compact table-sm",
-            index=False,
+            html_columns=("Flag",),
         )
+        advntr_row_summary = row_count_statement(len(advntr_df), flagged_row_count(advntr_df), noun=ADVNTR_ROW_NOUN)
         logger.debug("adVNTR results converted to HTML.")
 
     cross_match_message, cross_match_is_positive = build_cross_match_summary(pipeline_summary)
@@ -600,7 +630,14 @@ def generate_summary_report(
 
     context = {
         "kestrel_highlight": kestrel_html,
+        # The visible/total statement beside each table, counted here from the frame.
+        # DataTables' own "Showing 1 to 3 of 3 entries" footer is switched off: it is
+        # a second count that contradicts this one whenever a CDN fails (#242).
+        "kestrel_row_summary": row_count_statement(
+            len(kestrel_df), flagged_row_count(kestrel_df_raw), noun=KESTREL_ROW_NOUN
+        ),
         "advntr_highlight": advntr_html,
+        "advntr_row_summary": advntr_row_summary,
         "advntr_available": advntr_available,
         "log_content": pipeline_log_content,
         "igv_content": igv_content,

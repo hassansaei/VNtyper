@@ -64,6 +64,26 @@
         th {
             white-space: pre-wrap;
         }
+        /* The Flag column is last in both results tables and states its reason in
+           words (#242). The ellipsis rule above would clip that reason, which is
+           the same "the reader cannot see it" defect in a different form. */
+        .table td:last-child {
+            white-space: normal;
+            overflow: visible;
+            max-width: none;
+        }
+        /* "Highlight flagged values" adds this class to the results tables. It is
+           emphasis and nothing else: no rule here, and no script in this file, may
+           take a row out of the reader's view. */
+        .highlight-flagged .flag-flagged {
+            background-color: #ffe0e0;
+            outline: 1px solid #cc0000;
+        }
+        .table-count {
+            font-size: 0.95em;
+            color: #444;
+            margin: 0.25em 0 0.75em 0;
+        }
         /* Accordion style */
         .wrap-collabsible {
             margin-bottom: 1.2rem;
@@ -195,11 +215,21 @@
             </div>
         {% endif %}
 
-        <!-- Custom switches for toggling flagged values and detailed coverage -->
+        <!--
+          Custom switches for emphasising flagged values and for detailed coverage.
+
+          This switch used to offer to reveal flagged values, and it drove a
+          DataTables row-visibility predicate that removed every flagged row from the
+          DOM until the reader ticked it. A single-patient report that narrates a
+          flagged pathogenic variant and then renders it invisible is issue #242; the
+          switch now changes emphasis only, and there is no code path in this file
+          that can hide a results row. (The cohort report keeps its filter: hiding
+          flagged rows is defensible for triage across samples.)
+        -->
         <div class="d-flex">
             <div class="custom-control custom-switch text-left mb-3 mr-4">
-                <input type="checkbox" class="custom-control-input" id="toggleFlagged">
-                <label class="custom-control-label" for="toggleFlagged">Show flagged values</label>
+                <input type="checkbox" class="custom-control-input" id="highlightFlagged">
+                <label class="custom-control-label" for="highlightFlagged">Highlight flagged values</label>
             </div>
             <div class="custom-control custom-switch text-left mb-3">
                 <input type="checkbox" class="custom-control-input" id="toggleDetailedCoverage">
@@ -376,12 +406,22 @@
         {% endif %}
 
         <h2>Kestrel Identified Variants</h2>
+        {#
+          Counted in Python from the frame that was rendered, so it cannot disagree
+          with the table beneath it. DataTables' own "Showing 1 to 3 of 3 entries"
+          footer is switched off: it exists only when the CDNs resolve, and it
+          counted the rows left *after* the filter had removed the others (#242).
+        #}
+        <p class="table-count">{{ kestrel_row_summary }}</p>
         <div class="table-container">
             {{ kestrel_highlight | safe }}
         </div>
 
         {% if advntr_available and advntr_highlight %}
             <h2>adVNTR Identified Variants</h2>
+            {% if advntr_row_summary %}
+                <p class="table-count">{{ advntr_row_summary }}</p>
+            {% endif %}
             <div class="table-container">
                 {{ advntr_highlight | safe }}
             </div>
@@ -418,107 +458,69 @@
     <!-- jQuery and DataTables scripts -->
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
     <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
-    <!-- Bootstrap Bundle for tooltips -->
+    <!-- Bootstrap Bundle. Nothing this page runs calls into it any more; the three
+         CDN tags are removed together in a later change. -->
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
 
-    <!-- Custom filtering and flag update functions -->
+    <!--
+      The flag-highlight switch, in its own script element and deliberately not
+      jQuery. Both matter: a reader with no network still gets the switch, because
+      the flag cells it styles are already in the file, and a `$` that never loaded
+      throws at the top of the block below - which would take every statement after
+      it down with it, this handler included.
+    -->
     <script>
-        // Custom filter: apply flag filtering only for tables that have a "Flag" header.
-        $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
-            var $table = $(settings.nTable);
-            var lastHeader = $table.find('thead th:last').text().trim();
-            if(lastHeader !== "Flag") {
-                return true;
-            }
-            var showFlagged = $('#toggleFlagged').prop('checked');
-            var row = settings.aoData[dataIndex].nTr;
-            var flagCell = $(row).find('td:last');
-            var originalFlag = flagCell.attr('data-original') || flagCell.text().trim();
-            if(originalFlag === "") {
-                return true;
-            }
-            return showFlagged || originalFlag === "Not flagged" || originalFlag === "Not applicable";
-        });
-
-        // Function to round numeric values to 4 decimal places.
-        function roundValue(val) {
-            var num = parseFloat(val);
-            if (!isNaN(num)) {
-                return parseFloat(num.toFixed(4)).toString();
-            }
-            return val;
-        }
-
-        // Apply rounding to all table cells.
-        function applyRounding(tableElement) {
-            $(tableElement).find('td').each(function() {
-                var text = $(this).text().trim();
-                if ($.isNumeric(text)) {
-                    $(this).text(roundValue(text));
-                }
-            });
-        }
-
-        // Update the flag column for tables with a "Flag" header.
-        function updateFlagColumn(tableElement) {
-            var $table = $(tableElement);
-            var lastHeader = $table.find('thead th:last').text().trim();
-            if(lastHeader !== "Flag") {
+        document.addEventListener("DOMContentLoaded", function () {
+            var highlight = document.getElementById("highlightFlagged");
+            if (!highlight) {
                 return;
             }
-            $table.find('tr').each(function() {
-                var $cells = $(this).find('td');
-                if ($cells.length) {
-                    var $flagCell = $cells.last();
-                    var originalText = $flagCell.attr('data-original');
-                    if (typeof originalText === "undefined") {
-                        originalText = $flagCell.text().trim();
-                        $flagCell.attr('data-original', originalText);
-                    }
-                    // #207: the title is a sample-derived value. .attr() takes a value and
-                    // .text() takes a text node, so neither goes through an HTML parse --
-                    // which is what undid the server's escaping when this was built by
-                    // concatenating into a markup string and calling .html().
-                    var isClean = (originalText === "Not flagged"
-                        || originalText === "Not applicable"
-                        || originalText === "");
-                    var $mark = $('<span>')
-                        .attr('data-toggle', 'tooltip')
-                        .attr('title', originalText)
-                        .css({ 'color': isClean ? 'green' : 'red', 'font-size': '16px' })
-                        .text(isClean ? '✓' : '✖');
-                    $flagCell.empty().append($mark);
+            highlight.addEventListener("change", function () {
+                var tables = document.querySelectorAll(".table-container table");
+                for (var i = 0; i < tables.length; i++) {
+                    tables[i].classList.toggle("highlight-flagged", highlight.checked);
                 }
             });
-            $('[data-toggle="tooltip"]').tooltip({container: 'body'});
-        }
+        });
+    </script>
 
+    <!-- Table set-up -->
+    <script>
+        // The flag glyph, the flag reason and every displayed number are rendered by
+        // `report_formatting.py` before this file is written. Three things used to
+        // happen here instead and all three are gone (#242):
+        //
+        //   * a DataTables row-visibility predicate removed every flagged row from
+        //     the DOM until a switch was ticked, so a report narrating a flagged
+        //     pathogenic variant showed an empty table;
+        //   * a client-side rounding pass rewrote every numeric cell of every
+        //     initialised table to four decimal places, which turned a p-value of
+        //     1e-9 into the displayed value 0;
+        //   * a client-side flag renderer replaced the reason with a bare glyph
+        //     carrying it in a Bootstrap `title`, invisible in print, invisible to a
+        //     screen reader, and absent when the script did not run.
+        //
+        // Each was a value the reader saw only if three CDNs resolved. Nothing below
+        // may reintroduce one: `tests/unit/test_generate_report.py::
+        // test_no_per_sample_result_row_enters_a_hiding_path` and the browser tier
+        // both fail if it does.
         $(document).ready(function() {
-            // Initialize DataTables for tables on the page, excluding the coverage details table
+            // Sorting and column widths only. Paging, searching and the row-count
+            // footer are off because each of them decides, in the browser, which
+            // rows a reader of a single-patient report is allowed to see. `order` is
+            // empty so the table keeps the order the pipeline wrote it in - the
+            // DataTables default would re-sort it on the first column.
             $('table:not(#detailedCoverageView table)').DataTable({
-                "paging": true,
-                "searching": true,
-                "info": true,
+                "paging": false,
+                "searching": false,
+                "info": false,
+                "order": [],
                 "autoWidth": false,
                 "columnDefs": [
                     { "width": "150px", "targets": "_all" }
-                ],
-                "preDrawCallback": function(settings) {
-                    updateFlagColumn(this.api().table().node());
-                },
-                "drawCallback": function(settings) {
-                    applyRounding(this.api().table().node());
-                }
+                ]
             });
-            
-            // Update the switch label and redraw all tables when toggling.
-            $('#toggleFlagged').change(function() {
-                var isChecked = $(this).prop('checked');
-                var newLabel = isChecked ? "Hide flagged values" : "Show flagged values";
-                $('label[for="toggleFlagged"]').text(newLabel);
-                $('table:not(#detailedCoverageView table)').DataTable().draw();
-            });
-            
+
             // Handle toggling between basic and detailed coverage views
             $('#toggleDetailedCoverage').change(function() {
                 if($(this).prop('checked')) {
