@@ -225,12 +225,19 @@
           // screen reader and nothing in greyscale beyond the ✓/✖ shape. `role`
           // plus `aria-label` give it the reason in words; the tooltip stays for
           // the pointer (#242).
+          //
+          // An empty `Flag` is clean, but it is not a reason - and `role="img"`
+          // with an empty `aria-label` is an image with NO accessible name, which
+          // a screen reader skips outright. That is strictly worse than the bare
+          // glyph this replaced, because a bare ✓ at least announces as a
+          // character. So the empty case is named for what it is.
           var isClean = (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "");
+          var markName = originalText === "" ? "No flag recorded" : originalText;
           var $mark = $('<span>')
               .attr('data-toggle', 'tooltip')
               .attr('title', originalText)
               .attr('role', 'img')
-              .attr('aria-label', originalText)
+              .attr('aria-label', markName)
               .css({ 'color': isClean ? 'green' : 'red', 'font-size': '16px' })
               .text(isClean ? '✓' : '✖');
           $flagCell.empty().append($mark);
