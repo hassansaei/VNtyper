@@ -3,19 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <title>{{ report_title_prefix }} — {{ sample_name }}</title>
-    <!-- Include Bootstrap CSS for styling -->
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <!-- Include DataTables CSS for table styling -->
-    <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
 
     <!--
-      The token layer, and the viewport meta, shared with the cohort report. It is
-      pulled in *after* the two CDN stylesheets on purpose: at equal specificity the
-      later rule wins, which is how the tokens beat Bootstrap's own body and table
-      colours for the one release both are loaded. Everything the two reports share -
-      the colour scale, the type and spacing scales, the switch, the focus ring, the
-      disclosure, the results-table mechanics and the whole print block - lives there.
-      What is left below is what only this report has.
+      **This document resolves nothing off-machine (#242).** It used to open with six
+      tags pointing at four third-party hosts - Bootstrap's CSS and JS, DataTables' CSS
+      and JS, jQuery and igv.js - so what an archived report said depended on whether a
+      reader's browser could still reach a CDN years later. All six are gone. The
+      stylesheet is below, the ~90 lines of vanilla ES2020 that replace jQuery and
+      DataTables are at the foot of the document, and igv.js travels inside the file,
+      compressed.
+
+      Removing them also removed 627,398 bytes of raw JavaScript and CSS the reader had
+      to fetch, of which DataTables 1.10.21 is the one genuinely vulnerable pin
+      (CVE-2020-28458, CVE-2021-23445, SNYK-JS-DATATABLESNET-598806, all cleared only at
+      >= 1.11.3) and is EOL. Bootstrap 4.5.2 is EOL with no live CVE. jQuery 3.5.1 is
+      **not** affected by CVE-2020-11022/11023: the argument for removing it is weight
+      and the online/offline divergence, not a vulnerability, and saying otherwise would
+      be citing a CVE that does not apply.
+
+      The token layer, and the viewport meta, are shared with the cohort report.
+      Everything the two reports share - the colour scale, the type and spacing scales,
+      the switch, the focus ring, the disclosure, the sortable heading, the
+      results-table mechanics and the whole print block - lives there. What is left
+      below is what only this report has.
     -->
     {% include "_report_base.html" %}
 
@@ -42,7 +52,7 @@
             cursor: pointer;
             white-space: nowrap;
         }
-        #variant_table tr[aria-selected="true"] .variant-select {
+        #variant_table tr[aria-current="true"] .variant-select {
             font-weight: bold;
         }
         .summary-box {
@@ -246,6 +256,54 @@
         .header-warning {
             color: var(--state-finding);
         }
+
+        /* --- authored empty states --------------------------------------------
+           Every "there is nothing here" in this report is a sentence saying which
+           kind of nothing it is, and each is drawn as a block rather than left as a
+           bare paragraph, so an absent section reads as a deliberate statement and
+           not as a rendering that failed halfway. */
+        .empty-state {
+            border: 1px dashed var(--hairline);
+            border-radius: var(--radius);
+            background: var(--surface);
+            padding: var(--s-4);
+            font-size: var(--step--1);
+            color: var(--ink-muted);
+            max-width: var(--measure);
+        }
+        .empty-state strong {
+            display: block;
+            color: var(--ink);
+            font-size: var(--step-0);
+            margin-bottom: var(--s-1);
+        }
+        /* A file name or a command-line flag inside a sentence is a literal string,
+           and setting it in the mono face is what says so. */
+        .mono {
+            font-family: var(--font-mono);
+            font-size: 0.95em;
+        }
+
+        /* The alignment panel's own frame. It has a minimum height because the state
+           inside it changes after load - the embedded library is expanded
+           asynchronously - and a frame that collapses and then grows moves everything
+           under it while the reader is looking at it. */
+        .igv-frame {
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            background: var(--surface);
+            min-height: 12rem;
+            display: grid;
+            place-items: center;
+            padding: var(--s-5);
+        }
+        .igv-frame .empty-state {
+            border: 0;
+            background: none;
+            padding: 0;
+            text-align: center;
+            max-width: 52ch;
+        }
     </style>
 
     <!--
@@ -272,9 +330,6 @@
       below stays: it is the engine-independent statement, on the first sheet.
     -->
     <style>{{ print_running_header_css|safe }}</style>
-
-    <!-- IGV.js script -->
-    <script src="https://cdn.jsdelivr.net/npm/igv@3.0.2/dist/igv.min.js"></script>
 </head>
 <body>
     <!-- The whole report is the main landmark: there is no navigation, no aside
@@ -449,6 +504,17 @@
                 {%- if assembly_contig %} (Contig: {{ assembly_contig }}){% endif %}</p>
             <p><strong>Region analysed:</strong> {{ region_resolved }}</p>
             <p><strong>Summary schema version:</strong> {{ summary_schema_version }}</p>
+            {#
+              What carries the alignment browser, and which one. The digest is over the
+              *decompressed* library - the exact source this document evaluates - and is
+              printed in full so a reader can check it against upstream rather than
+              merely glance at it. `report_assets.igv_payload` verifies the same digest
+              in Python before the payload is written into the file, which is where a
+              check can actually run: `crypto.subtle` is unavailable on `file://` in
+              several engines, so verifying in the browser would be a check that quietly
+              does not happen on the machines this report is most often read on.
+            #}
+            <p><strong>Alignment browser:</strong> igv.js {{ igv_provenance }}</p>
         </div>
 
         <!-- Display the BWA reference actually resolved for this run (#163) -->
@@ -739,6 +805,69 @@
                 </div>
             </details>
             <div id="igvContainer">
+                {#
+                  **The alignment panel's first paint is authored, not blank.**
+
+                  Expanding the embedded library is asynchronous, so there is a real
+                  interval - and, for a browser that cannot expand it at all, a
+                  permanent state - in which this frame holds no alignment view. Until
+                  #242 that interval rendered as an empty box: a failed load threw
+                  before any fallback was reached, and the reader was given a
+                  panel-shaped hole with nothing in it.
+
+                  Which sentence belongs here is decided in Python, from facts Python
+                  has: whether the run produced an alignment session at all, and which
+                  `--report-igv` mode was in effect. Writing it into the markup rather
+                  than from the script is what makes it true for a reader with
+                  scripting off, and it is why there is no spinner: a spinner is a
+                  promise that something is coming, and in two of these four states
+                  nothing is.
+                #}
+                <div id="igvState" class="igv-frame">
+                    {# `off` is asked first, and the order is the point: it is the one
+                       state the *operator* chose, so it is the one the reader is owed a
+                       reason for. A run switched off has no session either, and
+                       answering "no alignment session was produced" would be true and
+                       useless - it would read as something the run failed to do rather
+                       than something it was told not to. `sidecar` is asked *after* the
+                       session check for the mirror-image reason: with no session there
+                       is no `igv_report.html` beside the report, and pointing at a file
+                       that was never written is worse than saying nothing. #}
+                    {% if igv_mode == "off" %}
+                        <p class="empty-state">
+                            <strong>Alignment visualisation was switched off for this run.</strong>
+                            <span class="mono">--report-igv off</span> was in effect, so no
+                            alignment browser was produced. The variant tables above are
+                            complete without it.
+                        </p>
+                    {% elif not igv_session_available %}
+                        <p class="empty-state">
+                            <strong>No alignment visualisation is available for this sample.</strong>
+                            This run produced no alignment session, so there is nothing for a
+                            genome browser to show. The variant tables above are complete
+                            without it.
+                        </p>
+                    {% elif igv_mode == "sidecar" %}
+                        <p class="empty-state">
+                            <strong>The alignment browser is a separate file.</strong>
+                            <span class="mono">igv_report.html</span>, written beside this
+                            report, is a self-contained alignment browser for this sample.
+                            It makes no network request either.
+                        </p>
+                    {% elif not igv_payload %}
+                        <p class="empty-state">
+                            <strong>The alignment browser is not in this file.</strong>
+                            The embedded library is missing, so the alignment view is not
+                            shown. The variant tables above are complete without it.
+                        </p>
+                    {% else %}
+                        <p class="empty-state">
+                            <strong>Alignment view</strong>
+                            igv.js {{ igv_version }} is embedded in this file, compressed, and
+                            expands when the report is opened. It makes no network request.
+                        </p>
+                    {% endif %}
+                </div>
                 <div id="igvDiv"></div>
             </div>
         </div>
@@ -755,21 +884,15 @@
         </details>
     </main>
 
-    <!-- jQuery and DataTables scripts -->
-    <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
-    <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
-    <!-- Bootstrap Bundle. Nothing this page runs calls into it any more; the three
-         CDN tags are removed together in a later change. -->
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
-
     <!--
-      Both switches, in their own script element and deliberately not jQuery. Both
-      facts matter: a reader with no network still gets them, because everything
-      they act on is already in the file, and a `$` that never loaded throws at the
-      top of whichever block it is in - which takes every statement after it in
-      that block down with it. "Show detailed coverage" was in the jQuery block and
-      was therefore a control that focused, ticked and did nothing for a reader
-      whose browser could not reach the CDN.
+      Both switches, in their own script element. This block used to sit beside three
+      `<script src>` tags pointing at jQuery, DataTables and Bootstrap; all three are
+      gone (#242), and with them the reason the blocks below are kept separate at all -
+      a `$` that never loaded threw at the top of whichever block it was in and took
+      every statement after it down with it, which is how "Show detailed coverage"
+      came to be a control that focused, ticked and did nothing for a reader with no
+      network. They stay separate anyway: a throw in one of them is still a throw, and
+      the variant table has no business depending on the coverage switch parsing.
     -->
     <script>
         document.addEventListener("DOMContentLoaded", function () {
@@ -831,11 +954,14 @@
         });
     </script>
 
-    <!-- Table set-up -->
+    <!-- Column sort -->
     <script>
-        // The flag glyph, the flag reason and every displayed number are rendered by
-        // `report_formatting.py` before this file is written. Three things used to
-        // happen here instead and all three are gone (#242):
+        // What replaced DataTables. Nothing here changes what the report *says*: no
+        // filtering, no paging, no rounding, no row removal. If this block throws on
+        // its first line the report is still correct - the rows are all in the file,
+        // in the order the pipeline wrote them, at the precision it wrote them.
+        //
+        // Four things used to happen in this position and all four are gone (#242):
         //
         //   * a DataTables row-visibility predicate removed every flagged row from
         //     the DOM until a switch was ticked, so a report narrating a flagged
@@ -845,34 +971,75 @@
         //     1e-9 into the displayed value 0;
         //   * a client-side flag renderer replaced the reason with a bare glyph
         //     carrying it in a Bootstrap `title`, invisible in print, invisible to a
-        //     screen reader, and absent when the script did not run.
+        //     screen reader, and absent when the script did not run;
+        //   * a "Showing 1 to 3 of 3 entries" footer that counted the rows left
+        //     *after* the filter had removed the others.
         //
         // Each was a value the reader saw only if three CDNs resolved. Nothing below
         // may reintroduce one: `tests/unit/test_generate_report.py::
         // test_no_per_sample_result_row_enters_a_hiding_path` and the browser tier
         // both fail if it does.
-        $(document).ready(function() {
-            // Sorting only. Paging, searching and the row-count footer are off
-            // because each of them decides, in the browser, which rows a reader of a
-            // single-patient report is allowed to see. `order` is empty so the table
-            // keeps the order the pipeline wrote it in - the DataTables default would
-            // re-sort it on the first column.
-            //
-            // No `columnDefs` width either. It set every column to 150px, which is
-            // the "distributing width evenly" that `table { width: auto }` in the
-            // shared token layer exists to stop: eleven fixed columns do not fit
-            // 1108px, so the browser squeezed them all and "Not flagged" wrapped onto
-            // two lines while a 121 bp motif sequence wrapped onto seventeen. Columns
-            // size to their content now and the table scrolls inside
-            // `.table-container` - which is why `Motif_sequence` is the last column.
-            $('table:not(#detailedCoverageView table)').DataTable({
-                "paging": false,
-                "searching": false,
-                "info": false,
-                "order": [],
-                "autoWidth": false
+        (function () {
+            "use strict";
+
+            // **Sorting reorders rows. It never removes them**, which is the whole
+            // reason sorting is allowed in a single-patient report when paging,
+            // searching and filtering are not: those three decide, in the browser,
+            // which rows the reader is permitted to see, and this one does not.
+            function cellValue(row, index) {
+                const cell = row.children[index];
+                return cell ? cell.textContent.trim() : "";
+            }
+
+            function comparator(index, direction) {
+                return function (a, b) {
+                    const x = cellValue(a, index);
+                    const y = cellValue(b, index);
+                    const nx = Number(x.replace(/,/g, ""));
+                    const ny = Number(y.replace(/,/g, ""));
+                    const both = !Number.isNaN(nx) && !Number.isNaN(ny) && x !== "" && y !== "";
+                    const result = both ? nx - ny : x.localeCompare(y, undefined, { numeric: true });
+                    return direction === "descending" ? -result : result;
+                };
+            }
+
+            // The heading becomes a real `<button>` here rather than in the markup,
+            // because it is a control that only works when this script runs: a report
+            // opened with scripting off, or printed, would otherwise offer an
+            // affordance that does nothing. The button takes the heading's own text as
+            // its accessible name, so it needs no label of its own, and `aria-sort` on
+            // the `th` is what announces the current direction.
+            document.querySelectorAll("table.sortable").forEach(function (table) {
+                if (!table.tHead || !table.tHead.rows.length || !table.tBodies.length) {
+                    return;
+                }
+                const headers = Array.from(table.tHead.rows[0].cells);
+                headers.forEach(function (th, index) {
+                    const label = th.textContent.trim();
+                    if (!label) {
+                        return;
+                    }
+                    const button = document.createElement("button");
+                    button.type = "button";
+                    button.textContent = label;
+                    th.textContent = "";
+                    th.appendChild(button);
+                    th.setAttribute("aria-sort", "none");
+                    // A `<button>` answers Enter and Space by itself, so there is no
+                    // key handler here and none is needed - which is exactly why the
+                    // control is a button rather than a `<th>` with a click listener.
+                    button.addEventListener("click", function () {
+                        const next = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+                        headers.forEach(function (other) { other.setAttribute("aria-sort", "none"); });
+                        th.setAttribute("aria-sort", next);
+                        const body = table.tBodies[0];
+                        Array.from(body.rows)
+                            .sort(comparator(index, next))
+                            .forEach(function (row) { body.appendChild(row); });
+                    });
+                });
             });
-        });
+        })();
     </script>
 
     <!--
@@ -885,8 +1052,69 @@
     <script>
         const tableJson = {{ table_json | safe }};
         const sessionDictionary = {{ session_dictionary | safe }};
+        {% if igv_payload %}
+        // The vendored alignment library: igv.js {{ igv_version }}, gzipped and
+        // base64-encoded by `report_assets.igv_payload`. It is written here only when
+        // this run produced an alignment session and `--report-igv embedded` was in
+        // effect, so a report with no alignments carries none of these 497 KB.
+        const IGV_GZ_B64 = "{{ igv_payload }}";
+        {% endif %}
 
         let igvBrowser;
+
+        // Replace whatever is in the alignment frame with an authored state. Every
+        // string passed to this is written in the template or right here, never read
+        // from a sample: `textContent` on both parts is what keeps it that way.
+        function setAlignmentState(heading, detail) {
+            const frame = document.getElementById("igvState");
+            if (!frame) {
+                return;
+            }
+            const paragraph = document.createElement("p");
+            paragraph.className = "empty-state";
+            const strong = document.createElement("strong");
+            strong.textContent = heading;
+            paragraph.appendChild(strong);
+            paragraph.appendChild(document.createTextNode(detail));
+            frame.replaceChildren(paragraph);
+        }
+
+        function clearAlignmentState() {
+            const frame = document.getElementById("igvState");
+            if (frame) {
+                frame.remove();
+            }
+        }
+
+        // Expand the embedded library and evaluate it.
+        //
+        // **On `(0, eval)`.** It is indirect eval, so the library is evaluated in
+        // global scope, which is where a UMD bundle expects to define `window.igv`.
+        // What makes evaluating a megabyte of JavaScript defensible here is what the
+        // megabyte is: a vendored asset at a pinned version, whose SHA-256 is verified
+        // **in Python at render time** - over the decompressed bytes, which are exactly
+        // the string this line receives - and printed in the report's Provenance
+        // section for the reader to check against upstream. It is never sample-derived
+        // and never read from anywhere but this document.
+        //
+        // Verifying it again in the browser is deliberately not attempted:
+        // `crypto.subtle` is unavailable on `file://` in several engines, and an
+        // archived report is opened from `file://` more often than not - so a runtime
+        // check would be a check that silently does not run on exactly the machines it
+        // was written for. The check lives where it can actually happen.
+        async function loadIgv() {
+            if (typeof IGV_GZ_B64 === "undefined") {
+                return null;
+            }
+            if (typeof DecompressionStream === "undefined") {
+                return null;
+            }
+            const bytes = Uint8Array.from(atob(IGV_GZ_B64), function (c) { return c.charCodeAt(0); });
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+            const source = await new Response(stream).text();
+            (0, eval)(source);
+            return window.igv;
+        }
 
         document.addEventListener("DOMContentLoaded", function () {
             // The variant list is evidence this file already carries, so it is
@@ -895,37 +1123,77 @@
             // network got no variant list either - the same "you see this only if
             // a CDN answered" shape as the rest of #242.
             initTable();
-            // No IGV report was generated for this sample: tableJson and
-            // sessionDictionary fall back to empty literals, and igv.createBrowser
-            // would throw on an undefined sessionURL and abort the rest of the
-            // script.
+            // No alignment session: the frame already carries the sentence saying so,
+            // written into the markup by the template because Python knows this before
+            // the file is written. Nothing to start, nothing to say twice.
             if (sessionDictionary && Object.keys(sessionDictionary).length > 0) {
                 initIGV();
-            } else {
-                document.getElementById("igvContainer").innerHTML =
-                    "<p><em>No IGV alignment visualization is available for this sample.</em></p>";
             }
         });
 
         function initIGV() {
-            // igv.js comes from a CDN. When it did not arrive, say so instead of
-            // throwing: the variant table above stands on its own.
-            if (typeof igv === "undefined") {
-                document.getElementById("igvContainer").innerHTML =
-                    "<p><em>The alignment viewer could not be loaded, so it is not shown. " +
-                    "The variant table above is complete without it.</em></p>";
+            if (typeof IGV_GZ_B64 === "undefined") {
+                // `--report-igv sidecar` or `off`, or a report whose payload was
+                // elided: the frame already says which, from the markup.
                 return;
             }
-            const igvDiv = document.getElementById("igvDiv");
-            const options = {
-                sessionURL: sessionDictionary["0"],
-                showChromosomeWidget: false,
-                showCenterGuide: true,
-                search: false
-            };
+            if (typeof DecompressionStream === "undefined") {
+                // Any engine older than Chrome 80, Safari 16.4 or Firefox 113. The
+                // library is in this file and cannot be expanded here, which is a
+                // different fact from "there is no alignment data" - and until #242
+                // neither was said: the load threw and the reader got blank space.
+                setAlignmentState(
+                    "This browser cannot expand the embedded alignment browser.",
+                    " igv.js travels in this file compressed, and expanding it needs " +
+                    "DecompressionStream, which arrived in Chrome 80, Safari 16.4 and " +
+                    "Firefox 113. Nothing has been hidden: the variant tables above are " +
+                    "complete without it, and so is the variant list beside this frame."
+                );
+                return;
+            }
 
-            igv.createBrowser(igvDiv, options).then(function (browser) {
-                igvBrowser = browser;
+            loadIgv().then(function (igv) {
+                if (!igv) {
+                    setAlignmentState(
+                        "The alignment browser could not be started.",
+                        " The embedded library did not expand into a usable browser. The " +
+                        "variant tables above are complete without it."
+                    );
+                    return;
+                }
+                const igvDiv = document.getElementById("igvDiv");
+                const options = {
+                    sessionURL: sessionDictionary["0"],
+                    showChromosomeWidget: false,
+                    showCenterGuide: true,
+                    search: false,
+                    // **Embedding the library is not the whole of "makes no network
+                    // request" (#242).** igv.js fetches its own genome registry -
+                    // `https://igv.org/genomes/genomes.json`, with a fallback to an S3
+                    // mirror - on `createBrowser`, to populate a genome selector this
+                    // report does not show. Measured in Chromium, and invisible to any
+                    // source-text scan: the URL is inside the minified bundle, not in
+                    // this document. `GenomeUtils.initializeGenomes` guards it with
+                    // `if (false !== config.loadDefaultGenomes)`, so this is the
+                    // supported way to switch it off. The genome this browser shows
+                    // comes from the session file beside the report, which is what the
+                    // registry would never have supplied anyway.
+                    // `tests/browser/test_offline_document.py` is what found it and is
+                    // what keeps it gone.
+                    loadDefaultGenomes: false
+                };
+                return igv.createBrowser(igvDiv, options).then(function (browser) {
+                    igvBrowser = browser;
+                    clearAlignmentState();
+                });
+            }).catch(function (error) {
+                // A rejected promise used to leave the placeholder standing and the
+                // reason in the console, where no reader of an archived report will
+                // ever look for it.
+                setAlignmentState(
+                    "The alignment browser could not be started.",
+                    " " + String(error) + ". The variant tables above are complete without it."
+                );
             });
         }
 
@@ -957,14 +1225,30 @@
         }
 
         function selectVariantRow(selected) {
+            // **`aria-current`, not `aria-selected` inside a `role="grid"` (#242).**
+            //
+            // The table used to declare `role="grid"` so that `aria-selected` on a row
+            // would be meaningful. That is true, and it is the wrong trade: `grid` is a
+            // composite widget, and declaring it promises a keyboard contract this
+            // table does not implement - Left and Right between cells, Home and End to
+            // the ends of a row and of the grid, and a managed focus model. A screen
+            // reader announces "grid" and the reader presses the keys it implies and
+            // gets nothing, which is worse than not claiming the role.
+            //
+            // `aria-current="true"` carries the same fact - this is the row the
+            // alignment view is showing - on any element, in any container, with no
+            // obligation attached. The row also loses `role="row"`: a `<tr>` in a plain
+            // table already has that role, and restating it was only there to prop up
+            // the grid. Which row is current is additionally carried in words, by the
+            // control's own "Showing" / "Show", so nothing here depends on ARIA alone.
             const all = document.querySelectorAll("#variant_table tbody tr");
             for (let i = 0; i < all.length; i++) {
                 all[i].classList.remove("selected");
-                all[i].setAttribute("aria-selected", "false");
+                all[i].removeAttribute("aria-current");
                 setVariantButtonState(all[i].querySelector(".variant-select"), false);
             }
             selected.classList.add("selected");
-            selected.setAttribute("aria-selected", "true");
+            selected.setAttribute("aria-current", "true");
             setVariantButtonState(selected.querySelector(".variant-select"), true);
 
             const session = sessionDictionary[selected.id.substring(4)];
@@ -976,10 +1260,12 @@
         }
 
         function moveVariantFocus(button, offset) {
-            // `role="grid"` promises arrow-key movement between rows. Every control
-            // stays a Tab stop as well, deliberately: a roving tabindex would make
-            // all but one of them unreachable by Tab alone, which is the defect
-            // this change exists to remove.
+            // Up and Down move between the row controls. This is a convenience and is
+            // deliberately not advertised as a keyboard contract: the table declares no
+            // composite role, so nothing has promised the reader Left, Right, Home or
+            // End, and every control stays a Tab stop of its own. A roving tabindex
+            // would make all but one of them unreachable by Tab alone, which is the
+            // defect this change exists to remove.
             const buttons = document.querySelectorAll("#variant_table .variant-select");
             for (let i = 0; i < buttons.length; i++) {
                 if (buttons[i] === button) {
@@ -1001,10 +1287,8 @@
 
             const table = document.createElement("table");
             table.id = "variant_table";
-            // `aria-selected` is only meaningful on a row inside a grid, and the
-            // grid is what makes "which variant am I on" a fact in the
-            // accessibility tree rather than a background colour.
-            table.setAttribute("role", "grid");
+            // A plain table with an accessible name. See `selectVariantRow` for why it
+            // is not a `role="grid"` any more.
             table.setAttribute("aria-label", "Variants; choose one to show it in the alignment view");
             table.style.width = "100%";
             selectorDiv.appendChild(table);
@@ -1039,8 +1323,6 @@
                 const unique_id = rowData[0];
                 const row = document.createElement("tr");
                 row.id = "row_" + unique_id;
-                row.setAttribute("role", "row");
-                row.setAttribute("aria-selected", "false");
                 tbody.appendChild(row);
 
                 // The control, not the row. Assigning a click handler to the row

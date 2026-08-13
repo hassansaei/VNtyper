@@ -35,6 +35,7 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from vntyper.scripts import report_assets
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
@@ -110,15 +111,23 @@ ADVNTR_ROW_NOUN = "adVNTR"
 
 #: CSS classes on both per-sample results tables. Named once so the two cannot drift.
 #:
-#: **No ``table-striped``** (#242). Bootstrap's
-#: ``.table-striped tbody tr:nth-of-type(odd)`` is specificity (0,2,2) and outranks the
-#: token layer's own row background, so the stripe won wherever it was applied - and a
-#: stripe competes with the one row treatment in these tables that carries meaning, the
-#: flagged-value highlight. It was also the ``#f2f2f2`` under the old inline ``orange``
-#: that measured 1.76:1. The cohort report keeps it for now
-#: (``cohort_tables.TABLE_CLASSES``): its tables are a triage scan across samples rather
-#: than a single patient's evidence, and changing its look is not this change's business.
-PER_SAMPLE_TABLE_CLASSES = "table table-bordered hover compact table-sm"
+#: Every Bootstrap and DataTables class is gone with the CDN tags that gave them meaning
+#: (#242): ``table-bordered``, ``table-sm``, ``hover``, ``compact`` and ``order-column``
+#: styled nothing this repository ships, and leaving them would have left the next reader
+#: to work out which of five class names were live. Two remain and both are ours:
+#: ``table`` is the hook the shared token layer's cell rules select on, and ``sortable``
+#: is what the report's own script looks for when it turns column headings into buttons.
+#:
+#: **No ``table-striped``.** A stripe competes with the one row treatment in these tables
+#: that carries meaning, the flagged-value highlight, and it was the ``#f2f2f2`` under the
+#: old inline ``orange`` that measured 1.76:1. That used to be enforced only by not
+#: emitting a Bootstrap class - a claim with no rule and no test behind it - so re-adding
+#: it passed the whole suite. The row background is now the report's own, and
+#: ``tests/unit/test_report_presentation.py`` and ``tests/browser/test_flagged_rows.py``
+#: hold it to one value: one in the source, one measured in a real browser. The cohort
+#: report keeps its stripes (``cohort_tables.TABLE_CLASSES``), and its own stylesheet is
+#: what draws them now.
+PER_SAMPLE_TABLE_CLASSES = "table sortable"
 
 
 def load_pipeline_summary(summary_file_path):
@@ -150,6 +159,15 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
     Wrapper around `create_report` IGV command. If config is provided and flanking
     is not explicitly set, we fall back to config's default_values.flanking.
     Skips passing None for track arguments (vcf_file or bam_file).
+
+    ``--standalone`` is passed, and that is a fix rather than a preference (#242).
+    Without it igv-reports writes a page that loads igv.js from a CDN, so
+    ``igv_report.html`` -- the file ``--report-igv sidecar`` hands the reader as *the*
+    alignment browser, and which every mode leaves in the output directory -- had
+    exactly the offline defect the summary report was being fixed for, unnoticed
+    because nobody had looked at the sidecar. It is passed in every mode: the file is
+    an artifact of the run whichever mode wrote it, and an artifact that only works
+    online is not one.
     """
     logger.debug("run_igv_report called with:")
     logger.debug("  bed_file=%s", bed_file)
@@ -171,6 +189,7 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
     igv_report_cmd = [
         "create_report",
         bed_file,
+        "--standalone",
         "--flanking",
         str(flanking),
         "--fasta",
@@ -434,6 +453,7 @@ def generate_summary_report(
     vcf_file=None,
     config=None,
     sample_name=None,
+    report_igv=report_assets.DEFAULT_REPORT_IGV,
 ):
     """
     Generates a summary report based on a pipeline summary JSON file.
@@ -459,9 +479,18 @@ def generate_summary_report(
             ``vntyper report --sample-name``; the pipeline passes nothing and the
             name is derived from the summary's own ``input_files`` instead - see
             :func:`~vntyper.scripts.report_identity.resolve_sample_name`.
+        report_igv (str, optional): How the report carries its alignment browser -
+            one of :data:`~vntyper.scripts.report_assets.REPORT_IGV_MODES`.
+            ``embedded`` (the default) writes the vendored, gzipped igv.js into the
+            document, so the archived file is a complete alignment browser needing
+            neither a second file nor a network. ``sidecar`` leaves it out and
+            points the reader at the self-contained ``igv_report.html`` beside it.
+            ``off`` produces no alignment browser at all. Reachable as
+            ``--report-igv`` on both ``vntyper pipeline`` and ``vntyper report``.
 
     Raises:
-        ValueError: If config is not provided.
+        ValueError: If config is not provided, or ``report_igv`` is not a recognised
+            mode, or the vendored asset fails its digest check.
     """
     logger.debug("---- DEBUG: Entered generate_summary_report ----")
     logger.debug(
@@ -613,8 +642,18 @@ def generate_summary_report(
 
     pipeline_log_content = load_pipeline_log(log_file)
 
-    # IGV report generation (if applicable)
-    if bed_file and os.path.exists(bed_file):
+    # IGV report generation (if applicable). `off` skips it outright: the mode says
+    # the run wants no alignment browser, and running `create_report` anyway would
+    # spend the time and write the file for nothing.
+    if report_igv not in report_assets.REPORT_IGV_MODES:
+        msg = f"Unknown --report-igv mode {report_igv!r}; expected one of {', '.join(report_assets.REPORT_IGV_MODES)}."
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if report_igv == report_assets.REPORT_IGV_OFF:
+        logger.info("--report-igv off: no alignment browser is produced for this run.")
+        igv_report_file = None
+    elif bed_file and os.path.exists(bed_file):
         logger.info("Running IGV report for BED file: %s", bed_file)
         igv_report_file = Path(output_dir) / "igv_report.html"
         run_igv_report(
@@ -636,6 +675,21 @@ def generate_summary_report(
         logger.warning("IGV report file not found. Skipping IGV content.")
         igv_content, table_json, session_dictionary = "", "", ""
 
+    # Whether this run has an alignment session at all. The template branches on it to
+    # author the right "there is no alignment view here" sentence *in the markup*, which
+    # is what makes that sentence true for a reader with scripting off - and it is also
+    # what decides whether the 497 KB payload is written at all. A report with no
+    # alignments carries none of it.
+    session_literal = js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY)
+    igv_session_available = session_literal.strip() not in ("", EMPTY_SESSION_DICTIONARY)
+    igv_payload = report_assets.igv_payload(report_igv) if igv_session_available else None
+    if igv_payload is None:
+        logger.info(
+            "No igv.js payload written into the report (mode=%s, alignment session=%s).",
+            report_igv,
+            igv_session_available,
+        )
+
     fastp = summarise_fastp(load_fastp_output(Path(output_dir) / "fastq_bam_processing/output.json"))
 
     coverage_icon, coverage_color = threshold_icon(
@@ -655,7 +709,7 @@ def generate_summary_report(
     # empty box under the heading - and every cell was escaped a step earlier instead.
     kestrel_html = escaped_table_html(
         kestrel_df,
-        classes=PER_SAMPLE_TABLE_CLASSES + " order-column",
+        classes=PER_SAMPLE_TABLE_CLASSES,
         html_columns=("Confidence", "Flag"),
         table_id="kestrel_table",
     )
@@ -786,7 +840,25 @@ def generate_summary_report(
         # Interpolated straight into a <script> block, so they must parse even
         # when there is no IGV report at all.
         "table_json": js_json_literal(table_json, EMPTY_TABLE_JSON),
-        "session_dictionary": js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY),
+        "session_dictionary": session_literal,
+        # The alignment browser. `igv_payload` is the base64 of the vendored, gzipped
+        # igv.js and is None unless this run has a session *and* the mode is
+        # `embedded`; the template writes the `IGV_GZ_B64` constant only when it is
+        # there, so a sample with no alignments carries no library. It is interpolated
+        # into a double-quoted JavaScript string under autoescaping rather than marked
+        # `|safe`: base64's alphabet contains none of the five characters Jinja2
+        # escapes, so escaping is a no-op over it, and
+        # `test_the_embedded_payload_survives_the_round_trip_into_the_document`
+        # decodes it back out of the rendered file and checks it against the pinned
+        # digest rather than assuming that.
+        "igv_payload": igv_payload,
+        "igv_mode": report_igv,
+        "igv_version": report_assets.IGV_VERSION,
+        "igv_session_available": igv_session_available,
+        # One line for the Provenance block: which library, which digest, and where it
+        # is. Built in the pure module because choosing the wording is presentation
+        # logic over a computed state (AGENTS.md trap 11).
+        "igv_provenance": report_assets.igv_provenance(report_igv),
         # Two timestamps, labelled, because they are different facts. `report_date`
         # is `datetime.now()` at render, so re-running `vntyper report` over an
         # archived run restamped the only date on the page and the artefact

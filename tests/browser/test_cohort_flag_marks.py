@@ -8,17 +8,24 @@ were the only difference left. The mark now carries ``role="img"`` and an
 
 Why this is a browser test
 --------------------------
-The cell is rebuilt **in the browser**, on DataTables' ``preDrawCallback``, so
-nothing about the rendered file says what the reader ends up with.
-``tests/unit/test_cohort_summary_oracle.py`` cannot see it either - ``_skeleton()``
-replaces every script body with ``<SCRIPT-BODY>`` before hashing - so reverting the
-accessible name was silent in every tier this repository had. This file is what
-makes it loud.
+The cell is rebuilt **in the browser**, so nothing about the rendered file says what
+the reader ends up with. ``tests/unit/test_cohort_summary_oracle.py`` cannot see it
+either - ``_skeleton()`` replaces every script body with ``<SCRIPT-BODY>`` before
+hashing - so reverting the accessible name was silent in every tier this repository
+had. This file is what makes it loud.
 
 The cohort report keeps its filter, deliberately (#242, precondition P4): hiding
 flagged rows is defensible for triage across samples and indefensible for a
 single-patient read. So the flagged specimen is reached by ticking the switch, which
 is also the only way a reader reaches it.
+
+**What changed when DataTables left.** The mark used to be built on DataTables'
+``preDrawCallback``, which meant it existed only for a reader whose browser had
+reached three CDNs - so "offline" was the no-script case and the last test here used
+it as one. The vanilla script runs for every reader, online or offline, so the
+no-script case is now stated as what it always meant: a context with JavaScript
+disabled. That is a stricter test than the one it replaces, because it no longer
+depends on a network condition to stand in for a scripting condition.
 """
 
 from __future__ import annotations
@@ -30,7 +37,6 @@ import pandas as pd
 import pytest
 from playwright.sync_api import Page
 
-from tests.browser.conftest import enhancement_state
 from vntyper.cli import load_config
 from vntyper.scripts.cohort_summary import generate_cohort_summary_report
 
@@ -71,10 +77,16 @@ ADVNTR_ROWS = pd.DataFrame([{"Sample": "sample_one", "VID": "25561", "Flag": CLE
 #: colour-coded ``Confidence`` span out of the result.
 MARK_SELECTOR = "table tbody td:last-child span"
 
-#: Read every flag mark the browser built, with the row it sits in for the failure
-#: message.
+#: Read every flag mark the reader can actually see, with the row it sits in for the
+#: failure message.
+#:
+#: **Visible, not merely present.** DataTables took a filtered row out of the DOM, so
+#: counting elements and counting what a reader sees were the same number; the vanilla
+#: filter sets ``hidden`` on the row and leaves it in the document, which is a better
+#: implementation and a worse thing to count. The ``offsetParent`` check is what keeps
+#: this measuring the reader's experience rather than the DOM's contents.
 _MARKS = """
-els => els.map(e => ({
+els => els.filter(e => e.offsetParent !== null).map(e => ({
     row: e.closest('tr').textContent.replace(/\\s+/g, ' ').trim(),
     role: e.getAttribute('role') || '',
     label: e.getAttribute('aria-label'),
@@ -128,11 +140,8 @@ def _marks(page: Page) -> list[dict[str, str]]:
 def _require_the_marks_were_built(page: Page, expected: int) -> list[dict[str, str]]:
     """Fail unless the browser actually rebuilt the flag column.
 
-    This is the positive proof that the pass was online, and it is a better one
-    than asking jQuery its version: ``updateFlagColumn`` runs on DataTables'
-    ``preDrawCallback``, so a mark existing at all means the exact code path under
-    test executed. Without it every assertion below would hold vacuously over an
-    empty list on a machine with no network.
+    A mark existing at all means the exact code path under test executed, so this is
+    what stops every assertion below from holding vacuously over an empty list.
 
     Args:
         page: An already-loaded page.
@@ -143,8 +152,8 @@ def _require_the_marks_were_built(page: Page, expected: int) -> list[dict[str, s
     """
     marks = _marks(page)
     assert len(marks) == expected, (
-        f"expected {expected} flag marks, found {len(marks)}: {marks}. DataTables did not rebuild the flag "
-        f"column, so nothing below tests the accessible name. Enhancement state: {enhancement_state(page)}"
+        f"expected {expected} flag marks, found {len(marks)}: {marks}. The script did not rebuild the flag "
+        "column, so nothing below tests the accessible name."
     )
     return marks
 
@@ -201,19 +210,29 @@ def test_the_mark_is_announced_as_the_reason_it_stands_for(
 
 def test_the_reason_is_still_readable_when_no_script_ran(
     rendered_cohort_report: Path,
-    open_report: Callable[..., Page],
+    browser,
 ) -> None:
     """The mark is an enhancement over text, not the only carrier of the reason.
 
-    Offline there is no jQuery, so ``updateFlagColumn`` never runs and the ``Flag``
-    cell keeps what the server wrote into it. If that were not the reason in words,
-    the accessible name above would be papering over a cell that says nothing to a
-    reader with no network.
+    With scripting off nothing rebuilds the cell, so it keeps what the server wrote
+    into it. If that were not the reason in words, the accessible name above would be
+    papering over a cell that says nothing at all to a reader whose browser did not
+    run the script - and it would also mean every row of the file was unreadable in
+    a text extractor, which is how an archived cohort table gets read years later.
+
+    This used to be measured *offline*, because offline was when jQuery failed to
+    arrive and the rebuild never happened. The rebuild no longer depends on the
+    network, so the condition is now stated directly.
     """
-    page = open_report(rendered_cohort_report, offline=True)
+    context = browser.new_context(java_script_enabled=False)
+    try:
+        page = context.new_page()
+        page.goto(rendered_cohort_report.as_uri(), wait_until="load")
 
-    assert _marks(page) == [], "a mark was built offline, so this is not the no-script case"
+        assert _marks(page) == [], "a mark was built with scripting off, so this is not the no-script case"
 
-    cells: list[str] = page.eval_on_selector_all("table tbody tr", _LAST_CELL_TEXT)
-    assert CLEAN_FLAG in cells, f"the clean reason is not readable without a script: {cells}"
-    assert FLAGGED_REASON in cells, f"the flag reason is not readable without a script: {cells}"
+        cells: list[str] = page.eval_on_selector_all("table tbody tr", _LAST_CELL_TEXT)
+        assert CLEAN_FLAG in cells, f"the clean reason is not readable without a script: {cells}"
+        assert FLAGGED_REASON in cells, f"the flag reason is not readable without a script: {cells}"
+    finally:
+        context.close()

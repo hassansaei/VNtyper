@@ -43,7 +43,7 @@ from tests.browser.conftest import (
     EXPECTED_KESTREL_ROWS,
     HIDDEN_FLAGS,
     KESTREL_ROW_SELECTOR,
-    enhancement_state,
+    external_requests,
     kestrel_column_text,
 )
 
@@ -163,31 +163,29 @@ def test_the_report_reads_identically_online_and_offline(
     online = visible_kestrel_rows(online_page)
     offline = visible_kestrel_rows(open_report(rendered_report, offline=True))
 
-    # Proving the online pass was really online takes a POSITIVE check. The
-    # absence of a transport failure is not one: `requestfailed` fires for a
-    # dropped connection and a blocked route, and not for a 404, a 503, or a 200
-    # carrying unusable JavaScript. In any of those the third-party scripts never
-    # initialise, both passes render the same raw table, and `online == offline`
-    # passes against a report nobody has checked. So: nothing failed, nothing came
-    # back with an error status, and the enhancement is live in the page itself.
+    # **This is the successor guard the previous version of this comment described.**
     #
-    # SUCCESSOR, for the task that removes the CDN tags: once the report fetches
-    # nothing, "the online pass was really online" is not a meaningful thing to
-    # assert, and jQuery will not be there to assert it with. The guard that
-    # replaces this one is the opposite claim - that the online pass issued ZERO
-    # non-`file://` requests, which is the same evidence read the other way round.
-    # It would fail today, which is why it is a note here and not code.
+    # Proving the online pass was really online used to take a positive check that
+    # jQuery and DataTables had initialised: the absence of a transport failure is not
+    # one, because `requestfailed` fires for a dropped connection and a blocked route
+    # and not for a 404, a 503, or a 200 carrying unusable JavaScript. In any of those
+    # the third-party scripts never initialised, both passes rendered the same raw
+    # table, and `online == offline` passed against a report nobody had checked.
+    #
+    # The CDN tags are gone (#242) and there is no jQuery left to ask, so the guard is
+    # the opposite claim over the same evidence: the online pass issued **zero**
+    # non-`file://` requests. That is a stronger statement than the one it replaces -
+    # it is about the document rather than about the network, and it holds in the
+    # offline pass too, because Playwright records a request before the route handler
+    # can abort it. `tests/browser/test_offline_document.py` proves the recorder is
+    # not vacuous by pointing a control document at a host and watching it be seen.
+    assert external_requests(online_page) == [], (
+        f"the online pass fetched something off-machine: {external_requests(online_page)}"
+    )
     assert not failed_requests[online_page], (
-        f"the online pass could not complete every request, so it was not online: {failed_requests[online_page]}"
+        f"the online pass could not complete every request: {failed_requests[online_page]}"
     )
-    assert not error_responses[online_page], (
-        f"the online pass got error statuses back, so its scripts did not run: {error_responses[online_page]}"
-    )
-    state = enhancement_state(online_page)
-    assert state["jquery"] and state["dataTable"], (
-        "the online pass loaded no working jQuery/DataTables, so it rendered the same unenhanced page the "
-        f"offline pass does and this comparison proves nothing: {state}"
-    )
+    assert not error_responses[online_page], f"the online pass got error statuses back: {error_responses[online_page]}"
 
     # An empty selector would make `[] == []` pass against an unmodified report,
     # which is how this check silently stops testing anything.

@@ -3,15 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <title>Cohort Summary Report</title>
-  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-  <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
 
-  <!-- The token layer, and the viewport meta, shared with the per-sample report.
-       Included after the two CDN stylesheets so that at equal specificity the token
-       values win. The switch, the focus ring, the results-table mechanics and the
-       print block used to be written out here and in `report_template.html`
-       separately; the truncation block was byte-identical in both. What is left
-       below is what only the cohort report has. -->
+  <!-- **This document resolves nothing off-machine (#242).** It used to open with
+       Bootstrap's and DataTables' stylesheets and close with jQuery, Bootstrap and
+       DataTables, from three third-party hosts. All five are gone, and with them the
+       two behaviours that made this file read differently depending on the reader's
+       network: `applyRounding`, which rewrote every numeric cell to four decimal
+       places in the DOM so the figure on screen was not the figure in the file, and a
+       flag column that only existed once a CDN had answered.
+
+       The cohort report keeps all three of its affordances - filtering flagged rows,
+       search and paging (precondition P4) - reimplemented in the vanilla script at the
+       foot of this file. They are kept *here* and refused in the per-sample report for
+       a reason that is about the read, not about the code: triage across hundreds of
+       samples is a search for the ones worth opening, and hiding rows is what that
+       task is. A single-patient report is a record, and a record with a control that
+       removes evidence from it is the defect this whole issue is named after.
+
+       The token layer, and the viewport meta, are shared with the per-sample report.
+       What is left below is what only this report has. -->
   {% include "_report_base.html" %}
 
   <style>
@@ -22,6 +32,66 @@
        horizontal scroll comes from; the width and centring are the cohort's own. */
     .table-container { width: 90%; margin: 0 auto; text-align: center; }
     .plot { margin: 20px auto; display: block; max-width: 500px; }
+
+    /* The zebra. It used to come from Bootstrap's `.table-striped`, at a specificity
+       (0,2,2) that outranked everything the token layer said about a row; the class is
+       still emitted (`cohort_tables.TABLE_CLASSES`) and this is now the only rule that
+       gives it meaning. Reading along a wide row across many samples is what a stripe
+       is for, and this table has nothing else tinting a row - the flagged ones are
+       filtered rather than highlighted here. The per-sample report has no such rule and
+       must not gain one: there a stripe would compete with the flagged-value highlight,
+       which is the one row treatment in those tables that carries meaning. */
+    .table-striped tbody tr:nth-of-type(odd) { background-color: var(--sunken); }
+
+    /* --- the table's own toolbar ------------------------------------------------
+       Search, page size and the pager, built by the script beneath each table rather
+       than written here: every one of them is a control that only works when a script
+       runs, and a report opened with scripting off shows every row of every table with
+       no controls at all, which is the correct fallback rather than a degraded one. */
+    .table-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--s-2) var(--s-4);
+      align-items: center;
+      justify-content: center;
+      margin: var(--s-3) auto var(--s-2);
+      font-size: var(--step--1);
+    }
+    .table-toolbar label { display: inline-flex; align-items: center; gap: var(--s-2); margin: 0; }
+    .table-toolbar input[type="search"],
+    .table-toolbar select {
+      font: inherit;
+      padding: var(--s-1) var(--s-2);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+    }
+    .table-pager {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--s-2) var(--s-3);
+      align-items: center;
+      justify-content: center;
+      margin: var(--s-2) auto var(--s-5);
+      font-size: var(--step--1);
+      color: var(--ink-muted);
+    }
+    .table-pager button {
+      font: inherit;
+      padding: var(--s-1) var(--s-3);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .table-pager button[disabled] { color: var(--ink-muted); cursor: default; }
+    /* The count line is what says how many rows are being withheld and why. It is the
+       one thing DataTables' own "Showing 1 to 10 of 57 entries" footer did that is
+       worth keeping, and it is kept only because the reader here has controls that
+       withhold rows on purpose. */
+    .table-status { font-size: var(--step--1); color: var(--ink-muted); }
   </style>
 </head>
 <body>
@@ -57,7 +127,7 @@
       {% if interactive %}
         {{ kestrel_plot_interactive | safe }}
       {% else %}
-        <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="img-fluid plot">
+        <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="plot">
       {% endif %}
     </div>
 
@@ -71,7 +141,7 @@
       {% if interactive %}
         {{ advntr_plot_interactive | safe }}
       {% else %}
-        <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="img-fluid plot">
+        <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="plot">
       {% endif %}
     </div>
 
@@ -83,144 +153,298 @@
     {% endif %}
   </main>
 
-  <!-- jQuery -->
-  <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
-  <!-- Bootstrap Bundle (includes Popper) for tooltips -->
-  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
-  <!-- DataTables -->
-  <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
   <script>
-    // Custom filter: only apply flag filtering if the table has a "Flag" column.
-    $.fn.dataTable.ext.search.push(
-      function(settings, data, dataIndex) {
-        var $table = $(settings.nTable);
-        var lastHeader = $table.find('thead th:last').text().trim();
-        if(lastHeader !== "Flag") {
-          // If table doesn't have a Flag column, do not filter.
-          return true;
-        }
-        var showFlagged = $('#toggleFlagged').prop('checked');
-        var row = settings.aoData[dataIndex].nTr;
-        var flagCell = $(row).find('td:last');
-        var originalFlag = flagCell.attr('data-original');
-        if (typeof originalFlag === "undefined") {
-          originalFlag = flagCell.text().trim();
-        }
-        if (originalFlag === "") {
-          return true;
-        }
-        // When switch is unchecked, only show rows where flag is "Not flagged" or "Not applicable".
-        return showFlagged || originalFlag === "Not flagged" || originalFlag === "Not applicable";
-      }
-    );
+    /* ========================================================================
+       The cohort report's table behaviour, in vanilla ES2020. This replaces
+       jQuery 3.5.1, DataTables 1.10.21 and Bootstrap 4.5.2 - 627,398 bytes over
+       three CDNs, of which DataTables is the one genuinely vulnerable and EOL pin
+       (CVE-2020-28458, CVE-2021-23445, SNYK-JS-DATATABLESNET-598806, all cleared
+       only at >= 1.11.3).
 
-    // Function to round numeric values to 4 decimal places.
-    function roundValue(val) {
-      var num = parseFloat(val);
-      if (!isNaN(num)) {
-        return parseFloat(num.toFixed(4)).toString();
-      }
-      return val;
-    }
+       What is kept, and why: filtering flagged rows, search and paging, because
+       cohort triage is a search across many samples and all three serve it
+       (precondition P4). What is *not* kept: `applyRounding`, which rewrote every
+       numeric cell to four decimal places in the DOM. It made this file say
+       different numbers to two readers of the same document depending on whether
+       a CDN answered, which is the defect #242 is about; the cells now read what
+       the pipeline wrote.
 
-    // Apply rounding to all table cells.
-    function applyRounding(tableElement) {
-      $(tableElement).find('td').each(function() {
-        var text = $(this).text().trim();
-        if ($.isNumeric(text)) {
-          $(this).text(roundValue(text));
+       Nothing here runs before the document is parsed, and nothing it does is
+       required for the report to be correct: with no script at all, every table
+       shows every row, at the precision in the file, with the flag reason in words.
+       ===================================================================== */
+    (function () {
+      "use strict";
+
+      var PAGE_SIZES = [10, 25, 50, 100];
+      var DEFAULT_PAGE_SIZE = 25;
+
+      /* The `Flag` values that mean "nothing to look at". Spelled out rather than
+         inferred: an empty cell is clean but it is not a *reason*, so it is named
+         separately below when the mark is given its accessible name. */
+      var CLEAN_FLAGS = ["", "Not flagged", "Not applicable"];
+
+      function lastHeading(table) {
+        var headings = table.querySelectorAll("thead th");
+        return headings.length ? headings[headings.length - 1].textContent.trim() : "";
+      }
+
+      /* The flag cell's server-written text, remembered before the mark replaces it.
+         Everything that filters, searches or names a row reads this rather than the
+         cell, so the reason survives being drawn as a glyph. */
+      function originalFlag(row) {
+        var cells = row.querySelectorAll("td");
+        if (!cells.length) {
+          return "";
         }
-      });
-    }
-
-    // Update the flag column for tables that have a "Flag" header.
-    function updateFlagColumn(tableElement) {
-      var $table = $(tableElement);
-      var lastHeader = $table.find('thead th:last').text().trim();
-      if(lastHeader !== "Flag") {
-        // Do nothing if this table doesn't have a "Flag" column.
-        return;
+        var cell = cells[cells.length - 1];
+        var stored = cell.getAttribute("data-original");
+        if (stored === null) {
+          stored = cell.textContent.trim();
+          cell.setAttribute("data-original", stored);
+        }
+        return stored;
       }
-      $table.find('tr').each(function() {
-        var $cells = $(this).find('td');
-        if ($cells.length) {
-          var $flagCell = $cells.last();
-          // Store the original flag value if not already set.
-          var originalText = $flagCell.attr('data-original');
-          if (typeof originalText === "undefined") {
-            originalText = $flagCell.text().trim();
-            $flagCell.attr('data-original', originalText);
+
+      /* Replace each `Flag` cell with a named mark.
+         The mark carries `role="img"` and an `aria-label` holding the reason, because
+         a glyph and a colour are two visual channels and no textual one: to a screen
+         reader the cell announced as a bare character, and in greyscale the two shapes
+         were the whole difference. An empty `Flag` is named for what it is - an image
+         with an empty accessible name is skipped outright, which is strictly worse
+         than the bare tick it replaced.
+
+         `title` is the native tooltip. It used to be Bootstrap's, initialised from
+         jQuery, so the reason was behind a pointer *and* behind a CDN; the native one
+         needs neither. The mark carries classes and no colour: this used to repaint
+         the glyph at runtime with a literal `red` at 4.00:1, in the one place a
+         stylesheet guard cannot see. */
+      function markFlagColumn(table) {
+        if (lastHeading(table) !== "Flag") {
+          return;
+        }
+        table.querySelectorAll("tbody tr").forEach(function (row) {
+          var cells = row.querySelectorAll("td");
+          if (!cells.length) {
+            return;
           }
-          // #207: the title is a sample-derived value. .attr() takes a value and
-          // .text() takes a text node, so neither goes through an HTML parse --
-          // which is what undid the server's escaping when this was built by
-          // concatenating into a markup string and calling .html().
-          // The mark is a glyph and a colour, so on its own it says nothing to a
-          // screen reader and nothing in greyscale beyond the ✓/✖ shape. `role`
-          // plus `aria-label` give it the reason in words; the tooltip stays for
-          // the pointer (#242).
-          //
-          // An empty `Flag` is clean, but it is not a reason - and `role="img"`
-          // with an empty `aria-label` is an image with NO accessible name, which
-          // a screen reader skips outright. That is strictly worse than the bare
-          // glyph this replaced, because a bare ✓ at least announces as a
-          // character. So the empty case is named for what it is.
-          //
-          // The mark carries classes, not a colour. It used to be
-          // `.css({color: isClean ? 'green' : 'red'})`, which repainted the glyph at
-          // runtime with a literal `red` at 4.00:1 against the page - the same defect
-          // `report_formatting.flag_html` was fixed for, surviving here because a
-          // stylesheet guard cannot see into a script. The two classes land on one
-          // element because this cell is required to hold exactly one `<span>`
-          // (`tests/browser/test_cohort_flag_marks.py`); the shared token layer matches
-          // that shape as well as the nested one the per-sample report builds.
-          var isClean = (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "");
-          var markName = originalText === "" ? "No flag recorded" : originalText;
-          var $mark = $('<span>')
-              .attr('data-toggle', 'tooltip')
-              .attr('title', originalText)
-              .attr('role', 'img')
-              .attr('aria-label', markName)
-              .addClass(isClean ? 'flag-clean flag-glyph' : 'flag-flagged flag-glyph')
-              .text(isClean ? '✓' : '✖');
-          $flagCell.empty().append($mark);
-        }
-      });
-      // Initialize Bootstrap tooltips.
-      $('[data-toggle="tooltip"]').tooltip({container: 'body'});
-    }
+          var cell = cells[cells.length - 1];
+          var reason = originalFlag(row);
+          var isClean = CLEAN_FLAGS.indexOf(reason) !== -1;
+          var mark = document.createElement("span");
+          mark.setAttribute("role", "img");
+          mark.setAttribute("title", reason);
+          mark.setAttribute("aria-label", reason === "" ? "No flag recorded" : reason);
+          mark.className = isClean ? "flag-clean flag-glyph" : "flag-flagged flag-glyph";
+          mark.textContent = isClean ? "✓" : "✖";
+          cell.replaceChildren(mark);
+        });
+      }
 
-    $(document).ready(function() {
-      // Initialize DataTables with preDrawCallback to update flag column only for tables with a Flag column.
-      // No `columnDefs` width: it set every column to 150px, which is the
-      // "distributing width evenly" that `table { width: auto }` in the shared token
-      // layer exists to stop. Columns size to their content and the table scrolls
-      // inside `.table-container`. Filtering, searching and paging are untouched -
-      // hiding flagged rows is defensible for triage across samples (#242, P4).
-      var dataTables = $('table').DataTable({
-        "paging": true,
-        "searching": true,
-        "info": true,
-        "autoWidth": false,
-        "preDrawCallback": function(settings) {
-          updateFlagColumn(this.api().table().node());
-        },
-        "drawCallback": function(settings) {
-          var tableNode = this.api().table().node();
-          applyRounding(tableNode);
+      /* --- column sort ------------------------------------------------------
+         Sorting reorders rows and never removes them, so it is the one control here
+         that cannot withhold anything. The heading becomes a real `<button>` - Enter
+         and Space for free, a focus ring for free, and `aria-sort` on the `th` saying
+         which way it went. */
+      function cellValue(row, index) {
+        var cell = row.children[index];
+        return cell ? cell.textContent.trim() : "";
+      }
+
+      function comparator(index, direction) {
+        return function (a, b) {
+          var x = cellValue(a, index);
+          var y = cellValue(b, index);
+          var nx = Number(x.replace(/,/g, ""));
+          var ny = Number(y.replace(/,/g, ""));
+          var both = !Number.isNaN(nx) && !Number.isNaN(ny) && x !== "" && y !== "";
+          var result = both ? nx - ny : x.localeCompare(y, undefined, { numeric: true });
+          return direction === "descending" ? -result : result;
+        };
+      }
+
+      function enhanceSorting(table, redraw) {
+        if (!table.tHead || !table.tHead.rows.length) {
+          return;
+        }
+        var headers = Array.prototype.slice.call(table.tHead.rows[0].cells);
+        headers.forEach(function (th, index) {
+          var label = th.textContent.trim();
+          if (!label) {
+            return;
+          }
+          var button = document.createElement("button");
+          button.type = "button";
+          button.textContent = label;
+          th.textContent = "";
+          th.appendChild(button);
+          th.setAttribute("aria-sort", "none");
+          button.addEventListener("click", function () {
+            var next = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+            headers.forEach(function (other) { other.setAttribute("aria-sort", "none"); });
+            th.setAttribute("aria-sort", next);
+            var body = table.tBodies[0];
+            Array.prototype.slice.call(body.rows)
+              .sort(comparator(index, next))
+              .forEach(function (row) { body.appendChild(row); });
+            redraw();
+          });
+        });
+      }
+
+      /* --- search, flag filter and paging -----------------------------------
+         One state object per table. `render` is the only thing that decides which
+         rows a reader can see, so there is exactly one place to read to know what
+         this report can hide and why. */
+      function setUpTable(table, index) {
+        var body = table.tBodies[0];
+        if (!body) {
+          return null;
+        }
+        var container = table.closest(".table-container") || table.parentNode;
+        var state = { query: "", page: 0, pageSize: DEFAULT_PAGE_SIZE, showFlagged: false };
+
+        var toolbar = document.createElement("div");
+        toolbar.className = "table-toolbar no-print";
+
+        var searchId = "tableSearch_" + index;
+        var searchLabel = document.createElement("label");
+        searchLabel.setAttribute("for", searchId);
+        searchLabel.textContent = "Search";
+        var search = document.createElement("input");
+        search.type = "search";
+        search.id = searchId;
+        search.placeholder = "sample, motif, flag…";
+        searchLabel.appendChild(search);
+        toolbar.appendChild(searchLabel);
+
+        var sizeId = "tablePageSize_" + index;
+        var sizeLabel = document.createElement("label");
+        sizeLabel.setAttribute("for", sizeId);
+        sizeLabel.textContent = "Rows per page";
+        var size = document.createElement("select");
+        size.id = sizeId;
+        PAGE_SIZES.forEach(function (value) {
+          var option = document.createElement("option");
+          option.value = String(value);
+          option.textContent = String(value);
+          option.selected = value === DEFAULT_PAGE_SIZE;
+          size.appendChild(option);
+        });
+        sizeLabel.appendChild(size);
+        toolbar.appendChild(sizeLabel);
+
+        /* Every control gets an id carrying its table's index. Three tables means
+           three toolbars and three pagers, and without ids "the Next button" is a
+           selector that matches whichever one the document happens to reach first -
+           for a reader's assistive technology as much as for a test. */
+        var pager = document.createElement("div");
+        pager.className = "table-pager no-print";
+        pager.id = "tablePager_" + index;
+        var previous = document.createElement("button");
+        previous.type = "button";
+        previous.id = "tablePrevious_" + index;
+        previous.textContent = "Previous";
+        var next = document.createElement("button");
+        next.type = "button";
+        next.id = "tableNext_" + index;
+        next.textContent = "Next";
+        var status = document.createElement("span");
+        status.className = "table-status";
+        status.id = "tableStatus_" + index;
+        /* The count line announces itself when it changes, so a reader who has just
+           typed in the search box is told how many rows are left rather than having
+           to go and look. */
+        status.setAttribute("role", "status");
+        pager.appendChild(previous);
+        pager.appendChild(status);
+        pager.appendChild(next);
+
+        container.parentNode.insertBefore(toolbar, container);
+        container.parentNode.insertBefore(pager, container.nextSibling);
+
+        function matches(row) {
+          if (!state.showFlagged && lastHeading(table) === "Flag") {
+            if (CLEAN_FLAGS.indexOf(originalFlag(row)) === -1) {
+              return false;
+            }
+          }
+          if (!state.query) {
+            return true;
+          }
+          var text = (row.textContent + " " + originalFlag(row)).toLowerCase();
+          return text.indexOf(state.query) !== -1;
+        }
+
+        function render() {
+          var rows = Array.prototype.slice.call(body.rows);
+          var kept = rows.filter(matches);
+          var pages = Math.max(1, Math.ceil(kept.length / state.pageSize));
+          state.page = Math.min(state.page, pages - 1);
+          var first = state.page * state.pageSize;
+          var shown = kept.slice(first, first + state.pageSize);
+
+          rows.forEach(function (row) { row.hidden = shown.indexOf(row) === -1; });
+
+          previous.disabled = state.page === 0;
+          next.disabled = state.page >= pages - 1;
+          status.textContent = kept.length
+            ? "Showing " + (first + 1) + " to " + (first + shown.length) + " of " + kept.length +
+              " row" + (kept.length === 1 ? "" : "s") +
+              (kept.length === rows.length ? "" : " (" + (rows.length - kept.length) + " hidden by the controls above)")
+            : "No row matches the current search and filter; " + rows.length + " are in this file.";
+        }
+
+        search.addEventListener("input", function () {
+          state.query = search.value.trim().toLowerCase();
+          state.page = 0;
+          render();
+        });
+        size.addEventListener("change", function () {
+          state.pageSize = Number(size.value);
+          state.page = 0;
+          render();
+        });
+        previous.addEventListener("click", function () {
+          state.page = Math.max(0, state.page - 1);
+          render();
+        });
+        next.addEventListener("click", function () {
+          state.page += 1;
+          render();
+        });
+
+        markFlagColumn(table);
+        enhanceSorting(table, render);
+        render();
+        return function (showFlagged) {
+          state.showFlagged = showFlagged;
+          state.page = 0;
+          render();
+        };
+      }
+
+      var setters = [];
+      document.querySelectorAll("table.sortable").forEach(function (table, index) {
+        var setter = setUpTable(table, index);
+        if (setter) {
+          setters.push(setter);
         }
       });
-      
-      // Update the switch label and redraw the table when toggling.
-      $('#toggleFlagged').change(function() {
-        var isChecked = $(this).prop('checked');
-        var newLabel = isChecked ? "Hide flagged values" : "Show flagged values";
-        // The span, not the label: the label wraps the input, and rewriting its
-        // text would delete the control it names.
-        $('#toggleFlaggedLabel').text(newLabel);
-        $('table').DataTable().draw();
-      });
-    });
+
+      var toggle = document.getElementById("toggleFlagged");
+      if (toggle) {
+        toggle.addEventListener("change", function () {
+          var label = document.getElementById("toggleFlaggedLabel");
+          if (label) {
+            /* The span, not the label: the label wraps the input, and rewriting its
+               text would delete the control it names. */
+            label.textContent = toggle.checked ? "Hide flagged values" : "Show flagged values";
+          }
+          setters.forEach(function (setter) { setter(toggle.checked); });
+        });
+      }
+    })();
   </script>
 </body>
 </html>

@@ -35,7 +35,7 @@ from tests.browser.conftest import (
     EXPECTED_KESTREL_ROWS,
     HIDDEN_FLAGS,
     KESTREL_ROW_SELECTOR,
-    enhancement_state,
+    external_requests,
     kestrel_column_text,
 )
 
@@ -58,29 +58,30 @@ def _require_online(
     *,
     offline: bool,
 ) -> None:
-    """Fail an online pass that did not actually get its third-party scripts.
+    """Fail an online pass that did not behave like one.
 
-    Proving a pass was online takes a POSITIVE check. The absence of a transport
-    failure is not one: ``requestfailed`` fires for a dropped connection and a
-    blocked route, and not for a 404, a 503, or a 200 carrying JavaScript that
-    never defines ``jQuery``. In any of those the page is left unenhanced, the
-    online pass silently becomes a second offline pass, and the online
+    This used to ask the page whether jQuery and DataTables had initialised, because
+    an online pass that silently became an offline one would have made the online
     parametrisations below pass while proving nothing about the online path.
 
-    So: nothing failed at the transport layer, nothing came back with an error
-    status, and the enhancement is live in the page itself. The same three-part
-    guard ``test_report_determinism`` uses, reading the same registries - see the
-    SUCCESSOR note there for what replaces it once the CDN tags are gone and there
-    is no jQuery left to ask.
+    The CDN tags are gone (#242), so the question changed rather than went away. What
+    is asserted now is the claim that replaced it and that the old guard's own comment
+    predicted: the document issued **zero** requests off-machine. That is the same
+    evidence read the other way round, and it is a stronger statement - it holds in
+    the offline pass too, because Playwright records a request before the route
+    handler can abort it.
 
     Args:
         page: The page the pass opened.
         failed_requests: Transport-layer failure registry, keyed by page.
         error_responses: Error-status registry, keyed by page.
-        offline: Whether the pass was deliberately offline. Nothing is asserted
-            then - an offline pass is *expected* to fail every non-``file://``
-            request, and that is what the fixture's route handler makes it do.
+        offline: Whether the pass was deliberately offline. The transport registries
+            are not asserted then - an offline pass is *expected* to fail every
+            non-``file://`` request - but the request log is, and it must be empty
+            either way.
     """
+    external = external_requests(page)
+    assert external == [], f"the report fetched {len(external)} resource(s) off-machine: {external}"
     if offline:
         return
 
@@ -89,11 +90,6 @@ def _require_online(
     )
     assert not error_responses[page], (
         f"the online pass got error statuses back, so its scripts did not run: {error_responses[page]}"
-    )
-    state = enhancement_state(page)
-    assert state["jquery"] and state["dataTable"], (
-        "the online pass loaded no working jQuery/DataTables, so it rendered the same unenhanced page the "
-        f"offline pass does and this check proves nothing about the online path: {state}"
     )
 
 

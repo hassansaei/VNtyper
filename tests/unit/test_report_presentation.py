@@ -1243,15 +1243,31 @@ def test_the_report_states_that_it_is_research_use_only() -> None:
 def test_the_igv_variant_rows_are_operated_by_a_real_control() -> None:
     """``<tr onclick>`` has no keyboard path, no name and no state.
 
-    A ``<button>`` brings Enter and Space, a focus ring and a name for free. The
-    row carries ``aria-selected`` so which variant is showing is a fact in the
-    accessibility tree rather than a background colour.
+    A ``<button>`` brings Enter and Space, a focus ring and a name for free. Which
+    variant is showing is a fact in the accessibility tree rather than a background
+    colour, and it is carried by ``aria-current="true"`` on the row.
+
+    **Why not ``aria-selected`` inside a ``role="grid"`` (#242).** That was the shape
+    this replaced, and it is not wrong so much as over-promising. ``grid`` is a
+    composite widget: declaring it commits the table to Left/Right between cells,
+    Home/End to the ends of a row and of the grid, and a managed focus model. This
+    table implements Up/Down between the row controls and nothing else, so a screen
+    reader announced "grid", the reader pressed the keys the role implies, and got
+    nothing - which is worse than not claiming the role. ``aria-current="true"`` states
+    the same fact, is valid on any element, and takes on no keyboard obligation. The
+    selection is *also* carried in words by the control's own "Showing"/"Show", so
+    nothing here depends on ARIA alone.
     """
     source = _markup(PER_SAMPLE_TEMPLATE)
 
     assert "row.onclick" not in source, "the variant row is still activated by a click handler on the row"
     assert 'createElement("button")' in source, "no per-row control is created"
-    assert 'setAttribute("aria-selected"' in source, "the selected variant row is not announced as selected"
-    assert 'setAttribute("role", "grid")' in source, (
-        "aria-selected is only meaningful on a row inside a grid, so the table has to declare one"
+    assert 'setAttribute("aria-current", "true")' in source, (
+        "the row the alignment view is showing is not announced as the current one"
+    )
+    assert 'setAttribute("role", "grid")' not in source, (
+        "the variant table declares a grid, which promises Left/Right/Home/End movement it does not implement"
+    )
+    assert 'setAttribute("aria-selected"' not in source, (
+        "aria-selected is only meaningful inside a composite role this table deliberately does not claim"
     )

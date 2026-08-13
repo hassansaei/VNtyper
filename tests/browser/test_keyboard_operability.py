@@ -28,74 +28,94 @@ set of Tab stops must contain all of them.
 
 Offline, deliberately
 ---------------------
-The report has to stand on its own, and the offline pass is the one where it must:
-no jQuery, no DataTables, no Bootstrap, so every Tab stop measured here is one the
-template itself put in the document. Online the same stops are present plus
-DataTables' own header stops, which would make the measurement about DataTables.
+The report has to stand on its own, and the offline pass is the one where it must.
+There is nothing left to load (#242), so every Tab stop measured here is one the
+document itself put there - which used to be true only offline, because online
+DataTables added header stops of its own and the measurement became about DataTables.
 The online/offline *equivalence* of the report is the subject of
 ``test_report_determinism.py``; this is about the document's own keyboard path.
 
 The two IGV cases
 -----------------
-``create_report`` is not run by this tier, so the shipped fixture renders the
-IGV-failure case: empty ``tableJson``, empty ``sessionDictionary``, an authored
-message where the alignment view would be. That case must not take the rest of the
-page's keyboard path down with it. The IGV-present case is produced by splicing a
-real variant table into the same rendered file, which is the only way to get one
-without igv-reports and a BAM; the fixture fails loudly if the splice does not
-land, because an IGV-present case that silently degraded to the failure case would
-assert nothing about the row controls.
+The shipped fixture renders the no-alignment case: no BED, so no ``create_report``,
+empty ``tableJson`` and ``sessionDictionary``, and an authored sentence where the
+alignment view would be. That case must not take the rest of the page's keyboard path
+down with it.
+
+The IGV-present case renders a real report with a real session through
+``rendered_report_with_alignments``, in ``--report-igv sidecar`` mode. Sidecar rather
+than embedded on purpose: it produces exactly the same variant table and row controls,
+and it leaves no half-megabyte library to expand asynchronously and add controls of its
+own to the tab order halfway through a traversal. What igv.js does once it *is*
+expanded is ``test_alignment_states.py``'s subject, not this file's.
+
+This replaces splicing two JavaScript literals into an already-rendered file. The
+splice could not produce the markup the template authors from ``igv_session_available``,
+so it tested the script against a page the generator never writes.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page
 
-from vntyper.scripts.report_formatting import EMPTY_SESSION_DICTIONARY, EMPTY_TABLE_JSON
-
 pytestmark = pytest.mark.browser
 
 #: The controls the per-sample report offers when no IGV table was produced. Every
 #: one of these was unreachable by keyboard before this change.
+#:
+#: The last two are the sortable column headings, which are new interactive controls
+#: (#242): they replace DataTables' own header controls, they are built by the report's
+#: own script, and a control that a script creates is exactly the kind that gets built
+#: as a ``<th onclick>`` and reaches nobody's keyboard. First and last of the Kestrel
+#: heading row are named here so the traversal below covers the whole row's span;
+#: :func:`test_every_sortable_heading_is_an_operable_control` then holds *all* of them
+#: to being focusable, named, keyboard-operable and reflected in ``aria-sort``.
 BASE_CONTROLS: tuple[str, ...] = (
     "#highlightFlagged",
     "#toggleDetailedCoverage",
+    "#kestrel_table thead th:first-child button",
+    "#kestrel_table thead th:last-child button",
     "#variantsToggle",
     "#logToggle",
 )
 
-#: The per-row controls of the spliced-in IGV variant table, one per row.
+#: Every sortable column heading of the Kestrel table.
+SORT_HEADERS = "#kestrel_table thead th button"
+
+#: The per-row controls of the IGV variant table, one per row of the shared fixture.
 VARIANT_CONTROLS: tuple[str, ...] = ("#variantSelect_0", "#variantSelect_1")
 
-#: The variant table spliced into the rendered report for the IGV-present case.
-#: Shaped exactly like igv-reports' own ``tableJson``: column 0 is the unique id
-#: the session dictionary is keyed by and is not displayed.
-SPLICED_HEADERS: list[str] = ["unique_id", "CHROM", "POS", "REF", "ALT"]
-SPLICED_VARIANTS: list[list[str]] = [
-    ["0", "chr1", "155188205", "G", "GG"],
-    ["1", "chr1", "155188305", "GG", "G"],
-]
-SPLICED_TABLE_JSON: dict[str, list] = {"headers": SPLICED_HEADERS, "rows": SPLICED_VARIANTS}
-
-#: A session per row, so ``initIGV`` takes its "a session exists" branch and the
-#: page exercises the same code path a real IGV report does. igv.js itself is
-#: absent offline; the report is expected to say so and keep the table.
-SPLICED_SESSION_DICTIONARY = {"0": "session0.json", "1": "session1.json"}
+#: Tag every expected control with the selector it was named by, so a Tab stop can be
+#: identified as "the thing the test asked for" rather than by whatever text it happens
+#: to contain. The sortable headings have no ids and their labels are column names that
+#: move, so a descriptor built from the element's own text would have to be rewritten
+#: every time a column is renamed - and would silently stop matching instead of failing
+#: on the thing it was written about.
+_TAG_EXPECTED = """
+(selectors) => selectors.map(selector => {
+    const el = document.querySelector(selector);
+    if (el) {
+        el.dataset.tabProbe = selector;
+    }
+    return !!el;
+})
+"""
 
 #: Describe whatever the browser has focused, or ``null`` once focus has left the
-#: document. The key is the element's id where it has one, because that is what the
-#: expected set is written in; anything else is described well enough to read in a
-#: failure message.
+#: document. The tag above wins where it is present, then the element's id; anything
+#: else is described well enough to read in a failure message.
 _ACTIVE_DESCRIPTOR = """
 () => {
     const el = document.activeElement;
     if (!el || el === document.body || el === document.documentElement) {
         return null;
+    }
+    if (el.dataset && el.dataset.tabProbe) {
+        return el.dataset.tabProbe;
     }
     if (el.id) {
         return "#" + el.id;
@@ -129,34 +149,20 @@ _PROBE = """
 
 
 @pytest.fixture
-def report_with_variant_table(rendered_report: Path) -> Path:
-    """Return a copy of the rendered report carrying a real IGV variant table.
+def report_with_variant_table(rendered_report_with_alignments: Callable[..., Path]) -> Path:
+    """A real report carrying a real two-row variant table and a session per row.
 
-    ``create_report`` needs igv-reports and a BAM, neither of which this tier has,
-    so the two JavaScript literals the template interpolates are replaced in the
-    rendered file. Both replacements are asserted: a splice that missed would leave
-    the IGV-failure document behind and the IGV-present test would quietly assert
-    the failure case twice.
+    ``--report-igv sidecar``: the same variant table and the same row controls as
+    ``embedded``, without a half-megabyte library expanding asynchronously and adding
+    igv.js's own controls to the tab order partway through a traversal.
 
     Args:
-        rendered_report: The report rendered by the shared fixture.
+        rendered_report_with_alignments: The shared renderer.
 
     Returns:
-        Path: A sibling file with a two-row variant table and a session per row.
+        Path: The rendered report.
     """
-    source = rendered_report.read_text(encoding="utf-8")
-    empty_table = f"const tableJson = {EMPTY_TABLE_JSON};"
-    empty_sessions = f"const sessionDictionary = {EMPTY_SESSION_DICTIONARY};"
-    assert empty_table in source, "the rendered report does not carry the empty tableJson literal to replace"
-    assert empty_sessions in source, "the rendered report does not carry the empty sessionDictionary literal"
-
-    spliced = source.replace(empty_table, f"const tableJson = {json.dumps(SPLICED_TABLE_JSON)};").replace(
-        empty_sessions, f"const sessionDictionary = {json.dumps(SPLICED_SESSION_DICTIONARY)};"
-    )
-
-    target = rendered_report.with_name("summary_report_with_igv.html")
-    target.write_text(spliced, encoding="utf-8")
-    return target
+    return rendered_report_with_alignments("sidecar")
 
 
 def _tab_stops(page: Page, limit: int = 40) -> list[str]:
@@ -189,6 +195,10 @@ def _assert_reachable(page: Page, expected: tuple[str, ...]) -> None:
         page: An already-loaded page.
         expected: The complete set of control selectors that must be reachable.
     """
+    found = page.evaluate(_TAG_EXPECTED, list(expected))
+    absent = [selector for selector, present in zip(expected, found, strict=True) if not present]
+    assert absent == [], f"these controls are not in the document at all, so no traversal can reach them: {absent}"
+
     stops = _tab_stops(page)
     missing = [selector for selector in expected if selector not in stops]
     assert not missing, f"these controls cannot be reached with the Tab key: {missing}; the Tab order was {stops}"
@@ -223,7 +233,7 @@ def test_every_control_is_reachable_by_tab_when_an_igv_table_is_present(
     """
     page = open_report(report_with_variant_table, offline=True)
 
-    assert page.locator("#variant_table tbody tr").count() == len(SPLICED_VARIANTS), (
+    assert page.locator("#variant_table tbody tr").count() == len(VARIANT_CONTROLS), (
         "the spliced variant table did not render, so this is not the IGV-present case"
     )
     _assert_reachable(page, BASE_CONTROLS + VARIANT_CONTROLS)
@@ -277,25 +287,31 @@ def test_enter_and_space_move_the_variant_selection(
     report_with_variant_table: Path,
     open_report: Callable[..., Page],
 ) -> None:
-    """Keyboard activation, and the selected row saying so in the accessibility tree.
+    """Keyboard activation, and the current row saying so in the accessibility tree.
 
     The first row is selected on render. Focusing the second row's control and
-    pressing Enter must move ``aria-selected``; Space must do the same on the way
-    back. Neither key did anything at all against ``<tr onclick>``.
+    pressing Enter must move ``aria-current``; Space must do the same on the way back.
+    Neither key did anything at all against ``<tr onclick>``.
+
+    ``aria-current`` rather than ``aria-selected`` inside a ``role="grid"`` (#242): the
+    grid role promises Left/Right/Home/End movement this table does not implement, and
+    a role that over-promises is worse than no role. ``aria-current`` states the same
+    fact with no obligation attached, and it is *removed* rather than set to "false" on
+    the rows that are not current, which is how the attribute is defined.
     """
     page = open_report(report_with_variant_table, offline=True)
 
-    assert page.locator("#row_0").get_attribute("aria-selected") == "true"
+    assert page.locator("#row_0").get_attribute("aria-current") == "true"
 
     page.focus("#variantSelect_1")
     page.keyboard.press("Enter")
-    assert page.locator("#row_1").get_attribute("aria-selected") == "true"
-    assert page.locator("#row_0").get_attribute("aria-selected") == "false"
+    assert page.locator("#row_1").get_attribute("aria-current") == "true"
+    assert page.locator("#row_0").get_attribute("aria-current") is None
 
     page.focus("#variantSelect_0")
     page.keyboard.press(" ")
-    assert page.locator("#row_0").get_attribute("aria-selected") == "true"
-    assert page.locator("#row_1").get_attribute("aria-selected") == "false"
+    assert page.locator("#row_0").get_attribute("aria-current") == "true"
+    assert page.locator("#row_1").get_attribute("aria-current") is None
 
 
 def test_the_selected_variant_row_says_so_in_words(
@@ -318,3 +334,121 @@ def test_the_selected_variant_row_says_so_in_words(
 
     assert page.locator("#variantSelect_0").inner_text().strip() == "Show"
     assert page.locator("#variantSelect_1").inner_text().strip() == "Showing"
+
+
+# ---------------------------------------------------------------------------
+# The sortable column headings, which are new controls (#242)
+# ---------------------------------------------------------------------------
+
+
+def test_every_sortable_heading_is_an_operable_control(
+    rendered_report: Path,
+    open_report: Callable[..., Page],
+) -> None:
+    """Every heading of a sortable table is focusable, named, and has a box.
+
+    These replace DataTables' own header controls. The report's script builds them,
+    which is precisely the shape that arrives as a ``<th onclick>`` with no keyboard
+    path, no accessible name and no state - the same defect the variant rows had.
+
+    The accessible name is the column's own heading text, so it needs no label and
+    cannot drift from what the reader sees.
+    """
+    page = open_report(rendered_report, offline=True)
+
+    headings = page.locator(SORT_HEADERS)
+    count = headings.count()
+    assert count >= 8, f"the Kestrel table has {count} sortable headings; the fixture renders eleven columns"
+
+    for index in range(count):
+        heading = headings.nth(index)
+        label = heading.inner_text().strip()
+        assert label, f"sortable heading {index} has no text, so it has no accessible name"
+        box = heading.bounding_box()
+        assert box and box["width"] > 0 and box["height"] > 0, f"heading {label!r} has no box: {box}"
+        heading.focus()
+        assert page.evaluate("() => document.activeElement.tagName.toLowerCase()") == "button", (
+            f"heading {label!r} does not take focus"
+        )
+
+
+def test_every_sortable_heading_is_reachable_by_tab(
+    rendered_report: Path,
+    open_report: Callable[..., Page],
+) -> None:
+    """All eleven of them, not just the two named in ``BASE_CONTROLS``.
+
+    A traversal that stopped at the first and last would pass against a middle column
+    whose heading had been left as plain text.
+    """
+    page = open_report(rendered_report, offline=True)
+
+    count = page.locator(SORT_HEADERS).count()
+    selectors = tuple(f"#kestrel_table thead th:nth-child({index + 1}) button" for index in range(count))
+
+    _assert_reachable(page, selectors)
+
+
+def test_enter_and_space_sort_the_table_and_say_which_way(
+    rendered_report: Path,
+    open_report: Callable[..., Page],
+) -> None:
+    """Keyboard activation, and ``aria-sort`` reflecting the result.
+
+    A ``<button>`` answers both keys by itself, which is why it is a button - but
+    "the control responds" and "the accessibility tree knows what it did" are two
+    claims, and only the second survives a change to how the arrow is drawn.
+
+    **The rows are counted before and after.** Sorting reorders; it must never remove.
+    That is the invariant that makes a sort control acceptable in a single-patient
+    report at all, and it is the one a future "sort and filter" would break.
+    """
+    page = open_report(rendered_report, offline=True)
+
+    heading = page.locator(SORT_HEADERS).first
+    column = page.locator("#kestrel_table thead th").first
+    before = page.locator("#kestrel_table tbody tr").count()
+
+    assert column.get_attribute("aria-sort") == "none"
+
+    heading.focus()
+    page.keyboard.press("Enter")
+    assert column.get_attribute("aria-sort") == "ascending"
+
+    page.keyboard.press(" ")
+    assert column.get_attribute("aria-sort") == "descending"
+
+    assert page.locator("#kestrel_table tbody tr").count() == before, "sorting removed a row"
+    assert page.locator("#kestrel_table tbody tr:visible").count() == before, "sorting hid a row"
+
+
+def test_sorting_reorders_the_rows_it_was_asked_to_reorder(
+    rendered_report: Path,
+    open_report: Callable[..., Page],
+) -> None:
+    """The control does the thing, and the thing is a permutation.
+
+    Asserting ``aria-sort`` alone would pass against a header that announces a
+    direction and moves nothing. The set of rows is compared before and after, so a
+    sort that dropped or duplicated one fails here rather than looking like a
+    reordering.
+    """
+    page = open_report(rendered_report, offline=True)
+
+    read = "els => els.map(e => e.textContent.replace(/\\s+/g, ' ').trim())"
+    heading = page.locator("#kestrel_table thead th button").nth(2)
+    before: list[str] = page.eval_on_selector_all("#kestrel_table tbody tr", read)
+
+    heading.click()
+    ascending: list[str] = page.eval_on_selector_all("#kestrel_table tbody tr", read)
+    heading.click()
+    descending: list[str] = page.eval_on_selector_all("#kestrel_table tbody tr", read)
+
+    # Ascending against descending, rather than either against the render order: the
+    # fixture's rows may already be in a column's ascending order, and a test that
+    # demanded movement from a *sorted* starting point would be asserting that the sort
+    # is wrong. Three distinct values cannot be in both orders at once.
+    assert sorted(ascending) == sorted(before), "sorting changed which rows are in the table, not only their order"
+    assert sorted(descending) == sorted(before), "sorting changed which rows are in the table, not only their order"
+    assert ascending != descending, "the sort control announced two directions and produced one order"
+    assert ascending == list(reversed(descending)), f"{ascending} is not the reverse of {descending}"

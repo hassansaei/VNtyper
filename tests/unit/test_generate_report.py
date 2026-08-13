@@ -1966,10 +1966,18 @@ def test_no_per_sample_result_row_enters_a_hiding_path() -> None:
     client-side DataTables predicate before the reader sees the table. This is the
     invariant that stops it coming back under another name.
 
-    **What this can see.** Four shapes, over the template source text: DataTables'
-    ``ext.search`` row-visibility hook; its ``paging`` and ``searching`` options,
-    which hide rows just as effectively; a JavaScript statement pairing a removal or
-    hiding verb with a word meaning "row"; and a CSS rule that hides ``tr``.
+    **What this can see.** Four shapes, over the template source text: the name of
+    every construct the *cohort* report uses to withhold a row, none of which may
+    appear here; a JavaScript statement pairing a removal or hiding verb with a word
+    meaning "row"; a CSS rule that hides ``tr``; and an inline style that hides one.
+
+    The cohort's names are the right list to check against because they are what a
+    future change would reach for: the two reports are edited together, the cohort
+    legitimately filters, searches and pages (precondition P4), and copying one of its
+    blocks across is the most likely way the per-sample report reacquires a control
+    that removes evidence. DataTables' ``ext.search`` predicate is still named, even
+    though DataTables itself is gone, because that is what the original defect was and
+    a re-added dependency would bring it back verbatim.
 
     **What this cannot see.** It is a tripwire, not a behavioural test - the unit
     tier has no JavaScript engine. It cannot evaluate an expression, so a hiding
@@ -1982,14 +1990,22 @@ def test_no_per_sample_result_row_enters_a_hiding_path() -> None:
     """
     source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
 
-    assert "$.fn.dataTable" in source or "DataTable(" in source, (
-        "the template no longer initialises DataTables at all; these assertions would be vacuous"
+    assert "table.sortable" in source, (
+        "the per-sample template enhances no table at all, so it has no table behaviour for these "
+        "assertions to be about and they would pass vacuously"
     )
-    assert "ext.search" not in source, (
-        "the per-sample report registers a DataTables row-visibility filter, which removes rows from the DOM"
-    )
-    assert '"paging": false' in source, "DataTables paging hides every row past the first page"
-    assert '"searching": false' in source, "DataTables searching hides every row that does not match"
+
+    # Every name the cohort report's withholding controls carry. None may appear here.
+    withholding = {
+        "ext.search": "a DataTables row-visibility predicate, which removes rows from the DOM",
+        "table-toolbar": "the cohort's search-and-page-size toolbar",
+        "table-pager": "the cohort's pager, which shows one page of rows and hides the rest",
+        "pageSize": "a page size, which is how paging hides every row past the first page",
+        'type = "search"': "a search box, which hides every row that does not match",
+        "toggleFlagged": "the cohort's show/hide-flagged switch",
+    }
+    present = sorted(f"{name} ({why})" for name, why in withholding.items() if name in source)
+    assert present == [], f"the per-sample template has acquired a control that withholds rows: {present}"
 
     offenders = [
         (number, line.strip())
@@ -2037,12 +2053,20 @@ def test_the_highlight_switch_survives_a_script_that_never_loaded() -> None:
     assert "$(" not in owning[0], "the highlight handler shares its block with jQuery code that can throw first"
 
 
-def test_the_cohort_report_keeps_its_own_filter() -> None:
-    """Scope boundary, pinned: this change is per-sample only (precondition P4)."""
+def test_the_cohort_report_keeps_all_three_of_its_affordances() -> None:
+    """Scope boundary, pinned: this change is per-sample only (precondition P4).
+
+    Removing DataTables removed the *implementation* of the cohort's flag filter, its
+    search and its paging in one go. All three are reviewed behaviour for triage across
+    samples, so all three were reimplemented rather than quietly dropped, and this is
+    what says so - two of three would otherwise look like a complete job.
+    """
     cohort = (TEMPLATE_DIR / "cohort_summary_template.html").read_text(encoding="utf-8")
 
-    assert "ext.search" in cohort, "the cohort filter was removed; that is a separate, reviewed decision"
-    assert "toggleFlagged" in cohort
+    assert "toggleFlagged" in cohort, "the cohort flag filter was removed; that is a separate, reviewed decision"
+    assert 'type = "search"' in cohort, "the cohort report lost its search box"
+    assert "state.pageSize" in cohort and "table-pager" in cohort, "the cohort report lost its paging"
+    assert "Showing " in cohort, "the cohort report no longer says how many rows its controls are withholding"
 
 
 # ---------------------------------------------------------------------------
@@ -2077,8 +2101,26 @@ def test_no_displayed_number_is_computed_in_the_browser() -> None:
 
 def test_the_reader_is_not_shown_a_row_count_the_browser_computed() -> None:
     """DataTables' "Showing 1 to 3 of 3 entries" footer is a second, contradictory
-    count that only exists when the CDNs resolve."""
-    assert '"info": false' in PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+    count: it counted the rows left *after* the filter had removed the others, and it
+    only existed when the CDNs resolved.
+
+    The per-sample report states its count once, from Python, out of the frame it
+    rendered (``kestrel_row_summary``). Nothing in the browser may state another - the
+    cohort report does, and it is allowed to precisely because its controls withhold
+    rows on purpose and a reader there needs to be told how many.
+    """
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "{{ kestrel_row_summary }}" in source, "the server-side count line is gone; this test would be vacuous"
+    scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", source, re.DOTALL)
+    assert scripts, "the per-sample report has no scripts at all; this test would be vacuous"
+
+    # Comments are stripped. The template names the footer it removed, verbatim, in a
+    # comment explaining why it is gone; scanning the prose would make an accurate
+    # comment fail the build and reward deleting it.
+    code = [re.sub(r"/\*.*?\*/|//[^\n]*", "", block, flags=re.DOTALL) for block in scripts]
+    counting = [block for block in code if "Showing " in block or "table-status" in block]
+    assert counting == [], "a script in the per-sample report writes its own row count"
 
 
 @pytest.fixture

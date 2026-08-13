@@ -20,8 +20,24 @@ all three were defects (#242):
 Together that meant the same file read differently depending on the reader's
 network. This tier renders one report and opens it twice, once with the network
 reachable and once with everything but ``file://`` blocked, and holds the report
-to reading the same either way. The first two behaviours are gone; the CDN tags
-are still there, which is why the online pass still has to prove it was online.
+to reading the same either way.
+
+How "was this pass really online?" is answered now
+--------------------------------------------------
+It used to be answered by asking the page whether jQuery and DataTables had
+initialised, and the file it was asked about is the reason: an online pass that
+silently became an offline one would have made ``online == offline`` pass against
+a report nobody had checked.
+
+The CDN tags are gone (#242), so there is no jQuery left to ask - and the question
+has been replaced rather than dropped. :func:`external_requests` reads the
+**request log**, and the log is populated from Playwright's ``request`` event,
+which fires *before* routing: an attempted fetch is recorded whether the network
+would have answered it, the route handler aborted it, or a CDN 404'd it. So "this
+document asked for nothing off-machine" is a claim with the same force in both
+passes, and it no longer depends on the network having worked.
+``test_offline_document.py`` proves the recorder itself is not vacuous, by
+pointing a control document at a host and watching the recorder see it.
 
 Purity
 ------
@@ -188,12 +204,13 @@ els => els.filter(e => e.offsetParent !== null)
           .map(e => e.textContent.replace(/\\s+/g, ' ').trim())
 """
 
-#: Whether the third-party scripts the report still loads actually initialised.
-#: ``requestfailed`` cannot answer this: a 404, a 503 and a 200 carrying unusable
-#: JavaScript all leave the transport layer happy and the page unenhanced.
-_ENHANCEMENT_STATE = """() => ({
+#: The two libraries the report used to load from a CDN. Nothing may put them back:
+#: this tier's whole subject is that the document stands on its own, and a page that
+#: has jQuery in it again has a CDN tag in it again.
+_REMOVED_LIBRARIES = """() => ({
     jquery: (window.jQuery && window.jQuery.fn) ? window.jQuery.fn.jquery : null,
     dataTable: !!(window.jQuery && window.jQuery.fn && window.jQuery.fn.dataTable),
+    bootstrap: !!(window.bootstrap || (window.jQuery && window.jQuery.fn && window.jQuery.fn.tooltip)),
 })"""
 
 
@@ -260,6 +277,89 @@ def rendered_report(tmp_path: Path) -> Path:
     return tmp_path / "summary_report.html"
 
 
+#: Every URL each page asked for, keyed by page. Module-level rather than a fixture so
+#: :func:`external_requests` can be called as a plain function from a test that already
+#: has the page - the same shape ``removed_libraries`` has, and one less fixture to
+#: thread through every signature.
+_REQUEST_LOG: dict[Page, list[str]] = {}
+
+
+#: A page in the shape ``create_report`` writes: the container marker, the two
+#: JavaScript literals, and a body end. ``run_igv_report`` is stubbed out with this
+#: because igv-reports needs a real BAM and a real reference, and this tier has
+#: neither - but everything downstream of the stub is the shipped code path, including
+#: the fragment extraction and the "is there a session" decision that gates the
+#: half-megabyte payload.
+IGV_REPORTS_PAGE = (
+    "<html><body>\n"
+    '<div id="container">\n<div id="igvDiv"></div>\n</div>\n<script>\n'
+    'const tableJson = {"headers": ["unique_id", "CHROM", "POS", "REF", "ALT"], '
+    '"rows": [["0", "chr1", "155188205", "G", "GG"], ["1", "chr1", "155188305", "GG", "G"]]}\n'
+    'const sessionDictionary = {"0": "session0.json", "1": "session1.json"}\n'
+    "</script>\n</body></html>\n"
+)
+
+#: The two spliced variants, as the report renders them. Named here so the tests that
+#: read the variant table do not each restate the fixture.
+IGV_VARIANT_IDS = ("0", "1")
+
+
+@pytest.fixture
+def rendered_report_with_alignments(tmp_path: Path, monkeypatch) -> Callable[..., Path]:
+    """Return a callable that renders a report carrying a real alignment session.
+
+    This is the shape that costs 497 KB and the only one in which the embedded library
+    is written at all, so every test of the alignment panel needs it. It replaces the
+    older approach of splicing the two JavaScript literals into an already-rendered
+    document: a splice cannot produce the *markup* the template authors from
+    ``igv_session_available``, so it would have tested the script against a page the
+    generator never writes.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory.
+        monkeypatch: Pytest's patcher, used to stand in for igv-reports.
+
+    Yields:
+        Callable: ``render(mode="embedded") -> Path`` to the rendered report.
+    """
+    from vntyper.scripts import generate_report
+
+    def _stub(bed_file, bam_file, fasta_file, output_html, **kwargs) -> None:
+        Path(output_html).write_text(IGV_REPORTS_PAGE, encoding="utf-8")
+
+    monkeypatch.setattr(generate_report, "run_igv_report", _stub)
+
+    def _render(mode: str = "embedded") -> Path:
+        run = tmp_path / mode
+        run.mkdir(exist_ok=True)
+        payload = {
+            "version": "9.9.9",
+            "input_files": {"bam": "sample.bam"},
+            "steps": [
+                _tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+                _tabular_step(summary_steps.STEP_KESTREL, list(KESTREL_ROWS)),
+            ],
+        }
+        (run / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+        bed = run / "regions.bed"
+        bed.write_text("chr1\t155188100\t155188300\n", encoding="utf-8")
+
+        generate_summary_report(
+            output_dir=str(run),
+            template_dir=str(TEMPLATE_DIR),
+            report_file="summary_report.html",
+            log_file=None,
+            config=load_config(None),
+            bed_file=str(bed),
+            report_igv=mode,
+        )
+        report = run / "summary_report.html"
+        logger.info("Rendered %s (--report-igv %s): %d bytes", report, mode, report.stat().st_size)
+        return report
+
+    return _render
+
+
 @pytest.fixture
 def failed_requests() -> dict[Page, list[str]]:
     """Per-page record of the requests that failed at the **transport** layer.
@@ -267,7 +367,7 @@ def failed_requests() -> dict[Page, list[str]]:
     This is a necessary but nowhere near sufficient signal that a pass was online:
     ``requestfailed`` fires for a dropped connection or a blocked route, and not
     for an HTTP 404 or 503. Pair it with :data:`error_responses` and
-    :func:`enhancement_state`, which see the cases it cannot.
+    :func:`external_requests`, which sees the cases they cannot.
 
     Returns:
         dict: Page -> the URLs that failed, filled in by :func:`open_report`.
@@ -313,18 +413,28 @@ def open_report(
     """
     contexts: list[BrowserContext] = []
 
-    def _open(path: Path, *, offline: bool = False) -> Page:
+    def _open(path: Path, *, offline: bool = False, before_load: str | None = None) -> Page:
         context = browser.new_context()
         contexts.append(context)
         page = context.new_page()
         failures: list[str] = []
         errors: list[str] = []
+        requested: list[str] = []
         failed_requests[page] = failures
         error_responses[page] = errors
+        _REQUEST_LOG[page] = requested
+        # Registered before `goto`, and before the route handler: `request` fires for
+        # every attempt, aborted or not, which is what makes the log evidence about the
+        # *document* rather than about the network.
+        page.on("request", lambda request: requested.append(request.url))
         page.on("requestfailed", lambda request: failures.append(_describe_failure(request)))
         page.on("response", lambda response: _record_error_response(response, errors))
         if offline:
             page.route("**/*", _block_everything_but_local_files)
+        if before_load is not None:
+            # Runs in a fresh document before any of the page's own script does, which
+            # is the only way to take a global away from the page under test.
+            page.add_init_script(before_load)
         page.goto(path.as_uri(), wait_until="load")
         logger.info(
             "Opened %s (offline=%s); %d transport failure(s) %s; %d error response(s) %s",
@@ -341,6 +451,7 @@ def open_report(
 
     for context in contexts:
         context.close()
+    _REQUEST_LOG.clear()
 
 
 def _describe_failure(request: Request) -> str:
@@ -366,24 +477,40 @@ def _record_error_response(response: Response, errors: list[str]) -> None:
         errors.append(f"{response.status} {response.url}")
 
 
-def enhancement_state(page: Page) -> dict[str, Any]:
-    """Report whether the page's third-party scripts actually initialised.
-
-    The report still loads jQuery and DataTables from CDNs, and every one of the
-    behaviours this tier compares depends on them having run. Asking the page
-    itself is the only way to know: a script served as a 200 of unusable
-    JavaScript leaves no trace in either request registry.
+def removed_libraries(page: Page) -> dict[str, Any]:
+    """Report whether any of the three removed third-party libraries is back.
 
     Args:
         page: An already-loaded page.
 
     Returns:
-        dict: ``jquery`` (the version string, or ``None``) and ``dataTable``
-        (whether the DataTables plugin is registered on jQuery).
+        dict: ``jquery`` (the version string, or ``None``), ``dataTable`` and
+        ``bootstrap`` (whether either is registered).
     """
-    state: dict[str, Any] = page.evaluate(_ENHANCEMENT_STATE)
-    logger.info("Third-party enhancement state: %s", state)
+    state: dict[str, Any] = page.evaluate(_REMOVED_LIBRARIES)
+    logger.info("Removed-library state: %s", state)
     return state
+
+
+def external_requests(page: Page) -> list[str]:
+    """Every request this page issued that was not a local file read.
+
+    The registry behind this is filled from Playwright's ``request`` event, which
+    fires before the route handler runs - so an attempted fetch is recorded whether
+    it succeeded, was aborted by the offline route, or came back 404. That is what
+    makes "the document asked for nothing off-machine" a claim worth making in
+    either pass rather than a restatement of "the network was unplugged".
+
+    Args:
+        page: A page opened through :func:`open_report`.
+
+    Returns:
+        list[str]: The non-``file://`` URLs, in the order they were requested.
+    """
+    requested = _REQUEST_LOG.get(page, [])
+    external = [url for url in requested if not url.startswith("file://")]
+    logger.info("%d request(s), %d of them off-machine: %s", len(requested), len(external), external)
+    return external
 
 
 @pytest.fixture

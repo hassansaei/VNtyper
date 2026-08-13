@@ -35,7 +35,19 @@ logger = logging.getLogger(__name__)
 
 #: CSS classes every table in the cohort report carries. Named once so the three tables
 #: cannot drift apart, and so the renderer call sites read as what they are.
-TABLE_CLASSES = "table table-bordered table-striped hover compact order-column table-sm"
+#:
+#: All three are the cohort report's own now (#242). ``table-bordered``, ``hover``,
+#: ``compact``, ``order-column`` and ``table-sm`` came from Bootstrap and DataTables and
+#: went with them; ``table`` is the hook the shared token layer's cell rules select on,
+#: ``table-striped`` is drawn by a rule in the cohort template itself, and ``sortable``
+#: is what the cohort's script looks for when it turns column headings into buttons.
+#:
+#: The stripe stays here and stays absent from the per-sample report, deliberately: a
+#: cohort table is a triage scan across many samples where reading along a wide row is
+#: the task, and its flagged rows are filtered rather than tinted, so a stripe competes
+#: with nothing. In a per-sample report it competes with the flagged-value highlight,
+#: which is the one row treatment there that carries meaning.
+TABLE_CLASSES = "table table-striped sortable"
 
 #: Kestrel result columns, in display order. ``Sample`` first; columns absent from the
 #: frame are skipped, because a negative run's results carry neither ``Flag`` nor the

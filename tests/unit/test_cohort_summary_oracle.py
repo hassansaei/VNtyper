@@ -121,8 +121,41 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved five times, and each reason is recorded here because a changed
+#: It has moved six times, and each reason is recorded here because a changed
 #: fingerprint with no explanation should be read as the worst case.
+#:
+#: Move 6 (#242 - the CDN tags leave, and the cohort's table behaviour is rewritten)
+#: --------------------------------------------------------------------------------
+#: * **Old**: ``7240600f1c89ffa78a9d26882e977ea3ff60db08702e864bac90f0c01adc4a15``
+#: * **New**: ``fb36948e8d30555deb7dfc513de915b038990e03cd69a38f0e65f8e84e8080ad``
+#:
+#: **Cause: five removed tags, one class attribute, and stylesheet rules.** Nothing in
+#: this report's *data* moved. Verified before the constant was changed, by rendering
+#: this file's own fixture against the previous commit's two template files through
+#: ``paths.template_dir`` - with ``cohort_tables.TABLE_CLASSES`` monkeypatched back to
+#: its old value - and reproducing ``7240600f…`` exactly, then diffing the two canonical
+#: documents. Everything the diff contains is one of:
+#:
+#: * the two ``<link rel="stylesheet">`` tags (Bootstrap, DataTables) and the three
+#:   ``<script src>`` tags (jQuery, Bootstrap, DataTables) leaving the document;
+#: * ``TABLE_CLASSES`` on all three tables:
+#:   ``table table-bordered table-striped hover compact order-column table-sm`` ->
+#:   ``table table-striped sortable``. Five of the seven old names were Bootstrap's or
+#:   DataTables' and styled nothing this repository ships once those two left;
+#:   ``table-striped`` is now drawn by a rule in this report's own stylesheet, and
+#:   ``sortable`` is what its script looks for;
+#: * rules and comments in the shared token layer (the sortable heading's button, the
+#:   flag glyph's font size, the row-colour rules losing their Bootstrap/DataTables
+#:   specificity twins, the ``.dataTables_wrapper`` chrome going away) and in this
+#:   template's own ``<style>`` (the zebra rule, the toolbar and pager).
+#:
+#: ``[TABLES]``'s cell contents, ``[CHART-VALUES]``, ``[CHART-LABELS]``,
+#: ``[CHART-TOTALS]`` and ``[IMAGES]`` are byte-identical, and both documents contain
+#: the same 14 ``<tr>``. The rewritten script - the vanilla filter, search, paging, flag
+#: mark and sort that replace DataTables - does not appear in the diff at all, because
+#: ``_skeleton`` replaces every script body with ``<SCRIPT-BODY>``;
+#: ``tests/browser/test_cohort_table_behaviour.py`` and
+#: ``tests/browser/test_cohort_flag_marks.py`` are what measure that half.
 #:
 #: Move 5 (#242, task 7 review - the runtime-painted flag glyph)
 #: -------------------------------------------------------------
@@ -290,7 +323,7 @@ pytestmark = pytest.mark.unit
 #: neither. The evidence for that fix is
 #: `test_cohort_inputs.py::test_processes_with_different_hash_seeds_discover_the_same_order`,
 #: which spawns five interpreters under five seeds, and it covers directory inputs only.
-EXPECTED_FINGERPRINT = "7240600f1c89ffa78a9d26882e977ea3ff60db08702e864bac90f0c01adc4a15"
+EXPECTED_FINGERPRINT = "fb36948e8d30555deb7dfc513de915b038990e03cd69a38f0e65f8e84e8080ad"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
