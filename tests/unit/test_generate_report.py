@@ -22,6 +22,7 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from jinja2 import DictLoader
 
 import vntyper
 from vntyper.cli import load_config
@@ -2764,15 +2765,47 @@ def test_every_nondeprecated_context_key_is_referenced_by_the_shipped_template(t
         loader=shipped_loader,
         autoescape=generate_report.select_autoescape(["html"]),
     )
-    referenced = report_context_contract.jinja_referenced_names_recursive(
+    referenced = report_context_contract.jinja_referenced_paths_recursive(
         shipped_environment,
         "report_template.html",
     )
-    deprecated_top_level = {path for path in report_context_contract.DEPRECATED_KEYS if "." not in path}
-
-    unused = (set(captured) - deprecated_top_level) - referenced
+    unused = report_context_contract.unreferenced_runtime_context_paths(
+        captured,
+        referenced_paths=referenced,
+        deprecated_paths=report_context_contract.DEPRECATED_KEYS,
+    )
     assert unused == set(), f"dead context keys: {sorted(unused)}"
     assert "_report_base.html" in loaded_templates, "the recursive audit did not follow the shipped include"
+
+    root_source = (TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8")
+    matched_rule_branch = "{% if not screening_state.matched_rule %}"
+    assert root_source.count(matched_rule_branch) == 1
+    mutated_environment = real_environment(
+        loader=DictLoader(
+            {
+                "report_template.html": root_source.replace(matched_rule_branch, "{% if false %}"),
+                "_report_base.html": (TEMPLATE_DIR / "_report_base.html").read_text(encoding="utf-8"),
+            }
+        )
+    )
+    without_matched_rule = report_context_contract.jinja_referenced_paths_recursive(
+        mutated_environment,
+        "report_template.html",
+    )
+    assert report_context_contract.unreferenced_runtime_context_paths(
+        captured,
+        referenced_paths=without_matched_rule,
+        deprecated_paths=report_context_contract.DEPRECATED_KEYS,
+    ) == {"screening_state.matched_rule"}
+
+    screening_state = captured["screening_state"]
+    assert isinstance(screening_state, dict)
+    screening_state["unused_new_key"] = "silent debt"
+    assert report_context_contract.unreferenced_runtime_context_paths(
+        captured,
+        referenced_paths=referenced,
+        deprecated_paths=report_context_contract.DEPRECATED_KEYS,
+    ) == {"screening_state.unused_new_key"}
 
 
 def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_path, monkeypatch) -> None:
