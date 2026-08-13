@@ -237,8 +237,17 @@ def construct_kestrel_command(
     # enforcing it unconditionally would reject configurations that are valid for stock
     # Kestrel -- which is why the guard and the split are inseparable rather than merely
     # committed together.
+    # Validating the split tokens and then appending the *original string* would be a
+    # guard in name only: `run_command` hands the result to bash, which re-expands it.
+    # `additional_settings="--flank $EXTRA"` splits into two tokens the allowlist accepts
+    # -- `$EXTRA` is a value, not an option -- and bash then supplies whatever `$EXTRA`
+    # holds, `--mincount 1` included. Re-rendering from the validated tokens is what
+    # makes the check binding; a token that needed the shell now reaches Kestrel
+    # literally and fails loudly there.
+    rendered_settings = additional_settings
     if ikc_path is not None:
         reject_non_call_options(additional_tokens)
+        rendered_settings = shlex.join(additional_tokens)
 
     if ikc_path is None:
         sample_inputs = " ".join(quote_path(path) for path in normalized_fastqs)
@@ -269,6 +278,6 @@ def construct_kestrel_command(
         f"--hapfmt sam -p {quote_path(f'{output_dir}/output.sam')} --logstdout "
         f"--loglevel {log_level.upper()} --temploc {quote_path(output_dir)}"
     )
-    if additional_settings:
-        base_command += " " + additional_settings
+    if rendered_settings:
+        base_command += " " + rendered_settings
     return base_command

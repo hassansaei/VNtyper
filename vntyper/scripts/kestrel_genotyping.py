@@ -324,10 +324,29 @@ def run_kestrel(
         # fail-closed cleanup reached only on the discard branches, while a failed
         # critical invocation raises before any of them. The two also want opposite
         # failure semantics, which is why they stay separate.
+        # Created *before* the cleanup scope, and only when it does not already exist.
+        # The `finally` below removes the whole directory, so adopting an existing one
+        # would delete data this run did not write: the diagnostics a previous
+        # `keep_ikc` run was asked to retain, or an operator's own `kmer_20/`. Refusing
+        # is the fail-closed choice, and raising here rather than inside the `try` is
+        # what keeps the cleanup from deleting the directory it just refused to adopt.
+        if invocation.count_command is not None:
+            attempt_dir = Path(str(invocation.attempt_dir))
+            try:
+                attempt_dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError as exc:
+                msg = (
+                    f"The k-mer counting directory {attempt_dir} already exists, so this run will "
+                    "not create it: everything inside is removed when the attempt ends, and "
+                    "adopting an existing directory would delete data this run did not write -- a "
+                    "previous run's retained IKC under kestrel_settings.keep_ikc, for instance. "
+                    "Remove or move it and re-run."
+                )
+                logger.error(msg)
+                raise RuntimeError(msg) from exc
+
         try:
             if invocation.count_command is not None:
-                # KAnalyze writes the IKC and its offloaded segments in here.
-                Path(str(invocation.attempt_dir)).mkdir(parents=True, exist_ok=True)
                 count_log = str(invocation.count_log)
                 # A read-only output directory now fails here, inside `run_command`'s
                 # `open(log_file, "w")`, with a raw PermissionError rather than the

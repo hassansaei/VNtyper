@@ -16,6 +16,7 @@ counting that actually happened, with no error anywhere.
 from __future__ import annotations
 
 import logging
+import shlex
 from pathlib import Path
 
 import pytest
@@ -275,6 +276,28 @@ def test_split_counting_can_be_disabled_by_an_operator(tmp_path, monkeypatch):
     assert "r1.fq r2.fq" in commands[0]
 
 
+def test_an_existing_attempt_directory_is_refused_rather_than_adopted(tmp_path, monkeypatch):
+    """The cleanup removes the whole directory, so adopting one would delete it.
+
+    The case that matters is a rerun after ``keep_ikc``: the diagnostics the operator
+    asked to keep would be deleted by the very next run. An operator's own ``kmer_20/``
+    beside the outputs is the same hazard. Refusing is fail-closed, and the directory
+    must survive the refusal.
+    """
+    monkeypatch.setattr(kg, "kestrel_config", _settings())
+    retained = attempt_directory(tmp_path, 20)
+    retained.mkdir(parents=True)
+    (retained / "notes.txt").write_text("keep me", encoding="utf-8")
+    run_command, commands = _recorder(tmp_path)
+    monkeypatch.setattr(kg, "run_command", run_command)
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        _run_kestrel(tmp_path)
+
+    assert (retained / "notes.txt").read_text(encoding="utf-8") == "keep me"
+    assert commands == [], "nothing may run before the directory question is settled"
+
+
 def test_keep_ikc_retains_the_attempt_directory_for_diagnosis(tmp_path, monkeypatch):
     """A successful run deletes the IKC that would be needed to diagnose a bad result."""
     monkeypatch.setattr(kg, "kestrel_config", _settings(keep_ikc=True))
@@ -385,6 +408,31 @@ def test_a_forbidden_option_hidden_behind_an_allowlisted_flag_is_rejected():
     """A boolean state machine over a flag list is what makes this fail open."""
     with pytest.raises(ValueError, match="requires a value"):
         _kestrel_command(additional_settings="--flank --memcount")
+
+
+def test_shell_expansion_cannot_smuggle_a_forbidden_option_past_the_allowlist():
+    """Validating the tokens and then appending the raw string is a guard in name only.
+
+    `run_command` hands the result to bash, which re-expands it. `--flank $EXTRA` splits
+    into two tokens the allowlist accepts -- `$EXTRA` is a value, not an option -- and
+    bash then supplies whatever `$EXTRA` holds, `--mincount 1` included. Kestrel would
+    count at 1 while the KAnalyze step stayed at 5.
+    """
+    command = _kestrel_command(additional_settings="--flank $KESTREL_EXTRA")
+
+    assert "$KESTREL_EXTRA" not in command.replace("'$KESTREL_EXTRA'", "")
+    assert command.endswith("--flank '$KESTREL_EXTRA'")
+
+
+@pytest.mark.parametrize("setting", ["--flank `id`", "--flank $(id)", "--noambivar; --mincount 1"])
+def test_no_shell_metacharacter_survives_unquoted(setting):
+    """Anything that needed the shell now reaches Kestrel literally and fails there."""
+    try:
+        command = _kestrel_command(additional_settings=setting)
+    except ValueError:
+        return  # rejected outright, which is at least as safe
+    for metacharacter in ("`", "$(", ";"):
+        assert metacharacter not in command.replace(shlex.quote(setting.split()[-1]), "")
 
 
 def test_the_allowlist_does_not_apply_without_a_supplied_ikc():
