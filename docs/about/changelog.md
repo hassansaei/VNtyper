@@ -9,10 +9,17 @@ tier.**
 
 Kestrel and adVNTR each report in their own internal coordinate frame — `POS 67 G>GG`,
 `I22_2_G_LEN1` — and neither emitted the naming the MUC1 literature uses. Both are now
-translated into a single name such as `59dupC`, carried in five new columns
+translated into a single name such as `59dupC`, carried in new columns
 (`Nomenclature`, `Nomenclature_Tier`, `Nomenclature_Flags`, `Ambiguity_Interval`,
-`Repeat_Form`) across the Kestrel and adVNTR result TSVs, the pipeline summary and the
-HTML report. Negative runs keep their existing narrower schema: no variant, no name.
+`Repeat_Form`, `Nomenclature_Note`, `Nomenclature_Kestrel`, `Nomenclature_adVNTR`)
+across the Kestrel and adVNTR result TSVs, the pipeline summary and the HTML report.
+Negative runs keep their existing narrower schema: no variant, no name.
+
+`Nomenclature` is the reconciled verdict; `Nomenclature_Kestrel` and
+`Nomenclature_adVNTR` record what each caller said on its own, so a disagreement stays
+legible in either result file rather than being collapsed into a single opinion.
+adVNTR is optional — when it has not run its column is empty and the Kestrel result
+stands alone.
 
 The name carries **no `c.` prefix**. `c.` asserts a coding-DNA reference sequence, and
 no transcript places this tract at positions 53–59. See
@@ -31,8 +38,18 @@ delins — the existing `output.bam` is consulted for that call only, and adjace
 non-matching CIGAR blocks are merged to recover the allele. The reads may supply a name
 the VCF lacked but may not veto one it has.
 
-Measured on 200 known-truth simulated samples: 129 named correctly, 46 at tier A with
-none disagreeing with truth, and no name emitted for any of the 200 negative controls.
+The one exception is corroboration by a second caller: where adVNTR and the reads
+independently name the same allele and Kestrel's VCF names another, the two outvote
+the one. "Independent" means a different caller — Kestrel's VCF agreeing with Kestrel's
+own alignment is one opinion, not two, and neither outvotes anything nor promotes a
+tier.
+
+Measured on 200 known-truth simulated samples: 135 named correctly, none of the tier-A
+names disagreeing with truth, and no name emitted for any of the 200 negative controls.
+
+Also fixes a result row whose last column is empty being dropped from
+`pipeline_summary.json` as malformed, which could fail the cross-match step on a run
+that had otherwise succeeded.
 
 ## 2.0.19 (Current)
 

@@ -54,6 +54,10 @@ The tier is an **emission rule**, not a label: it decides what may be printed.
 whole `insG` family one position 3′ of truth; those records look perfectly clean in
 isolation. Only a second, independent source separates them.
 
+"Independent" means *a different caller*, not merely a different file. Kestrel's VCF
+and Kestrel's alignment are one caller read twice, so their agreeing is one opinion
+rather than two, and it does not promote anything.
+
 Tier C is the point of the whole design. Where a caller's allele is genuinely
 indistinguishable from another, printing a name would be a confident falsehood, and
 `allele undetermined` is the honest answer.
@@ -101,6 +105,39 @@ overruling a well-supported record loses more than it gains.
 
 The BAM is opened only for calls that need it — on the benchmark, about a fifth of
 samples — and never at all for the rest.
+
+## When two sources outvote a third
+
+There is one case where the Kestrel VCF does not have the last word: when **two
+sources spanning two different callers** name the same allele and the VCF names
+another. adVNTR and the reads agreeing is genuine corroboration from evidence Kestrel
+did not produce, and it outvotes Kestrel's placement.
+
+The independence requirement is doing the work here. Kestrel's VCF agreeing with
+Kestrel's own alignment is *not* two sources, so it never outvotes adVNTR and never
+promotes a tier. Without that distinction, one caller corroborating itself would look
+exactly like the two independent sources tier A asks for.
+
+Measured over the 200-sample benchmark this recovers 6 samples and loses none —
+`insG` goes from 1 to 5 and `insG_pos54` from 0 to 2, while `dupA`, `insCCCC` and
+`dupC` are unmoved. The narrowness matters: an earlier attempt that simply preferred
+the reads whenever they disagreed cost `dupA` 6 correct calls out of 10 and `insCCCC`
+6 out of 10. Requiring a second *caller* to agree is what makes the difference.
+
+## Both callers' names are kept
+
+Where the two callers disagree, collapsing them into one verdict destroys the evidence
+a reader needs in order to weigh that verdict. Both result files therefore carry
+`Nomenclature_Kestrel` and `Nomenclature_adVNTR` alongside the reconciled
+`Nomenclature`, so either file on its own says what each caller reported and where
+they parted company.
+
+The columns are named for the callers rather than relatively ("the other caller"), so
+a row means the same thing in `kestrel_result.tsv`, in `output_adVNTR_result.tsv` and
+in a cohort table that merges the two.
+
+adVNTR is an optional module. When it has not run, `Nomenclature_adVNTR` is empty and
+the Kestrel result stands exactly as its own stage wrote it.
 
 ## A known limitation
 

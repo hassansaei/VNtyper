@@ -51,18 +51,25 @@ This is the primary output file. Each row represents a genotyped variant.
 | `Confidence` | Confidence classification (see below) |
 | `Flag` | Quality flag (`Not flagged` or a flag reason) |
 | `haplo_count` | Number of haplotype calls supporting the same variant |
-| `Nomenclature` | Literature-compatible variant name, e.g. `59dupC` (see [MUC1 Nomenclature](../pipeline/nomenclature.md)) |
+| `Nomenclature` | Reconciled variant name, e.g. `59dupC` (see [MUC1 Nomenclature](../pipeline/nomenclature.md)) |
 | `Nomenclature_Tier` | `A`, `B` or `C` — how much of the name may be stated |
 | `Nomenclature_Flags` | `;`-separated reasons the tier is what it is |
 | `Ambiguity_Interval` | Span in which every anchor is the same allele, e.g. `53_59`. Empty when the variant cannot shift |
 | `Repeat_Form` | Tract copy-number change, e.g. `53C[7]>53C[8]`. Empty outside a detectable tract |
+| `Nomenclature_Kestrel` | What Kestrel named on its own |
+| `Nomenclature_adVNTR` | What adVNTR named on its own. Empty when the optional adVNTR module did not run |
 
-`Ambiguity_Interval` and `Repeat_Form` are nullable: they are written only where they
-mean something, and are left empty rather than padded with a placeholder.
+`Nomenclature` is the reconciled verdict; the two per-caller columns beside it say
+what each caller reported, so a disagreement stays legible in either result file. Both
+files carry the same values for all three, which is what lets a cohort table merging
+them be read as one.
+
+`Ambiguity_Interval`, `Repeat_Form` and `Nomenclature_adVNTR` are nullable: they are
+written only where they mean something, and are left empty rather than padded with a
+placeholder.
 
 A negative run writes a different, narrower schema (first column `Motif`, no depth or
-flag columns) and carries none of these five — there is no variant, so there is no
-name.
+flag columns) and carries none of these — there is no variant, so there is no name.
 
 ## Confidence Levels
 
