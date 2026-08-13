@@ -15,6 +15,7 @@ by running the whole pipeline:
 import json
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -904,3 +905,303 @@ def test_a_table_can_be_given_the_id_its_selectors_use() -> None:
 def test_a_table_with_no_id_asked_for_carries_none() -> None:
     """The cohort tables share one stylesheet and are addressed by class."""
     assert "id=" not in rf.escaped_table_html(pd.DataFrame({"POS": [67]}), classes="table")
+
+
+# ---------------------------------------------------------------------------
+# Per-column presentation (#242 report pass)
+#
+# `annotate_table_columns` writes alignment, face, width floor, `scope` and the
+# column's own explanation onto a table pandas has already rendered. It counts cells
+# from each `<tr>`, which is exact for `to_html(index=False)` output and is the part
+# worth pinning: an off-by-one here silently right-aligns a sequence column and sets a
+# p-value in the body face, and both look plausible.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def naming_frame() -> pd.DataFrame:
+    """A one-row Kestrel display frame carrying the columns the classes key on."""
+    return pd.DataFrame(
+        [
+            {
+                "Motif": "L",
+                "Position": 67,
+                "REF": "G",
+                "Depth Score": "0.009410",
+                "MUC1 Name": "59dupC",
+                "Tier": "B",
+                "Flags": "known-variant; position-ambiguous",
+                "Motif Sequence": "GGCCACCACCCTG",
+            }
+        ]
+    )
+
+
+def test_numeric_headings_names_only_the_columns_holding_numbers() -> None:
+    numeric = rf.numeric_headings(rf.KESTREL_DISPLAY_CELL_FORMATS)
+
+    assert "Depth Score" in numeric
+    assert "Position" in numeric
+    # A text column must not be right-aligned onto a numeric axis it does not share.
+    assert "Motif Sequence" not in numeric
+    assert "Confidence" not in numeric
+
+
+def test_every_display_heading_of_both_tables_has_column_help() -> None:
+    """A heading with no explanation is one the reading key cannot introduce.
+
+    Both tables' headings are checked together because the pass that humanised the
+    adVNTR headings is the same pass that wrote these sentences, and a heading added to
+    either table later should fail here rather than render a bare column name with no
+    way for a first-time reader to find out what it holds.
+    """
+    headings = {*rf.KESTREL_DISPLAY_COLUMNS.values(), *rf.ADVNTR_DISPLAY_HEADINGS.values()}
+
+    missing = sorted(heading for heading in headings if heading not in rf.COLUMN_HELP)
+
+    assert missing == [], f"these column headings carry no explanation: {missing}"
+
+
+def test_the_advntr_headings_cover_exactly_the_advntr_display_columns() -> None:
+    """The rename map and the projection order are two halves of one decision."""
+    assert tuple(rf.ADVNTR_DISPLAY_HEADINGS) == rf.ADVNTR_DISPLAY_COLUMNS
+
+
+def test_annotate_table_columns_aligns_numbers_and_sets_identifiers_in_mono(naming_frame) -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(naming_frame, classes="table"),
+        list(naming_frame.columns),
+        numeric=rf.numeric_headings(rf.KESTREL_DISPLAY_CELL_FORMATS),
+    )
+
+    assert '<td class="num">67</td>' in markup
+    assert '<td class="num">0.009410</td>' in markup
+    assert '<td class="mono-cell">G</td>' in markup
+    assert '<td class="mono-cell">59dupC</td>' in markup
+    # The flag list gets a width floor rather than a face or an axis.
+    assert '<td class="wide-cell">known-variant; position-ambiguous</td>' in markup
+    # And a plain text column keeps all three off.
+    assert "<td>L</td>" in markup
+
+
+def test_annotate_table_columns_scopes_every_heading_and_explains_it(naming_frame) -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(naming_frame, classes="table"),
+        list(naming_frame.columns),
+    )
+
+    for heading in naming_frame.columns:
+        assert f'scope="col" title="{rf.escape_html(rf.COLUMN_HELP[heading])}">{heading}</th>' in markup
+
+
+def test_annotate_table_columns_gives_one_column_the_tables_slack(naming_frame) -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(naming_frame, classes="table"),
+        list(naming_frame.columns),
+    )
+
+    assert markup.count("col-grow") == 1
+    assert "col-grow" in markup.split(">Motif Sequence</th>")[0].rsplit("<th", 1)[-1]
+
+
+def test_annotate_table_columns_names_the_table(naming_frame) -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(naming_frame, classes="table"),
+        list(naming_frame.columns),
+        caption="Kestrel variant calls",
+    )
+
+    assert "<caption>Kestrel variant calls</caption>" in markup
+    assert markup.index("<caption>") < markup.index("<thead>")
+
+
+def test_annotate_table_columns_escapes_a_caption() -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(pd.DataFrame([{"A": 1}]), classes="table"),
+        ["A"],
+        caption='<script>"x"</script>',
+    )
+
+    assert "<script>" not in markup.split("</caption>")[0].split("<caption>")[1]
+    assert "&lt;script&gt;" in markup
+
+
+def test_annotate_table_columns_leaves_an_empty_table_alone() -> None:
+    """`escaped_table_html` returns "" for an empty frame, and "" is what the template's
+    authored empty states branch on. Annotating it into a non-empty string would render
+    an empty box under the heading instead of the sentence saying which kind of nothing
+    this is."""
+    assert rf.annotate_table_columns("", ["A"], caption="never rendered") == ""
+
+
+def test_annotate_table_columns_drops_the_inline_alignment_pandas_writes(naming_frame) -> None:
+    """An inline `text-align` on the header row is a declaration no stylesheet can see."""
+    rendered = rf.escaped_table_html(naming_frame, classes="table")
+    assert "text-align: right" in rendered
+
+    markup = rf.annotate_table_columns(rendered, list(naming_frame.columns))
+
+    assert "text-align" not in markup
+
+
+def test_a_rendered_table_carries_no_presentation_border(naming_frame) -> None:
+    """pandas writes `border="1"`, which painted a grey no palette owns on every cell."""
+    assert 'border="1"' not in rf.escaped_table_html(naming_frame, classes="table")
+
+
+def test_space_flag_tokens_breaks_a_flag_list_between_flags() -> None:
+    frame = pd.DataFrame([{"Nomenclature_Flags": "known-variant;motif-context-diverges"}])
+
+    spaced = rf.space_flag_tokens(frame)
+
+    assert spaced["Nomenclature_Flags"][0] == "known-variant; motif-context-diverges"
+    # The input is not modified, and a frame with no flag column passes straight through.
+    assert frame["Nomenclature_Flags"][0] == "known-variant;motif-context-diverges"
+    other = pd.DataFrame([{"Motif": "L"}])
+    assert rf.space_flag_tokens(other) is other
+
+
+# ---------------------------------------------------------------------------
+# What the run named
+# ---------------------------------------------------------------------------
+
+
+KESTREL_NAMED = {
+    "MUC1 Name": "59dupC",
+    "Tier": "B",
+    "Flags": "known-variant;position-ambiguous",
+    "Kestrel Name": "59dupC",
+    "adVNTR Name": "59dupC",
+    "Ambiguity": "53_59",
+    "Repeat Form": "53C[7]>53C[8]",
+    "Naming Note": "matches a described MUC1 variant; requires validation",
+}
+
+ADVNTR_NAMED = {
+    "Nomenclature": "59dupC",
+    "Nomenclature_Tier": "B",
+    "Nomenclature_Flags": "known-variant",
+    "Nomenclature_Kestrel": "59dupC",
+    "Nomenclature_adVNTR": "59dupC",
+    "Ambiguity_Interval": "53_59",
+    "Repeat_Form": "53C[7]>53C[8]",
+    "Nomenclature_Note": "matches a described MUC1 variant; requires validation",
+}
+
+
+def named(*frames: pd.DataFrame) -> dict[str, Any]:
+    """:func:`variant_identity`, asserted to have found a name.
+
+    It returns None for a run that named nothing, which is the branch the masthead
+    hangs its "render no allele panel at all" on and which
+    `test_variant_identity_is_none_when_no_row_carries_a_name` covers directly. Every
+    other test here is about what the qualifiers say once there *is* a name, so the
+    narrowing happens once, here, rather than as an `assert` at the top of each.
+    """
+    identity = rf.variant_identity(*frames)
+    assert identity is not None, "expected these rows to carry a name"
+    return identity
+
+
+def test_variant_identity_reads_the_kestrel_display_headings() -> None:
+    identity = named(pd.DataFrame([KESTREL_NAMED]))
+
+    assert identity["name"] == "59dupC"
+    assert identity["tier"] == "B"
+    assert identity["tier_label"] == rf.NOMENCLATURE_TIERS["B"][0]
+    assert identity["ambiguity"] == "53_59"
+    assert identity["repeat_form"] == "53C[7]>53C[8]"
+    assert identity["callers_agree"] is True
+    assert [flag["token"] for flag in identity["flags"]] == ["known-variant", "position-ambiguous"]
+    assert all(flag["meaning"] for flag in identity["flags"])
+
+
+def test_variant_identity_reads_the_advntr_source_names_too() -> None:
+    """The two frames spell these columns differently and both are read.
+
+    ``build_kestrel_frames`` projects through the display headings before the matching
+    frame is copied; ``build_advntr_frame`` renames nothing. Reading one spelling would
+    have summarised whichever caller happened to use it.
+    """
+    identity = named(pd.DataFrame([ADVNTR_NAMED]))
+
+    assert identity["name"] == "59dupC"
+    assert identity["tier"] == "B"
+    assert identity["ambiguity"] == "53_59"
+
+
+def test_variant_identity_is_none_when_no_row_carries_a_name() -> None:
+    """A run that named nothing must not render an empty allele panel."""
+    assert rf.variant_identity(pd.DataFrame(), pd.DataFrame()) is None
+    assert rf.variant_identity(pd.DataFrame([{"Motif": "L", "MUC1 Name": ""}])) is None
+
+
+def test_variant_identity_never_chooses_between_two_names() -> None:
+    """Picking one would be the top of the report deciding which variant is shown.
+
+    Both names are returned, and every qualifier is withheld: a tier and an ambiguity
+    interval belong to one name, and attaching them to a list of names would be a claim
+    no row made.
+    """
+    identity = named(pd.DataFrame([KESTREL_NAMED, {**KESTREL_NAMED, "MUC1 Name": "60dupA", "Tier": "A"}]))
+
+    assert identity["name"] == "59dupC"
+    assert identity["other_names"] == ["60dupA"]
+    assert identity["tier"] == ""
+    assert identity["ambiguity"] == ""
+    assert identity["flags"] == []
+
+
+def test_variant_identity_withholds_a_qualifier_the_rows_disagree_on() -> None:
+    rows = [KESTREL_NAMED, {**KESTREL_NAMED, "Ambiguity": "1_5"}]
+
+    identity = named(pd.DataFrame(rows))
+
+    assert identity["name"] == "59dupC"
+    assert identity["ambiguity"] == ""
+    # A qualifier the rows do agree on is still stated.
+    assert identity["repeat_form"] == "53C[7]>53C[8]"
+
+
+def test_variant_identity_does_not_claim_agreement_the_callers_did_not_reach() -> None:
+    identity = named(pd.DataFrame([{**KESTREL_NAMED, "adVNTR Name": "58_59insG"}]))
+
+    assert identity["callers_agree"] is False
+
+
+def test_nomenclature_legend_explains_only_the_terms_these_rows_use() -> None:
+    entries = rf.nomenclature_legend(pd.DataFrame([KESTREL_NAMED]))
+    terms = [entry["term"] for entry in entries]
+
+    assert terms == ["Tier B", "known-variant", "position-ambiguous"]
+    assert entries[0]["label"] == rf.NOMENCLATURE_TIERS["B"][0]
+    assert all(entry["meaning"] for entry in entries)
+    # A tier this sample never reached is not explained at it.
+    assert "Tier A" not in terms
+
+
+def test_nomenclature_legend_is_empty_for_a_run_that_named_nothing() -> None:
+    assert rf.nomenclature_legend(pd.DataFrame(), pd.DataFrame()) == []
+
+
+def test_every_flag_the_caller_can_set_is_explained() -> None:
+    """The vocabulary is closed and declared in one place, so the key can be complete.
+
+    A flag with no sentence here reaches the reader as an unexplained kebab-case token,
+    which is the defect the reading key exists to close - and it would do so silently,
+    because the key only lists the terms a sample actually carries.
+    """
+    from vntyper.scripts import nomenclature
+
+    declared = {
+        value for name, value in vars(nomenclature).items() if name.startswith("FLAG_") and isinstance(value, str)
+    }
+
+    missing = sorted(declared - set(rf.NOMENCLATURE_FLAG_MEANINGS))
+
+    assert missing == [], f"these nomenclature flags have no explanation: {missing}"
+
+
+def test_every_tier_the_caller_can_assign_is_explained() -> None:
+    assert set(rf.NOMENCLATURE_TIERS) == {"A", "B", "C"}
+    assert all(label and meaning for label, meaning in rf.NOMENCLATURE_TIERS.values())

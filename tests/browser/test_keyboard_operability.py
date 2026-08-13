@@ -78,15 +78,47 @@ BASE_CONTROLS: tuple[str, ...] = (
     "#highlightFlagged",
     "#toggleDetailedCoverage",
     "#kestrel_table thead th:first-child button",
-    "#kestrel_table thead th:last-child button",
     "#variantsToggle",
     "#logToggle",
 )
 
-#: Every sortable column heading of the Kestrel table.
-SORT_HEADERS = "#kestrel_table thead th button"
+
+def last_displayed_heading(page: Page) -> str:
+    """The selector for the last heading the report is currently showing.
+
+    The report opens on the essential column set, so the last heading in the row is
+    usually folded and is deliberately not a control anybody can reach - and which
+    position the last *displayed* one occupies depends on the frame, because the
+    fixture's eleven columns and a real run's nineteen fold different numbers away.
+    `:last-of-type` cannot express it: it counts siblings of the same element type and
+    ignores the `:not()` beside it. So the position is read from the DOM.
+
+    Args:
+        page: The open report.
+
+    Returns:
+        str: A selector for that heading's button.
+    """
+    position = page.evaluate(
+        """() => Array.from(document.querySelectorAll('#kestrel_table thead th'))
+            .map((th, index) => (th.classList.contains('col-optional') ? null : index + 1))
+            .filter(Boolean)
+            .pop()"""
+    )
+    assert position, "the Kestrel table shows no headings at all"
+    return f"#kestrel_table thead th:nth-child({position}) button"
+
+
+#: Every *displayed* sortable column heading of the Kestrel table.
+SORT_HEADERS = "#kestrel_table thead th:not(.col-optional) button"
+
+#: Every sortable heading, including the ones the essential column set folds away.
+ALL_SORT_HEADERS = "#kestrel_table thead th button"
 
 #: The per-row controls of the IGV variant table, one per row of the shared fixture.
+#: The rows of the Kestrel table, as CSS sees them (shared with the conftest).
+KESTREL_ROW_SELECTOR = "#kestrel_table tbody tr"
+
 VARIANT_CONTROLS: tuple[str, ...] = ("#variantSelect_0", "#variantSelect_1")
 
 #: Tag every expected control with the selector it was named by, so a Tab stop can be
@@ -218,7 +250,7 @@ def test_every_control_is_reachable_by_tab_when_no_igv_table_was_produced(
     page = open_report(rendered_report, offline=True)
 
     assert page.locator("#variant_table").count() == 0, "this fixture is supposed to be the IGV-failure case"
-    _assert_reachable(page, BASE_CONTROLS)
+    _assert_reachable(page, BASE_CONTROLS + (last_displayed_heading(page),))
 
 
 def test_every_control_is_reachable_by_tab_when_an_igv_table_is_present(
@@ -236,7 +268,7 @@ def test_every_control_is_reachable_by_tab_when_an_igv_table_is_present(
     assert page.locator("#variant_table tbody tr").count() == len(VARIANT_CONTROLS), (
         "the spliced variant table did not render, so this is not the IGV-present case"
     )
-    _assert_reachable(page, BASE_CONTROLS + VARIANT_CONTROLS)
+    _assert_reachable(page, BASE_CONTROLS + VARIANT_CONTROLS + (last_displayed_heading(page),))
 
 
 def test_every_control_has_a_box_and_takes_focus(
@@ -252,7 +284,8 @@ def test_every_control_has_a_box_and_takes_focus(
     """
     page = open_report(report_with_variant_table, offline=True)
 
-    measured = {selector: page.evaluate(_PROBE, selector) for selector in BASE_CONTROLS + VARIANT_CONTROLS}
+    expected = BASE_CONTROLS + VARIANT_CONTROLS + (last_displayed_heading(page),)
+    measured = {selector: page.evaluate(_PROBE, selector) for selector in expected}
 
     for selector, state in measured.items():
         assert state["present"], f"{selector} is not in the document at all"
@@ -358,7 +391,7 @@ def test_every_sortable_heading_is_an_operable_control(
 
     headings = page.locator(SORT_HEADERS)
     count = headings.count()
-    assert count >= 8, f"the Kestrel table has {count} sortable headings; the fixture renders eleven columns"
+    assert count >= 8, f"the Kestrel table shows {count} sortable headings; the fixture renders eleven columns"
 
     for index in range(count):
         heading = headings.nth(index)
@@ -383,10 +416,57 @@ def test_every_sortable_heading_is_reachable_by_tab(
     """
     page = open_report(rendered_report, offline=True)
 
-    count = page.locator(SORT_HEADERS).count()
-    selectors = tuple(f"#kestrel_table thead th:nth-child({index + 1}) button" for index in range(count))
+    # Positions in the heading row, computed from the DOM: a folded heading has no box
+    # and is not a control, and `:nth-of-type` cannot express "the nth *displayed* one"
+    # because it counts siblings of the same element type and ignores the `:not()`
+    # beside it.
+    positions = page.evaluate(
+        """() => Array.from(document.querySelectorAll('#kestrel_table thead th'))
+            .map((th, index) => (th.classList.contains('col-optional') ? null : index + 1))
+            .filter(Boolean)"""
+    )
+    assert len(positions) >= 8, f"the Kestrel table shows {len(positions)} headings; the fixture renders eleven"
+    selectors = tuple(f"#kestrel_table thead th:nth-child({position}) button" for position in positions)
 
     _assert_reachable(page, selectors)
+
+
+def test_the_column_control_reveals_every_folded_heading(
+    rendered_report: Path,
+    open_report: Callable[..., Page],
+) -> None:
+    """Folding a column is the reader's choice, and it is reversible in one click.
+
+    The report opens on the essential column set because a nineteen-column table does
+    not fit the frame it is in. That is only defensible while the rest is one control
+    away and the control says how much it is holding, so this measures both: the
+    folded headings have no box while folded, every one of them has a box and takes
+    focus once "All" is chosen, and the row count never moves - a column control that
+    could change how many rows are on the page would be the defect #242 is named after,
+    wearing a different hat.
+    """
+    page = open_report(rendered_report, offline=True)
+
+    rows_before = page.locator(KESTREL_ROW_SELECTOR).count()
+    folded = page.locator("#kestrel_table thead th.col-optional button")
+    assert folded.count() >= 1, "no column is folded, so this assertion would be vacuous"
+    assert folded.first.bounding_box() is None, "a folded heading is still drawing a box"
+
+    page.locator("#columnMode0-all").check()
+
+    for index in range(folded.count()):
+        heading = folded.nth(index)
+        box = heading.bounding_box()
+        label = heading.inner_text().strip()
+        assert box and box["width"] > 0 and box["height"] > 0, f"revealed heading {label!r} has no box: {box}"
+        heading.focus()
+        assert page.evaluate("() => document.activeElement.tagName.toLowerCase()") == "button", (
+            f"revealed heading {label!r} does not take focus"
+        )
+
+    assert page.locator(KESTREL_ROW_SELECTOR).count() == rows_before, (
+        "the column control changed how many rows are on the page"
+    )
 
 
 def test_enter_and_space_sort_the_table_and_say_which_way(

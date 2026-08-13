@@ -124,8 +124,24 @@ other output; if you parse anything, parse those. If you scrape the HTML report 
 *position*, this is a breaking change and you should key on the heading text instead. The
 `cohort_summary.html` Kestrel table declares its own column order and is **not** affected.
 
-Two further display changes in the same release:
+Further display changes in the same release:
 
+- **The adVNTR table's headings are English**, matching the Kestrel table above it:
+  `NumberOfSupportingReads` is `Supporting Reads`, `Pvalue` is `P-value`, `RU` is
+  `Repeat Unit`, and the eight naming fields take the same headings the Kestrel table
+  already used -- `Nomenclature` is `MUC1 Name`, `Nomenclature_Tier` is `Tier`,
+  `Ambiguity_Interval` is `Ambiguity`, and so on. The two tables previously named the
+  same field two different ways in one document. `advntr_result.tsv` is unchanged and
+  keeps the source names; if you scrape the HTML, key on the new heading text.
+- **A semicolon-separated list is spaced.** `Nomenclature_Flags` renders as
+  `known-variant; motif-context-diverges; position-ambiguous` rather than with bare
+  semicolons, so a cell narrow enough to wrap breaks between flags instead of inside
+  one. The separator is unchanged; splitting on `;` and stripping is unaffected.
+- **Numbers are aligned on their own axis** and set with tabular figures, and each
+  column heading carries a one-line explanation as hover text. Every coded value the
+  tables print -- the tier letter and each nomenclature flag -- is also spelled out in
+  words in a **reading key printed underneath the tables**, so the explanation is on
+  paper and needs no pointer.
 - **The `Flag` column shows the reason in words**, beside a tick or a cross, instead of a
   glyph whose reason appeared only in a hover tooltip. The reason is therefore in the
   printed page, readable by a screen reader, and present when scripts do not run.

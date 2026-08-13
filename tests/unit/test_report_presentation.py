@@ -740,7 +740,7 @@ def test_the_header_warning_is_announced() -> None:
     puts it in front of a reader who is not looking at it.
     """
     source = _markup(PER_SAMPLE_TEMPLATE)
-    block = re.search(r'<p[^>]*role="alert"[^>]*>.*?</p>', source, re.DOTALL)
+    block = re.search(r'<li[^>]*role="alert"[^>]*>.*?</li>', source, re.DOTALL)
     assert block, "the header warning does not announce itself"
     assert "header_warning" in block.group(0), "role=alert is on something other than the header warning"
 

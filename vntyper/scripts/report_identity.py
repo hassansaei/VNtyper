@@ -75,12 +75,33 @@ UNNAMED_SAMPLE = "unnamed sample"
 #: heuristic over the string alone got it wrong in both directions (#242).
 SAMPLE_NAME_EXPLICIT_KEY = "sample_name_is_explicit"
 
-#: What this report is a report of. Descriptive, not a claim about its use:
-#: VNtyper is research use only and the interpretive text is config-driven.
-ASSAY_NAME = "MUC1 coding VNTR genotyping"
+#: The gene this assay is of, as HGNC spells it.
+#:
+#: Declared separately because a gene symbol is *set in italics* by long-standing
+#: convention, and italicising it means the report has to know which part of its own
+#: title is the symbol. The two strings below are built from it rather than written out,
+#: so the symbol the heading italicises and the symbol in the plain-text title cannot
+#: drift apart - which they would the first time either string was edited by hand.
+GENE_SYMBOL = "MUC1"
 
-#: The fixed half of the report's title; the sample name follows it.
-REPORT_TITLE_PREFIX = "MUC1 VNTR report"
+#: What this report is a report of, after the gene symbol. Descriptive, not a claim
+#: about its use: VNtyper is research use only and the interpretive text is
+#: config-driven.
+ASSAY_DESCRIPTION = "coding VNTR genotyping"
+
+#: The whole assay name, as one plain string. This is what the printed running header
+#: and the ``@page`` margin boxes carry: a CSS string cannot hold markup, so there is
+#: nothing to italicise there and the symbol travels as text.
+ASSAY_NAME = f"{GENE_SYMBOL} {ASSAY_DESCRIPTION}"
+
+#: The report's title after the gene symbol.
+REPORT_TITLE_DESCRIPTION = "VNTR report"
+
+#: The fixed half of the report's title, as one plain string; the sample name follows
+#: it. This is what ``<title>`` carries - the element holds text and no markup, so the
+#: symbol is not italicised there either, and it is what a browser tab and a bookmark
+#: show.
+REPORT_TITLE_PREFIX = f"{GENE_SYMBOL} {REPORT_TITLE_DESCRIPTION}"
 
 #: What the report says about its own standing. Quoted from ``README.md`` ("This tool
 #: is for research use only"), not composed here: it is a restriction on use, and the

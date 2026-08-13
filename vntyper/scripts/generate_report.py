@@ -28,6 +28,7 @@ Two things about this module are load-bearing and easy to break:
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,28 +42,40 @@ from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
     ADVNTR_CELL_FORMATS,
+    ADVNTR_DISPLAY_CELL_FORMATS,
     ADVNTR_DISPLAY_COLUMNS,
+    ADVNTR_DISPLAY_HEADINGS,
+    ADVNTR_ESSENTIAL_COLUMNS,
     EMPTY_SESSION_DICTIONARY,
     EMPTY_TABLE_JSON,
     KESTREL_DISPLAY_CELL_FORMATS,
     KESTREL_DISPLAY_COLUMNS,
+    KESTREL_ESSENTIAL_COLUMNS,
     MISSING_AS_OK,
+    annotate_table_columns,
     confidence_html,
     drop_empty_result_rows,
     escaped_table_html,
     flag_html,
     flagged_row_count,
+    folded_record_html,
     format_number_columns,
     js_json_literal,
+    nomenclature_legend,
+    numeric_headings,
     parse_coverage_stats,
     row_count_statement,
     select_display_columns,
+    space_flag_tokens,
     summarise_fastp,
     threshold_icon,
+    variant_identity,
 )
 from vntyper.scripts.report_identity import (
     ASSAY_NAME,
+    GENE_SYMBOL,
     NOT_RECORDED,
+    REPORT_TITLE_DESCRIPTION,
     REPORT_TITLE_PREFIX,
     RESEARCH_USE_STATEMENT,
     SAMPLE_NAME_EXPLICIT_KEY,
@@ -251,7 +264,7 @@ def build_kestrel_frames(kestrel_data):
     # resolved, so the same file read differently online and offline (#242). The
     # matching frame is copied first and keeps the unformatted values, because the
     # screening rules compare against them.
-    frame = format_number_columns(frame, KESTREL_DISPLAY_CELL_FORMATS)
+    frame = space_flag_tokens(format_number_columns(frame, KESTREL_DISPLAY_CELL_FORMATS))
 
     if "Confidence" in frame.columns:
         frame["Confidence"] = frame["Confidence"].apply(confidence_html)
@@ -463,7 +476,14 @@ def generate_summary_report(
     # Header info from the BAM Header Parsing step, whose parsed_result is a flat
     # object rather than {"data": [...]}.
     header_info = get_step_result(pipeline_summary, STEP_BAM_HEADER)
-    header_warning = header_info.get("warning", "")
+    # The template puts the word "Warning:" in front of this, because that word is what
+    # carries the meaning for a reader who does not see the colour. The recorded string
+    # begins with `WARNING: ` of its own (`fastq_bam_processing.py`), so the one
+    # genuinely urgent sentence in the report rendered as "Warning: WARNING: ...".
+    # Stripped here rather than in the step that records it: the summary is a stored
+    # artefact that other tooling reads, and this is a presentation decision about one
+    # rendering of it.
+    header_warning = re.sub(r"^\s*WARNING:\s*", "", header_info.get("warning", "") or "")
     alignment_pipeline = header_info.get("alignment_pipeline", "")
     assembly_text = header_info.get("assembly_text", "")
     assembly_contig = header_info.get("assembly_contig", "")
@@ -662,6 +682,18 @@ def generate_summary_report(
         html_columns=("Confidence", "Flag"),
         table_id="kestrel_table",
     )
+    # Per-column alignment, face and column help, added to the rendered markup rather
+    # than carried in the frame: they are presentation over a column, and pandas has no
+    # way to attach either to one. Every number in both results tables was centred and
+    # the `.num`, `.mono-cell` and `.col-grow` rules the stylesheet has carried since
+    # #242 were emitted by nothing at all.
+    kestrel_html = annotate_table_columns(
+        kestrel_html,
+        list(kestrel_df.columns),
+        numeric=numeric_headings(KESTREL_DISPLAY_CELL_FORMATS),
+        essential=KESTREL_ESSENTIAL_COLUMNS,
+        caption="Kestrel variant calls, with the MUC1 name reconciled from both callers",
+    )
     kestrel_row_summary = (
         row_count_statement(len(kestrel_df), flagged_row_count(kestrel_df_raw), noun=KESTREL_ROW_NOUN)
         if kestrel_html
@@ -670,6 +702,7 @@ def generate_summary_report(
     logger.debug("Kestrel results converted to HTML.")
 
     advntr_row_summary = ""
+    advntr_folded_record = ""
     if not advntr_available or advntr_df.empty:
         # Every adVNTR state that is not a table is worded by the template, the way the
         # Kestrel side already does it. Two of the four used to be built here instead:
@@ -683,15 +716,26 @@ def generate_summary_report(
     else:
         # Rendered from a copy: `advntr_df` itself is what the screening rules match
         # on (`VID`, `Flag`), so it has to keep the unformatted values.
-        advntr_display = format_number_columns(advntr_df, ADVNTR_CELL_FORMATS)
+        advntr_display = space_flag_tokens(format_number_columns(advntr_df, ADVNTR_CELL_FORMATS))
+        # Headings, on the copy that is rendered. Formatting runs first because
+        # `ADVNTR_CELL_FORMATS` is keyed by the source names, which is also why this
+        # cannot simply move into `build_advntr_frame`.
+        advntr_display = advntr_display.rename(columns=ADVNTR_DISPLAY_HEADINGS)
         if "Flag" in advntr_display.columns:
             advntr_display["Flag"] = advntr_display["Flag"].apply(flag_html)
-        advntr_html = escaped_table_html(
-            advntr_display,
-            classes=PER_SAMPLE_TABLE_CLASSES,
-            html_columns=("Flag",),
+        advntr_html = annotate_table_columns(
+            escaped_table_html(
+                advntr_display,
+                classes=PER_SAMPLE_TABLE_CLASSES,
+                html_columns=("Flag",),
+            ),
+            list(advntr_display.columns),
+            numeric=numeric_headings(ADVNTR_DISPLAY_CELL_FORMATS),
+            essential=ADVNTR_ESSENTIAL_COLUMNS,
+            caption="adVNTR variant calls, with the MUC1 name reconciled from both callers",
         )
         advntr_row_summary = row_count_statement(len(advntr_df), flagged_row_count(advntr_df), noun=ADVNTR_ROW_NOUN)
+        advntr_folded_record = folded_record_html(advntr_display, ADVNTR_ESSENTIAL_COLUMNS, noun=ADVNTR_ROW_NOUN)
         logger.debug("adVNTR results converted to HTML.")
 
     cross_match_message, cross_match_is_positive = build_cross_match_summary(pipeline_summary)
@@ -781,6 +825,11 @@ def generate_summary_report(
         # empty when there is no table: the sentence exists to say that nothing was
         # withheld from the rows below it, so counting a non-result defeats its purpose.
         "kestrel_row_summary": kestrel_row_summary,
+        # The folded columns, printed under each table because a nineteen-column table
+        # does not fit A4 and silently lost ten of them - the 121 bp motif sequence
+        # among them - off the right edge of every sheet.
+        "kestrel_folded_record": folded_record_html(kestrel_df, KESTREL_ESSENTIAL_COLUMNS, noun=KESTREL_ROW_NOUN),
+        "advntr_folded_record": advntr_folded_record,
         "advntr_highlight": advntr_html,
         "advntr_row_summary": advntr_row_summary,
         "advntr_available": advntr_available,
@@ -828,6 +877,12 @@ def generate_summary_report(
         "sample_name": resolved_sample_name,
         "assay_name": ASSAY_NAME,
         "report_title_prefix": REPORT_TITLE_PREFIX,
+        # The two halves of the same title. `<title>` and the printed running header
+        # take the whole string above, because neither can carry markup; the `<h1>`
+        # takes these, so the gene symbol can be set in italics the way a gene symbol
+        # is. Both are interpolated under autoescaping - nothing here is marked safe.
+        "report_gene_symbol": GENE_SYMBOL,
+        "report_title_description": REPORT_TITLE_DESCRIPTION,
         # Printed on every archived page. The printed record is the artefact that
         # outlives the HTML, and it is the one that gets filed and forwarded.
         "research_use_statement": RESEARCH_USE_STATEMENT,
@@ -956,6 +1011,19 @@ def generate_summary_report(
         },
         "cross_match_message": cross_match_message,
         "cross_match_is_positive": cross_match_is_positive,
+        # What the run named, at the top of the report rather than in column eleven of a
+        # nineteen-column table. Built from the *unformatted* frames: the displayed
+        # Kestrel frame carries markup in its `Confidence` and `Flag` cells, and the
+        # nomenclature columns are read as text. It is None when no row carries a name,
+        # which is what the masthead branches on - a run that named nothing must not
+        # render an empty allele panel.
+        "variant_identity": variant_identity(kestrel_df_raw, advntr_df),
+        # Every coded nomenclature value these rows actually use, in words. A tier is a
+        # bare letter and a flag is a kebab-case token; both were printed with nothing
+        # anywhere in the artefact saying what they meant. Only the terms present are
+        # listed, and they are printed rather than put behind a hover, because this
+        # report is read on paper as often as on a screen.
+        "nomenclature_legend": nomenclature_legend(kestrel_df_raw, advntr_df),
     }
 
     try:

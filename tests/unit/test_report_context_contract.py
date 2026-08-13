@@ -146,6 +146,8 @@ def test_every_deprecated_context_path_has_an_explicit_major_release() -> None:
                 "igv_content",
                 "screening_state.kestrel_result",
                 "screening_state.advntr_result",
+                "cross_match_message",
+                "cross_match_is_positive",
             }
         )
         == contract.DEPRECATED_KEYS

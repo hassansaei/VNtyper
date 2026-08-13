@@ -28,6 +28,15 @@ DEPRECATED_KEYS = frozenset(
         "igv_content",
         "screening_state.kestrel_result",
         "screening_state.advntr_result",
+        # The cross-match sentence and its computed state. The shipped per-sample report
+        # no longer renders a `Cross-Match Summary` section: the masthead already
+        # carries a `Concordance` chip built from the same computed state, and for a run
+        # that named one allele the allele panel prints both callers' own names beside
+        # each other - so the section was a heading and a bordered box restating a fact
+        # the reader had already been given twice, 1,300px further up. Both values are
+        # still passed, because a configured template may render them.
+        "cross_match_message",
+        "cross_match_is_positive",
     }
 )
 

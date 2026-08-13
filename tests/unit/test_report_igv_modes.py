@@ -179,7 +179,12 @@ def test_a_report_without_alignments_embeds_no_library(tmp_path: Path) -> None:
     html = _render(tmp_path)
 
     assert PAYLOAD_DECLARATION not in html
-    assert len(html) < 120_000, f"a report with no alignments is {len(html):,} bytes"
+    # The bound exists to prove the 576 KB payload is *not* in this document, so it is
+    # set well below the payload and not tight against the current document: the report
+    # gained a reading key, a printed full-record appendix and a notices block in the
+    # #242 presentation pass, and a guard that has to be nudged by every markup edit
+    # stops measuring what it was written for.
+    assert len(html) < 200_000, f"a report with no alignments is {len(html):,} bytes"
 
 
 def test_a_report_with_alignments_embeds_the_library(run_with_alignments: Path) -> None:
@@ -187,7 +192,9 @@ def test_a_report_with_alignments_embeds_the_library(run_with_alignments: Path) 
     html = _render(run_with_alignments)
 
     assert PAYLOAD_DECLARATION in html
-    assert 450_000 < len(html) < 700_000, f"a report with alignments is {len(html):,} bytes"
+    # igv.js 3.8.5 is 575,932 base64 characters, against 3.0.2's 496,920; the window is
+    # widened for the version, not loosened - it still fails if the payload is absent.
+    assert 500_000 < len(html) < 800_000, f"a report with alignments is {len(html):,} bytes"
 
 
 @pytest.mark.parametrize("mode", [report_assets.REPORT_IGV_SIDECAR, report_assets.REPORT_IGV_OFF])

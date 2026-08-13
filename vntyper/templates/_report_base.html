@@ -74,6 +74,18 @@
   --state-ok:      #1c6b3f;
   --state-none:    #5b6570;
 
+  /* The alignment browser's ground, and the only pair here that is the same colour in
+     every palette. igv.js paints its own light theme from inside a minified bundle this
+     document evaluates but does not style, so in dark mode the panel rendered as a bare
+     white slab with white-on-white form controls in it. It cannot be re-tinted from
+     here, so it is committed to instead: a genome browser is a light instrument, its
+     base colours encode the four bases, and this is the convention its readers have.
+     Declared as tokens rather than as two literals in the per-sample template, because
+     every colour in either report resolves through this block - including the ones
+     deliberately exempt from the palette switch. 17.36:1. */
+  --instrument-paper: #ffffff;
+  --instrument-ink:   #14181d;
+
   --focus: var(--accent);
   --motion: 120ms;
 }
@@ -131,6 +143,34 @@ body {
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   background: var(--surface);
+  /* A results table is nineteen columns wide and the reader has to be told there is
+     more of it to the right. The shadow is painted by the scroll container itself:
+     two `local` layers sit on the content and two `scroll` layers stay pinned to the
+     edges, so the shadow is drawn only on the side that still has content behind it
+     and disappears when that end is reached. It costs no script, and a reader with no
+     pointer - who cannot discover the overflow by hovering - sees it too. */
+  background-image:
+    linear-gradient(to right, var(--surface), transparent 12px),
+    linear-gradient(to left, var(--surface), transparent 12px),
+    linear-gradient(to right, color-mix(in oklab, var(--ink) 16%, transparent), transparent 12px),
+    linear-gradient(to left, color-mix(in oklab, var(--ink) 16%, transparent), transparent 12px);
+  background-position: left center, right center, left center, right center;
+  background-repeat: no-repeat;
+  background-size: 24px 100%, 24px 100%, 12px 100%, 12px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+
+/* The name of the table, for a reader who arrives at it from find-in-page or from a
+   screen reader's table list, and on paper where a scrolled-past heading is not
+   above it any more. `caption-side: top` is the default; it is stated because a
+   caption that renders under its table reads as a footnote. */
+caption {
+  caption-side: top;
+  text-align: left;
+  padding: var(--s-3) var(--s-4) var(--s-2);
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink-muted);
 }
 
 /* `width: auto` + `min-width: 100%` lets columns size to their content and lets
@@ -154,10 +194,20 @@ thead {
 
 /* The heading row was `lightskyblue` with `color: white` - 1.72:1, the worst
    pair in either report and the one on every column of every table. */
+/* The heading row was `lightskyblue` with `color: white` - 1.72:1, the worst pair in
+   either report and the one on every column of every table.
+
+   The padding is on the cell, not only on the button: a reader with no script gets a
+   heading and no button, and `padding: 0` printed that heading hard against the cell
+   border. The button below takes the padding back off with a negative margin, so the
+   whole cell is still the hit target rather than the text alone - which is the reason
+   the padding moved to the button in the first place, kept without the no-script cost.
+   `top: 0` on `thead` is what makes the heading stick, and it needs an opaque
+   background to stick *over*: `--sunken` is one. */
 thead th {
   background: var(--sunken);
   color: var(--ink);
-  padding: 0;
+  padding: var(--s-2) var(--s-3);
 }
 
 /* --- sortable column headings --------------------------------------------
@@ -182,8 +232,15 @@ thead th button {
   align-items: center;
   justify-content: center;
   gap: var(--s-1);
-  width: 100%;
+  /* The cell's own padding, taken back off and re-applied here, so the control fills
+     the cell edge to edge and the heading is still padded when no script ran. */
+  margin: calc(var(--s-2) * -1) calc(var(--s-3) * -1);
+  width: calc(100% + 2 * var(--s-3));
   padding: var(--s-2) var(--s-3);
+  /* 44px, which is the target size WCAG 2.2's Target Size (Minimum) asks for and the
+     one every touch platform's own guidance settles on. Measured at 390px these were
+     40.8px tall, and they are the most numerous control in the document. */
+  min-height: 2.75rem;
   cursor: pointer;
   font: inherit;
   font-weight: 600;
@@ -225,8 +282,26 @@ thead th.num button { justify-content: flex-end; }
    it back off the flag. A cell that wraps needs no exception at all: the widest
    column absorbs the width, the table outgrows `.table-container`, and
    `.table-container` scrolls. Nothing in this report is behind a hover. */
+/* **Cell rhythm.** `thead th button` has carried `8px 12px` since #242 and the data
+   cells had nothing at all, so they rendered at the user agent's 1px: roomy headings
+   over cramped figures, and the two never shared a rhythm. The table also never took
+   the 13px step the scale declares for it (`--step--1`, commented "tables, notes"),
+   so nineteen columns of 16px text is a large part of why the Kestrel table measured
+   2123px inside a 1422px frame. Both stated once, here, for both reports. */
 .table td,
-.table th { text-align: center; }
+.table th {
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--step--1);
+}
+
+/* **Text reads from a left edge; numbers read from a right one.** Everything was
+   centred, so a full-sentence naming note, a 121 bp sequence and `53C[7]>53C[8]` had no
+   shared edge to compare from - which contradicts the reason `mono-cell` exists two
+   rules below, that these are the columns where two values are compared for equality.
+   Centring survives on nothing: `.num` takes the figures right, and the rest start
+   where the eye returns to. */
+.table td,
+.table th { text-align: left; }
 /* `overflow-wrap: break-word`, not `word-break: break-word`. The second one lets the
    browser take a column's minimum width down to a single character, which is how
    "High_Precision" ended up broken across two lines in a column with room to spare;
@@ -250,6 +325,119 @@ thead th.num button { justify-content: flex-end; }
 }
 th { white-space: pre-wrap; }
 
+/* --- per-column presentation ----------------------------------------------
+   The three classes below have been declared here since #242 and were emitted by
+   nothing at all, so every figure in both results tables was centred, every
+   identifier was set in the body face, and no column absorbed the table's slack.
+   `report_formatting.annotate_table_columns` is what writes them now.
+
+   Numbers share a right-hand axis and a fixed digit width, which is what lets a
+   reader compare 0.009410 with 0.004690 by looking rather than by reading. A
+   centred column of decimals hides exactly the digit that separates them. */
+.table td.num,
+.table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* An identifier, a coordinate, an allele or a sequence is read character by
+   character, and the proportional face closes up the letter pairs that matter most
+   in one: `53C[7]` and `53C[1]` differ by a glyph. Not a costume for "technical" -
+   these are the columns where two values are compared for equality. */
+.table td.mono-cell {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+/* A floor for the columns holding several tokens or a sentence. Auto table layout was
+   giving the flag list a column narrower than one of its flags, so a single-variant row
+   stood 244px tall with 180px of white under every other cell in it. */
+.table td.wide-cell,
+.table th.wide-cell { min-width: 18ch; }
+
+/* --- how much of a row to look at -----------------------------------------
+   **A column, never a row.** A hidden row is evidence the reader cannot know exists,
+   which is the defect #242 is named after and which nothing in the per-sample report
+   may do. A column the reader folds away is the opposite: the control names the full
+   count on its own label, it defaults to the shorter set and says so, every column it
+   folds is already stated in the masthead's allele panel or derived by the column
+   beside it, the whole table prints either way (below), and with no script running
+   there is no class on the table and every column is shown. More, not less, is the
+   failure mode.
+
+   The class goes on the `<table>`, so the two results tables are independent and a
+   reader who opened one of them wide is not opening the other. */
+.table.essential-columns td.col-optional,
+.table.essential-columns th.col-optional { display: none; }
+
+.column-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: var(--step--1);
+}
+.column-mode legend {
+  float: left;
+  padding: 0;
+  margin-right: var(--s-3);
+  font-size: var(--step--2);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.column-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 2.75rem;
+  cursor: pointer;
+}
+.column-mode input { accent-color: var(--accent); margin: 0; }
+
+/* A column heading carrying its own explanation says so. The help is *also* printed
+   under the table, so this dotted rule is a shortcut to something already on the
+   page rather than the only route to it. */
+thead th[title] button { text-decoration: underline dotted currentColor; text-underline-offset: 4px; }
+
+/* --- the row's own label stays put ----------------------------------------
+   Scrolled 700px right in a nineteen-column table, a reader has lost `Motif`,
+   `Variant` and `Position` and cannot tell which row they are reading. The first
+   column is the row's name, so it stays. `background: inherit` takes the row's
+   computed background, which is what carries the hover tint across the frozen cell
+   instead of leaving a stripe of `--surface` behind it. */
+.table thead th:first-child,
+.table tbody td:first-child {
+  position: sticky;
+  left: 0;
+  /* `inherit` on the *heading* cell resolved against a `<tr>` with no background of
+     its own, so the frozen cell was transparent: a white notch in the heading row at
+     rest, and at `scrollLeft > 0` the columns slid visibly through it - "Motif" and
+     "Flag" drawn on top of each other and both illegible, during exactly the scroll
+     this column was frozen to survive. The body cell is separately correct, because
+     its row *does* carry one, and it has to stay `inherit` to keep the hover tint. */
+  background: inherit;
+  /* The seam, as a shadow rather than a border: a border would occupy layout width
+     and shift every column, and this cell is painted over its neighbour. */
+  box-shadow: 1px 0 0 var(--hairline);
+}
+.table thead th:first-child { z-index: 2; background: var(--sunken); }
+.table tbody td:first-child { z-index: 1; }
+/* `thead` is already sticky; a `<th>` needs the sticky background of its own row to
+   paint over the cells sliding under it. */
+.table thead th { background: var(--sunken); }
+
+/* A scroll container that only a pointer can reach is a third of the evidence a
+   keyboard reader cannot get to. `tabindex="0"` on the wrapper makes it a scrollable
+   region the arrow keys drive, which is what the ARIA practice for a scrollable
+   region asks for; the `role` and the name come with it in the markup. */
+.table-container:focus-visible,
+#igvContainer:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
 /* Row colour, and who owns it. Until #242 this had to be stated three times over -
    for `table`, for Bootstrap's `.table` and for DataTables' `table.dataTable` - at a
    specificity chosen to beat two CDN stylesheets this file could not edit. Both are
@@ -257,7 +445,18 @@ th { white-space: pre-wrap; }
    report's own for the first time. */
 table { color: var(--ink); background: var(--surface); }
 tbody tr { background-color: var(--surface); }
-tbody tr:hover { background-color: var(--sunken); }
+/* Reading across nineteen columns is the thing this row treatment exists for, and
+   `--sunken` on `--surface` is a 1.03:1 difference - a hover nobody can see is a
+   hover that is not there. The tint is mixed from the accent so it reads as the
+   pointer's own mark rather than as a second row state, it is weak enough that the
+   flagged-value highlight still wins, and `:hover` is emphasis only: no rule here
+   may take a row out of the reader's view.
+
+   `@media (hover: hover)` keeps it off a touch device, where a tap leaves the tint
+   behind on the last row touched and it reads as a selection nobody made. */
+@media (hover: hover) {
+  tbody tr:hover { background-color: color-mix(in oklab, var(--accent) 8%, var(--surface)); }
+}
 
 /* **No zebra in the per-sample report.** A stripe competes with the one row treatment
    in those tables that carries meaning, the flagged-value highlight, and `#f2f2f2`
@@ -352,10 +551,15 @@ tbody tr:hover { background-color: var(--sunken); }
   align-items: center;
   margin-bottom: var(--s-4);
 }
+/* The label is the control's target, not just its name - the whole of it toggles the
+   input it wraps. It is sized to 44px so that is true of a thumb as well as a pointer:
+   the input itself is 36x20, which is the size the switch wants to *look*, and pairing
+   that with a target the same size is how a small control becomes a hard one. */
 .switch {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
+  min-height: 2.75rem;
   cursor: pointer;
   margin-bottom: 0;
 }
@@ -540,9 +744,44 @@ details[open] > summary::before { transform: rotate(90deg) translateX(-2px); }
   /* Controls that cannot be operated on paper. Printing a switch beside its
      label states an option the reader does not have. */
   .controls,
+  .column-mode,
   .no-print {
     display: none !important;
   }
+  /* **The printed record is always the whole row - beneath the table, not inside it.**
+     A nineteen-column table lays out at 1,442px on a 718px sheet: restoring every
+     column here is what put 757px of the Kestrel table, the 121 bp motif sequence among
+     it, off the right edge of every printed page with nothing saying so. The table
+     prints the columns that fit, and `.record-appendix` prints every folded value under
+     it, labelled, one block per row. The control itself is removed above, because a
+     radio beside its label states an option paper does not have. */
+  .table.essential-columns { table-layout: auto; }
+  .print-only,
+  .record-appendix {
+    display: block !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-top: var(--s-3);
+  }
+  .record-row {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    padding-top: var(--s-2);
+  }
+  .record-row h3 {
+    margin: 0 0 var(--s-1);
+    font-size: 9pt;
+    color: var(--ink-muted);
+  }
+  .record-appendix dl {
+    display: grid;
+    grid-template-columns: minmax(28mm, auto) 1fr;
+    gap: 1mm var(--s-3);
+    margin: 0;
+    font-size: 8pt;
+  }
+  .record-appendix dt { font-weight: 600; color: var(--ink-muted); }
+  .record-appendix dd { margin: 0; overflow-wrap: anywhere; }
   /* The detailed coverage view is what prints: it carries the eight statistics
      and the QC verdict that the basic view does not, and on screen it is
      revealed by a switch that has just been removed. Both would state the mean
@@ -555,10 +794,21 @@ details[open] > summary::before { transform: rotate(90deg) translateX(-2px); }
   }
   /* Nothing scrolls on paper, so nothing may be reachable only by scrolling.
      `.table-container` is the screen's horizontal scroller and has to let the
-     whole table through here. */
+     whole table through here - and with nothing scrolling, the edge shadow that
+     says "there is more to the right" is a claim about a page that has all of it.
+     `position: sticky` is the same argument: a frozen column and a repeating
+     heading are answers to scrolling, and `thead { display: table-header-group }`
+     below is what repeats the heading on paper instead. */
   .table-container {
     overflow: visible;
     border: 0.5pt solid var(--hairline);
+    background-image: none;
+  }
+  .table thead th,
+  .table tbody td:first-child,
+  .table thead th:first-child {
+    position: static;
+    box-shadow: none;
   }
   /* No clipping, so the whole value prints. `overflow-wrap: anywhere` is the
      other half: a 121 bp motif sequence is one unbroken string with nowhere to
@@ -573,12 +823,23 @@ details[open] > summary::before { transform: rotate(90deg) translateX(-2px); }
     overflow: visible;
     max-width: none;
   }
-  /* Only the data cells may break inside a word - that is what lets the 121 bp
-     sequence fit into eleven columns across 182mm of A4. The headings keep their
-     words whole, which is also what stops the layout squeezing a column narrower
-     than the word naming it: with `word-break: break-word` in force everywhere,
-     "Confidence" printed as "Confidenc e". */
+  /* **Only the sequence may break inside a word, and only it.** `anywhere` was on
+     every data cell, and measured in the printed PDF it split values mid-token: VID
+     `25561` over three lines as "25"/"56"/"1", `6.78e-07` as "6.78e"/"-07",
+     `0.009410` as "0.009"/"410", `59dupC` as "59du"/"pC". A number broken mid-digit
+     on a record somebody files and transcribes from is a hazard, not a cosmetic
+     defect. The 121 bp motif sequence is the one value with genuinely nowhere to
+     break - it is a single unbroken string - so it keeps `anywhere` and everything
+     else breaks only between words.
+
+     The headings keep their words whole, which is also what stops the layout
+     squeezing a column narrower than the word naming it: with `word-break:
+     break-word` in force everywhere, "Confidence" printed as "Confidenc e". */
   .table td {
+    overflow-wrap: break-word;
+  }
+  .table td.mono-cell.col-grow,
+  .table td.sequence-cell {
     overflow-wrap: anywhere;
   }
   .table th {

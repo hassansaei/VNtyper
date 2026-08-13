@@ -118,7 +118,7 @@ def positive_summary(tmp_path):
 def test_a_report_is_written(positive_summary) -> None:
     html = render(positive_summary)
     assert html.lstrip().startswith("<!DOCTYPE html>")
-    assert "<h1>MUC1 VNTR report — sample</h1>" in html
+    assert '<h1><i class="gene">MUC1</i> VNTR report — sample</h1>' in html
 
 
 def test_the_config_is_required(tmp_path) -> None:
@@ -135,7 +135,7 @@ def test_the_config_is_required(tmp_path) -> None:
 def test_a_missing_pipeline_summary_still_renders(tmp_path) -> None:
     """A report with nothing in it is a usable diagnostic; a traceback is not."""
     html = render(tmp_path)
-    assert "<h1>MUC1 VNTR report — unnamed sample</h1>" in html
+    assert '<h1><i class="gene">MUC1</i> VNTR report — unnamed sample</h1>' in html
     assert "Not calculated" in html
 
 
@@ -235,10 +235,24 @@ def test_the_reported_verdict_agrees_with_the_figure_it_prints_at_the_boundary(t
 # ---------------------------------------------------------------------------
 
 
+#: Matches one results-table column heading whatever presentation it carries.
+#:
+#: The headings are no longer bare `<th>`: `report_formatting.annotate_table_columns`
+#: gives each one its column's alignment class, `scope="col"` and the one-line
+#: explanation the reader sees as hover text and reads in the reading key under the
+#: table. An exact-string assertion on `<th>Position</th>` therefore fails on markup
+#: that is *more* correct than it was, which is a guard rewarding the wrong thing.
+#: What matters is that the heading reaches the report, and that it is scoped.
+def _has_heading(html: str, heading: str) -> bool:
+    """Whether the report renders ``heading`` as a scoped column heading."""
+    pattern = rf"<th[^>]*\bscope=\"col\"[^>]*>{re.escape(heading)}</th>"
+    return re.search(pattern, html) is not None
+
+
 def test_the_kestrel_table_carries_the_display_headings(positive_summary) -> None:
     html = render(positive_summary)
     for heading in ("Position", "Depth (Variant)", "Depth (Region)", "Depth Score", "Confidence", "Flag"):
-        assert f"<th>{heading}</th>" in html
+        assert _has_heading(html, heading), f"the Kestrel table does not render {heading!r} as a scoped heading"
 
 
 def test_both_report_tables_show_the_complete_mutation_naming_record(tmp_path: Path) -> None:
@@ -289,12 +303,19 @@ def test_both_report_tables_show_the_complete_mutation_naming_record(tmp_path: P
         "Repeat Form",
         "Naming Note",
     ):
-        assert f"<th>{heading}</th>" in kestrel_table
+        assert _has_heading(kestrel_table, heading), f"the Kestrel table lost the {heading!r} column"
     for value in kestrel_naming.values():
         assert f">{value.replace('>', '&gt;')}<" in kestrel_table
 
-    for heading in advntr_naming:
-        assert f"<th>{heading}</th>" in advntr_table
+    # The adVNTR table now names these eight columns the way the Kestrel table above it
+    # already did, so the same field is not called `Nomenclature_Tier` in one table and
+    # `Tier` in the other. The source names are what `advntr_naming` is keyed by and
+    # what the summary and the TSV still carry; `ADVNTR_DISPLAY_HEADINGS` is the map
+    # between them, and reading it here is what keeps this test measuring the boundary
+    # rather than restating one side of it.
+    for source_name in advntr_naming:
+        heading = report_formatting.ADVNTR_DISPLAY_HEADINGS[source_name]
+        assert _has_heading(advntr_table, heading), f"the adVNTR table lost the {source_name!r} column"
     for value in advntr_naming.values():
         assert f">{value}<" in advntr_table
 
@@ -307,7 +328,7 @@ def test_the_motif_column_reaches_the_report(positive_summary) -> None:
     column at all -- lost the column entirely. `cohort_summary.py` keys on
     `Motif`, so the two reports disagreed about the same sample."""
     html = render(positive_summary)
-    assert "<th>Motif</th>" in html, "the Motif column is missing from the Kestrel table"
+    assert _has_heading(html, "Motif"), "the Motif column is missing from the Kestrel table"
 
 
 def test_the_motif_column_shows_the_annotated_motif_not_the_raw_pair(positive_summary) -> None:
@@ -641,7 +662,7 @@ def test_a_negative_run_still_names_its_sample_and_its_coverage(tmp_path) -> Non
     """
     html = render(negative_summary(tmp_path))
 
-    assert "<h1>MUC1 VNTR report — NEG1</h1>" in html
+    assert '<h1><i class="gene">MUC1</i> VNTR report — NEG1</h1>' in html
     assert _coverage_qc_cell(html) == "PASS"
 
 
@@ -679,6 +700,26 @@ def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -
 # ---------------------------------------------------------------------------
 # The screening summary box - defect W3
 # ---------------------------------------------------------------------------
+
+
+def provenance_region(html: str) -> str:
+    """The report from the ``Run provenance`` heading to the end of the document.
+
+    The raw-state line ("Kestrel: negative . adVNTR: not performed . Coverage QC: PASS")
+    is rendered here rather than in the masthead: beside the state chips it printed the
+    same four facts twice over, once in words and once in the pipeline's own tokens.
+    Nothing about the line changed except which section it is filed in, and it is filed
+    with the schema version and the library digest it belongs beside.
+
+    Args:
+        html: The rendered report.
+
+    Returns:
+        str: The provenance section and everything after it.
+    """
+    marker = 'id="run-provenance"'
+    assert marker in html, "the report has no run-provenance section"
+    return html[html.index(marker) :]
 
 
 def masthead(html: str) -> str:
@@ -885,11 +926,19 @@ def test_no_state_word_is_ever_rendered_as_text(tmp_path, emphasis) -> None:
 
 
 def test_the_masthead_leads_with_identity_then_state_then_the_message(positive_summary) -> None:
-    """Scan order, asserted as document order: who this is about, what state the
-    pipeline computed, then the sentence the configuration wrote for that state."""
+    """Scan order, asserted as document order: who this is about, then the sentence the
+    configuration wrote, then what the run named, with the computed state beside them.
+
+    The chips moved *after* the sentence in the source and beside it on the screen. They
+    are the right-hand column of a two-column masthead: a column of sentences capped at a
+    readable measure left half of a 1,132px panel empty while the chips used a third of
+    theirs, so the two were stacked in a wide box rather than laid out in one. Source
+    order still leads with identity, and a reader with no CSS - or a screen reader
+    walking the document - gets identity, verdict, allele, then state.
+    """
     block = masthead(render(positive_summary))
 
-    assert block.index('class="identity"') < block.index('class="chips"') < block.index('class="headline"')
+    assert block.index('class="identity"') < block.index('class="headline"') < block.index('class="chips"')
 
 
 def test_the_identity_strip_keeps_each_label_with_its_value(positive_summary) -> None:
@@ -939,7 +988,17 @@ def test_a_provenance_value_the_run_did_not_record_is_drawn_as_absent(tmp_path) 
 def test_the_state_reaches_the_chip_row(positive_summary) -> None:
     html = render(positive_summary)
 
-    assert chip_labels(html) == ["Kestrel", "adVNTR", "Concordance", "Coverage QC"]
+    # The two depth figures are chips as well. "How confident should I be" is the third
+    # question this report is opened with, and answering it used to mean holding a depth
+    # score from the table and two coverage figures from a section 250px below it.
+    assert chip_labels(html) == [
+        "Kestrel",
+        "adVNTR",
+        "Concordance",
+        "Coverage QC",
+        "Mean coverage",
+        "Flank depth",
+    ]
     assert chip_value(html, "Kestrel") == "High precision"
     assert chip_value(html, "Coverage QC") == "PASS"
 
@@ -1022,7 +1081,10 @@ def test_the_research_use_statement_is_on_screen(positive_summary) -> None:
 
     block = masthead(render(positive_summary))
 
-    assert 'class="use-statement"' in block
+    # It shares one block with the BAM-header warning: two things this report must say
+    # that are neither a result nor evidence, in one treatment rather than a grey box
+    # inside the masthead and a red box outside it.
+    assert 'class="notices"' in block
     assert RESEARCH_USE_STATEMENT in block
 
 
@@ -1065,7 +1127,10 @@ def test_the_provenance_line_never_prints_the_not_performed_token_raw(positive_s
     from `"negative"`, which means it ran and found nothing. The provenance line must
     render this as words a reader understands, not the raw internal token."""
     html = render(positive_summary)
-    assert "adVNTR: not performed" in visible_text(masthead(html))
+    # The line is in the run-provenance section now, not the masthead: beside the state
+    # chips it printed the same four facts twice, once in words and once in the
+    # pipeline's own tokens. It says exactly what it said before, one section lower.
+    assert "adVNTR: not performed" in visible_text(provenance_region(html))
     assert "adVNTR: none" not in html
 
 
@@ -1080,10 +1145,16 @@ def test_the_template_no_longer_decides_emphasis_from_the_message_text() -> None
     what keeps `summary-positive` in the file and this assertion non-vacuous.
     """
     template = (TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8")
-    assert "summary-positive" in template, "the class vanished; this assertion would be vacuous"
     assert "'negative' not in summary_text" not in template
-    assert "cross_match_is_positive" in template
     assert "screening_state.emphasis" in template
+    # The cross-match box is gone from the shipped template, so the boolean it carried is
+    # no longer read here. It is not gone from the *contract*: `cross_match_is_positive`
+    # is still computed and still passed for configured templates, and it is recorded in
+    # `report_context_contract.DEPRECATED_KEYS` rather than dropped silently. What
+    # replaced the box is the `Concordance` chip built from the same computed state -
+    # which is the point of this test, so it is asserted here.
+    assert "cross_match_is_positive" in report_context_contract.DEPRECATED_KEYS
+    assert "cross_match_message" in report_context_contract.DEPRECATED_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -1326,7 +1397,12 @@ def test_advntr_rows_are_tabulated(tmp_path) -> None:
     )
     html = render(tmp_path)
     assert "25561" in html
-    assert "<th>NumberOfSupportingReads</th>" in html
+    # `Supporting Reads`, not `NumberOfSupportingReads`. The adVNTR table used to print
+    # its dataframe identifiers verbatim directly beneath a Kestrel table whose headings
+    # were English, so the same eight nomenclature fields appeared under two different
+    # names in one document. `ADVNTR_DISPLAY_HEADINGS` renames the rendered copy only:
+    # `advntr_df` keeps the source names, because the screening rules match on them.
+    assert _has_heading(html, "Supporting Reads")
 
 
 # ---------------------------------------------------------------------------
@@ -1350,8 +1426,9 @@ def test_a_cross_match_hit_is_reported(tmp_path) -> None:
     )
     html = render(tmp_path)
 
-    assert "At least one match was found" in html
-    assert "summary-positive" in _cross_match_paragraph(html)
+    # The sentence is no longer rendered; the `Concordance` chip is what the reader sees,
+    # and it is built in `screening_summary.state_chips` from the same computed boolean.
+    assert chip_value(html, "Concordance") == "Match"
 
 
 def test_a_cross_match_miss_is_not_styled_as_a_hit(tmp_path) -> None:
@@ -1371,8 +1448,7 @@ def test_a_cross_match_miss_is_not_styled_as_a_hit(tmp_path) -> None:
     )
     html = render(tmp_path)
 
-    assert "No matches were found" in html
-    assert "summary-positive" not in _cross_match_paragraph(html)
+    assert chip_value(html, "Concordance") != "Match"
 
 
 @pytest.mark.parametrize(
@@ -1828,6 +1904,13 @@ SAFE_BY_DESIGN = {
     # message is now rendered as the ordered parts it was authored in, each one an
     # autoescaped element of its own.
     "cross_match_message": "one of two fixed sentences built in generate_report",
+    # The columns the results table folds away, printed under it because a
+    # nineteen-column table does not fit A4. `folded_record_html` builds the whole
+    # fragment and puts every heading *and* every cell through `escape_html` on the way
+    # in - it is markup this codebase constructs, from values it escapes itself, which
+    # is the same warrant the two results tables above carry.
+    "kestrel_folded_record": "a <dl> per row built by folded_record_html, every label and value escaped there",
+    "advntr_folded_record": "a <dl> per row built by folded_record_html, every label and value escaped there",
     "table_json": "a JavaScript literal spliced out of the IGV report",
     "session_dictionary": "a JavaScript literal spliced out of the IGV report",
     "mean_vntr_coverage_icon": "an HTML fragment built by report_formatting",
@@ -2407,7 +2490,7 @@ def test_the_heading_carries_the_sample_name(tmp_path) -> None:
     """Two tabs and a printed page are all indistinguishable without this."""
     write_summary(tmp_path, input_files={"cram": "S1.cram"})
 
-    assert "<h1>MUC1 VNTR report — S1</h1>" in render(tmp_path)
+    assert '<h1><i class="gene">MUC1</i> VNTR report — S1</h1>' in render(tmp_path)
 
 
 def test_the_header_names_the_assay_and_the_version(tmp_path) -> None:
@@ -2597,7 +2680,7 @@ def test_a_sample_name_derived_from_an_input_file_is_escaped(tmp_path) -> None:
 
     assert TITLE_PAYLOAD not in html
     assert f"<title>MUC1 VNTR report — {TITLE_ESCAPED}</title>" in html
-    assert f"<h1>MUC1 VNTR report — {TITLE_ESCAPED}</h1>" in html
+    assert f'<h1><i class="gene">MUC1</i> VNTR report — {TITLE_ESCAPED}</h1>' in html
 
 
 def test_a_sample_name_in_the_printed_header_line_is_escaped(tmp_path) -> None:

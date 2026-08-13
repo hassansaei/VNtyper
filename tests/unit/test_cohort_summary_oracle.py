@@ -323,7 +323,18 @@ pytestmark = pytest.mark.unit
 #: neither. The evidence for that fix is
 #: `test_cohort_inputs.py::test_processes_with_different_hash_seeds_discover_the_same_order`,
 #: which spawns five interpreters under five seeds, and it covers directory inputs only.
-EXPECTED_FINGERPRINT = "fb36948e8d30555deb7dfc513de915b038990e03cd69a38f0e65f8e84e8080ad"
+#: **Moved once, deliberately, by #242's report presentation pass.** The previous value
+#: was ``fb36948e8d30555deb7dfc513de915b038990e03cd69a38f0e65f8e84e8080ad``. The only
+#: change to this report's *content* is that ``escaped_table_html`` now renders with
+#: ``border=0``: pandas' default wrote ``border="1"`` into every table it produced, and a
+#: presentation attribute is a colour no stylesheet can see - it painted a 1px ``inset``
+#: grey at 3.95:1 on every cell, square-cornered, inside the report's own hairline frame.
+#: The canonical document was diffed line by line against the recorded one before this
+#: constant was touched: the ``[TABLES]``, ``[CHART-VALUES]``, ``[CHART-LABELS]``,
+#: ``[CHART-TOTALS]`` and ``[IMAGES]`` sections are byte-identical, and every other line
+#: that moved is inside the shared token layer's ``<style>`` or its comments. No cell
+#: value, no column, no row order and no chart datum changed.
+EXPECTED_FINGERPRINT = "bf5c1d831c61090abd4cc6031c635e6b2858e42c2dab30f6218bfb8e12d7f21b"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
@@ -362,6 +373,16 @@ def _fingerprint(html: str) -> tuple[str, str]:
         tuple[str, str]: The canonical document (for diffing on failure) and its
         SHA-256 hex digest.
     """
+    # **Normalised once, before anything is extracted.** The volatile fragments were
+    # replaced inside `_skeleton` only, so every section taken from `html` above it -
+    # `[TABLES]` first among them - carried the raw text. Measured: the cohort report
+    # renders `<p><strong>Report Date:</strong> 2026-08-13 20:42:42</p>` inside the span
+    # `_TABLE` captures, so the digest moved whenever the clock's seconds ticked between
+    # two runs and this oracle was flaky at a rate nobody had cause to notice while the
+    # recorded value was stale anyway. Three consecutive runs produced three digests.
+    # Doing the substitutions here makes every section measure the same document.
+    html = _UUID.sub("<UUID>", _TIMESTAMP.sub("<TIMESTAMP>", html))
+
     parts = [
         "[TABLES]",
         *_TABLE.findall(html),
