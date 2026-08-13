@@ -174,9 +174,13 @@ def process_bam_to_fastq(
             plan=plan,
             output_bam=unmapped_bam,
             threads=threads,
-            # Always: this file is consumed by the merge on the next line and then
-            # deleted, so it is the one intermediate that is unambiguously throwaway.
-            uncompressed=True,
+            # Only when it is genuinely throwaway. The merge consumes it on the next
+            # line, but the removal below is gated on `delete_intermediates`, which
+            # defaults to False all the way up to the CLI -- so in an ordinary run this
+            # file survives in the output directory and goes into the archive. Writing
+            # a surviving file at BGZF level 0 would ship a roughly 3x larger BAM, the
+            # same regression the merge output is left compressed to avoid.
+            uncompressed=delete_intermediates,
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
         logger.info(f"Executing filtering with command: {command_filter}")

@@ -1114,12 +1114,21 @@ def test_the_non_fast_slice_is_uncompressed_because_the_merge_replaces_it(tmp_pa
     assert " -u " in slice_command
 
 
-def test_the_unmapped_extraction_is_uncompressed(tmp_path):
-    """It is merged on the next line and then deleted, so deflating it is pure cost."""
-    commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+def test_the_unmapped_extraction_is_uncompressed_only_when_it_will_be_deleted(tmp_path):
+    """`delete_intermediates` is what decides whether this file is throwaway.
 
-    unmapped_command = next(command for command in commands if " -f 4 " in command)
-    assert " -u " in unmapped_command
+    It defaults to **False** all the way up to the CLI, so in an ordinary run
+    `<name>_unmapped.bam` survives in the output directory and is included in the
+    archive -- the compatibility baseline even asserts its absence only in the
+    delete-intermediates case. Writing a surviving file at BGZF level 0 would ship a
+    roughly 3x larger BAM to users, which is precisely the regression the merge output
+    is left compressed to avoid.
+    """
+    deleted = _run_bam_to_fastq(tmp_path, fast_mode=False, delete_intermediates=True)
+    retained = _run_bam_to_fastq(tmp_path, fast_mode=False, delete_intermediates=False)
+
+    assert " -u " in next(command for command in deleted if " -f 4 " in command)
+    assert " -u " not in next(command for command in retained if " -f 4 " in command)
 
 
 def test_the_merge_output_is_never_uncompressed(tmp_path):
