@@ -380,13 +380,16 @@
         {#
           The provenance line: the raw state `summary_text` was computed from, spelled
           out in existing pipeline vocabulary so I2 is visible to a reader, not only to
-          a test. `advntr_result` is the literal "none" when adVNTR never ran, which is
-          not the same as "negative" (ran and found nothing), so it is worded from
-          `advntr_available` rather than printed raw.
+          a test.
+
+          Each algorithm's word is computed in `screening_summary.algorithm_state_text`,
+          because the computed result is only a result when the stage produced one: an
+          absent or unreadable stage reduces to the block's `default`, so printing
+          `kestrel_result` here read "Kestrel: negative" for a stage that called nothing.
         #}
         <p class="screening-provenance">
-            Kestrel: {{ screening_state.kestrel_result }} &middot;
-            adVNTR: {% if advntr_available %}{{ screening_state.advntr_result }}{% else %}not performed{% endif %}
+            Kestrel: {{ screening_state.kestrel_state_text }} &middot;
+            adVNTR: {{ screening_state.advntr_state_text }}
             &middot; Coverage QC: {{ coverage_qc }}
         </p>
 
@@ -445,16 +448,29 @@
             <p class="empty-state">Kestrel genotyping was not performed for this sample.</p>
         {% endif %}
 
+        <h2>adVNTR Identified Variants</h2>
+        {#
+          The same four states the Kestrel section above distinguishes, and for the same
+          reason. This section had two branches for them: a table, and one disjunction -
+          "adVNTR genotyping was not performed or no adVNTR results are available" -
+          which covered a failed stage by being vague about it. `advntr_available` now
+          means "produced a result", so an unreadable stage no longer falls into the
+          negative branch and says in words that it is not one.
+        #}
         {% if advntr_available and advntr_highlight %}
-            <h2>adVNTR Identified Variants</h2>
             {% if advntr_row_summary %}
                 <p class="table-count">{{ advntr_row_summary }}</p>
             {% endif %}
             <div class="table-container">
                 {{ advntr_highlight | safe }}
             </div>
+        {% elif advntr_result_unreadable %}
+            <p class="empty-state">adVNTR genotyping ran, but its result file is missing or could not be
+                read. No adVNTR result is shown, and this is not a negative.</p>
+        {% elif advntr_step_recorded %}
+            <p class="empty-state">No pathogenic variants identified by adVNTR.</p>
         {% else %}
-            <p><em>adVNTR genotyping was not performed or no adVNTR results are available.</em></p>
+            <p class="empty-state">adVNTR genotyping was not performed for this sample.</p>
         {% endif %}
 
         <h2>IGV Alignment Visualization</h2>

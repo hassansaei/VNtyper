@@ -32,6 +32,7 @@ import pandas as pd
 import pytest
 
 from vntyper.scripts import screening_summary as ss
+from vntyper.scripts import summary_steps
 from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 
 pytestmark = pytest.mark.unit
@@ -318,6 +319,8 @@ def _summary(
     text: str = "message",
     kestrel_result: str = "High_Precision",
     advntr_result: str = ss.NOT_PERFORMED,
+    kestrel_execution: str = ss.EXECUTION_PERFORMED,
+    advntr_execution: str = ss.EXECUTION_PERFORMED,
 ) -> "ss.ScreeningSummary":
     """Build a `ScreeningSummary` with only the axes each test cares about named."""
     return ss.ScreeningSummary(
@@ -327,6 +330,8 @@ def _summary(
         advntr_result=advntr_result,
         quality_metrics_pass=quality_metrics_pass,
         matched_rule=matched_rule,
+        kestrel_execution=kestrel_execution,
+        advntr_execution=advntr_execution,
     )
 
 
@@ -560,3 +565,166 @@ def test_a_state_with_no_rule_warns_rather_than_going_quiet(caplog, report_confi
     assert summary.text == report_config["screening_summary_default"]
     assert summary.is_positive is True, "the state is still positive even with no message for it"
     assert any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Execution state -- a stage that ran and produced nothing readable is not a
+# negative, and the message chosen for the state it did not establish is not
+# authoritative (#242, Gate B)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("step_state", "expected"),
+    [
+        (summary_steps.STEP_READ, ss.EXECUTION_PERFORMED),
+        (summary_steps.STEP_ABSENT, ss.EXECUTION_NOT_PERFORMED),
+        (summary_steps.STEP_UNREADABLE, ss.EXECUTION_FAILED),
+    ],
+)
+def test_each_step_state_maps_to_one_execution_state(step_state, expected) -> None:
+    """``get_step_state`` already distinguishes three states; this is the only
+    translation of them into the vocabulary the report presents."""
+    assert ss.execution_state(step_state) == expected
+
+
+def test_an_unrecognised_step_state_is_treated_as_a_failure() -> None:
+    """The conservative direction. A state this module does not recognise has
+    established nothing about the sample, so it must not be presented as a result."""
+    assert ss.execution_state("something-new") == ss.EXECUTION_FAILED
+
+
+#: One failed stage each, with the other reporting normally.
+ONE_STAGE_FAILED = [
+    (ss.EXECUTION_FAILED, ss.EXECUTION_PERFORMED),
+    (ss.EXECUTION_PERFORMED, ss.EXECUTION_FAILED),
+]
+
+
+@pytest.mark.parametrize(("kestrel", "advntr"), ONE_STAGE_FAILED, ids=["kestrel", "advntr"])
+def test_a_failed_stage_makes_the_screening_state_indeterminate(kestrel: str, advntr: str) -> None:
+    """Either algorithm is enough. A rule was selected by matching a state one of
+    the two stages never established, so the state as a whole is not established."""
+    summary = _summary(is_positive=False, matched_rule=True, kestrel_execution=kestrel, advntr_execution=advntr)
+    assert summary.emphasis == "indeterminate"
+
+
+@pytest.mark.parametrize(("kestrel", "advntr"), ONE_STAGE_FAILED, ids=["kestrel", "advntr"])
+def test_a_failed_stage_outranks_a_positive_call(kestrel: str, advntr: str) -> None:
+    """The other ordering, and the one that matters: a Kestrel call cannot make a
+    report authoritative about a state adVNTR never established, and vice versa."""
+    summary = _summary(is_positive=True, matched_rule=True, kestrel_execution=kestrel, advntr_execution=advntr)
+    assert summary.emphasis == "indeterminate"
+
+
+def test_an_advntr_stage_that_was_never_asked_to_run_is_not_a_failure() -> None:
+    """An adVNTR-less run is the commonest run there is, and the rule table covers it.
+
+    Eight of the forty rules are keyed on ``advntr_result == "none"`` and say in words
+    that the stage was not performed, so the state *is* established. Treating this like a
+    failure would make every adVNTR-less report indeterminate.
+    """
+    summary = _summary(is_positive=True, matched_rule=True, advntr_execution=ss.EXECUTION_NOT_PERFORMED)
+    assert summary.state_is_established is True
+    assert summary.emphasis == "finding"
+
+
+def test_an_absent_kestrel_stage_leaves_the_state_unestablished() -> None:
+    """The asymmetry, and where it comes from.
+
+    ``kestrel_result`` has no value for "did not run": an absent Kestrel step hands
+    ``compute_algorithm_result`` an empty frame and gets the block's ``default`` back -
+    the same ``negative`` a stage that genotyped and called nothing produces. So the rule
+    that matches is one keyed on a Kestrel negative, and the report would state a negative
+    for a stage that never ran. ``vntyper report`` can legitimately be handed such a
+    summary (#207), so this is reachable rather than theoretical.
+    """
+    summary = _summary(is_positive=False, matched_rule=True, kestrel_execution=ss.EXECUTION_NOT_PERFORMED)
+    assert summary.state_is_established is False
+    assert summary.emphasis == "indeterminate"
+
+
+def test_a_failed_kestrel_stage_withholds_the_configured_message(report_config, caplog) -> None:
+    """The Gate B defect, at its source.
+
+    ``record_step`` writes an empty ``data`` list for a Kestrel stage whose result
+    file is missing (#212) -- the same shape a run that genotyped and called nothing
+    produces -- so ``compute_algorithm_result`` returns the block's ``default`` and the
+    rule table hands back "No variant detected." A report that prints that sentence is
+    asserting a negative the run never reached.
+    """
+    with caplog.at_level(logging.WARNING, logger="vntyper.scripts.screening_summary"):
+        summary = ss.build_screening_summary(
+            pd.DataFrame(),
+            pd.DataFrame(),
+            False,
+            _passing(),
+            report_config,
+            kestrel_execution=ss.EXECUTION_FAILED,
+        )
+
+    assert summary.text == ss.UNAVAILABLE_SUMMARY_MESSAGE
+    assert summary.emphasis == "indeterminate"
+    assert summary.kestrel_execution == ss.EXECUTION_FAILED
+    assert any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+def test_a_failed_advntr_stage_withholds_the_configured_message(report_config) -> None:
+    """The half the first fix missed: only Kestrel's step state reached the report,
+    so an unreadable adVNTR stage was reported as "No pathogenic variants identified"."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+        advntr_execution=ss.EXECUTION_FAILED,
+    )
+
+    assert summary.text == ss.UNAVAILABLE_SUMMARY_MESSAGE
+    assert summary.emphasis == "indeterminate"
+
+
+def test_a_run_that_states_its_stages_ran_keeps_its_configured_message(report_config) -> None:
+    """Guard the guard: withholding must be reachable *and* avoidable, or the two
+    tests above would pass against a module that never renders a message at all."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+        kestrel_execution=ss.EXECUTION_PERFORMED,
+        advntr_execution=ss.EXECUTION_NOT_PERFORMED,
+    )
+
+    assert summary.text != ss.UNAVAILABLE_SUMMARY_MESSAGE
+    assert summary.emphasis == "finding"
+
+
+def test_the_execution_states_default_to_the_two_state_model_they_replace(report_config) -> None:
+    """A caller that says nothing gets exactly the model that existed before: Kestrel
+    ran, and adVNTR ran if and only if ``advntr_available`` says so. No default asserts
+    anything the old signature could not."""
+    performed = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), True, _passing(), report_config)
+    absent = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, _passing(), report_config)
+
+    assert performed.kestrel_execution == absent.kestrel_execution == ss.EXECUTION_PERFORMED
+    assert performed.advntr_execution == ss.EXECUTION_PERFORMED
+    assert absent.advntr_execution == ss.EXECUTION_NOT_PERFORMED
+
+
+@pytest.mark.parametrize(
+    ("execution", "result", "expected"),
+    [
+        (ss.EXECUTION_PERFORMED, "High_Precision", "High_Precision"),
+        (ss.EXECUTION_PERFORMED, "negative", "negative"),
+        (ss.EXECUTION_NOT_PERFORMED, "none", "not performed"),
+        (ss.EXECUTION_FAILED, "negative", "failed"),
+    ],
+)
+def test_the_provenance_word_says_the_execution_state_before_the_result(execution, result, expected) -> None:
+    """The raw state line prints the computed result only when there is one. The last
+    row is the defect: an unreadable stage computes the block's ``default``, so a line
+    that printed the result would read "Kestrel: negative"."""
+    assert ss.algorithm_state_text(execution, result) == expected

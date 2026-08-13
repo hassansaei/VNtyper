@@ -18,6 +18,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -421,10 +422,11 @@ _STEP_START = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).replace(tzinfo
 _STEP_END = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc).replace(tzinfo=None)
 
 
-def unreadable_kestrel_step(missing_result_file: Path) -> dict:
-    """Record a Kestrel step whose result file does not exist, the way a run would.
+def unreadable_step(step_name: str, missing_result_file: Path) -> dict:
+    """Record one stage's step with a result file that does not exist, the way a run would.
 
     Args:
+        step_name: One of the ``STEP_*`` constants.
         missing_result_file: A path that is not there.
 
     Returns:
@@ -433,16 +435,13 @@ def unreadable_kestrel_step(missing_result_file: Path) -> dict:
     from vntyper.scripts.summary import record_step
 
     summary: dict = {"steps": []}
-    record_step(
-        summary,
-        summary_steps.STEP_KESTREL,
-        str(missing_result_file),
-        "tsv",
-        "java -jar kestrel.jar",
-        _STEP_START,
-        _STEP_END,
-    )
+    record_step(summary, step_name, str(missing_result_file), "tsv", "the stage's command", _STEP_START, _STEP_END)
     return summary["steps"][0]
+
+
+def unreadable_kestrel_step(missing_result_file: Path) -> dict:
+    """Record a Kestrel step whose result file does not exist, the way a run would."""
+    return unreadable_step(summary_steps.STEP_KESTREL, missing_result_file)
 
 
 def test_a_kestrel_result_file_that_is_missing_is_not_reported_as_a_negative(tmp_path) -> None:
@@ -632,6 +631,24 @@ def summary_box_classes(html: str) -> str:
     return match.group(1)
 
 
+def screening_message(html: str) -> str:
+    """The configured screening message as the reader gets it, markup removed.
+
+    Read from the document rather than from the context, because the whole point of
+    withholding it is that the *reader* must not be shown a sentence chosen for a state
+    the run never reached.
+
+    Args:
+        html: The rendered report.
+
+    Returns:
+        str: The message's visible text, whitespace collapsed.
+    """
+    match = re.search(r'<p class="summary-box[^"]*"[^>]*>(.*?)</p>', html, re.DOTALL)
+    assert match, "the screening message is missing from the report"
+    return " ".join(_TAG.sub(" ", match.group(1)).split())
+
+
 def test_a_negative_screening_is_not_styled_as_a_finding(tmp_path) -> None:
     """Defect W3. The template decided emphasis with
     `{% if 'negative' not in summary_text %}summary-positive{% endif %}`, and
@@ -730,17 +747,170 @@ def test_the_advntr_not_performed_state_is_worded_once(positive_summary) -> None
 
     ``generate_summary_report`` also built ``<p>adVNTR genotyping was not performed.</p>``
     for this state, which the template's ``{% if advntr_available and advntr_highlight %}``
-    can never reach: when adVNTR is unavailable the guard is false and the ``{% else %}``
-    below it prints its own, differently worded line. Two sentences for one state, one of
-    them unreachable. This counts what the reader actually gets.
+    can never reach: when adVNTR is unavailable the guard is false and the branch
+    below that guard prints its own line. Two sentences for one state, one of them
+    unreachable. This counts what the reader actually gets.
+
+    The section's wording is no longer the disjunction "was not performed **or** no adVNTR
+    results are available": that covered three different facts with one hedge, and one of
+    the three was a stage that ran and lost its result.
     """
     text = visible_text(render(positive_summary))
 
-    assert "adVNTR genotyping was not performed or no adVNTR results are available." in text
+    assert "adVNTR genotyping was not performed for this sample." in text
+    assert "or no adVNTR results are available" not in text, "one sentence per state, and no hedging between them"
     assert text.count("adVNTR genotyping was not performed") == 2, (
         "the report should say this exactly twice - once in the configured screening message and once "
         f"in the adVNTR section - and says it {text.count('adVNTR genotyping was not performed')} times"
     )
+
+
+#: A row each stage calls, so "called" is a state with evidence in it.
+STAGE_ROWS: dict[str, list[dict]] = {
+    summary_steps.STEP_KESTREL: [KESTREL_ROW],
+    summary_steps.STEP_ADVNTR: [{"VID": "25561", "Flag": "Not flagged"}],
+}
+
+
+def _stage_step(step_name: str, execution: str, tmp_path: Path) -> dict | None:
+    """Build one stage's summary step in the requested execution state.
+
+    The four states are how a ``pipeline_summary.json`` records a stage, and the last two
+    are the whole of the Gate B defect: ``record_step`` writes a step whether or not the
+    result file exists (#212), so a stage that ran and lost its result leaves exactly the
+    shape a stage that genotyped and called nothing leaves. The failed one is produced by
+    the real recorder rather than by hand, so a change to what it writes is caught here.
+
+    Args:
+        step_name: The ``STEP_*`` constant naming the stage.
+        execution: ``called``, ``empty``, ``absent`` or ``failed``.
+        tmp_path: Where the missing result file would have been.
+
+    Returns:
+        dict | None: The step mapping, or None when the stage never ran.
+    """
+    if execution == "called":
+        return tabular_step(step_name, STAGE_ROWS[step_name])
+    if execution == "empty":
+        return tabular_step(step_name, [])
+    if execution == "absent":
+        return None
+    return unreadable_step(step_name, tmp_path / "gone" / "result.tsv")
+
+
+#: What the report must say about each stage in each execution state, in the two places
+#: that used to be able to disagree: the stage's own section, and the raw-state provenance
+#: line. Only ``empty`` may read as a negative - that is the one state in which the stage
+#: established one.
+NEGATIVE_SENTENCE = {"Kestrel": "No variant detected by Kestrel", "adVNTR": "No pathogenic variants"}
+
+STAGE_EXECUTIONS: dict[str, dict[str, Any]] = {
+    "called": {"provenance": None, "section": None, "reads_as_a_negative": False},
+    "empty": {
+        "provenance": None,
+        "section": {"Kestrel": "No variant detected by Kestrel in this sample.", "adVNTR": "No pathogenic variants"},
+        "reads_as_a_negative": True,
+    },
+    "absent": {
+        "provenance": "not performed",
+        "section": {"Kestrel": "Kestrel genotyping was not performed", "adVNTR": "adVNTR genotyping was not performed"},
+        "reads_as_a_negative": False,
+    },
+    "failed": {
+        "provenance": "failed",
+        "section": {
+            "Kestrel": "Kestrel genotyping ran, but its result file is missing or could not be read",
+            "adVNTR": "adVNTR genotyping ran, but its result file is missing or could not be read",
+        },
+        "reads_as_a_negative": False,
+    },
+}
+
+#: Which combinations leave the screening state unestablished, and therefore leave the
+#: rule-selected message unusable. It is not symmetric, and the asymmetry comes from the
+#: configuration rather than from a preference: ``advntr_result`` has a value for a stage
+#: that never ran (``none``, keyed on by eight of the forty rules), while ``kestrel_result``
+#: has none - an absent or unreadable Kestrel stage computes the block's ``default``,
+#: which is the same ``negative`` a stage that genotyped and called nothing produces.
+UNESTABLISHED_KESTREL = ("absent", "failed")
+UNESTABLISHED_ADVNTR = ("failed",)
+
+
+@pytest.mark.parametrize("kestrel_execution", list(STAGE_EXECUTIONS))
+@pytest.mark.parametrize("advntr_execution", list(STAGE_EXECUTIONS))
+def test_a_stage_that_established_nothing_is_never_reported_as_a_negative(
+    tmp_path, kestrel_execution, advntr_execution
+) -> None:
+    """Gate B's Critical, over the whole 4x4 matrix.
+
+    ``get_step_state`` distinguished the three states from the start, but its result
+    reached only the Kestrel *section*. The screening computation and the whole adVNTR
+    side asked merely whether the step was present, so an unreadable stage rendered as
+    "No variant detected."/"No pathogenic variants identified by adVNTR" and the
+    provenance line said ``negative``, while the Kestrel section immediately below said
+    "this is not a negative". One report, two contradictory statements.
+
+    Every surface is read out of one rendered document, so agreement between them is
+    what is asserted rather than each in isolation.
+    """
+    from vntyper.scripts.screening_summary import UNAVAILABLE_SUMMARY_MESSAGE
+
+    steps = [tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW])]
+    for step_name, execution in (
+        (summary_steps.STEP_KESTREL, kestrel_execution),
+        (summary_steps.STEP_ADVNTR, advntr_execution),
+    ):
+        step = _stage_step(step_name, execution, tmp_path)
+        if step is not None:
+            steps.append(step)
+    write_summary(tmp_path, *steps, input_files={"bam": "S1.bam"})
+
+    html = render(tmp_path)
+    text = visible_text(html)
+    established = kestrel_execution not in UNESTABLISHED_KESTREL and advntr_execution not in UNESTABLISHED_ADVNTR
+
+    for label, execution in (("Kestrel", kestrel_execution), ("adVNTR", advntr_execution)):
+        expected = STAGE_EXECUTIONS[execution]
+        if expected["provenance"] is not None:
+            assert f"{label}: {expected['provenance']}" in text, (
+                f"the provenance line does not say {label} was {expected['provenance']!r}"
+            )
+        if expected["section"] is not None:
+            assert expected["section"][label] in text, f"the {label} section does not state its {execution} state"
+        if not expected["reads_as_a_negative"]:
+            assert NEGATIVE_SENTENCE[label] not in text, (
+                f"a {label} stage in the {execution!r} state still reads as {NEGATIVE_SENTENCE[label]!r}"
+            )
+
+    message = screening_message(html)
+    if established:
+        assert message != UNAVAILABLE_SUMMARY_MESSAGE, (
+            "the configured message is withheld from a run whose stages both reported"
+        )
+    else:
+        assert 'data-state="indeterminate"' in html, "a state one stage never established is not indeterminate"
+        assert message == UNAVAILABLE_SUMMARY_MESSAGE, (
+            f"the rule-selected message is still presented as authoritative: {message!r}"
+        )
+
+
+def test_an_unreadable_advntr_step_says_so_rather_than_reporting_nothing_found(tmp_path) -> None:
+    """The third adVNTR state, in the section's own words.
+
+    The section had two branches for three facts, so the failure fell into the "not
+    performed or no results are available" disjunction - which is not what happened, and
+    which reads as an absence rather than as a stage that ran and lost its result.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        unreadable_step(summary_steps.STEP_ADVNTR, tmp_path / "advntr" / "output_adVNTR_result.tsv"),
+    )
+
+    text = visible_text(render(tmp_path))
+
+    assert "adVNTR genotyping ran, but its result file is missing or could not be read" in text
+    assert "adVNTR genotyping was not performed" not in text, "the stage did run; saying otherwise is a second claim"
 
 
 def test_an_advntr_step_with_no_rows_says_nothing_was_found(tmp_path) -> None:
@@ -1254,8 +1424,8 @@ SAFE_BY_DESIGN = {
     ),
     "advntr_highlight": (
         "pandas table rendered with escape=False through escaped_table_html; escape_frame_cells escapes "
-        "every cell except `Flag`, whose markup flag_html builds and escapes itself - or one of two fixed <p> "
-        "sentences when adVNTR did not run or found nothing"
+        'every cell except `Flag`, whose markup flag_html builds and escapes itself - and "" for every '
+        "state that is not a table, each of which the template words itself"
     ),
     "summary_text": "a configured clinical message carrying <br> line breaks",
     "cross_match_message": "one of two fixed sentences built in generate_report",

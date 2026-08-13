@@ -40,9 +40,18 @@ contains that word -- only the fallback default does -- so every configured
 message, including "No variant detected by either genotyping method", rendered as
 a positive finding.
 
+A fourth thing the state model has to carry is *whether each stage ran at all*, which
+is not one of the three axes and cannot be: ``compute_algorithm_result`` reduces an empty
+frame to the block's ``default``, and a stage that ran and lost its result hands it exactly
+that empty frame. So the two execution axes are separate, they come from
+``summary_steps.get_step_state``, and they decide whether the message the rule table
+selected may be presented at all -- see :attr:`ScreeningSummary.state_is_established`.
+
 Functions:
     load_report_config: Read the packaged ``report_config.json``
     compute_algorithm_result: One results frame + one rule block to a state value
+    execution_state: One pipeline-summary step state to one execution state
+    algorithm_state_text: One algorithm's state as the provenance line prints it
     build_screening_summary: The three state axes to the configured message
 """
 
@@ -51,12 +60,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import pandas as pd
 
 from vntyper.scripts.coverage_qc import CoverageQC
+from vntyper.scripts.summary_steps import STEP_ABSENT, STEP_READ, STEP_UNREADABLE
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +74,25 @@ logger = logging.getLogger(__name__)
 #: Distinct from that block's ``default`` ("negative"), which means adVNTR ran and
 #: found nothing.
 NOT_PERFORMED = "none"
+
+#: How a stage's *execution* is reported, as distinct from what it called. The three
+#: values are :func:`~vntyper.scripts.summary_steps.get_step_state`'s three states in the
+#: vocabulary the report presents, and they exist because "recorded" is not "produced a
+#: readable result": ``record_step`` writes the step either way and flags the missing file
+#: (#212), leaving exactly the shape a stage that genotyped and called nothing produces.
+EXECUTION_PERFORMED = "performed"
+EXECUTION_NOT_PERFORMED = "not-performed"
+EXECUTION_FAILED = "failed"
+
+#: The one translation from step state to execution state. An unrecognised step state maps
+#: to :data:`EXECUTION_FAILED`, which is the conservative direction: a state this module
+#: does not know has established nothing about the sample, and presenting it as a result
+#: is the defect the whole distinction exists to remove.
+_EXECUTION_BY_STEP_STATE = {
+    STEP_READ: EXECUTION_PERFORMED,
+    STEP_ABSENT: EXECUTION_NOT_PERFORMED,
+    STEP_UNREADABLE: EXECUTION_FAILED,
+}
 
 #: Used when ``report_config.json`` declares no default for an algorithm block.
 FALLBACK_ALGORITHM_RESULT = "none"
@@ -75,20 +104,62 @@ FALLBACK_SUMMARY_MESSAGE = "The screening was negative (no valid Kestrel or adVN
 UNAVAILABLE_SUMMARY_MESSAGE = "No summary available."
 
 
+def execution_state(step_state: str) -> str:
+    """Translate one pipeline-summary step state into an execution state.
+
+    Args:
+        step_state: One of :mod:`vntyper.scripts.summary_steps`' ``STEP_*`` state values.
+
+    Returns:
+        str: :data:`EXECUTION_PERFORMED`, :data:`EXECUTION_NOT_PERFORMED` or
+        :data:`EXECUTION_FAILED`. An unrecognised state reads as failed.
+    """
+    return _EXECUTION_BY_STEP_STATE.get(step_state, EXECUTION_FAILED)
+
+
+def algorithm_state_text(execution: str, result: str) -> str:
+    """One algorithm's state as the report's raw-state provenance line prints it.
+
+    The execution state comes first because the computed ``result`` is only a result when
+    the stage produced one: an absent or unreadable stage hands
+    :func:`compute_algorithm_result` an empty frame and gets back the block's ``default``,
+    so a line that printed the result would read "Kestrel: negative" for a stage that
+    never called anything.
+
+    Args:
+        execution: One of the ``EXECUTION_*`` values.
+        result: The computed ``kestrel_result``/``advntr_result``.
+
+    Returns:
+        str: The computed result token when the stage produced one, else the execution
+        state in words.
+    """
+    if execution == EXECUTION_PERFORMED:
+        return result
+    return execution.replace("-", " ")
+
+
 @dataclass(frozen=True)
 class ScreeningSummary:
     """The screening state and the sentence configured for it.
 
     Attributes:
-        text: The message to render.
+        text: The message the report may present. It is the matched rule's message, or
+            the fallback default, or :data:`UNAVAILABLE_SUMMARY_MESSAGE` when
+            :attr:`state_is_established` is False - a message chosen by matching a state
+            the run never established is not evidence about the sample.
         is_positive: Whether either algorithm reported a finding. Drives the
             template's emphasis; computed from the state, never from ``text``.
         kestrel_result: The computed Kestrel state value.
         advntr_result: The computed adVNTR state value.
         quality_metrics_pass: Whether the sample met every configured coverage
             threshold - mean depth and uncovered fraction alike (#172).
-        matched_rule: Whether a configured rule matched. False means ``text`` is
-            the fallback default and the state has no message of its own.
+        matched_rule: Whether a configured rule matched the computed state. False means
+            the state has no message of its own. It says nothing about whether the state
+            was established: that is what the two execution axes are for.
+        kestrel_execution: Whether the Kestrel stage produced a readable result, was
+            never asked to run, or ran and lost it.
+        advntr_execution: The same for the adVNTR stage.
     """
 
     text: str
@@ -97,14 +168,38 @@ class ScreeningSummary:
     advntr_result: str
     quality_metrics_pass: bool
     matched_rule: bool
+    kestrel_execution: str = EXECUTION_PERFORMED
+    advntr_execution: str = EXECUTION_PERFORMED
+
+    @property
+    def state_is_established(self) -> bool:
+        """Whether every axis the rule table matched on describes something the run did.
+
+        The two algorithms are treated differently, and the asymmetry is read off the
+        configuration rather than chosen. ``advntr_result`` has a value for a stage that
+        never ran -- :data:`NOT_PERFORMED` -- and eight of the forty configured rules are
+        keyed on it, so an absent adVNTR stage is a state the table covers *in words*.
+        ``kestrel_result`` has no such value: a Kestrel stage that produced nothing hands
+        :func:`compute_algorithm_result` an empty frame, which returns the block's
+        ``default`` -- the same ``negative`` token a stage that genotyped and called
+        nothing produces. So a Kestrel stage that did not produce a result leaves the
+        state unestablished whichever way it failed to, while an adVNTR stage does so only
+        when it ran and lost its result.
+
+        Returns:
+            bool: True when the configured message describes states the run reached.
+        """
+        return self.kestrel_execution == EXECUTION_PERFORMED and self.advntr_execution != EXECUTION_FAILED
 
     @property
     def emphasis(self) -> Literal["finding", "no-finding", "indeterminate"]:
         """How the report should style this state.
 
-        ``matched_rule`` is checked first and wins over ``is_positive``: a state with
-        no configured rule is genuinely unknown, not a negative -- that is what
-        ``matched_rule`` exists to distinguish (see the module docstring).
+        :attr:`state_is_established` is checked first, then ``matched_rule``, and both win
+        over ``is_positive``. A state one stage never established is unknown, and so is a
+        state with no configured rule -- neither is a negative, and neither is a finding
+        the report may assert.
+
         ``quality_metrics_pass`` never appears in this expression -- call status, QC
         status and rule-match status are orthogonal. The rule table already describes
         a positive call with failing coverage QC as a finding, and ``is_positive`` is
@@ -117,12 +212,15 @@ class ScreeningSummary:
         path in :func:`build_screening_summary`: every one of the 40 reachable
         ``(kestrel_result, advntr_result, quality_metrics_pass)`` combinations
         resolves to a configured rule (``tests/unit/test_screening_summary.py::
-        test_every_reachable_state_has_its_own_message``). So ``"indeterminate"`` is
-        genuinely exceptional and cannot mislabel an ordinary all-negative report.
+        test_every_reachable_state_has_its_own_message``). So a ``"indeterminate"``
+        reached that way is genuinely exceptional and cannot mislabel an ordinary
+        all-negative report.
 
         Returns:
             Literal["finding", "no-finding", "indeterminate"]: The emphasis to apply.
         """
+        if not self.state_is_established:
+            return "indeterminate"
         if self.matched_rule is False:
             return "indeterminate"
         if self.is_positive:
@@ -282,22 +380,34 @@ def build_screening_summary(
     advntr_available: bool,
     coverage_qc: CoverageQC,
     report_config: dict[str, Any],
+    *,
+    kestrel_execution: str | None = None,
+    advntr_execution: str | None = None,
 ) -> ScreeningSummary:
     """Compute the screening state and look up its configured message.
 
     Args:
         kestrel_df: Kestrel results, unformatted (no HTML in the cells).
         advntr_df: adVNTR results.
-        advntr_available: Whether the adVNTR stage ran.
+        advntr_available: Whether the adVNTR stage produced a result to match on.
         coverage_qc: The coverage QC verdict, already evaluated by the caller from
             the published figures. Taking the verdict rather than the raw numbers is
             what keeps this axis and the ``coverage_qc`` column in the coverage
             summary from disagreeing - they are the same value (#172).
         report_config: The parsed ``report_config.json``.
+        kestrel_execution: Whether the Kestrel stage produced a readable result. ``None``
+            means "the two-state model this argument replaces", i.e. performed - which is
+            all the older signature could say, so the default asserts nothing new.
+        advntr_execution: The same for adVNTR. ``None`` derives it from
+            ``advntr_available``, again restating the model that existed before.
 
     Returns:
         ScreeningSummary: The state and its message.
     """
+    if kestrel_execution is None:
+        kestrel_execution = EXECUTION_PERFORMED
+    if advntr_execution is None:
+        advntr_execution = EXECUTION_PERFORMED if advntr_available else EXECUTION_NOT_PERFORMED
     try:
         default_message = report_config.get("screening_summary_default", FALLBACK_SUMMARY_MESSAGE)
         algorithm_logic = report_config.get("algorithm_logic", {})
@@ -345,14 +455,35 @@ def build_screening_summary(
             advntr_result="",
             quality_metrics_pass=False,
             matched_rule=False,
+            kestrel_execution=kestrel_execution,
+            advntr_execution=advntr_execution,
         )
 
-    logger.debug("Final screening summary: %s", text)
-    return ScreeningSummary(
+    summary = ScreeningSummary(
         text=text,
         is_positive=is_positive,
         kestrel_result=kestrel_result,
         advntr_result=advntr_result,
         quality_metrics_pass=quality_metrics_pass,
         matched_rule=matched_rule,
+        kestrel_execution=kestrel_execution,
+        advntr_execution=advntr_execution,
     )
+    # The rule matched a state one of the stages never established, so its message is not
+    # evidence about this sample - it is the sentence configured for a state the run did
+    # not reach. Withholding it is the only honest option, and the vocabulary for saying so
+    # already exists. The state axes above are left exactly as computed: they are what the
+    # provenance line and the tests are about, and rewriting them would hide the reason.
+    if not summary.state_is_established:
+        logger.warning(
+            "Withholding the configured screening message: kestrel_execution=%r, advntr_execution=%r. "
+            "The rule for kestrel_result=%r, advntr_result=%r matched a state this run did not establish.",
+            kestrel_execution,
+            advntr_execution,
+            kestrel_result,
+            advntr_result,
+        )
+        summary = replace(summary, text=UNAVAILABLE_SUMMARY_MESSAGE)
+
+    logger.debug("Final screening summary: %s", summary.text)
+    return summary

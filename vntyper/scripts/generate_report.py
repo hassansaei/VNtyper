@@ -72,7 +72,12 @@ from vntyper.scripts.report_identity import (
     recorded_or_not,
     resolve_sample_name,
 )
-from vntyper.scripts.screening_summary import build_screening_summary, load_report_config
+from vntyper.scripts.screening_summary import (
+    algorithm_state_text,
+    build_screening_summary,
+    execution_state,
+    load_report_config,
+)
 
 # These five names are matched by exact string comparison against what pipeline.py
 # records. A typo does not fail - it silently drops a report section (AGENTS.md
@@ -84,6 +89,7 @@ from vntyper.scripts.summary_steps import (
     STEP_COVERAGE,
     STEP_CROSS_MATCH,
     STEP_KESTREL,
+    STEP_READ,
     STEP_UNREADABLE,
     get_step,
     get_step_data,
@@ -580,16 +586,27 @@ def generate_summary_report(
         percent_vntr_uncovered_threshold,
     )
 
-    # Three states, not two. "Recorded" is not "produced a readable result": when
-    # `kestrel_result.tsv` is absent, `record_step` flags the step `result_file_missing`
-    # and still records it with an empty `data` list (#212) - the same shape a run that
-    # genotyped and called nothing produces. Asking only whether the step is present
-    # therefore renders a failed stage as a negative, which is a claim the run never
-    # established. This is the first consumer of that flag.
+    # Three states, not two, for **both** algorithms. "Recorded" is not "produced a
+    # readable result": when `kestrel_result.tsv` is absent, `record_step` flags the step
+    # `result_file_missing` and still records it with an empty `data` list (#212) - the
+    # same shape a run that genotyped and called nothing produces. Asking only whether the
+    # step is present therefore renders a failed stage as a negative, which is a claim the
+    # run never established.
+    #
+    # `get_step_state` distinguished the three from the start, but its result used to reach
+    # only the Kestrel *section*: the screening computation and the whole adVNTR side still
+    # asked whether the step was present, so an unreadable adVNTR stage produced "No
+    # pathogenic variants identified by adVNTR" and `adVNTR: negative` while the Kestrel
+    # section two headings up said "this is not a negative".
     kestrel_state = get_step_state(pipeline_summary, STEP_KESTREL)
     kestrel_df, kestrel_df_raw = build_kestrel_frames(get_step_data(pipeline_summary, STEP_KESTREL))
 
-    advntr_available = get_step(pipeline_summary, STEP_ADVNTR) is not None
+    # `advntr_available` is now "produced a result to match on", not "has a step". That is
+    # what makes `advntr_result` the `NOT_PERFORMED` token rather than the block's
+    # "negative" default for a stage that ran and lost its result; the execution axis
+    # beside it is what keeps the two apart in everything the reader sees.
+    advntr_state = get_step_state(pipeline_summary, STEP_ADVNTR)
+    advntr_available = advntr_state == STEP_READ
     advntr_df = build_advntr_frame(get_step_data(pipeline_summary, STEP_ADVNTR))
 
     pipeline_log_content = load_pipeline_log(log_file)
@@ -648,16 +665,16 @@ def generate_summary_report(
     logger.debug("Kestrel results converted to HTML.")
 
     advntr_row_summary = ""
-    if not advntr_available:
-        # The template's `{% if advntr_available and advntr_highlight %}` cannot reach
-        # this branch's markup, so the paragraph that used to be built here was never
-        # rendered by any report - the `{% else %}` beneath that guard prints its own,
-        # differently worded line. One state, one sentence, and it is the template's.
+    if not advntr_available or advntr_df.empty:
+        # Every adVNTR state that is not a table is worded by the template, the way the
+        # Kestrel side already does it. Two of the four used to be built here instead:
+        # the not-performed paragraph was unreachable - the template's
+        # `{% if advntr_available and advntr_highlight %}` cannot render it, and the
+        # branch beneath that guard printed its own, differently worded line - and the
+        # empty-result paragraph *was* reached, and was rendered inside the bordered
+        # `.table-container` as if it were a table. One state, one sentence, one place.
         advntr_html = ""
-        logger.debug("adVNTR was not performed; the template states so.")
-    elif advntr_df.empty:
-        advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
-        logger.debug("adVNTR was performed but no variants identified; adding negative message.")
+        logger.debug("adVNTR produced no rows to tabulate; the template states which state it is in.")
     else:
         # Rendered from a copy: `advntr_df` itself is what the screening rules match
         # on (`VID`, `Flag`), so it has to keep the unformatted values.
@@ -695,6 +712,8 @@ def generate_summary_report(
         advntr_available,
         coverage_qc,
         report_config,
+        kestrel_execution=execution_state(kestrel_state),
+        advntr_execution=execution_state(advntr_state),
     )
     logger.debug("Summary text generated: %s", screening.text)
 
@@ -745,6 +764,12 @@ def generate_summary_report(
         # same shape, and it is worth closing separately.)
         "kestrel_step_recorded": kestrel_state != STEP_ABSENT,
         "kestrel_result_unreadable": kestrel_state == STEP_UNREADABLE,
+        # The same three facts on the adVNTR side, which had only two branches for them.
+        # Its absent-case wording used to be a disjunction ("was not performed or no
+        # adVNTR results are available") that covered the failure by being vague about
+        # it; each state now says which one it is.
+        "advntr_step_recorded": advntr_state != STEP_ABSENT,
+        "advntr_result_unreadable": advntr_state == STEP_UNREADABLE,
         # The visible/total statement beside each table, counted here from the frame.
         # DataTables' own "Showing 1 to 3 of 3 entries" footer is switched off: it is
         # a second count that contradicts this one whenever a CDN fails (#242). It is
@@ -857,6 +882,13 @@ def generate_summary_report(
             "quality_metrics_pass": screening.quality_metrics_pass,
             "matched_rule": screening.matched_rule,
             "emphasis": screening.emphasis,
+            # What the provenance line prints for each algorithm. Built here rather than
+            # branched on in the template because the choice is presentation logic over
+            # computed state, and that lives in the pure modules (AGENTS.md trap 11) -
+            # and because printing `kestrel_result` unconditionally is the defect: a
+            # stage that produced nothing computes the block's "negative" default.
+            "kestrel_state_text": algorithm_state_text(screening.kestrel_execution, screening.kestrel_result),
+            "advntr_state_text": algorithm_state_text(screening.advntr_execution, screening.advntr_result),
         },
         "cross_match_message": cross_match_message,
         "cross_match_is_positive": cross_match_is_positive,
