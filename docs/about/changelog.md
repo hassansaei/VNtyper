@@ -6,7 +6,83 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.18 (Current)
+## 2.0.19 (Current)
+
+**Kestrel counts k-mers on more than one thread.**
+
+### Changed
+
+- **Kestrel-mode k-mer counting runs as its own threaded step (#262).** Kestrel 1.0.1 builds a
+  KAnalyze `CountModule` and configures almost nothing on it: `getCountModule()` sets the k-mer
+  size, the temporary directory, the post-count filter and the free-segment flag, but calls none
+  of `setKmerThreadCount`, `setSplitThreadCount` or `setThreads`. Counting therefore ran at the
+  compile-time defaults of one k-mer thread and one split thread, while being the large majority
+  of Kestrel's work on an unmapped-dominated input.
+
+  VNtyper now runs the bundled `kanalyze.jar` as its own step and hands Kestrel the resulting
+  indexed k-mer count. This is a supported Kestrel input, verified in the bytecode rather than
+  assumed: `IkcCountMap.preModuleRun` adopts a supplied `ikc` file, sets `rmLastTemp = false`
+  so Kestrel never deletes a count file it was handed, and skips its own count module.
+
+  The run's `--threads` budget is divided across KAnalyze's three *concurrent* stages rather
+  than passed to each — they are independent stages, so passing `--threads N` to all three would
+  start roughly 2.5N workers. Measured end to end on `example_7a61_hg19_subset.bam`: **29.5 s →
+  17.4 s at `--threads 8`** (1.68x). At the shipped default of `--threads 4` the gain is modest
+  (1.10x), because the budget is treated as a total rather than a per-stage multiplier; operators
+  who want the larger win should raise `--threads`.
+
+  `kestrel_settings.split_counting` defaults to true. Setting it false restores the
+  single-command path exactly — it is an operator kill switch, not a fallback: nothing selects
+  it automatically, and a failed counting step raises rather than silently re-running the work
+  internally. `keep_ikc` retains the count file for diagnosis, and the path a run took is
+  recorded as `kestrel_counting_mode` in the pipeline summary.
+
+- **Unmapped-read extraction is one samtools process (#262).** The whole-file extraction was a
+  decode-to-SAM-text, pipe, and re-parse; it is now a single `samtools view`. Genuinely
+  throwaway BAMs are written at BGZF level 0, and the produced alignment is indexed only when
+  something will read the index.
+
+- **The startup tool-version log lists only the tools a run uses (#262).** Keys such as `shark`
+  and `advntr` no longer appear in an ordinary Kestrel run. The cohort, online and
+  install-references stacks are imported on first use, taking `import vntyper.cli` from
+  0.35–0.39 s and ~116 MB to 0.19–0.20 s and ~82 MB.
+
+  **None of this changes a genotype.** The golden-cohort gate compares the two sides across 78
+  pipeline cases, three probes and the cohort cases: **every genotype-bearing artefact is
+  identical**, as are the report tables, pipeline steps, CRAM read-set evidence and `output.bed`.
+  The only artefact that differs is the executed command stream, which changes by construction;
+  its delta was classified case by case rather than waived unread. See
+  `docs/development/golden-cohort-gate.md`.
+
+### Fixed
+
+- **`additional_settings` can no longer desynchronise the two Kestrel commands (#262).** When
+  Kestrel is handed a pre-built count file it validates only the k-size, so a count file built
+  with a different minimum count or minimizer size is silently accepted and silently different —
+  which moves `Depth_Score`. Under split counting, `kestrel_settings.additional_settings` is now
+  an allowlist of options that provably cannot reach the counter, and a count-affecting value
+  such as `--mincount 3` is refused with a message naming it. The shipped default is `""`, so no
+  shipped configuration is affected; an operator who needs those options sets
+  `split_counting: false`.
+
+- **A k-mer attempt never adopts an existing directory (#262).** Each attempt owns
+  `<output>/kmer_<size>/`, which is removed on every exit path. Adopting a directory that
+  already exists would delete data the run did not write, so the run refuses to start instead.
+
+### Internal
+
+- The golden-cohort gate gained an `--expect-command-delta` mode: a caller may declare in advance
+  that the executed command stream changes on purpose, which keeps that one artefact out of the
+  verdict while every other delta stays fatal. The rendered summary names each case whose delta
+  was waived, because a declaration nobody reads attests nothing. The gate also compares
+  `output.bed`, which the collector never read — #203's one-base interval shift would have been
+  invisible to it.
+
+- The waiver policy moved out of `golden_cohort/compare.py` into `golden_cohort/waiver.py`. It is
+  the one rule in the harness that can turn a check off, and `render_text` had been recomputing
+  half of it inline.
+
+## 2.0.18
 
 **`--threads` reaches adVNTR, and adVNTR can use it.**
 
