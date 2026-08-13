@@ -756,7 +756,9 @@ def test_the_shipped_rule_table_is_loaded() -> None:
 
 def test_ten_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
     """Five Kestrel states times two coverage-QC states, derived from conditions."""
-    not_performed_rules = [rule for rule in ALL_RULES if rule["conditions"]["advntr_result"] == ss.NOT_PERFORMED]
+    assert ss.NOT_PERFORMED == "none"
+
+    not_performed_rules = [rule for rule in ALL_RULES if rule["conditions"]["advntr_result"] == "none"]
 
     assert len(not_performed_rules) == 10
 
