@@ -102,6 +102,20 @@ overruling a well-supported record loses more than it gains.
 The BAM is opened only for calls that need it — on the benchmark, about a fifth of
 samples — and never at all for the rest.
 
+## A known limitation
+
+Every name is anchored on the canonical unit, even where the motif the caller
+assigned differs from it there. That projection is what makes the canonical
+duplication resolve correctly on the motifs whose own C-tract is shorter or sits
+elsewhere — anchoring on the assigned motif instead loses roughly a quarter of the
+canonical calls.
+
+The cost is confined to tier B. A projected call always carries
+`motif-context-diverges`, which blocks promotion, so no *confident* name rests on the
+projection. What the projection can get wrong is the tier-B **event word**: an edit
+that is a duplication against the assigned motif may read as an insertion against the
+canonical one. The position and the ambiguity window are unaffected.
+
 ## What this does and does not fix
 
 Normalisation fixes **description-level** disagreement: two callers describing one

@@ -976,6 +976,21 @@ def name_coding_pair_edit(
     # A span still crossing the junction after normalisation cannot be projected onto
     # a single 60 bp unit, so it is named against the coding pair and anchored on the
     # unit holding its 5' end -- leaving an end above 60, never a negative one.
+    # Deliberate, measured deviation from spec §3.2 step 4, which says to keep the
+    # assigned motif when its local context is not homologous to X. Naming is done
+    # against canonical X either way, and divergence is reported as a flag that caps
+    # the tier.
+    #
+    # The spec's own numbers require this. §2.4 measures the X-anchored path at
+    # 123/178 with dupC 96/96, and states that anchoring on the motif Kestrel
+    # assigned instead drops dupC to 69/96 -- motifs H/E/A/J carry their longest
+    # C-tract at 20-23 or 38-41, and C/5C have six C rather than seven. Following
+    # §3.2 literally would forfeit 27 correct canonical calls.
+    #
+    # The cost is confined to tier B: a divergent-context call carries
+    # `motif-context-diverges`, which blocks promotion, so no confident name depends
+    # on the projection. What it can get wrong is the tier-B *event* word -- an edit
+    # that is a duplication against motif J reads as an insertion against X.
     if junction_flags:
         context = coding_pair
         start, end = coding_start, coding_end
