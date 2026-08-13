@@ -27,7 +27,7 @@ import sys
 
 import pytest
 
-from vntyper.scripts import cli_handlers
+from vntyper.scripts import cli_handlers, cli_lazy_imports
 
 pytestmark = pytest.mark.unit
 
@@ -121,7 +121,8 @@ def test_the_wrapper_forwards_every_argument_and_returns_the_result(
         seen["kwargs"] = kwargs
         return "returned"
 
-    monkeypatch.setattr(cli_handlers, f"_load_{wrapper}", lambda: implementation)
+    # The loaders live in cli_lazy_imports; cli_handlers imports the wrappers from it.
+    monkeypatch.setattr(cli_lazy_imports, f"_load_{wrapper}", lambda: implementation)
 
     assert getattr(cli_handlers, wrapper)(1, 2, three=3) == "returned"
     assert seen == {"args": (1, 2), "kwargs": {"three": 3}}

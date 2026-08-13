@@ -37,7 +37,7 @@ from vntyper.scripts.confidence_assignment import (
 )
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
-from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, remove_count_artifacts
+from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.motif_processing import (
@@ -315,58 +315,12 @@ def run_kestrel(
 
     for invocation in invocations:
         kmer_size = invocation.kmer_size
-        kmer_command = invocation.command
-        log_file = str(invocation.log_file)
 
-        # The counting artefacts are removed on *every* exit path -- a partial IKC from
-        # a failed count, a complete one after a failed call, and a complete one after
-        # success. `_discard_attempt_artifacts` is the wrong hook for this: it is a
-        # fail-closed cleanup reached only on the discard branches, while a failed
-        # critical invocation raises before any of them. The two also want opposite
-        # failure semantics, which is why they stay separate.
-        # Created *before* the cleanup scope, and only when it does not already exist.
-        # The `finally` below removes the whole directory, so adopting an existing one
-        # would delete data this run did not write: the diagnostics a previous
-        # `keep_ikc` run was asked to retain, or an operator's own `kmer_20/`. Refusing
-        # is the fail-closed choice, and raising here rather than inside the `try` is
-        # what keeps the cleanup from deleting the directory it just refused to adopt.
-        if invocation.count_command is not None:
-            attempt_dir = Path(str(invocation.attempt_dir))
-            try:
-                attempt_dir.mkdir(parents=True, exist_ok=False)
-            except FileExistsError as exc:
-                msg = (
-                    f"The k-mer counting directory {attempt_dir} already exists, so this run will "
-                    "not create it: everything inside is removed when the attempt ends, and "
-                    "adopting an existing directory would delete data this run did not write -- a "
-                    "previous run's retained IKC under kestrel_settings.keep_ikc, for instance. "
-                    "Remove or move it and re-run."
-                )
-                logger.error(msg)
-                raise RuntimeError(msg) from exc
-
-        try:
-            if invocation.count_command is not None:
-                count_log = str(invocation.count_log)
-                # A read-only output directory now fails here, inside `run_command`'s
-                # `open(log_file, "w")`, with a raw PermissionError rather than the
-                # count RuntimeError below. That is chosen rather than discovered: the
-                # first thing either step does is open its log.
-                logger.info(f"Counting k-mers with KAnalyze at k-mer size {kmer_size}...")
-                if not run_command(invocation.count_command, count_log, critical=False, cwd=cwd):
-                    msg = f"KAnalyze k-mer counting failed for kmer size {kmer_size}. Check {count_log} for details."
-                    logger.error(msg)
-                    raise RuntimeError(msg)
-
-            logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
-
-            if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
-                logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
-                raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
-        finally:
-            if invocation.attempt_dir is not None and not keep_ikc:
-                remove_count_artifacts(invocation.attempt_dir)
-
+        # Counting, calling and their cleanup live in `kestrel_counting` (AGENTS.md
+        # rule 3): this file is well over the ~650-line guideline and the split is the
+        # region that changed. `run_command` is passed so the module attribute the test
+        # suite patches is the one that runs.
+        execute_attempt(invocation, cwd=cwd, keep_ikc=keep_ikc, run_command=run_command)
         logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
 
         if vcf_path.is_file():
