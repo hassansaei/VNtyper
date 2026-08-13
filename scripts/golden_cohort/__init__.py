@@ -21,6 +21,7 @@ Modules:
     runner: Execute one side of the comparison.
     artifacts: Read one run's comparable artefacts off disk.
     normalise: The substitutions applied to everything that differs by construction.
+    waiver: Which deltas are fatal, and the single one a caller may declare away.
     compare: Diff two sides and report.
 """
 

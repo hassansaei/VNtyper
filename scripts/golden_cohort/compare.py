@@ -29,6 +29,17 @@ from typing import Any
 
 from golden_cohort import HARNESS_VERSION, artifacts
 
+# The waiver policy - which deltas are fatal, and the one a caller may declare away -
+# lives in its own module because it is the only rule here that can turn a check off.
+# Imported rather than re-implemented, so ``compare.fatal_deltas`` and
+# ``waiver.fatal_deltas`` are the same object and cannot drift.
+from golden_cohort.waiver import (
+    DECLARABLE_DELTA,
+    DECLARED_DELTA_HEADING,
+    fatal_deltas,
+    waived_cases,
+)
+
 logger = logging.getLogger(__name__)
 
 #: Artefact name -> (comparison kind, key columns). The kinds are ``scalar`` (compared with
@@ -55,25 +66,6 @@ PIPELINE_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     # has. It is collected as the file's lines, in file order, and compared as a sequence.
     "output_bed": ("sequence", ()),
 }
-
-#: The one artefact whose delta a caller may declare in advance.
-#:
-#: Performance work changes the executed command stream by construction, so without a
-#: declaration the gate can never report anything but ``DELTAS`` for it - and a gate that
-#: always fails is one nobody reads. The exemption is exactly one artefact wide and it is
-#: an allowlist rather than a "genotype-bearing only" rule, because ``report_tables``,
-#: ``pipeline_steps``, ``pipeline_step_records``, the CRAM read-set evidence and the
-#: ``EXPECTATION`` delta are all deliberate gate failures that such a rule would silently
-#: turn off.
-DECLARABLE_DELTA = "executed_commands"
-
-#: The rendered report's heading for the cases whose command delta was waived.
-#:
-#: A distinct constant rather than prose, because a run that reaches ``IDENTICAL`` by
-#: waiving a delta attests strictly less than one that reaches it outright - the same
-#: distinction ``REDUCED`` exists to make - and the reader must be told which cases used
-#: the waiver so they can go and read the diff.
-DECLARED_DELTA_HEADING = "## Declared command-stream deltas, waived by --expect-command-delta"
 
 #: The cohort artefacts, which no run of this gate before now has compared at all.
 COHORT_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -376,28 +368,6 @@ def diff_case(
         if name in before or name in after
     }
     return {"artefacts": results, "deltas": deltas, "uncompared": uncompared}
-
-
-def fatal_deltas(case: dict[str, Any], *, expect_command_delta: bool) -> list[str]:
-    """Return the deltas that must fail the gate.
-
-    Every delta is fatal except :data:`DECLARABLE_DELTA`, and that one only when the
-    caller declares in advance that the command stream was changed on purpose.
-
-    The delta itself is never removed from ``case["deltas"]``: the report must always
-    name what changed, because the declaration is only worth anything if a human then
-    reads the diff and confirms it is the change they intended. Only the verdict, and
-    therefore the exit status, is affected.
-
-    Args:
-        case: One case's :func:`diff_case` result, after the expectation fold.
-        expect_command_delta: Whether a command-stream change was declared.
-
-    Returns:
-        list[str]: The fatal delta names, in the order ``diff_case`` reported them.
-    """
-    exempt = {DECLARABLE_DELTA} if expect_command_delta else set()
-    return [name for name in case.get("deltas", []) if name not in exempt]
 
 
 def compare_sides(
@@ -735,11 +705,7 @@ def render_text(result: dict[str, Any]) -> str:
         lines.extend(f"- **Differs from the gate page**: {mismatch}" for mismatch in check.get("mismatches", []))
         lines.append("")
 
-    waived = sorted(
-        case_id
-        for case_id, case in result["cases"].items()
-        if DECLARABLE_DELTA in case.get("deltas", []) and DECLARABLE_DELTA not in case.get("fatal_deltas", [])
-    )
+    waived = waived_cases(result)
     if waived:
         lines.append(DECLARED_DELTA_HEADING)
         lines.append("")
