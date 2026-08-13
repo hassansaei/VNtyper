@@ -308,6 +308,30 @@ def test_a_section_the_reader_collapsed_still_prints(printable_report: Path, bro
     assert _squashed(DEBUG_LOG_LINE) not in squashed, "the log was opened along with everything else"
 
 
+def test_a_log_the_reader_expanded_still_prints_as_a_pointer(printable_report: Path, browser: Browser) -> None:
+    """The one case in which the log rule is the only thing standing between a reader
+    and a wall of DEBUG output in the archived PDF.
+
+    Every other specimen here leaves ``#logDisclosure`` closed, and a closed disclosure
+    is hidden by the UA whether or not the print block says anything - so the rule
+    ``.log-section > .details-body { display: none !important; }`` could be deleted with
+    all six of these cases and all 34 unit cases still passing. A reader who expanded
+    the log to look at it and then printed is what it is for, and it is why this case
+    exists rather than a stronger assertion on one of the others.
+    """
+    pages = _printed_pages(
+        browser,
+        printable_report,
+        before='() => { document.getElementById("logDisclosure").open = true; }',
+    )
+    squashed = _squashed("\n".join(pages))
+
+    assert _squashed(DEBUG_LOG_LINE) not in squashed, (
+        "a log the reader had expanded printed its body, so the archived PDF carries the DEBUG output"
+    )
+    assert _squashed(LOG_POINTER) in squashed, "the expanded log printed neither its body nor the pointer"
+
+
 def test_the_record_survives_a_reader_with_scripting_off(printable_report: Path, browser: Browser) -> None:
     """What the print stylesheet does on its own, asserted honestly.
 
