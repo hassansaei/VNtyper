@@ -6,6 +6,8 @@ from those same frames, and the HTML report all inherit them together.
 Research use only.
 """
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -16,6 +18,7 @@ from vntyper.scripts.nomenclature_annotate import (
     NOMENCLATURE_COLUMNS,
     annotate_advntr_frame,
     annotate_kestrel_frame,
+    reconcile_caller_outputs,
 )
 from vntyper.scripts.report_formatting import ADVNTR_DISPLAY_COLUMNS, KESTREL_DISPLAY_COLUMNS
 
@@ -132,3 +135,72 @@ def test_a_below_tier_a_row_never_shows_a_bare_number() -> None:
     out = annotate_kestrel_frame(frame)
     assert out.loc[0, "Nomenclature_Tier"] != "A"
     assert out.loc[0, "Nomenclature"] != "59dupC"
+
+
+# ---------------------------------------------------------------------------
+# Cross-caller reconciliation, on the files production actually writes
+# ---------------------------------------------------------------------------
+
+
+def _write_caller_outputs(tmp_path, advntr_state: str, support: str) -> tuple[Path, Path]:
+    kestrel = tmp_path / "kestrel_result.tsv"
+    kestrel.write_text(
+        "## VNtyper Kestrel result\n"
+        "Motifs\tPOS\tREF\tALT\tConfidence\tNomenclature\tNomenclature_Tier\t"
+        "Nomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\n"
+        "X-X\t67\tG\tGG\tHigh_Precision\tduplication, position-ambiguous\tB\t\t53_59\t53C[7]>53C[8]\n"
+    )
+    advntr = tmp_path / "output_adVNTR_result.tsv"
+    advntr.write_text(
+        "VID\tVariant\tNumberOfSupportingReads\tNomenclature\tNomenclature_Tier\t"
+        "Nomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\n"
+        f"25561\t{advntr_state}\t{support}\tduplication, position-ambiguous\tB\t\t53_59\t53C[7]>53C[8]\n"
+    )
+    return kestrel, advntr
+
+
+def test_two_agreeing_callers_reach_tier_a_in_the_written_files(tmp_path) -> None:
+    """Production must be able to produce a tier-A name, not just the API.
+
+    Each caller names its own rows as it writes them, so neither stage can see the
+    other; without a reconciliation step over the written results, no real run could
+    ever emit tier A however well the two callers agreed.
+    """
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "24")
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert written.loc[0, "Nomenclature_Tier"] == "A"
+
+    mirrored = pd.read_csv(advntr, sep="\t", dtype=str)
+    assert mirrored.loc[0, "Nomenclature"] == "59dupC", "both files must carry one verdict"
+
+
+def test_disagreeing_callers_do_not_reach_tier_a_in_the_written_files(tmp_path) -> None:
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I23_2_C_LEN1", "24")
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    assert written.loc[0, "Nomenclature_Tier"] != "A"
+    assert written.loc[0, "Nomenclature"] != "59dupC"
+
+
+def test_thin_advntr_support_does_not_reach_tier_a_in_the_written_files(tmp_path) -> None:
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "1")
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    assert written.loc[0, "Nomenclature_Tier"] != "A"
+
+
+def test_reconciliation_preserves_the_kestrel_header_lines(tmp_path) -> None:
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "24")
+    reconcile_caller_outputs(kestrel, advntr)
+    assert kestrel.read_text().startswith("## VNtyper Kestrel result")
+
+
+def test_a_missing_advntr_file_is_not_an_error(tmp_path) -> None:
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "24")
+    advntr.unlink()
+    assert reconcile_caller_outputs(kestrel, advntr) is False

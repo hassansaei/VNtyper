@@ -9,8 +9,6 @@ from vntyper.scripts.alignment_preflight import run_preflight
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.archive_safety import create_safe_archive
 from vntyper.scripts.artifact_names import select_best_vcf_file
-
-# Import cross-match functions from cross_match.py
 from vntyper.scripts.cross_match import (
     cross_match_variants,
     extract_results_from_pipeline_summary,
@@ -26,6 +24,9 @@ from vntyper.scripts.fastq_bam_processing import (
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
+
+# Import cross-match functions from cross_match.py
+from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
 from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
     prepare_alignment_target,
@@ -577,6 +578,13 @@ def run_pipeline(
                 output_ext = advntr_output_extension(advntr_settings)
                 output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
                 process_advntr_output(output_path, dirs["advntr"], "output", config=config)
+                # Tier A needs two independent callers agreeing, which no single
+                # caller stage can see. Without this step production could never
+                # emit a tier-A name however well the two agreed (#nomenclature).
+                reconcile_caller_outputs(
+                    os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
+                    os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
+                )
                 advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,

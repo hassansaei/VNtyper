@@ -93,6 +93,47 @@ def test_reconciling_nothing_yields_an_undetermined_call() -> None:
     assert merged.name is None
 
 
+def test_duplicate_rows_from_one_caller_are_not_two_sources() -> None:
+    """Independence is counted over the calls that carry the name, not all calls.
+
+    An unnamed call -- an adVNTR state in an unmappable repeat unit, say -- must not
+    donate a second `source` to two duplicate rows from one caller. Counting every
+    supplied call let a single caller's placement be promoted as though two had
+    agreed on it, and Kestrel's insG placements are exactly the ones that are wrong.
+    """
+    kestrel = from_kestrel("X-X", 61, "T", "TC")
+    (unnamed,) = from_advntr("I69_3_G_LEN1")
+    assert unnamed.name is None
+
+    merged = reconcile(kestrel, kestrel, unnamed, support=10)
+    assert merged.tier != "A"
+    assert render(merged) != kestrel.name
+
+
+def test_support_must_belong_to_the_agreeing_evidence() -> None:
+    """A well-covered but unrelated observation cannot lend depth to a thin agreement."""
+    kestrel = from_kestrel("X-X", 62, "G", "GC")
+    (advntr,) = from_advntr("I23_2_C_LEN1")
+    (unrelated,) = from_advntr("I69_3_G_LEN1")
+
+    thin = reconcile(kestrel, advntr, unrelated, supports={"kestrel_vcf": 40, "advntr": 1})
+    assert thin.tier != "A", "a 1-read adVNTR agreement must not borrow depth"
+    assert "low-read-support" in thin.flags
+
+    real = reconcile(kestrel, advntr, supports={"kestrel_vcf": 40, "advntr": 24})
+    assert real.tier == "A"
+    assert real.name == "58_59insG"
+
+
+def test_an_agreement_is_only_as_strong_as_its_weakest_source() -> None:
+    merged = reconcile(
+        from_kestrel("X-X", 62, "G", "GC"),
+        from_advntr("I23_2_C_LEN1")[0],
+        supports={"kestrel_vcf": 500, "advntr": 2},
+    )
+    assert merged.tier != "A"
+
+
 def test_several_simultaneous_events_never_reach_tier_a() -> None:
     """A locus reporting three events at once is not one simple allele.
 

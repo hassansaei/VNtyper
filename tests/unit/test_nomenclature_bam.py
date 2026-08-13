@@ -231,6 +231,27 @@ def test_a_missing_bam_is_not_an_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_a_tie_yields_no_rescue_at_all(tmp_path: Path) -> None:
+    """A tie has no winner. `Counter.most_common` breaks one by BAM order, so
+    whichever read was written first would decide an allele that can override the
+    VCF."""
+    bam = _write_bam(
+        tmp_path / "tied.bam",
+        [(f"a{n}", 10, "20=1I20=") for n in range(3)] + [(f"b{n}", 10, "20=2I20=") for n in range(3)],
+    )
+    assert BamRescuer(bam).rescue("K-J", 30) is None
+
+
+def test_a_clear_winner_over_a_runner_up_is_still_rescued(tmp_path: Path) -> None:
+    bam = _write_bam(
+        tmp_path / "clear.bam",
+        [(f"a{n}", 10, "20=1I20=") for n in range(5)] + [(f"b{n}", 10, "20=2I20=") for n in range(2)],
+    )
+    consensus = BamRescuer(bam).rescue("K-J", 30)
+    assert consensus is not None
+    assert consensus.support == 5
+
+
 def test_a_well_supported_consensus_is_not_thin() -> None:
     assert BamConsensus("delins", 55, 1, 2, support=9, total=20, n_distinct=2).is_thin is False
 

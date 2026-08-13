@@ -455,7 +455,22 @@ class BamRescuer:
         if not votes:
             return None
 
-        (kind, edit_start, ref_span, inserted, bases), support = votes.most_common(1)[0]
+        ranked = votes.most_common()
+        (kind, edit_start, ref_span, inserted, bases), support = ranked[0]
+
+        # A tie has no winner. `Counter.most_common` breaks one by insertion order,
+        # which here is BAM order -- so whichever read happened to be written first
+        # would decide the allele, and that allele can override the VCF. Report no
+        # rescue instead of choosing arbitrarily.
+        if len(ranked) > 1 and ranked[1][1] == support:
+            logger.debug(
+                "BAM rescue declined at %s:%s; %d alleles tied on %d reads",
+                contig,
+                position,
+                sum(1 for _, count in ranked if count == support),
+                support,
+            )
+            return None
         return BamConsensus(
             kind=kind,
             start=edit_start,

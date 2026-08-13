@@ -110,7 +110,6 @@ def annotate_kestrel_frame(frame: pd.DataFrame, output_dir: str | Path | None = 
 
     annotated = frame.copy()
     rescuer = _open_rescuer(output_dir)
-    locus = _read_locus(output_dir)
 
     try:
         cells: list[dict[str, Any]] = []
@@ -128,6 +127,7 @@ def annotate_kestrel_frame(frame: pd.DataFrame, output_dir: str | Path | None = 
             merged = reconcile(call)
             # VCF primary, BAM refines. The BAM is consulted only for candidates, so
             # the common path never opens it.
+            locus = _row_locus(row)
             if rescuer is not None and locus is not None and is_candidate(merged):
                 contig, position = locus
                 consensus = rescuer.rescue(contig, position)
@@ -162,29 +162,131 @@ def _open_rescuer(output_dir: str | Path | None) -> BamRescuer | None:
     return BamRescuer(bam)
 
 
-def _read_locus(output_dir: str | Path | None) -> tuple[str, int] | None:
-    """Read the called locus from ``output.bed``.
+def _row_locus(row: pd.Series) -> tuple[str, int] | None:
+    """The locus a row was called at, taken from the row itself.
+
+    Deliberately not read from ``output.bed``. That file carries one record per
+    frame row, so a single parse of it names the *first* row's locus for every row;
+    and its start column is ``POS_fasta - 1`` because BED is half-open, which read
+    as a 1-based position shifts the rescue window one base left. ``Motif_fasta``
+    and ``POS_fasta`` are what the BED is written from, so taking them directly is
+    both correct per row and immune to that off-by-one.
 
     Args:
-        output_dir: The Kestrel output directory.
+        row: One Kestrel result row.
 
     Returns:
         tuple[str, int] | None: ``(pair name, 1-based position)``, or ``None`` when
-        the BED is absent or malformed.
+        the row does not carry them.
     """
-    if output_dir is None:
-        return None
-    bed = Path(output_dir) / "output.bed"
-    if not bed.is_file():
-        return None
-    fields = bed.read_text().split()
-    if len(fields) < 2:
+    contig = row.get("Motif_fasta")
+    position = row.get("POS_fasta")
+    if contig is None or position is None:
         return None
     try:
-        return fields[0], int(fields[1])
-    except ValueError:
-        logger.debug("output.bed did not carry a numeric position: %r", fields[:2])
+        return str(contig), int(position)
+    except (TypeError, ValueError):
+        logger.debug("row carried a non-numeric POS_fasta: %r", position)
         return None
+
+
+def reconcile_caller_outputs(kestrel_tsv: str | Path, advntr_tsv: str | Path) -> bool:
+    """Reconcile the two callers' written results and rewrite both in place.
+
+    Each caller names its own rows as it writes them, which is what puts the columns
+    on every surface. But tier A requires **two independent sources agreeing**, and
+    no single caller's stage can see the other -- so without this step production
+    could never emit a tier-A name, however well the two agreed.
+
+    Both files are rewritten so the report, the summary and the cohort tables all
+    read the same reconciled verdict rather than two independent opinions.
+
+    Args:
+        kestrel_tsv: Path to ``kestrel_result.tsv``.
+        advntr_tsv: Path to ``output_adVNTR_result.tsv``.
+
+    Returns:
+        bool: True when both files were read and rewritten.
+    """
+    kestrel_path, advntr_path = Path(kestrel_tsv), Path(advntr_tsv)
+    if not kestrel_path.is_file() or not advntr_path.is_file():
+        logger.debug("Cross-caller reconciliation skipped; one of the result files is absent.")
+        return False
+
+    try:
+        header = [line for line in kestrel_path.read_text().splitlines() if line.startswith("##")]
+        kestrel = pd.read_csv(kestrel_path, sep="\t", comment="#", dtype=str)
+        advntr = pd.read_csv(advntr_path, sep="\t", dtype=str)
+    except (OSError, ValueError, pd.errors.ParserError) as error:
+        logger.warning("Cross-caller reconciliation skipped; could not read a result file: %s", error)
+        return False
+
+    if kestrel.empty or advntr.empty or "Motifs" not in kestrel.columns:
+        return False
+
+    calls: list[Nomenclature] = []
+    supports: dict[str, int | None] = {}
+
+    for _, row in kestrel.iterrows():
+        if _is_negative(row):
+            continue
+        try:
+            calls.append(from_kestrel(str(row["Motifs"]), int(row["POS"]), str(row["REF"]), str(row["ALT"])))
+        except (TypeError, ValueError):
+            continue
+        supports.setdefault("kestrel_vcf", _as_int(row.get("Estimated_Depth_AlternateVariant")))
+
+    # Every adVNTR event at the locus, not just the first: a sample reporting several
+    # simultaneous events is not describing one simple allele, and hiding the rest
+    # would let a wrong name be promoted.
+    for _, row in advntr.iterrows():
+        if _is_negative(row):
+            continue
+        parsed = from_advntr(str(row.get("Variant", "")))
+        if not parsed:
+            continue
+        calls.extend(parsed)
+        depth = _as_int(row.get("NumberOfSupportingReads"))
+        existing = supports.get("advntr")
+        supports["advntr"] = depth if existing is None else min(existing, depth or existing)
+
+    if not calls:
+        return False
+
+    merged = reconcile(*calls, supports=supports)
+    cells = _cells(merged)
+
+    for frame, path, is_kestrel in ((kestrel, kestrel_path, True), (advntr, advntr_path, False)):
+        updated = frame.copy()
+        for column, value in cells.items():
+            if column in updated.columns:
+                updated.loc[~updated.apply(_is_negative, axis=1), column] = value
+        _write_tsv(updated, path, header if is_kestrel else [])
+
+    logger.info("Cross-caller nomenclature reconciled: tier %s.", merged.tier)
+    return True
+
+
+def _as_int(value: object) -> int | None:
+    """Read a depth cell as an integer, or ``None`` when it is not one."""
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_tsv(frame: pd.DataFrame, path: Path, header: list[str]) -> None:
+    """Rewrite a result TSV, preserving its ``##`` header lines.
+
+    Args:
+        frame: The frame to write.
+        path: Destination.
+        header: ``##`` lines to re-emit above the table.
+    """
+    with path.open("w") as handle:
+        if header:
+            handle.write("\n".join(header) + "\n")
+        frame.to_csv(handle, sep="\t", index=False)
 
 
 def annotate_advntr_frame(frame: pd.DataFrame) -> pd.DataFrame:

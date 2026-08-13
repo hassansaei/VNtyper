@@ -28,7 +28,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Mapping
 
 __all__ = [
     "CANONICAL_UNIT",
@@ -539,7 +542,11 @@ def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ..
 MIN_SUPPORT_FOR_TIER_A = 5
 
 
-def reconcile(*calls: Nomenclature, support: int | None = None) -> Nomenclature:
+def reconcile(
+    *calls: Nomenclature,
+    support: int | None = None,
+    supports: Mapping[str, int | None] | None = None,
+) -> Nomenclature:
     """Combine independent callers into one result, and decide its tier.
 
     Tier A is the only tier that emits a bare number, so it is the only tier that can
@@ -555,7 +562,11 @@ def reconcile(*calls: Nomenclature, support: int | None = None) -> Nomenclature:
     Args:
         *calls: Translations of the same locus from different sources.
         support: Reads supporting the call, when known. ``None`` means unknown, which
-            is not the same as sufficient.
+            is not the same as sufficient. Ignored when ``supports`` is given.
+        supports: Reads per source, e.g. ``{"advntr": 24}``. Preferred: it binds the
+            depth to the evidence it came from, so an unrelated well-covered
+            observation cannot lend its depth to a thin agreement. The agreement is
+            taken to be as strong as its weakest contributing source.
 
     Returns:
         Nomenclature: The reconciled call. Tier C when nothing was supplied or the
@@ -580,20 +591,32 @@ def reconcile(*calls: Nomenclature, support: int | None = None) -> Nomenclature:
         net = primary.net_length
         return _undetermined("unknown", net, "reconciled", tuple(sorted(flags)))
 
-    agree = len({call.name for call in named}) == 1 and len(named) > 1
-    independent = len({call.source for call in usable}) > 1
-    if named and not agree and len(named) > 1:
+    # Independence is counted over the calls that actually carry the name, never over
+    # every call supplied. Counting all of them let an *unnamed* call -- an adVNTR
+    # state in an unmappable repeat unit, say -- donate a second `source` to two
+    # duplicate rows from one caller, so a single caller's placement could be
+    # promoted as though two had agreed on it.
+    naming_sources = {call.source for call in named}
+    agree = len({call.name for call in named}) == 1 and len(naming_sources) > 1
+    if named and len({call.name for call in named}) > 1:
         flags.add(FLAG_CALLER_DISAGREEMENT)
 
-    if support is not None and support < MIN_SUPPORT_FOR_TIER_A:
+    # Support must belong to the agreeing evidence. A sample-wide maximum would let a
+    # well-covered but unrelated observation lend its depth to a 1-read agreement.
+    effective_support = support
+    if supports is not None:
+        relevant = [supports.get(source) for source in naming_sources]
+        present = [value for value in relevant if value is not None]
+        effective_support = min(present) if present else None
+
+    if effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
         flags.add(FLAG_LOW_READ_SUPPORT)
 
     tier = "B"
     if (
         agree
-        and independent
-        and support is not None
-        and support >= MIN_SUPPORT_FOR_TIER_A
+        and effective_support is not None
+        and effective_support >= MIN_SUPPORT_FOR_TIER_A
         and FLAG_MOTIF_CONTEXT_DIVERGES not in flags
         and FLAG_SEQUENCE_UNDETERMINED not in flags
         and FLAG_CALLER_DISAGREEMENT not in flags
@@ -613,7 +636,7 @@ def reconcile(*calls: Nomenclature, support: int | None = None) -> Nomenclature:
         ambiguity=chosen.ambiguity,
         repeat_form=chosen.repeat_form,
         net_length=chosen.net_length,
-        source="reconciled" if independent else chosen.source,
+        source="reconciled" if len(naming_sources) > 1 else chosen.source,
     )
 
 

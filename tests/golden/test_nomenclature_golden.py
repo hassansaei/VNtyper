@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from vntyper.scripts.nomenclature import from_advntr, from_kestrel, reconcile
+from vntyper.scripts.nomenclature import from_advntr, from_kestrel, reconcile, render
 from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate, refine
 
 pytestmark = pytest.mark.golden
@@ -183,7 +183,10 @@ def _reconciled() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
                 from_kestrel(record["Motifs"], int(record["POS"]), record["REF"], record["ALT"])
                 for record in _kestrel_records(sample_dir / "mutated" / "kestrel" / "kestrel_result.tsv")
             ]
-            support: int | None = None
+            # Support is bound to the source it came from, and an adVNTR agreement
+            # is taken at its weakest state: a sample-wide maximum would let a
+            # well-covered unrelated observation lend depth to a 1-read agreement.
+            supports: dict[str, int | None] = {}
             # Every event adVNTR reported, not just the first: a locus showing three
             # simultaneous events is not one simple allele, and hiding the rest lets
             # a wrong name reach tier A.
@@ -191,9 +194,15 @@ def _reconciled() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
                 advntr_root / experiment / pair_id / "mutated" / "advntr" / "output_adVNTR_result.tsv"
             ):
                 calls.extend(from_advntr(state))
-                support = state_support if support is None else max(support, state_support)
+                seen = supports.get("advntr")
+                supports["advntr"] = state_support if seen is None else min(seen, state_support)
+            for record in _kestrel_records(sample_dir / "mutated" / "kestrel" / "kestrel_result.tsv"):
+                try:
+                    supports["kestrel_vcf"] = int(float(record.get("Estimated_Depth_AlternateVariant") or 0))
+                except ValueError:
+                    supports["kestrel_vcf"] = None
 
-            merged = reconcile(*calls, support=support)
+            merged = reconcile(*calls, supports=supports)
             if merged.name == EXPECTED_NAME[klass]:
                 correct[klass] += 1
                 if merged.tier == "A":
@@ -232,14 +241,20 @@ def _hybrid() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
                 from_kestrel(record["Motifs"], int(record["POS"]), record["REF"], record["ALT"])
                 for record in _kestrel_records(kestrel_dir / "kestrel_result.tsv")
             ]
-            support: int | None = None
+            supports: dict[str, int | None] = {}
             for state, state_support in _advntr_records(
                 advntr_root / experiment / pair_id / "mutated" / "advntr" / "output_adVNTR_result.tsv"
             ):
                 calls.extend(from_advntr(state))
-                support = state_support if support is None else max(support, state_support)
+                seen = supports.get("advntr")
+                supports["advntr"] = state_support if seen is None else min(seen, state_support)
+            for record in _kestrel_records(kestrel_dir / "kestrel_result.tsv"):
+                try:
+                    supports["kestrel_vcf"] = int(float(record.get("Estimated_Depth_AlternateVariant") or 0))
+                except ValueError:
+                    supports["kestrel_vcf"] = None
 
-            merged = reconcile(*calls, support=support)
+            merged = reconcile(*calls, supports=supports)
 
             if is_candidate(merged):
                 bed = kestrel_dir / "output.bed"
@@ -351,6 +366,47 @@ def test_the_bam_rescue_recovers_alleles_the_vcf_could_not() -> None:
     vcf_correct, _, _ = _vcf_only()
     gained = {klass for klass in EXPECTED_NAME if correct[klass] > vcf_correct[klass]}
     assert gained, "BAM rescue changed nothing; the whole path is then dead weight"
+
+
+def test_every_tier_a_cell_renders_as_the_bare_name_and_no_other_tier_does() -> None:
+    """Assert the *emitted* cell, not the internal field.
+
+    The golden numbers are computed from `Nomenclature.name`, which every tier
+    carries. What reaches a user is `render`. Without this, replacing
+    ``render(call)`` with ``call.name or ""`` in the production adapter would leak a
+    bare number on every tier-B row while this whole tier stayed green.
+    """
+    root = _require_sim()
+    advntr_root = _require_advntr()
+    leaked: list[tuple[str, str]] = []
+
+    for experiment in EXPERIMENTS:
+        for pair_id, _ in sorted(_truth(root, experiment).items()):
+            calls = [
+                from_kestrel(record["Motifs"], int(record["POS"]), record["REF"], record["ALT"])
+                for record in _kestrel_records(
+                    root / experiment / "vntyper" / pair_id / "mutated" / "kestrel" / "kestrel_result.tsv"
+                )
+            ]
+            supports: dict[str, int | None] = {}
+            for state, state_support in _advntr_records(
+                advntr_root / experiment / pair_id / "mutated" / "advntr" / "output_adVNTR_result.tsv"
+            ):
+                calls.extend(from_advntr(state))
+                seen = supports.get("advntr")
+                supports["advntr"] = state_support if seen is None else min(seen, state_support)
+            if not calls:
+                continue
+
+            merged = reconcile(*calls, supports=supports)
+            shown = render(merged)
+            if merged.tier == "A":
+                if shown != merged.name:
+                    leaked.append((pair_id, shown))
+            elif merged.name is not None and shown == merged.name:
+                leaked.append((pair_id, shown))
+
+    assert leaked == [], f"rendered cell disagreed with what the tier permits: {leaked[:5]}"
 
 
 def test_reconciliation_produces_tier_a_names() -> None:
