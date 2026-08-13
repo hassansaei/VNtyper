@@ -725,6 +725,90 @@ def test_a_malicious_flag_in_a_stored_summary_is_server_escaped(tmp_path) -> Non
     assert ESCAPED in html
 
 
+#: The adVNTR row the escaping checks below plant a payload into. Kept beside them
+#: rather than reused from the numeric section, so a change to the precision
+#: specimen cannot quietly change what the trust-boundary checks are testing.
+ADVNTR_ESCAPING_ROW = {
+    "VID": 25561,
+    "Variant": "I22_G_LEN1",
+    "NumberOfSupportingReads": 14,
+    "MeanCoverage": 98.5,
+    "Pvalue": 1e-09,
+    "RU": "CGCGG",
+    "POS": 67,
+    "REF": "G",
+    "ALT": "GG",
+    "Flag": "Not flagged",
+}
+
+#: Every adVNTR display column except the one exemption, derived from the display
+#: table so a column added later is covered without editing this list. These are the
+#: cells a widened ``html_columns`` would expose.
+ADVNTR_ESCAPED_COLUMNS = tuple(column for column in generate_report.ADVNTR_DISPLAY_COLUMNS if column != "Flag")
+
+
+def advntr_summary(tmp_path: Path, **overrides) -> Path:
+    """Write a summary whose adVNTR step carries one row with ``overrides`` applied."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{**ADVNTR_ESCAPING_ROW, **overrides}]),
+    )
+    return tmp_path
+
+
+def test_a_malicious_flag_in_an_advntr_row_is_server_escaped(tmp_path) -> None:
+    """The adVNTR table's one escaping exemption, planted against.
+
+    #242 moved this table from a blanket ``to_html(escape=True)`` to the same
+    per-column model the Kestrel table uses: ``escape=False`` for the whole table,
+    with ``escape_frame_cells`` escaping every cell except ``Flag``, whose markup
+    ``flag_html`` builds *and escapes* itself. The two halves have to stay together.
+
+    **The concrete state this catches**: drop or reorder the ``flag_html`` call in
+    ``generate_summary_report`` while ``html_columns=("Flag",)`` stays. Nothing
+    raises, the table still renders, every other test still passes - and a
+    sample-derived ``Flag`` reaches the HTML unescaped. That is this codebase's
+    signature failure mode: a silently wrong call, not a crash.
+    """
+    html = render(advntr_summary(tmp_path, Flag=PAYLOAD))
+
+    assert PAYLOAD not in html
+    assert ESCAPED in html
+
+
+@pytest.mark.parametrize("column", ADVNTR_ESCAPED_COLUMNS)
+def test_every_other_advntr_cell_is_escaped(tmp_path, column: str) -> None:
+    """The columns the exemption does *not* cover, including the numeric ones.
+
+    A payload in a numeric column is not absurd: the value comes out of a supplied
+    ``pipeline_summary.json``, the formatters pass a non-numeric value through
+    untouched by design, and the whole table is rendered with ``escape=False``. So
+    each of these is escaped only because it is *not* named in ``html_columns`` -
+    which is exactly what widening that tuple would undo.
+    """
+    html = render(advntr_summary(tmp_path, **{column: PAYLOAD}))
+
+    assert PAYLOAD not in html, f"an adVNTR {column} value reached the HTML unescaped"
+    assert ESCAPED in html
+
+
+def test_an_advntr_flagged_row_states_its_reason_in_the_table(tmp_path) -> None:
+    """The adVNTR flag cell is rendered server-side too, not just Kestrel's.
+
+    Both tables lost their client-side flag renderer in #242, so both have to gain
+    the server-side one; the escaping check above passes vacuously if this table
+    stopped carrying a flag cell at all.
+    """
+    from vntyper.scripts.report_formatting import FLAG_WARNING_GLYPH
+
+    html = render(advntr_summary(tmp_path, Flag="Low_Depth"))
+
+    assert FLAG_WARNING_GLYPH in html
+    assert "Low_Depth" in html
+
+
 def test_an_unstyled_confidence_value_is_escaped(tmp_path) -> None:
     """The Confidence column is the one cell that legitimately carries markup.
     A value with no configured style used to pass through untouched."""
@@ -770,9 +854,24 @@ def test_escaping_does_not_neuter_the_igv_script_block(positive_summary) -> None
 
 
 #: Every context value the template is allowed to interpolate unescaped, and why.
+#:
+#: This is the audit record of the report's trust model, so each entry has to say
+#: what is actually true of the value today. **Neither results table is escaped by
+#: pandas.** Both go out through ``to_html(escape=False)``, because both carry
+#: markup VNtyper built, and both therefore rely on ``escape_frame_cells`` having
+#: escaped every cell first *except* the columns named in ``html_columns``. That
+#: exemption is per column and each exempted column escapes its own value; widening
+#: ``html_columns`` is what would expose a sample's string, not editing this dict.
 SAFE_BY_DESIGN = {
-    "kestrel_highlight": "pandas table; its cells are escaped by escape_frame_cells",
-    "advntr_highlight": "pandas table rendered with escape=True, or a fixed <p>",
+    "kestrel_highlight": (
+        "pandas table rendered with escape=False; escape_frame_cells escapes every cell except "
+        "`Confidence` and `Flag`, whose markup confidence_html and flag_html build and escape themselves"
+    ),
+    "advntr_highlight": (
+        "pandas table rendered with escape=False through escaped_table_html; escape_frame_cells escapes "
+        "every cell except `Flag`, whose markup flag_html builds and escapes itself - or one of two fixed <p> "
+        "sentences when adVNTR did not run or found nothing"
+    ),
     "summary_text": "a configured clinical message carrying <br> line breaks",
     "cross_match_message": "one of two fixed sentences built in generate_report",
     "table_json": "a JavaScript literal spliced out of the IGV report",
