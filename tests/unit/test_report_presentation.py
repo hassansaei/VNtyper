@@ -917,6 +917,34 @@ def test_every_other_disclosure_prints_open() -> None:
     assert "display: block !important" in block
 
 
+def test_every_print_relevant_disclosure_is_served_open() -> None:
+    """The mitigation for the one case neither CSS nor the handler can reach.
+
+    A reader with scripting off can collapse a ``<details>`` - clicking a ``<summary>``
+    is user-agent behaviour, not script - and Chromium then prints its heading and none
+    of its contents. ``open`` is an attribute rather than a style, so no author rule
+    reopens it and no ``beforeprint`` handler runs. What is left is to not start there:
+    every disclosure the printed record needs is *served* open, so a hole in the record
+    takes a deliberate click rather than arriving by default.
+
+    The log is the standing exception. It is pages of DEBUG output, it is in the HTML
+    original either way, and both the print block and the handler skip it.
+
+    ``tests/browser/test_printed_record.py`` measures both sides of this in a real
+    engine; this is the source-text half, which is what fails first if the attribute is
+    dropped in an edit.
+    """
+    markup = _markup(PER_SAMPLE_TEMPLATE)
+    disclosures = re.findall(r"<details\b[^>]*>", markup)
+
+    assert disclosures, "found no disclosures in the report; this assertion would be vacuous"
+    for tag in disclosures:
+        if "log-section" in tag:
+            assert " open" not in tag, f"the pipeline log is served open: {tag}"
+            continue
+        assert re.search(r"\bopen\b", tag), f"a print-relevant disclosure is served collapsed: {tag}"
+
+
 def test_a_section_the_reader_collapsed_is_restored_after_printing() -> None:
     """Printing must not be a mutation. Both halves of the handler, and its own block.
 

@@ -69,6 +69,19 @@ The flanking region parameter (default: 50 bp) controls how much sequence contex
 !!! info "VCF compression"
     If bcftools is installed, the INDEL VCF is compressed and sorted for optimal IGV performance. If bcftools is unavailable, the uncompressed VCF is used. The report generation handles both cases gracefully.
 
+### Printing and archiving
+
+The report is written to be printed: the printed sheet is the artefact that gets filed, forwarded and read years later, so it carries its own identity. The first page states the sample, the assay, the reference assembly and the VNtyper version, and every page is numbered `Page N of M` so a print that lost a sheet is visible as one. The detailed coverage table prints in place of the basic view, results tables print in full rather than clipped to the screen's column widths, and the on-screen switches are omitted because paper has no switches.
+
+The pipeline log is the deliberate exception. It prints as a one-line pointer back to the HTML original rather than as pages of DEBUG output, whether or not the reader had it expanded.
+
+!!! warning "One thing a collapsed section costs a reader with JavaScript disabled"
+    Sections such as **Variants** are collapsible. The report is served with them **open**, so an ordinary print carries them; if a reader collapses one and then prints, a small script reopens it for the duration of the print and closes it again afterwards.
+
+    That script is the only mechanism that works. Measured in Chromium 151: a section the reader collapsed prints its heading and **none of its contents** when JavaScript is disabled, and no stylesheet can change that — `open` is an HTML attribute rather than a style, and the browser hides a closed section's contents in a way an author stylesheet cannot reach. Firefox and WebKit ignore the paged-CSS features this report relies on altogether.
+
+    So with scripting off, print the report **as it opens** — do not collapse a section first. If a print is missing a section, its heading will still be on the page where the contents should have been.
+
 ## Cohort Report
 
 The cohort summary module (`cohort_summary.py`) aggregates results from multiple pipeline runs into a single report. It scans a directory structure for `pipeline_summary.json` files and constructs:

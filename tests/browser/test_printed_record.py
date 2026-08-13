@@ -38,11 +38,22 @@ exposes a PDF API to Playwright at all. Measured, not assumed:
   author rule reaches. It is the no-JS fallback for engines that honour it, and
   the handler is what does the work here. The JavaScript-disabled case below
   therefore asserts what is actually true rather than what would be convenient.
+
+What a reader with scripting off can still lose
+-----------------------------------------------
+Measured in this file, both states with one gesture between them: a ``<details>``
+served ``open`` prints its contents with no script at all, and the same disclosure
+after a click on its ``<summary>`` prints its heading and nothing else. Nothing in
+CSS can undo that click - ``open`` is an attribute, not a style - so the mitigation
+is that the report is *served* with every print-relevant disclosure open, and
+collapsing one is a deliberate act rather than the state the file arrives in. The
+residual limitation is stated in ``docs/pipeline/reports.md`` in the same words.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -165,7 +176,14 @@ def printable_report(tmp_path: Path) -> Path:
     return tmp_path / "summary_report.html"
 
 
-def _printed_pages(browser: Browser, report: Path, *, javascript: bool = True, before: str = "") -> list[str]:
+def _printed_pages(
+    browser: Browser,
+    report: Path,
+    *,
+    javascript: bool = True,
+    before: str = "",
+    click: str = "",
+) -> list[str]:
     """Print a report to PDF and return the text of each page.
 
     Args:
@@ -175,7 +193,11 @@ def _printed_pages(browser: Browser, report: Path, *, javascript: bool = True, b
             reader with scripting off, and the only way to see what the print
             stylesheet does on its own.
         before: JavaScript evaluated after load and before printing, used to put the
-            page into the state a reader might print it from.
+            page into the state a reader might print it from. Needs ``javascript``.
+        click: A selector clicked after load and before printing. This is the *reader's*
+            way into the same states, and it is the only one available with scripting
+            off: toggling a ``<details>`` from its ``<summary>`` is user-agent behaviour,
+            not script.
 
     Returns:
         list[str]: One string per printed page, whitespace as ``pdftotext`` gives it.
@@ -191,6 +213,8 @@ def _printed_pages(browser: Browser, report: Path, *, javascript: bool = True, b
         page.goto(report.as_uri(), wait_until="load")
         if before:
             page.evaluate(before)
+        if click:
+            page.click(click)
         pdf = report.with_suffix(".pdf")
         page.pdf(path=str(pdf), prefer_css_page_size=True, print_background=True)
     finally:
@@ -293,12 +317,14 @@ def test_a_section_the_reader_collapsed_still_prints(printable_report: Path, bro
     so this exercises the same handler Ctrl+P does. The log is the deliberate
     exception and is checked in the same pass, because "open everything" and "open
     everything except the log" differ only there.
+
+    The collapse is a **click on the summary**, not an assignment to ``.open``: that is
+    the reader's own gesture, it is user-agent behaviour rather than script, and it is
+    the one thing this case and
+    :func:`test_a_disclosure_the_reader_collapsed_does_not_print_without_scripting`
+    have in common - so the two differ in exactly one variable.
     """
-    collapsed = _printed_pages(
-        browser,
-        printable_report,
-        before='() => { document.getElementById("variantsDisclosure").open = false; }',
-    )
+    collapsed = _printed_pages(browser, printable_report, click="#variantsToggle")
     squashed = _squashed("\n".join(collapsed))
 
     assert "IGVvarianttable" in squashed or "novariant" in squashed.lower() or "Variants" in squashed
@@ -330,6 +356,100 @@ def test_a_log_the_reader_expanded_still_prints_as_a_pointer(printable_report: P
         "a log the reader had expanded printed its body, so the archived PDF carries the DEBUG output"
     )
     assert _squashed(LOG_POINTER) in squashed, "the expanded log printed neither its body nor the pointer"
+
+
+#: Text planted inside a disclosure body by the server, so that "did this disclosure's
+#: contents reach the paper" is answerable at all. The shipped report's one open
+#: disclosure is filled in by ``initTable()``, so with scripting off it is empty
+#: whatever its state - which would make the two cases below indistinguishable and both
+#: of them vacuous.
+SERVER_RENDERED_EVIDENCE = "SERVERRENDEREDEVIDENCE42"
+
+#: The empty container ``initTable()`` writes into, and where the marker goes instead.
+VARIANT_TABLE_CONTAINER = '<div id="tableSelectorDiv"></div>'
+
+
+def _with_evidence_inside_the_disclosure(report: Path) -> Path:
+    """Write a copy of a rendered report with server-rendered text in a disclosure.
+
+    This is specimen preparation, not a fixture of the product: the marker stands for
+    any evidence a future change might put inside a ``<details>``. The disclosure, its
+    ``open`` attribute and every print rule are the shipped ones.
+
+    Args:
+        report: The rendered ``summary_report.html``.
+
+    Returns:
+        Path: A sibling file whose Variants disclosure has a body the server wrote.
+    """
+    html = report.read_text(encoding="utf-8")
+    assert VARIANT_TABLE_CONTAINER in html, "the variant-table container moved; this specimen plants nothing"
+    # A click on a `<summary>` toggles, so "collapsed" is only what it means if the
+    # served state was open. That is the mitigation itself, pinned in the source text
+    # by `tests/unit/test_report_presentation.py::
+    # test_every_print_relevant_disclosure_is_served_open`, and restated here so the
+    # case below cannot quietly become "the reader expanded it".
+    assert re.search(r"<details[^>]*\bid=\"variantsDisclosure\"[^>]*\bopen\b", html), (
+        "the Variants disclosure is not served open, so clicking its summary expands rather than collapses"
+    )
+    marked = report.with_name("marked_report.html")
+    marked.write_text(
+        html.replace(VARIANT_TABLE_CONTAINER, f'<div id="tableSelectorDiv"><p>{SERVER_RENDERED_EVIDENCE}</p></div>'),
+        encoding="utf-8",
+    )
+    return marked
+
+
+def test_a_disclosure_is_served_open_so_a_reader_with_no_script_gets_its_contents(
+    printable_report: Path, browser: Browser
+) -> None:
+    """The mitigation, measured: printing works with no script because nothing is closed.
+
+    Every print-relevant disclosure carries ``open`` in the HTML the server writes, so
+    the reachable no-script case is the one that works. Collapsing is then something a
+    reader has to choose, rather than the state the file arrives in.
+    """
+    pages = _printed_pages(browser, _with_evidence_inside_the_disclosure(printable_report), javascript=False)
+
+    assert SERVER_RENDERED_EVIDENCE in _squashed("\n".join(pages)), (
+        "a disclosure the server left open did not print its contents with scripting off"
+    )
+
+
+def test_a_disclosure_the_reader_collapsed_does_not_print_without_scripting(
+    printable_report: Path, browser: Browser
+) -> None:
+    """The residual limitation, stated rather than papered over.
+
+    A reader with scripting off clicks a ``<summary>`` - which is user-agent behaviour
+    and needs no script - and prints. **Chromium 151 does not put that section's
+    contents on the paper.** The ``@media print`` rule ``details > summary ~ *
+    { display: block !important }`` does not reach them: the UA hides a closed
+    disclosure's content in a way no author rule overrides, and ``open`` is an attribute
+    rather than a style, so no stylesheet can set it. The ``beforeprint`` handler that
+    reopens collapsed sections is the fix, and it is exactly what this reader does not
+    have.
+
+    So the archived PDF is short a section, and only the ``<summary>`` line says one was
+    there. Both halves are asserted, because "the reader can see something is missing"
+    is the whole of what survives. The mitigation is the sibling case above: the file is
+    served with nothing collapsed, so reaching this state takes a deliberate click.
+    ``docs/pipeline/reports.md`` says the same in the operator's words.
+    """
+    pages = _printed_pages(
+        browser,
+        _with_evidence_inside_the_disclosure(printable_report),
+        javascript=False,
+        click="#variantsToggle",
+    )
+    squashed = _squashed("\n".join(pages))
+
+    assert SERVER_RENDERED_EVIDENCE not in squashed, (
+        "Chromium now prints a reader-collapsed disclosure without script - the limitation "
+        "documented here and in docs/pipeline/reports.md is gone, so update both"
+    )
+    assert "Variants" in squashed, "not even the collapsed section's heading printed, so nothing marks the gap"
+    assert "Page1of" in squashed, "the rest of the print stylesheet stopped working in this state"
 
 
 def test_the_record_survives_a_reader_with_scripting_off(printable_report: Path, browser: Browser) -> None:
