@@ -304,6 +304,205 @@ def test_the_confidence_label_is_always_present_as_text(value: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Print is a build target - issue #242
+# ---------------------------------------------------------------------------
+
+
+def _at_rule_body(source: str, prelude: str) -> str:
+    """Return the body of one at-rule, brace-matched so nested at-rules survive.
+
+    ``@media print`` contains ``@page``-style nesting and the crude
+    ``([^{}]+)\\{([^{}]*)\\}`` split used elsewhere in this file cannot see it. This
+    walks the braces instead.
+
+    Args:
+        source: A template's source text.
+        prelude: The at-rule's prelude, e.g. ``"@media print"``.
+
+    Returns:
+        str: Everything between the rule's braces, or "" when it is absent.
+    """
+    start = source.find(prelude)
+    if start == -1:
+        return ""
+    opening = source.find("{", start)
+    depth = 0
+    for index in range(opening, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1 : index]
+    return ""
+
+
+def _print_block() -> str:
+    """The per-sample report's ``@media print`` body, comments stripped."""
+    return _at_rule_body(_markup(PER_SAMPLE_TEMPLATE), "@media print")
+
+
+def test_the_report_has_a_print_stylesheet() -> None:
+    """The archived PDF is the artefact that outlives the HTML.
+
+    Measured in a browser rather than grepped, before this change:
+    ``document.styleSheets`` reported ``mediaRules: []`` for both templates - not one
+    author media rule, so the printed page inherited every screen affordance.
+    """
+    assert "@media print" in PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+    assert _print_block(), "the @media print block is empty"
+
+
+def test_print_unsets_the_truncation_clamp() -> None:
+    """``.table td`` clamps to 150px with ``overflow: hidden`` and reveals on hover.
+
+    The motif sequence is 121 bp in real data and paper has no hover, so the archived
+    record carried a truncated sequence with an ellipsis where the evidence was.
+    """
+    block = _print_block()
+
+    assert "max-width: none" in block
+    assert "white-space: normal" in block
+    assert "overflow: visible" in block, "the cell is still clipped by overflow: hidden"
+
+
+def test_print_gives_an_unbroken_sequence_somewhere_to_break() -> None:
+    """Unsetting the clamp is not enough on its own.
+
+    A 121-character motif sequence contains no space, so with the clamp gone it still
+    overflows its cell and is clipped by the table's own width. Measured in Chromium:
+    ``max-width: none`` plus ``white-space: normal`` printed 100 of the 121 bases;
+    adding a break opportunity printed all 121.
+    """
+    block = _print_block()
+
+    assert "overflow-wrap: anywhere" in block or "word-break: break-all" in block, (
+        "print unsets the clamp but gives a long unbroken sequence no break opportunity, so it is clipped anyway"
+    )
+
+
+def test_print_hides_the_controls_that_do_nothing_on_paper() -> None:
+    """The two switches print as ticked or unticked boxes that nobody can operate."""
+    assert ".controls" in _print_block()
+
+
+def test_the_printed_page_is_numbered() -> None:
+    """A dropped sheet is unrecoverable without this, and a truncated print is invisible.
+
+    ``@page`` margin boxes, which the supported renderer (Chromium) honours;
+    ``tests/browser/test_printed_record.py`` is what proves they reach the PDF.
+    """
+    page_rule = _at_rule_body(_markup(PER_SAMPLE_TEMPLATE), "@page")
+
+    assert "counter(page)" in page_rule
+    assert "counter(pages)" in page_rule, "the page number does not say how many pages there are"
+
+
+def test_the_printed_record_states_its_identity_in_the_document() -> None:
+    """Who, what, which assembly, which version - at the head of the printed sheet.
+
+    It is a block in the document rather than an ``@page`` margin box because the
+    supported engine cannot put a document value in one: measured, Chromium 151 drops
+    a ``content`` list containing ``string()`` whole. See the note in the template and
+    ``test_no_value_is_interpolated_into_a_stylesheet`` for the alternative that was
+    refused.
+    """
+    source = _markup(PER_SAMPLE_TEMPLATE)
+    block = re.search(r'<div class="print-header">(.*?)</div>', source, re.DOTALL)
+
+    assert block, "the printed record has no header line"
+    for value in ("sample_name", "assay_name", "assembly_declared", "pipeline_version", "research_use_statement"):
+        assert value in block.group(1), f"the printed header line does not state {value}"
+
+
+def test_no_value_is_interpolated_into_a_stylesheet() -> None:
+    """The printed identity is a document value, and it stays out of the CSS.
+
+    A ``<style>`` element is a raw text element and CSS is not an HTML context:
+    autoescaping turns ``&`` into ``&amp;`` there, which nothing decodes, and does
+    nothing about the characters that matter in a CSS string - a sample name reaching
+    ``content:`` could close the element outright. The sample name is derived from a
+    sample-supplied basename and the report is a file people forward, so a running
+    header in the page margin is worth less than this guarantee.
+    """
+    for style in _style_blocks(PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")):
+        assert "{{" not in style, f"a value is interpolated into a stylesheet: {style[:200]}"
+
+
+def test_the_log_prints_as_a_pointer_rather_than_a_wall_of_debug() -> None:
+    """A DEBUG log is pages of it, and it is in the HTML original either way.
+
+    This is the one disclosure that does *not* print open: it is the exception the
+    print block states explicitly, so the rule that opens the others cannot be read as
+    an accident.
+    """
+    block = _print_block()
+
+    assert "log-section" in block, "the print block does not treat the log differently from any other disclosure"
+    assert "HTML original" in block, "the printed log does not point anywhere"
+    assert 'class="log-section"' in _markup(PER_SAMPLE_TEMPLATE) or "log-section" in _markup(PER_SAMPLE_TEMPLATE)
+
+
+def test_every_other_disclosure_prints_open() -> None:
+    """The no-JS half of the belt and braces.
+
+    CSS alone cannot open a closed ``<details>`` in Chromium - measured: with this rule
+    and scripting off, the body of a closed disclosure did not print - so the handler
+    below is what does the work there. The rule is still what an engine honouring the
+    author's cascade over the UA's closed-details shadow content needs, and it costs
+    nothing.
+    """
+    block = _print_block()
+
+    assert "details > summary ~ *" in block
+    assert "display: block !important" in block
+
+
+def test_a_section_the_reader_collapsed_is_restored_after_printing() -> None:
+    """Printing must not be a mutation. Both halves of the handler, and its own block.
+
+    A ``$`` that never resolved throws at the top of whichever block it is in and takes
+    every statement after it down, so the print handler shares its block with no jQuery
+    - the same reason the switches were moved out of it.
+    """
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+    blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", source, re.DOTALL)
+
+    owning = [block for block in blocks if "beforeprint" in block]
+    assert len(owning) == 1, f"expected exactly one script block to handle printing, found {len(owning)}"
+    assert "afterprint" in owning[0], "the handler opens sections for printing and never closes them again"
+    assert "log-section" in owning[0], "the handler would open the log as well, which prints as a pointer"
+    assert "$(" not in owning[0], "the print handler shares its block with jQuery code that can throw first"
+
+
+def test_the_printed_record_carries_the_whole_coverage_table() -> None:
+    """The detailed view is hidden behind a switch, and paper has no switches.
+
+    ``#detailedCoverageView`` carries eight statistics and the QC verdict that the
+    basic view does not, and it is ``display: none`` until a reader ticks a control the
+    print block removes. Printing the basic view alone archives less than the screen
+    could show.
+    """
+    block = _print_block()
+
+    assert "#detailedCoverageView" in block
+    assert "#basicCoverageView" in block, "both coverage views print, so the mean is stated twice"
+
+
+def test_the_report_states_that_it_is_research_use_only() -> None:
+    """The one thing a forwarded artefact has to say about itself.
+
+    Quoted from ``README.md`` and declared as a constant beside the assay name rather
+    than written into the template, for the same reason every other fixed string in
+    ``report_identity`` is: interpretive text is not invented at a call site.
+    """
+    from vntyper.scripts.report_identity import RESEARCH_USE_STATEMENT
+
+    assert "research use only" in RESEARCH_USE_STATEMENT.lower()
+    assert "research_use_statement" in _markup(PER_SAMPLE_TEMPLATE)
+
+
 def test_the_igv_variant_rows_are_operated_by_a_real_control() -> None:
     """``<tr onclick>`` has no keyboard path, no name and no state.
 

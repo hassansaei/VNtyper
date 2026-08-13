@@ -62,6 +62,7 @@ from vntyper.scripts.report_formatting import (
 from vntyper.scripts.report_identity import (
     ASSAY_NAME,
     REPORT_TITLE_PREFIX,
+    RESEARCH_USE_STATEMENT,
     format_input_files,
     format_region,
     format_run_timestamp,
@@ -722,6 +723,9 @@ def generate_summary_report(
         "sample_name": resolved_sample_name,
         "assay_name": ASSAY_NAME,
         "report_title_prefix": REPORT_TITLE_PREFIX,
+        # Printed on every archived page. The printed record is the artefact that
+        # outlives the HTML, and it is the one that gets filed and forwarded.
+        "research_use_statement": RESEARCH_USE_STATEMENT,
         "pipeline_version": pipeline_version,
         # The provenance block. Two of these four rows are *not* new summary keys:
         # `assembly_declared` is the `reference_assembly_requested` `start_summary`

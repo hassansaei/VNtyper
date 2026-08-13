@@ -86,6 +86,13 @@ ASSAY_NAME = "MUC1 coding VNTR genotyping"
 #: The fixed half of the report's title; the sample name follows it.
 REPORT_TITLE_PREFIX = "MUC1 VNTR report"
 
+#: What the report says about its own standing. Quoted from ``README.md`` ("This tool
+#: is for research use only"), not composed here: it is a restriction on use, and the
+#: one statement a forwarded or printed artefact has to carry about itself. It is
+#: declared beside the assay name for the same reason that one is - a fixed string the
+#: report identifies itself with belongs in one place, not written into a template.
+RESEARCH_USE_STATEMENT = "Research use only"
+
 #: Compound extensions the sample-name rule recognises, longest first so that
 #: ``.fastq.gz`` is matched before ``.fastq`` could be. A basename ending in
 #: anything else is not something this pipeline reads, so the rule declines to

@@ -253,12 +253,6 @@
         .report-header {
             margin-bottom: 1em;
         }
-        @media print {
-            .report-header {
-                break-inside: avoid;
-                page-break-inside: avoid;
-            }
-        }
         /* Style for header info section */
         .header-info {
             margin-bottom: 1em;
@@ -268,6 +262,151 @@
         }
         .header-info p {
             margin: 0.5em 0;
+        }
+        /*
+          ================== Print is a build target (#242) ==================
+
+          The archived PDF outlives the HTML it came from: it is what gets filed,
+          attached to an email and read years later. Until this block existed
+          neither template contained a single author media rule - measured in the
+          browser, `document.styleSheets` reported `mediaRules: []` - so the
+          printed page inherited every screen affordance, including the ones that
+          exist only because a screen can be hovered and scrolled.
+
+          What the margin boxes may carry was measured in the supported engine
+          rather than assumed. Chromium 151 honours `@page` margin boxes and the
+          `counter(page)`/`counter(pages)` in them, so every sheet is numbered and
+          a truncated print is visible. It does **not** implement `string()`: a
+          `content` list containing one is dropped whole, taking its literal prefix
+          with it, so the identity cannot be carried into the margin from the
+          document. The two ways to put it there anyway are both refused here:
+
+            * interpolating the sample name into this stylesheet - a `<style>` is a
+              raw text element, CSS is not an HTML context, the name is derived from
+              a sample-supplied basename, and the report is a file people forward;
+            * a `position: fixed` header, which Chromium does repeat on every sheet
+              but does not reserve space for, so it lands on top of the first line
+              of every page after the first.
+
+          So the identity is a block at the head of the printed document, written
+          from escaped values like everything else, and the margin boxes carry only
+          what is fixed: the page number.
+        */
+        .print-header {
+            display: none;
+        }
+        @page {
+            size: A4 portrait;
+            margin: 18mm 14mm 18mm;
+            @bottom-right {
+                content: "Page " counter(page) " of " counter(pages);
+                font-size: 8pt;
+                color: #333333;
+            }
+        }
+        @media print {
+            .report-header {
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
+            /* The printed record's header line: who, what, which assembly, which
+               version, and what the artefact may be used for - above everything
+               else, on the sheet that gets filed. */
+            .print-header {
+                display: block;
+                font-size: 8pt;
+                color: #333333;
+                border-bottom: 0.5pt solid #999999;
+                padding-bottom: 2mm;
+                margin-bottom: 4mm;
+            }
+            /* Controls that cannot be operated on paper. Printing a switch beside
+               its label states an option the reader does not have. */
+            .controls,
+            .no-print {
+                display: none !important;
+            }
+            /* The detailed coverage view is what prints: it carries the eight
+               statistics and the QC verdict that the basic view does not, and on
+               screen it is revealed by a switch that has just been removed. Both
+               would state the mean twice. */
+            #basicCoverageView {
+                display: none !important;
+            }
+            #detailedCoverageView {
+                display: block !important;
+            }
+            /* No clipping, so the whole value prints. `.table td` clamps to 150px
+               with `overflow: hidden` and reveals the rest on `:hover`; the motif
+               sequence is 121 bp in real data and paper has no hover, so the
+               archived record carried an ellipsis where the evidence was.
+               `overflow-wrap: anywhere` is the other half: unsetting the clamp
+               leaves an unbroken 121-character string with nowhere to break, and it
+               overflows the table's own width and is clipped again. Measured in
+               Chromium: 100 of 121 bases without it, all 121 with it. */
+            .table td,
+            .table th,
+            .table td:last-child {
+                white-space: normal !important;
+                overflow: visible;
+                max-width: none;
+            }
+            /* Only the data cells may break inside a word - that is what lets the
+               121 bp sequence fit into eleven columns across 182mm of A4. The
+               headings keep their words whole, which is also what stops the layout
+               squeezing a column narrower than the word naming it: with
+               `word-break: break-word` in force everywhere, "Confidence" printed as
+               "Confidenc e". */
+            .table td {
+                overflow-wrap: anywhere;
+            }
+            .table th {
+                word-break: normal;
+                overflow-wrap: normal;
+            }
+            /* Nothing scrolls on paper, so nothing may be reachable only by
+               scrolling. */
+            .details-body {
+                max-height: none;
+                overflow: visible;
+            }
+            /* A heading at the foot of a page belongs to the table on the next one,
+               and a row split across the fold is a row read twice or not at all. */
+            h2 {
+                break-after: avoid;
+                page-break-after: avoid;
+            }
+            tr {
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
+            thead {
+                display: table-header-group;
+            }
+            /* Every disclosure prints open. This is the no-JS half of the belt and
+               braces: measured with scripting off, Chromium does *not* reveal a
+               closed `<details>` this way, because the UA hides its content in a
+               way no author rule reaches - the `beforeprint` handler at the foot of
+               this file is what opens them here. The rule is what an engine that
+               honours the author cascade needs, and it costs nothing. */
+            details > summary ~ * {
+                display: block !important;
+            }
+            /* The log is the exception, and it is stated rather than implied: it is
+               pages of DEBUG output, it is in the HTML original either way, and the
+               handler skips it for the same reason. Two class selectors beat the
+               two type selectors above, so this wins without a further
+               `!important` fight. */
+            .log-section > .details-body {
+                display: none !important;
+            }
+            .log-section::after {
+                content: "The full pipeline log is in the HTML original of this report.";
+                display: block;
+                padding: 0 1rem 1rem;
+                font-size: 8pt;
+                color: #333333;
+            }
         }
     </style>
 
@@ -279,6 +418,20 @@
          and no footer, so a screen reader user skipping to the content should
          land on the report itself. There was no landmark at all before (#242). -->
     <main class="container">
+        <!--
+          The printed record's header line. It is not shown on screen: the identity
+          block below says all of this and more, with room to say it in, and a
+          browser tab already carries the title.
+
+          Every value here is escaped, which is exactly why the printed identity is
+          a block in the document rather than text interpolated into the stylesheet's
+          `@page` margin boxes - see the note there.
+        -->
+        <div class="print-header">
+            {{ sample_name }} &middot; {{ assay_name }} &middot; {{ assembly_declared }}
+            &middot; VNtyper {{ pipeline_version }} &middot; {{ research_use_statement }}
+        </div>
+
         <!--
           The report says who and what it is, in the browser tab, on screen and on
           the first printed page. `<title>` and `<h1>` used to be the constant
@@ -616,7 +769,7 @@
         {# "Show/Hide Log" was an instruction to the reader about a control that
            did not announce itself. `<details>` announces its own state, so the
            summary is now the name of the thing rather than the verb. #}
-        <details id="logDisclosure" aria-labelledby="logToggle">
+        <details id="logDisclosure" class="log-section" aria-labelledby="logToggle">
             <summary id="logToggle">Pipeline log</summary>
             <div class="details-body">
                 <pre>{{ log_content }}</pre>
@@ -661,6 +814,42 @@
                     detailedView.style.display = detailed.checked ? "" : "none";
                 });
             }
+        });
+    </script>
+
+    <!--
+      Printing, in a block of its own and with no jQuery in it, for the same reason
+      the switches are: a `$` that never resolved throws at the top of whichever
+      block it is in and takes every statement after it down.
+    -->
+    <script>
+        // CSS alone cannot open a closed disclosure: `open` is an attribute rather
+        // than a style, and Chromium hides a closed disclosure's content in a way no
+        // author rule reaches - measured, with scripting off, against the
+        // `details > summary ~ *` rule in the print block above. So a section the
+        // reader collapsed is opened for the duration of the print and closed again
+        // afterwards: printing is not a mutation, and an archived report must not be
+        // missing a section because of how the reader left the page.
+        //
+        // The log is the exception, by the same rule the stylesheet states: it prints
+        // as a one-line pointer to the HTML original rather than as pages of DEBUG
+        // output.
+        var openedForPrint = [];
+        window.addEventListener("beforeprint", function () {
+            openedForPrint = [];
+            var closed = document.querySelectorAll("details:not([open])");
+            for (var i = 0; i < closed.length; i++) {
+                if (!closed[i].classList.contains("log-section")) {
+                    closed[i].open = true;
+                    openedForPrint.push(closed[i]);
+                }
+            }
+        });
+        window.addEventListener("afterprint", function () {
+            for (var i = 0; i < openedForPrint.length; i++) {
+                openedForPrint[i].open = false;
+            }
+            openedForPrint = [];
         });
     </script>
 

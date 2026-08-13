@@ -1679,6 +1679,32 @@ def test_the_header_names_the_assay_and_the_version(tmp_path) -> None:
     assert _labeled_value(html, "VNtyper Version") == "2.0.18"
 
 
+def test_the_printed_header_line_names_the_run_and_its_use(tmp_path) -> None:
+    """The line at the head of the printed record, rendered end to end.
+
+    It is ``display: none`` on screen and the only identity a filed sheet carries, so
+    every field it states has to survive the render - and, like everything else in the
+    report, it is escaped rather than interpolated into the stylesheet (see
+    ``tests/unit/test_report_presentation.py::test_no_value_is_interpolated_into_a_stylesheet``).
+    """
+    from vntyper.scripts.report_identity import RESEARCH_USE_STATEMENT
+
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        input_files={"bam": "S1.bam"},
+        version="2.0.18",
+        reference_assembly_requested="hg19",
+    )
+
+    header = re.search(r'<div class="print-header">(.*?)</div>', render(tmp_path), re.DOTALL)
+
+    assert header, "the report has no printed header line"
+    line = " ".join(header.group(1).split())
+    for value in ("S1", "MUC1 coding VNTR genotyping", "hg19", "VNtyper 2.0.18", RESEARCH_USE_STATEMENT):
+        assert value in line, f"the printed header line does not state {value!r}: {line!r}"
+
+
 def test_an_explicit_sample_name_wins_over_the_input_files(tmp_path) -> None:
     write_summary(tmp_path, input_files={"cram": "S1.cram"})
 
@@ -1768,6 +1794,22 @@ def test_a_sample_name_derived_from_an_input_file_is_escaped(tmp_path) -> None:
     assert TITLE_PAYLOAD not in html
     assert f"<title>MUC1 VNTR report — {TITLE_ESCAPED}</title>" in html
     assert f"<h1>MUC1 VNTR report — {TITLE_ESCAPED}</h1>" in html
+
+
+def test_a_sample_name_in_the_printed_header_line_is_escaped(tmp_path) -> None:
+    """The printed header line states the name too, so it is the third place to check.
+
+    It is also the reason that line is a block in the document: the alternative was a
+    running header in the page margin, which would have put this value inside a
+    ``<style>`` element where HTML escaping means nothing.
+    """
+    write_summary(tmp_path, input_files={"bam": f"{TITLE_PAYLOAD}.bam"})
+
+    header = re.search(r'<div class="print-header">(.*?)</div>', render(tmp_path), re.DOTALL)
+
+    assert header, "the report has no printed header line"
+    assert TITLE_PAYLOAD not in header.group(1)
+    assert TITLE_ESCAPED in header.group(1)
 
 
 # ---------------------------------------------------------------------------
