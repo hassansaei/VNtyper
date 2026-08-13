@@ -24,6 +24,7 @@ from vntyper.scripts.nomenclature_annotate import (
     reconcile_caller_outputs,
 )
 from vntyper.scripts.report_formatting import ADVNTR_DISPLAY_COLUMNS, KESTREL_DISPLAY_COLUMNS
+from vntyper.scripts.summary import parse_tsv
 
 pytestmark = pytest.mark.unit
 
@@ -237,6 +238,29 @@ def test_the_advntr_frame_records_its_own_name_as_the_advntr_column() -> None:
     named = annotate_advntr_frame(frame)
     assert named.loc[0, "Nomenclature_adVNTR"] == "59dupC"
     assert named.loc[0, "Nomenclature_Kestrel"] == ""
+
+
+def test_an_annotated_kestrel_result_survives_the_summary_parser(tmp_path) -> None:
+    """The written result must round-trip into ``pipeline_summary.json``.
+
+    The nomenclature columns are nullable by contract, and the last of them is empty
+    on every run where adVNTR did not contribute. A row ending in an empty field is
+    one field short once its line is stripped, so the summary parser discarded it as
+    ragged -- and the pipeline then raised "Kestrel genotyping results not found" on
+    a run that had in fact succeeded. Nothing about the row was wrong, which is why
+    only an end-to-end run found it.
+    """
+    named = annotate_kestrel_frame(kestrel_stage_frame("final"))
+    assert named.loc[0, "Nomenclature_adVNTR"] == "", "the last column must be the empty case"
+
+    path = tmp_path / "kestrel_result.tsv"
+    with path.open("w") as handle:
+        handle.write("## VNtyper Kestrel result\n")
+        named.to_csv(handle, sep="\t", index=False)
+
+    parsed = parse_tsv(str(path))
+    assert len(parsed["data"]) == len(named), "every written row must reach the summary"
+    assert parsed["data"][0]["Nomenclature_Kestrel"] == named.loc[0, "Nomenclature"]
 
 
 def test_two_agreeing_callers_reach_tier_a_in_the_written_files(tmp_path) -> None:

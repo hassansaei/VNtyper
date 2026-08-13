@@ -137,8 +137,14 @@ def parse_tsv(file_path):
     try:
         with open(file_path, encoding="utf-8") as f:
             for line_number, raw_line in enumerate(f, start=1):
-                line = raw_line.strip()
-                if not line:
+                # Strip the line ending only. `.strip()` also removes the trailing
+                # tab of a row whose last column is empty, which makes a well-formed
+                # row arrive one field short and be discarded as ragged below --
+                # silently, since nothing about the row is actually wrong. Every
+                # nullable column is the empty string by contract, so whenever one is
+                # last that dropped real data.
+                line = raw_line.rstrip("\r\n")
+                if not line.strip():
                     continue
                 if line.startswith("#"):
                     comments.append(line.lstrip("#").strip())

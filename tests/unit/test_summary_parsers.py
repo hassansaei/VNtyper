@@ -73,6 +73,28 @@ def test_parse_tsv_skips_blank_lines(tmp_path: Path) -> None:
     assert parse_tsv(path)["data"] == [{"A": "1", "B": "2"}]
 
 
+def test_parse_tsv_keeps_a_row_whose_last_column_is_empty(tmp_path: Path) -> None:
+    """A trailing empty field is a value, not absent whitespace.
+
+    Stripping the line removes the final tab along with it, so the row arrives one
+    field short of the header and is discarded as ragged -- silently, because the row
+    itself is perfectly well formed. Every nullable column is written as the empty
+    string by contract, so whenever one of them is last this drops real data: it took
+    out the whole Kestrel result whenever adVNTR had not run, leaving the summary with
+    no Kestrel records and the cross-match step raising on a run that had succeeded.
+    """
+    path = _write(tmp_path / "trailing.tsv", "A\tB\tC\n1\t2\t\n")
+
+    assert parse_tsv(path)["data"] == [{"A": "1", "B": "2", "C": ""}]
+
+
+def test_parse_tsv_keeps_a_row_that_is_empty_but_for_its_first_column(tmp_path: Path) -> None:
+    """The degenerate case of the same bug: every field after the first is empty."""
+    path = _write(tmp_path / "mostly-empty.tsv", "A\tB\tC\n1\t\t\n")
+
+    assert parse_tsv(path)["data"] == [{"A": "1", "B": "", "C": ""}]
+
+
 # --- ragged rows: the behaviour this module pins -----------------------------
 
 
