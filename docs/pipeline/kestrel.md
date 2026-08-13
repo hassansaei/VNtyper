@@ -14,26 +14,122 @@ Kestrel scans ordered k-mer frequency spectra from the input reads, detecting re
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `kmer_sizes` | `[20]` | K-mer length for graph construction |
-| `java_memory` | `12g` | JVM heap allocation |
-| `max_align_states` | `60` | Maximum alignment states during path enumeration |
-| `max_hap_states` | `60` | Maximum haplotype states for genotype resolution |
-| `additional_settings` | `""` | Extra command-line flags passed to Kestrel |
+| `java_memory` | `12g` | JVM heap allocation, applied to both steps |
+| `max_align_states` | `40` | Maximum alignment states during path enumeration |
+| `max_hap_states` | `40` | Maximum haplotype states for genotype resolution |
+| `additional_settings` | `""` | Extra command-line flags appended to the calling step |
+| `split_counting` | `true` | Count k-mers in a separate KAnalyze step (see below) |
+| `keep_ikc` | `false` | Retain the attempt directory and its k-mer count after the run |
+| `java_opts_count` | `""` | Extra JVM options for the counting step |
+| `java_opts_call` | `-XX:+UseSerialGC` | Extra JVM options for the calling step |
 
 These parameters are configured in `kestrel_config.json` under the `kestrel_settings` key.
 
+!!! warning "`java_memory` is load-bearing"
+    12g is not a round number picked for comfort. Lowering it to 4g measured *slower*
+    overall with CPU time rising several-fold as G1 thrashed, and the counting step
+    peaks near 7.7 GB at high thread counts. The observed peak RSS of one small run is
+    not a reason to shrink it.
+
 ## Kestrel Execution
 
-The pipeline constructs a Java command invoking the Kestrel JAR:
+By default VNtyper runs Kestrel as **two commands per k-mer size**: a KAnalyze counting
+step, then Kestrel itself reading the counts that step produced.
+
+### Why counting is a separate step
+
+Kestrel 1.0.1 builds a KAnalyze `CountModule` and configures almost nothing on it.
+`KestrelRunnerBase.getCountModule()` sets the k-mer size, the temporary directory, the
+post-count filter and the free-segment flag — but calls none of `setKmerThreadCount`,
+`setSplitThreadCount` or `setThreads`, all three of which exist on that class. Counting
+therefore runs at the compile-time defaults of one k-mer thread and one split thread,
+and counting is the large majority of Kestrel's work on an unmapped-dominated input.
+
+Running the bundled `kanalyze.jar` as its own step lets that work use the machine.
+Kestrel accepts a pre-built indexed k-mer count (IKC) as input: `IkcCountMap.preModuleRun`
+adopts a supplied `ikc` file, sets `rmLastTemp = false` — so Kestrel never deletes a
+count file it was handed — and skips its own count module entirely.
 
 ```
-java -Xmx12g -jar kestrel.jar -k 20 \
-  --maxalignstates 60 --maxhapstates 60 \
+# Step 1 - count, threaded
+java -Xmx12g -jar kanalyze.jar count -k 20 \
+  -c kmercount:5 --minsize 15 -m ikc \
+  -d <kmer> -l <split> -t <sort> \
+  --temploc <out>/kmer_20 -o <out>/kmer_20/kestrel_kmers.ikc \
+  R1.fastq.gz R2.fastq.gz single.fastq.gz
+
+# Step 2 - call, reading those counts
+java -Xmx12g -XX:+UseSerialGC -jar kestrel.jar -k 20 \
+  --maxalignstates 40 --maxhapstates 40 \
   -r <muc1_reference.fa> -o output.vcf \
-  -s<sample_name> R1.fastq.gz R2.fastq.gz \
+  -s<sample_name> -f ikc <out>/kmer_20/kestrel_kmers.ikc \
   --hapfmt sam -p output.sam
 ```
 
+The run's `--threads` budget is split across KAnalyze's three *concurrent* stages —
+`-d` (k-mer), `-l` (split) and `-t` (sort). These are independent stages, not three
+spellings of one worker count, so passing `--threads N` to all three would start
+roughly 2.5N workers. The k-mer stage takes the largest share because it is the
+measured bottleneck; every stage is floored at one worker.
+
+The two steps use different JVM options because they have different shapes. Counting is
+genuinely parallel and keeps the G1 default; calling is single-threaded, where G1 spawns
+a GC worker per core against one application thread, so it uses `-XX:+UseSerialGC`.
+`-XX:+UseParallelGC` is harmful on both and must not be used.
+
 Kestrel produces a VCF file with all detected variants and a SAM file of haplotype alignments. The SAM is converted to an indexed BAM for downstream IGV visualization.
+
+### Output layout and logs
+
+Each k-mer attempt owns a directory, `<output>/kmer_<size>/`, rather than just a
+filename — that makes a collision between two concurrent or retried attempts at the same
+k structurally impossible, and makes cleanup one recursive removal. The counting step
+writes its own log, `<output>/kanalyze_count_kmer_<size>.log`, kept separate from the
+Kestrel log so that a counting failure's diagnostics are not overwritten by the calling
+step's output.
+
+The attempt directory is removed on every exit path — count failure, call failure and
+success alike. Set `keep_ikc: true` to retain it when diagnosing a result; nothing else
+will delete a count file Kestrel was handed. If the attempt directory already exists the
+run **refuses to start**, rather than adopting it: the cleanup removes the whole
+directory, so adopting one would delete data the run did not write.
+
+Which path a run actually took is recorded in the pipeline summary as
+`kestrel_counting_mode`, with the value `split` or `internal`.
+
+### Turning the split off
+
+`split_counting: false` restores the single-command path exactly. It is an operator
+**kill switch, not a fallback**: nothing selects it automatically, and a failed counting
+step raises rather than quietly re-running the work internally. An automatic fallback
+would turn a broken counting step into a silently slower run, which is the failure mode
+this codebase is least able to notice.
+
+### `additional_settings` is an allowlist under the split
+
+When Kestrel is handed a pre-built IKC, `additional_settings` accepts **only options
+that provably cannot reach the k-mer counter**. Anything else raises a configuration
+error before either command runs.
+
+The reason is that once counting is a separate command, a count-affecting option has to
+be applied to *both* commands or to neither. Kestrel validates only the k-size when it
+reads an IKC — a same-k count file built with a different minimum count or minimizer
+size is silently accepted and silently different, which moves `Depth_Score` and
+therefore genotypes. A deny-list would be fail-open at exactly that boundary, so the
+rule is an allowlist and a rejected option is a loud error the operator can see.
+
+Rejected classes include counter-affecting options (`--mincount`, `--minsize`,
+`--minmask`, `--charset`, `--seqfilter`, `--quality`, `-k`/`--ksize`, `--temploc`,
+`--free`/`--nofree`, `--lib`/`--liburl`), the count-map selectors
+(`--memcount`/`--nomemcount`), the IKC lifecycle flags (`--rmikc`/`--normikc`), and any
+option whose value this builder already sets. So a setting such as `--mincount 3`, which
+stock Kestrel would have accepted, now raises.
+
+!!! note "If you need a count-affecting option"
+    Set `kestrel_settings.split_counting: false`. That restores stock Kestrel's single
+    command, where there is no second command to desynchronise from and the allowlist
+    does not apply. The shipped default for `additional_settings` is `""`, so no shipped
+    configuration is affected by the restriction.
 
 ## Postprocessing Pipeline
 
