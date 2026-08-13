@@ -110,6 +110,7 @@ def run_pipeline(
     bed_file=None,
     log_level=logging.INFO,
     sample_name=None,
+    sample_name_is_explicit=False,
     log_file=None,
     summary_formats=None,  # New parameter: list of additional summary output formats (e.g., ['csv', 'tsv'])
 ):
@@ -146,6 +147,12 @@ def run_pipeline(
         bed_file (Path, optional): BED file for MUC1 analysis.
         log_level (int, optional): Logging level.
         sample_name (str, optional): Sample name for labeling results.
+        sample_name_is_explicit (bool, optional): Whether `sample_name` is the
+            operator's own `--sample-name` rather than a name `handle_pipeline`
+            derived from an input path. Recorded in the run summary beside the name
+            itself, because the report has to finish deriving a derived one
+            (`S1_R1.fastq` -> `S1`) and must leave an explicit one alone - and the
+            string on its own cannot say which it is (#242).
         log_file (str, optional): Path to the log file.
         summary_formats (list, optional): Additional summary output formats to generate.
             Supported formats are 'csv' and 'tsv'. JSON summary is always generated.
@@ -263,8 +270,11 @@ def run_pipeline(
             input_files=input_files,
             # The same string Kestrel embeds below, so the report and the VCF cannot
             # name the same run differently (#242). `start_summary` runs before any
-            # step, so this is on disk from the first `record_step` onwards.
+            # step, so this is on disk from the first `record_step` onwards. The
+            # provenance flag travels with it because the string alone cannot say
+            # whether it is a name or a `Path.stem` still to be derived.
             sample_name=sample_name,
+            sample_name_is_explicit=sample_name_is_explicit,
             reference_assembly_requested=reference_assembly,
             reference_key_used=reference_provenance.key_used,
             reference_path=reference_provenance.path,

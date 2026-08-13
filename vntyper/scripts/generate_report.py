@@ -63,6 +63,7 @@ from vntyper.scripts.report_identity import (
     ASSAY_NAME,
     REPORT_TITLE_PREFIX,
     RESEARCH_USE_STATEMENT,
+    SAMPLE_NAME_EXPLICIT_KEY,
     format_input_files,
     format_region,
     format_run_timestamp,
@@ -491,10 +492,13 @@ def generate_summary_report(
     # then the name the *run* recorded - the same string Kestrel embedded, so the
     # report and the VCF cannot disagree - then a derivation from `input_files`,
     # which is what every summary written before the field existed still uses.
+    # `sample_name_is_explicit` says which of the two shapes the recorded name has:
+    # an operator's name to print verbatim, or a `Path.stem` to finish deriving.
     resolved_sample_name = resolve_sample_name(
         sample_name,
         *input_file_names(input_files),
         recorded=pipeline_summary.get("sample_name"),
+        recorded_is_explicit=pipeline_summary.get(SAMPLE_NAME_EXPLICIT_KEY),
     )
     logger.info("Report sample name resolved to %r.", resolved_sample_name)
 

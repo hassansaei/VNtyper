@@ -12,6 +12,15 @@ trailing ``_R1``/``_R2``, and **anything the rule does not recognise is printed
 verbatim** rather than guessed at: a wrong sample name on a report is worse than
 an ugly one.
 
+The run's own recorded name sits between those two, and the cases below say why it
+needs a *second* recorded value beside it. ``cli_handlers`` records either the
+operator's ``--sample-name`` or ``Path(input).stem``, and the same string names
+Kestrel's output files - so the report may neither print a derived
+``S1_R1.fastq`` verbatim nor discard an explicit ``sample``. Judging which it is
+from how the string looks was wrong in both directions; ``sample_name_is_explicit``
+is the run saying which, and these tests cover every shape a summary can have,
+including the two that predate one field or both.
+
 The four provenance helpers share the same discipline in the other direction: a
 value the run did not record renders :data:`NOT_RECORDED`, never a configured
 default. Falling back to ``config["default_values"]["reference_assembly"]``
@@ -26,6 +35,7 @@ import pytest
 
 from vntyper.scripts.report_identity import (
     NOT_RECORDED,
+    SAMPLE_NAME_EXPLICIT_KEY,
     UNNAMED_SAMPLE,
     derive_sample_name,
     format_input_files,
@@ -35,7 +45,9 @@ from vntyper.scripts.report_identity import (
     recorded_or_not,
     recorded_sample_name,
     resolve_sample_name,
+    sample_name_was_given,
 )
+from vntyper.scripts.summary import start_summary
 
 pytestmark = pytest.mark.unit
 
@@ -164,29 +176,83 @@ def test_a_summary_with_no_recorded_name_falls_through_to_the_derivation(recorde
     assert resolve_sample_name(None, "S1_R1.fastq.gz", recorded=recorded) == "S1"
 
 
-def test_the_placeholder_name_does_not_win(caplog) -> None:
-    """`cli_handlers` falls back to the literal `"sample"` when it can resolve
-    nothing, and the run embeds that. It is the absence of a name, not a name,
-    so it must not displace a basename that names the sample perfectly well."""
-    with caplog.at_level(logging.INFO, logger="vntyper.scripts.report_identity"):
-        assert resolve_sample_name(None, "S1_R1.fastq.gz", recorded="sample") == "S1"
+def test_a_name_the_operator_chose_is_never_second_guessed() -> None:
+    """The defect the removed placeholder heuristic caused.
 
-    assert "placeholder" in caplog.text
+    ``handle_pipeline`` rejects any invocation without ``--bam``/``--cram``/
+    ``--fastq1``, so its literal ``"sample"`` arm is unreachable for a valid run: a
+    recorded ``"sample"`` can only be an operator's ``--sample-name sample``.
+    Treating it as "no name" rendered ``patient42`` from ``patient42.bam`` --
+    recreating the one-run/two-identities defect (#242).
+    """
+    resolved = resolve_sample_name(None, "patient42.bam", recorded="sample", recorded_is_explicit=True)
+
+    assert resolved == "sample"
 
 
-def test_an_explicit_name_still_wins_over_the_placeholder_rule() -> None:
-    """An explicit value at render time is unambiguous in a way a recorded one is
-    not, so `vntyper report --sample-name sample` is honoured."""
-    assert resolve_sample_name("sample", "S1_R1.fastq.gz", recorded="PATIENT_042") == "sample"
+def test_an_explicit_name_that_looks_like_a_file_is_still_used_verbatim() -> None:
+    """ "Explicit" means explicit. ``--sample-name S1_R1.fastq`` is what the run's
+    own artefacts are named, so the report names it that too."""
+    assert resolve_sample_name(None, "S1.bam", recorded="S1_R1.fastq", recorded_is_explicit=True) == "S1_R1.fastq"
+
+
+def test_a_name_the_cli_derived_is_finished_off_by_the_documented_rule() -> None:
+    """The other half of the same defect, and the commonest input shape.
+
+    ``cli_handlers`` records ``Path("S1_R1.fastq.gz").stem``, which is
+    ``S1_R1.fastq``. Preferring that verbatim printed a half-stripped file name
+    where this module's documented rule says ``S1``.
+    """
+    assert resolve_sample_name(None, "S1_R1.fastq.gz", recorded="S1_R1.fastq", recorded_is_explicit=False) == "S1"
+
+
+def test_a_derived_name_that_is_not_a_file_name_comes_back_unchanged() -> None:
+    """Why deriving a recorded name is safe: a BAM stem has no extension left to
+    strip, so the BAM/CRAM shapes resolve exactly as they did before."""
+    assert resolve_sample_name(None, "foo.bam", recorded="foo", recorded_is_explicit=False) == "foo"
+
+
+def test_a_summary_with_a_name_but_no_provenance_flag_derives_it(caplog) -> None:
+    """The shape a run written between the two commits has.
+
+    Neither branch is provably right, so the rule is stated rather than inferred:
+    an absent flag is read as "the CLI derived it", because deriving only ever
+    changes a value ending in an input extension -- the shape the CLI's own
+    derivation leaves behind -- and leaves everything else alone.
+    """
+    with caplog.at_level(logging.DEBUG, logger="vntyper.scripts.report_identity"):
+        assert resolve_sample_name(None, "S1_R1.fastq.gz", recorded="S1_R1.fastq") == "S1"
+
+    assert "derived its own sample name" in caplog.text
+
+
+@pytest.mark.parametrize("flag", [None, False, "true", "yes", 1, 0, [], {}])
+def test_only_the_boolean_true_means_the_operator_named_it(flag) -> None:
+    """``vntyper report`` renders a *supplied* summary (#207), so this value is
+    untrusted. Anything that is not the boolean the writer writes means "this
+    summary does not say", which is answered the same way an older one is."""
+    assert sample_name_was_given(flag) is False
+    assert resolve_sample_name(None, "S1.bam", recorded="S1_R1.fastq", recorded_is_explicit=flag) == "S1"
+
+
+def test_the_boolean_true_is_what_the_writer_writes() -> None:
+    assert sample_name_was_given(True) is True
+
+
+def test_an_explicit_report_name_still_wins_over_the_recorded_one() -> None:
+    """An explicit value at render time is the last word, whatever the run said."""
+    assert (
+        resolve_sample_name("sample", "S1_R1.fastq.gz", recorded="PATIENT_042", recorded_is_explicit=True) == "sample"
+    )
 
 
 def test_the_run_s_own_name_wins_even_when_the_mates_disagree() -> None:
     """The disagreeing-mate fallback is level 3; it never overrides level 2."""
-    assert resolve_sample_name(None, "a.fq", "b.fq", recorded="PATIENT_042") == "PATIENT_042"
+    assert resolve_sample_name(None, "a.fq", "b.fq", recorded="PATIENT_042", recorded_is_explicit=True) == "PATIENT_042"
 
 
 def test_the_run_s_own_name_is_used_when_there_are_no_input_files_at_all() -> None:
-    assert resolve_sample_name(None, recorded="PATIENT_042") == "PATIENT_042"
+    assert resolve_sample_name(None, recorded="PATIENT_042", recorded_is_explicit=True) == "PATIENT_042"
 
 
 @pytest.mark.parametrize(
@@ -194,7 +260,9 @@ def test_the_run_s_own_name_is_used_when_there_are_no_input_files_at_all() -> No
     [
         ("PATIENT_042", "PATIENT_042"),
         ("  PATIENT_042  ", "PATIENT_042"),
-        ("sample", None),
+        # No value is a placeholder any more: this used to answer None, which is
+        # what discarded an operator's `--sample-name sample`.
+        ("sample", "sample"),
         ("", None),
         ("   ", None),
         (None, None),
@@ -202,6 +270,21 @@ def test_the_run_s_own_name_is_used_when_there_are_no_input_files_at_all() -> No
 )
 def test_the_recorded_name_predicate(recorded, expected) -> None:
     assert recorded_sample_name(recorded) == expected
+
+
+def test_the_explicit_flag_is_read_from_the_key_the_summary_writer_writes() -> None:
+    """The two ends of one string literal, pinned in one place (AGENTS.md trap 5).
+
+    ``start_summary`` writes the key and ``generate_report`` reads it through
+    :data:`SAMPLE_NAME_EXPLICIT_KEY`. A rename on either side is a silently
+    unreadable provenance flag, and every FASTQ report quietly reverts to printing
+    a half-stripped file name.
+    """
+    written = start_summary(sample_name="PATIENT_042", sample_name_is_explicit=True)
+
+    assert SAMPLE_NAME_EXPLICIT_KEY in written
+    assert written[SAMPLE_NAME_EXPLICIT_KEY] is True
+    assert sample_name_was_given(written[SAMPLE_NAME_EXPLICIT_KEY]) is True
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ import pytest
 
 import vntyper
 from vntyper.cli import load_config
-from vntyper.scripts import generate_report, report_formatting, summary_steps
+from vntyper.scripts import generate_report, report_formatting, summary, summary_steps
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -1842,7 +1842,12 @@ def test_the_report_uses_the_name_the_run_recorded_for_itself(tmp_path) -> None:
     and its VCF header `PATIENT_042`. Until the run recorded that name, the report
     could not see it and titled itself `foo` -- one run, two identities, in the
     artefact that gets forwarded."""
-    write_summary(tmp_path, input_files={"bam": "foo.bam"}, sample_name="PATIENT_042")
+    write_summary(
+        tmp_path,
+        input_files={"bam": "foo.bam"},
+        sample_name="PATIENT_042",
+        sample_name_is_explicit=True,
+    )
 
     html = render(tmp_path)
 
@@ -1853,20 +1858,78 @@ def test_the_report_uses_the_name_the_run_recorded_for_itself(tmp_path) -> None:
 
 
 def test_an_explicit_sample_name_beats_the_one_the_run_recorded(tmp_path) -> None:
-    write_summary(tmp_path, input_files={"bam": "foo.bam"}, sample_name="PATIENT_042")
+    write_summary(
+        tmp_path,
+        input_files={"bam": "foo.bam"},
+        sample_name="PATIENT_042",
+        sample_name_is_explicit=True,
+    )
 
     html = render(tmp_path, sample_name="RENAMED")
 
     assert _labeled_value(html, "Sample") == "RENAMED"
 
 
-def test_the_recorded_placeholder_name_does_not_displace_the_derivation(tmp_path) -> None:
-    """`cli_handlers` records the literal `"sample"` when it resolved nothing.
-    A report titled `sample` beside an input file that names the sample perfectly
-    well is a placeholder winning over a fact."""
-    write_summary(tmp_path, input_files={"fastq1": "S1_R1.fastq.gz"}, sample_name="sample")
+def test_a_name_the_operator_chose_is_printed_however_it_looks(tmp_path) -> None:
+    """The hole the placeholder heuristic opened, end to end.
+
+    `handle_pipeline` rejects any run without `--bam`/`--cram`/`--fastq1`, so a
+    recorded `"sample"` can only have come from an operator typing
+    `--sample-name sample`. Discarding it titled the report `patient42` from
+    `patient42.bam` -- the very one-run/two-identities defect the recorded name
+    exists to close.
+    """
+    write_summary(
+        tmp_path,
+        input_files={"bam": "patient42.bam"},
+        sample_name="sample",
+        sample_name_is_explicit=True,
+    )
+
+    assert _labeled_value(render(tmp_path), "Sample") == "sample"
+
+
+def test_a_name_the_cli_derived_from_a_fastq_finishes_being_derived(tmp_path) -> None:
+    """The other half, and the commonest input shape there is.
+
+    `cli_handlers` records `Path("S1_R1.fastq.gz").stem`, which is `S1_R1.fastq` --
+    a half-stripped file name, not a sample name. Preferring the recorded value
+    without knowing where it came from printed that on the report where the
+    documented rule says `S1`.
+    """
+    write_summary(
+        tmp_path,
+        input_files={"fastq1": "S1_R1.fastq.gz"},
+        sample_name="S1_R1.fastq",
+        sample_name_is_explicit=False,
+    )
 
     assert _labeled_value(render(tmp_path), "Sample") == "S1"
+
+
+def test_a_summary_written_between_the_two_commits_derives_its_recorded_name(tmp_path) -> None:
+    """A `sample_name` with no `sample_name_is_explicit` beside it.
+
+    That summary shape exists: it is what a run written after the name was recorded
+    and before its provenance was. The report cannot know, so it takes the branch
+    that is wrong least often -- `derive_sample_name` only ever changes a value that
+    ends in an input extension, which is exactly the shape the CLI's own derivation
+    leaves behind.
+    """
+    write_summary(tmp_path, input_files={"fastq1": "S1_R1.fastq.gz"}, sample_name="S1_R1.fastq")
+
+    assert _labeled_value(render(tmp_path), "Sample") == "S1"
+
+
+def test_a_summary_written_between_the_two_commits_keeps_a_name_that_is_not_a_file(tmp_path) -> None:
+    """The same shape, and the reason that branch is safe to take.
+
+    An operator's name is not a file name, so deriving leaves it alone. This is what
+    keeps the missing-key case from being the discard-the-name defect again.
+    """
+    write_summary(tmp_path, input_files={"bam": "foo.bam"}, sample_name="PATIENT_042")
+
+    assert _labeled_value(render(tmp_path), "Sample") == "PATIENT_042"
 
 
 def test_a_legacy_summary_with_no_recorded_name_derives_one_as_before(tmp_path) -> None:
@@ -2058,7 +2121,7 @@ def test_the_pipeline_puts_the_resolved_region_on_disk_before_the_report_reads_i
     assert harness.error is None
 
     on_disk = json.loads(captured["summary"])
-    assert on_disk["schema_version"] == 1
+    assert on_disk["schema_version"] == summary.SUMMARY_SCHEMA_VERSION
     assert on_disk["region_resolved"] == "chr1:155158000-155163000"
 
     report_dir = tmp_path / "rendered"
@@ -2068,9 +2131,11 @@ def test_the_pipeline_puts_the_resolved_region_on_disk_before_the_report_reads_i
     html = render(report_dir)
 
     assert "chr1:155,158,000-155,163,000" in _provenance_block(html)
-    # The harness passes the literal `"sample"` placeholder, so this is also the
-    # end-to-end proof that it falls through to the input basename (`in.bam`).
-    assert "<title>MUC1 VNTR report — in</title>" in html
+    # The harness calls `run_pipeline` directly with `sample_name="sample"` and no
+    # provenance flag, so the run recorded a derived name; `derive_sample_name`
+    # leaves a value with no input extension alone, and the report says what the run
+    # said rather than second-guessing it from the basename.
+    assert "<title>MUC1 VNTR report — sample</title>" in html
 
 
 def test_the_operators_sample_name_survives_the_run_into_the_report(tmp_path) -> None:

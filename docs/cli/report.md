@@ -32,12 +32,23 @@ vntyper [global-options] report
 The report's `<title>`, `<h1>` and header block all carry the sample name, so two
 reports are distinguishable in two browser tabs and a printed one says whose it is.
 
-`--sample-name` wins whenever it is given. Otherwise the name is derived from the
-input file names the run recorded in `pipeline_summary.json`: one recognised
-compound extension (`.fastq.gz`, `.fq.gz`, `.bam`, `.cram`, …) is stripped, then a
-single **trailing** `_R1` or `_R2`. So `example_b178_hg19_subset_R1.fastq.gz`
-becomes `example_b178_hg19_subset` and `S1.lane3.L001_R1.fastq.gz` becomes
-`S1.lane3.L001`.
+`--sample-name` wins whenever it is given. Otherwise the report uses the name the
+*run itself* recorded in `pipeline_summary.json` — the same string Kestrel embedded
+in its output filenames and VCF header, so one run cannot carry two identities. The
+summary records where that name came from, in `sample_name_is_explicit`:
+
+- `true` — the operator gave `vntyper pipeline --sample-name`. It is printed
+  verbatim, whatever it looks like.
+- `false` — the pipeline derived it from an input path, and it is a `Path.stem`
+  rather than a finished name: `S1_R1.fastq.gz` records `S1_R1.fastq`. The
+  derivation rule below finishes it.
+
+A summary that records no name at all — every run archived before the field existed
+— falls back to deriving one from the input file names it recorded. The rule is the
+same either way: one recognised compound extension (`.fastq.gz`, `.fq.gz`, `.bam`,
+`.cram`, …) is stripped, then a single **trailing** `_R1` or `_R2`. So
+`example_b178_hg19_subset_R1.fastq.gz` becomes `example_b178_hg19_subset` and
+`S1.lane3.L001_R1.fastq.gz` becomes `S1.lane3.L001`.
 
 Anything the rule does not recognise is printed verbatim rather than guessed at —
 an unrecognised extension, a mate marker that is not at the end

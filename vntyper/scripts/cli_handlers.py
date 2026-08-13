@@ -414,6 +414,13 @@ def handle_pipeline(
         )
     logger.debug(f"Using BWA reference {reference_key_used}: {bwa_reference}")
 
+    # Where the sample name came from, recorded alongside it (#242). This is the only
+    # place that knows: `Path(...).stem` of `S1_R1.fastq.gz` is `S1_R1.fastq`, and the
+    # report's documented rule finishes that into `S1` - but only if it can tell a stem
+    # from a name the operator typed, which the string cannot say. Deriving the name
+    # *here* instead would also close the hole and would rename every FASTQ run's
+    # Kestrel output files, because `run_kestrel` builds them from this same value.
+    sample_name_is_explicit = args.sample_name is not None
     sample_name_val = args.sample_name
     if sample_name_val is None:
         if args.bam:
@@ -464,6 +471,7 @@ def handle_pipeline(
         bed_file=args.bed_file,
         log_level=log_level_value,  # Pass log_level to run_pipeline
         sample_name=sample_name_val,
+        sample_name_is_explicit=sample_name_is_explicit,
         log_file=log_file_str,  # Pass the correctly determined log_file
         summary_formats=summary_formats,  # New parameter passed
     )
