@@ -86,6 +86,26 @@ The pipeline log is the deliberate exception. It prints as a one-line pointer ba
 
     So with scripting off, print the report **as it opens** — do not collapse a section first. If a print is missing a section, its heading will still be on the page where the contents should have been.
 
+### Custom template context compatibility
+
+`paths.template_dir` may point at a custom Jinja template directory, so the values
+VNtyper passes to `report_template.html` are a public compatibility interface. VNtyper
+2.x continues to provide the deprecated keys below even though the shipped template no
+longer reads them. They are scheduled for removal in **VNtyper 3.0.0**, not before:
+
+- `percent_vntr_uncovered_color`, `mean_vntr_coverage_color`,
+  `duplication_rate_color`, `q20_color`, `q30_color`, and `passed_filter_color`;
+- `igv_content`;
+- `screening_state.kestrel_result` and `screening_state.advntr_result`.
+
+For new custom templates, use the accessible `*_icon` fragments and the semantic state
+tokens in `_report_base.html` instead of raw colour names. Build alignment presentation
+from the structured IGV/session values used by the shipped template rather than
+`igv_content`. Use `screening_state.kestrel_state_text` and
+`screening_state.advntr_state_text` for reader-facing algorithm state: unlike the raw
+result fields, those values distinguish a negative result from a stage that was not
+performed or failed to produce readable evidence.
+
 ## Cohort Report
 
 The cohort summary module (`cohort_summary.py`) aggregates results from multiple pipeline runs into a single report. It scans a directory structure for `pipeline_summary.json` files and constructs:

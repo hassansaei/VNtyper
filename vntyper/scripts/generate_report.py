@@ -785,6 +785,10 @@ def generate_summary_report(
         "advntr_row_summary": advntr_row_summary,
         "advntr_available": advntr_available,
         "log_content": pipeline_log_content,
+        # Deprecated custom-template API, retained through VNtyper 2.x. The shipped
+        # template now builds its alignment panel from the structured JSON/session
+        # fields below, but configured legacy templates may still splice this fragment.
+        # See report_context_contract.DEPRECATED_KEYS.
         "igv_content": igv_content,
         # Interpolated straight into a <script> block, so they must parse even
         # when there is no IGV report at all.
@@ -887,6 +891,9 @@ def generate_summary_report(
         # that says the gate was never evaluated.
         "coverage_qc_measured": coverage_qc.status != COVERAGE_QC_NOT_EVALUATED,
         "percent_vntr_uncovered_icon": uncovered_icon,
+        # The six raw colour names are deprecated custom-template API retained through
+        # VNtyper 2.x. Shipped templates use semantic tokens and the accessible icon
+        # fragments instead; see report_context_contract.DEPRECATED_KEYS.
         "percent_vntr_uncovered_color": uncovered_color,
         "mean_vntr_coverage_icon": coverage_icon,
         "mean_vntr_coverage_color": coverage_color,
@@ -924,6 +931,9 @@ def generate_summary_report(
         # whose state matched no rule (`emphasis == "indeterminate"`) is distinguishable
         # from a genuine negative rather than rendering identically (#242 I2).
         "screening_state": {
+            # Deprecated custom-template API retained through VNtyper 2.x. The shipped
+            # provenance line consumes the honest execution-aware `*_state_text`
+            # values below instead; see report_context_contract.DEPRECATED_KEYS.
             "kestrel_result": screening.kestrel_result,
             "advntr_result": screening.advntr_result,
             "quality_metrics_pass": screening.quality_metrics_pass,

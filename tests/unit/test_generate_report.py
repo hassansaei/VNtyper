@@ -25,7 +25,7 @@ import pytest
 
 import vntyper
 from vntyper.cli import load_config
-from vntyper.scripts import generate_report, report_formatting, summary, summary_steps
+from vntyper.scripts import generate_report, report_context_contract, report_formatting, summary, summary_steps
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -2716,3 +2716,127 @@ def test_the_operators_sample_name_survives_the_run_into_the_report(tmp_path) ->
     (report_dir / "pipeline_summary.json").write_text(captured["summary"], encoding="utf-8")
 
     assert "<title>MUC1 VNTR report — PATIENT_042</title>" in render(report_dir)
+
+
+# ---------------------------------------------------------------------------
+# The configured template context is a public compatibility contract
+# ---------------------------------------------------------------------------
+
+
+def test_every_nondeprecated_context_key_is_referenced_by_the_shipped_template(tmp_path, monkeypatch) -> None:
+    """Adding a context value that no shipped template renders creates silent debt."""
+    write_summary(tmp_path)
+    captured: dict[str, object] = {}
+    real_environment = generate_report.Environment
+
+    def environment_spy(*args, **kwargs):
+        environment = real_environment(*args, **kwargs)
+        real_get_template = environment.get_template
+
+        def get_template(name, *get_args, **get_kwargs):
+            template = real_get_template(name, *get_args, **get_kwargs)
+            if name != "report_template.html":
+                return template
+
+            class TemplateSpy:
+                def render(self, context):
+                    captured.update(context)
+                    return template.render(context)
+
+            return TemplateSpy()
+
+        environment.get_template = get_template
+        return environment
+
+    monkeypatch.setattr(generate_report, "Environment", environment_spy)
+    render(tmp_path)
+
+    shipped_loader = generate_report.FileSystemLoader(TEMPLATE_DIR)
+    loaded_templates: list[str] = []
+    real_get_source = shipped_loader.get_source
+
+    def get_source(environment, template):
+        loaded_templates.append(template)
+        return real_get_source(environment, template)
+
+    monkeypatch.setattr(shipped_loader, "get_source", get_source)
+    shipped_environment = real_environment(
+        loader=shipped_loader,
+        autoescape=generate_report.select_autoescape(["html"]),
+    )
+    referenced = report_context_contract.jinja_referenced_names_recursive(
+        shipped_environment,
+        "report_template.html",
+    )
+    deprecated_top_level = {path for path in report_context_contract.DEPRECATED_KEYS if "." not in path}
+
+    unused = (set(captured) - deprecated_top_level) - referenced
+    assert unused == set(), f"dead context keys: {sorted(unused)}"
+    assert "_report_base.html" in loaded_templates, "the recursive audit did not follow the shipped include"
+
+
+def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_path, monkeypatch) -> None:
+    """The configurable template directory makes the old context keys a public API."""
+    template_dir = tmp_path / "legacy-template"
+    template_dir.mkdir()
+    (template_dir / "report_template.html").write_text(
+        "|".join(
+            (
+                "{{ percent_vntr_uncovered_color }}",
+                "{{ mean_vntr_coverage_color }}",
+                "{{ duplication_rate_color }}",
+                "{{ q20_color }}",
+                "{{ q30_color }}",
+                "{{ passed_filter_color }}",
+                "{{ screening_state.kestrel_result }}",
+                "{{ screening_state.advntr_result }}",
+                "{{ igv_content|safe }}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 100},
+                    "after_filtering": {"q20_rate": 0.9, "q30_rate": 0.6},
+                },
+                "duplication": {"rate": 0.2},
+                "filtering_result": {"passed_filter_reads": 90},
+            }
+        ),
+        encoding="utf-8",
+    )
+    bed_file = tmp_path / "sites.bed"
+    bed_file.write_text("chr1\t1\t2\n", encoding="utf-8")
+
+    def write_igv_report(bed_file, bam_file, fasta_file, output_html, **kwargs) -> None:
+        Path(output_html).write_text(
+            '<div id="container"><p id="legacy-igv">legacy alignment view</p></div>\n'
+            'const tableJson = {"headers":[],"rows":[]}\n'
+            'const sessionDictionary = {"0":"session0.json"}\n'
+            "</body>\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(generate_report, "run_igv_report", write_igv_report)
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(template_dir),
+        report_file="legacy.html",
+        log_file=None,
+        bed_file=str(bed_file),
+        config=load_config(None),
+    )
+
+    rendered = (tmp_path / "legacy.html").read_text(encoding="utf-8")
+    assert rendered.startswith("green|green|red|green|red|green|High_Precision|none|")
+    assert '<p id="legacy-igv">legacy alignment view</p>' in rendered
