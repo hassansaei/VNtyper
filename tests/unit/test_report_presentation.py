@@ -25,12 +25,14 @@ file; it is the presentation tier's home, not this change's scratchpad.
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
 import pytest
 
 import vntyper
+from vntyper.scripts import generate_report
 from vntyper.scripts import report_formatting as rf
 
 pytestmark = pytest.mark.unit
@@ -854,38 +856,105 @@ def test_the_printed_page_is_numbered() -> None:
 
 
 def test_the_printed_record_states_its_identity_in_the_document() -> None:
-    """Who, what, which assembly, which version - at the head of the printed sheet.
+    """Who, what, which assembly, which version, when the run started - on the sheet.
 
-    It is a block in the document rather than an ``@page`` margin box because the
-    supported engine cannot put a document value in one: measured, Chromium 151 drops
-    a ``content`` list containing ``string()`` whole. See the note in the template and
-    ``test_no_value_is_interpolated_into_a_stylesheet`` for the alternative that was
-    refused.
+    This block is not the running header any more; the ``@page`` margin boxes are, and
+    they repeat. It stays because those boxes are a Chromium capability that Firefox
+    and WebKit drop silently, and a printed report carrying no identity at all is the
+    defect the whole block exists to prevent.
     """
     source = _markup(PER_SAMPLE_TEMPLATE)
     block = re.search(r'<div class="print-header">(.*?)</div>', source, re.DOTALL)
 
     assert block, "the printed record has no header line"
-    for value in ("sample_name", "assay_name", "assembly_declared", "pipeline_version", "research_use_statement"):
+    for value in (
+        "sample_name",
+        "assay_name",
+        "assembly_declared",
+        "pipeline_version",
+        "run_date",
+        "research_use_statement",
+    ):
         assert value in block.group(1), f"the printed header line does not state {value}"
 
 
+#: The only expression either template may put inside a ``<style>``, spelled exactly.
+#: It is a fragment ``report_identity.print_running_header_css`` built, in which every
+#: value has already been through ``css_escaping.css_string_literal``.
+ALLOWED_STYLE_EXPRESSION = "{{ print_running_header_css|safe }}"
+
+
+def test_the_shared_token_layer_interpolates_nothing_at_all() -> None:
+    """The partial both reports include carries no value, and that is what makes it safe
+    to include from a template directory a deployment configured.
+
+    The per-sample report's one exception below is per-sample precisely so that this
+    file can keep the stronger guarantee.
+    """
+    for style in _style_blocks(SHARED_PARTIAL.read_text(encoding="utf-8")):
+        assert "{{" not in style, f"a value is interpolated into the shared token layer: {style[:200]}"
+
+
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
-def test_no_value_is_interpolated_into_a_stylesheet(template: Path) -> None:
-    """The printed identity is a document value, and it stays out of the CSS.
+def test_the_only_value_in_a_stylesheet_is_the_escaped_running_header(template: Path) -> None:
+    """One way into the CSS, and it goes through the escaper.
 
     A ``<style>`` element is a raw text element and CSS is not an HTML context:
     autoescaping turns ``&`` into ``&amp;`` there, which nothing decodes, and does
     nothing about the characters that matter in a CSS string - a sample name reaching
-    ``content:`` could close the element outright. The sample name is derived from a
-    sample-supplied basename and the report is a file people forward, so a running
-    header in the page margin is worth less than this guarantee.
+    ``content:`` could close the declaration, the rule, or the element itself. That is
+    why interpolating into a stylesheet was refused outright until there was an
+    escaper, and it is why the exception is written as an identity rather than a
+    pattern: the *whole* ``@page`` rule is built in Python, so the template holds one
+    opaque fragment and no template edit can add a second value beside it.
 
-    Read through the include, so the shared token layer is held to it too - it is the
-    file that now carries the ``@page`` margin boxes the temptation belongs to.
+    Read through the include, so the shared token layer is held to the same rule from
+    both sides, and with HTML comments stripped - a comment that mentions a style
+    element is prose, and reading it as one makes this test fail on documentation.
     """
-    for style in _style_blocks(_source(template)):
-        assert "{{" not in style, f"a value is interpolated into {template.name}'s stylesheet: {style[:200]}"
+    for style in _style_blocks(_markup(template)):
+        stripped = style.strip()
+        if "{{" not in stripped:
+            continue
+        assert stripped == ALLOWED_STYLE_EXPRESSION, (
+            f"{template.name} interpolates something other than the escaped running header "
+            f"into a stylesheet: {stripped[:200]}"
+        )
+
+
+def test_the_per_sample_report_carries_the_running_header() -> None:
+    """The other direction, and the one the test above cannot fail on.
+
+    ``test_the_only_value_in_a_stylesheet_is_the_escaped_running_header`` is satisfied
+    by a template with no stylesheet expression at all - which is exactly what
+    deleting the running header leaves behind, and what put the identity on page 1
+    only. The browser tier measures the printed sheets; this is the source-text half,
+    and it is the half that runs in CI.
+    """
+    styles = [style.strip() for style in _style_blocks(_markup(PER_SAMPLE_TEMPLATE))]
+
+    assert ALLOWED_STYLE_EXPRESSION in styles, (
+        "the per-sample report no longer interpolates the printed running header, so the identity "
+        f"is back on the first sheet only; stylesheet blocks found: {len(styles)}"
+    )
+
+
+def test_the_running_header_reaches_the_stylesheet_only_from_the_escaping_builder() -> None:
+    """The other end of the same guarantee, in Python.
+
+    The template's fragment is only as safe as what put it in the context. This pins
+    that ``generate_report`` fills ``print_running_header_css`` from
+    ``print_running_header_css()`` and from nothing else - a formatted string built at
+    the call site would satisfy the template test above and skip the escaper entirely.
+    """
+    source = inspect.getsource(generate_report)
+
+    assert "print_running_header_css=" not in source, "the context key is being set from an argument, not the builder"
+    assignments = re.findall(r'"print_running_header_css":\s*([A-Za-z_][A-Za-z0-9_]*)', source)
+    assert assignments == ["running_header_css"], f"unexpected source for the stylesheet fragment: {assignments}"
+    assert re.search(r"running_header_css\s*=\s*print_running_header_css\(", source), (
+        "the fragment is not built by report_identity.print_running_header_css"
+    )
 
 
 def test_the_log_prints_as_a_pointer_rather_than_a_wall_of_debug() -> None:

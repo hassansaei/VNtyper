@@ -8,9 +8,13 @@
   `cohort_summary.py`), so this file is reachable from both, including from a directory
   supplied through `config.json`'s `paths.template_dir`.
 
-  It carries no Jinja2 expression of its own. Nothing in a stylesheet may be interpolated
-  from a value - a `<style>` is a raw text element, CSS is not an HTML context, and
-  autoescaping does not protect it. `tests/unit/test_report_presentation.py` pins that.
+  It carries no Jinja2 expression of its own, and `tests/unit/test_report_presentation.py`
+  pins that on its own. A `<style>` is a raw text element, CSS is not an HTML context, and
+  autoescaping does not protect it - so a value reaches a stylesheet only through
+  `css_escaping.css_string_literal`, and only in the per-sample report, which builds the
+  whole `@page` rule in Python and interpolates that one fragment. This file, being shared
+  and reachable from a configured `paths.template_dir`, keeps the stronger guarantee of
+  interpolating nothing at all.
 
   What is here and what is not: the token scale, the two palettes, and every rule the two
   reports both need. A rule only one report needs stays in that report. There is exactly
@@ -389,22 +393,27 @@ details[open] > summary::before { transform: rotate(90deg) translateX(-2px); }
   `counter(page)`/`counter(pages)` in them, so every sheet is numbered and a
   truncated print is visible. It does **not** implement `string()`: a `content`
   list containing one is dropped whole, taking its literal prefix with it, so the
-  identity cannot be carried into the margin from the document. The two ways to
-  put it there anyway are both refused:
+  identity cannot be carried into the margin *from the document*. Of the two ways
+  to put it there anyway, one is still refused and one is now taken:
 
-    * interpolating the sample name into this stylesheet - a `<style>` is a raw
-      text element, CSS is not an HTML context, the name is derived from a
-      sample-supplied basename, and the report is a file people forward;
     * a `position: fixed` header, which Chromium does repeat on every sheet but
       does not reserve space for, so it lands on top of the first line of every
-      page after the first.
+      page after the first. Still refused;
+    * interpolating the identity into a stylesheet. A `<style>` is a raw text
+      element, CSS is not an HTML context, the sample name is derived from a
+      sample-supplied basename and the report is a file people forward - so this
+      was refused for as long as there was no escaper. `css_escaping.py` is that
+      escaper, `report_identity.print_running_header_css` builds the whole rule
+      from it, and the per-sample report writes the finished fragment into a
+      `<style>` of its own. **Not here**: this file is shared with the cohort
+      report and carries no Jinja2 expression, which is what lets
+      `test_report_presentation.py` hold it to exactly that.
 
-  So the identity is a block at the head of the printed document, written from
-  escaped values like everything else, and the margin boxes carry only what is
-  fixed: the page number. Its grey is the one literal colour left in this file -
-  a `@page` margin box sits outside the document tree and whether a custom
-  property declared on `:root` reaches it was not measured here, so it is not
-  worth a token that might resolve to nothing.
+  So this file's `@page` carries what is fixed - the page number - and the
+  per-sample report adds the identity boxes to it. Its grey is the one literal
+  colour left in this file: a `@page` margin box sits outside the document tree and
+  whether a custom property declared on `:root` reaches it was not measured here, so
+  it is not worth a token that might resolve to nothing.
 */
 .print-header { display: none; }
 

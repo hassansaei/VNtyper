@@ -1267,6 +1267,13 @@ SAFE_BY_DESIGN = {
     "q20_icon": "an HTML fragment built by report_formatting",
     "q30_icon": "an HTML fragment built by report_formatting",
     "passed_filter_icon": "an HTML fragment built by report_formatting",
+    "print_running_header_css": (
+        "a complete @page rule built by report_identity.print_running_header_css; it is not HTML at all, "
+        "and HTML escaping would be the wrong defence for it - every value inside it has been through "
+        "css_escaping.css_string_literal, which escapes for the CSS string and for the raw text element a "
+        "<style> is. test_report_presentation.py pins that this is the only expression any stylesheet may "
+        "carry and that generate_report fills it from that builder and nothing else"
+    ),
 }
 
 

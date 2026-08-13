@@ -66,6 +66,7 @@ from tests.browser.conftest import COVERAGE_ROW, TEMPLATE_DIR
 from vntyper.cli import load_config
 from vntyper.scripts import summary_steps
 from vntyper.scripts.generate_report import generate_summary_report
+from vntyper.scripts.report_identity import ASSAY_NAME, RESEARCH_USE_STATEMENT
 
 pytestmark = pytest.mark.browser
 
@@ -80,6 +81,17 @@ MOTIF_SEQUENCE = ("GGCCACCACCCTG" * 10)[:MOTIF_SEQUENCE_LENGTH]
 #: The sample this report is about. Distinctive enough that finding it in the
 #: extracted text cannot be an accident.
 SAMPLE_NAME = "PRINTCHECK_042"
+
+#: The rest of the identity the running header carries, and what the run recorded for
+#: each. They are constants because every one of them is asserted **per page**.
+PIPELINE_VERSION = "9.9.9"
+ASSEMBLY = "hg19"
+RUN_STARTED = "2020-01-02T03:04:05"
+
+#: How the run time reads once ``format_run_timestamp`` has rendered it, with the label
+#: that keeps it from being mistaken for the time the report was made. Those are two
+#: different facts and the report is at pains to keep them apart.
+RUN_TIME_LABEL = "Run 2020-01-02 03:04:05 UTC"
 
 #: A log line that must never reach the paper: the log prints as a one-line pointer
 #: to the HTML original, not as a wall of DEBUG output.
@@ -136,23 +148,27 @@ KESTREL_ROWS: tuple[dict[str, Any], ...] = (
 ROW_MARKERS = ("0.010012", "0.008034", "0.006001")
 
 
-@pytest.fixture
-def printable_report(tmp_path: Path) -> Path:
+def _render_report(output_dir: Path, *, sample_name: str = SAMPLE_NAME) -> Path:
     """Render a report whose evidence is the size real evidence is.
 
     Args:
-        tmp_path: Pytest's per-test temporary directory.
+        output_dir: Directory to render into.
+        sample_name: What the run recorded for itself, explicitly - so the report
+            prints it verbatim and a hostile name is not derived away before it can
+            be tested.
 
     Returns:
         Path: The rendered ``summary_report.html``.
     """
-    log_file = tmp_path / "pipeline.log"
+    log_file = output_dir / "pipeline.log"
     log_file.write_text(f"{DEBUG_LOG_LINE}\n", encoding="utf-8")
     payload = {
-        "version": "9.9.9",
-        "sample_name": SAMPLE_NAME,
-        "input_files": {"bam": f"{SAMPLE_NAME}.bam"},
-        "reference_assembly_requested": "hg19",
+        "version": PIPELINE_VERSION,
+        "sample_name": sample_name,
+        "sample_name_is_explicit": True,
+        "input_files": {"bam": f"{sample_name}.bam"},
+        "reference_assembly_requested": ASSEMBLY,
+        "pipeline_start": RUN_STARTED,
         "steps": [
             {
                 "step": summary_steps.STEP_COVERAGE,
@@ -164,16 +180,29 @@ def printable_report(tmp_path: Path) -> Path:
             },
         ],
     }
-    (tmp_path / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
 
     generate_summary_report(
-        output_dir=str(tmp_path),
+        output_dir=str(output_dir),
         template_dir=str(TEMPLATE_DIR),
         report_file="summary_report.html",
         log_file=str(log_file),
         config=load_config(None),
     )
-    return tmp_path / "summary_report.html"
+    return output_dir / "summary_report.html"
+
+
+@pytest.fixture
+def printable_report(tmp_path: Path) -> Path:
+    """The specimen every case below prints.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory.
+
+    Returns:
+        Path: The rendered ``summary_report.html``.
+    """
+    return _render_report(tmp_path)
 
 
 def _printed_pages(
@@ -283,30 +312,56 @@ def test_the_printed_pdf_is_a_complete_record(printable_report: Path, browser: B
     assert _squashed(DEBUG_LOG_LINE) not in squashed, "the pipeline log printed as a wall of DEBUG output"
 
 
-def test_every_printed_page_is_numbered_and_the_first_says_whose_report_it_is(
-    printable_report: Path, browser: Browser
-) -> None:
-    """A print that lost its last sheet is otherwise indistinguishable from a whole one.
+def test_every_printed_page_is_numbered_and_says_whose_report_it_is(printable_report: Path, browser: Browser) -> None:
+    """A sheet on its own must still say what it is a sheet of.
 
-    The counter is an ``@page`` margin box, which is the half of paged CSS this engine
-    implements. The identity is a block at the head of the document rather than a
-    per-page running header, and that is a measured limitation rather than an
-    oversight: Chromium 151 drops a margin-box ``content`` list containing
-    ``string()``, and the ``position: fixed`` alternative repeats on every sheet
-    without reserving space for itself, so it lands on the first line of every page
-    after the first. Putting the sample name into the stylesheet instead is refused
-    outright - see ``tests/unit/test_report_presentation.py::
-    test_no_value_is_interpolated_into_a_stylesheet``.
+    Page 2 of a separated or rescanned printout used to carry no identity at all: the
+    header was ordinary document content, so it appeared once, and the ``@page``
+    margin boxes carried only ``Page N of M``. The identity is now in the margin
+    boxes too, which is why the escaper exists - Chromium 151 drops a margin-box
+    ``content`` list containing ``string()``, so the document cannot hand the margin a
+    value and the only route is writing it into the stylesheet.
 
-    The specimen is asserted to be longer than one page, or the counter would prove
-    nothing.
+    Every element of the running header is asserted on **page 2 specifically**, not on
+    the concatenation: a page-1-only header passes the concatenated form, which is how
+    the defect survived the earlier version of this case. The specimen is asserted to
+    be longer than one page for the same reason.
     """
     pages = _printed_pages(browser, printable_report)
 
-    assert len(pages) >= 2, f"the specimen printed on {len(pages)} page(s), so the page counter proves nothing"
+    assert len(pages) >= 2, f"the specimen printed on {len(pages)} page(s), so a running header proves nothing"
     for number, page_text in enumerate(pages, start=1):
-        assert f"Page{number}of{len(pages)}" in _squashed(page_text), f"page {number} is not numbered"
-    assert SAMPLE_NAME in _squashed(pages[0]), "the printed record does not open by saying whose report it is"
+        squashed = _squashed(page_text)
+        assert f"Page{number}of{len(pages)}" in squashed, f"page {number} is not numbered"
+        assert SAMPLE_NAME in squashed, f"page {number} does not say whose report it is"
+        assert _squashed(ASSAY_NAME) in squashed, f"page {number} does not say what was assayed"
+        assert "hg19" in squashed, f"page {number} does not say which assembly the run asked for"
+        assert "VNtyper9.9.9" in squashed, f"page {number} does not say which version produced it"
+        assert _squashed(RUN_TIME_LABEL) in squashed, f"page {number} does not say when the run started"
+        assert _squashed(RESEARCH_USE_STATEMENT) in squashed, f"page {number} makes no statement about its use"
+
+
+def test_a_hostile_sample_name_cannot_escape_the_running_header(tmp_path: Path, browser: Browser) -> None:
+    """The identity is written into a stylesheet, so the escaper is load-bearing here.
+
+    A sample name is a file name, and a file name is not a controlled vocabulary. This
+    renders a real report for a sample whose name tries to close the CSS string, the
+    declaration, the rule and the ``<style>`` element, then prints it and reads the
+    paper back: the name must arrive in the margin as text, and the page must still be
+    a page - numbered, with its tables on it - rather than a document that fell apart
+    at the point the name was interpolated.
+    """
+    hostile = 'S1" ; } </style><script>x</script> {'
+    report = _render_report(tmp_path, sample_name=hostile)
+    pages = _printed_pages(browser, report, javascript=False)
+    squashed = _squashed("\n".join(pages))
+
+    assert _squashed(hostile) in squashed, "the hostile name did not reach the margin as text"
+    assert "Page1of" in squashed, "the page counter is gone, so the stylesheet was broken by the name"
+    assert MOTIF_SEQUENCE in squashed, "the document did not survive the interpolated name"
+    assert "<script>" not in report.read_text(encoding="utf-8").split("</head>")[0], (
+        "the name reopened a script element inside the document head"
+    )
 
 
 def test_a_section_the_reader_collapsed_still_prints(printable_report: Path, browser: Browser) -> None:

@@ -71,7 +71,9 @@ The flanking region parameter (default: 50 bp) controls how much sequence contex
 
 ### Printing and archiving
 
-The report is written to be printed: the printed sheet is the artefact that gets filed, forwarded and read years later, so it carries its own identity. The first page states the sample, the assay, the reference assembly and the VNtyper version, and every page is numbered `Page N of M` so a print that lost a sheet is visible as one. The detailed coverage table prints in place of the basic view, results tables print in full rather than clipped to the screen's column widths, and the on-screen switches are omitted because paper has no switches.
+The report is written to be printed: the printed sheet is the artefact that gets filed, forwarded and read years later, so it carries its own identity. **Every** page repeats the sample, the assay, the reference assembly, the VNtyper version and the time the run started in the page margin, and is numbered `Page N of M` so a print that lost a sheet is visible as one — a sheet separated from the rest still says what it is a sheet of. The detailed coverage table prints in place of the basic view, results tables print in full rather than clipped to the screen's column widths, and the on-screen switches are omitted because paper has no switches.
+
+The running header is a paged-CSS feature that only Chromium implements, so the first page additionally states the same identity as an ordinary line of the document. In Chromium that line is redundant with the margin; in Firefox and WebKit, which drop page margin boxes silently, it is the only identity the printed record has.
 
 The pipeline log is the deliberate exception. It prints as a one-line pointer back to the HTML original rather than as pages of DEBUG output, whether or not the reader had it expanded.
 

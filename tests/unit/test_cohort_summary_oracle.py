@@ -121,8 +121,25 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved three times, and each reason is recorded here because a changed
+#: It has moved four times, and each reason is recorded here because a changed
 #: fingerprint with no explanation should be read as the worst case.
+#:
+#: Move 4 (#242 - the printed running header)
+#: ------------------------------------------
+#: * **Old**: ``171c90650179a14916efd70fd1167818585b8a29c3ee260fae932ac9cd103487``
+#: * **New**: ``e99096fe0db6105b39de0b0b216bc57ec6a968004431a4c0a7d34061db4b0dfc``
+#:
+#: **Cause: one CSS comment, and nothing else.** The shared token layer's note about
+#: the ``@page`` margin boxes said the two ways of putting the identity in the margin
+#: were "both refused". One of them is now taken - the per-sample report interpolates
+#: an escaped ``@page`` rule into a ``<style>`` of its own - so the note would
+#: otherwise have been false. A CSS comment is rendered output, so the digest moves.
+#:
+#: **Verified before it was moved**, by diffing the canonical documents: the whole
+#: difference is the one comment inside ``[SKELETON]``. No ``[TABLES]``,
+#: ``[CHART-*]`` or ``[IMAGES]`` section changed, and no selector, declaration or
+#: rendered value did either. The cohort report has no ``@page`` identity boxes and
+#: gains none: the builder is called only by ``generate_report.py``.
 #:
 #: Move 3 (#242, task 7 - one token layer, two reports)
 #: ----------------------------------------------------
@@ -248,7 +265,7 @@ pytestmark = pytest.mark.unit
 #: neither. The evidence for that fix is
 #: `test_cohort_inputs.py::test_processes_with_different_hash_seeds_discover_the_same_order`,
 #: which spawns five interpreters under five seeds, and it covers directory inputs only.
-EXPECTED_FINGERPRINT = "171c90650179a14916efd70fd1167818585b8a29c3ee260fae932ac9cd103487"
+EXPECTED_FINGERPRINT = "e99096fe0db6105b39de0b0b216bc57ec6a968004431a4c0a7d34061db4b0dfc"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")

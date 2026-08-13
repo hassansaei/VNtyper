@@ -82,6 +82,31 @@
         }
     </style>
 
+    <!--
+      The printed running header: who, what, which assembly, which version and when
+      the run started, in the page margin, on **every** sheet. Page 2 of a separated
+      or rescanned printout used to carry no identity at all.
+
+      This is the one style element in either template with a value in it, and it is
+      a deliberate exception with three parts:
+
+        * the whole `@page` rule is built in Python by
+          `report_identity.print_running_header_css`, so the template interpolates one
+          opaque fragment and never a value;
+        * every value in it has been through `css_escaping.css_string_literal`, which
+          escapes for the CSS string *and* for the raw text element a style element is
+          - a sample name that tries to close the element ends neither;
+        * `tests/unit/test_report_presentation.py` fails on any other expression
+          inside any style element in either template, and on this one if it is not
+          marked `|safe`, so there is no second way in.
+
+      It adds margin boxes to the `@page` the shared token layer declares; measured in
+      Chromium 151, the two rules merge and the `Page N of M` counter keeps working.
+      Firefox and WebKit ignore margin boxes entirely, which is why `.print-header`
+      below stays: it is the engine-independent statement, on the first sheet.
+    -->
+    <style>{{ print_running_header_css|safe }}</style>
+
     <!-- IGV.js script -->
     <script src="https://cdn.jsdelivr.net/npm/igv@3.0.2/dist/igv.min.js"></script>
 </head>
@@ -91,17 +116,22 @@
          land on the report itself. There was no landmark at all before (#242). -->
     <main class="container">
         <!--
-          The printed record's header line. It is not shown on screen: the identity
-          block below says all of this and more, with room to say it in, and a
-          browser tab already carries the title.
+          The printed record's header line, on the first sheet. It is not shown on
+          screen: the identity block below says all of this and more, with room to
+          say it in, and a browser tab already carries the title.
 
-          Every value here is escaped, which is exactly why the printed identity is
-          a block in the document rather than text interpolated into the stylesheet's
-          `@page` margin boxes - see the note there.
+          It is *also* not the running header any more - the `@page` margin boxes in
+          the head are, and they repeat on every sheet. This stays because those boxes
+          are a Chromium capability: Firefox and WebKit drop them silently, and a
+          printed report with no identity on it at all is the defect this whole block
+          exists to prevent. So: margin boxes where they work, and this everywhere.
+          The run time is here for the same reason it is up there - a printed record
+          that cannot say when it was produced from is not a record.
         -->
         <div class="print-header">
             {{ sample_name }} &middot; {{ assay_name }} &middot; {{ assembly_declared }}
-            &middot; VNtyper {{ pipeline_version }} &middot; {{ research_use_statement }}
+            &middot; VNtyper {{ pipeline_version }} &middot; Run {{ run_date }}
+            &middot; {{ research_use_statement }}
         </div>
 
         <!--

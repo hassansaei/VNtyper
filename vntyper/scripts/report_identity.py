@@ -33,6 +33,7 @@ recorded, or say that nothing was**:
   ``--custom-regions`` at all.
 
 Functions:
+    print_running_header_css: The identity, as ``@page`` margin boxes that repeat
     derive_sample_name: One input basename to the sample it names
     recorded_sample_name: The name a run recorded, if it recorded one at all
     sample_name_was_given: Whether that name was the operator's own choice
@@ -52,6 +53,8 @@ import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+
+from vntyper.scripts.css_escaping import css_string_literal
 
 logger = logging.getLogger(__name__)
 
@@ -397,3 +400,62 @@ def recorded_or_not(value: object) -> str:
         return NOT_RECORDED
     text = str(value).strip()
     return text or NOT_RECORDED
+
+
+def print_running_header_css(
+    *,
+    sample_name: str,
+    assay_name: str,
+    assembly: str,
+    pipeline_version: str,
+    run_time: str,
+) -> str:
+    """Build the ``@page`` margin boxes that put the identity on **every** printed sheet.
+
+    The printed record used to say whose it was once, in a block at the head of the
+    document, so page 2 of a separated or rescanned printout carried no identity at
+    all - and the margin boxes carried only ``Page N of M``. Measured in Chromium 151:
+    a margin box whose ``content`` list contains ``string()`` has its whole
+    declaration dropped, taking the literal prefix with it, so the document cannot
+    hand the margin a value. A margin box whose ``content`` is a plain string works,
+    on every sheet. That leaves writing the value into the stylesheet, which is what
+    this does, and which is defensible only because
+    :func:`~vntyper.scripts.css_escaping.css_string_literal` exists: a ``<style>`` is
+    a raw text element, CSS is not an HTML context, and Jinja2's autoescaping is no
+    help there.
+
+    **Every value goes through the escaper**, including the fixed ones. Escaping only
+    the "untrusted" ones would make the safety of this function a claim about its
+    arguments rather than a property of its body, and the next argument added would
+    be the one that got it wrong.
+
+    The identity is split across two boxes so that each has half the page width to
+    fit in, and the run time is labelled: an unlabelled timestamp beside a version
+    number reads as either the run or the rendering, which are two different facts the
+    report is at pains to keep apart.
+
+    Args:
+        sample_name: The resolved sample name, as the title and heading use it.
+        assay_name: What the report is a report of (:data:`ASSAY_NAME`).
+        assembly: The reference assembly the run asked for, or the words saying it
+            recorded none.
+        pipeline_version: The VNtyper version recorded by the run.
+        run_time: When the run started, already rendered by
+            :func:`format_run_timestamp`.
+
+    Returns:
+        str: A complete ``@page`` rule, ready to be written into a ``<style>``
+        element. It adds margin boxes to the ``@page`` the shared token layer already
+        declares rather than replacing it - measured: Chromium merges the two, and
+        the page counter in ``@bottom-right`` keeps working.
+    """
+    left = css_string_literal(f"{sample_name} · {assay_name}")
+    right = css_string_literal(f"{assembly} · VNtyper {pipeline_version} · Run {run_time}")
+    footer = css_string_literal(RESEARCH_USE_STATEMENT)
+    return (
+        "@page {\n"
+        f"  @top-left {{ content: {left}; font-size: 8pt; color: #333333; }}\n"
+        f"  @top-right {{ content: {right}; font-size: 8pt; color: #333333; }}\n"
+        f"  @bottom-left {{ content: {footer}; font-size: 8pt; color: #333333; }}\n"
+        "}"
+    )

@@ -68,6 +68,7 @@ from vntyper.scripts.report_identity import (
     format_region,
     format_run_timestamp,
     input_file_names,
+    print_running_header_css,
     recorded_or_not,
     resolve_sample_name,
 )
@@ -699,6 +700,26 @@ def generate_summary_report(
         """
         return None if value is None else round(value, 2)
 
+    # The printed running header, built here so that the template interpolates one
+    # opaque fragment into its `<style>` rather than five values. Every value is put
+    # through the CSS escaper by `print_running_header_css`, and there is no other way
+    # into that stylesheet: `tests/unit/test_report_presentation.py` fails on any other
+    # expression inside a `<style>`, and on any `<style>` expression that is not this
+    # one marked `|safe`.
+    #
+    # These three locals are computed once and used twice - here and in the context
+    # below - because the margin box and the document's own header block must not be
+    # able to disagree about what the report is of.
+    assembly_declared_text = recorded_or_not(reference_assembly_requested)
+    run_time_text = format_run_timestamp(pipeline_summary.get("pipeline_start"))
+    running_header_css = print_running_header_css(
+        sample_name=resolved_sample_name,
+        assay_name=ASSAY_NAME,
+        assembly=assembly_declared_text,
+        pipeline_version=str(pipeline_version),
+        run_time=run_time_text,
+    )
+
     context = {
         "kestrel_highlight": kestrel_html,
         # The two facts the empty states branch on, both derived from the computed
@@ -735,7 +756,7 @@ def generate_summary_report(
         # so printing them unqualified beside each other invites the reader to
         # subtract them.
         "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
-        "run_date": format_run_timestamp(pipeline_summary.get("pipeline_start")),
+        "run_date": run_time_text,
         # The mapping is rendered by iterating it, not by branching on its shape:
         # the template tested for `fastq1 and fastq2` or `bam`, so the other two
         # shapes `resolve_pipeline_input` emits rendered an empty line.
@@ -746,6 +767,11 @@ def generate_summary_report(
         # Printed on every archived page. The printed record is the artefact that
         # outlives the HTML, and it is the one that gets filed and forwarded.
         "research_use_statement": RESEARCH_USE_STATEMENT,
+        # The only value in either template that is interpolated into a stylesheet,
+        # and the only one that may be: it is a fragment VNtyper built, with every
+        # sample-derived value already escaped for CSS *and* for the raw text element
+        # a `<style>` is.
+        "print_running_header_css": running_header_css,
         "pipeline_version": pipeline_version,
         # The provenance block. Two of these four rows are *not* new summary keys:
         # `assembly_declared` is the `reference_assembly_requested` `start_summary`
@@ -756,7 +782,7 @@ def generate_summary_report(
         # `config["default_values"]["reference_assembly"]`, which would mislabel any
         # `--reference-assembly` override and cannot reconstruct `--custom-regions`.
         "summary_schema_version": recorded_or_not(pipeline_summary.get("schema_version")),
-        "assembly_declared": recorded_or_not(reference_assembly_requested),
+        "assembly_declared": assembly_declared_text,
         "assembly_detected": recorded_or_not(assembly_text),
         "region_resolved": format_region(pipeline_summary.get("region_resolved")),
         # `reference_assembly_requested` and `assembly_text` are deliberately absent:
