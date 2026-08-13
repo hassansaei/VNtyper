@@ -4,7 +4,35 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+**MUC1 variants are reported by their literature name, with an explicit confidence
+tier.**
+
+Kestrel and adVNTR each report in their own internal coordinate frame — `POS 67 G>GG`,
+`I22_2_G_LEN1` — and neither emitted the naming the MUC1 literature uses. Both are now
+translated into a single name such as `59dupC`, carried in five new columns
+(`Nomenclature`, `Nomenclature_Tier`, `Nomenclature_Flags`, `Ambiguity_Interval`,
+`Repeat_Form`) across the Kestrel and adVNTR result TSVs, the pipeline summary and the
+HTML report. Negative runs keep their existing narrower schema: no variant, no name.
+
+The name carries **no `c.` prefix**. `c.` asserts a coding-DNA reference sequence, and
+no transcript places this tract at positions 53–59. See
+[MUC1 Nomenclature](../pipeline/nomenclature.md).
+
+The tier decides what may be printed. Only tier A emits a bare number, and reaching it
+requires two independent callers agreeing after normalisation, a matching motif context
+and sufficient read support — no single caller can promote itself. Tier B states the
+event and its ambiguity window; tier C states the frameshift and stops. This exists
+because a confident wrong name is worse than an honest "allele undetermined": on the
+simulated benchmark, Kestrel places the whole `insG` family one position 3′ of truth,
+and those records look clean in isolation.
+
+Where the VCF cannot express what the reads show — Kestrel has no representation for a
+delins — the existing `output.bam` is consulted for that call only, and adjacent
+non-matching CIGAR blocks are merged to recover the allele. The reads may supply a name
+the VCF lacked but may not veto one it has.
+
+Measured on 200 known-truth simulated samples: 129 named correctly, 46 at tier A with
+none disagreeing with truth, and no name emitted for any of the 200 negative controls.
 
 ## 2.0.19 (Current)
 
