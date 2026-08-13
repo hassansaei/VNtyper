@@ -18,17 +18,22 @@ All positions here are 1-based and inclusive, on a single 60 bp repeat unit in t
 coding orientation. An **insertion** is expressed as the empty span between two
 bases, i.e. ``end == start - 1``, so insertions and deletions share one convention.
 
-This module is pure: no I/O, no pandas, no logging. It is safe to call from a
-dataframe ``.apply`` and from tests without fixtures.
+Reference data and thresholds are configured, not written into the logic: see
+``nomenclature_config.json``. It is read once at import, per AGENTS.md trap 1.
+Beyond that this module does no I/O and has no pandas or logging in the hot path,
+so it is safe to call from a dataframe ``.apply`` and from tests without fixtures.
 
 Research use only.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
+
+from vntyper.scripts.utils import load_config
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Mapping
@@ -52,13 +57,80 @@ __all__ = [
     "revcomp",
 ]
 
+
+def load_nomenclature_config(config_path: str | None = None) -> dict:
+    """Load the nomenclature reference data and thresholds.
+
+    Follows the convention the rest of the package uses (AGENTS.md trap 1): the
+    config is read once at import into a module global, not per call.
+
+    Args:
+        config_path: Optional override. Defaults to ``nomenclature_config.json``
+            beside this module.
+
+    Returns:
+        dict: The parsed configuration.
+    """
+    if config_path is None:
+        config_path = os.path.join(os.path.dirname(__file__), "nomenclature_config.json")
+    return load_config(config_path)
+
+
+#: Loaded once at import. Every table below is data, not code: the canonical unit,
+#: the motif sequences, which adVNTR repeat units carry a canonical coordinate, the
+#: support threshold, and the described-variant list all live in
+#: ``nomenclature_config.json`` so they can be corrected without touching logic.
+nomenclature_config: dict = load_nomenclature_config()
+
 #: The canonical MUC1 repeat unit in the coding orientation. Carries the tract Wenzel
-#: (2018, PMID:29520014) publishes: 7xC at positions 53-59, ``A`` at 60. Verified
-#: byte-identical to the MUC1 simulator's ``X`` unit.
-CANONICAL_UNIT = "GCCCACGGTGTCACCTCGGCCCCGGACACCAGGCCGGCCCCGGGCTCCACCGCCCCCCCA"
+#: (2018, PMID:29520014) publishes: 7xC at positions 53-59, ``A`` at 60.
+CANONICAL_UNIT: str = nomenclature_config["canonical_unit"]
 
 #: Every MUC1 repeat unit is 60 bp.
-UNIT_LENGTH = 60
+UNIT_LENGTH: int = nomenclature_config["unit_length"]
+
+#: Motif symbol -> 60 bp unit on the genomic plus strand, as Kestrel sees it.
+#:
+#: Configured rather than read from ``reference/MUC1_motifs_Rev_com.fa``, because
+#: that directory is downloaded and not checked in: importing this module from a
+#: fresh clone or an installed wheel must not depend on it. A test asserts the table
+#: is byte-identical to the shipped FASTA wherever that FASTA is present.
+#:
+#: The 551-record pair reference is deliberately absent: every one of its records is
+#: ``seq(R) ++ seq(L)`` over these same motifs -- verified across all 551 -- so
+#: :func:`pair_sequence` derives it instead of duplicating 69 kB.
+MOTIFS: dict[str, str] = nomenclature_config["motifs"]
+
+#: Where the motif table came from, for the provenance test.
+MOTIF_FASTA_NAME: str = nomenclature_config["motif_fasta_name"]
+
+#: adVNTR repeat unit -> the motif it is a rotation of.
+#:
+#: adVNTR ships nine repeat units; only some are rotations of a MUC1 motif. The rest
+#: are either 60 bp matching no motif, or not 60 bp at all, so parts of them have no
+#: counterpart in a repeat unit. Projecting a state from one of those through the
+#: rotation would fabricate a coordinate, so those states are reported without one.
+MAPPABLE_RUS: dict[int, str] = {
+    int(unit): symbol for unit, symbol in nomenclature_config["advntr"]["mappable_repeat_units"].items()
+}
+
+#: Rotation offset shared by every mappable repeat unit.
+_RU_ROTATION: int = nomenclature_config["advntr"]["rotation_offset"]
+
+#: Reads supporting a call below which the top confidence is withheld.
+MIN_SUPPORT_FOR_TIER_A: int = nomenclature_config["thresholds"]["min_support_for_high_confidence"]
+
+#: MUC1 variants described in the literature, name -> the report they come from.
+#:
+#: Used **only to check a name and raise confidence in it** -- never to produce one.
+#: Every name is derived from the caller's own record; matching an entry here says
+#: "and somebody has described this allele before", which is a weaker and different
+#: claim than "this is correct".
+#:
+#: A name absent from this table is not suspect, merely un-cross-checked, and is
+#: reported as what it is: a representation of the caller's call, requiring
+#: validation. Extending the table is a config edit, not a code change.
+KNOWN_VARIANTS: dict[str, str] = nomenclature_config["known_variants"]
 
 #: Flag vocabulary. Stable, kebab-case, and closed: a consumer may match on these.
 FLAG_POSITION_AMBIGUOUS = "position-ambiguous"
@@ -68,81 +140,16 @@ FLAG_ALLELE_UNREPRESENTABLE = "allele-unrepresentable-in-vcf"
 FLAG_LOW_READ_SUPPORT = "low-read-support"
 FLAG_CALLER_DISAGREEMENT = "caller-disagreement"
 FLAG_LENGTH_TRUNCATED = "length-truncated"
+FLAG_SEQUENCE_UNDETERMINED = "sequence-undetermined"
+
+#: Set on a name that matches :data:`KNOWN_VARIANTS`.
+FLAG_KNOWN_VARIANT = "known-variant"
+
+#: Set on every name that does not. States what the name is rather than implying a
+#: defect: a representation of what the caller reported, not a validated allele.
+FLAG_REPRESENTATION_ONLY = "representation-of-caller-call"
 
 _COMPLEMENT = str.maketrans("ACGTacgtNn", "TGCAtgcaNn")
-
-#: Motif symbol -> 60 bp unit on the genomic plus strand, as Kestrel sees it.
-#:
-#: Embedded rather than read from ``reference/MUC1_motifs_Rev_com.fa`` because that
-#: directory is downloaded, not checked in: importing this module from a fresh clone
-#: or an installed wheel must not depend on it. ``tests`` asserts this table is
-#: byte-identical to the shipped FASTA whenever that FASTA is present, so the two
-#: cannot drift.
-#:
-#: The 551-record pair reference is deliberately *not* embedded: every one of its
-#: records is ``seq(R) ++ seq(L)`` over these same 34 motifs -- verified across all
-#: 551 -- so :func:`pair_sequence` derives it and 69 kB of duplication is avoided.
-MOTIFS: dict[str, str] = {
-    "1": "CACAGCATTCTTCTCAGTAGAGCTGGGCACTGAACTTCTCTGGGTAGCCGAAGTCTCCTT",
-    "2": "CTGAGTGGTGGAGGAGCCTGAACCGGGGCTGTGGCTGGAGAGTACGCTGCTGGTCATACT",
-    "3": "CCAGGTGGCAGCTGAACCTGAAGCTGGTTCCGTGGCCGGGGCCAGAGTGACATCCTGTCC",
-    "4": "TGGCGGGGTGGTGGAGCCCAGGGCTGGCCTGGTGACTGGGACCGAGGTGACATCCTGTCC",
-    "4p": "TGGTGGGGTGGTGGAGCCCAGGGCTGGCCTGGTGACTGGGACCGAGGTGACATCCTGTCC",
-    "5": "TGGGGGGGCGGTGGAGCCCGGGGCTGGCTTGTTGTCCGGGGCTGAGGTGACATCGTGGGC",
-    "5C": "TTGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCTGAGGTGACATCGTGGGC",
-    "X": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "A": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
-    "B": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
-    "C": "TTGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "D": "TGGGGGGGCGGTGGAGCCCGGGGCGGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "E": "TGCGGGCGCGGTGGAGCCCGGGGCGGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "F": "TGTGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "G": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "H": "TGGGGCGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "I": "TGGGGGCGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "J": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGTGCCGAGGTGACACCGTGGGC",
-    "K": "TGGGGGGGCGGTGGAGCCCAGGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
-    "V": "TGGGGGTGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "W": "CGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "6": "CGGGGCCGGGGTGGAGCCCGGGGCCCGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "6p": "CGGGGCCGGGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "7": "CGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGCTGGGGGGGCGGTGGAGCC",
-    "8": "CAAGGCGGGCCTGTTGTCCGGGGCCGAGGTGACACCATGGGCTGGGGGGGCGGTGGAGCC",
-    "9": "TGAGCCTGATGCAGAGCCTGAGGCCGAGGTGACATTGTGGACTGGAGGGGCGGTGGAGCC",
-    "L": "TGGGGCGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCTGAGGTGACACCGTGGGC",
-    "M": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGTGCCGAGGTGACACCGTGGGC",
-    "N": "TGGGGGGGCGGTGGAGCCCGTGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
-    "O": "TGGGGGGGCGGTGGAGCCTGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "P": "TGGGGGGGCGGTGGAGCCCGGGGCTGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
-    "Q": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACTGTGGGC",
-    "R": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGTGCCCGAGGTGACACCGTGGGC",
-    "S": "TGCGGGGGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCTGAGGTGACACCGTGGGC",
-}
-
-#: Where the embedded table came from, for the provenance test.
-MOTIF_FASTA_NAME = "MUC1_motifs_Rev_com.fa"
-
-#: adVNTR repeat unit -> the motif it is a rotation of.
-#:
-#: adVNTR ships nine repeat units. Only these three are rotations of a MUC1 motif
-#: (each by 39 bases, which is what makes ``plus_from_ru`` a single formula). RU1,
-#: RU4 and RU8 are 60 bp but match no motif; RU3, RU7 and RU9 are 78, 48 and 54 bp,
-#: so parts of them have no counterpart in a 60 bp unit at all. Projecting a state
-#: from any of the other six through this map would fabricate a coordinate, so those
-#: states are reported without one.
-MAPPABLE_RUS: dict[int, str] = {2: "X", 5: "V", 6: "C"}
-
-#: Rotation offset shared by every mappable repeat unit.
-_RU_ROTATION = 39
-
-#: Emitted when adVNTR reports an insertion length without its sequence.
-#:
-#: An extension to the spec's flag vocabulary. It is needed because adVNTR records
-#: only the first inserted base -- ``vntr_finder.py``: "If there are run of
-#: insertions, the sequence might differ, but we just take the first base" -- so a
-#: ``LEN4`` state constrains the length and nothing else. Without a distinct flag
-#: this state is indistinguishable from a fully determined one.
-FLAG_SEQUENCE_UNDETERMINED = "sequence-undetermined"
 
 
 def pair_sequence(motifs: str) -> str | None:
@@ -612,9 +619,19 @@ def reconcile(
     if effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
         flags.add(FLAG_LOW_READ_SUPPORT)
 
+    chosen_name = named[0].name if named else None
+
+    # Known variants are used to *check* a name, never to make one. Matching the
+    # literature says somebody has described this allele before -- a weaker and
+    # different claim than "this is correct" -- so it raises confidence rather than
+    # conferring it.
+    if chosen_name is not None:
+        flags.add(FLAG_KNOWN_VARIANT if chosen_name in KNOWN_VARIANTS else FLAG_REPRESENTATION_ONLY)
+
     tier = "B"
     if (
         agree
+        and chosen_name in KNOWN_VARIANTS
         and effective_support is not None
         and effective_support >= MIN_SUPPORT_FOR_TIER_A
         and FLAG_MOTIF_CONTEXT_DIVERGES not in flags
@@ -640,37 +657,58 @@ def reconcile(
     )
 
 
-def render(call: Nomenclature) -> str:
-    """Render a call as display text, showing only what its tier permits.
+def confidence_note(call: Nomenclature) -> str:
+    """One sentence saying what the name is and how far it has been checked.
 
-    The tier ladder is an emission rule, not just metadata: tier A shows the bare
-    name, tier B shows the event and its ambiguity window but never a bare number,
-    and tier C states the frameshift and stops. This function is the single place
-    that rule is applied, so no surface can bypass it by reading ``name`` directly.
+    The honest position, in the output rather than only in the docs: a name is
+    derived from a caller's record, and unless it matches a variant somebody has
+    already described, that is all it is.
 
     Args:
         call: The reconciled call.
 
     Returns:
-        str: Display text.
+        str: The note, or ``""`` when there is no name to qualify.
     """
-    if call.tier == "A" and call.name:
+    if not call.name:
+        return ""
+    citation = KNOWN_VARIANTS.get(call.name)
+    if citation is not None:
+        return f"matches a described MUC1 variant ({citation}); requires validation"
+    return "representation of the caller's call, not a described variant; requires validation"
+
+
+def render(call: Nomenclature) -> str:
+    """Render a call as display text.
+
+    **If a name could be computed, the name is shown.** The tier is a confidence
+    indicator carried beside it, not a gate that suppresses it.
+
+    This was the other way round at first -- only tier A showed a number, and tiers
+    B and C showed the event class instead. Measured on the 200-sample benchmark
+    that discarded most of the useful output: 129 samples had the correct name
+    computed and only 46 of them displayed it. Withholding a name that was right
+    83 times to avoid displaying one that was wrong 0 times is a bad trade, and it
+    loses information a reader can weigh for themselves. The tier, the flags and
+    :func:`confidence_note` say how far the name has been checked; they do not decide
+    whether the reader is allowed to see it.
+
+    Args:
+        call: The reconciled call.
+
+    Returns:
+        str: The name where one exists, otherwise a statement of what is known.
+    """
+    if call.name:
         return call.name
 
-    if call.tier == "C" or not call.name:
-        # A net length change of zero is not a frameshift, so saying "frameshift +0"
-        # states something untrue about a locus we in fact know nothing about. It is
-        # what a locus with no usable call at all reduces to.
-        if call.net_length == 0:
-            return "allele undetermined"
-        sign = "+" if call.net_length > 0 else "-"
-        return f"frameshift {sign}{abs(call.net_length)}, allele undetermined"
-
-    text = call.event
-    if call.ambiguity:
-        low, high = call.ambiguity
-        text = f"{text} in {low}_{high}"
-    return f"{text}, position-ambiguous"
+    # No name could be computed at all. A net length change of zero is not a
+    # frameshift, so saying "frameshift +0" would state something untrue about a
+    # locus we know nothing about.
+    if call.net_length == 0:
+        return "allele undetermined"
+    sign = "+" if call.net_length > 0 else "-"
+    return f"frameshift {sign}{abs(call.net_length)}, allele undetermined"
 
 
 _ADVNTR_STATE = re.compile(r"^(?P<kind>[ID])(?P<pos>\d+)_(?P<ru>\d+)(?:_(?P<base>[ACGT])_LEN(?P<length>\d+))?$")
@@ -801,6 +839,12 @@ def _name_advntr_group(group: list[_Component]) -> Nomenclature:
         if deletions:
             # A co-located delins: the deletion supplies the replaced base.
             start, end = left + 1, left + 1
+        elif left == 0:
+            # The insertion sits exactly on the unit junction. The array is tandem,
+            # so that gap is equally "after position 60 of the preceding unit", and
+            # naming it there turns a meaningless `0_1insA` into the `60dupA` it is.
+            # `from_kestrel` already did this; adVNTR states reach the same boundary.
+            start, end = UNIT_LENGTH + 1, UNIT_LENGTH
     else:
         positions = sorted(UNIT_LENGTH + 1 - (((_RU_ROTATION - 1 + item.pos) % UNIT_LENGTH) + 1) for item in deletions)
         start, end = positions[0], positions[-1]

@@ -128,7 +128,7 @@ def test_a_non_string_is_returned_unchanged(value: object) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_kestrel_display_columns_are_the_recorded_sixteen() -> None:
+def test_the_kestrel_display_columns_are_the_recorded_seventeen() -> None:
     assert KESTREL_DISPLAY_COLUMNS == (
         "Sample",
         "Motif",
@@ -146,6 +146,7 @@ def test_the_kestrel_display_columns_are_the_recorded_sixteen() -> None:
         "Nomenclature_Tier",
         "Ambiguity_Interval",
         "Repeat_Form",
+        "Nomenclature_Note",
     )
 
 
@@ -247,7 +248,7 @@ def test_the_kestrel_table_carries_the_shared_css_classes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_advntr_display_columns_are_the_recorded_fifteen() -> None:
+def test_the_advntr_display_columns_are_the_recorded_sixteen() -> None:
     assert ADVNTR_DISPLAY_COLUMNS == (
         "Sample",
         "VID",
@@ -264,6 +265,7 @@ def test_the_advntr_display_columns_are_the_recorded_fifteen() -> None:
         "Nomenclature_Tier",
         "Ambiguity_Interval",
         "Repeat_Form",
+        "Nomenclature_Note",
     )
 
 

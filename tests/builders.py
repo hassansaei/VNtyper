@@ -168,6 +168,7 @@ STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
         "Nomenclature_Flags",
         "Ambiguity_Interval",
         "Repeat_Form",
+        "Nomenclature_Note",
     ),
 }
 

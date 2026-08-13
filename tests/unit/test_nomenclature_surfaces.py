@@ -7,13 +7,16 @@ Research use only.
 """
 
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 import pytest
 
 from tests.builders import STAGE_COLUMNS, kestrel_stage_frame
+from vntyper.scripts import nomenclature
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
+from vntyper.scripts.nomenclature import Nomenclature
 from vntyper.scripts.nomenclature_annotate import (
     NOMENCLATURE_COLUMNS,
     annotate_advntr_frame,
@@ -129,12 +132,16 @@ def test_a_populated_window_and_tract_are_written() -> None:
     assert out.loc[0, "Repeat_Form"] == "53C[7]>53C[8]"
 
 
-def test_a_below_tier_a_row_never_shows_a_bare_number() -> None:
-    """One caller alone cannot reach tier A, so the cell must not read `59dupC`."""
+def test_a_below_tier_a_row_still_shows_its_name() -> None:
+    """The name is emitted whenever one exists; the tier column carries the caveat.
+
+    One caller alone cannot reach tier A, but withholding the name it computed
+    loses information the reader can weigh against the tier themselves.
+    """
     frame = pd.DataFrame([{"Motifs": "X-X", "POS": 67, "REF": "G", "ALT": "GG"}])
     out = annotate_kestrel_frame(frame)
-    assert out.loc[0, "Nomenclature_Tier"] != "A"
-    assert out.loc[0, "Nomenclature"] != "59dupC"
+    assert out.loc[0, "Nomenclature"] == "59dupC"
+    assert out.loc[0, "Nomenclature_Tier"] == "B", "the lower confidence must still be reported"
 
 
 # ---------------------------------------------------------------------------
@@ -204,3 +211,63 @@ def test_a_missing_advntr_file_is_not_an_error(tmp_path) -> None:
     kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "24")
     advntr.unlink()
     assert reconcile_caller_outputs(kestrel, advntr) is False
+
+
+# ---------------------------------------------------------------------------
+# The config is the source of truth, and it must ship
+# ---------------------------------------------------------------------------
+
+
+def test_the_nomenclature_config_ships_with_the_package() -> None:
+    """Reference data lives in config, so a config that is not packaged is a bug.
+
+    `MANIFEST.in` and `pyproject.toml` both list it, the way every other config in
+    this package is listed; this asserts the file they name is actually there.
+    """
+    config = Path(nomenclature.__file__).with_name("nomenclature_config.json")
+    assert config.is_file(), f"{config.name} must sit beside the module that loads it"
+
+    root = Path(__file__).resolve().parents[2]
+    assert "nomenclature_config.json" in (root / "MANIFEST.in").read_text()
+    assert "nomenclature_config.json" in (root / "pyproject.toml").read_text()
+
+
+def test_every_configured_table_is_populated() -> None:
+    """A silently empty table would make every call undetermined rather than fail."""
+    assert len(nomenclature.MOTIFS) == 34
+    assert len(nomenclature.CANONICAL_UNIT) == nomenclature.UNIT_LENGTH
+    assert nomenclature.MAPPABLE_RUS, "no adVNTR repeat unit is mappable"
+    assert nomenclature.KNOWN_VARIANTS, "the described-variant check has nothing to check against"
+    assert nomenclature.MIN_SUPPORT_FOR_TIER_A > 0
+
+
+def test_no_reference_data_is_written_into_the_module() -> None:
+    """Domain knowledge belongs in the config, not in the logic.
+
+    Guards the rule directly: a future edit that pastes a motif sequence or a
+    variant name back into the module fails here rather than being noticed later.
+    """
+    source = Path(nomenclature.__file__).read_text()
+    for motif in list(nomenclature.MOTIFS.values())[:5]:
+        assert motif not in source, "a motif sequence was written into the module"
+    for name in nomenclature.KNOWN_VARIANTS:
+        assert f'"{name}"' not in source, f"the variant {name} was written into the module"
+
+
+def test_a_variant_can_be_added_by_editing_config_alone() -> None:
+    """The described-variant list is data: extending it must not need a code change."""
+    extended = dict(nomenclature.KNOWN_VARIANTS)
+    extended["99dupT"] = "Fictional et al. 2099"
+    call = Nomenclature(
+        name="99dupT",
+        event="duplication",
+        unit="X",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=1,
+        source="kestrel_vcf",
+    )
+    with mock.patch.object(nomenclature, "KNOWN_VARIANTS", extended):
+        assert "Fictional" in nomenclature.confidence_note(call)

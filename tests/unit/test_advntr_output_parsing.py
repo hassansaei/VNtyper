@@ -55,6 +55,7 @@ FINAL_COLUMNS = [
     "Nomenclature_Flags",
     "Ambiguity_Interval",
     "Repeat_Form",
+    "Nomenclature_Note",
 ]
 
 RESULT_SUFFIX = "_adVNTR_result.tsv"
@@ -90,6 +91,7 @@ NULLABLE_COLUMNS = (
     "Nomenclature_Flags",
     "Ambiguity_Interval",
     "Repeat_Form",
+    "Nomenclature_Note",
 )
 
 

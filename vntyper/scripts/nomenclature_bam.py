@@ -33,6 +33,7 @@ from vntyper.scripts.nomenclature import (
     FLAG_SEQUENCE_UNDETERMINED,
     Nomenclature,
     name_coding_pair_edit,
+    nomenclature_config,
     pair_sequence,
     revcomp,
 )
@@ -54,14 +55,14 @@ __all__ = [
     "walk_cigar",
 ]
 
-#: Window either side of the called locus, in bases.
-DEFAULT_FLANK = 8
+#: Window either side of the called locus, in bases. Configured, not hard-coded.
+DEFAULT_FLANK: int = nomenclature_config["thresholds"]["bam_flank"]
 
 #: Reads below which a consensus is reported as thin. `output.bam` splits reads
 #: across many pair records while `Estimated_Depth_AlternateVariant` aggregates
 #: them, so a locus often carries only 1-3 reads; a consensus is only as good as
 #: the reads under it.
-THIN_SUPPORT = 3
+THIN_SUPPORT: int = nomenclature_config["thresholds"]["bam_thin_support"]
 
 # CIGAR operation codes, as pysam returns them.
 _OP_MATCH = 0

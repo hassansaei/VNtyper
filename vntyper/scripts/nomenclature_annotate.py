@@ -24,6 +24,7 @@ import pandas as pd
 
 from vntyper.scripts.nomenclature import (
     Nomenclature,
+    confidence_note,
     from_advntr,
     from_kestrel,
     reconcile,
@@ -40,6 +41,7 @@ NOMENCLATURE_COLUMNS: tuple[str, ...] = (
     "Nomenclature_Flags",
     "Ambiguity_Interval",
     "Repeat_Form",
+    "Nomenclature_Note",
 )
 
 #: A negative Kestrel run writes a different, 10-column schema whose first column is
@@ -87,6 +89,7 @@ def _cells(call: Nomenclature) -> dict[str, Any]:
         "Nomenclature_Flags": ";".join(call.flags),
         "Ambiguity_Interval": interval,
         "Repeat_Form": call.repeat_form or "",
+        "Nomenclature_Note": confidence_note(call),
     }
 
 

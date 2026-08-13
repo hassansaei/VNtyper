@@ -96,6 +96,7 @@ KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
     "Nomenclature_Tier": "Tier",
     "Ambiguity_Interval": "Ambiguity",
     "Repeat_Form": "Repeat Form",
+    "Nomenclature_Note": "Naming Note",
 }
 
 #: adVNTR result columns, in display order. Unlike Kestrel these are not renamed.
@@ -114,6 +115,7 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Nomenclature_Tier",
     "Ambiguity_Interval",
     "Repeat_Form",
+    "Nomenclature_Note",
 )
 
 #: Inline style per ``Confidence`` value. A value not listed renders unstyled.
