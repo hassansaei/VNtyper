@@ -40,12 +40,12 @@ off explicitly.
 
 | Value | What the report is | Size |
 |-------|--------------------|------|
-| `embedded` (default) | One file, and a complete alignment browser. | 575,641 B with alignment data in the verification specimen |
+| `embedded` (default) | One file, and a complete alignment browser. | 575,762 B with alignment data in the verification specimen |
 | `sidecar` | No library in the summary; `igv_report.html` beside it is the alignment browser, built from VNtyper's verified vendored igv.js with no network request. | Summary remains near the no-alignment size, plus the sidecar |
-| `off` | No alignment browser at all; the complete result tables remain. | 78,365 B in the no-alignment specimen |
+| `off` | No alignment browser at all; the complete result tables remain. | 78,486 B in the no-alignment specimen |
 
 A report for a run with no alignment data carries no library in any mode. The last
-verification specimen measured **78,365 bytes without alignment data** and **575,641
+verification specimen measured **78,486 bytes without alignment data** and **575,762
 bytes with embedded alignment data**, against **2,002,405 bytes** fetched over 11 CDN
 tags by the old report. These numbers are measurements to be refreshed for a release,
 not size guarantees; sample content also affects the artifact.

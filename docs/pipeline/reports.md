@@ -82,7 +82,7 @@ The flanking region parameter (default: 50 bp) controls how much sequence contex
 | `sidecar` | The summary stays small and a self-contained `igv_report.html` is written beside it. |
 | `off` | No alignment browser is generated; the result tables remain complete. |
 
-In the last verification specimen, the self-contained report measured **78,365 bytes without alignment data** and **575,641 bytes with embedded alignment data**. The old report fetched **2,002,405 bytes** over 11 CDN tags in addition to its file. These figures describe the measured specimen rather than a fixed size guarantee; sample content changes the final byte count.
+In the last verification specimen, the self-contained report measured **78,486 bytes without alignment data** and **575,762 bytes with embedded alignment data**. The old report fetched **2,002,405 bytes** over 11 CDN tags in addition to its file. These figures describe the measured specimen rather than a fixed size guarantee; sample content changes the final byte count.
 
 The embedded library is expanded with `DecompressionStream`. This sets a 2023 cross-browser floor for the alignment panel: Chrome 80+, Safari 16.4+ or Firefox 113+. An older browser receives an authored explanation, while the tables and all variant evidence remain available.
 

@@ -142,7 +142,7 @@ Two further display changes in the same release:
 `--report-igv embedded` (the default) produces one self-contained report. `sidecar`
 writes a small summary plus a self-contained `igv_report.html`, and `off` omits the
 alignment browser without removing any table row. The last verification specimen was
-**78,365 bytes without alignment data** and **575,641 bytes with embedded alignment
+**78,486 bytes without alignment data** and **575,762 bytes with embedded alignment
 data**, compared with **2,002,405 bytes** fetched by the previous report's 11 CDN tags.
 These are measured specimen sizes, not fixed limits; the tables and other sample content
 also contribute to the file.
