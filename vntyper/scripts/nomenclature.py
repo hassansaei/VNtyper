@@ -188,6 +188,24 @@ def pair_sequence(motifs: str) -> str | None:
     return right_seq + left_seq
 
 
+def _is_dna(sequence: str) -> bool:
+    """Is this a non-empty run of unambiguous DNA bases?
+
+    A missing cell reaches the translator as the *text* ``nan`` or ``None`` once a
+    pandas frame read with ``dtype=str`` is stringified, and those are accepted as
+    bases by anything that only checks for emptiness -- an absent ``REF`` produced a
+    confident ``52_53delGC``. Missing data must make a row untranslatable, not
+    become DNA.
+
+    Args:
+        sequence: The candidate allele.
+
+    Returns:
+        bool: True when every character is A, C, G or T.
+    """
+    return bool(sequence) and set(sequence.upper()) <= {"A", "C", "G", "T"}
+
+
 def revcomp(sequence: str) -> str:
     """Reverse-complement a DNA sequence.
 
@@ -665,8 +683,13 @@ def reconcile(
     effective_support = support
     if supports is not None:
         relevant = [supports.get(source) for source in backing_sources]
-        present = [value for value in relevant if value is not None]
-        effective_support = min(present) if present else None
+        # Unknown is not sufficient. Dropping the `None`s and taking the minimum of
+        # what remained let one caller's depth stand in for the other's missing depth,
+        # so an agreement with a blank or non-numeric depth column reached tier A on
+        # one source's reads -- exactly the "two independent sources" claim the tier
+        # is supposed to guarantee. One unknown makes the whole agreement unknown.
+        known = [value for value in relevant if value is not None]
+        effective_support = None if len(known) != len(relevant) or not known else min(known)
 
     if effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
         flags.add(FLAG_LOW_READ_SUPPORT)
@@ -896,6 +919,14 @@ def _name_advntr_group(group: list[_Component]) -> Nomenclature:
             start, end = UNIT_LENGTH + 1, UNIT_LENGTH
     else:
         positions = sorted(UNIT_LENGTH + 1 - (((_RU_ROTATION - 1 + item.pos) % UNIT_LENGTH) + 1) for item in deletions)
+        # Consecutive positions in adVNTR's rotated unit are not necessarily
+        # consecutive in the coding unit: the rotation puts a seam inside the unit, so
+        # `D21_2&D22_2` projects to coding 1 and 60 -- opposite ends. Spanning
+        # `[min, max]` there named a 2 bp deletion as a 60 bp one, deleting the entire
+        # repeat unit. A gap means the event crosses the junction and cannot be
+        # expressed as one span on a single unit.
+        if positions[-1] - positions[0] != len(positions) - 1:
+            return _undetermined(event, net, "advntr", (*flags, FLAG_SPANS_UNIT_JUNCTION))
         start, end = positions[0], positions[-1]
         inserted = ""
 
@@ -970,7 +1001,7 @@ def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
     net = len(alt) - len(ref)
 
     pair = pair_sequence(motifs)
-    if pair is None or not 1 <= pos <= len(pair) or not ref or not alt:
+    if pair is None or not 1 <= pos <= len(pair) or not _is_dna(ref) or not _is_dna(alt):
         return _undetermined("insertion" if net > 0 else "deletion", net, "kestrel_vcf", ())
 
     pair_length = len(pair)

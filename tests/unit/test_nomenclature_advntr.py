@@ -137,3 +137,26 @@ def test_a_negative_run_yields_no_call() -> None:
 def test_unparseable_input_yields_no_call_rather_than_a_guess() -> None:
     for state in ("", "   ", "banana", "I_2_G_LEN1", "Q22_2_G_LEN1"):
         assert from_advntr(state) == (), state
+
+
+def test_a_deletion_crossing_the_rotation_seam_is_not_named_as_one_span() -> None:
+    """Consecutive adVNTR positions are not always consecutive coding positions.
+
+    The rotation puts a seam inside the unit: ``D21_2`` and ``D22_2`` are adjacent in
+    adVNTR's own frame but project to coding 1 and 60, at opposite ends. Spanning
+    ``[min, max]`` named a 2 bp deletion as a deletion of the entire 60 bp repeat
+    unit, while still reporting ``net_length`` of -2.
+    """
+    (call,) = from_advntr("D21_2&D22_2")
+
+    assert call.net_length == -2
+    assert call.name is None, "a junction-spanning deletion has no single-unit span"
+    assert "spans-unit-junction" in call.flags
+
+
+def test_a_genuinely_contiguous_deletion_is_still_named() -> None:
+    """The seam guard must not silently swallow ordinary deletions."""
+    (call,) = from_advntr("D17_2&D18_2")
+
+    assert call.name is not None
+    assert call.net_length == -2

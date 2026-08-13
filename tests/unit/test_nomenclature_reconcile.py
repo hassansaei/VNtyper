@@ -106,6 +106,21 @@ def test_the_reads_corroborating_a_second_caller_still_reach_tier_a() -> None:
     assert merged.tier == "A"
 
 
+def test_unknown_depth_from_one_source_blocks_tier_a() -> None:
+    """Unknown is not sufficient, and one caller's depth is not the other's evidence.
+
+    Dropping the unknown and taking the minimum of what remained let a well-covered
+    Kestrel record supply the depth for an adVNTR agreement whose own depth column was
+    blank -- a tier-A name resting on one source's reads while claiming two.
+    """
+    merged = reconcile(
+        _kestrel_dupc(),
+        _advntr_dupc(),
+        supports={"kestrel_vcf": 40, "advntr": None},
+    )
+    assert merged.tier != "A"
+
+
 def test_two_corroborated_alleles_are_a_conflict_rather_than_a_vote() -> None:
     """Only an unambiguous majority decides.
 

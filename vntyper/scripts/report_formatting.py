@@ -94,6 +94,7 @@ KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
     # otherwise the event, or a frameshift statement with no number at all.
     "Nomenclature": "MUC1 Name",
     "Nomenclature_Tier": "Tier",
+    "Nomenclature_Flags": "Flags",
     # Both callers are shown, not just the verdict: where they disagree, which one
     # said what is the evidence a reader needs in order to weigh that verdict.
     "Nomenclature_Kestrel": "Kestrel Name",
@@ -117,6 +118,7 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Flag",
     "Nomenclature",
     "Nomenclature_Tier",
+    "Nomenclature_Flags",
     "Nomenclature_Kestrel",
     "Nomenclature_adVNTR",
     "Ambiguity_Interval",

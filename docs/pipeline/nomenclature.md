@@ -46,9 +46,20 @@ The tier is an **emission rule**, not a label: it decides what may be printed.
 
 | Tier | Condition | What is emitted |
 |---|---|---|
-| **A** | Two independent callers agree after normalisation, the motif context matches the canonical unit, and read support meets the threshold | the bare name, e.g. `59dupC` |
-| **B** | A name was computed, but something above is missing | the event and its ambiguity window — **never a bare number** |
+| **A** | Two independent callers agree after normalisation, the motif context matches the canonical unit, and read support meets the threshold | the name, e.g. `59dupC` |
+| **B** | A name was computed, but something above is missing | the same name, carrying the tier and the flags that say what is missing |
 | **C** | No allele could be determined | `frameshift +1, allele undetermined` — no position at all |
+
+Tier B **does** show its name. Withholding it was the original design and it was measured
+to be a bad trade: of 200 benchmark samples, 129 had the correct name computed and only 46
+were allowed to display it. Suppressing a name that was right 83 times, to avoid showing
+one that was never wrong, discards information a reader can weigh for themselves. The tier
+and the flags travel beside the name and say how far it has been checked; they do not
+decide whether the reader may see it.
+
+Read support is **unknown-hostile**: a source whose depth column is blank or non-numeric
+makes the whole agreement's depth unknown, and unknown never clears the threshold. One
+caller's depth is not evidence about another's.
 
 **No single caller can reach tier A on its own.** On the benchmark, Kestrel places the
 whole `insG` family one position 3′ of truth; those records look perfectly clean in
@@ -106,6 +117,13 @@ overruling a well-supported record loses more than it gains.
 The BAM is opened only for calls that need it — on the benchmark, about a fifth of
 samples — and never at all for the rest.
 
+Two consequences worth stating plainly. A locus where the two callers describe
+*different events* is a conflict, not a gap, so a thin read consensus is not allowed to
+settle it with a number; `allele undetermined` stands. And because an ordinary
+single-caller call is tier B and therefore not a candidate, a run **without** the optional
+adVNTR module rarely opens the BAM at all — so a delins that Kestrel's VCF could not
+express is unlikely to be recovered unless adVNTR also ran.
+
 ## When two sources outvote a third
 
 There is one case where the Kestrel VCF does not have the last word: when **two
@@ -119,8 +137,8 @@ promotes a tier. Without that distinction, one caller corroborating itself would
 exactly like the two independent sources tier A asks for.
 
 Measured over the 200-sample benchmark this recovers 6 samples and loses none —
-`insG` goes from 1 to 5 and `insG_pos54` from 0 to 2, while `dupA`, `insCCCC` and
-`dupC` are unmoved. The narrowness matters: an earlier attempt that simply preferred
+`insG` goes from 1 to 5 and `insG_pos54` from 0 to 2, while `dupA` and `dupC` are
+unmoved. The narrowness matters: an earlier attempt that simply preferred
 the reads whenever they disagreed cost `dupA` 6 correct calls out of 10 and `insCCCC`
 6 out of 10. Requiring a second *caller* to agree is what makes the difference.
 

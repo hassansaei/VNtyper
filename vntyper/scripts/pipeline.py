@@ -49,6 +49,7 @@ from vntyper.scripts.summary import (
     convert_summary_to_tsv,
     end_summary,
     record_step,
+    refresh_step,
     start_summary,
     write_summary,
 )
@@ -61,6 +62,7 @@ from vntyper.scripts.summary_steps import (
     STEP_BAM_HEADER,
     STEP_COVERAGE,
     STEP_CROSS_MATCH,
+    STEP_KESTREL,
 )
 from vntyper.scripts.utils import (
     create_output_directories,
@@ -581,10 +583,19 @@ def run_pipeline(
                 # Tier A needs two independent callers agreeing, which no single
                 # caller stage can see. Without this step production could never
                 # emit a tier-A name however well the two agreed (#nomenclature).
-                reconcile_caller_outputs(
+                if reconcile_caller_outputs(
                     os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
                     os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
-                )
+                ):
+                    # The Kestrel step was recorded before this ran, so the summary
+                    # still holds the pre-reconciliation row -- and the HTML report
+                    # and cohort tables are built from the summary, not the TSV. Its
+                    # checksum no longer matched the rewritten file either.
+                    refresh_step(
+                        summary,
+                        STEP_KESTREL,
+                        write_summary_path=summary_file_path,
+                    )
                 advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,

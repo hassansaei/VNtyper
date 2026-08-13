@@ -368,13 +368,18 @@ def test_the_hybrid_total_does_not_regress() -> None:
     decide without truth cannot: preferring the reads costs more than it gains
     wherever the VCF was already right.
 
-    135 is what one uniform rule achieves, one short of that oracle bound. Naively
-    preferring the reads scored 129 and cost `dupA` 6->1 and `insCCCC` 9->3; letting
-    two *independent* sources outvote a third gains 6 and loses none, because the
-    reads may only overturn the VCF when the second caller agrees with them.
+    134 is what one uniform rule achieves. Naively preferring the reads scored 129 and
+    cost `dupA` 6->1 and `insCCCC` 9->3; letting two *independent* sources outvote a
+    third gains 6 and loses none, because the reads may only overturn the VCF when the
+    second caller agrees with them.
+
+    The last call back is deliberate. Of the 20 loci where a read consensus was the
+    only thing naming a locus the two callers described differently, just 6 were
+    right; refusing the 10 that rest on one or two reads gives up 1 correct name and
+    withholds 9 wrong ones, which is the trade this whole design is built on.
     """
     correct, _, _, _ = _hybrid()
-    assert sum(correct.values()) >= 135
+    assert sum(correct.values()) >= 134
 
 
 def test_the_bam_rescue_recovers_alleles_the_vcf_could_not() -> None:

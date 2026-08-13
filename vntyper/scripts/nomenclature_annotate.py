@@ -208,6 +208,12 @@ def _kestrel_row_call(row: pd.Series) -> Nomenclature | None:
     Returns:
         Nomenclature | None: The named record.
     """
+    # A missing cell in a frame read with `dtype=str` is NaN, and `str(NaN)` is the
+    # text "nan" -- which every emptiness check accepts as an allele. Reject the row
+    # here, where the frame is still available to ask.
+    if any(pd.isna(row.get(field)) for field in ("Motifs", "POS", "REF", "ALT")):
+        logger.debug("Kestrel row missing a required field; not translatable: %s", dict(row))
+        return None
     try:
         return from_kestrel(str(row["Motifs"]), int(row["POS"]), str(row["REF"]), str(row["ALT"]))
     except (TypeError, ValueError):
@@ -312,102 +318,152 @@ def reconcile_caller_outputs(
         return False
 
     supports: dict[str, int | None] = {}
-    kestrel_rows = [row for _, row in kestrel.iterrows() if not _is_negative(row)]
+    kestrel_keep = [not _is_negative(row) for _, row in kestrel.iterrows()]
+    kestrel_rows = [row for (_, row), keep in zip(kestrel.iterrows(), kestrel_keep, strict=True) if keep]
 
-    vcf_calls: list[Nomenclature] = []
+    # Aligned to `kestrel_rows`, `None` where a row could not be translated. Position
+    # is what ties a call back to the record it came from, so nothing is compacted.
+    vcf_calls: list[Nomenclature | None] = []
     for row in kestrel_rows:
         call = _kestrel_row_call(row)
+        vcf_calls.append(call)
         if call is None:
             continue
-        vcf_calls.append(call)
-        supports.setdefault("kestrel_vcf", _as_int(row.get("Estimated_Depth_AlternateVariant")))
+        # The thinnest row sets the depth, as everywhere else. Recording only the
+        # first row's depth made the tier depend on the order rows happened to be
+        # written in.
+        depth = _as_int(row.get("Estimated_Depth_AlternateVariant"))
+        existing = supports.get("kestrel_vcf")
+        supports["kestrel_vcf"] = depth if "kestrel_vcf" not in supports else _lesser(existing, depth)
 
-    advntr_calls = _advntr_calls(advntr, supports)
+    advntr_keep = [not _is_negative(row) for _, row in advntr.iterrows()]
+    advntr_calls_by_row = _advntr_calls_by_row(advntr, advntr_keep, supports)
+    advntr_calls = [call for calls in advntr_calls_by_row for call in calls]
 
-    if not vcf_calls and not advntr_calls:
+    named_vcf = [call for call in vcf_calls if call is not None]
+    if not named_vcf and not advntr_calls:
         return False
 
-    bam_calls = _read_calls(kestrel_rows, kestrel_dir or kestrel_path.parent, vcf_calls, advntr_calls, supports)
+    bam_calls = _read_calls(kestrel_rows, kestrel_dir or kestrel_path.parent, named_vcf, advntr_calls, supports)
+    named_bam = [call for call in bam_calls if call is not None]
 
     # Order matters: the Kestrel VCF is offered first so that whenever nothing
     # outvotes it, it is the call that stands. adVNTR is optional; Kestrel is not.
-    merged = reconcile(*vcf_calls, *bam_calls, *advntr_calls, supports=supports)
-    for bam_call in bam_calls:
+    merged = reconcile(*named_vcf, *named_bam, *advntr_calls, supports=supports)
+    for bam_call in named_bam:
         # Still applied after the vote, because it carries one rule the vote cannot:
         # a delins is unrepresentable in Kestrel's VCF, so a delins seen in the reads
         # is better evidence than the closest shape the VCF could write.
         merged = refine(merged, bam_call)
 
-    cells = _cells(
-        merged,
-        kestrel=_summarise([refine(reconcile(call), bam) for call, bam in _pair_rows(vcf_calls, bam_calls)]),
-        advntr=_summarise(advntr_calls),
-    )
+    # Each row keeps its *own* caller's name. Broadcasting one joined string to every
+    # row destroyed row identity: a file reporting two variants said both names on
+    # both rows, so neither row described itself any more.
+    kestrel_row_calls = _row_verdicts(vcf_calls, bam_calls)
+    kestrel_row_names = [render(call) if call is not None else "" for call in kestrel_row_calls]
+    advntr_row_names = [_summarise(calls) for calls in advntr_calls_by_row]
 
-    for frame, path, is_kestrel in ((kestrel, kestrel_path, True), (advntr, advntr_path, False)):
+    kestrel_summary = _summarise([call for call in kestrel_row_calls if call is not None])
+    advntr_summary = _summarise(advntr_calls)
+
+    cells = _cells(merged, kestrel=kestrel_summary, advntr=advntr_summary)
+
+    surfaces: tuple[tuple[pd.DataFrame, Path, list[bool], list[str], str, list[str]], ...] = (
+        (kestrel, kestrel_path, kestrel_keep, header, "Nomenclature_Kestrel", kestrel_row_names),
+        (advntr, advntr_path, advntr_keep, [], "Nomenclature_adVNTR", advntr_row_names),
+    )
+    for frame, path, keep, file_header, own_column, own_names in surfaces:
         updated = frame.copy()
-        keep = ~updated.apply(_is_negative, axis=1)
+        mask = pd.Series(keep, index=updated.index)
         for column, value in cells.items():
             if column not in updated.columns:
                 # The per-caller columns are this step's own output. A file written
                 # before they existed must gain them rather than silently drop the
                 # information they carry.
                 updated[column] = ""
-            updated.loc[keep, column] = value
-        _write_tsv(updated, path, header if is_kestrel else [])
+            updated.loc[mask, column] = value
+        updated.loc[mask, own_column] = own_names
+        _write_tsv(updated, path, file_header)
 
     logger.info(
         "Cross-caller nomenclature reconciled: tier %s (kestrel=%r advntr=%r).",
         merged.tier,
-        cells["Nomenclature_Kestrel"],
-        cells["Nomenclature_adVNTR"],
+        kestrel_summary,
+        advntr_summary,
     )
     return True
 
 
-def _pair_rows(
-    vcf_calls: list[Nomenclature],
-    bam_calls: list[Nomenclature],
-) -> list[tuple[Nomenclature, Nomenclature | None]]:
-    """Pair each Kestrel VCF call with the read consensus at its own locus.
+def _lesser(left: int | None, right: int | None) -> int | None:
+    """The smaller of two depths, where ``None`` means unknown and wins.
+
+    Unknown is not sufficient, so an unknown depth anywhere in an agreement makes the
+    agreement's depth unknown rather than letting a known one stand in for it.
+    """
+    if left is None or right is None:
+        return None
+    return min(left, right)
+
+
+def _row_verdicts(
+    vcf_calls: list[Nomenclature | None],
+    bam_calls: list[Nomenclature | None],
+) -> list[Nomenclature | None]:
+    """What Kestrel concludes for each of its own rows, refined by that row's reads.
+
+    Both lists are aligned to the Kestrel rows, so the pairing is by position. An
+    earlier version compacted the read consensuses, which pushed row 2's reads onto
+    row 1 whenever row 1 had none.
 
     Args:
-        vcf_calls: One per translatable Kestrel row, in row order.
-        bam_calls: The read consensus per row, same order, short when the reads were
-            not consulted.
+        vcf_calls: Per Kestrel row, ``None`` where untranslatable.
+        bam_calls: Per Kestrel row, ``None`` where the reads said nothing.
 
     Returns:
-        list: ``(vcf call, read call or None)`` pairs.
+        list: Per Kestrel row, ``None`` where untranslatable.
     """
-    return [(call, bam_calls[index] if index < len(bam_calls) else None) for index, call in enumerate(vcf_calls)]
+    verdicts: list[Nomenclature | None] = []
+    for index, call in enumerate(vcf_calls):
+        if call is None:
+            verdicts.append(None)
+            continue
+        reads = bam_calls[index] if index < len(bam_calls) else None
+        verdicts.append(refine(reconcile(call), reads))
+    return verdicts
 
 
-def _advntr_calls(advntr: pd.DataFrame, supports: dict[str, int | None]) -> list[Nomenclature]:
-    """Every adVNTR event at the locus, with the depth of the thinnest one.
+def _advntr_calls_by_row(
+    advntr: pd.DataFrame,
+    keep: list[bool],
+    supports: dict[str, int | None],
+) -> list[list[Nomenclature]]:
+    """Every adVNTR event, grouped by the row that reported it.
 
-    Not just the first: a sample reporting several simultaneous events is not
-    describing one simple allele, and hiding the rest would let a wrong name be
-    promoted.
+    Every event, not just the first: a sample reporting several simultaneous events is
+    not describing one simple allele, and hiding the rest would let a wrong name be
+    promoted. Grouped by row rather than flattened, so each row can still state its
+    own call.
 
     Args:
         advntr: The adVNTR result frame.
+        keep: Per row, whether it is a real call rather than a placeholder.
         supports: Per-source depths, updated in place.
 
     Returns:
-        list[Nomenclature]: The named events.
+        list[list[Nomenclature]]: One inner list per kept row, in row order.
     """
-    calls: list[Nomenclature] = []
-    for _, row in advntr.iterrows():
-        if _is_negative(row):
+    grouped: list[list[Nomenclature]] = []
+    for (_, row), wanted in zip(advntr.iterrows(), keep, strict=True):
+        if not wanted:
             continue
-        parsed = from_advntr(str(row.get("Variant", "")))
+        parsed = list(from_advntr(str(row.get("Variant", ""))))
+        grouped.append(parsed)
         if not parsed:
             continue
-        calls.extend(parsed)
         depth = _as_int(row.get("NumberOfSupportingReads"))
         existing = supports.get("advntr")
-        supports["advntr"] = depth if existing is None else min(existing, depth or existing)
-    return calls
+        supports["advntr"] = depth if "advntr" not in supports else _lesser(existing, depth)
+    return grouped
 
 
 def _read_calls(
@@ -416,7 +472,7 @@ def _read_calls(
     vcf_calls: list[Nomenclature],
     advntr_calls: list[Nomenclature],
     supports: dict[str, int | None],
-) -> list[Nomenclature]:
+) -> list[Nomenclature | None]:
     """The reads, as a third source, where the two callers leave something open.
 
     The reads are what separate a Kestrel misplacement from a real disagreement, and
@@ -432,7 +488,8 @@ def _read_calls(
         supports: Per-source depths, updated in place with the read count.
 
     Returns:
-        list[Nomenclature]: One call per row the reads could speak to.
+        list[Nomenclature | None]: One entry per Kestrel row, `None` where the
+        reads said nothing.
     """
     if not is_candidate(reconcile(*vcf_calls, *advntr_calls, supports=supports)):
         return []
@@ -441,13 +498,16 @@ def _read_calls(
     if rescuer is None:
         return []
 
-    calls: list[Nomenclature] = []
+    # One entry per Kestrel row, `None` where the reads said nothing. The positions
+    # are what pairs a read consensus back to the record it came from; compacting the
+    # list would refine row 2's allele onto row 1.
+    calls: list[Nomenclature | None] = []
     try:
         for row in kestrel_rows:
             call, support = _row_read_call(row, rescuer)
+            calls.append(call)
             if call is None:
                 continue
-            calls.append(call)
             existing = supports.get("kestrel_bam")
             # The weakest read consensus sets the depth, as for every other source:
             # an agreement is only as strong as its thinnest contributing evidence.

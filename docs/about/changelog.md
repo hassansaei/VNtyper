@@ -44,7 +44,12 @@ the one. "Independent" means a different caller — Kestrel's VCF agreeing with 
 own alignment is one opinion, not two, and neither outvotes anything nor promotes a
 tier.
 
-Measured on 200 known-truth simulated samples: 135 named correctly, none of the tier-A
+A read consensus may not settle a locus where the two callers describe *different
+events*: that is a conflict rather than a gap, and of the 20 benchmark loci where the
+reads were the only thing naming one, just 6 were right. Refusing the ten that rest on
+one or two reads gives up one correct name and withholds nine wrong ones.
+
+Measured on 200 known-truth simulated samples: 134 named correctly, none of the tier-A
 names disagreeing with truth, and no name emitted for any of the 200 negative controls.
 
 Also fixes a result row whose last column is empty being dropped from

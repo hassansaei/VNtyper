@@ -153,11 +153,14 @@ def test_a_below_tier_a_row_still_shows_its_name() -> None:
 
 def _write_caller_outputs(tmp_path, advntr_state: str, support: str) -> tuple[Path, Path]:
     kestrel = tmp_path / "kestrel_result.tsv"
+    # The depth column is present and populated: an agreement is only as strong as its
+    # weakest source, and a source with no depth at all makes it unknown rather than
+    # borrowing the other caller's.
     kestrel.write_text(
         "## VNtyper Kestrel result\n"
-        "Motifs\tPOS\tREF\tALT\tConfidence\tNomenclature\tNomenclature_Tier\t"
-        "Nomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\n"
-        "X-X\t67\tG\tGG\tHigh_Precision\tduplication, position-ambiguous\tB\t\t53_59\t53C[7]>53C[8]\n"
+        "Motifs\tPOS\tREF\tALT\tConfidence\tEstimated_Depth_AlternateVariant\tNomenclature\t"
+        "Nomenclature_Tier\tNomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\n"
+        "X-X\t67\tG\tGG\tHigh_Precision\t40\tduplication, position-ambiguous\tB\t\t53_59\t53C[7]>53C[8]\n"
     )
     advntr = tmp_path / "output_adVNTR_result.tsv"
     advntr.write_text(
@@ -302,6 +305,56 @@ def test_the_reads_alone_do_not_outvote_the_vcf(tmp_path) -> None:
 
     written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
     assert written.loc[0, "Nomenclature"] == "59_60insG", "one caller's reads may not veto its own VCF"
+
+
+def test_a_missing_allele_cell_does_not_become_a_name(tmp_path) -> None:
+    """A blank ``REF`` must make the row untranslatable, not become DNA.
+
+    Read with ``dtype=str`` a missing cell is NaN, and ``str(NaN)`` is the text
+    ``nan`` -- which every emptiness check accepts as an allele. An absent ``REF``
+    produced a confident ``52_53delGC`` out of nothing.
+    """
+    frame = kestrel_stage_frame("final")
+    frame.loc[0, "REF"] = None
+
+    named = annotate_kestrel_frame(frame)
+    assert named.loc[0, "Nomenclature"] == ""
+    assert named.loc[0, "Nomenclature_Kestrel"] == ""
+
+
+def test_each_row_keeps_its_own_name_when_a_file_reports_two_variants(tmp_path) -> None:
+    """Row identity survives reconciliation.
+
+    Broadcasting one joined summary onto every row made a two-variant file say both
+    names on both rows, so neither row described itself any more.
+    """
+    kestrel = tmp_path / "kestrel_result.tsv"
+    kestrel.write_text(
+        "## VNtyper Kestrel result\n"
+        "Motifs\tPOS\tREF\tALT\tConfidence\tEstimated_Depth_AlternateVariant\tNomenclature\t"
+        "Nomenclature_Tier\tNomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\tNomenclature_Note\t"
+        "Nomenclature_Kestrel\tNomenclature_adVNTR\n"
+        "X-X\t67\tG\tGG\tHigh_Precision\t24\t59dupC\tB\t\t\t\t\t59dupC\t\n"
+        "X-X\t62\tG\tGC\tHigh_Precision\t24\t58_59insG\tB\t\t\t\t\t58_59insG\t\n"
+    )
+    advntr = tmp_path / "output_adVNTR_result.tsv"
+    advntr.write_text(
+        "VID\tVariant\tNumberOfSupportingReads\tNomenclature\tNomenclature_Tier\t"
+        "Nomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\tNomenclature_Note\t"
+        "Nomenclature_Kestrel\tNomenclature_adVNTR\n"
+        "1\tI22_2_G_LEN1\t24\t59dupC\tB\t\t\t\t\t\t59dupC\n"
+        "2\tI23_2_C_LEN1\t24\t58_59insG\tB\t\t\t\t\t\t58_59insG\n"
+    )
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    assert written.loc[0, "Nomenclature_Kestrel"] == "59dupC"
+    assert written.loc[1, "Nomenclature_Kestrel"] == "58_59insG", "row 2 must not inherit row 1's name"
+
+    mirrored = pd.read_csv(advntr, sep="\t", dtype=str)
+    assert mirrored.loc[0, "Nomenclature_adVNTR"] == "59dupC"
+    assert mirrored.loc[1, "Nomenclature_adVNTR"] == "58_59insG"
 
 
 def test_an_annotated_kestrel_result_survives_the_summary_parser(tmp_path) -> None:

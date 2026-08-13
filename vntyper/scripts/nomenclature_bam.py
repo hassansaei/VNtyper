@@ -217,6 +217,13 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         return call
 
     if call.name is None:
+        if FLAG_CALLER_DISAGREEMENT in call.flags and FLAG_LOW_READ_SUPPORT in bam_call.flags:
+            # There is no name here because two callers described different events,
+            # which is a real conflict rather than a gap the reads may fill. A thin
+            # consensus -- one or two reads at a locus covered by a hundred -- is not
+            # enough to settle it, and adopting it turned an honest "allele
+            # undetermined" into a bare number backed by a single read.
+            return call
         # The VCF had no allele to offer; the reads do. This is the whole point of
         # the rescue path -- it is where delins and the insG family come from.
         return Nomenclature(
