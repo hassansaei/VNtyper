@@ -14,6 +14,7 @@ BAM or CRAM input, which no module list can express.
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from pathlib import Path
 
@@ -140,3 +141,42 @@ def test_the_post_alignment_conversion_is_told_too(tmp_path: Path) -> None:
     )
 
     assert harness.kwargs("process_bam_to_fastq")["needs_advntr"] is True
+
+
+def test_the_model_a_run_used_is_recorded_in_the_summary(tmp_path: Path) -> None:
+    """A result must be traceable to the model that produced it (#268).
+
+    The fetch window comes from the model's own content, so which file was resolved
+    decides which reads adVNTR could ever see. Recording it is what makes a past run
+    interpretable.
+    """
+    config = deepcopy(MINIMAL_CONFIG)
+    config["tools"]["advntr"] = "echo 2.0.4 #"
+
+    harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"])
+
+    summary = json.loads((harness.output_dir / "pipeline_summary.json").read_text())
+    model = summary["advntr_model"]
+    assert model["schema_version"] == "v2"
+    assert model["window_bp"] == 155192032 - 155188507
+    assert model["genomic_interval"] == "chr1:155188507-155192032"
+    assert len(model["sha256"]) == 64
+
+
+def test_a_model_advntr_cannot_read_stops_the_run(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """An adVNTR predating the recorded end would fetch the old 840 bp window.
+
+    It reports no error while doing so, so the run has to be refused up front rather
+    than diagnosed from results that look confident.
+    """
+    config = deepcopy(MINIMAL_CONFIG)
+    config["tools"]["advntr"] = "echo 2.0.3 #"
+
+    # run_pipeline swallows every exception into sys.exit(1), so what the harness records
+    # is the exit; the refusal itself is in the log. Both matter: the run must stop, and
+    # it must say why.
+    caplog.set_level("ERROR")
+    harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"], expect_failure=True)
+
+    assert isinstance(harness.error, SystemExit)
+    assert "Install adVNTR >= 2.0.4" in caplog.text

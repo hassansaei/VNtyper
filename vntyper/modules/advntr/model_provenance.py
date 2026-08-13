@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shlex
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -27,6 +28,27 @@ from typing import Any
 SPAN_AWARE_ADVNTR = (2, 0, 4)
 
 _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+#: Every statement this module runs, keyed by the two table names it accepts. No SQL is
+#: assembled from a variable, so there is no identifier for anything to be injected into.
+#: SQLite cannot parameterise an identifier, so a fixed literal is the only safe form.
+_PRAGMA = {
+    "vntrs": "PRAGMA table_info(vntrs)",
+    "vntrs_v2": "PRAGMA table_info(vntrs_v2)",
+}
+_SELECT = {
+    "vntrs": {
+        False: "SELECT id, chromosome, ref_start, repeats FROM vntrs",
+        True: "SELECT id, chromosome, ref_start, repeats, ref_end FROM vntrs",
+    },
+    "vntrs_v2": {
+        False: "SELECT id, chromosome, ref_start, repeats FROM vntrs_v2",
+        True: "SELECT id, chromosome, ref_start, repeats, ref_end FROM vntrs_v2",
+    },
+}
+
+#: The MUC1 VNTR. A database carrying more rows is selected from, not rejected.
+MUC1_VID = 25561
 
 _REINSTALL = "Reinstall the reference bundle with `vntyper install-references -d reference --references hg38`."
 
@@ -61,15 +83,17 @@ def detect_advntr_version(config: dict[str, Any]) -> tuple[int, int, int] | None
     if not command:
         return None
     try:
-        completed = subprocess.run(  # noqa: S602 - configured command, same as the run itself
-            f"{command} --version",
-            shell=True,
+        # Split rather than handing the string to a shell: the configured command is
+        # multi-token ("mamba run -n envadvntr advntr"), which is the only reason a
+        # shell was tempting, and shlex gives the same tokens without one.
+        completed = subprocess.run(
+            [*shlex.split(command), "--version"],
             capture_output=True,
             text=True,
             timeout=120,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
     return parse_advntr_version(f"{completed.stdout}\n{completed.stderr}")
 
@@ -89,6 +113,9 @@ def describe_model(db_path: str | Path) -> dict[str, Any]:
     connection = sqlite3.connect(str(path))
     try:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        # Statements are selected from a fixed map rather than built by interpolating a
+        # name into SQL. SQLite cannot parameterise an identifier, so the only safe form
+        # is a literal the caller never influences.
         if "vntrs_v2" in tables:
             table, schema_version = "vntrs_v2", "v2"
         elif "vntrs" in tables:
@@ -98,18 +125,25 @@ def describe_model(db_path: str | Path) -> dict[str, Any]:
                 f"{path} contains no adVNTR model table (expected `vntrs_v2` or `vntrs`). {_REINSTALL}"
             )
 
-        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-        selected = "id, chromosome, ref_start, repeats" + (", ref_end" if "ref_end" in columns else "")
-        rows = list(connection.execute(f"SELECT {selected} FROM {table}"))
+        columns = {row[1] for row in connection.execute(_PRAGMA[table])}
+        rows = list(connection.execute(_SELECT[table]["ref_end" in columns]))
     finally:
         connection.close()
 
-    if len(rows) != 1:
-        raise AdvntrModelError(
-            f"{path} holds {len(rows)} VNTR rows; the MUC1 bundle is single-row by design. {_REINSTALL}"
-        )
-
-    row = rows[0]
+    if not rows:
+        raise AdvntrModelError(f"{path} holds no VNTR rows. {_REINSTALL}")
+    if len(rows) == 1:
+        row = rows[0]
+    else:
+        # A general adVNTR database carries thousands of VNTRs. Select MUC1 rather than
+        # assuming the file is the single-row bundle.
+        muc1 = [candidate for candidate in rows if candidate[0] == MUC1_VID]
+        if len(muc1) != 1:
+            raise AdvntrModelError(
+                f"{path} holds {len(rows)} VNTR rows and {len(muc1)} with VID "
+                f"{MUC1_VID}; exactly one MUC1 model is required. {_REINSTALL}"
+            )
+        row = muc1[0]
     vid, chromosome, ref_start, repeats = row[0], row[1], int(row[2]), row[3]
     ref_end = int(row[4]) if len(row) > 4 and row[4] is not None else None
     segments = repeats.split(",")

@@ -112,6 +112,47 @@ class TestDescribeModel:
         with pytest.raises(AdvntrModelError):
             describe_model(tmp_path / "absent.db")
 
+    def test_an_empty_table_is_rejected(self, tmp_path):
+        path = tmp_path / "norows.db"
+        sqlite3.connect(str(path)).execute(V2_SQL)
+        with pytest.raises(AdvntrModelError) as exc:
+            describe_model(path)
+        assert "install-references" in str(exc.value)
+
+    def test_a_multi_row_database_selects_the_muc1_model(self, tmp_path):
+        # A general adVNTR database carries thousands of VNTRs. Selecting MUC1 beats
+        # assuming the file is the single-row bundle.
+        path = _write(tmp_path / "many.db", V2_SQL, ref_end=155192032)
+        db = sqlite3.connect(str(path))
+        db.execute(
+            "INSERT INTO vntrs_v2 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (999, "True", "chr7", 1000, "OTHER", "Coding", "T" * 60, "L" * 500, "R" * 500, "T" * 60, 0.0, 1600),
+        )
+        db.commit()
+        db.close()
+        assert describe_model(path)["vid"] == 25561
+
+    def test_a_multi_row_database_without_muc1_is_rejected(self, tmp_path):
+        path = _write(tmp_path / "nomuc1.db", V2_SQL, ref_end=155192032)
+        db = sqlite3.connect(str(path))
+        db.execute("UPDATE vntrs_v2 SET id = 999")
+        db.execute(
+            "INSERT INTO vntrs_v2 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (998, "True", "chr7", 1000, "OTHER", "Coding", "T" * 60, "L" * 500, "R" * 500, "T" * 60, 0.0, 1600),
+        )
+        db.commit()
+        db.close()
+        with pytest.raises(AdvntrModelError) as exc:
+            describe_model(path)
+        assert "25561" in str(exc.value)
+
+    @pytest.mark.parametrize("ref_end", [155188507, 155188000])
+    def test_an_end_at_or_before_the_start_is_rejected(self, tmp_path, ref_end):
+        path = _write(tmp_path / "backwards.db", V2_SQL, ref_end=ref_end)
+        with pytest.raises(AdvntrModelError) as exc:
+            describe_model(path)
+        assert "ref_start" in str(exc.value)
+
 
 class TestVersionParsing:
     @pytest.mark.parametrize(
@@ -124,6 +165,11 @@ class TestVersionParsing:
     def test_unparseable_output_is_not_guessed_at(self):
         # 2.0.3 has no --version flag at all, so this is the realistic old-binary case.
         assert parse_advntr_version("usage: advntr [options]") is None
+
+    @pytest.mark.parametrize("text", ["", None])
+    def test_no_output_is_not_a_version(self, text):
+        # A binary that answers nothing must read as "too old", never as "fine".
+        assert parse_advntr_version(text) is None
 
 
 class TestCompatibility:

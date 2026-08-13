@@ -21,6 +21,7 @@ re-raises the recorded exception instead, so a broken stub is visible.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import tempfile
 from contextlib import ExitStack
@@ -79,7 +80,11 @@ def _minimal_advntr_model(path: Path) -> str:
     return str(path)
 
 
-_MODEL_DIR = Path(tempfile.mkdtemp(prefix="vntyper-harness-advntr-"))
+# Registered for cleanup rather than left on disk: a module-level mkdtemp survives the
+# session otherwise, and a test suite should not litter /tmp.
+_MODEL_TMP = tempfile.TemporaryDirectory(prefix="vntyper-harness-advntr-")
+atexit.register(_MODEL_TMP.cleanup)
+_MODEL_DIR = Path(_MODEL_TMP.name)
 
 MINIMAL_CONFIG: dict[str, Any] = {
     "tools": {
