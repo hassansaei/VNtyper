@@ -55,6 +55,10 @@ KESTREL_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Depth_Score",
     "Confidence",
     "Flag",
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Ambiguity_Interval",
+    "Repeat_Form",
 )
 
 #: adVNTR result columns, in display order.
@@ -70,6 +74,10 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "REF",
     "ALT",
     "Flag",
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Ambiguity_Interval",
+    "Repeat_Form",
 )
 
 #: The one escaping exemption in the whole cohort report: the column

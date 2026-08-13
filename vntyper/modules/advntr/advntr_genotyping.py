@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from vntyper.scripts.command_builders import quote_path
+from vntyper.scripts.nomenclature_annotate import NOMENCLATURE_COLUMNS, annotate_advntr_frame
 from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
@@ -820,6 +821,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
         "REF",
         "ALT",
         "Flag",
+        *NOMENCLATURE_COLUMNS,
     ]
     if df.empty:
         logger.warning("VCF file is empty. Generating default negative result.")
@@ -836,6 +838,9 @@ def process_advntr_output(output_path, output, output_name, config=None):
                     "REF": "Not applicable",
                     "ALT": "Not applicable",
                     "Flag": "Not applicable",
+                    # Empty, not "Not applicable": these five are nullable by
+                    # contract and are never padded with a placeholder string.
+                    **dict.fromkeys(NOMENCLATURE_COLUMNS, ""),
                 }
             ]
         )
@@ -871,6 +876,9 @@ def process_advntr_output(output_path, output, output_name, config=None):
                         "REF": "Not applicable",
                         "ALT": "Not applicable",
                         "Flag": "Not applicable",
+                        # Empty, not "Not applicable": these five are nullable by
+                        # contract and are never padded with a placeholder string.
+                        **dict.fromkeys(NOMENCLATURE_COLUMNS, ""),
                     }
                 ]
             )
@@ -907,10 +915,14 @@ def process_advntr_output(output_path, output, output_name, config=None):
 
                 advntr_concat = add_flags(advntr_concat, flagging_rules)
 
+            # Name the variants. Done before the "ensure all columns present" sweep
+            # below so the five land as computed values, not as "Not applicable".
+            advntr_concat = annotate_advntr_frame(advntr_concat)
+
             # Ensure all final columns are present
             for col in final_columns:
                 if col not in advntr_concat.columns:
-                    advntr_concat[col] = "Not applicable"
+                    advntr_concat[col] = "" if col in NOMENCLATURE_COLUMNS else "Not applicable"
 
         advntr_concat = advntr_concat[final_columns]
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")

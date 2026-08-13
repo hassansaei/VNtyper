@@ -48,6 +48,13 @@ FINAL_COLUMNS = [
     "REF",
     "ALT",
     "Flag",
+    # MUC1 nomenclature, added for every caller in one pass. Nullable: written as
+    # the empty string, never as "Not applicable", on rows that carry no name.
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Nomenclature_Flags",
+    "Ambiguity_Interval",
+    "Repeat_Form",
 ]
 
 RESULT_SUFFIX = "_adVNTR_result.tsv"
@@ -74,6 +81,18 @@ def read_result(tmp_path: Path, output_name: str = "output") -> pd.DataFrame:
     return pd.read_csv(path, sep="\t", dtype=str)
 
 
+#: The nomenclature columns are nullable by contract: on a row that carries no name
+#: they are written empty, never padded with the "Not applicable" the older columns
+#: use. Read back with ``dtype=str`` an empty cell arrives as NaN.
+NULLABLE_COLUMNS = (
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Nomenclature_Flags",
+    "Ambiguity_Interval",
+    "Repeat_Form",
+)
+
+
 def assert_is_negative_placeholder(df: pd.DataFrame) -> None:
     """Assert the frame is exactly the one-row negative placeholder the report expects."""
     assert list(df.columns) == FINAL_COLUMNS
@@ -81,6 +100,11 @@ def assert_is_negative_placeholder(df: pd.DataFrame) -> None:
     row = df.iloc[0]
     assert row["VID"] == "Negative"
     for column in FINAL_COLUMNS[1:]:
+        if column in NULLABLE_COLUMNS:
+            assert pd.isna(row[column]) or row[column] == "", (
+                f"{column} is nullable and must be empty, got {row[column]!r}"
+            )
+            continue
         assert row[column] == "Not applicable", f"{column} should be 'Not applicable', got {row[column]!r}"
 
 

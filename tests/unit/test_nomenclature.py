@@ -94,7 +94,7 @@ def _edit(change: dict) -> tuple[int, int, str]:
 def test_canonical_unit_is_the_simulators_unit() -> None:
     """The translator's canonical X must be the simulator's X, byte for byte."""
     data = _config()
-    assert CANONICAL_UNIT == data["repeats"]["X"]
+    assert data["repeats"]["X"] == CANONICAL_UNIT
 
 
 def test_canonical_unit_carries_the_published_c_tract() -> None:

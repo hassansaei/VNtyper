@@ -102,9 +102,7 @@ def test_several_simultaneous_events_never_reach_tier_a() -> None:
     every event the caller reported is what makes the locus's complexity visible.
     """
     kestrel = from_kestrel("5C-M", 31, "G", "GG")
-    events = [
-        call for state in ("I51_2_G_LEN1", "I69_3_G_LEN1", "D49_3&I49_3_C_LEN5") for call in from_advntr(state)
-    ]
+    events = [call for state in ("I51_2_G_LEN1", "I69_3_G_LEN1", "D49_3&I49_3_C_LEN5") for call in from_advntr(state)]
     merged = reconcile(kestrel, *events, support=42)
     assert merged.tier != "A"
     assert merged.name is None

@@ -65,7 +65,7 @@ def test_the_embedded_table_matches_the_shipped_fasta() -> None:
     if name:
         shipped[name] = "".join(chunks)
 
-    assert MOTIFS == shipped
+    assert shipped == MOTIFS
 
 
 def test_a_pair_is_right_then_left() -> None:

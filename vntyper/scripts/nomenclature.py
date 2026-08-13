@@ -712,10 +712,7 @@ def _group_components(components: list[_Component]) -> list[list[_Component]]:
             previous = groups[-1][-1]
             same_unit = previous.ru == component.ru
             consecutive_deletion = (
-                same_unit
-                and previous.kind == "D"
-                and component.kind == "D"
-                and previous.pos + 1 == component.pos
+                same_unit and previous.kind == "D" and component.kind == "D" and previous.pos + 1 == component.pos
             )
             colocated_delins = (
                 same_unit and previous.kind == "D" and component.kind == "I" and previous.pos == component.pos
