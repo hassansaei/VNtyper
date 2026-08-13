@@ -250,14 +250,27 @@ def test_the_motif_column_shows_the_annotated_motif_not_the_raw_pair(positive_su
     assert ">X-5</td>" not in html
 
 
-def test_a_negative_run_still_has_a_motif_column(tmp_path) -> None:
-    """The negative placeholder row carries `Motif` and no `Motifs` at all, so
-    before the fix the column was absent from every negative report too."""
+def test_a_truncated_placeholder_row_is_still_not_a_result(tmp_path) -> None:
+    """A placeholder need not carry all ten columns to be a non-result.
+
+    This case used to pin that the negative placeholder kept its `Motif` column
+    (contract C3): the row carries `Motif` and no `Motifs` at all, which is the
+    shape that made the missing-column defect invisible to a positive run. The
+    column contract is now pinned where it is declared
+    (`test_the_kestrel_display_columns_key_on_the_annotated_motif`) and on a
+    positive run (`test_the_motif_column_reaches_the_report`), because a negative
+    run no longer renders a row at all - so what is left to check here is that a
+    partial placeholder is recognised as one rather than tabulated.
+    """
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_KESTREL, [{"Motif": "None", "Confidence": "Negative"}]),
     )
-    assert "<th>Motif</th>" in render(tmp_path)
+
+    html = render(tmp_path)
+
+    assert 'id="kestrel_table"' not in html, "a placeholder row was tabulated as a result"
+    assert "No variant detected by Kestrel" in visible_text(html)
 
 
 def test_the_kestrel_display_columns_key_on_the_annotated_motif() -> None:
@@ -284,32 +297,189 @@ def test_the_confidence_column_is_colour_coded(positive_summary) -> None:
     assert '<span style="color:red;font-weight:bold;text-decoration:underline solid;">High_Precision</span>' in html
 
 
-def test_a_negative_run_renders_its_placeholder_row(tmp_path) -> None:
-    """`output_empty_result` writes a `Motif` column and no `Motifs` at all --
-    the shape that made the missing-column defect invisible to a positive run."""
-    negative_row = {
-        "Motif": "None",
-        "Variant": "None",
-        "POS": "None",
-        "REF": "None",
-        "ALT": "None",
-        "Motif_sequence": "None",
-        "Estimated_Depth_AlternateVariant": "None",
-        "Estimated_Depth_Variant_ActiveRegion": "None",
-        "Depth_Score": "None",
-        "Confidence": "Negative",
-    }
+# ---------------------------------------------------------------------------
+# The Kestrel empty states - issue #242
+# ---------------------------------------------------------------------------
+
+#: What `kestrel_genotyping.output_empty_result` writes when Kestrel ran and called
+#: nothing: the literal string "None" in all nine value columns and `Negative` in
+#: `Confidence`. `summary.parse_tsv` splits the file on tabs and coerces nothing
+#: (AGENTS.md trap 5: all `parsed_result` values are strings), so this is exactly the
+#: row that reaches the report.
+NEGATIVE_KESTREL_ROW = {
+    "Motif": "None",
+    "Variant": "None",
+    "POS": "None",
+    "REF": "None",
+    "ALT": "None",
+    "Motif_sequence": "None",
+    "Estimated_Depth_AlternateVariant": "None",
+    "Estimated_Depth_Variant_ActiveRegion": "None",
+    "Depth_Score": "None",
+    "Confidence": "Negative",
+}
+
+#: Script and style bodies, which are not text the reader sees.
+_SCRIPT_OR_STYLE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+
+#: Any tag.
+_TAG = re.compile(r"<[^>]+>")
+
+
+def visible_text(html: str) -> str:
+    """Return what the report says, with its markup removed.
+
+    The defect this file's empty-state cases describe is a *reading*: the cells
+    ``None None None None None None None None NaN Negative`` under a heading
+    claiming to list identified variants. Asserting that against the raw HTML is
+    vacuous - every cell is separated by tags - so the tags come out first.
+
+    Args:
+        html: The rendered report.
+
+    Returns:
+        str: The document's text, whitespace collapsed.
+    """
+    return " ".join(_TAG.sub(" ", _SCRIPT_OR_STYLE.sub(" ", html)).split())
+
+
+def negative_summary(output_dir: Path) -> Path:
+    """Write a summary whose Kestrel step carries only the empty-result placeholder."""
+    write_summary(
+        output_dir,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [NEGATIVE_KESTREL_ROW]),
+        input_files={"bam": "NEG1.bam"},
+    )
+    return output_dir
+
+
+def test_a_negative_kestrel_run_renders_a_sentence_not_a_none_row(tmp_path) -> None:
+    """The commonest report in any cohort, and it read as a crashed pipeline.
+
+    ``output_empty_result`` writes the literal string ``"None"`` into all nine value
+    columns, and ``build_kestrel_frames`` coerced ``Depth_Score`` through
+    ``pd.to_numeric(errors="coerce")`` - so a negative sample's report tabulated
+    ``None None None None None None None None NaN Negative`` under the heading
+    "Kestrel Identified Variants".
+    """
+    text = visible_text(render(negative_summary(tmp_path)))
+
+    assert "None None" not in text, "the empty-result placeholder is still tabulated as a variant"
+    assert "NaN" not in text, "a coerced placeholder depth score is still displayed"
+    assert "No variant detected by Kestrel" in text
+
+
+def test_a_negative_kestrel_run_makes_no_row_count_claim(tmp_path) -> None:
+    """The count line says nothing was withheld; counting a non-result defeats it.
+
+    Rendered over the placeholder it read "Showing 1 of 1 Kestrel row; none flagged."
+    above a table containing no variant. The adVNTR side has always suppressed its
+    count line when it has no table, and this mirrors it.
+    """
+    html = render(negative_summary(tmp_path))
+
+    assert "Showing 1 of 1 Kestrel row" not in html
+    assert "Kestrel row" not in html, "a report with no Kestrel table still makes a Kestrel row-count claim"
+
+
+def test_an_absent_kestrel_step_does_not_emit_a_zero_column_table(tmp_path) -> None:
+    """``vntyper report`` renders a supplied summary, which need not have the step.
+
+    ``to_html`` on a frame with no columns produces a headerless, bodyless table -
+    a stray empty box beneath a heading. ``escaped_table_html`` returns "" for an
+    empty frame instead, which is the hook the authored sentence hangs on.
+    """
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]))
+
+    html = render(tmp_path)
+
+    assert 'id="kestrel_table"' not in html, "a report with no Kestrel step still emits an empty table"
+    assert '<tr style="text-align: right;">' not in html
+    assert "Kestrel genotyping was not performed" in visible_text(html)
+
+
+def test_the_two_kestrel_empty_states_do_not_read_alike(tmp_path) -> None:
+    """ "Kestrel ran and called nothing" and "Kestrel did not run" are different facts.
+
+    This is the same distinction #223 drew for an unreadable derived VCF and the one
+    ``screening_summary.NOT_PERFORMED`` draws for adVNTR: a stage that was never asked
+    to run has said nothing, and a report that renders it as a negative is asserting
+    something the run never established.
+    """
+    ran = tmp_path / "ran"
+    absent = tmp_path / "absent"
+    ran.mkdir()
+    absent.mkdir()
+    negative_summary(ran)
+    write_summary(absent, tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]))
+
+    ran_text = visible_text(render(ran))
+    absent_text = visible_text(render(absent))
+
+    assert "No variant detected by Kestrel" in ran_text
+    assert "Kestrel genotyping was not performed" not in ran_text
+    assert "Kestrel genotyping was not performed" in absent_text
+    assert "No variant detected by Kestrel" not in absent_text
+
+
+def test_suppressing_the_placeholder_leaves_the_screening_state_alone(tmp_path) -> None:
+    """The state is computed from the rows, and a non-result was never one.
+
+    With the placeholder in the frame every configured Kestrel rule broke on its
+    ``Confidence`` condition and the block's ``default`` - "negative" - was returned;
+    an empty frame returns the same default by the shortest path in
+    ``compute_algorithm_result``. This pins that the two agree, so removing the row
+    from the table cannot move the screening verdict.
+    """
+    html = render(negative_summary(tmp_path))
+
+    assert 'data-state="no-finding"' in html
+    assert "Kestrel: negative" in visible_text(html)
+
+
+def test_a_row_that_names_a_variant_is_never_suppressed(tmp_path) -> None:
+    """Adversarial: a real call whose ``Confidence`` happens to be the placeholder token.
+
+    Suppression keys on the whole row being empty, not on one cell. A rule reading
+    ``Confidence == "Negative"`` alone would delete this variant from the report.
+    """
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
-        tabular_step(summary_steps.STEP_KESTREL, [negative_row]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Confidence": "Negative"}]),
     )
+
     html = render(tmp_path)
-    assert "Negative" in html
+
+    assert 'id="kestrel_table"' in html, "a row naming a position, a REF and an ALT was suppressed"
+    assert ">67</td>" in html
+    assert "Showing 1 of 1 Kestrel row; none flagged." in html
+
+
+def test_a_negative_run_still_names_its_sample_and_its_coverage(tmp_path) -> None:
+    """The empty state replaces the table, not the report.
+
+    A negative run is the commonest one in a cohort, so everything that makes the
+    file a record - who it is about, what was measured - has to survive the branch.
+    """
+    html = render(negative_summary(tmp_path))
+
+    assert "<h1>MUC1 VNTR report — NEG1</h1>" in html
+    assert _coverage_qc_cell(html) == "PASS"
 
 
 def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -> None:
-    """A formatting conversion failure keeps matching evidence and escaped display data."""
+    """A formatting conversion failure keeps matching evidence and display data.
+
+    The display frame carries the sample's own string **unescaped** here, and that is
+    deliberate: since the table is rendered through ``escaped_table_html`` the escaping
+    happens once, at render time, over every column not named in ``html_columns``.
+    Escaping here as well would double-escape it, so a motif sequence containing a ``<``
+    would reach the reader as the literal text ``&lt;``. What must stay true is that
+    nothing sample-derived reaches the HTML unescaped, which is asserted end to end by
+    ``test_every_kestrel_cell_but_the_two_we_build_is_escaped``.
+    """
     monkeypatch.setattr(generate_report.pd, "to_numeric", Mock(side_effect=ValueError("bad depth")))
     caplog.set_level(logging.WARNING, logger=generate_report.logger.name)
     caplog.clear()
@@ -324,7 +494,7 @@ def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -
     assert display_frame.loc[0, "Confidence"] == (
         '<span style="color:red;font-weight:bold;text-decoration:underline solid;">High_Precision</span>'
     )
-    assert display_frame.loc[0, "Motif Sequence"] == "&lt;untrusted&gt;"
+    assert display_frame.loc[0, "Motif Sequence"] == "<untrusted>"
     assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
         (logging.WARNING, "Could not convert 'Depth Score' to numeric: bad depth")
     ]
@@ -435,6 +605,24 @@ def test_the_template_no_longer_decides_emphasis_from_the_message_text() -> None
 
 def test_an_absent_advntr_step_says_it_was_not_performed(positive_summary) -> None:
     assert "adVNTR genotyping was not performed." in render(positive_summary)
+
+
+def test_the_advntr_not_performed_state_is_worded_once(positive_summary) -> None:
+    """One state, one sentence - and it is the template's.
+
+    ``generate_summary_report`` also built ``<p>adVNTR genotyping was not performed.</p>``
+    for this state, which the template's ``{% if advntr_available and advntr_highlight %}``
+    can never reach: when adVNTR is unavailable the guard is false and the ``{% else %}``
+    below it prints its own, differently worded line. Two sentences for one state, one of
+    them unreachable. This counts what the reader actually gets.
+    """
+    text = visible_text(render(positive_summary))
+
+    assert "adVNTR genotyping was not performed or no adVNTR results are available." in text
+    assert text.count("adVNTR genotyping was not performed") == 2, (
+        "the report should say this exactly twice - once in the configured screening message and once "
+        f"in the adVNTR section - and says it {text.count('adVNTR genotyping was not performed')} times"
+    )
 
 
 def test_an_advntr_step_with_no_rows_says_nothing_was_found(tmp_path) -> None:
@@ -817,6 +1005,65 @@ def test_an_advntr_flagged_row_states_its_reason_in_the_table(tmp_path) -> None:
 
     assert FLAG_WARNING_GLYPH in html
     assert "Low_Depth" in html
+
+
+#: Every Kestrel display column except the two whose markup VNtyper builds itself and
+#: the one whose value never survives to be escaped. Derived from the display table so
+#: a column added later is covered without editing this list.
+#:
+#: ``Depth_Score`` is excluded because ``build_kestrel_frames`` runs it through
+#: ``pd.to_numeric(errors="coerce")``, so a non-numeric value is NaN before it reaches
+#: any escaping at all - covered by
+#: ``test_a_payload_in_the_depth_score_is_coerced_rather_than_escaped``.
+KESTREL_ESCAPED_COLUMNS = tuple(
+    column for column in generate_report.KESTREL_DISPLAY_COLUMNS if column not in ("Confidence", "Flag", "Depth_Score")
+)
+
+
+@pytest.mark.parametrize("column", KESTREL_ESCAPED_COLUMNS)
+def test_every_kestrel_cell_but_the_two_we_build_is_escaped(tmp_path, column: str) -> None:
+    """The Kestrel table's escaping, asserted where it is observable.
+
+    The table is rendered with ``escape=False`` - the ``Confidence`` span and the
+    ``Flag`` cell are markup VNtyper builds - so every other cell is escaped only
+    because ``escaped_table_html`` escapes it. #242 routed this table through that
+    helper instead of calling ``to_html`` directly; before that the frame was escaped a
+    step earlier, in ``build_kestrel_frames``. Either arrangement is correct and only
+    one of them may be in force, because doing both renders ``&lt;`` to the reader as
+    text. This is the assertion that survives the choice.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, column: PAYLOAD}]),
+    )
+
+    html = render(tmp_path)
+
+    assert PAYLOAD not in html, f"a Kestrel {column} value reached the HTML unescaped"
+    assert ESCAPED in html
+    assert "&amp;lt;" not in html, "the Kestrel table is escaped twice, so the reader sees the escape sequence"
+
+
+def test_a_payload_in_the_depth_score_is_coerced_rather_than_escaped(tmp_path) -> None:
+    """The one Kestrel column whose value cannot reach the escaping at all.
+
+    ``build_kestrel_frames`` sorts on ``Depth Score`` and runs the column through
+    ``pd.to_numeric(errors="coerce")`` first, so anything that is not a number is NaN
+    before the table is built. Asserted rather than assumed: it is the reason that
+    column is left out of the parametrisation above, and if the coercion moved, the
+    exclusion would silently stop covering anything.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Depth_Score": PAYLOAD}]),
+    )
+
+    html = render(tmp_path)
+
+    assert PAYLOAD not in html
+    assert ESCAPED not in html, "the payload survived the coercion, so this column does need escaping"
 
 
 def test_an_unstyled_confidence_value_is_escaped(tmp_path) -> None:

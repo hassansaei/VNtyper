@@ -47,7 +47,7 @@ import html
 import json
 import logging
 import numbers
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -471,6 +471,74 @@ def format_number_columns(df: pd.DataFrame, formats: Mapping[str, str]) -> pd.Da
     return formatted
 
 
+#: What ``kestrel_genotyping.output_empty_result`` writes into every column but
+#: ``Confidence`` when Kestrel ran and called nothing: the literal four characters
+#: ``None``, not a JSON null. ``summary.parse_tsv`` splits the file on tabs and coerces
+#: nothing, so this is what reaches the report (AGENTS.md trap 5).
+EMPTY_RESULT_TOKEN = "None"
+
+#: The ``Confidence`` that placeholder row carries. It is not a confidence value - no
+#: rule in ``report_config.json`` matches it - it is the row saying there is no call.
+EMPTY_RESULT_CONFIDENCE = "Negative"
+
+
+def _names_nothing(value: Any) -> bool:
+    """Whether one cell of a candidate placeholder row states no fact.
+
+    Args:
+        value: The cell value.
+
+    Returns:
+        bool: True for the placeholder token, an empty string, ``None`` and NaN.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() in ("", EMPTY_RESULT_TOKEN)
+    return isinstance(value, float) and pd.isna(value)
+
+
+def is_empty_result_row(row: Mapping[str, Any]) -> bool:
+    """Whether one Kestrel row is the placeholder a negative run writes, not a variant.
+
+    ``output_empty_result`` writes one row of ``"None"`` with ``Confidence`` set to
+    ``"Negative"`` so that ``kestrel_result.tsv`` has a body rather than a header alone.
+    Rendered as a table row it read ``None None None None None None None None NaN
+    Negative`` under the heading "Kestrel Identified Variants", which is what the
+    commonest report in any cohort said (#242).
+
+    **Both halves of the test are required.** The ``Confidence`` value alone is not
+    enough: a report is a record, and a rule that removed every row carrying that label
+    would remove a real call the moment a future calibration used the word. So the row
+    must also name nothing - no motif, no position, no REF, no ALT.
+
+    Args:
+        row: One row of the ``Kestrel Genotyping`` step's data.
+
+    Returns:
+        bool: True when the row is the empty-result placeholder.
+    """
+    confidence = row.get("Confidence")
+    if not isinstance(confidence, str) or confidence.strip() != EMPTY_RESULT_CONFIDENCE:
+        return False
+    return all(_names_nothing(value) for key, value in row.items() if key != "Confidence")
+
+
+def drop_empty_result_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Return the rows that state a result, in the order they arrived.
+
+    Args:
+        rows: The ``Kestrel Genotyping`` step's data. Not modified.
+
+    Returns:
+        list[Mapping[str, Any]]: Every row that is not the empty-result placeholder.
+    """
+    kept = [row for row in rows if not is_empty_result_row(row)]
+    if len(kept) != len(rows):
+        logger.info("Suppressed %d Kestrel empty-result placeholder row(s) from display.", len(rows) - len(kept))
+    return kept
+
+
 def flagged_row_count(df: pd.DataFrame) -> int:
     """Count the rows of a results frame whose ``Flag`` states a reason.
 
@@ -552,7 +620,12 @@ def escape_frame_cells(df: pd.DataFrame, html_columns: tuple[str, ...] = ()) -> 
     return escaped
 
 
-def escaped_table_html(df: pd.DataFrame, classes: str, html_columns: tuple[str, ...] = ()) -> str:
+def escaped_table_html(
+    df: pd.DataFrame,
+    classes: str,
+    html_columns: tuple[str, ...] = (),
+    table_id: str | None = None,
+) -> str:
     """Render a frame as an HTML table with every sample-derived cell escaped.
 
     ``DataFrame.to_html(escape=False)`` is needed whenever *any* column holds markup
@@ -566,14 +639,20 @@ def escaped_table_html(df: pd.DataFrame, classes: str, html_columns: tuple[str, 
         classes: The CSS classes for the ``<table>`` element.
         html_columns: Columns already holding markup this codebase constructed.
             Anything not named here is escaped.
+        table_id: The ``id`` for the ``<table>`` element, when something addresses it.
+            The per-sample Kestrel table is ``#kestrel_table`` to the template's
+            DataTables initialisation and to the browser tier; the cohort tables are
+            addressed by class and pass nothing.
 
     Returns:
         str: The table markup, or "" for an empty frame - ``to_html`` on one produces a
-            headerless table that renders as a stray empty box.
+            headerless table that renders as a stray empty box. Callers treat that empty
+            string as the hook for an authored empty state (#242).
     """
     if df.empty:
         return ""
     return escape_frame_cells(df, html_columns=html_columns).to_html(
+        table_id=table_id,
         classes=classes,
         index=False,
         escape=False,

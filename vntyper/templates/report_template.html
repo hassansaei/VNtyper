@@ -550,15 +550,35 @@
 
         <h2>Kestrel Identified Variants</h2>
         {#
-          Counted in Python from the frame that was rendered, so it cannot disagree
-          with the table beneath it. DataTables' own "Showing 1 to 3 of 3 entries"
-          footer is switched off: it exists only when the CDNs resolve, and it
-          counted the rows left *after* the filter had removed the others (#242).
+          Three states, and they are three different facts (#242). A table of calls;
+          a run that genotyped and called nothing; and a summary with no Kestrel step
+          in it at all, which `vntyper report` can legitimately be handed.
+
+          `escaped_table_html` returns "" for an empty frame, and that empty string is
+          what this branches on - `to_html` on one produces a headerless, bodyless
+          table that renders as a stray empty box under the heading.
+
+          The middle state was the commonest report in any cohort and it looked like a
+          crashed pipeline: `output_empty_result` writes one row of the literal string
+          "None" so that `kestrel_result.tsv` has a body, and the report tabulated it
+          as `None None None None None None None None NaN Negative` with a count line
+          above it calling it one Kestrel row.
+
+          The count line is counted in Python from the frame that was rendered, so it
+          cannot disagree with the table beneath it. DataTables' own "Showing 1 to 3 of
+          3 entries" footer is switched off: it exists only when the CDNs resolve, and
+          it counted the rows left *after* the filter had removed the others.
         #}
-        <p class="table-count">{{ kestrel_row_summary }}</p>
-        <div class="table-container">
-            {{ kestrel_highlight | safe }}
-        </div>
+        {% if kestrel_highlight %}
+            <p class="table-count">{{ kestrel_row_summary }}</p>
+            <div class="table-container">
+                {{ kestrel_highlight | safe }}
+            </div>
+        {% elif kestrel_available %}
+            <p class="empty-state">No variant detected by Kestrel in this sample.</p>
+        {% else %}
+            <p class="empty-state">Kestrel genotyping was not performed for this sample.</p>
+        {% endif %}
 
         {% if advntr_available and advntr_highlight %}
             <h2>adVNTR Identified Variants</h2>

@@ -784,3 +784,96 @@ def test_the_row_count_statement_says_how_many_rows_are_shown(total: int, flagge
 )
 def test_flagged_row_count_counts_only_the_rows_carrying_a_reason(frame: pd.DataFrame, expected: int) -> None:
     assert rf.flagged_row_count(frame) == expected
+
+
+# ---------------------------------------------------------------------------
+# The empty-result placeholder - issue #242
+# ---------------------------------------------------------------------------
+
+
+def test_the_placeholder_a_negative_run_writes_is_recognised(tmp_path) -> None:
+    """The two ends of the contract, bound together in one test.
+
+    ``kestrel_genotyping.output_empty_result`` writes the row and ``summary.parse_tsv``
+    is what turns it into the mapping the report reads - it splits on tabs and coerces
+    nothing, so the literal string ``"None"`` is what arrives. Constructing the row by
+    hand here would let the writer change shape without this failing, which is the
+    silently-wrong-call failure mode AGENTS.md warns about: the report would go back to
+    tabulating a non-result and every test would still pass.
+    """
+    from vntyper.scripts.kestrel_genotyping import output_empty_result
+    from vntyper.scripts.summary import parse_tsv
+
+    output_empty_result(str(tmp_path), ["## VNtyper Kestrel result"])
+    rows = parse_tsv(str(tmp_path / "kestrel_result.tsv"))["data"]
+
+    assert len(rows) == 1, "output_empty_result no longer writes exactly one placeholder row"
+    assert rf.is_empty_result_row(rows[0]), f"the placeholder {rows[0]} is not recognised as one"
+    assert rf.drop_empty_result_rows(rows) == []
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({"Motif": "None", "Confidence": "Negative"}, True),
+        ({"Confidence": "Negative"}, True),
+        ({"Motif": "None", "POS": "", "Confidence": "Negative"}, True),
+        ({"Motif": "None", "POS": None, "Confidence": "Negative"}, True),
+        ({"Motif": "None", "POS": float("nan"), "Confidence": "Negative"}, True),
+        ({"Motif": "5", "POS": "67", "Confidence": "Negative"}, False),
+        ({"Motif": "None", "POS": "67", "Confidence": "Negative"}, False),
+        ({"Motif": "None", "Confidence": "High_Precision"}, False),
+        ({"Motif": "None"}, False),
+        ({}, False),
+    ],
+)
+def test_a_row_is_a_placeholder_only_when_it_names_no_variant(row: dict, expected: bool) -> None:
+    """Both halves are required, and the second is what keeps a real call safe.
+
+    ``Confidence == "Negative"`` alone is not the test: a report is a record, and a rule
+    that deleted every row carrying that label would delete a real variant the moment a
+    future calibration used it. A row is a non-result only when it also names nothing -
+    no position, no REF, no ALT, no motif.
+    """
+    assert rf.is_empty_result_row(row) is expected
+
+
+def test_dropping_placeholders_keeps_every_other_row_and_its_order() -> None:
+    first = {"Motif": "5", "POS": "67", "Confidence": "High_Precision"}
+    second = {"Motif": "6", "POS": "68", "Confidence": "Low_Precision"}
+
+    kept = rf.drop_empty_result_rows([first, {"Motif": "None", "Confidence": "Negative"}, second])
+
+    assert kept == [first, second]
+
+
+def test_dropping_placeholders_does_not_modify_its_input() -> None:
+    rows = [{"Motif": "None", "Confidence": "Negative"}]
+
+    rf.drop_empty_result_rows(rows)
+
+    assert rows == [{"Motif": "None", "Confidence": "Negative"}]
+
+
+# ---------------------------------------------------------------------------
+# escaped_table_html
+# ---------------------------------------------------------------------------
+
+
+def test_an_empty_frame_renders_no_table_at_all() -> None:
+    """The authored-empty-state hook: ``to_html`` on an empty frame is a stray box."""
+    assert rf.escaped_table_html(pd.DataFrame(), classes="table") == ""
+
+
+def test_a_table_can_be_given_the_id_its_selectors_use() -> None:
+    """The per-sample Kestrel table is addressed as ``#kestrel_table`` by the browser
+    tier and by the template's DataTables initialisation, so routing it through this
+    helper has to keep the id it had when it called ``to_html`` directly."""
+    markup = rf.escaped_table_html(pd.DataFrame({"POS": [67]}), classes="table", table_id="kestrel_table")
+
+    assert 'id="kestrel_table"' in markup
+
+
+def test_a_table_with_no_id_asked_for_carries_none() -> None:
+    """The cohort tables share one stylesheet and are addressed by class."""
+    assert "id=" not in rf.escaped_table_html(pd.DataFrame({"POS": [67]}), classes="table")

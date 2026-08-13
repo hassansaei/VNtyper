@@ -46,7 +46,7 @@ from vntyper.scripts.report_formatting import (
     KESTREL_DISPLAY_COLUMNS,
     MISSING_AS_OK,
     confidence_html,
-    escape_frame_cells,
+    drop_empty_result_rows,
     escaped_table_html,
     extract_igv_fragments,
     flag_html,
@@ -267,13 +267,29 @@ def build_kestrel_frames(kestrel_data):
     colour-coded HTML. Colour-coding the frame the summary reads would make every
     ``Confidence`` comparison fail against a ``<span>``.
 
+    A run that genotyped and called nothing is *not* a run with a result. Kestrel
+    records one there anyway - ``output_empty_result`` writes a row of the literal
+    string ``"None"`` with ``Confidence`` set to ``Negative``, so that
+    ``kestrel_result.tsv`` has a body - and both frames used to carry it: the table
+    rendered ``None None None None None None None None NaN Negative`` and the count
+    line called it one Kestrel row (#242). It is dropped here, before either frame
+    exists, so the display, the count and the screening match all see the same rows.
+
+    Dropping it cannot move the screening verdict. ``compute_algorithm_result`` reads
+    only the first row and every configured Kestrel rule breaks on that row's
+    ``Confidence``, so the block's ``default`` - "negative" - is what it returned with
+    the placeholder present, and an empty frame returns the same default by the
+    shortest path.
+
     Args:
         kestrel_data (list[dict]): The ``Kestrel Genotyping`` step's rows.
 
     Returns:
         tuple[pandas.DataFrame, pandas.DataFrame]: The frame to render, and the
-        unformatted frame to match on. Both are empty when there are no rows.
+        unformatted frame to match on. Both are empty when there are no rows, and when
+        the only row is the empty-result placeholder.
     """
+    kestrel_data = drop_empty_result_rows(kestrel_data) if kestrel_data else kestrel_data
     if not kestrel_data:
         logger.warning("No Kestrel data found in pipeline summary.")
         return pd.DataFrame(), pd.DataFrame()
@@ -301,12 +317,10 @@ def build_kestrel_frames(kestrel_data):
     if "Flag" in frame.columns:
         frame["Flag"] = frame["Flag"].apply(flag_html)
 
-    # The table is rendered with escape=False so the colour-coded Confidence span
-    # and the Flag glyph survive, which means every other cell has to be escaped
-    # here. Those two are excluded because `confidence_html` and `flag_html` have
-    # already escaped their own values.
-    frame = escape_frame_cells(frame, html_columns=("Confidence", "Flag"))
-
+    # The remaining cells are escaped by `escaped_table_html`, which renders the frame -
+    # once, naming `Confidence` and `Flag` as the columns whose markup we built and which
+    # escaped their own values. Escaping here as well would double-escape every other
+    # cell, so a motif sequence containing a `<` would reach the reader as `&lt;`.
     logger.debug("Kestrel data extracted from summary and formatted.")
     return frame, matching_frame
 
@@ -588,18 +602,31 @@ def generate_summary_report(
     q30_icon, q30_color = threshold_icon(fastp.q30_rate, q30_rate_cutoff)
     pf_icon, pf_color = threshold_icon(fastp.passed_filter_rate, passed_filter_rate_cutoff)
 
-    kestrel_html = kestrel_df.to_html(
-        table_id="kestrel_table",
+    # "" for an empty frame, which is what the template's authored empty states hang
+    # on. This used to call `to_html` directly, bypassing the helper written for
+    # exactly this: an empty frame produced a headerless, bodyless `<table>` - a stray
+    # empty box under the heading - and every cell was escaped a step earlier instead.
+    kestrel_html = escaped_table_html(
+        kestrel_df,
         classes="table table-bordered table-striped hover compact order-column table-sm",
-        index=False,
-        escape=False,
+        html_columns=("Confidence", "Flag"),
+        table_id="kestrel_table",
+    )
+    kestrel_row_summary = (
+        row_count_statement(len(kestrel_df), flagged_row_count(kestrel_df_raw), noun=KESTREL_ROW_NOUN)
+        if kestrel_html
+        else ""
     )
     logger.debug("Kestrel results converted to HTML.")
 
     advntr_row_summary = ""
     if not advntr_available:
-        advntr_html = "<p>adVNTR genotyping was not performed.</p>"
-        logger.debug("adVNTR was not performed; adding message to report.")
+        # The template's `{% if advntr_available and advntr_highlight %}` cannot reach
+        # this branch's markup, so the paragraph that used to be built here was never
+        # rendered by any report - the `{% else %}` beneath that guard prints its own,
+        # differently worded line. One state, one sentence, and it is the template's.
+        advntr_html = ""
+        logger.debug("adVNTR was not performed; the template states so.")
     elif advntr_df.empty:
         advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
         logger.debug("adVNTR was performed but no variants identified; adding negative message.")
@@ -659,12 +686,17 @@ def generate_summary_report(
 
     context = {
         "kestrel_highlight": kestrel_html,
+        # Whether the step ran at all, which is not the same fact as whether it found
+        # anything: `vntyper report` renders a supplied summary (#207) that need not
+        # carry the step, and a report that renders "did not run" as "found nothing"
+        # asserts something the run never established.
+        "kestrel_available": get_step(pipeline_summary, STEP_KESTREL) is not None,
         # The visible/total statement beside each table, counted here from the frame.
         # DataTables' own "Showing 1 to 3 of 3 entries" footer is switched off: it is
-        # a second count that contradicts this one whenever a CDN fails (#242).
-        "kestrel_row_summary": row_count_statement(
-            len(kestrel_df), flagged_row_count(kestrel_df_raw), noun=KESTREL_ROW_NOUN
-        ),
+        # a second count that contradicts this one whenever a CDN fails (#242). It is
+        # empty when there is no table: the sentence exists to say that nothing was
+        # withheld from the rows below it, so counting a non-result defeats its purpose.
+        "kestrel_row_summary": kestrel_row_summary,
         "advntr_highlight": advntr_html,
         "advntr_row_summary": advntr_row_summary,
         "advntr_available": advntr_available,
