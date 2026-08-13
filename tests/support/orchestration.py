@@ -245,7 +245,14 @@ def _request_from_case(
     input_paths: tuple[Path, ...],
     output_dir: Path,
 ) -> PipelineRequest:
-    """Create the canonical request while live declarations await Task 5 fields."""
+    """Create a canonical request, preserving established artifact contracts."""
+    cli_options = tuple(test_case.get("cli_options", ()))
+    report_mode_is_explicit = any(option.partition("=")[0] == "--report-igv" for option in cli_options)
+    if "igv_report.html" in test_case.get("expected_files", ()) and not report_mode_is_explicit:
+        # These compatibility fixtures predate the embedded default. Their frozen
+        # artifact contract still promises the sidecar, so name that legacy mode
+        # explicitly instead of changing either production's default or the oracle.
+        cli_options += ("--report-igv", "sidecar")
     return PipelineRequest(
         input_kind=input_kind,
         input_paths=input_paths,
@@ -253,7 +260,7 @@ def _request_from_case(
         output_dir=output_dir,
         threads=int(test_case.get("threads", 2)),
         log_level=str(test_case.get("log_level", "DEBUG")),
-        cli_options=tuple(test_case.get("cli_options", ())),
+        cli_options=cli_options,
         reference_fasta=Path(test_case["reference_fasta"]) if test_case.get("reference_fasta") else None,
     )
 
