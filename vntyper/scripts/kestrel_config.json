@@ -1,10 +1,18 @@
 {
   "kestrel_settings": {
+    "_comment_java_memory": "12g is load-bearing. 4g measured +1.2s with CPU rising 3.88x to 7.29x (G1 thrashing), and the KAnalyze count step peaks near 7.7GB at -d16. Do not shrink it because the observed peak RSS of a single run looks smaller.",
     "java_memory": "12g",
     "kmer_sizes": [20],
     "max_align_states": 40,
     "max_hap_states": 40,
-    "additional_settings": ""
+    "additional_settings": "",
+    "_comment_split_counting": "Kestrel never configures the KAnalyze CountModule it builds, so counting - roughly 88% of its work - runs one k-mer and one split thread. true runs kanalyze count as its own threaded step and hands Kestrel the resulting IKC. false is an operator kill switch that restores the single-command path exactly; nothing selects it automatically, and a failed count still raises rather than falling back.",
+    "split_counting": true,
+    "_comment_keep_ikc": "Retain the attempt directory and its IKC after the run, for diagnosing a result. Off by default because the IKC is roughly the size of the input k-mer set.",
+    "keep_ikc": false,
+    "_comment_java_opts": "The count step is genuinely parallel once the thread budget reaches it, so it keeps the G1 default. The call step is single-threaded, where G1 spawns a GC worker per core against one application thread. -XX:+UseParallelGC is harmful on both and must not be used.",
+    "java_opts_count": "",
+    "java_opts_call": "-XX:+UseSerialGC"
   },
   "frame_score_filtering": {
     "replace_value": "C",

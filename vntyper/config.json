@@ -57,6 +57,8 @@
     "advntr": "mamba run -n envadvntr advntr",
     "shark": "mamba run -n shark_env shark",
     "kestrel": "vntyper/dependencies/kestrel/kestrel.jar",
+    "_comment_kanalyze": "Declared explicitly rather than derived from the kestrel jar's directory: an operator may legitimately relocate kestrel.jar, and a derived sibling path would then be silently wrong. It has no version flag of its own and is never version-probed - it ships and is versioned with kestrel.",
+    "kanalyze": "vntyper/dependencies/kestrel/kanalyze.jar",
     "java_path": "java"
   },
   "tool_params": {

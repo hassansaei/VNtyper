@@ -58,6 +58,22 @@ def run_kestrel_stage(
     if len(set(resolved)) != len(resolved):
         raise ValueError("Kestrel FASTQ inputs contain duplicate paths.")
 
+    # Which counting path produced this result, recorded so a result can always be
+    # attributed to the code that produced it. It is a **run-level** property, so it goes
+    # beside the other run-level provenance rather than into a step record: `record_step`
+    # derives `parsed_result` from the result file and cannot carry it, the step's
+    # `command` string is compared by the golden-cohort gate as `pipeline_step_records`,
+    # and trap 5 forbids inventing a new step name.
+    #
+    # The setting lives in ``kestrel_genotyping``'s import-time module global, which
+    # ``--config-path`` cannot override (trap 1), so it is read from there rather than
+    # from ``config``. The import is function-local only to keep this module importable
+    # on its own; ``pipeline`` already imports both.
+    from vntyper.scripts import kestrel_genotyping
+
+    settings = kestrel_genotyping.kestrel_config.get("kestrel_settings", {})
+    summary["kestrel_counting_mode"] = "split" if settings.get("split_counting", True) else "internal"
+
     kestrel_dir = Path(dirs["kestrel"])
     tools = cast(Mapping[str, Any], config["tools"])
     reference_data = cast(Mapping[str, Any], config["reference_data"])

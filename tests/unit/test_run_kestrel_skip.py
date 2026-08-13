@@ -45,6 +45,23 @@ def _config():
     return {"tools": {"java_path": "java"}}
 
 
+def is_count(command):
+    """Is this the KAnalyze counting step rather than the Kestrel call?
+
+    Since #262 each attempt issues two subprocesses. Every fake in this module models
+    both, because the properties this module pins are about **attempts** -- how many
+    k-mer sizes were tried, and what each one left behind -- and counting an attempt's
+    count step as a Kestrel launch would silently double every one of them.
+
+    Args:
+        command (str): The command the fake was handed.
+
+    Returns:
+        bool: True for the count step.
+    """
+    return " count " in command and "kanalyze" in command
+
+
 def _run(vcf, tmp_path):
     """Invoke ``run_kestrel`` with placeholder inputs.
 
@@ -160,6 +177,8 @@ def test_the_vcf_a_later_kmer_size_writes_is_not_removed(tmp_path, monkeypatch):
     post_processing_saw = []
 
     def fake_run_command(command, log_file=None, **kwargs):
+        if is_count(command):
+            return True
         launches.append(command)
         if len(launches) == 2:
             vcf.write_text(USABLE_VCF, encoding="utf-8")
@@ -184,7 +203,10 @@ def test_a_kestrel_invocation_that_exits_non_zero_aborts_the_run(tmp_path, monke
     report as a negative, which is the failure mode #212 exists to close. The error
     names the log file, because that is the only place the Java stack trace survives.
     """
-    monkeypatch.setattr(kg, "run_command", lambda *args, **kwargs: False)
+    # The count step succeeds so the Kestrel call is what fails: a fake that failed
+    # everything would be satisfied by the count step's own error and would stop
+    # measuring this path at all (#262).
+    monkeypatch.setattr(kg, "run_command", lambda command, *args, **kwargs: is_count(command))
 
     with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="Kestrel failed for kmer size 20"):
         _run(tmp_path / "output.vcf", tmp_path)
@@ -218,12 +240,25 @@ def test_runner_receives_the_planned_command_log_criticality_and_cwd(tmp_path, m
         cwd="/project/root",
     )
 
-    assert len(calls) == 1
-    command, log_file, kwargs = calls[0]
+    # Two subprocesses per attempt since #262, in this order. The ordering is part of
+    # the contract: Kestrel cannot adopt an IKC that does not exist yet.
+    assert len(calls) == 2
+    count_command, count_log, count_kwargs = calls[0]
+    command, log_file, kwargs = calls[1]
+
+    assert is_count(count_command)
+    assert count_log == str(tmp_path / "kanalyze_count_kmer_20.log")
+    # Not critical: a failed count raises here with its own message rather than being
+    # reported as a failed Kestrel run.
+    assert count_kwargs == {"critical": False, "cwd": "/project/root"}
+    assert "r1.fq r2.fq single.fq" in count_command, "the count step consumes the FASTQ operands"
+
     assert "--loglevel DEBUG" in command
     assert log_file == str(tmp_path / "kestrel_kmer_20.log")
     assert kwargs == {"critical": True, "cwd": "/project/root"}
-    assert "-ssample r1.fq r2.fq single.fq --hapfmt" in command
+    # The FASTQ operands are replaced by the IKC: a supplied count file has to be the
+    # sample's sole source or `IkcCountMap.preModuleRun` will not adopt it.
+    assert f"-ssample -f ikc {tmp_path / 'kmer_20' / 'kestrel_kmers.ikc'} --hapfmt" in command
 
 
 # --------------------------------------------------------------------------------------
@@ -281,6 +316,8 @@ def test_every_configured_kmer_size_is_tried_before_giving_up(tmp_path, monkeypa
     post_processing_saw = []
 
     def fake_run_command(command, log_file=None, **kwargs):
+        if is_count(command):
+            return True
         launches.append(command)
         if len(launches) == 1:
             vcf.write_text("##fileformat=VCFv4.2\nchr1\t1\t.\tC\tCG\t.\t.\tDP=1\n", encoding="utf-8")
@@ -310,6 +347,8 @@ def test_an_unusable_vcf_is_removed_before_the_next_kmer_size_runs(tmp_path, mon
     existed_at_launch = []
 
     def fake_run_command(command, log_file=None, **kwargs):
+        if is_count(command):
+            return True
         existed_at_launch.append(vcf.is_file())
         vcf.write_text("##fileformat=VCFv4.2\n", encoding="utf-8")
         return True
@@ -393,6 +432,8 @@ def test_a_discarded_attempt_leaves_no_sam_for_a_later_one_to_convert(tmp_path, 
     converted = []
 
     def fake_run_command(command, log_file=None, **kwargs):
+        if is_count(command):
+            return True
         launches.append(command)
         if len(launches) == 1:
             # exits 0, writes an unusable VCF and a SAM -- the attempt that gets discarded
@@ -420,6 +461,8 @@ def test_an_absent_sam_is_not_an_error_when_an_attempt_is_discarded(tmp_path, mo
     launches = []
 
     def fake_run_command(command, log_file=None, **kwargs):
+        if is_count(command):
+            return True
         launches.append(command)
         vcf.write_text("##fileformat=VCFv4.2\n" if len(launches) == 1 else USABLE_VCF, encoding="utf-8")
         return True
@@ -505,6 +548,8 @@ def test_an_attempt_that_writes_no_vcf_also_leaves_no_sam(tmp_path, monkeypatch)
     converted = []
 
     def fake_run_command(command, log_file=None, **kwargs):
+        if is_count(command):
+            return True
         launches.append(command)
         if len(launches) == 1:
             sam.write_text("@HD\tVN:1.6\nFIRST-ATTEMPT\n", encoding="utf-8")  # no VCF at all

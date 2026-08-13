@@ -14,7 +14,15 @@ def test_kestrel_genotyping_reexports_the_extracted_builder() -> None:
     assert kestrel_genotyping.construct_kestrel_command is construct_kestrel_command
 
 
-def test_extraction_preserves_the_existing_paired_command_byte_for_byte() -> None:
+def test_the_paired_command_without_a_supplied_ikc_is_pinned_byte_for_byte() -> None:
+    """The legacy shape, still reachable through ``kestrel_settings.split_counting``.
+
+    ``--logstderr`` is gone from all three expectations in this module and that is a
+    clarity fix rather than a behaviour change: ``OptLogStderr`` and ``OptLogStdout``
+    call the same setter on a single ``logFile`` field, so last-one-wins and
+    ``--logstdout`` -- emitted second -- has always won. ``run_command`` merges stderr
+    into stdout regardless.
+    """
     command = construct_kestrel_command(
         kmer_size=20,
         kestrel_path="/opt/kestrel.jar",
@@ -35,7 +43,7 @@ def test_extraction_preserves_the_existing_paired_command_byte_for_byte() -> Non
         "--maxalignstates 40 --maxhapstates 40 "
         "-r /ref/muc1.fa -o /out/output.vcf "
         "-sSAMPLE1 /in/R1.fastq.gz /in/R2.fastq.gz "
-        "--hapfmt sam -p /out/output.sam --logstderr --logstdout "
+        "--hapfmt sam -p /out/output.sam --logstdout "
         "--loglevel INFO --temploc /out"
     )
 
@@ -72,7 +80,7 @@ def test_output_directory_spelling_is_preserved_byte_for_byte(
         "--maxalignstates 40 --maxhapstates 40 "
         "-r /ref/muc1.fa -o /out/output.vcf "
         "-sSAMPLE1 /in/R1.fastq.gz /in/R2.fastq.gz "
-        f"--hapfmt sam -p {expected_sam} --logstderr --logstdout "
+        f"--hapfmt sam -p {expected_sam} --logstdout "
         f"--loglevel INFO --temploc {expected_temp}"
     )
 
@@ -114,7 +122,7 @@ def test_one_three_and_four_fastq_commands_preserve_exact_order(
         "--maxalignstates 40 --maxhapstates 40 "
         "-r /ref/muc1.fa -o /out/output.vcf "
         f"-sSAMPLE1 {expected_inputs} "
-        "--hapfmt sam -p /out/output.sam --logstderr --logstdout "
+        "--hapfmt sam -p /out/output.sam --logstdout "
         "--loglevel INFO --temploc /out"
     )
     assert command.count("-sSAMPLE1") == 1

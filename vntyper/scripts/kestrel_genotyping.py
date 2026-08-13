@@ -37,6 +37,7 @@ from vntyper.scripts.confidence_assignment import (
 )
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
+from vntyper.scripts.kestrel_counting import remove_count_artifacts
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.motif_processing import (
@@ -259,6 +260,15 @@ def run_kestrel(
     log_level_str = logging.getLevelName(log_level)
 
     additional_settings = kestrel_settings.get("additional_settings", "")
+    # Every new key is read with `.get` and a shipped default: `--config-path` replaces
+    # the whole config rather than merging, so a replacement config legitimately lacks
+    # all of them (trap 2). `kestrel_config` itself is a module global read at import
+    # time, so tests patch the global rather than passing a config (trap 1).
+    java_opts_count = kestrel_settings.get("java_opts_count", "")
+    java_opts_call = kestrel_settings.get("java_opts_call", "-XX:+UseSerialGC")
+    split_counting = kestrel_settings.get("split_counting", True)
+    keep_ikc = kestrel_settings.get("keep_ikc", False)
+    kanalyze_path = config["tools"].get("kanalyze", "vntyper/dependencies/kestrel/kanalyze.jar")
 
     # #212: a pre-existing output.vcf used to skip the whole stage and `return`, which
     # also skipped the two statements that turn a VCF into a result. Re-running into a
@@ -285,6 +295,11 @@ def run_kestrel(
         log_level=log_level_str,
         sample_name=sample_name,
         additional_settings=additional_settings,
+        java_opts_call=java_opts_call,
+        java_opts_count=java_opts_count,
+        kanalyze_path=kanalyze_path,
+        threads=threads,
+        split_counting=split_counting,
     )
     invocations = plan_kestrel_invocations(
         fastq_files=fastq_files,
@@ -303,11 +318,35 @@ def run_kestrel(
         kmer_command = invocation.command
         log_file = str(invocation.log_file)
 
-        logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
+        # The counting artefacts are removed on *every* exit path -- a partial IKC from
+        # a failed count, a complete one after a failed call, and a complete one after
+        # success. `_discard_attempt_artifacts` is the wrong hook for this: it is a
+        # fail-closed cleanup reached only on the discard branches, while a failed
+        # critical invocation raises before any of them. The two also want opposite
+        # failure semantics, which is why they stay separate.
+        try:
+            if invocation.count_command is not None:
+                # KAnalyze writes the IKC and its offloaded segments in here.
+                Path(str(invocation.attempt_dir)).mkdir(parents=True, exist_ok=True)
+                count_log = str(invocation.count_log)
+                # A read-only output directory now fails here, inside `run_command`'s
+                # `open(log_file, "w")`, with a raw PermissionError rather than the
+                # count RuntimeError below. That is chosen rather than discovered: the
+                # first thing either step does is open its log.
+                logger.info(f"Counting k-mers with KAnalyze at k-mer size {kmer_size}...")
+                if not run_command(invocation.count_command, count_log, critical=False, cwd=cwd):
+                    msg = f"KAnalyze k-mer counting failed for kmer size {kmer_size}. Check {count_log} for details."
+                    logger.error(msg)
+                    raise RuntimeError(msg)
 
-        if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
-            logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
-            raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
+            logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
+
+            if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
+                logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
+                raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
+        finally:
+            if invocation.attempt_dir is not None and not keep_ikc:
+                remove_count_artifacts(invocation.attempt_dir)
 
         logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
 
