@@ -106,6 +106,26 @@ def test_the_reads_corroborating_a_second_caller_still_reach_tier_a() -> None:
     assert merged.tier == "A"
 
 
+def test_two_corroborated_alleles_are_a_conflict_rather_than_a_vote() -> None:
+    """Only an unambiguous majority decides.
+
+    adVNTR may report several events at one locus, so it can corroborate two
+    different alleles at once -- here it backs the VCF's allele *and* the reads'. Both
+    then clear the independence bar, and picking whichever happened to be seen first
+    would settle a real conflict by input order.
+    """
+    merged = reconcile(
+        from_kestrel("X-X", 61, "T", "TC"),  # 59_60insG, backed by the VCF alone
+        _from_reads("58_59insG", "insertion"),
+        _from_reads("57_58insG", "insertion"),
+        from_advntr("I23_2_C_LEN1")[0],  # 58_59insG -- corroborates the first read call
+        from_advntr("I24_2_C_LEN1")[0],  # 57_58insG -- corroborates the second
+    )
+    assert merged.tier != "A"
+    assert "caller-disagreement" in merged.flags
+    assert merged.name == "59_60insG", "two corroborated alleles must not be settled by input order"
+
+
 def test_support_is_taken_from_the_sources_backing_the_chosen_name() -> None:
     """A dissenting source's depth is not the agreement's depth.
 

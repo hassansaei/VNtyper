@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
+import pysam
 import pytest
 
 from tests.builders import STAGE_COLUMNS, kestrel_stage_frame
@@ -238,6 +239,69 @@ def test_the_advntr_frame_records_its_own_name_as_the_advntr_column() -> None:
     named = annotate_advntr_frame(frame)
     assert named.loc[0, "Nomenclature_adVNTR"] == "59dupC"
     assert named.loc[0, "Nomenclature_Kestrel"] == ""
+
+
+def _write_pair_bam(path: Path, inserted_at: int, base: str, reads: int) -> None:
+    """Write an indexed ``output.bam`` over the real ``X-X`` pair reference.
+
+    Args:
+        path: Destination ``output.bam``.
+        inserted_at: 0-based reference position the insertion sits before.
+        base: The inserted plus-strand base.
+        reads: How many reads carry it.
+    """
+    pair = nomenclature.pair_sequence("X-X")
+    assert pair is not None
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "X-X", "LN": len(pair)}]}
+    trailing = len(pair) - inserted_at
+    with pysam.AlignmentFile(str(path), "wb", header=header) as handle:
+        for index in range(reads):
+            record = pysam.AlignedSegment(handle.header)
+            record.query_name = f"read{index}"
+            record.reference_id = 0
+            record.reference_start = 0
+            record.mapping_quality = 255
+            record.cigarstring = f"{inserted_at}=1I{trailing}="
+            record.query_sequence = pair[:inserted_at] + base + pair[inserted_at:]
+            handle.write(record)
+    pysam.index(str(path))  # type: ignore[attr-defined]
+
+
+def test_the_cross_caller_stage_consults_the_reads(tmp_path) -> None:
+    """The reads must reach the only step that can see both callers.
+
+    This is the production path for the whole vote. The Kestrel VCF places the
+    insertion at ``59_60insG``; adVNTR and the reads independently say ``58_59insG``,
+    and two sources from two callers outvote one. Without the BAM the cross-caller
+    step sees only the two callers disagreeing and the wrong VCF placement stands.
+    """
+    kestrel, advntr = _write_disagreeing_outputs(tmp_path)
+    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", reads=4)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "58_59insG", "the reads corroborated adVNTR; the VCF was outvoted"
+    assert written.loc[0, "Nomenclature_Kestrel"] == "59_60insG", "Kestrel's own record is still reported"
+    assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
+
+
+def test_the_reads_alone_do_not_outvote_the_vcf(tmp_path) -> None:
+    """Same reads, but adVNTR agreeing with Kestrel instead.
+
+    The reads are Kestrel's own alignment, so on their own they are not a second
+    caller and must not overturn the VCF -- the guard against the earlier policy that
+    cost `dupA` 6 correct calls out of 10.
+    """
+    kestrel, advntr = _write_disagreeing_outputs(tmp_path)
+    # I22_2_C_LEN1 names 59_60insG, the same allele the Kestrel VCF names.
+    advntr.write_text(advntr.read_text().replace("I23_2_C_LEN1", "I22_2_C_LEN1"))
+    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", reads=4)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "59_60insG", "one caller's reads may not veto its own VCF"
 
 
 def test_an_annotated_kestrel_result_survives_the_summary_parser(tmp_path) -> None:

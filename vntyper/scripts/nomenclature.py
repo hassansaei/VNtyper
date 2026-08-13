@@ -558,10 +558,13 @@ def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ..
 def _is_corroborated(sources: set[str]) -> bool:
     """Do these sources amount to independent corroboration?
 
-    Two conditions, and both matter. At least two sources must name the allele, and
-    they must come from at least two distinct callers -- otherwise ``kestrel_vcf``
-    and ``kestrel_bam``, which are one caller read twice, would look like the two
-    independent sources tier A requires.
+    The test is on *callers*, not sources: ``kestrel_vcf`` and ``kestrel_bam`` are one
+    caller read twice, and counting them as two would make Kestrel agreeing with its
+    own alignment look like the two independent sources tier A requires.
+
+    Counting callers subsumes counting sources -- the callers are the image of the
+    sources under a map, so there can never be more of them -- which is why there is
+    no separate "at least two sources" condition here.
 
     Args:
         sources: The ``source`` fields of the calls naming one allele.
@@ -569,8 +572,6 @@ def _is_corroborated(sources: set[str]) -> bool:
     Returns:
         bool: True when the allele is independently corroborated.
     """
-    if len(sources) < 2:
-        return False
     # An unrecognised source is assumed to be its own caller: a new source added
     # without a config entry is treated as independent rather than silently folded
     # into an existing caller, which would hide a disagreement.
