@@ -339,14 +339,23 @@
            selector that matches whichever one the document happens to reach first -
            for a reader's assistive technology as much as for a test. */
         var pager = document.createElement("div");
-        pager.className = "table-pager no-print";
+        /* **The pager is not `no-print`; its buttons are.**
+           Paging hides rows, and a printed page is where a hidden row is least
+           recoverable: there is no control to press and no scrollbar to notice. So the
+           two buttons - which cannot be operated on paper, and printing one states an
+           option the reader does not have - go, and the count line saying how many rows
+           this page is withholding stays. An archived cohort page that shows 25 of 34
+           rows and says so is a record; one that shows 25 and says nothing is wrong. */
+        pager.className = "table-pager";
         pager.id = "tablePager_" + index;
         var previous = document.createElement("button");
         previous.type = "button";
+        previous.className = "no-print";
         previous.id = "tablePrevious_" + index;
         previous.textContent = "Previous";
         var next = document.createElement("button");
         next.type = "button";
+        next.className = "no-print";
         next.id = "tableNext_" + index;
         next.textContent = "Next";
         var status = document.createElement("span");

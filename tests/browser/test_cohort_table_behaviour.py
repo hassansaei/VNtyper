@@ -282,3 +282,28 @@ def test_no_control_exists_at_all_when_no_script_ran(
         )
     finally:
         context.close()
+
+
+def test_the_printed_page_still_says_how_many_rows_it_is_withholding(
+    rendered_cohort_report: Path,
+    open_report: Callable[..., Page],
+) -> None:
+    """Paging survives into print, so the sentence explaining it has to as well.
+
+    A printed page is where a hidden row is least recoverable: no control to press, no
+    scrollbar to notice, and no way to tell 25 rows from all of them. The two buttons go
+    - printing a control the reader cannot operate states an option they do not have -
+    and the count line stays.
+
+    Measured through ``print`` emulation rather than by reading the class list, because
+    what is being asserted is the computed result of the shared print block's
+    ``.no-print { display: none !important }`` meeting this element.
+    """
+    page = open_report(rendered_cohort_report, offline=True)
+    page.emulate_media(media="print")
+
+    assert page.locator(STATUS).is_visible(), "the printed cohort page hides rows and does not say so"
+    assert "hidden by the controls above" in page.inner_text(STATUS)
+    assert not page.locator(NEXT).is_visible(), "a printed page offers a Next button"
+    assert not page.locator(PREVIOUS).is_visible(), "a printed page offers a Previous button"
+    assert not page.locator(SEARCH).is_visible(), "a printed page offers a search box"
