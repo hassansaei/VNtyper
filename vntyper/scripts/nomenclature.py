@@ -26,15 +26,19 @@ Research use only.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from typing import NamedTuple
 
 __all__ = [
     "CANONICAL_UNIT",
+    "MAPPABLE_RUS",
     "MOTIFS",
     "pair_sequence",
     "UNIT_LENGTH",
     "Nomenclature",
     "ambiguity_interval",
+    "from_advntr",
     "from_kestrel",
     "name_edit",
     "normalise",
@@ -111,6 +115,28 @@ MOTIFS: dict[str, str] = {
 
 #: Where the embedded table came from, for the provenance test.
 MOTIF_FASTA_NAME = "MUC1_motifs_Rev_com.fa"
+
+#: adVNTR repeat unit -> the motif it is a rotation of.
+#:
+#: adVNTR ships nine repeat units. Only these three are rotations of a MUC1 motif
+#: (each by 39 bases, which is what makes ``plus_from_ru`` a single formula). RU1,
+#: RU4 and RU8 are 60 bp but match no motif; RU3, RU7 and RU9 are 78, 48 and 54 bp,
+#: so parts of them have no counterpart in a 60 bp unit at all. Projecting a state
+#: from any of the other six through this map would fabricate a coordinate, so those
+#: states are reported without one.
+MAPPABLE_RUS: dict[int, str] = {2: "X", 5: "V", 6: "C"}
+
+#: Rotation offset shared by every mappable repeat unit.
+_RU_ROTATION = 39
+
+#: Emitted when adVNTR reports an insertion length without its sequence.
+#:
+#: An extension to the spec's flag vocabulary. It is needed because adVNTR records
+#: only the first inserted base -- ``vntr_finder.py``: "If there are run of
+#: insertions, the sequence might differ, but we just take the first base" -- so a
+#: ``LEN4`` state constrains the length and nothing else. Without a distinct flag
+#: this state is indistinguishable from a fully determined one.
+FLAG_SEQUENCE_UNDETERMINED = "sequence-undetermined"
 
 
 def pair_sequence(motifs: str) -> str | None:
@@ -501,6 +527,187 @@ def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ..
         net_length=net_length,
         source=source,
     )
+
+
+_ADVNTR_STATE = re.compile(r"^(?P<kind>[ID])(?P<pos>\d+)_(?P<ru>\d+)(?:_(?P<base>[ACGT])_LEN(?P<length>\d+))?$")
+
+
+class _Component(NamedTuple):
+    """One parsed adVNTR state component."""
+
+    kind: str
+    pos: int
+    ru: int
+    base: str
+    length: int
+
+
+def _parse_components(state: str) -> list[_Component]:
+    """Parse an ``&``-joined adVNTR state into its components.
+
+    Args:
+        state: e.g. ``D27_2&I27_2_A_LEN2``.
+
+    Returns:
+        list[_Component]: The components, or an empty list if any part fails to
+        parse -- a partially understood compound state is not named at all.
+    """
+    parts = [part.strip() for part in state.split("&") if part.strip()]
+    if not parts:
+        return []
+
+    components: list[_Component] = []
+    for part in parts:
+        match = _ADVNTR_STATE.match(part)
+        if match is None:
+            return []
+        kind = match["kind"]
+        if kind == "I" and match["base"] is None:
+            return []
+        components.append(
+            _Component(
+                kind=kind,
+                pos=int(match["pos"]),
+                ru=int(match["ru"]),
+                base=match["base"] or "",
+                length=int(match["length"]) if match["length"] else 1,
+            )
+        )
+    return components
+
+
+def _group_components(components: list[_Component]) -> list[list[_Component]]:
+    """Group components into events, using adVNTR's own joining rule.
+
+    ``vntr_finder.py`` joins a deletion to the previous component only when the match
+    indices are consecutive *and* the repeat-unit index is the same, and joins a
+    deletion to an insertion only at the same position in the same unit. Merging more
+    broadly -- "anything adjacent" -- would fuse two independent variants that happen
+    to sit side by side into one fabricated allele.
+
+    Args:
+        components: Parsed components, in the order adVNTR emitted them.
+
+    Returns:
+        list[list[_Component]]: One inner list per event.
+    """
+    groups: list[list[_Component]] = []
+    for component in sorted(components, key=lambda item: (item.ru, item.pos, item.kind)):
+        if groups:
+            previous = groups[-1][-1]
+            same_unit = previous.ru == component.ru
+            consecutive_deletion = (
+                same_unit
+                and previous.kind == "D"
+                and component.kind == "D"
+                and previous.pos + 1 == component.pos
+            )
+            colocated_delins = (
+                same_unit and previous.kind == "D" and component.kind == "I" and previous.pos == component.pos
+            )
+            if consecutive_deletion or colocated_delins:
+                groups[-1].append(component)
+                continue
+        groups.append([component])
+    return groups
+
+
+def _name_advntr_group(group: list[_Component]) -> Nomenclature:
+    """Name one grouped adVNTR event.
+
+    Args:
+        group: Components belonging to a single event.
+
+    Returns:
+        Nomenclature: The named event, tier C when it cannot be placed.
+    """
+    ru = group[0].ru
+    deletions = [item for item in group if item.kind == "D"]
+    insertions = [item for item in group if item.kind == "I"]
+    inserted_length = sum(item.length for item in insertions)
+    net = inserted_length - len(deletions)
+
+    if deletions and insertions:
+        event = "delins"
+    elif insertions:
+        event = "insertion"
+    else:
+        event = "deletion"
+
+    symbol = MAPPABLE_RUS.get(ru)
+    if symbol is None:
+        return _undetermined(event, net, "advntr", ())
+
+    # An insertion of more than one base carries a length but not a sequence, so the
+    # allele cannot be written out. The event and its length are still reportable.
+    if inserted_length > 1:
+        return _undetermined(event, net, "advntr", (FLAG_SEQUENCE_UNDETERMINED,))
+
+    flags: list[str] = []
+    if symbol != "X":
+        flags.append(FLAG_MOTIF_CONTEXT_DIVERGES)
+
+    if insertions:
+        component = insertions[0]
+        plus = ((_RU_ROTATION - 1 + component.pos) % UNIT_LENGTH) + 1
+        # adVNTR anchors an insertion in the gap *after* the plus-strand position, and
+        # reverse complement swaps which side of that gap it sits on, so the coding
+        # base immediately 5' of it is `UNIT_LENGTH - plus`. Treating the anchor as a
+        # base instead yields 60 for the canonical duplication rather than 59.
+        left = UNIT_LENGTH - plus
+        start, end = left + 1, left
+        inserted = revcomp(component.base)
+        if deletions:
+            # A co-located delins: the deletion supplies the replaced base.
+            start, end = left + 1, left + 1
+    else:
+        positions = sorted(UNIT_LENGTH + 1 - (((_RU_ROTATION - 1 + item.pos) % UNIT_LENGTH) + 1) for item in deletions)
+        start, end = positions[0], positions[-1]
+        inserted = ""
+
+    if not 1 <= start <= UNIT_LENGTH + 1 or end > UNIT_LENGTH:
+        return _undetermined(event, net, "advntr", tuple(flags))
+
+    name = name_edit(CANONICAL_UNIT, start, end, inserted)
+    window = ambiguity_interval(CANONICAL_UNIT, start, end, inserted)
+    tract = repeat_form(CANONICAL_UNIT, start, end, inserted)
+    if window is not None:
+        flags.append(FLAG_POSITION_AMBIGUOUS)
+
+    norm = normalise(CANONICAL_UNIT, start, end, inserted)
+    resolved = _event_of(*norm)
+    if resolved == "insertion" and "dup" in name:
+        resolved = "duplication"
+
+    return Nomenclature(
+        name=name,
+        event=resolved if not deletions or not insertions else "delins",
+        unit=symbol,
+        tier="B",
+        flags=tuple(flags),
+        ambiguity=window,
+        repeat_form=tract,
+        net_length=net,
+        source="advntr",
+    )
+
+
+def from_advntr(state: str) -> tuple[Nomenclature, ...]:
+    """Translate one adVNTR state field into MUC1 nomenclature.
+
+    Args:
+        state: The ``Variant`` field, e.g. ``I22_2_G_LEN1`` or
+            ``D27_2&I27_2_A_LEN2``. Non-states such as ``Not applicable`` yield
+            an empty tuple.
+
+    Returns:
+        tuple[Nomenclature, ...]: One entry per distinct event. Usually length 1;
+        empty when nothing parseable was reported.
+    """
+    components = _parse_components(state)
+    if not components:
+        return ()
+    return tuple(_name_advntr_group(group) for group in _group_components(components))
 
 
 def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
