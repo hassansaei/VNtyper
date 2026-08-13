@@ -2,7 +2,7 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
-## Unreleased
+## 2.0.20 (Current)
 
 **MUC1 variants are reported by their literature name, with an explicit confidence
 tier.**
@@ -56,7 +56,7 @@ Also fixes a result row whose last column is empty being dropped from
 `pipeline_summary.json` as malformed, which could fail the cross-match step on a run
 that had otherwise succeeded.
 
-## 2.0.19 (Current)
+## 2.0.19
 
 **Kestrel counts k-mers on more than one thread.**
 

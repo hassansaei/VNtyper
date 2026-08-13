@@ -203,7 +203,9 @@ def _is_dna(sequence: str) -> bool:
     Returns:
         bool: True when every character is A, C, G or T.
     """
-    return bool(sequence) and set(sequence.upper()) <= {"A", "C", "G", "T"}
+    # `str.strip` with a character set is one C-level scan and allocates nothing,
+    # unlike building a set per call in what is a per-dataframe-row hot path.
+    return bool(sequence) and not sequence.strip("ACGTacgt")
 
 
 def revcomp(sequence: str) -> str:
