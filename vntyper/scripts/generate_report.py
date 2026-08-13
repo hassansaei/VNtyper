@@ -59,6 +59,16 @@ from vntyper.scripts.report_formatting import (
     summarise_fastp,
     threshold_icon,
 )
+from vntyper.scripts.report_identity import (
+    ASSAY_NAME,
+    REPORT_TITLE_PREFIX,
+    format_input_files,
+    format_region,
+    format_run_timestamp,
+    input_file_names,
+    recorded_or_not,
+    resolve_sample_name,
+)
 from vntyper.scripts.screening_summary import build_screening_summary, load_report_config
 
 # These five names are matched by exact string comparison against what pipeline.py
@@ -383,6 +393,7 @@ def generate_summary_report(
     flanking=50,
     vcf_file=None,
     config=None,
+    sample_name=None,
 ):
     """
     Generates a summary report based on a pipeline summary JSON file.
@@ -403,6 +414,11 @@ def generate_summary_report(
         flanking (int, optional): Size of the flanking region for IGV reports.
         vcf_file (str, optional): Path to the sorted/indexed VCF file.
         config (dict): Main configuration dictionary (passed from the pipeline).
+        sample_name (str, optional): What the report calls its sample, in the
+            title, the heading and the header block. Reachable through
+            ``vntyper report --sample-name``; the pipeline passes nothing and the
+            name is derived from the summary's own ``input_files`` instead - see
+            :func:`~vntyper.scripts.report_identity.resolve_sample_name`.
 
     Raises:
         ValueError: If config is not provided.
@@ -450,6 +466,14 @@ def generate_summary_report(
     # Extract input_files and pipeline_version from the summary.
     input_files = pipeline_summary.get("input_files", {})
     pipeline_version = pipeline_summary.get("version", "unknown")
+
+    # Who this report is about (#242). Every report was titled "Summary Report",
+    # so two of them were indistinguishable in two browser tabs and a printed one
+    # carried no identity at all. An explicit `--sample-name` wins; otherwise the
+    # name is derived from the summary's own `input_files`, which is why the
+    # pipeline needs no new argument to get a named report.
+    resolved_sample_name = resolve_sample_name(sample_name, *input_file_names(input_files))
+    logger.info("Report sample name resolved to %r.", resolved_sample_name)
 
     # How the run's reference was actually resolved (#163) - the BWA reference for
     # FASTQ, or whatever the alignment plan proved for BAM/CRAM, never a BWA path a
@@ -645,16 +669,45 @@ def generate_summary_report(
         # when there is no IGV report at all.
         "table_json": js_json_literal(table_json, EMPTY_TABLE_JSON),
         "session_dictionary": js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY),
-        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
-        "input_files": input_files,
+        # Two timestamps, labelled, because they are different facts. `report_date`
+        # is `datetime.now()` at render, so re-running `vntyper report` over an
+        # archived run restamped the only date on the page and the artefact
+        # silently claimed to be newer than the analysis (#242). Both carry a zone:
+        # the run time is UTC and this one is the rendering machine's local time,
+        # so printing them unqualified beside each other invites the reader to
+        # subtract them.
+        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "run_date": format_run_timestamp(pipeline_summary.get("pipeline_start")),
+        # The mapping is rendered by iterating it, not by branching on its shape:
+        # the template tested for `fastq1 and fastq2` or `bam`, so the other two
+        # shapes `resolve_pipeline_input` emits rendered an empty line.
+        "input_files_text": format_input_files(input_files),
+        "sample_name": resolved_sample_name,
+        "assay_name": ASSAY_NAME,
+        "report_title_prefix": REPORT_TITLE_PREFIX,
         "pipeline_version": pipeline_version,
-        "reference_assembly_requested": reference_assembly_requested,
+        # The provenance block. Two of these four rows are *not* new summary keys:
+        # `assembly_declared` is the `reference_assembly_requested` `start_summary`
+        # has always written, and `assembly_detected` is the BAM-header step's
+        # `assembly_text`. Recording either again under a second name would be the
+        # divergent-source problem `cli_report.py`'s docstring warns about. Every
+        # row says `not recorded by this run` when its source is absent - never
+        # `config["default_values"]["reference_assembly"]`, which would mislabel any
+        # `--reference-assembly` override and cannot reconstruct `--custom-regions`.
+        "summary_schema_version": recorded_or_not(pipeline_summary.get("schema_version")),
+        "assembly_declared": recorded_or_not(reference_assembly_requested),
+        "assembly_detected": recorded_or_not(assembly_text),
+        "region_resolved": format_region(pipeline_summary.get("region_resolved")),
+        # `reference_assembly_requested` and `assembly_text` are deliberately absent:
+        # they reach the template as `assembly_declared` and `assembly_detected`
+        # above. Passing the raw values too would put the same fact in the context
+        # twice under two names, which is how the template came to have two places
+        # that could disagree about the assembly.
         "reference_key_used": reference_key_used,
         "reference_path": reference_path,
         "reference_source_effective": reference_source_effective,
         "header_warning": header_warning,
         "alignment_pipeline": alignment_pipeline,
-        "assembly_text": assembly_text,
         "assembly_contig": assembly_contig,
         "mean_vntr_coverage": shown(coverage["mean"]),
         "median_vntr_coverage": shown(coverage["median"]),

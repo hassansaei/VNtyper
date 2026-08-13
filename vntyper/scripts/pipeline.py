@@ -468,6 +468,13 @@ def run_pipeline(
             coverage_calculator=calculate_vntr_coverage,
             region_resolver=get_region_string_with_fallback,
         )
+        # The exact span the coverage stage consumed - resolved here and, until
+        # #242, thrown away. The report could not otherwise state it: reading
+        # `config["default_values"]["reference_assembly"]` back would mislabel any
+        # `--reference-assembly` override and cannot reconstruct `--custom-regions`
+        # at all. `record_step` below serialises the whole summary dict, not just
+        # the step, so setting it here puts it on disk immediately.
+        summary["region_resolved"] = vntr_region
         cov_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
             summary,
@@ -616,6 +623,14 @@ def run_pipeline(
         bam_out = os.path.join(dirs["kestrel"], "output.bam")
         bed_out = os.path.join(dirs["kestrel"], "output.bed")
         fasta_reference = config["reference_data"]["muc1_reference_vntr"]
+
+        # `generate_summary_report` reads `pipeline_summary.json` back **from
+        # disk**, and the final `write_summary` below runs after it. Every
+        # top-level key set since the last `record_step` would therefore be
+        # missing from the report even though the finished file carries it. This
+        # makes the file match the summary in hand at the moment it is read,
+        # rather than relying on a later `record_step` happening to fire (#242).
+        write_summary(summary, summary_file_path)
 
         generate_summary_report(
             output_dir,

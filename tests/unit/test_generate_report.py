@@ -115,7 +115,7 @@ def positive_summary(tmp_path):
 def test_a_report_is_written(positive_summary) -> None:
     html = render(positive_summary)
     assert html.lstrip().startswith("<!DOCTYPE html>")
-    assert "Summary Report" in html
+    assert "<h1>MUC1 VNTR report — sample</h1>" in html
 
 
 def test_the_config_is_required(tmp_path) -> None:
@@ -132,7 +132,7 @@ def test_the_config_is_required(tmp_path) -> None:
 def test_a_missing_pipeline_summary_still_renders(tmp_path) -> None:
     """A report with nothing in it is a usable diagnostic; a traceback is not."""
     html = render(tmp_path)
-    assert "Summary Report" in html
+    assert "<h1>MUC1 VNTR report — unnamed sample</h1>" in html
     assert "Not calculated" in html
 
 
@@ -1006,11 +1006,17 @@ def test_the_requested_and_effective_reference_sources_are_shown_as_different(tm
 
 def test_an_older_summary_without_reference_selection_fields_still_renders(positive_summary) -> None:
     """A summary written before this change (or one with no BWA reference at all, e.g.
-    a BAM-only run) simply omits the four fields; the section must not appear rather
-    than rendering empty labels."""
+    a BAM-only run) simply omits the four fields.
+
+    Three of them stay conditional: they name a *file* the run opened, and a
+    missing label is the honest rendering of a run that opened none. The fourth
+    moved into the provenance block, where an absent value is stated rather than
+    left blank - the requested assembly is what selects the region even for a run
+    that reads no reference, so its absence is itself a fact about the run (#242).
+    """
     html = render(positive_summary)
 
-    assert "Reference assembly requested" not in html
+    assert _labeled_value(html, "Reference assembly requested") == "not recorded by this run"
     assert "Reference key used" not in html
     assert "Reference path" not in html
     assert "Effective reference source" not in html
@@ -1328,3 +1334,258 @@ def test_the_advntr_table_states_how_many_rows_are_shown(both_tables) -> None:
 
 def test_a_run_with_no_advntr_table_makes_no_advntr_count_claim(positive_summary) -> None:
     assert "adVNTR row" not in render(positive_summary)
+
+
+# ---------------------------------------------------------------------------
+# The report identifies itself (#242)
+# ---------------------------------------------------------------------------
+
+#: The four shapes `resolve_pipeline_input` produces (`pipeline_inputs.py:162-170`).
+#: The template branched on two of them, so a CRAM run and a single-end FASTQ run
+#: rendered an empty `Input Files:` line.
+INPUT_SHAPES = [
+    {"cram": "S1.cram"},
+    {"fastq1": "S1.fq.gz"},
+    {"bam": "S1.bam"},
+    {"fastq1": "a.fq", "fastq2": "b.fq"},
+]
+
+
+def _provenance_block(html: str) -> str:
+    """The provenance section of the rendered report, and nothing else.
+
+    Args:
+        html: The rendered report.
+
+    Returns:
+        str: The markup between the block's opening tag and its closing ``</div>``.
+    """
+    start = html.index('id="provenance"')
+    end = html.index("</div>", start)
+    return html[start:end]
+
+
+@pytest.mark.parametrize("inputs", INPUT_SHAPES)
+def test_every_input_shape_names_its_files(tmp_path, inputs) -> None:
+    """A report that does not say what it was run on is not a record of anything."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        input_files=inputs,
+    )
+
+    listed = _labeled_value(render(tmp_path), "Input Files")
+
+    for name in inputs.values():
+        assert name in listed, f"{name!r} is missing from the Input Files line"
+
+
+def test_the_title_carries_the_sample_name(tmp_path) -> None:
+    write_summary(tmp_path, input_files={"cram": "S1.cram"})
+
+    assert "<title>MUC1 VNTR report — S1" in render(tmp_path)
+
+
+def test_the_heading_carries_the_sample_name(tmp_path) -> None:
+    """Two tabs and a printed page are all indistinguishable without this."""
+    write_summary(tmp_path, input_files={"cram": "S1.cram"})
+
+    assert "<h1>MUC1 VNTR report — S1</h1>" in render(tmp_path)
+
+
+def test_the_header_names_the_assay_and_the_version(tmp_path) -> None:
+    write_summary(tmp_path, input_files={"bam": "S1.bam"}, version="2.0.18")
+
+    html = render(tmp_path)
+
+    assert _labeled_value(html, "Assay") == "MUC1 coding VNTR genotyping"
+    assert _labeled_value(html, "Sample") == "S1"
+    assert _labeled_value(html, "VNtyper Version") == "2.0.18"
+
+
+def test_an_explicit_sample_name_wins_over_the_input_files(tmp_path) -> None:
+    write_summary(tmp_path, input_files={"cram": "S1.cram"})
+
+    html = render(tmp_path, sample_name="PATIENT_042")
+
+    assert "<title>MUC1 VNTR report — PATIENT_042" in html
+    assert _labeled_value(html, "Sample") == "PATIENT_042"
+
+
+def test_a_summary_with_no_input_files_still_names_the_report(tmp_path) -> None:
+    """A report with nothing to derive a name from must still be a report."""
+    write_summary(tmp_path)
+
+    html = render(tmp_path)
+
+    assert "<title>MUC1 VNTR report — unnamed sample" in html
+    assert _labeled_value(html, "Input Files") == "not recorded by this run"
+
+
+def test_a_malformed_input_files_value_costs_the_line_and_not_the_report(tmp_path) -> None:
+    """`vntyper report` renders a *supplied* summary (#207), so a wrong-typed
+    `input_files` must not replace the report with a traceback."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]), input_files=["sample.bam"])
+
+    html = render(tmp_path)
+
+    assert _labeled_value(html, "Input Files") == "not recorded by this run"
+    assert "<title>MUC1 VNTR report — unnamed sample" in html
+    assert _kestrel_table(html), "the rest of the report must still render"
+
+
+#: An injection payload carrying no ``/``. ``PAYLOAD`` does, and the sample name
+#: is taken from a *basename*, so ``</script>`` alone is stripped by the path
+#: split before any escaping happens -- which would make an escaping assertion on
+#: the title pass for the wrong reason.
+TITLE_PAYLOAD = "<img src=x onerror=alert(1)>"
+TITLE_ESCAPED = "&lt;img src=x onerror=alert(1)&gt;"
+
+
+def test_a_sample_name_derived_from_an_input_file_is_escaped(tmp_path) -> None:
+    """The name is derived from a sample-supplied basename, so it reaches
+    ``<title>`` and ``<h1>`` as attacker-influenced text."""
+    write_summary(tmp_path, input_files={"bam": f"{TITLE_PAYLOAD}.bam"})
+
+    html = render(tmp_path)
+
+    assert TITLE_PAYLOAD not in html
+    assert f"<title>MUC1 VNTR report — {TITLE_ESCAPED}</title>" in html
+    assert f"<h1>MUC1 VNTR report — {TITLE_ESCAPED}</h1>" in html
+
+
+# ---------------------------------------------------------------------------
+# Provenance: recorded, or said to be absent -- never guessed (#242, P5)
+# ---------------------------------------------------------------------------
+
+
+def test_a_legacy_summary_renders_not_recorded(tmp_path) -> None:
+    """A summary written before this change carries none of the provenance
+    fields, and the report must say so rather than reading the config default.
+
+    ``config["default_values"]["reference_assembly"]`` is ``hg19``. Printing it
+    would mislabel every ``--reference-assembly`` override, and it cannot
+    reconstruct ``--custom-regions`` at all.
+    """
+    write_summary(tmp_path, version="2.0.11")
+
+    html = render(tmp_path)
+
+    assert "not recorded by this run" in html
+    assert "hg19" not in _provenance_block(html)
+
+
+def test_a_current_summary_prints_the_resolved_region(tmp_path) -> None:
+    write_summary(tmp_path, schema_version=1, region_resolved="chr1:155184000-155194000")
+
+    assert "chr1:155,184,000-155,194,000" in render(tmp_path)
+
+
+def test_the_provenance_block_reads_the_assembly_fields_already_recorded(tmp_path) -> None:
+    """Two of the four provenance rows are not new keys.
+
+    ``assembly_declared`` is ``reference_assembly_requested``, written by
+    ``start_summary``; ``assembly_detected`` is the ``BAM Header Parsing`` step's
+    ``assembly_text``. Recording either again under a second name would be the
+    divergent-source problem ``cli_report.py``'s docstring warns about.
+    """
+    write_summary(
+        tmp_path,
+        {
+            "step": summary_steps.STEP_BAM_HEADER,
+            "parsed_result": {"assembly_text": "GRCh38", "assembly_contig": "chr1"},
+        },
+        reference_assembly_requested="hg38_ensembl",
+        schema_version=1,
+        region_resolved="chr1:155184000-155194000",
+    )
+
+    block = _provenance_block(render(tmp_path))
+
+    assert "hg38_ensembl" in block
+    assert "GRCh38" in block
+    assert "chr1:155,184,000-155,194,000" in block
+    assert "not recorded by this run" not in block
+
+
+def test_the_summary_schema_version_is_shown(tmp_path) -> None:
+    write_summary(tmp_path, schema_version=1)
+
+    assert _labeled_value(render(tmp_path), "Summary schema version") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Run time is not render time
+# ---------------------------------------------------------------------------
+
+
+def test_the_run_time_and_the_render_time_are_both_shown(tmp_path) -> None:
+    write_summary(tmp_path, pipeline_start="2020-01-02T03:04:05.678901")
+
+    html = render(tmp_path)
+
+    assert _labeled_value(html, "Pipeline run started") == "2020-01-02 03:04:05 UTC"
+    # Both carry a zone, so a reader can subtract one from the other.
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+", _labeled_value(html, "This report rendered"))
+
+
+def test_re_rendering_an_archived_run_does_not_restamp_the_run_time(tmp_path) -> None:
+    """`vntyper report -o <finished run>` produced an artefact claiming to be
+    newer than the analysis, because the only date on it was `datetime.now()`."""
+    write_summary(tmp_path, pipeline_start="2020-01-02T03:04:05.678901")
+
+    first = _labeled_value(render(tmp_path), "Pipeline run started")
+    second = _labeled_value(render(tmp_path), "Pipeline run started")
+
+    assert first == second == "2020-01-02 03:04:05 UTC"
+
+
+def test_a_summary_with_no_start_time_says_so(tmp_path) -> None:
+    write_summary(tmp_path)
+
+    assert _labeled_value(render(tmp_path), "Pipeline run started") == "not recorded by this run"
+
+
+# ---------------------------------------------------------------------------
+# What the pipeline actually wrote, read back by the real report
+# ---------------------------------------------------------------------------
+
+
+def test_the_pipeline_puts_the_resolved_region_on_disk_before_the_report_reads_it(tmp_path) -> None:
+    """The write-ordering trap, pinned end to end.
+
+    ``pipeline_summary.json`` is written incrementally by ``record_step``, and
+    ``generate_summary_report`` reads it back **from disk** -- while the final
+    ``write_summary`` runs after the report. The resolved region does not exist
+    until the coverage stage, so a key set after the last ``record_step`` would
+    never reach the report at all.
+
+    This renders from the bytes that were on disk at the instant the pipeline
+    called the report generator, not from a hand-built summary, so it fails if
+    the ordering regresses even when the finished file is correct.
+    """
+    from tests.support.pipeline_harness import run_pipeline_under_harness
+
+    run_dir = tmp_path / "run"
+    captured: dict[str, str] = {}
+
+    def _capture(*args, **kwargs):
+        """Read the summary at the instant the pipeline asked for the report."""
+        captured["summary"] = (run_dir / "pipeline_summary.json").read_text(encoding="utf-8")
+
+    harness = run_pipeline_under_harness(run_dir, stage_side_effects={"generate_summary_report": _capture})
+    assert harness.error is None
+
+    on_disk = json.loads(captured["summary"])
+    assert on_disk["schema_version"] == 1
+    assert on_disk["region_resolved"] == "chr1:155158000-155163000"
+
+    report_dir = tmp_path / "rendered"
+    report_dir.mkdir()
+    (report_dir / "pipeline_summary.json").write_text(captured["summary"], encoding="utf-8")
+
+    html = render(report_dir)
+
+    assert "chr1:155,158,000-155,163,000" in _provenance_block(html)
+    assert "<title>MUC1 VNTR report — in</title>" in html

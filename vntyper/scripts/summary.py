@@ -22,6 +22,15 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+#: Version of the ``pipeline_summary.json`` layout this module writes.
+#:
+#: Nothing versioned the summary before, so a consumer could not tell "this run
+#: did not record the region" from "this run predates the field" - and the report
+#: has to distinguish them, because the only honest rendering of the second is to
+#: say the value was not recorded rather than to substitute a configured default
+#: (#242). Bump this when a key is added, removed or changes meaning.
+SUMMARY_SCHEMA_VERSION = 1
+
 
 def start_summary(
     version=None,
@@ -74,10 +83,12 @@ def start_summary(
             For BAM and CRAM, the alignment plan's own source label instead.
 
     Returns:
-        dict: A summary dictionary with pipeline start timestamp, version, input files,
-        the effective reference selection, and an empty steps list.
+        dict: A summary dictionary with its schema version, pipeline start timestamp,
+        version, input files, the effective reference selection, a placeholder for the
+        region the run resolves later, and an empty steps list.
     """
     return {
+        "schema_version": SUMMARY_SCHEMA_VERSION,
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
@@ -85,6 +96,12 @@ def start_summary(
         "reference_key_used": reference_key_used,
         "reference_path": reference_path,
         "reference_source_effective": reference_source_effective,
+        # The span the coverage stage actually worked over. It is not known yet -
+        # `calculate_alignment_coverage` resolves it mid-run - but the key exists
+        # from the start so that schema 1 means "this field is present", and an
+        # absent one means the summary predates it rather than that the run
+        # declined to say (#242).
+        "region_resolved": None,
         "steps": [],
     }
 

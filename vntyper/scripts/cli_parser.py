@@ -225,6 +225,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Flanking region size for IGV reports.",
     )
+    parser_report.add_argument(
+        "-s",
+        "--sample-name",
+        type=str,
+        default=None,
+        help=(
+            "What the report calls its sample, in the title, the heading and the header block. "
+            "Derived from the run's own input file names when omitted."
+        ),
+    )
 
     # Subcommand: cohort
     parser_cohort = subparsers.add_parser(

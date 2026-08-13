@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Summary Report</title>
+    <title>{{ report_title_prefix }} — {{ sample_name }}</title>
     <!-- Include Bootstrap CSS for styling -->
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <!-- Include DataTables CSS for table styling -->
@@ -149,6 +149,18 @@
         .summary-positive {
             font-weight: bold;
         }
+        /* The identity block is also the printed report's header: on paper it is
+           the only thing that says whose report this is, so it must not be split
+           across a page boundary. */
+        .report-header {
+            margin-bottom: 1em;
+        }
+        @media print {
+            .report-header {
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
+        }
         /* Style for header info section */
         .header-info {
             margin-bottom: 1em;
@@ -166,24 +178,48 @@
 </head>
 <body>
     <div class="container">
-        <h1>Summary Report</h1>
-        <p><strong>Report Date:</strong> {{ report_date }}</p>
-        <p><strong>VNtyper Version:</strong> {{ pipeline_version }}</p>
-        <!-- Display Input Files -->
-        {% if input_files %}
-            <p><strong>Input Files:</strong>
-                {% if input_files.fastq1 and input_files.fastq2 %}
-                    {{ input_files.fastq1 }}, {{ input_files.fastq2 }}
-                {% elif input_files.bam %}
-                    {{ input_files.bam }}
-                {% endif %}
-            </p>
-        {% endif %}
+        <!--
+          The report says who and what it is, in the browser tab, on screen and on
+          the first printed page. `<title>` and `<h1>` used to be the constant
+          string "Summary Report" for every report a lab produced (#242).
+
+          Every value in this block is escaped: the sample name and the input file
+          names are derived from a sample-supplied basename, and the report is a
+          file people forward.
+        -->
+        <div class="report-header">
+            <h1>{{ report_title_prefix }} — {{ sample_name }}</h1>
+            <p><strong>Assay:</strong> {{ assay_name }}</p>
+            <p><strong>Sample:</strong> {{ sample_name }}</p>
+            <p><strong>Input Files:</strong> {{ input_files_text }}</p>
+            <p><strong>VNtyper Version:</strong> {{ pipeline_version }}</p>
+            <!--
+              Two timestamps, because they are two facts. Re-running `vntyper report`
+              over an archived run restamped the only date on the page, so the
+              artefact claimed to be newer than the analysis it reports.
+            -->
+            <p><strong>Pipeline run started:</strong> {{ run_date }}</p>
+            <p><strong>This report rendered:</strong> {{ report_date }}</p>
+        </div>
+
+        <!--
+          Provenance: what this run recorded about the coordinates it worked in.
+          A field the run did not record says so in words. Nothing here is ever
+          filled in from a configured default - that would mislabel any
+          `--reference-assembly` override and could not reconstruct
+          `--custom-regions` at all (#242, P5).
+        -->
+        <div class="header-info" id="provenance">
+            <p><strong>Reference assembly requested:</strong> {{ assembly_declared }}</p>
+            <p><strong>Assembly detected from BAM header:</strong> {{ assembly_detected }}
+                {%- if assembly_contig %} (Contig: {{ assembly_contig }}){% endif %}</p>
+            <p><strong>Region analysed:</strong> {{ region_resolved }}</p>
+            <p><strong>Summary schema version:</strong> {{ summary_schema_version }}</p>
+        </div>
 
         <!-- Display the BWA reference actually resolved for this run (#163) -->
-        {% if reference_assembly_requested %}
+        {% if reference_key_used or reference_path or reference_source_effective %}
             <div class="header-info">
-                <p><strong>Reference assembly requested:</strong> {{ reference_assembly_requested }}</p>
                 {% if reference_key_used %}
                     <p><strong>Reference key used:</strong> {{ reference_key_used }}</p>
                 {% endif %}
@@ -197,17 +233,10 @@
         {% endif %}
 
         <!-- Display Combined Header Information if available -->
-        {% if alignment_pipeline or assembly_text or assembly_contig or header_warning %}
+        {% if alignment_pipeline or header_warning %}
             <div class="header-info">
                 {% if alignment_pipeline %}
                     <p><strong>Alignment pipeline:</strong> {{ alignment_pipeline }}</p>
-                {% endif %}
-                {% if assembly_text %}
-                    <p><strong>Assembly detected from BAM header:</strong> {{ assembly_text }}
-                        {% if assembly_contig %}
-                            (Contig: {{ assembly_contig }})
-                        {% endif %}
-                    </p>
                 {% endif %}
                 {% if header_warning %}
                     <p style="color: red;"><strong>Warning:</strong> {{ header_warning }}</p>
