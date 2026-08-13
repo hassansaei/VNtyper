@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import hashlib
 import re
-import shlex
 import sqlite3
-import subprocess
 from pathlib import Path
 from typing import Any
+
+from vntyper.scripts.utils import get_tool_version
 
 #: adVNTR releases before this ignore a model's recorded genomic end.
 SPAN_AWARE_ADVNTR = (2, 0, 4)
@@ -82,20 +82,11 @@ def detect_advntr_version(config: dict[str, Any]) -> tuple[int, int, int] | None
     command = config.get("tools", {}).get("advntr")
     if not command:
         return None
-    try:
-        # Split rather than handing the string to a shell: the configured command is
-        # multi-token ("mamba run -n envadvntr advntr"), which is the only reason a
-        # shell was tempting, and shlex gives the same tokens without one.
-        completed = subprocess.run(
-            [*shlex.split(command), "--version"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    return parse_advntr_version(f"{completed.stdout}\n{completed.stderr}")
+    # Reuse the pipeline's own tool probe rather than adding a second way to run a
+    # configured command. It already splits the multi-token form
+    # ("mamba run -n envadvntr advntr") without a shell, and already knows how to read
+    # adVNTR's answer. It returns "unknown" when it cannot, which parses to None.
+    return parse_advntr_version(get_tool_version(command, "--version"))
 
 
 def describe_model(db_path: str | Path) -> dict[str, Any]:

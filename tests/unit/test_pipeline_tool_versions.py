@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
+from tests.support.pipeline_harness import MINIMAL_CONFIG, advntr_stub, run_pipeline_under_harness
 
 pytestmark = pytest.mark.unit
 
@@ -80,11 +80,10 @@ def test_requesting_advntr_declares_advntr(tmp_path: Path) -> None:
     the config declares a tool of that name.
     """
     config = deepcopy(MINIMAL_CONFIG)
-    # A command whose `--version` reports a span-aware adVNTR. The real
-    # `mamba run -n envadvntr advntr` is refused before the run when the installed
-    # adVNTR predates the recorded genomic end (#268), which is the point of the
-    # check -- but this test is about tool declaration, not model compatibility.
-    config["tools"]["advntr"] = "echo 2.0.4 #"
+    # A stub reporting a span-aware adVNTR. The real `mamba run -n envadvntr advntr`
+    # is refused before the run when the installed adVNTR predates the recorded genomic
+    # end (#268) -- that check is the point, but this test is about tool declaration.
+    config["tools"]["advntr"] = advntr_stub("2.0.4")
 
     harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"])
 
@@ -151,7 +150,7 @@ def test_the_model_a_run_used_is_recorded_in_the_summary(tmp_path: Path) -> None
     interpretable.
     """
     config = deepcopy(MINIMAL_CONFIG)
-    config["tools"]["advntr"] = "echo 2.0.4 #"
+    config["tools"]["advntr"] = advntr_stub("2.0.4")
 
     harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"])
 
@@ -170,7 +169,7 @@ def test_a_model_advntr_cannot_read_stops_the_run(tmp_path: Path, caplog: pytest
     than diagnosed from results that look confident.
     """
     config = deepcopy(MINIMAL_CONFIG)
-    config["tools"]["advntr"] = "echo 2.0.3 #"
+    config["tools"]["advntr"] = advntr_stub("2.0.3")
 
     # run_pipeline swallows every exception into sys.exit(1), so what the harness records
     # is the exit; the refusal itself is in the log. Both matter: the run must stop, and

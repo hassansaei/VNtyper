@@ -5,6 +5,7 @@ import importlib.resources as pkg_resources
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -174,6 +175,14 @@ def get_tool_version(command, version_flag):
             return "unknown"
         if "advntr" in command:
             lines = output.split("\n")
+            # adVNTR >= 2.0.4 answers --version with a bare version string. Older
+            # releases have no --version flag at all and print their help banner, whose
+            # third line carries the version -- so both shapes are read here, and a
+            # release that answers neither stays "unknown", which callers treat as
+            # too old rather than as acceptable.
+            bare = re.match(r"^\s*(\d+\.\d+\.\d+)\s*$", lines[0]) if lines else None
+            if bare:
+                return bare.group(1)
             if len(lines) >= 3 and "adVNTR" in lines[2]:
                 return lines[2].split(": ")[0].split(" ")[1]
             return "unknown"

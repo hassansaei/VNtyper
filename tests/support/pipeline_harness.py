@@ -86,6 +86,22 @@ _MODEL_TMP = tempfile.TemporaryDirectory(prefix="vntyper-harness-advntr-")
 atexit.register(_MODEL_TMP.cleanup)
 _MODEL_DIR = Path(_MODEL_TMP.name)
 
+
+def advntr_stub(version: str, directory: Path = _MODEL_DIR) -> str:
+    """An executable that answers `--version` with `version`.
+
+    The pipeline probes the configured adVNTR before running, so the harness needs a
+    command that answers. It has to be a real executable rather than a shell one-liner:
+    the probe splits the command into an argv list and runs it without a shell, so
+    nothing can be commented out and the appended `--version` reaches the program. The
+    name contains "advntr" because that is how the shared probe picks its parser.
+    """
+    path = directory / f"advntr-{version}"
+    path.write_text(f'#!/bin/sh\necho "{version}"\n')
+    path.chmod(0o755)
+    return str(path)
+
+
 MINIMAL_CONFIG: dict[str, Any] = {
     "tools": {
         "samtools": "samtools",
@@ -93,9 +109,7 @@ MINIMAL_CONFIG: dict[str, Any] = {
         "bwa": "bwa",
         "kestrel": "kestrel.jar",
         "java_path": "java",
-        # `<command> --version` must report a span-aware adVNTR; the trailing comment
-        # marker swallows the flag the caller appends.
-        "advntr": "echo 2.0.4 #",
+        "advntr": advntr_stub("2.0.4"),
     },
     "reference_data": {
         "muc1_reference_vntr": "/refs/muc1.fa",
