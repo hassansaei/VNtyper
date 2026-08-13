@@ -7,9 +7,10 @@ That is the whole argument for storing it gzipped and expanding it in the browse
 and it is a number rather than an opinion.
 
 **Reproducibility.** The gzip is pinned by digest, so it has to be byte-identical on
-every rebuild. ``gzip.compress(..., mtime=0)`` is what makes that true: the gzip
-header carries a modification time by default, so without it the file's bytes -- and
-its digest -- differ every time anyone regenerates it.
+every rebuild. ``gzip.compress(..., mtime=0)`` fixes the timestamp, and the recipe
+also canonicalises the gzip OS byte: Python releases disagree on whether that byte
+is Unix (3) or unknown (255) when ``mtime=0``. Without both steps, the file's bytes
+-- and its digest -- depend on when and under which Python it was regenerated.
 
 **What the digest covers.** Checking the file on disk proves it was not corrupted. It
 proves nothing about *which* igv.js is inside it, because any gzip of anything at all
@@ -40,6 +41,12 @@ pytestmark = pytest.mark.unit
 RAW_BYTES = 1_310_337
 GZIP_BYTES = 372_690
 BASE64_CHARS = 496_920
+
+# RFC 1952's OS value for Unix. Python 3.11/3.12 delegate the ``mtime=0`` fast path
+# to zlib and emit 3 here, while 3.10/3.13 emit gzip.GzipFile's 255. The vendored
+# artifact uses 3, so the regeneration recipe sets it explicitly instead of letting
+# the interpreter choose it.
+GZIP_OS_UNIX = 3
 
 
 def test_the_vendored_asset_matches_its_pinned_digest() -> None:
@@ -105,18 +112,22 @@ def test_an_unknown_mode_is_refused_rather_than_treated_as_off() -> None:
 
 
 def test_the_gzip_is_reproducible_from_the_source_it_decompresses_to() -> None:
-    """``mtime=0`` is required, not tidy.
+    """The zero timestamp and canonical OS byte are both required, not tidy.
 
-    Recompressing the decompressed source at level 9 with ``mtime=0`` must reproduce
-    the shipped file byte for byte. Without ``mtime=0`` the gzip header carries the
-    time of compression, so the file's digest changes on every rebuild and pinning it
-    pins nothing.
+    Recompressing the decompressed source at level 9 with ``mtime=0`` and setting
+    the RFC 1952 OS byte to Unix must reproduce the shipped file byte for byte.
+    Python's own choice for that byte changed across supported releases, so merely
+    setting ``mtime=0`` is not a cross-version recipe.
     """
     source = report_assets.igv_library_source()
-    rebuilt = gzip.compress(source, compresslevel=9, mtime=0)
+    rebuilt_buffer = bytearray(gzip.compress(source, compresslevel=9, mtime=0))
+    rebuilt_buffer[9] = GZIP_OS_UNIX
+    rebuilt = bytes(rebuilt_buffer)
 
     assert rebuilt == report_assets.IGV_ASSET_PATH.read_bytes()
     assert hashlib.sha256(rebuilt).hexdigest() == report_assets.IGV_GZIP_SHA256
+    assert rebuilt[4:8] == b"\x00\x00\x00\x00"
+    assert rebuilt[9] == GZIP_OS_UNIX
 
     stamped = gzip.compress(source, compresslevel=9, mtime=1_700_000_000)
     assert stamped != rebuilt, "the gzip header does not carry mtime here, so this test asserts nothing"

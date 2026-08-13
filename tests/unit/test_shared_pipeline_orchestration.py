@@ -516,6 +516,31 @@ def test_strict_fastq_success_validates_values_summary_report_and_archive(tmp_pa
         orchestration.validate_strict_fastq_success(changed, output_dir)
 
 
+def test_legacy_break_separated_report_oracle_accepts_the_same_visible_segments(tmp_path: Path) -> None:
+    """The report may improve its markup without changing the configured message.
+
+    The integration fixtures intentionally retain the configuration's historical
+    ``<br>``-joined message. The shipped template now renders those exact authored
+    segments as separate paragraphs, so the strict oracle must compare the words in
+    order rather than require the old presentational tag. Changing any word must
+    still fail the contract.
+    """
+    output_dir = tmp_path / "semantic-report"
+    _write_strict_success_tree(output_dir)
+    case = _strict_fastq_case()
+    case["report_assertions"] = ["first authored segment.<br>second authored segment.<br>third segment."]
+    (output_dir / "summary_report.html").write_text(
+        "<section><p>first authored segment.</p><p>second authored segment.</p><p>third segment.</p></section>",
+        encoding="utf-8",
+    )
+
+    orchestration.validate_strict_fastq_success(case, output_dir)
+
+    case["report_assertions"] = ["first authored segment.<br>changed words.<br>third segment."]
+    with pytest.raises(AssertionError, match="changed words"):
+        orchestration.validate_strict_fastq_success(case, output_dir)
+
+
 @pytest.mark.parametrize("missing", ["Estimated_Depth_Variant_ActiveRegion", "Depth_Score"])
 def test_strict_fastq_success_requires_every_characterized_kestrel_field(tmp_path: Path, missing: str) -> None:
     """The strict oracle must not silently weaken either characterized depth value."""

@@ -25,10 +25,11 @@ what the file on disk carries. `report_assets.igv_payload` verifies **both** —
 it read, and then the bytes that come back out of it, which are exactly the source the
 report later evaluates.
 
-The gzip is reproducible: `gzip.compress(raw, compresslevel=9, mtime=0)`. `mtime=0` is
-required rather than tidy — without it the gzip header embeds the time of compression,
-so the file's bytes and therefore its digest differ on every rebuild, and a pinned
-digest for a file that changes on every rebuild is not a pin.
+The gzip is reproducible: run `gzip.compress(raw, compresslevel=9, mtime=0)`, then set
+byte 9 of the result to `3` (RFC 1952's Unix OS value). `mtime=0` fixes the timestamp;
+canonicalising the OS byte avoids a Python-version difference where supported
+interpreters emit either Unix (`3`) or unknown (`255`). Both are required for the
+same source to retain the same file digest across the supported Python matrix.
 
 ### Why 3.0.2 and not the newest release
 

@@ -10,13 +10,15 @@ The sample report (`summary_report.html`) is generated at the end of each pipeli
 
 **Variant Summary Table**
 
-The Kestrel results are displayed in a sortable table with columns for motif, variant type, position, REF/ALT alleles, motif sequence, depth metrics, depth score, confidence level, and flag status. Confidence is written as a labelled pill rather than encoded only by an alert colour:
+The Kestrel results are displayed in a sortable table with columns for motif, variant type, position, REF/ALT alleles, depth metrics, depth score, confidence level, flag status, the mutation-naming record, and motif sequence. The naming record includes the reconciled MUC1 name, confidence tier and flags, both callers' own names, ambiguity interval, repeat form and naming note; it is not collapsed to the reconciled name because caller disagreement is evidence the reader needs. See [MUC1 Nomenclature](nomenclature.md).
+
+Confidence is written as a labelled pill rather than encoded only by an alert colour:
 
 - High_Precision / High_Precision* -- high-precision call
 - Low_Precision -- lower-precision call
 - Negative -- no variant detected
 
-If adVNTR was run, its results appear in a separate table showing VID, variant state, supporting read count, mean coverage, p-value, repeat unit, REF/ALT, and flag status.
+If adVNTR was run, its results appear in a separate table showing VID, variant state, supporting read count, mean coverage, p-value, repeat unit, REF/ALT, flag status and the same complete mutation-naming record.
 
 **Screening Summary**
 
@@ -128,7 +130,7 @@ performed or failed to produce readable evidence.
 
 The cohort summary module (`cohort_summary.py`) aggregates results from multiple pipeline runs into a single report. It scans a directory structure for `pipeline_summary.json` files and constructs:
 
-- **Sample result table** -- aggregated variant calls, confidence levels, and flags across all samples
+- **Sample result table** -- aggregated variant calls, confidence levels, flags and complete mutation-naming records across all samples
 - **Donut charts** -- interactive Plotly visualizations showing the distribution of results (positive/negative/low precision) across the cohort
 - **Coverage statistics** -- per-sample VNTR coverage metrics
 - **Runtime statistics** -- pipeline execution times

@@ -513,7 +513,16 @@ def _assert_report_values(test_case: dict[str, Any], output_dir: Path) -> None:
     assert report_path.is_file() and report_path.stat().st_size > 0, f"Summary report is missing: {report_path}"
     report = report_path.read_text(encoding="utf-8")
     for fragment in expected:
-        assert fragment in report, f"Summary report is missing declared text: {fragment}"
+        # The compatibility fixtures predate the semantic report template and retain
+        # report_config.json's historical ``<br>``-joined message. The template now
+        # renders the same author-owned segments as separate paragraphs. Compare the
+        # exact words in their declared order, while allowing markup between them;
+        # changing, dropping, or reordering any segment still fails the oracle.
+        cursor = 0
+        for segment in fragment.split("<br>"):
+            position = report.find(segment, cursor)
+            assert position >= 0, f"Summary report is missing declared text: {segment}"
+            cursor = position + len(segment)
 
 
 def validate_strict_fastq_success(test_case: dict[str, Any], output_dir: Path) -> None:

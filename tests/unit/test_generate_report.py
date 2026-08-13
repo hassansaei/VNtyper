@@ -241,6 +241,64 @@ def test_the_kestrel_table_carries_the_display_headings(positive_summary) -> Non
         assert f"<th>{heading}</th>" in html
 
 
+def test_both_report_tables_show_the_complete_mutation_naming_record(tmp_path: Path) -> None:
+    """#271's naming evidence must survive the summary-to-HTML boundary.
+
+    Membership tests on display-column constants cannot catch a renderer dropping
+    the values before the template. This renders both real table paths with distinct
+    reconciled and per-caller names, then checks each value in its own table.
+    """
+    kestrel_naming = {
+        "Nomenclature": "59dupC",
+        "Nomenclature_Tier": "A",
+        "Nomenclature_Flags": "caller-disagreement",
+        "Nomenclature_Kestrel": "59_60insG",
+        "Nomenclature_adVNTR": "58_59insG",
+        "Ambiguity_Interval": "53_59",
+        "Repeat_Form": "53C[7]>53C[8]",
+        "Nomenclature_Note": "two-caller reconciliation",
+    }
+    advntr_naming = {
+        "Nomenclature": "1_5delGCCCA",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "low-support",
+        "Nomenclature_Kestrel": "60dupA",
+        "Nomenclature_adVNTR": "1_5delGCCCA",
+        "Ambiguity_Interval": "1_5",
+        "Repeat_Form": "outside a detectable tract",
+        "Nomenclature_Note": "caller-specific representation",
+    }
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, **kestrel_naming}]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{**ADVNTR_ESCAPING_ROW, **advntr_naming}]),
+    )
+
+    html = render(tmp_path)
+    kestrel_table = _kestrel_table(html)
+    advntr_table = html.split("<h2>adVNTR Identified Variants</h2>", 1)[1].split("</table>", 1)[0]
+
+    for heading in (
+        "MUC1 Name",
+        "Tier",
+        "Flags",
+        "Kestrel Name",
+        "adVNTR Name",
+        "Ambiguity",
+        "Repeat Form",
+        "Naming Note",
+    ):
+        assert f"<th>{heading}</th>" in kestrel_table
+    for value in kestrel_naming.values():
+        assert f">{value.replace('>', '&gt;')}<" in kestrel_table
+
+    for heading in advntr_naming:
+        assert f"<th>{heading}</th>" in advntr_table
+    for value in advntr_naming.values():
+        assert f">{value}<" in advntr_table
+
+
 def test_the_motif_column_reaches_the_report(positive_summary) -> None:
     """Defect W2. The pipeline emits an annotated `Motif` **and** a raw `Motifs`
     pair; the report keyed on `Motifs` and renamed it to the heading "Motif", so

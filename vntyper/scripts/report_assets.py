@@ -43,10 +43,12 @@ nothing about *which* igv.js is inside it. :func:`igv_payload` therefore decompr
 and verifies the source before encoding the compressed bytes it came from, so the
 check covers exactly what reaches the document -- and, from there, ``eval``.
 
-The gzip is reproducible: ``gzip.compress(raw, compresslevel=9, mtime=0)``.
-``mtime=0`` is required rather than tidy. Without it the gzip header embeds the
-time of compression, the file's bytes differ on every rebuild, and a pinned digest
-for a file that changes on every rebuild pins nothing.
+The gzip is reproducible: start with
+``gzip.compress(raw, compresslevel=9, mtime=0)`` and set byte 9 of the result to
+``3`` (RFC 1952's Unix OS value). ``mtime=0`` fixes the timestamp; setting the OS
+byte fixes a Python-version difference where supported interpreters emit either
+Unix (3) or unknown (255). Without both steps, a pinned digest can vary with the
+build environment rather than only with the library source.
 """
 
 from __future__ import annotations
