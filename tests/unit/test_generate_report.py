@@ -1320,7 +1320,11 @@ def test_the_igv_fragments_are_used_when_a_report_exists(positive_summary, monke
         "extract_igv_content",
         lambda path: ('<div id="container">panel</div>', '{"headers": ["a"], "rows": []}', '{"0": "blob:x"}'),
     )
-    monkeypatch.setattr(generate_report, "run_igv_report", lambda *a, **k: None)
+
+    def _write_igv_report(*args, **kwargs) -> None:
+        Path(args[3]).write_text("ignored", encoding="utf-8")
+
+    monkeypatch.setattr(generate_report, "run_igv_report", _write_igv_report)
 
     bed = positive_summary / "output.bed"
     bed.write_text("chr1\t1\t2\n", encoding="utf-8")
@@ -1333,7 +1337,7 @@ def test_the_igv_fragments_are_used_when_a_report_exists(positive_summary, monke
 
 def test_igv_extraction_failure_returns_empty_fragment(monkeypatch, caplog) -> None:
     """An unreadable optional IGV page preserves its exact three-part fallback."""
-    monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable IGV")))
+    monkeypatch.setattr(Path, "read_text", Mock(side_effect=OSError("unreadable IGV")))
     caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
     caplog.clear()
 

@@ -79,6 +79,15 @@ IGV_GZIP_SHA256 = "0d8b512654b2ef588009453c403c8f1329dce88eedca90ba9e60888af6b2f
 #: fails the build for a file here that is in neither.
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
 
+#: The controlled template passed to igv-reports. It carries no external resource
+#: URL; :func:`~vntyper.scripts.igv_report.run_igv_report` inserts the verified
+#: library into the generated sidecar after igv-reports has populated its data.
+IGV_REPORT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "igv_report_template.html"
+
+#: The one literal replaced in a generated sidecar. Keeping it distinctive makes a
+#: changed or partial template fail closed instead of emitting a browser with no library.
+IGV_REPORT_LIBRARY_MARKER = "@VNTYPER_IGV_LIBRARY@"
+
 #: The vendored library, gzipped.
 IGV_ASSET_PATH = ASSET_DIR / f"igv-{IGV_VERSION}.min.js.gz"
 
@@ -87,7 +96,7 @@ IGV_ASSET_PATH = ASSET_DIR / f"igv-{IGV_VERSION}.min.js.gz"
 REPORT_IGV_EMBEDDED = "embedded"
 
 #: ``--report-igv sidecar``: the report carries no library, and the self-contained
-#: ``igv_report.html`` that ``create_report --standalone`` writes beside it is the
+#: ``igv_report.html`` built from VNtyper's local template and vendored library is the
 #: alignment browser. Chosen when the ~500 KB matters more than the single file.
 REPORT_IGV_SIDECAR = "sidecar"
 
@@ -165,8 +174,15 @@ def _read_verified_asset() -> tuple[bytes, bytes]:
     Raises:
         ValueError: If either digest does not match, or the asset is missing.
     """
-    verify_asset(IGV_ASSET_PATH, IGV_GZIP_SHA256)
+    if not IGV_ASSET_PATH.is_file():
+        msg = (
+            f"Vendored asset {IGV_ASSET_PATH} is missing. A distribution built without it cannot embed "
+            "the alignment browser; check pyproject's package-data and MANIFEST.in."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
     compressed = IGV_ASSET_PATH.read_bytes()
+    _verify_bytes(compressed, IGV_GZIP_SHA256, f"Vendored asset {IGV_ASSET_PATH.name}")
     source = gzip.decompress(compressed)
     _verify_bytes(source, IGV_SHA256, f"Decompressed igv.js {IGV_VERSION}")
     return compressed, source

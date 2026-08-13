@@ -67,6 +67,14 @@ def test_verify_asset_says_so_when_the_asset_is_not_installed(tmp_path: Path) ->
         report_assets.verify_asset(tmp_path / "absent.gz", report_assets.IGV_GZIP_SHA256)
 
 
+def test_payload_says_so_when_the_vendored_asset_is_not_installed(tmp_path: Path, monkeypatch) -> None:
+    """The single-read payload path preserves the package-data failure message."""
+    monkeypatch.setattr(report_assets, "IGV_ASSET_PATH", tmp_path / "absent.gz")
+
+    with pytest.raises(ValueError, match="is missing"):
+        report_assets.igv_payload(report_assets.REPORT_IGV_EMBEDDED)
+
+
 def test_the_embedded_library_is_compressed() -> None:
     """Measured: 1,310,337 raw -> 372,690 gzip -> 496,920 base64.
 
@@ -136,6 +144,31 @@ def test_the_payload_decodes_back_to_the_pinned_source() -> None:
 
     assert hashlib.sha256(expanded).hexdigest() == report_assets.IGV_SHA256
     assert len(expanded) == RAW_BYTES
+
+
+def test_the_payload_hashes_and_embeds_one_read_of_the_vendored_gzip(monkeypatch) -> None:
+    """The gzip digest must cover the exact compressed buffer that is embedded.
+
+    Reading the path once to check the gzip digest and again to build the payload
+    leaves a replacement window between those operations. Counting only reads of the
+    vendored asset keeps this assertion about the trust chain rather than incidental
+    reads elsewhere in the renderer.
+    """
+    original_read_bytes = Path.read_bytes
+    asset_reads = 0
+
+    def _counted_read_bytes(path: Path) -> bytes:
+        nonlocal asset_reads
+        if path == report_assets.IGV_ASSET_PATH:
+            asset_reads += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", _counted_read_bytes)
+
+    payload = report_assets.igv_payload(report_assets.REPORT_IGV_EMBEDDED)
+
+    assert payload is not None
+    assert asset_reads == 1, "the gzip pin and embedded payload came from different reads"
 
 
 def test_a_well_formed_gzip_of_the_wrong_library_is_refused(tmp_path: Path, monkeypatch) -> None:

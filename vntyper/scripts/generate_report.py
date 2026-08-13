@@ -28,7 +28,7 @@ Two things about this module are load-bearing and easy to break:
 import json
 import logging
 import os
-import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +37,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from vntyper.scripts import report_assets
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
+from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
     ADVNTR_CELL_FORMATS,
@@ -49,7 +50,6 @@ from vntyper.scripts.report_formatting import (
     confidence_html,
     drop_empty_result_rows,
     escaped_table_html,
-    extract_igv_fragments,
     flag_html,
     flagged_row_count,
     format_number_columns,
@@ -152,115 +152,6 @@ def load_pipeline_summary(summary_file_path):
     except Exception as e:
         logger.error("Failed to load pipeline summary: %s", e)
         return {}
-
-
-def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None):
-    """
-    Wrapper around `create_report` IGV command. If config is provided and flanking
-    is not explicitly set, we fall back to config's default_values.flanking.
-    Skips passing None for track arguments (vcf_file or bam_file).
-
-    ``--standalone`` is passed, and that is a fix rather than a preference (#242).
-    Without it igv-reports writes a page that loads igv.js from a CDN, so
-    ``igv_report.html`` -- the file ``--report-igv sidecar`` hands the reader as *the*
-    alignment browser, and which every mode leaves in the output directory -- had
-    exactly the offline defect the summary report was being fixed for, unnoticed
-    because nobody had looked at the sidecar. It is passed in every mode: the file is
-    an artifact of the run whichever mode wrote it, and an artifact that only works
-    online is not one.
-    """
-    logger.debug("run_igv_report called with:")
-    logger.debug("  bed_file=%s", bed_file)
-    logger.debug("  bam_file=%s", bam_file)
-    logger.debug("  fasta_file=%s", fasta_file)
-    logger.debug("  output_html=%s", output_html)
-    logger.debug("  vcf_file=%s", vcf_file)
-    logger.debug("  flanking=%s", flanking)
-
-    if config is not None and flanking == 50:
-        flanking = config.get("default_values", {}).get("flanking", 50)
-        logger.debug("Flanking region set to %s based on config.", flanking)
-
-    bed_file = str(bed_file) if bed_file else None
-    bam_file = str(bam_file) if bam_file else None
-    fasta_file = str(fasta_file) if fasta_file else None
-    output_html = str(output_html) if output_html else None
-
-    igv_report_cmd = [
-        "create_report",
-        bed_file,
-        "--standalone",
-        "--flanking",
-        str(flanking),
-        "--fasta",
-        fasta_file,
-        "--tracks",
-    ]
-
-    # Build tracks list with defensive programming (verify files exist)
-    # Follows SOLID principles: defensive checks + clear logging
-    tracks = []
-
-    if vcf_file:
-        # Verify file exists before adding to tracks (defensive programming)
-        if os.path.exists(vcf_file):
-            tracks.append(str(vcf_file))
-            logger.debug(f"Adding VCF track: {vcf_file}")
-        else:
-            logger.warning(f"VCF file specified but not found: {vcf_file}. Skipping VCF track.")
-    else:
-        logger.info("No VCF file provided. IGV report will not include VCF track.")
-
-    if bam_file:
-        if os.path.exists(bam_file):
-            tracks.append(str(bam_file))
-            logger.debug(f"Adding BAM track: {bam_file}")
-        else:
-            logger.warning(f"BAM file specified but not found: {bam_file}. Skipping BAM track.")
-
-    if not tracks:
-        logger.error("No valid tracks (VCF or BAM) available for IGV report. Report may be empty or fail.")
-
-    igv_report_cmd.extend(tracks)
-    igv_report_cmd.extend(["--output", output_html])
-
-    logger.debug("IGV report command: %s", " ".join([str(x) for x in igv_report_cmd if x]))
-    try:
-        logger.info("Running IGV report: %s", " ".join([str(x) for x in igv_report_cmd if x]))
-        subprocess.run(igv_report_cmd, check=True)
-        logger.info("IGV report successfully generated at %s", output_html)
-    except subprocess.CalledProcessError as e:
-        logger.error("Error generating IGV report: %s", e)
-        raise
-    except Exception as e:
-        logger.error("Unexpected error generating IGV report: %s", e)
-        raise
-
-
-def extract_igv_content(igv_report_html):
-    """
-    Reads the generated IGV HTML report and extracts the IGV content,
-    the tableJson variable, and the sessionDictionary variable from the script.
-    Returns empty strings if not found or on error.
-
-    Args:
-        igv_report_html (str or Path): Path to the page ``create_report`` wrote.
-
-    Returns:
-        tuple[str, str, str]: The container markup, ``tableJson`` and
-        ``sessionDictionary``. All three are empty on any read failure.
-    """
-    logger.debug("extract_igv_content called with igv_report_html=%s", igv_report_html)
-    try:
-        with open(igv_report_html) as f:
-            content = f.read()
-    except FileNotFoundError:
-        logger.error("IGV report file not found: %s", igv_report_html)
-        return "", "", ""
-    except Exception as e:
-        logger.error("Unexpected error reading IGV report: %s", e)
-        return "", "", ""
-    return extract_igv_fragments(content)
 
 
 def load_fastp_output(fastp_file):
@@ -650,29 +541,40 @@ def generate_summary_report(
         logger.error(msg)
         raise ValueError(msg)
 
+    temporary_igv_dir = None
     if report_igv == report_assets.REPORT_IGV_OFF:
         logger.info("--report-igv off: no alignment browser is produced for this run.")
         igv_report_file = None
+        igv_content, table_json, session_dictionary = "", "", ""
     elif bed_file and os.path.exists(bed_file):
         logger.info("Running IGV report for BED file: %s", bed_file)
-        igv_report_file = Path(output_dir) / "igv_report.html"
-        run_igv_report(
-            bed_file,
-            bam_file,
-            fasta_file,
-            igv_report_file,
-            flanking=flanking,
-            vcf_file=vcf_file,
-            config=config,
-        )
+        if report_igv == report_assets.REPORT_IGV_EMBEDDED:
+            temporary_igv_dir = tempfile.TemporaryDirectory(prefix=".vntyper-igv-", dir=output_dir)
+            igv_report_file = Path(temporary_igv_dir.name) / "igv_report.html"
+        else:
+            igv_report_file = Path(output_dir) / "igv_report.html"
+        try:
+            run_igv_report(
+                bed_file,
+                bam_file,
+                fasta_file,
+                igv_report_file,
+                flanking=flanking,
+                vcf_file=vcf_file,
+                config=config,
+                report_igv=report_igv,
+            )
+            if igv_report_file.exists():
+                igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
+            else:
+                logger.warning("IGV report file not found. Skipping IGV content.")
+                igv_content, table_json, session_dictionary = "", "", ""
+        finally:
+            if temporary_igv_dir is not None:
+                temporary_igv_dir.cleanup()
     else:
         logger.warning("BED file does not exist or not provided. Skipping IGV report generation.")
         igv_report_file = None
-
-    if igv_report_file and igv_report_file.exists():
-        igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
-    else:
-        logger.warning("IGV report file not found. Skipping IGV content.")
         igv_content, table_json, session_dictionary = "", "", ""
 
     # Whether this run has an alignment session at all. The template branches on it to

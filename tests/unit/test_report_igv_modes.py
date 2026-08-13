@@ -6,7 +6,7 @@ Three modes, and they differ in what a reader ends up holding:
   base64-encoded. The archived file is a complete alignment browser needing neither a
   second file nor a network.
 * ``sidecar`` -- the report carries no library and points at ``igv_report.html``, which
-  ``create_report --standalone`` writes beside it.
+  VNtyper builds from a controlled local template and its verified vendored igv.js.
 * ``off`` -- no alignment browser at all, and ``create_report`` is not run.
 
 Two invariants cut across all three, and both are asserted here rather than assumed.
@@ -30,6 +30,7 @@ import gzip
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +38,7 @@ import pytest
 
 import vntyper
 from vntyper.cli import load_config
-from vntyper.scripts import generate_report, report_assets, summary_steps
+from vntyper.scripts import generate_report, igv_report, report_assets, summary_steps
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -282,22 +283,20 @@ def test_a_run_with_no_alignment_session_says_so_without_a_script(tmp_path: Path
 # ---------------------------------------------------------------------------
 
 
-def test_the_sidecar_igv_report_is_self_contained(tmp_path: Path, monkeypatch) -> None:
-    """``create_report`` without ``--standalone`` writes a page that loads igv.js from a CDN.
-
-    That made ``igv_report.html`` - the file ``--report-igv sidecar`` hands the reader as
-    *the* alignment browser, and which every mode that runs it leaves in the output
-    directory - carry the identical offline defect the summary report was being fixed
-    for. It went unnoticed because nobody had opened the sidecar.
-    """
+def test_the_sidecar_uses_the_verified_library_without_standalone_fetches(tmp_path: Path, monkeypatch) -> None:
+    """The real sidecar source is local, pinned and configured not to fetch a registry."""
     captured: list[list[str]] = []
 
     def _capture(cmd, **kwargs):
         captured.append([str(part) for part in cmd])
-        Path(cmd[cmd.index("--output") + 1]).write_text(_igv_reports_page(), encoding="utf-8")
+        template = Path(cmd[cmd.index("--template") + 1]).read_text(encoding="utf-8")
+        rendered = template.replace('"@TABLE_JSON@"', json.dumps(STUB_TABLE_JSON)).replace(
+            '"@SESSION_DICTIONARY@"', json.dumps(STUB_SESSION_DICTIONARY)
+        )
+        Path(cmd[cmd.index("--output") + 1]).write_text(rendered, encoding="utf-8")
         return None
 
-    monkeypatch.setattr(generate_report.subprocess, "run", _capture)
+    monkeypatch.setattr(igv_report.subprocess, "run", _capture)
 
     generate_report.run_igv_report(
         bed_file=tmp_path / "regions.bed",
@@ -305,18 +304,137 @@ def test_the_sidecar_igv_report_is_self_contained(tmp_path: Path, monkeypatch) -
         fasta_file=tmp_path / "ref.fa",
         output_html=tmp_path / "igv_report.html",
         vcf_file=None,
+        report_igv=report_assets.REPORT_IGV_SIDECAR,
     )
 
     assert captured, "create_report was never invoked"
-    assert "--standalone" in captured[0], (
-        f"the sidecar alignment browser is built without --standalone, so it loads igv.js from a CDN: {captured[0]}"
+    command = captured[0]
+    assert "--standalone" not in command, f"igv-reports would fetch its CDN template assets: {command}"
+    assert "--template" in command, f"the controlled local template was not selected: {command}"
+    assert Path(command[command.index("--template") + 1]) == report_assets.IGV_REPORT_TEMPLATE_PATH
+
+    sidecar = (tmp_path / "igv_report.html").read_text(encoding="utf-8")
+    script_start = sidecar.index('<script id="igv-library" type="text/javascript">')
+    script_start = sidecar.index(">", script_start) + 1
+    script_end = sidecar.index("</script>", script_start)
+    source = sidecar[script_start:script_end].encode("utf-8")
+    assert hashlib.sha256(source).hexdigest() == report_assets.IGV_SHA256
+    assert "loadDefaultGenomes: false" in sidecar
+    extracted = generate_report.extract_igv_content(tmp_path / "igv_report.html")
+    assert json.loads(extracted[1]) == STUB_TABLE_JSON
+    assert json.loads(extracted[2]) == STUB_SESSION_DICTIONARY
+
+
+def test_embedded_generation_does_not_build_an_unused_second_library(tmp_path: Path, monkeypatch) -> None:
+    """The one-file mode uses the local extraction template without inlining igv.js twice."""
+    captured: list[list[str]] = []
+
+    def _capture(cmd, **kwargs):
+        captured.append([str(part) for part in cmd])
+        template = Path(cmd[cmd.index("--template") + 1]).read_text(encoding="utf-8")
+        rendered = template.replace('"@TABLE_JSON@"', json.dumps(STUB_TABLE_JSON)).replace(
+            '"@SESSION_DICTIONARY@"', json.dumps(STUB_SESSION_DICTIONARY)
+        )
+        Path(cmd[cmd.index("--output") + 1]).write_text(rendered, encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(igv_report.subprocess, "run", _capture)
+
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"alignment")
+
+    generate_report.run_igv_report(
+        bed_file=tmp_path / "regions.bed",
+        bam_file=bam,
+        fasta_file=tmp_path / "ref.fa",
+        output_html=tmp_path / "intermediate.html",
+        vcf_file=tmp_path / "missing.vcf",
+        config={"default_values": {"flanking": 73}},
+        report_igv=report_assets.REPORT_IGV_EMBEDDED,
     )
+
+    command = captured[0]
+    assert "--standalone" not in command
+    assert "--template" in command
+    assert command[command.index("--flanking") + 1] == "73"
+    assert str(bam) in command
+    assert str(tmp_path / "missing.vcf") not in command
+    assert (tmp_path / "intermediate.html").stat().st_size < 100_000
+
+
+def test_the_sidecar_refuses_an_output_that_lost_the_library_marker(tmp_path: Path, monkeypatch) -> None:
+    """A changed upstream/template contract must not silently emit a viewer with no igv.js."""
+
+    def _capture(cmd, **kwargs):
+        Path(cmd[cmd.index("--output") + 1]).write_text(_igv_reports_page(), encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(igv_report.subprocess, "run", _capture)
+
+    with pytest.raises(ValueError, match="library marker"):
+        generate_report.run_igv_report(
+            bed_file=tmp_path / "regions.bed",
+            bam_file=None,
+            fasta_file=tmp_path / "ref.fa",
+            output_html=tmp_path / "igv_report.html",
+            vcf_file=None,
+            report_igv=report_assets.REPORT_IGV_SIDECAR,
+        )
+
+
+def test_run_igv_report_refuses_off_mode(tmp_path: Path) -> None:
+    """The off mode is an orchestration decision, never a request to build a hidden report."""
+    with pytest.raises(ValueError, match="cannot generate an IGV report"):
+        generate_report.run_igv_report(
+            bed_file=tmp_path / "regions.bed",
+            bam_file=None,
+            fasta_file=tmp_path / "ref.fa",
+            output_html=tmp_path / "igv_report.html",
+            vcf_file=None,
+            report_igv=report_assets.REPORT_IGV_OFF,
+        )
+
+
+def test_run_igv_report_refuses_a_missing_controlled_template(tmp_path: Path, monkeypatch) -> None:
+    """A wheel missing the new package-data file fails before invoking igv-reports."""
+    monkeypatch.setattr(report_assets, "IGV_REPORT_TEMPLATE_PATH", tmp_path / "absent.html")
+
+    with pytest.raises(ValueError, match="Controlled IGV report template is missing"):
+        generate_report.run_igv_report(
+            bed_file=tmp_path / "regions.bed",
+            bam_file=None,
+            fasta_file=tmp_path / "ref.fa",
+            output_html=tmp_path / "igv_report.html",
+            report_igv=report_assets.REPORT_IGV_SIDECAR,
+        )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [subprocess.CalledProcessError(1, ["create_report"]), RuntimeError("could not launch")],
+)
+def test_run_igv_report_propagates_generator_failures(tmp_path: Path, monkeypatch, error: Exception) -> None:
+    """Generation failures stop the report instead of leaving a trusted-looking partial sidecar."""
+
+    def _fail(cmd, **kwargs):
+        raise error
+
+    monkeypatch.setattr(igv_report.subprocess, "run", _fail)
+
+    with pytest.raises(type(error)):
+        generate_report.run_igv_report(
+            bed_file=tmp_path / "regions.bed",
+            bam_file=None,
+            fasta_file=tmp_path / "ref.fa",
+            output_html=tmp_path / "igv_report.html",
+            report_igv=report_assets.REPORT_IGV_SIDECAR,
+        )
 
 
 @pytest.mark.parametrize(
     ("mode", "expect_sidecar"),
     [
-        (report_assets.REPORT_IGV_EMBEDDED, True),
+        (report_assets.REPORT_IGV_EMBEDDED, False),
         (report_assets.REPORT_IGV_SIDECAR, True),
         (report_assets.REPORT_IGV_OFF, False),
     ],
@@ -326,8 +444,8 @@ def test_what_each_mode_leaves_in_the_output_directory(
 ) -> None:
     """The archive's contents, per mode.
 
-    ``off`` does not run ``create_report`` at all - a mode that says "no alignment
-    browser" and then spends the time producing one, and archives it, is not off.
+    ``embedded`` uses a temporary extraction artifact and leaves one report; ``off``
+    does not run ``create_report`` at all; ``sidecar`` alone leaves the second file.
     """
     _render(run_with_alignments, report_igv=mode)
 

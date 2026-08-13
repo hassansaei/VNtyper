@@ -41,7 +41,7 @@ off explicitly.
 | Value | What the report is | Size |
 |-------|--------------------|------|
 | `embedded` (default) | One file, and a complete alignment browser. | ~560 KB with alignments |
-| `sidecar` | No library in the report; `igv_report.html` beside it is the alignment browser, and it is self-contained too (`create_report --standalone`). | ~75 KB, plus the sidecar |
+| `sidecar` | No library in the report; `igv_report.html` beside it is the alignment browser, built from VNtyper's verified vendored igv.js with no network request. | ~75 KB, plus the sidecar |
 | `off` | No alignment browser at all; `create_report` is not run. | ~75 KB |
 
 A report for a run with no alignment data carries no library in any mode and is ~75 KB.

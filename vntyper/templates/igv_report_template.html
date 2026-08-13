@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IGV Variant Inspector</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: system-ui, sans-serif;
+        }
+
+        body {
+            margin: 1rem;
+        }
+
+        summary,
+        button {
+            cursor: pointer;
+        }
+
+        #tableSelectorDiv {
+            max-height: 22rem;
+            overflow: auto;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        th,
+        td {
+            border-bottom: 1px solid GrayText;
+            padding: 0.4rem;
+            text-align: left;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background: Canvas;
+        }
+
+        tr[aria-selected="true"] {
+            outline: 2px solid Highlight;
+            outline-offset: -2px;
+        }
+
+        #igvState {
+            border: 1px solid GrayText;
+            margin-top: 1rem;
+            padding: 1rem;
+        }
+
+        @media print {
+            #tableSelectorDiv {
+                max-height: none;
+                overflow: visible;
+            }
+
+            button {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>IGV Variant Inspector</h1>
+    <div id="container">
+        <details open>
+            <summary>Variants</summary>
+            <div id="tableSelectorDiv"></div>
+        </details>
+        <div id="igvContainer">
+            <p id="igvState" role="status">Starting the self-contained alignment browser.</p>
+            <div id="igvDiv"></div>
+        </div>
+    </div>
+</main>
+
+<!--
+  `run_igv_report` replaces this one marker only for `--report-igv sidecar`,
+  after igv-reports has populated the data literals below. The inserted source is
+  decompressed from VNtyper's vendored gzip only after both pinned SHA-256 checks pass.
+  Embedded mode uses this page only as a temporary source of those literals, so it does
+  not insert a second copy of the library.
+-->
+<script id="igv-library" type="text/javascript">@VNTYPER_IGV_LIBRARY@</script>
+<script>
+    const tableJson = "@TABLE_JSON@"
+    const sessionDictionary = "@SESSION_DICTIONARY@"
+    let igvBrowser = null;
+
+    function describeRow(headers, rowData) {
+        const parts = [];
+        for (let index = 1; index < headers.length; index += 1) {
+            parts.push(headers[index] + " " + rowData[index]);
+        }
+        return parts.join(", ");
+    }
+
+    function selectRow(row, button) {
+        document.querySelectorAll("#variant_table tbody tr").forEach(function (candidate) {
+            const selected = candidate === row;
+            candidate.setAttribute("aria-selected", String(selected));
+            const candidateButton = candidate.querySelector("button");
+            if (candidateButton) {
+                candidateButton.textContent = selected ? "Showing" : "Show";
+            }
+        });
+        button.focus();
+    }
+
+    function showSession(row, button) {
+        const session = sessionDictionary[row.dataset.id];
+        if (!igvBrowser || !session) {
+            return;
+        }
+        igvBrowser.loadSession({url: session}).then(function () {
+            selectRow(row, button);
+        });
+    }
+
+    function initTable() {
+        const host = document.getElementById("tableSelectorDiv");
+        const table = document.createElement("table");
+        table.id = "variant_table";
+        const head = table.createTHead();
+        const headerRow = head.insertRow();
+        const viewHeader = document.createElement("th");
+        viewHeader.scope = "col";
+        viewHeader.textContent = "View";
+        headerRow.appendChild(viewHeader);
+
+        tableJson.headers.slice(1).forEach(function (header) {
+            const cell = document.createElement("th");
+            cell.scope = "col";
+            cell.textContent = header;
+            headerRow.appendChild(cell);
+        });
+
+        const body = table.createTBody();
+        tableJson.rows.forEach(function (rowData, rowIndex) {
+            const row = body.insertRow();
+            row.dataset.id = rowData[0];
+            row.setAttribute("aria-selected", String(rowIndex === 0));
+            const action = row.insertCell();
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = rowIndex === 0 ? "Showing" : "Show";
+            button.setAttribute("aria-label", button.textContent + " " + describeRow(tableJson.headers, rowData));
+            button.addEventListener("click", function () {
+                showSession(row, button);
+            });
+            action.appendChild(button);
+
+            rowData.slice(1).forEach(function (value) {
+                const cell = row.insertCell();
+                cell.textContent = value;
+            });
+        });
+        host.appendChild(table);
+    }
+
+    function setState(message) {
+        const state = document.getElementById("igvState");
+        if (state) {
+            state.textContent = message;
+        }
+    }
+
+    function initIGV() {
+        if (!window.igv || typeof window.igv.createBrowser !== "function") {
+            setState("The alignment browser library is unavailable. The variant table remains complete.");
+            return;
+        }
+        const sessionIds = Object.keys(sessionDictionary);
+        if (sessionIds.length === 0) {
+            setState("No alignment session is available. The variant table remains complete.");
+            return;
+        }
+        const options = {
+            sessionURL: sessionDictionary[sessionIds[0]],
+            showChromosomeWidget: false,
+            showCenterGuide: true,
+            search: false,
+            loadDefaultGenomes: false
+        };
+        window.igv.createBrowser(document.getElementById("igvDiv"), options).then(function (browser) {
+            igvBrowser = browser;
+            const state = document.getElementById("igvState");
+            if (state) {
+                state.remove();
+            }
+        }).catch(function (error) {
+            setState("The alignment browser could not be started: " + String(error));
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        initTable();
+        initIGV();
+    });
+</script>
+</body>
+</html>
