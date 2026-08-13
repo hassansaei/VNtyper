@@ -622,13 +622,54 @@ def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -
 # ---------------------------------------------------------------------------
 
 
-def summary_box_classes(html: str) -> str:
-    """Return the class attribute of the screening summary box."""
-    import re
-
-    match = re.search(r'<p class="(summary-box[^"]*)"', html)
-    assert match, "the screening summary box is missing from the report"
+def masthead(html: str) -> str:
+    """The masthead element and everything in it."""
+    match = re.search(r'<header class="masthead"[^>]*>(.*?)</header>', html, re.DOTALL)
+    assert match, "the masthead is missing from the report"
     return match.group(1)
+
+
+def masthead_state(html: str) -> str:
+    """The computed screening state the masthead is drawn in."""
+    match = re.search(r'<header class="masthead" data-state="([^"]*)"', html)
+    assert match, "the masthead carries no computed state"
+    return match.group(1)
+
+
+def chip_value(html: str, label: str) -> str:
+    """The value of one masthead chip, by its label.
+
+    Args:
+        html: The rendered report.
+        label: The chip's visible label.
+
+    Returns:
+        str: The chip's visible value.
+    """
+    pattern = rf'<span class="chip-label">{re.escape(label)}</span>\s*<span class="chip-value">(.*?)</span>'
+    match = re.search(pattern, masthead(html), re.DOTALL)
+    assert match, f"the masthead has no {label!r} chip"
+    return " ".join(match.group(1).split())
+
+
+def chip_labels(html: str) -> list[str]:
+    """Every chip label in the masthead, in scan order."""
+    return re.findall(r'<span class="chip-label">(.*?)</span>', masthead(html), re.DOTALL)
+
+
+def identity_value(html: str, term: str) -> str:
+    """The value of one masthead identity pair, by its term.
+
+    Args:
+        html: The rendered report.
+        term: The ``<dt>``'s text.
+
+    Returns:
+        str: The paired ``<dd>``'s visible text, whitespace collapsed.
+    """
+    match = re.search(rf"<dt>{re.escape(term)}</dt>\s*<dd[^>]*>(.*?)</dd>", masthead(html), re.DOTALL)
+    assert match, f"the identity strip has no {term!r}"
+    return " ".join(_TAG.sub(" ", match.group(1)).split())
 
 
 def screening_message(html: str) -> str:
@@ -636,7 +677,8 @@ def screening_message(html: str) -> str:
 
     Read from the document rather than from the context, because the whole point of
     withholding it is that the *reader* must not be shown a sentence chosen for a state
-    the run never reached.
+    the run never reached. The parts are rejoined with a space: they are separate
+    elements now, and what is asserted is the wording, not the element boundaries.
 
     Args:
         html: The rendered report.
@@ -644,9 +686,9 @@ def screening_message(html: str) -> str:
     Returns:
         str: The message's visible text, whitespace collapsed.
     """
-    match = re.search(r'<p class="summary-box[^"]*"[^>]*>(.*?)</p>', html, re.DOTALL)
-    assert match, "the screening message is missing from the report"
-    return " ".join(_TAG.sub(" ", match.group(1)).split())
+    parts = re.findall(r'<p class="(?:headline|detail)">(.*?)</p>', masthead(html), re.DOTALL)
+    assert parts, "the screening message is missing from the masthead"
+    return " ".join(" ".join(_TAG.sub(" ", part).split()) for part in parts)
 
 
 def test_a_negative_screening_is_not_styled_as_a_finding(tmp_path) -> None:
@@ -662,13 +704,15 @@ def test_a_negative_screening_is_not_styled_as_a_finding(tmp_path) -> None:
         tabular_step(summary_steps.STEP_ADVNTR, []),
     )
     html = render(tmp_path)
-    assert "No variant detected by either genotyping method" in html
-    assert "summary-positive" not in summary_box_classes(html)
+    assert "No variant detected by either genotyping method" in screening_message(html)
+    assert masthead_state(html) == "no-finding"
 
 
 def test_a_positive_screening_is_styled_as_a_finding(positive_summary) -> None:
+    """The masthead is where the state is now, and `data-state` is the whole of it:
+    the state selects a colour, and no report renders the word."""
     html = render(positive_summary)
-    assert "summary-positive" in summary_box_classes(html)
+    assert masthead_state(html) == "finding"
 
 
 def test_an_advntr_only_finding_is_styled_as_a_finding(tmp_path) -> None:
@@ -680,14 +724,17 @@ def test_an_advntr_only_finding_is_styled_as_a_finding(tmp_path) -> None:
         tabular_step(summary_steps.STEP_KESTREL, []),
         tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
     )
-    assert "summary-positive" in summary_box_classes(render(tmp_path))
+    assert masthead_state(render(tmp_path)) == "finding"
 
 
 def test_a_run_with_no_results_at_all_is_not_styled_as_a_finding(tmp_path) -> None:
-    """No pipeline summary: Kestrel negative, adVNTR never run. Its configured
-    message is "No variant detected." -- which also lacks the giveaway word, so
-    an empty run rendered as a finding too."""
-    assert "summary-positive" not in summary_box_classes(render(tmp_path))
+    """No pipeline summary at all. This used to render the configured message for a
+    Kestrel negative -- "No variant detected." -- which is a claim about a sample no
+    stage in this run ever looked at."""
+    html = render(tmp_path)
+
+    assert masthead_state(html) != "finding"
+    assert screening_message(html) == "No summary available."
 
 
 def test_the_screening_state_reaches_the_report(positive_summary) -> None:
@@ -697,7 +744,7 @@ def test_the_screening_state_reaches_the_report(positive_summary) -> None:
     this also pins the exact provenance line's wording for the common case.
     """
     html = render(positive_summary)
-    assert 'data-state="finding"' in html
+    assert masthead_state(html) == "finding"
     assert "Kestrel: High_Precision" in html
     assert "adVNTR: not performed" in html
     assert "Coverage QC: PASS" in html
@@ -711,9 +758,230 @@ def test_a_negative_screening_state_carries_the_no_finding_state(tmp_path) -> No
         tabular_step(summary_steps.STEP_ADVNTR, []),
     )
     html = render(tmp_path)
-    assert 'data-state="no-finding"' in html
+    assert masthead_state(html) == "no-finding"
     assert "Kestrel: negative" in html
     assert "adVNTR: negative" in html
+
+
+# ---------------------------------------------------------------------------
+# The masthead -- the state, and never a word for it
+# ---------------------------------------------------------------------------
+
+
+#: One summary per emphasis, and each is chosen rather than convenient. The negative
+#: assertion below is on *rendered text*, and one of the forty configured messages
+#: legitimately contains the word "finding" ("validate the finding using orthogonal
+#: methods", the High_Precision_flagged/none/pass rule) -- so the states are reached
+#: through summaries whose configured message does not, and the fixture check below
+#: fails if a future config edit changes that.
+def _summary_for(emphasis: str, tmp_path: Path) -> Path:
+    """Write a pipeline summary that computes the requested emphasis."""
+    steps = [tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW])]
+    if emphasis == "finding":
+        steps.append(tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    elif emphasis == "no-finding":
+        steps.append(tabular_step(summary_steps.STEP_KESTREL, []))
+        steps.append(tabular_step(summary_steps.STEP_ADVNTR, []))
+    else:
+        steps.append(unreadable_kestrel_step(tmp_path / "gone.tsv"))
+    write_summary(tmp_path, *steps, input_files={"bam": "S1.bam"})
+    return tmp_path
+
+
+@pytest.mark.parametrize("emphasis", ["finding", "no-finding", "indeterminate"])
+def test_emphasis_sets_the_masthead_state_attribute(tmp_path, emphasis) -> None:
+    assert masthead_state(render(_summary_for(emphasis, tmp_path))) == emphasis
+
+
+@pytest.mark.parametrize("emphasis", ["finding", "no-finding", "indeterminate"])
+def test_no_state_word_is_ever_rendered_as_text(tmp_path, emphasis) -> None:
+    """P1 resolved against creating a verdict word, so the negative test is the one
+    that matters. `finding`, `no-finding` and `indeterminate` select a colour and
+    nothing else; every word on screen is existing pipeline or configured vocabulary.
+
+    Asserted on extracted visible text rather than on the source, because `data-state`
+    puts all three words in the markup and would make a source assertion pass for the
+    wrong reason.
+    """
+    text = visible_text(render(_summary_for(emphasis, tmp_path))).lower()
+
+    for word in ("finding", "no-finding", "indeterminate"):
+        assert word not in text, f"the report renders the state word {word!r} to the reader"
+
+
+def test_the_masthead_leads_with_identity_then_state_then_the_message(positive_summary) -> None:
+    """Scan order, asserted as document order: who this is about, what state the
+    pipeline computed, then the sentence the configuration wrote for that state."""
+    block = masthead(render(positive_summary))
+
+    assert block.index('class="identity"') < block.index('class="chips"') < block.index('class="headline"')
+
+
+def test_the_identity_strip_keeps_each_label_with_its_value(positive_summary) -> None:
+    """Each pair is one flex item. With `display: contents` on the list every `dt` and
+    `dd` becomes an independent item and pairs split across line breaks -- measured, it
+    stranded REGION at the right edge at 1280px and shattered the strip at 390px."""
+    block = masthead(render(positive_summary))
+
+    pairs = re.findall(r"<div>\s*<dt>(.*?)</dt>\s*<dd[^>]*>", block, re.DOTALL)
+    assert pairs == ["Sample", "Assay", "Assembly", "Region"]
+    # The mechanism, not the absence of the alternative: a rule banning the string
+    # `display: contents` would fail on the stylesheet comment that explains why it is
+    # not used, which rewards deleting the explanation.
+    rules = _style_blocks((TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8"))
+    assert re.search(r"\.identity\s*>\s*div\s*\{[^}]*display:\s*flex", "\n".join(rules)), (
+        "each identity pair must be one flex item of its own"
+    )
+
+
+def test_the_identity_strip_names_the_sample_the_assay_and_the_coordinates(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        input_files={"bam": "S1.bam"},
+        reference_assembly_requested="hg19",
+        region_resolved="chr1:155184000-155194000",
+    )
+
+    html = render(tmp_path)
+
+    assert identity_value(html, "Sample") == "S1"
+    assert identity_value(html, "Assay") == "MUC1 coding VNTR genotyping"
+    assert identity_value(html, "Assembly") == "hg19"
+    assert identity_value(html, "Region") == "chr1:155,184,000-155,194,000"
+
+
+def test_a_provenance_value_the_run_did_not_record_is_drawn_as_absent(tmp_path) -> None:
+    """It says so in words either way; this is what stops it being *drawn* like a
+    recorded value, which is the difference between a fact and a blank."""
+    write_summary(tmp_path, input_files={"bam": "S1.bam"})
+
+    block = masthead(render(tmp_path))
+
+    assert block.count('class="unrecorded"') == 2, "assembly and region were both unrecorded here"
+    assert identity_value(render(tmp_path), "Assembly") == "not recorded by this run"
+
+
+def test_the_state_reaches_the_chip_row(positive_summary) -> None:
+    html = render(positive_summary)
+
+    assert chip_labels(html) == ["Kestrel", "adVNTR", "Concordance", "Coverage QC"]
+    assert chip_value(html, "Kestrel") == "High precision"
+    assert chip_value(html, "Coverage QC") == "PASS"
+
+
+def test_an_unperformed_stage_does_not_render_as_negative(positive_summary) -> None:
+    """`positive_summary` has no adVNTR step at all."""
+    html = render(positive_summary)
+
+    assert chip_value(html, "adVNTR") == "Not performed"
+    assert "Negative" not in chip_value(html, "adVNTR")
+
+
+def test_concordance_is_not_assessable_when_one_stage_did_not_run(positive_summary) -> None:
+    """A result cannot agree or disagree with an absence."""
+    assert chip_value(render(positive_summary), "Concordance") == "Not assessable"
+
+
+def test_a_cross_match_hit_reaches_the_concordance_chip(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
+        tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "Yes"}]),
+    )
+
+    assert chip_value(render(tmp_path), "Concordance") == "Match"
+
+
+def test_the_coverage_gate_is_chipped_as_unevaluated_rather_than_passing(tmp_path) -> None:
+    """`quality_metrics_pass` stays True for a run with no coverage step - the screening
+    axis is deliberately unchanged by #172 - so the chip would otherwise be painted as a
+    pass beside a verdict saying the gate was never evaluated."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "Coverage QC") == "NOT_EVALUATED"
+    assert 'data-tone="none"' in masthead(html)
+
+
+def test_a_failing_coverage_gate_is_chipped_as_a_caution(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 3.0}]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "Coverage QC") == "FAIL"
+    assert re.search(r'<li class="chip" data-tone="\s*caution">\s*<span class="chip-label">Coverage QC', html)
+
+
+def test_a_state_with_no_configured_rule_says_so_in_the_chip_row(tmp_path, monkeypatch) -> None:
+    """`matched_rule` is False only when the configuration has no message for the
+    computed state. The message the reader then sees is a fallback, and the chip row is
+    where that is said - otherwise a broken configuration renders as an ordinary report.
+    """
+    config = generate_report.load_report_config()
+    monkeypatch.setattr(generate_report, "load_report_config", lambda: {**config, "screening_summary_rules": []})
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "Screening rule") == "Not configured"
+    assert masthead_state(html) == "indeterminate"
+
+
+def test_an_ordinary_report_carries_no_screening_rule_chip(positive_summary) -> None:
+    """Guard the guard: the chip is conditional, so it costs a healthy report nothing."""
+    assert "Screening rule" not in chip_labels(render(positive_summary))
+
+
+def test_the_research_use_statement_is_on_screen(positive_summary) -> None:
+    """It printed and did not display, so the one statement about what this artefact may
+    be used for was missing from the copy people actually read."""
+    from vntyper.scripts.report_identity import RESEARCH_USE_STATEMENT
+
+    block = masthead(render(positive_summary))
+
+    assert 'class="use-statement"' in block
+    assert RESEARCH_USE_STATEMENT in block
+
+
+def test_the_configured_message_is_rendered_as_the_parts_it_was_authored_in(positive_summary) -> None:
+    """Each part is its own autoescaped element, so the message needs no `|safe` to get
+    its line breaks -- which is what used to exempt the whole sentence from escaping."""
+    block = masthead(render(positive_summary))
+
+    assert block.count('<p class="detail">') == 2
+    assert "<br>" not in block
+    assert screening_message(render(positive_summary)) == (
+        "Kestrel detected a high-precision pathogenic variant. "
+        "Note: adVNTR genotyping was not performed. "
+        "It is recommended to perform adVNTR and validate the result using orthogonal methods "
+        "(e.g., SNaPshot, long‐read sequencing)."
+    )
+
+
+def test_every_configured_message_survives_the_split_into_the_report(tmp_path) -> None:
+    """The round trip, end to end rather than against the config: what the reader gets is
+    the configured message with its separators turned into element boundaries."""
+    from vntyper.scripts.screening_summary import load_report_config, render_segments
+
+    rules = load_report_config()["screening_summary_rules"]
+    rule = next(
+        r
+        for r in rules
+        if r["conditions"]
+        == {"kestrel_result": "High_Precision", "advntr_result": "none", "quality_metrics_pass": True}
+    )
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    rendered = screening_message(render(tmp_path))
+
+    assert rendered == " ".join(render_segments(rule).split("<br>"))
 
 
 def test_the_provenance_line_never_prints_the_not_performed_token_raw(positive_summary) -> None:
@@ -726,11 +994,19 @@ def test_the_provenance_line_never_prints_the_not_performed_token_raw(positive_s
 
 def test_the_template_no_longer_decides_emphasis_from_the_message_text() -> None:
     """Pinned at the template, because the substring test is the kind of thing
-    that gets reintroduced by someone reading the rendered output."""
+    that gets reintroduced by someone reading the rendered output.
+
+    The screening box's own `summary_is_positive` boolean is gone: the masthead reads
+    the three-way `screening_state.emphasis` instead, which is the same computed state
+    with the case it could not express restored. The cross-match box still carries the
+    boolean, and it is still computed rather than read out of its sentence - which is
+    what keeps `summary-positive` in the file and this assertion non-vacuous.
+    """
     template = (TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8")
     assert "summary-positive" in template, "the class vanished; this assertion would be vacuous"
     assert "'negative' not in summary_text" not in template
-    assert "summary_is_positive" in template
+    assert "cross_match_is_positive" in template
+    assert "screening_state.emphasis" in template
 
 
 # ---------------------------------------------------------------------------
@@ -1427,7 +1703,11 @@ SAFE_BY_DESIGN = {
         'every cell except `Flag`, whose markup flag_html builds and escapes itself - and "" for every '
         "state that is not a table, each of which the template words itself"
     ),
-    "summary_text": "a configured clinical message carrying <br> line breaks",
+    # `summary_text` is deliberately absent, and its removal is the point: it was marked
+    # safe only so that the line-break separators inside a configured message would
+    # render, which exempted the whole sentence from escaping to get a line break. The
+    # message is now rendered as the ordered parts it was authored in, each one an
+    # autoescaped element of its own.
     "cross_match_message": "one of two fixed sentences built in generate_report",
     "table_json": "a JavaScript literal spliced out of the IGV report",
     "session_dictionary": "a JavaScript literal spliced out of the IGV report",
@@ -1974,8 +2254,8 @@ def test_the_header_names_the_assay_and_the_version(tmp_path) -> None:
 
     html = render(tmp_path)
 
-    assert _labeled_value(html, "Assay") == "MUC1 coding VNTR genotyping"
-    assert _labeled_value(html, "Sample") == "S1"
+    assert identity_value(html, "Assay") == "MUC1 coding VNTR genotyping"
+    assert identity_value(html, "Sample") == "S1"
     assert _labeled_value(html, "VNtyper Version") == "2.0.18"
 
 
@@ -2011,7 +2291,7 @@ def test_an_explicit_sample_name_wins_over_the_input_files(tmp_path) -> None:
     html = render(tmp_path, sample_name="PATIENT_042")
 
     assert "<title>MUC1 VNTR report — PATIENT_042" in html
-    assert _labeled_value(html, "Sample") == "PATIENT_042"
+    assert identity_value(html, "Sample") == "PATIENT_042"
 
 
 def test_the_report_uses_the_name_the_run_recorded_for_itself(tmp_path) -> None:
@@ -2029,7 +2309,7 @@ def test_the_report_uses_the_name_the_run_recorded_for_itself(tmp_path) -> None:
     html = render(tmp_path)
 
     assert "<title>MUC1 VNTR report — PATIENT_042</title>" in html
-    assert _labeled_value(html, "Sample") == "PATIENT_042"
+    assert identity_value(html, "Sample") == "PATIENT_042"
     # The file it ran on is still stated; the two are different facts.
     assert _labeled_value(html, "Input Files") == "foo.bam"
 
@@ -2044,7 +2324,7 @@ def test_an_explicit_sample_name_beats_the_one_the_run_recorded(tmp_path) -> Non
 
     html = render(tmp_path, sample_name="RENAMED")
 
-    assert _labeled_value(html, "Sample") == "RENAMED"
+    assert identity_value(html, "Sample") == "RENAMED"
 
 
 def test_a_name_the_operator_chose_is_printed_however_it_looks(tmp_path) -> None:
@@ -2063,7 +2343,7 @@ def test_a_name_the_operator_chose_is_printed_however_it_looks(tmp_path) -> None
         sample_name_is_explicit=True,
     )
 
-    assert _labeled_value(render(tmp_path), "Sample") == "sample"
+    assert identity_value(render(tmp_path), "Sample") == "sample"
 
 
 def test_a_name_the_cli_derived_from_a_fastq_finishes_being_derived(tmp_path) -> None:
@@ -2081,7 +2361,7 @@ def test_a_name_the_cli_derived_from_a_fastq_finishes_being_derived(tmp_path) ->
         sample_name_is_explicit=False,
     )
 
-    assert _labeled_value(render(tmp_path), "Sample") == "S1"
+    assert identity_value(render(tmp_path), "Sample") == "S1"
 
 
 def test_a_summary_written_between_the_two_commits_derives_its_recorded_name(tmp_path) -> None:
@@ -2095,7 +2375,7 @@ def test_a_summary_written_between_the_two_commits_derives_its_recorded_name(tmp
     """
     write_summary(tmp_path, input_files={"fastq1": "S1_R1.fastq.gz"}, sample_name="S1_R1.fastq")
 
-    assert _labeled_value(render(tmp_path), "Sample") == "S1"
+    assert identity_value(render(tmp_path), "Sample") == "S1"
 
 
 def test_a_summary_written_between_the_two_commits_keeps_a_name_that_is_not_a_file(tmp_path) -> None:
@@ -2106,7 +2386,7 @@ def test_a_summary_written_between_the_two_commits_keeps_a_name_that_is_not_a_fi
     """
     write_summary(tmp_path, input_files={"bam": "foo.bam"}, sample_name="PATIENT_042")
 
-    assert _labeled_value(render(tmp_path), "Sample") == "PATIENT_042"
+    assert identity_value(render(tmp_path), "Sample") == "PATIENT_042"
 
 
 def test_a_legacy_summary_with_no_recorded_name_derives_one_as_before(tmp_path) -> None:
@@ -2114,7 +2394,7 @@ def test_a_legacy_summary_with_no_recorded_name_derives_one_as_before(tmp_path) 
     must not change what those reports are called."""
     write_summary(tmp_path, input_files={"fastq1": "S1_R1.fastq.gz", "fastq2": "S1_R2.fastq.gz"})
 
-    assert _labeled_value(render(tmp_path), "Sample") == "S1"
+    assert identity_value(render(tmp_path), "Sample") == "S1"
 
 
 def test_a_summary_with_no_input_files_still_names_the_report(tmp_path) -> None:

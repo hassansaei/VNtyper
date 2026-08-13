@@ -35,7 +35,7 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from vntyper.scripts.coverage_qc import evaluate_coverage_qc
+from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
     ADVNTR_CELL_FORMATS,
@@ -61,6 +61,7 @@ from vntyper.scripts.report_formatting import (
 )
 from vntyper.scripts.report_identity import (
     ASSAY_NAME,
+    NOT_RECORDED,
     REPORT_TITLE_PREFIX,
     RESEARCH_USE_STATEMENT,
     SAMPLE_NAME_EXPLICIT_KEY,
@@ -77,6 +78,7 @@ from vntyper.scripts.screening_summary import (
     build_screening_summary,
     execution_state,
     load_report_config,
+    state_chips,
 )
 
 # These five names are matched by exact string comparison against what pipeline.py
@@ -819,6 +821,11 @@ def generate_summary_report(
         # `config["default_values"]["reference_assembly"]`, which would mislabel any
         # `--reference-assembly` override and cannot reconstruct `--custom-regions`.
         "summary_schema_version": recorded_or_not(pipeline_summary.get("schema_version")),
+        # The words a provenance value renders as when the run recorded nothing for it.
+        # Passed in rather than restated in the template, so the masthead can mark those
+        # values as absent instead of drawing them as if they were facts - and so the
+        # phrase itself exists in exactly one place (`report_identity.NOT_RECORDED`).
+        "not_recorded": NOT_RECORDED,
         "assembly_declared": assembly_declared_text,
         "assembly_detected": recorded_or_not(assembly_text),
         "region_resolved": format_region(pipeline_summary.get("region_resolved")),
@@ -853,6 +860,11 @@ def generate_summary_report(
         "depth_sum_reference_length": shown(coverage["depth_sum_reference_length"]),
         "depth_counting_policy": shown(coverage["depth_counting_policy"]),
         "coverage_qc": coverage_qc.status,
+        # Whether there was anything to judge. `quality_metrics_pass` stays True for a run
+        # with no coverage step at all - the screening axis is unchanged by #172's
+        # honesty fix - so the chip would otherwise be painted "passing" beside a status
+        # that says the gate was never evaluated.
+        "coverage_qc_measured": coverage_qc.status != COVERAGE_QC_NOT_EVALUATED,
         "percent_vntr_uncovered_icon": uncovered_icon,
         "percent_vntr_uncovered_color": uncovered_color,
         "mean_vntr_coverage_icon": coverage_icon,
@@ -871,8 +883,22 @@ def generate_summary_report(
         "passed_filter_icon": pf_icon,
         "passed_filter_color": pf_color,
         "sequencing_str": fastp.sequencing,
-        "summary_text": screening.text,
-        "summary_is_positive": screening.is_positive,
+        # The configured message as the ordered parts it was authored in, each rendered as
+        # an element of its own and autoescaped with everything else. It used to be one
+        # `{{ summary_text|safe }}`, marked safe for no reason but the `<br>` separators
+        # inside it - so the whole sentence was exempt from escaping to get a line break.
+        # `report_config.json` now carries the split beside the verbatim message, and
+        # `screening_summary.render_segments` is what pins that the two still agree.
+        "screening_segments": screening.rendered_segments,
+        # The state as words, computed in the pure module: a chip is the most compressed
+        # thing the report says about a stage, so it is the one most easily misread as a
+        # verdict, and none of these words may be one the run did not reach.
+        "state_chips": state_chips(
+            screening,
+            report_config,
+            cross_match_available=bool(cross_match_message),
+            cross_match_is_positive=cross_match_is_positive,
+        ),
         # The full computed screening state, not just `is_positive` - so a report
         # whose state matched no rule (`emphasis == "indeterminate"`) is distinguishable
         # from a genuine negative rather than rendering identically (#242 I2).

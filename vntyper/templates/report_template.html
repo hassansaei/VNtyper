@@ -62,6 +62,172 @@
         .report-header {
             margin-bottom: var(--s-4);
         }
+
+        /* --- masthead ---------------------------------------------------------
+           The report leads with who it is about and what state the pipeline
+           computed, in that order: identity, then the state as chips, then the
+           configured message.
+
+           State reads as a 2px rule across the top, never as a coloured bar down
+           the left side. The side-tab is the most recognisable tell of generated
+           UI, and a rule across the top is the one that survives a printed page.
+
+           `break-inside` is declared here rather than in a print block because it
+           is a fragmentation property: it does nothing in continuous media, and
+           the shared token layer deliberately owns the only `@media print` block
+           in either report. */
+        .masthead {
+            background: var(--surface);
+            border: 1px solid var(--hairline);
+            border-top: 2px solid var(--state-accent, var(--state-none));
+            border-radius: var(--radius);
+            padding: var(--s-5);
+            margin-bottom: var(--s-6);
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+        .masthead[data-state="finding"]       { --state-accent: var(--state-finding); }
+        .masthead[data-state="no-finding"]    { --state-accent: var(--state-none); }
+        .masthead[data-state="indeterminate"] { --state-accent: var(--state-caution); }
+
+        /* Each label/value pair is one flex item, so a pair can never be split
+           across a line break. With `display: contents` on the list every `dt` and
+           every `dd` is an independent item: measured, that stranded REGION at the
+           right edge of a 1280px viewport and shattered the whole strip at 390px. */
+        .identity {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--s-2) var(--s-5);
+            margin: 0 0 var(--s-4);
+            padding-bottom: var(--s-3);
+            border-bottom: 1px solid var(--hairline);
+        }
+        .identity > div {
+            display: flex;
+            align-items: baseline;
+            gap: var(--s-2);
+            min-width: 0;
+        }
+        .identity dt {
+            font-size: var(--step--2);
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .identity dd {
+            margin: 0;
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
+            font-size: var(--step--1);
+            overflow-wrap: anywhere;
+        }
+        .sample-name {
+            font-family: var(--font-sans);
+            font-size: var(--step-0);
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+        /* A value the run did not record is not a value. It says so in words either
+           way; this is what stops it being *drawn* like a recorded one. Two classes
+           and a type, so it outranks `.identity dd`'s monospace whatever the order
+           the two rules end up in. */
+        .identity dd.unrecorded {
+            color: var(--ink-muted);
+            font-style: italic;
+            font-family: var(--font-sans);
+        }
+
+        /* --- state chips ------------------------------------------------------
+           One signal, not three: a hairline border on every chip, no tint, and the
+           value in the state colour. The value is always a word, so colour never
+           carries a fact on its own - which is what makes the row readable in
+           greyscale, on paper and with any colour vision. */
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--s-2);
+            margin: 0 0 var(--s-5);
+            padding: 0;
+            list-style: none;
+        }
+        .chip {
+            display: grid;
+            gap: 1px;
+            min-width: 10rem;
+            padding: var(--s-2) var(--s-3);
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            background: var(--surface);
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+        .chip-label {
+            font-size: var(--step--2);
+            font-weight: 600;
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+        }
+        .chip-value {
+            font-size: var(--step-0);
+            font-weight: 600;
+            line-height: 1.3;
+            color: var(--chip-color, var(--ink));
+        }
+        .chip[data-tone="finding"] { --chip-color: var(--state-finding); }
+        .chip[data-tone="caution"] { --chip-color: var(--state-caution); }
+        .chip[data-tone="ok"]      { --chip-color: var(--state-ok); }
+        .chip[data-tone="none"]    { --chip-color: var(--state-none); }
+
+        @media (max-width: 34rem) {
+            .chip { flex: 1 1 100%; min-width: 0; }
+        }
+
+        /* The configured message. `segments[0]` leads and the rest follow as
+           paragraphs, so the authored wording stays contiguous and in order. The
+           headline takes the state colour except on a negative, where the page's
+           own ink is the honest weight for it. */
+        .headline {
+            font-size: var(--step-2);
+            line-height: 1.28;
+            font-weight: 600;
+            letter-spacing: -0.014em;
+            margin: 0 0 var(--s-3);
+            max-width: 44ch;
+            color: var(--state-accent, var(--ink));
+        }
+        .masthead[data-state="no-finding"] .headline { color: var(--ink); }
+        .detail {
+            max-width: var(--measure);
+            margin-bottom: var(--s-2);
+        }
+        .detail:last-of-type { margin-bottom: 0; }
+
+        /* The raw state the message above was selected by, in the pipeline's own
+           vocabulary. It is fine print rather than a second reading of the chips:
+           the chips say what the state means, this says what it literally was. */
+        .screening-provenance {
+            margin: var(--s-4) 0 0;
+            font-family: var(--font-mono);
+            font-size: var(--step--1);
+            color: var(--ink-muted);
+        }
+
+        /* Research use only, on screen as well as on paper. It used to print and
+           not display, so the one statement about what this artefact may be used
+           for was missing from the copy people actually read. */
+        .use-statement {
+            margin: var(--s-5) 0 0;
+            padding: var(--s-3) var(--s-4);
+            background: var(--sunken);
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            font-size: var(--step--1);
+            color: var(--ink-muted);
+        }
+        .use-statement strong { color: var(--ink); }
         /* Style for header info section */
         .header-info {
             margin-bottom: var(--s-4);
@@ -139,14 +305,126 @@
           the first printed page. `<title>` and `<h1>` used to be the constant
           string "Summary Report" for every report a lab produced (#242).
 
-          Every value in this block is escaped: the sample name and the input file
-          names are derived from a sample-supplied basename, and the report is a
-          file people forward.
+          Every value below is escaped: the sample name and the input file names
+          are derived from a sample-supplied basename, and the report is a file
+          people forward.
         -->
+        <h1>{{ report_title_prefix }} — {{ sample_name }}</h1>
+
+        {#
+          THE MASTHEAD. Scan order is who this is about, what state the pipeline
+          computed, then the sentence the configuration wrote for that state.
+
+          `data-state` drives emphasis and nothing else. None of the three values
+          it takes - `finding`, `no-finding`, `indeterminate` - is ever rendered as
+          text: they are colour selectors, not a verdict vocabulary, and
+          `tests/unit/test_generate_report.py` asserts that no report prints one.
+          Every word here is either the pipeline's own or the configuration's.
+        #}
+        <header class="masthead" data-state="{{ screening_state.emphasis }}">
+            {#
+              One `<div>` per label/value pair, so a pair is one flex item and can
+              never be split across a line break. A value the run did not record is
+              marked as absent rather than drawn like a fact.
+            #}
+            <dl class="identity">
+                <div>
+                    <dt>Sample</dt>
+                    <dd class="sample-name">{{ sample_name }}</dd>
+                </div>
+                <div>
+                    <dt>Assay</dt>
+                    <dd>{{ assay_name }}</dd>
+                </div>
+                <div>
+                    <dt>Assembly</dt>
+                    <dd{% if assembly_declared == not_recorded %} class="unrecorded"{% endif %}>
+                        {{- assembly_declared }}</dd>
+                </div>
+                <div>
+                    <dt>Region</dt>
+                    <dd{% if region_resolved == not_recorded %} class="unrecorded"{% endif %}>
+                        {{- region_resolved }}</dd>
+                </div>
+            </dl>
+
+            {#
+              The state, in words. The three algorithm chips are built in
+              `screening_summary.state_chips` - a chip is the most compressed thing
+              this report says about a stage, so it is the one most easily misread
+              as a verdict, and choosing its wording is presentation logic that
+              belongs in the pure module (AGENTS.md trap 11).
+
+              The last two are here because they read booleans the computed state
+              carries: coverage QC has a displayed verdict *and* a screening axis,
+              and they are not the same fact - a run with no coverage step at all
+              passes the axis while its verdict says it was never evaluated. The
+              rule chip appears only when the configuration had no message for the
+              computed state, which is what tells the reader that the sentence
+              below is a fallback rather than the one written for this state.
+            #}
+            <ul class="chips">
+                {% for chip in state_chips %}
+                    <li class="chip" data-tone="{{ chip.tone }}">
+                        <span class="chip-label">{{ chip.label }}</span>
+                        <span class="chip-value">{{ chip.value }}</span>
+                    </li>
+                {% endfor %}
+                <li class="chip" data-tone="
+                    {%- if not screening_state.quality_metrics_pass %}caution
+                    {%- elif coverage_qc_measured %}ok
+                    {%- else %}none{% endif %}">
+                    <span class="chip-label">Coverage QC</span>
+                    <span class="chip-value">{{ coverage_qc }}</span>
+                </li>
+                {% if not screening_state.matched_rule %}
+                    <li class="chip" data-tone="caution">
+                        <span class="chip-label">Screening rule</span>
+                        <span class="chip-value">Not configured</span>
+                    </li>
+                {% endif %}
+            </ul>
+
+            {#
+              The configured message, as the ordered parts it was authored in.
+              Every part is a separate autoescaped element: it used to be one
+              `summary_text` interpolation marked safe, and the only reason it was
+              marked safe was the line-break separators inside it - the whole
+              sentence was exempt from escaping to get a line break. Nothing is
+              reworded here; the split lives in `report_config.json` beside the
+              verbatim message, and `screening_summary.render_segments` pins that
+              the two still agree.
+            #}
+            <p class="headline">{{ screening_segments[0] }}</p>
+            {% for segment in screening_segments[1:] %}
+                <p class="detail">{{ segment }}</p>
+            {% endfor %}
+
+            {#
+              The provenance line: the raw state the message above was selected by,
+              spelled out in existing pipeline vocabulary so I2 is visible to a
+              reader, not only to a test.
+
+              Each algorithm's word comes from `screening_summary.algorithm_state_text`,
+              because the computed result is only a result when the stage produced
+              one: an absent or unreadable stage reduces to the block's `default`,
+              so printing `kestrel_result` here read "Kestrel: negative" for a stage
+              that never called anything.
+            #}
+            <p class="screening-provenance">
+                Kestrel: {{ screening_state.kestrel_state_text }} &middot;
+                adVNTR: {{ screening_state.advntr_state_text }}
+                &middot; Coverage QC: {{ coverage_qc }}
+            </p>
+
+            {#
+              What this artefact may be used for. It was printed and not displayed,
+              so the copy people actually read carried no such statement at all.
+            #}
+            <p class="use-statement"><strong>{{ research_use_statement }}.</strong></p>
+        </header>
+
         <div class="report-header">
-            <h1>{{ report_title_prefix }} — {{ sample_name }}</h1>
-            <p><strong>Assay:</strong> {{ assay_name }}</p>
-            <p><strong>Sample:</strong> {{ sample_name }}</p>
             <p><strong>Input Files:</strong> {{ input_files_text }}</p>
             <p><strong>VNtyper Version:</strong> {{ pipeline_version }}</p>
             <!--
@@ -359,40 +637,12 @@
             </table>
         {% endif %}
 
-        <h2>Screening Summary</h2>
         {#
-          Emphasis comes from the computed screening state, never from the text.
-          The message is written by configuration and its wording is not evidence
-          of anything: a condition that searched it for a word would put a
-          positive style on whichever messages happened to contain that word,
-          "No variant detected by either genotyping method" among them.
-          `tests/unit/test_generate_report.py` pins this.
-
-          `data-state` carries the full three-way state (`finding` / `no-finding` /
-          `indeterminate`) rather than the two-way `summary_is_positive` boolean, so a
-          report whose state matched no configured rule is distinguishable from a
-          genuine negative (#242 I2) instead of rendering identically to one.
+          The screening summary is the masthead at the top of this document. It used
+          to be repeated here as a `.summary-box` under a heading of its own; the
+          message, the state and the provenance line all moved up, so the reader is
+          told the outcome once, before the evidence rather than after it.
         #}
-        <p class="summary-box {% if summary_is_positive %}summary-positive{% endif %}"
-           data-state="{{ screening_state.emphasis }}">
-            {{ summary_text|safe }}
-        </p>
-        {#
-          The provenance line: the raw state `summary_text` was computed from, spelled
-          out in existing pipeline vocabulary so I2 is visible to a reader, not only to
-          a test.
-
-          Each algorithm's word is computed in `screening_summary.algorithm_state_text`,
-          because the computed result is only a result when the stage produced one: an
-          absent or unreadable stage reduces to the block's `default`, so printing
-          `kestrel_result` here read "Kestrel: negative" for a stage that called nothing.
-        #}
-        <p class="screening-provenance">
-            Kestrel: {{ screening_state.kestrel_state_text }} &middot;
-            adVNTR: {{ screening_state.advntr_state_text }}
-            &middot; Coverage QC: {{ coverage_qc }}
-        </p>
-
         {% if cross_match_message and advntr_available %}
             <h2>Cross-Match Summary</h2>
             {#

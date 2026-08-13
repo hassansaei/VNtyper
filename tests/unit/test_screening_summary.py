@@ -728,3 +728,172 @@ def test_the_provenance_word_says_the_execution_state_before_the_result(executio
     row is the defect: an unreadable stage computes the block's ``default``, so a line
     that printed the result would read "Kestrel: negative"."""
     assert ss.algorithm_state_text(execution, result) == expected
+
+
+# ---------------------------------------------------------------------------
+# The configured messages, as the ordered parts the report renders
+# ---------------------------------------------------------------------------
+
+
+def rule_id(rule: dict) -> str:
+    """Name one screening rule by the state it covers."""
+    conditions = rule["conditions"]
+    qc = "qc-pass" if conditions["quality_metrics_pass"] else "qc-fail"
+    return f"{conditions['kestrel_result']}-{conditions['advntr_result'].replace(' ', '-')}-{qc}"
+
+
+ALL_RULES = ss.load_report_config()["screening_summary_rules"]
+
+
+def test_the_shipped_rule_table_is_loaded() -> None:
+    """Guard the guard: an empty table makes every parametrised assertion below vacuous."""
+    assert len(ALL_RULES) == 40
+
+
+@pytest.mark.parametrize("rule", ALL_RULES, ids=rule_id)
+def test_rendering_reproduces_the_exact_legacy_message(rule) -> None:
+    """The migration's whole contract, asserted on rendering rather than on shape.
+
+    The configured wording is clinical text that nothing here may reword, only split. A
+    test that asserted "every rule has two segments" would pass against a migration that
+    dropped a sentence from the nine three-part rules; this one cannot.
+    """
+    assert ss.render_segments(rule) == rule["message"]
+
+
+@pytest.mark.parametrize("rule", ALL_RULES, ids=rule_id)
+def test_no_segment_carries_the_separator_it_was_split_on(rule) -> None:
+    """Each part is rendered as an element of its own and autoescaped with everything
+    else, so a ``<br>`` surviving inside one would reach the reader as literal text."""
+    for segment in ss.message_segments(rule):
+        assert ss.SEGMENT_SEPARATOR not in segment
+
+
+def test_a_rule_with_only_a_message_still_renders() -> None:
+    """``segments`` is optional, forever.
+
+    ``report_config.json`` is configuration: a deployment may ship its own, and one
+    written before this migration - or by hand today - carries only ``message`` keys.
+    """
+    rule = {"message": "One sentence.<br>And another."}
+
+    assert ss.message_segments(rule) == ("One sentence.", "And another.")
+    assert ss.render_segments(rule) == rule["message"]
+
+
+def test_a_rule_with_no_message_at_all_renders_nothing_rather_than_raising() -> None:
+    """A malformed rule costs its sentence, not the report."""
+    assert ss.message_segments({}) == ("",)
+
+
+def test_the_summary_carries_the_matched_rule_segments(report_config) -> None:
+    """End to end: what the report renders is what the matched rule declared."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]), pd.DataFrame(), False, _passing(), report_config
+    )
+
+    assert len(summary.segments) > 1, "this state's message has three parts; one would mean it was not split"
+    assert ss.SEGMENT_SEPARATOR.join(summary.segments) == summary.text
+
+
+def test_a_summary_built_without_segments_still_renders_as_parts() -> None:
+    """A caller holding only the message - a test, or a third party - must not put a
+    literal ``<br>`` in front of the reader."""
+    summary = _summary(is_positive=False, matched_rule=True, text="First.<br>Second.")
+
+    assert summary.rendered_segments == ("First.", "Second.")
+
+
+# ---------------------------------------------------------------------------
+# The chip row -- the computed state in words
+# ---------------------------------------------------------------------------
+
+
+def _chips(summary, report_config, *, available=False, positive=False) -> dict[str, ss.StateChip]:
+    """The chip row, keyed by label."""
+    chips = ss.state_chips(summary, report_config, cross_match_available=available, cross_match_is_positive=positive)
+    return {chip.label: chip for chip in chips}
+
+
+def _one_stage_in(execution: str, algorithm: str) -> "ss.ScreeningSummary":
+    """A summary with one algorithm in the named execution state and the other reporting."""
+    kestrel = execution if algorithm == ss.KESTREL_LABEL else ss.EXECUTION_PERFORMED
+    advntr = execution if algorithm == ss.ADVNTR_LABEL else ss.EXECUTION_PERFORMED
+    return _summary(is_positive=False, matched_rule=True, kestrel_execution=kestrel, advntr_execution=advntr)
+
+
+@pytest.mark.parametrize("algorithm", [ss.KESTREL_LABEL, ss.ADVNTR_LABEL])
+def test_a_stage_that_did_not_run_is_not_chipped_as_a_negative(algorithm, report_config) -> None:
+    """The chip is the most compressed thing the report says about a stage, so it is the
+    one most easily read as a verdict. It must never carry one the run did not reach."""
+    chip = _chips(_one_stage_in(ss.EXECUTION_NOT_PERFORMED, algorithm), report_config)[algorithm]
+
+    assert chip.value == ss.NOT_PERFORMED_CHIP
+    assert "egative" not in chip.value
+
+
+@pytest.mark.parametrize("algorithm", [ss.KESTREL_LABEL, ss.ADVNTR_LABEL])
+def test_a_stage_that_lost_its_result_is_not_chipped_as_a_negative(algorithm, report_config) -> None:
+    chip = _chips(_one_stage_in(ss.EXECUTION_FAILED, algorithm), report_config)[algorithm]
+
+    assert chip.value == ss.NOT_AVAILABLE_CHIP
+    assert chip.tone == ss.TONE_CAUTION
+
+
+def test_a_called_stage_is_chipped_with_the_word_the_pipeline_computed(report_config) -> None:
+    summary = _summary(is_positive=True, matched_rule=True, kestrel_result="High_Precision")
+
+    chip = _chips(summary, report_config)[ss.KESTREL_LABEL]
+
+    assert chip.value == "High precision"
+    assert chip.tone == ss.TONE_FINDING
+
+
+def test_a_negative_call_is_chipped_without_the_finding_tone(report_config) -> None:
+    summary = _summary(is_positive=False, matched_rule=True, kestrel_result="negative")
+
+    chip = _chips(summary, report_config)[ss.KESTREL_LABEL]
+
+    assert chip.value == "Negative"
+    assert chip.tone == ss.TONE_NONE
+
+
+@pytest.mark.parametrize("algorithm", ["kestrel", "advntr"])
+def test_every_configured_result_has_a_chip_word(algorithm, report_config) -> None:
+    """Tied to the shipped configuration, so a renamed ``result`` cannot leave a chip
+    printing a raw token with an underscore in it."""
+    logic = report_config["algorithm_logic"][algorithm]
+    assert logic["rules"], "no rules loaded; this assertion would be vacuous"
+    for rule in [*logic["rules"], {"result": logic["default"]}]:
+        word = ss.result_word(rule["result"])
+        assert "_" not in word
+        assert word[:1].isupper()
+
+
+def test_concordance_is_not_assessable_when_one_stage_did_not_run(report_config) -> None:
+    """A result cannot agree or disagree with an absence, and a chip saying either would
+    be the same defect as reporting an absence as a negative."""
+    summary = _summary(is_positive=True, matched_rule=True, advntr_execution=ss.EXECUTION_NOT_PERFORMED)
+
+    chip = _chips(summary, report_config, available=True, positive=True)[ss.CONCORDANCE_LABEL]
+
+    assert chip.value == ss.NOT_ASSESSABLE_CHIP
+
+
+def test_concordance_is_not_assessable_when_the_cross_match_stage_produced_nothing(report_config) -> None:
+    summary = _summary(is_positive=True, matched_rule=True)
+
+    chip = _chips(summary, report_config, available=False)[ss.CONCORDANCE_LABEL]
+
+    assert chip.value == ss.NOT_ASSESSABLE_CHIP
+
+
+@pytest.mark.parametrize(
+    ("positive", "expected"), [(True, ss.MATCH_CHIP), (False, ss.NO_MATCH_CHIP)], ids=["match", "no-match"]
+)
+def test_concordance_reports_the_cross_match_stage_when_both_stages_ran(positive, expected, report_config) -> None:
+    summary = _summary(is_positive=True, matched_rule=True)
+
+    chip = _chips(summary, report_config, available=True, positive=positive)[ss.CONCORDANCE_LABEL]
+
+    assert chip.value == expected

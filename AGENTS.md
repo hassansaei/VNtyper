@@ -562,7 +562,8 @@ summary | release-summary | none | always records success, failure, skipped jobs
     table; `report_formatting.py` owns the icons, the column projections and the IGV
     fragment splicing. Put new pure logic there, not back in `generate_report.py`.
     Two rules that are easy to break: emphasis in the report comes from the computed
-    state (`summary_is_positive`), never from searching the message text, and the
+    state (`screening_state.emphasis`, and `cross_match_is_positive` for the
+    cross-match box), never from searching the message text, and the
     Jinja2 environment autoescapes — anything you mark `|safe` must be a fragment
     VNtyper built, not a value read from a sample. `tests/unit/test_generate_report.py`
     enforces both. (`vntyper report` itself was broken until #179 — the handler passed

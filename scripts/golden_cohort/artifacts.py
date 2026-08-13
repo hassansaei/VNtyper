@@ -29,9 +29,19 @@ KESTREL_KEY = ("Motifs", "POS", "REF", "ALT", "Variant")
 #: adVNTR rows are keyed on the VNTR id and the called state.
 ADVNTR_KEY = ("VID", "State")
 
-#: ``<p class="summary-box ...">`` - the screening summary box and, when adVNTR ran, the
-#: cross-match box. The class list is what carries the computed emphasis.
+#: ``<p class="summary-box ...">`` - the cross-match box, and in a report written before
+#: the masthead landed the screening box too. The class list is what carries the computed
+#: emphasis.
 SUMMARY_BOX_RE = re.compile(r'<p class="summary-box([^"]*)">\s*(.*?)\s*</p>', re.DOTALL)
+
+#: The masthead (#242), which is where the screening state and its message now live. The
+#: gate compares a report written by one release against one written by another, so both
+#: shapes have to be readable: whichever side is missing its masthead falls back to the
+#: first ``summary-box``, which is where its screening box was.
+MASTHEAD_RE = re.compile(r'<header class="masthead" data-state="([^"]*)">(.*?)</header>', re.DOTALL)
+
+#: The message inside a masthead, as the ordered elements it is rendered in.
+MASTHEAD_MESSAGE_RE = re.compile(r'<p class="(?:headline|detail)">(.*?)</p>', re.DOTALL)
 
 #: Plotly writes the donut's category counts into the figure JSON. Extracting them is how
 #: the cohort's category counts are compared without depending on a base64 PNG.
@@ -196,6 +206,34 @@ def _summary_boxes(html: str, rules: list[Rule]) -> list[dict[str, Any]]:
     return boxes
 
 
+def _masthead(html: str, rules: list[Rule]) -> dict[str, Any] | None:
+    """Extract the masthead's computed state and the message it renders.
+
+    ``is_positive`` is kept beside ``state`` so the two shapes of report line up on the
+    fact the gate has always compared. It is derived rather than read: the masthead
+    carries three states where the box carried a boolean, and "the run did not establish
+    this" is exactly the case the boolean could not express.
+
+    Args:
+        html: The rendered per-sample report.
+        rules: The normalisation rules for this side.
+
+    Returns:
+        dict[str, Any] | None: ``text``, ``is_positive`` and ``state``, or None when the
+        report has no masthead - which is every report written before #242.
+    """
+    match = MASTHEAD_RE.search(html)
+    if match is None:
+        return None
+    state, body = match.group(1), match.group(2)
+    message = " ".join(" ".join(part.split()) for part in MASTHEAD_MESSAGE_RE.findall(body))
+    return {
+        "text": normalise.apply(message, rules),
+        "is_positive": state == "finding",
+        "state": state,
+    }
+
+
 def read_report(path: Path, rules: list[Rule]) -> dict[str, Any] | None:
     """Read the per-sample HTML report's summary boxes and rendered tables.
 
@@ -216,12 +254,24 @@ def read_report(path: Path, rules: list[Rule]) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     html = path.read_text(encoding="utf-8", errors="replace")
+    masthead = _masthead(html, rules)
     boxes = _summary_boxes(html, rules)
+    # Which box is which depends on where the screening summary lives in this report.
+    # Since #242 it is the masthead, and the only `summary-box` left is the cross-match
+    # one; before that the screening box came first and the cross-match box second. Both
+    # sides of a gate run have to be read correctly, and reading the cross-match box as
+    # the screening summary would report a delta that is entirely the reader's.
+    if masthead is not None:
+        screening: dict[str, Any] | None = masthead
+        cross_match = boxes[0] if boxes else None
+    else:
+        screening = boxes[0] if boxes else None
+        cross_match = boxes[1] if len(boxes) > 1 else None
     extractor = _TableExtractor()
     extractor.feed(html)
     return {
-        "screening": boxes[0] if boxes else None,
-        "cross_match": boxes[1] if len(boxes) > 1 else None,
+        "screening": screening,
+        "cross_match": cross_match,
         "box_count": len(boxes),
         "tables": normalise.apply_deep(extractor.tables, rules),
     }

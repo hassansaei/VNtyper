@@ -52,6 +52,9 @@ Functions:
     compute_algorithm_result: One results frame + one rule block to a state value
     execution_state: One pipeline-summary step state to one execution state
     algorithm_state_text: One algorithm's state as the provenance line prints it
+    message_segments: One configured message as the parts the report renders
+    render_segments: Those parts reassembled, which must equal the message
+    state_chips: The computed state as the masthead's chip row
     build_screening_summary: The three state axes to the configured message
 """
 
@@ -100,8 +103,53 @@ FALLBACK_ALGORITHM_RESULT = "none"
 #: Used when ``report_config.json`` declares no ``screening_summary_default``.
 FALLBACK_SUMMARY_MESSAGE = "The screening was negative (no valid Kestrel or adVNTR data)."
 
-#: What the report says when the summary could not be computed at all.
+#: What the report says when the summary could not be computed at all, or when it was
+#: computed from a state one of the stages never established.
 UNAVAILABLE_SUMMARY_MESSAGE = "No summary available."
+
+#: The separator every configured message uses between its parts. It is markup, and the
+#: report no longer interpolates it as markup: each part is rendered as an element of its
+#: own, autoescaped like everything else. ``segments`` in ``report_config.json`` is that
+#: split, stored beside the ``message`` it came from; the message stays verbatim and
+#: authoritative, and :func:`render_segments` is what proves the two still agree.
+SEGMENT_SEPARATOR = "<br>"
+
+
+def message_segments(rule: dict[str, Any]) -> tuple[str, ...]:
+    """The ordered parts one configured rule's message is rendered as.
+
+    A rule that declares ``segments`` is taken at its word; one that declares only
+    ``message`` is split on :data:`SEGMENT_SEPARATOR`. The second path is not a migration
+    artefact to be removed later - ``report_config.json`` is configuration, a deployment
+    may ship its own, and a config carrying only ``message`` keys has to keep rendering.
+
+    Args:
+        rule: One entry of ``screening_summary_rules``.
+
+    Returns:
+        tuple[str, ...]: The parts, in the order they are rendered.
+    """
+    segments = rule.get("segments")
+    if isinstance(segments, list) and segments:
+        return tuple(str(segment) for segment in segments)
+    return tuple(str(rule.get("message", "")).split(SEGMENT_SEPARATOR))
+
+
+def render_segments(rule: dict[str, Any]) -> str:
+    """Reassemble one rule's message from the parts the report actually renders.
+
+    The round trip is the contract: ``render_segments(rule) == rule["message"]`` for every
+    configured rule. Asserting it on *rendering* rather than on any rule having a given
+    number of segments is what keeps the migration honest - the configured wording is
+    clinical text nothing here may reword, only split.
+
+    Args:
+        rule: One entry of ``screening_summary_rules``.
+
+    Returns:
+        str: The message as the reader receives it, separators restored.
+    """
+    return SEGMENT_SEPARATOR.join(message_segments(rule))
 
 
 def execution_state(step_state: str) -> str:
@@ -170,6 +218,20 @@ class ScreeningSummary:
     matched_rule: bool
     kestrel_execution: str = EXECUTION_PERFORMED
     advntr_execution: str = EXECUTION_PERFORMED
+    segments: tuple[str, ...] = ()
+
+    @property
+    def rendered_segments(self) -> tuple[str, ...]:
+        """The parts the report renders, one element each.
+
+        Falls back to splitting :attr:`text` so a summary built without ``segments`` -
+        by a test, or by a caller that has only the message - still renders as elements
+        rather than putting a literal ``<br>`` in front of the reader.
+
+        Returns:
+            tuple[str, ...]: One or more parts, never empty.
+        """
+        return self.segments or tuple(self.text.split(SEGMENT_SEPARATOR))
 
     @property
     def state_is_established(self) -> bool:
@@ -226,6 +288,153 @@ class ScreeningSummary:
         if self.is_positive:
             return "finding"
         return "no-finding"
+
+
+#: The four tones a state chip can be drawn in. Each names a token in the shared token
+#: layer; the chip's *value* is always a word, so the tone is never the only carrier.
+TONE_FINDING = "finding"
+TONE_CAUTION = "caution"
+TONE_OK = "ok"
+TONE_NONE = "none"
+
+#: What a chip says for a stage that produced no result. Neither is a statement about the
+#: sample: one says the stage was never asked to run, the other that it ran and nothing
+#: could be read from it. Neither may ever be replaced by a result word.
+NOT_PERFORMED_CHIP = "Not performed"
+NOT_AVAILABLE_CHIP = "Not available"
+
+#: What the concordance chip says when there is nothing to compare. A stage that produced
+#: no result cannot agree or disagree with one that did, and a chip claiming either would
+#: be the same defect as reporting an absence as a negative.
+NOT_ASSESSABLE_CHIP = "Not assessable"
+
+#: The two words the cross-match state has. They compress the sentence
+#: ``build_cross_match_summary`` writes; the sentence itself is still printed in full.
+MATCH_CHIP = "Match"
+NO_MATCH_CHIP = "No match"
+
+#: The chip labels, named once so the chip row and its tests cannot drift apart.
+KESTREL_LABEL = "Kestrel"
+ADVNTR_LABEL = "adVNTR"
+CONCORDANCE_LABEL = "Concordance"
+
+
+@dataclass(frozen=True)
+class StateChip:
+    """One computed fact, as the masthead's chip row shows it.
+
+    Attributes:
+        label: What the fact is about.
+        value: The fact, always in words.
+        tone: Which state token colours it. Emphasis only - every chip is readable in
+            greyscale, in print and with any colour vision.
+    """
+
+    label: str
+    value: str
+    tone: str
+
+
+def result_word(result: str) -> str:
+    """One computed result token as a chip prints it.
+
+    A pure transformation of the token rather than a lookup table, and deliberately: a
+    table would have to be extended by hand whenever ``report_config.json`` declares a new
+    ``result``, and until someone did the chip would either fall back to a wrong word or
+    crash. ``High_Precision`` reads "High precision"; ``positive flagged`` reads "Positive
+    flagged"; nothing is composed, translated or interpreted.
+
+    Args:
+        result: A computed ``kestrel_result``/``advntr_result`` value.
+
+    Returns:
+        str: The same word, spaced and sentence-cased.
+    """
+    return result.replace("_", " ").capitalize()
+
+
+def algorithm_chip(label: str, execution: str, result: str, default: str) -> StateChip:
+    """One algorithm's chip: what it called, or that it called nothing.
+
+    Args:
+        label: :data:`KESTREL_LABEL` or :data:`ADVNTR_LABEL`.
+        execution: One of the ``EXECUTION_*`` values.
+        result: The computed result token.
+        default: The algorithm block's configured ``default``.
+
+    Returns:
+        StateChip: The chip to render.
+    """
+    if execution == EXECUTION_NOT_PERFORMED:
+        return StateChip(label=label, value=NOT_PERFORMED_CHIP, tone=TONE_NONE)
+    if execution != EXECUTION_PERFORMED:
+        return StateChip(label=label, value=NOT_AVAILABLE_CHIP, tone=TONE_CAUTION)
+    tone = TONE_FINDING if is_finding(result, default) else TONE_NONE
+    return StateChip(label=label, value=result_word(result), tone=tone)
+
+
+def concordance_chip(
+    summary: ScreeningSummary, cross_match_available: bool, cross_match_is_positive: bool
+) -> StateChip:
+    """Whether the two algorithms agreed, or whether that is a question at all.
+
+    Concordance is the cross-match stage's own comparison, not a second opinion computed
+    here. It needs two results to compare, so a stage that produced none makes the chip
+    unassessable rather than negative - "the two did not agree" and "there was nothing to
+    agree with" are different facts, and only one of them is about the sample.
+
+    Args:
+        summary: The computed screening state.
+        cross_match_available: Whether the cross-match stage produced a comparison.
+        cross_match_is_positive: Whether that comparison found a match.
+
+    Returns:
+        StateChip: The chip to render.
+    """
+    both_performed = summary.kestrel_execution == EXECUTION_PERFORMED and (
+        summary.advntr_execution == EXECUTION_PERFORMED
+    )
+    if not both_performed or not cross_match_available:
+        return StateChip(label=CONCORDANCE_LABEL, value=NOT_ASSESSABLE_CHIP, tone=TONE_NONE)
+    if cross_match_is_positive:
+        return StateChip(label=CONCORDANCE_LABEL, value=MATCH_CHIP, tone=TONE_FINDING)
+    return StateChip(label=CONCORDANCE_LABEL, value=NO_MATCH_CHIP, tone=TONE_NONE)
+
+
+def state_chips(
+    summary: ScreeningSummary,
+    report_config: dict[str, Any],
+    *,
+    cross_match_available: bool,
+    cross_match_is_positive: bool,
+) -> list[StateChip]:
+    """The computed screening state as the masthead's chips.
+
+    Args:
+        summary: The computed screening state.
+        report_config: The parsed ``report_config.json``, for each block's ``default``.
+        cross_match_available: Whether the cross-match stage produced a comparison.
+        cross_match_is_positive: Whether that comparison found a match.
+
+    Returns:
+        list[StateChip]: Kestrel, adVNTR and concordance, in scan order.
+    """
+    algorithm_logic = report_config.get("algorithm_logic", {})
+    return [
+        algorithm_chip(
+            KESTREL_LABEL,
+            summary.kestrel_execution,
+            summary.kestrel_result,
+            algorithm_logic.get("kestrel", {}).get("default", FALLBACK_ALGORITHM_RESULT),
+        ),
+        algorithm_chip(
+            ADVNTR_LABEL,
+            summary.advntr_execution,
+            summary.advntr_result,
+            algorithm_logic.get("advntr", {}).get("default", FALLBACK_ALGORITHM_RESULT),
+        ),
+        concordance_chip(summary, cross_match_available, cross_match_is_positive),
+    ]
 
 
 def load_report_config() -> dict[str, Any]:
@@ -429,12 +638,14 @@ def build_screening_summary(
 
         rule = find_screening_rule(report_config, current)
         text = rule.get("message", "") if rule is not None else ""
+        segments = message_segments(rule) if rule is not None else ()
         if rule is not None:
             logger.debug("Unified rule matched: %s", rule.get("conditions"))
 
         matched_rule = bool(text)
         if not matched_rule:
             text = default_message
+            segments = tuple(default_message.split(SEGMENT_SEPARATOR))
             logger.warning(
                 "No screening rule covers kestrel_result=%r, advntr_result=%r, quality_metrics_pass=%r; "
                 "falling back to the default message.",
@@ -457,6 +668,7 @@ def build_screening_summary(
             matched_rule=False,
             kestrel_execution=kestrel_execution,
             advntr_execution=advntr_execution,
+            segments=(UNAVAILABLE_SUMMARY_MESSAGE,),
         )
 
     summary = ScreeningSummary(
@@ -468,6 +680,7 @@ def build_screening_summary(
         matched_rule=matched_rule,
         kestrel_execution=kestrel_execution,
         advntr_execution=advntr_execution,
+        segments=segments,
     )
     # The rule matched a state one of the stages never established, so its message is not
     # evidence about this sample - it is the sentence configured for a state the run did
@@ -483,7 +696,7 @@ def build_screening_summary(
             kestrel_result,
             advntr_result,
         )
-        summary = replace(summary, text=UNAVAILABLE_SUMMARY_MESSAGE)
+        summary = replace(summary, text=UNAVAILABLE_SUMMARY_MESSAGE, segments=(UNAVAILABLE_SUMMARY_MESSAGE,))
 
     logger.debug("Final screening summary: %s", summary.text)
     return summary

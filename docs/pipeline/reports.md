@@ -20,13 +20,15 @@ If adVNTR was run, its results appear in a separate table showing VID, variant s
 
 **Screening Summary**
 
-An interpretive text block summarizes the combined result. The summary is generated from a rule-based system defined in `report_config.json` that considers:
+The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The text is generated from a rule-based system defined in `report_config.json` that considers:
 
 - Kestrel result category (High_Precision, Low_Precision, flagged variants, negative)
 - adVNTR result category (positive, negative, not performed)
 - Quality metrics pass/fail status
 
-The screening summary states what the combined evidence supports, including where orthogonal validation is recommended.
+The screening summary states what the combined evidence supports, including where orthogonal validation is recommended. Each configured message is stored both verbatim (`message`) and as the ordered parts it is rendered in (`segments`); the two are kept in step by a round-trip check, and a configuration supplying only `message` still renders.
+
+A stage that ran without producing a readable result is reported as neither a positive nor a negative. When either genotyping stage is in that state, the configured message is withheld -- it was selected by matching a state the run never established -- and the masthead is drawn in its indeterminate state instead.
 
 **Cross-Match Summary**
 

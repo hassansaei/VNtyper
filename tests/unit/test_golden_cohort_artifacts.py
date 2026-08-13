@@ -70,7 +70,9 @@ def test_delimited_sort_key_orders_rows_deterministically(tmp_path: Path) -> Non
     }
 
 
-def test_report_returns_summary_emphasis_and_tables(tmp_path: Path) -> None:
+def test_a_report_written_before_the_masthead_still_reads_as_two_boxes(tmp_path: Path) -> None:
+    """The gate compares one release's output against another's, so the older shape has
+    to keep reading correctly - the screening box first, the cross-match box second."""
     path = tmp_path / "summary_report.html"
     path.write_text(
         """
@@ -89,6 +91,52 @@ def test_report_returns_summary_emphasis_and_tables(tmp_path: Path) -> None:
         "box_count": 2,
         "tables": [{"header": ["Call", "Value"], "rows": [["Kestrel", "Positive"]]}],
     }
+
+
+def test_a_report_with_a_masthead_reads_its_state_rather_than_the_cross_match_box(tmp_path: Path) -> None:
+    """#242 moved the screening summary into the masthead and left one `summary-box`.
+    Reading that remaining box as the screening summary would report a delta on every
+    sample that is entirely the reader's, so the masthead is what is read."""
+    path = tmp_path / "summary_report.html"
+    path.write_text(
+        """
+        <header class="masthead" data-state="finding">
+          <p class="headline">Kestrel detected something.</p>
+          <p class="detail">And a second part.</p>
+        </header>
+        <p class="summary-box">Cross-match neutral</p>
+        """,
+        encoding="utf-8",
+    )
+    assert artifacts.read_report(path, []) == {
+        "screening": {
+            "text": "Kestrel detected something. And a second part.",
+            "is_positive": True,
+            "state": "finding",
+        },
+        "cross_match": {"text": "Cross-match neutral", "is_positive": False},
+        "box_count": 1,
+        "tables": [],
+    }
+
+
+def test_a_masthead_state_the_boolean_could_not_express_is_not_positive(tmp_path: Path) -> None:
+    """Three states where the box had two, and "the run did not establish this" is the
+    one the boolean could not carry. It is not a finding, and it is not a negative."""
+    path = tmp_path / "summary_report.html"
+    path.write_text(
+        '<header class="masthead" data-state="indeterminate"><p class="headline">No summary available.</p></header>',
+        encoding="utf-8",
+    )
+    report = artifacts.read_report(path, [])
+
+    assert report is not None
+    assert report["screening"] == {
+        "text": "No summary available.",
+        "is_positive": False,
+        "state": "indeterminate",
+    }
+    assert report["cross_match"] is None
 
 
 def test_donut_totals_are_numeric_strings_in_document_order() -> None:
