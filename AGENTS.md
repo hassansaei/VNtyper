@@ -601,8 +601,15 @@ summary | release-summary | none | always records success, failure, skipped jobs
     here before, which is exactly the drift this note now warns against instead of
     restating a new one.)
     Adding `scripts/bundle_release.py` (milestone 5, the reference bundle
-    builder) took the directory to all 40 Python files and `make test-scripts-cov` to
+    builder) took the directory to 40 Python files and `make test-scripts-cov` to
     7,806 of 8,340 measured units, or 93.60%, over 5,665 passing unit tests.
+    Adding `scripts/golden_cohort/waiver.py` (#262, the gate's declared-delta waiver
+    policy, extracted out of `compare.py`) took it to all 41 Python files and
+    `make test-scripts-cov` to 7,869 of 8,392 measured units, or 93.77%, over 6,299
+    passing unit tests. **A new file under `scripts/` must update this sentence** -
+    `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
+    counts `scripts/**/*.py` and fails until it does, which is the tripwire working, not
+    a flaky test.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:

@@ -26,16 +26,20 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from vntyper.scripts.artifact_names import validate_output_name
-from vntyper.scripts.cohort_summary import aggregate_cohort
-from vntyper.scripts.install_references import main as install_references_main
 
-# Import the online mode function
-from vntyper.scripts.online_mode import run_online_mode
+# Imported names are module attributes and module globals alike, which is what keeps
+# the suite's monkeypatch seams and the handlers' own lookups working (#262).
+from vntyper.scripts.cli_lazy_imports import (
+    aggregate_cohort,
+    install_references_main,
+    run_online_mode,
+)
 from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.reference_registry import get_reference_source, physical_reference_id, reference_keys
 from vntyper.scripts.reference_resolution import ResolvedReference, resolve_from_mapping
 
 logger = logging.getLogger(__name__)
+
 
 #: The optional stages ``--extra-modules`` can name. ``pipeline.py`` tests membership
 #: against exactly these two strings (``"advntr" in extra_modules``,

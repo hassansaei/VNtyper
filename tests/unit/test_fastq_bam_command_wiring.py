@@ -184,13 +184,18 @@ def test_process_fastq_emits_the_single_input_fastp_form(tmp_path):
 
 
 def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
-    """Fast mode skips unmapped-read extraction entirely: two commands, in order."""
+    """Fast mode skips unmapped-read extraction entirely: two commands, in order.
+
+    The slice index is gone from this expectation because ``needs_advntr`` defaults to
+    False (#262). The index's only consumers are ``run_advntr`` and
+    ``downsample_bam_if_needed``, and coverage reads the alignment plan's own view, so
+    in a Kestrel-only fast-mode run it had no reader at all. The adVNTR case still
+    emits it -- see ``test_fast_mode_still_indexes_the_slice_for_advntr``.
+    """
     commands = _run_bam_to_fastq(tmp_path)
 
     assert commands == [
-        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
-        f"-o {tmp_path}/output_sliced.bam && "
-        f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} -o {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
@@ -198,20 +203,39 @@ def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
     ]
 
 
-def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
+def test_the_bam_normal_path_extracts_merges_and_converts(tmp_path):
     """
-    The full BAM path, in order.
+    The full BAM path in a Kestrel-only run, in order.
 
-    Preflight has already proved and supplied the input index. The temporary slice
-    is not indexed because the merge immediately replaces it; the merged BAM is
-    indexed once before conversion.
+    Preflight has already proved and supplied the input index. The temporary slice is
+    not indexed because the merge immediately replaces it, and the merged BAM is no
+    longer indexed either: ``needs_advntr`` defaults to False and the index has no
+    other reader (#262). The adVNTR ordering is
+    ``test_the_bam_normal_path_indexes_the_merge_for_advntr`` below.
     """
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert commands == [
-        f"samtools view -P -b -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"samtools view -P -b -u -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
         f"-o {tmp_path}/output_sliced.bam",
-        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
+        f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
+        f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
+        f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
+        f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
+        f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
+        f"-s {tmp_path}/output_single.fastq.gz",
+    ]
+
+
+def test_the_bam_normal_path_indexes_the_merge_for_advntr(tmp_path):
+    """The same path with adVNTR: the merged BAM is indexed once, before conversion."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, needs_advntr=True)
+
+    assert commands == [
+        f"samtools view -P -b -u -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"-o {tmp_path}/output_sliced.bam",
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
         f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
@@ -248,7 +272,7 @@ def test_indexed_bam_recovery_uses_the_htslib_literal_star_command(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert [command for command in commands if "-f 4" in command] == [
-        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam"
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam"
     ]
 
 
@@ -353,7 +377,7 @@ def test_indexed_bam_recovery_uses_the_plan_view_and_exact_index_without_a_refer
 
     (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
     assert unmapped_command == (
-        f"samtools view -b -f 4 -@ 4 -X {plan.view_path} {plan.index_path} '*' -o {tmp_path}/output_unmapped.bam"
+        f"samtools view -b -f 4 -u -@ 4 -X {plan.view_path} {plan.index_path} '*' -o {tmp_path}/output_unmapped.bam"
     )
     assert " -T " not in unmapped_command
 
@@ -448,15 +472,21 @@ def _cram_unmapped_command(tmp_path, **overrides):
     return filters[0]
 
 
-def test_the_cram_unmapped_command_is_pinned_as_a_plain_pipe(tmp_path):
+def test_the_cram_unmapped_command_is_pinned_as_a_single_process(tmp_path):
     """
     The whole command, byte for byte.
 
     With no resolved reference yet, the optional ``-T`` fragment is omitted.
+
+    The expectation moved from a two-stage pipe to one process (#262) because the
+    command genuinely changed: the old form decoded the whole CRAM to SAM **text**,
+    piped it and re-parsed it. The read set is identical -- the reading stage applied
+    no filter and no region, so both forms select flag 4 over every record in the
+    file, which was verified as identical name/flag/sequence digests over all eight
+    registered CRAM fixtures, with and without an explicit ``-T``.
     """
     assert _cram_unmapped_command(tmp_path) == (
-        f"set -o pipefail; /envs/vntyper/bin/samtools view -@ 4 -h /data/sample.cram | "
-        f"/envs/vntyper/bin/samtools view -b -f 4 -@ 4 - -o {tmp_path}/output_unmapped.bam"
+        f"/envs/vntyper/bin/samtools view -b -f 4 -u -@ 4 /data/sample.cram -o {tmp_path}/output_unmapped.bam"
     )
 
 
@@ -502,52 +532,51 @@ def test_the_cram_unmapped_command_has_no_process_substitution(tmp_path):
     assert "/dev/null" not in command, "nothing is discarded any more; the writer consumes the whole stream"
 
 
-def test_the_cram_unmapped_writer_is_a_pipeline_stage(tmp_path):
+def test_the_cram_unmapped_extraction_is_one_process_that_writes_the_output(tmp_path):
     """
-    The writing samtools must be a **stage**, which is what makes bash wait for it.
+    The writer must be the process the shell itself waits for.
 
-    Two stages joined by one ``|``: the reader streams the CRAM, the writer filters
-    flag 4 into the output BAM. Because the writer is in the pipeline, the shell
-    does not return until it has exited, and ``pipefail`` covers its exit status.
-    """
-    command = _cram_unmapped_command(tmp_path)
-    stages = command.removeprefix("set -o pipefail; ").split(" | ")
-
-    assert len(stages) == 2, f"expected a two-stage pipeline, got {len(stages)}: {stages}"
-    reader, writer = stages
-    assert reader.endswith("-h /data/sample.cram"), f"the reader must end at the CRAM input: {reader}"
-    assert writer.startswith("/envs/vntyper/bin/samtools view -b -f 4"), f"the writer is not stage two: {writer}"
-    assert writer.endswith(f"- -o {tmp_path}/output_unmapped.bam"), (
-        f"the writer must read stdin and write the unmapped BAM: {writer}"
-    )
-
-
-def test_the_cram_unmapped_command_sets_pipefail(tmp_path):
-    """
-    ``pipefail`` is only meaningful now that the writer is in the pipeline.
-
-    Under the substitution it bought nothing: a writer that consumed its whole input
-    and then failed never made ``tee`` see EPIPE, so the command exited 0 and the
-    stage carried on with a BAM that was never finished.
+    This is the property the two-stage pipe existed to guarantee, and one process
+    guarantees it outright rather than by construction: there is no second process
+    that could still be flushing when ``run_command`` returns, so the ``samtools
+    merge`` on the next line cannot race it (#262).
     """
     command = _cram_unmapped_command(tmp_path)
 
-    assert "|" in command, "this test is checking the wrong command if there is no pipe in it"
-    assert command.startswith("set -o pipefail; "), "without pipefail a failed writer exits 0"
+    assert "|" not in command, f"expected a single process, got a pipeline: {command}"
+    assert ">(" not in command, "a process substitution is not waited for; the merge would race it"
+    assert command.startswith("/envs/vntyper/bin/samtools view -b -f 4"), f"not a flag-4 extraction: {command}"
+    assert command.endswith(f"-o {tmp_path}/output_unmapped.bam"), f"must write the unmapped BAM: {command}"
 
 
-def test_the_cram_unmapped_command_uses_the_configured_samtools_in_both_stages(tmp_path):
+def test_the_cram_unmapped_command_does_not_set_pipefail(tmp_path):
+    """
+    With no pipeline there is no stage whose exit status can be masked.
+
+    ``pipefail`` was worth having while this was a pipe: a reading stage that died
+    half-way would otherwise be hidden behind the writer's exit status. One process
+    reports its own status, so the prefix would now be decoration -- and decoration on
+    a command that does not pipe is exactly what
+    ``test_pipefail_is_set_on_exactly_the_commands_that_pipe`` now forbids.
+    """
+    command = _cram_unmapped_command(tmp_path)
+
+    assert "set -o pipefail" not in command
+
+
+def test_the_cram_unmapped_command_uses_the_configured_samtools(tmp_path):
     """
     D2 through the real call site.
 
-    The stage passes ``config["tools"]["samtools"]`` to the builder for both stages.
-    A bare ``samtools`` in either would resolve against whatever PATH ``mamba run``
-    set up, so the unmapped reads would be extracted by a different build - or by
-    nothing at all, while the pipeline reported success.
+    The stage passes ``config["tools"]["samtools"]`` to the builder. A bare
+    ``samtools`` would resolve against whatever PATH ``mamba run`` set up, so the
+    unmapped reads would be extracted by a different build - or by nothing at all,
+    while the pipeline reported success. There is one invocation rather than two
+    since the pipe collapsed (#262), so the count moves with it.
     """
     command = _cram_unmapped_command(tmp_path)
 
-    assert command.count("/envs/vntyper/bin/samtools") == 2, f"both stages must use the configured samtools: {command}"
+    assert command.count("/envs/vntyper/bin/samtools") == 1, f"must use the configured samtools: {command}"
     assert [token for token in command.split() if token == "samtools"] == [], (
         f"a bare `samtools` token means the mismatch is back: {command}"
     )
@@ -601,9 +630,7 @@ def test_the_bed_file_branch_passes_minus_l_instead_of_a_region(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, bed_file=bed)
 
     assert commands[0] == (
-        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai -L {bed} "
-        f"-o {tmp_path}/output_sliced.bam && "
-        f"samtools index -@ 4 {tmp_path}/output_sliced.bam"
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai -L {bed} -o {tmp_path}/output_sliced.bam"
     )
     assert REGION not in commands[0]
 
@@ -1005,3 +1032,123 @@ def test_an_operator_supplied_region_records_not_measured_rather_than_a_wrong_fi
     assert stats["vntr_array_depth_sum"] is None
     assert stats["vntr_flank_mean_depth"] is None
     assert stats["mean"] == pytest.approx(5.0)
+
+
+# ---------------------------------------------------------------------------
+# The slice index has exactly one consumer, and it is optional (#262)
+# ---------------------------------------------------------------------------
+#
+# A complete consumer trace of `output_sliced.bam.bai` finds `run_advntr`
+# (--alignment_file) and `downsample_bam_if_needed`, both reachable only inside
+# pipeline.py's `if "advntr" in extra_modules:` block. Coverage does not use it:
+# pipeline_coverage.py passes `bam_file=plan.view_path` with
+# `index_path=plan.stable_index_path`, which is the run-local view of the original
+# input. artifact_names.py's "sliced_bam" entry has no consumer at all.
+
+
+def _indexes(commands):
+    """Return the ``samtools index`` commands among ``commands``.
+
+    Args:
+        commands: The issued command strings.
+
+    Returns:
+        list[str]: Every command that indexes something.
+    """
+    return [command for command in commands if "samtools index" in command]
+
+
+def test_the_merged_bam_is_not_indexed_without_advntr(tmp_path):
+    """In Kestrel-only mode the merged-BAM index has no consumer.
+
+    Measured 58 ms at --threads 4 and 244 ms at --threads 1 on the largest fixture.
+    """
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, needs_advntr=False)
+
+    assert _indexes(commands) == []
+
+
+def test_the_merged_bam_is_indexed_when_advntr_is_requested(tmp_path):
+    """adVNTR reads output_sliced.bam through its index, so the gate is not "never"."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, needs_advntr=True)
+
+    assert _indexes(commands) == [f"samtools index -@ 4 {tmp_path}/output_sliced.bam"]
+
+
+def test_fast_mode_also_skips_the_slice_index_without_advntr(tmp_path):
+    """build_plan_slice_command passed index_output=fast_mode, indexing for nobody.
+
+    In fast mode the slice *is* output_sliced.bam, so its index has exactly the same
+    single consumer as the merged one -- and coverage still reads the alignment plan's
+    own view either way.
+    """
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=True, needs_advntr=False)
+
+    assert _indexes(commands) == []
+
+
+def test_fast_mode_still_indexes_the_slice_for_advntr(tmp_path):
+    """The gate is needs_advntr, not fast_mode."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=True, needs_advntr=True)
+
+    assert any(" && samtools index " in command for command in commands)
+
+
+def test_the_fast_mode_slice_is_compressed_because_it_survives_the_run(tmp_path):
+    """In fast mode the slice IS <name>_sliced.bam: archived, not merged away.
+
+    Compressing it is the same decision as leaving the merge output compressed, and
+    getting it wrong here would reintroduce that regression by a different route.
+    """
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=True)
+
+    slice_command = next(command for command in commands if " view " in command)
+    assert " -u " not in slice_command
+
+
+def test_the_non_fast_slice_is_uncompressed_because_the_merge_replaces_it(tmp_path):
+    """It is read by the merge milliseconds later and then overwritten by it."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+
+    slice_command = next(command for command in commands if " -F 4 " in command)
+    assert " -u " in slice_command
+
+
+def test_the_unmapped_extraction_is_uncompressed_only_when_it_will_be_deleted(tmp_path):
+    """`delete_intermediates` is what decides whether this file is throwaway.
+
+    It defaults to **False** all the way up to the CLI, so in an ordinary run
+    `<name>_unmapped.bam` survives in the output directory and is included in the
+    archive -- the compatibility baseline even asserts its absence only in the
+    delete-intermediates case. Writing a surviving file at BGZF level 0 would ship a
+    roughly 3x larger BAM to users, which is precisely the regression the merge output
+    is left compressed to avoid.
+    """
+    deleted = _run_bam_to_fastq(tmp_path, fast_mode=False, delete_intermediates=True)
+    retained = _run_bam_to_fastq(tmp_path, fast_mode=False, delete_intermediates=False)
+
+    assert " -u " in next(command for command in deleted if " -f 4 " in command)
+    assert " -u " not in next(command for command in retained if " -f 4 " in command)
+
+
+def test_the_merge_output_is_never_uncompressed(tmp_path):
+    """It survives as <name>_sliced.bam and is shipped to users in the archive."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+
+    merge_command = next(command for command in commands if " merge " in command)
+    assert "-u" not in shlex.split(merge_command)
+
+
+def test_the_conversion_stage_takes_a_boolean_not_the_module_list(tmp_path):
+    """A Sequence[str] parameter invites the stage to grow more module knowledge.
+
+    The conversion stage has no business knowing about module state beyond the one
+    question "will anything read this index?", so it is given the answer, not the list.
+    """
+    import inspect
+
+    parameters = inspect.signature(fastq_bam_processing.process_bam_to_fastq).parameters
+
+    assert parameters["needs_advntr"].annotation == "bool"
+    assert parameters["needs_advntr"].default is False
+    assert "extra_modules" not in parameters

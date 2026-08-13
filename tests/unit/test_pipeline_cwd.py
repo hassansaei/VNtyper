@@ -146,7 +146,13 @@ def test_the_fastq_path_also_carries_the_working_directory(tmp_path: Path, monke
 
 
 def test_kestrel_stage_boundary_preserves_inputs_configuration_and_summary(tmp_path: Path, monkeypatch) -> None:
-    """Extracting the Kestrel stage must preserve every caller-visible argument and artifact."""
+    """Extracting the Kestrel stage must preserve every caller-visible argument and artifact.
+
+    The expected dict is **exhaustive on purpose**: it fails if a parameter is added as
+    well as if one is dropped, so growing ``run_kestrel``'s call contract has to be a
+    decision rather than a side effect. ``threads`` was added that way in #262, for the
+    KAnalyze counting step.
+    """
     run_dir = tmp_path / "elsewhere"
     run_dir.mkdir()
     monkeypatch.chdir(run_dir)
@@ -175,6 +181,7 @@ def test_kestrel_stage_boundary_preserves_inputs_configuration_and_summary(tmp_p
         "sample_name": "patient-7",
         "log_level": logging.DEBUG,
         "cwd": str(run_dir),
+        "threads": 4,
     }
     summary = json.loads((out / "pipeline_summary.json").read_text(encoding="utf-8"))
     kestrel_steps = [step for step in summary["steps"] if step["step"] == "Kestrel Genotyping"]

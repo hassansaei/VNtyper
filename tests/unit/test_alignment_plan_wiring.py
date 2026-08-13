@@ -55,13 +55,16 @@ def _run_conversion(
     *,
     fast_mode: bool,
     keep_intermediates: bool = False,
+    needs_advntr: bool = False,
 ) -> list[str]:
     """Run conversion with shell and filesystem effects recorded.
 
     Args:
         tmp_path: Test directory receiving generated output names.
         plan: Proven alignment plan consumed by the stage.
-        fast_mode: Whether the slice is final and therefore needs an index.
+        fast_mode: Whether the slice is the run's final alignment.
+        keep_intermediates: Whether intermediates survive the run.
+        needs_advntr: Whether adVNTR will read the produced alignment's index.
 
     Returns:
         Emitted commands.
@@ -86,6 +89,7 @@ def _run_conversion(
             config=CONFIG,
             fast_mode=fast_mode,
             keep_intermediates=keep_intermediates,
+            needs_advntr=needs_advntr,
             plan=plan,
         )
     return commands
@@ -95,13 +99,24 @@ def test_conversion_api_has_one_authoritative_alignment_input() -> None:
     assert "in_bam" not in inspect.signature(fastq_bam_processing.process_bam_to_fastq).parameters
 
 
-@pytest.mark.parametrize(("fast_mode", "expects_index"), [(False, False), (True, True)])
-def test_slice_uses_the_view_reference_threads_and_mode_specific_indexing(
-    tmp_path: Path, fast_mode: bool, expects_index: bool
+@pytest.mark.parametrize(
+    ("fast_mode", "needs_advntr", "expects_index"),
+    [
+        # The slice only survives the run in fast mode, so only fast mode can index it
+        # at all -- and even then its single consumer is adVNTR (#262). Coverage reads
+        # the alignment plan's own view, never this file.
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+def test_slice_uses_the_view_reference_threads_and_consumer_specific_indexing(
+    tmp_path: Path, fast_mode: bool, needs_advntr: bool, expects_index: bool
 ) -> None:
     plan = _plan(tmp_path, "cram")
 
-    commands = _run_conversion(tmp_path, plan, fast_mode=fast_mode)
+    commands = _run_conversion(tmp_path, plan, fast_mode=fast_mode, needs_advntr=needs_advntr)
 
     slice_command = commands[0]
     assert plan.view_path in slice_command
@@ -120,27 +135,38 @@ def test_non_fast_indexed_bam_uses_the_plan_view_and_htslib_star_fetch(tmp_path:
     assert plan.view_path in commands[0]
     (unmapped_command,) = [command for command in commands if "-f 4" in command]
     assert unmapped_command == (
-        f"samtools view -b -f 4 -@ 4 -X {plan.view_path} {plan.index_path} '*' "
+        f"samtools view -b -f 4 -u -@ 4 -X {plan.view_path} {plan.index_path} '*' "
         f"-o {tmp_path / 'run' / 'output_unmapped.bam'}"
     )
 
 
 def test_bam_with_placed_unmapped_evidence_uses_the_complete_stream_scan(tmp_path: Path) -> None:
-    """A placed unmapped record can occur before the BAI tail offset."""
+    """A placed unmapped record can occur before the BAI tail offset.
+
+    What makes the scan *complete* is the absence of the ``'*'`` index query, not the
+    shell pipe the mode used to be implemented with (#262). A ``'*'`` fetch returns
+    only unplaced unmapped reads and silently drops placed ones -- measured as 329,
+    3,732 and 129 reads on the b178, 6449 and 7a61 fixtures, and 5,806 on 6c28 -- so
+    that is the property to assert.
+    """
     plan = _plan(tmp_path, "bam", unmapped_scan="stream")
 
     commands = _run_conversion(tmp_path, plan, fast_mode=False)
 
     (unmapped_command,) = [command for command in commands if "-f 4" in command]
-    assert "set -o pipefail" in unmapped_command
+    assert " '*'" not in unmapped_command
+    assert " -X " not in unmapped_command
     assert plan.view_path in unmapped_command
 
 
 @pytest.mark.parametrize(
     ("scan", "expected_fragment", "unexpected_fragment"),
     [
-        ("indexed", "'*' -o", "set -o pipefail"),
-        ("stream", "set -o pipefail", " '*' -o"),
+        # The distinguishing property is the index query, not the shell shape. The
+        # stream mode used to be identifiable by `set -o pipefail`; that was incidental
+        # to how it was implemented and stopped being true when it became one process.
+        ("indexed", "'*' -o", " -o /dev/null"),
+        ("stream", " -o ", " '*' -o"),
     ],
 )
 def test_cram_unmapped_command_is_selected_by_the_proven_plan(
@@ -156,6 +182,7 @@ def test_cram_unmapped_command_is_selected_by_the_proven_plan(
     assert plan.view_path in unmapped_command
     assert f"-T '{plan.reference_path}'" in unmapped_command
     assert (" -X " in unmapped_command) is (scan == "indexed")
+    assert ("|" in unmapped_command) is False
 
 
 def test_coverage_passes_the_proven_reference_to_samtools_depth(tmp_path: Path) -> None:
