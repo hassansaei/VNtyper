@@ -138,7 +138,7 @@ MUC1_FASTAS = (
 )
 
 #: Extracted out of `vntr_db_advntr.zip`; the zip itself is a build input, not an asset.
-ADVNTR_DATABASES = ("vntr_db_advntr/hg19_muc1.db", "vntr_db_advntr/hg38_muc1.db")
+ADVNTR_DATABASES = ("vntr_db_advntr_v2/hg19_muc1.db", "vntr_db_advntr_v2/hg38_muc1.db")
 
 MUC1_MEMBERS: tuple[str, ...] = (
     *(name for fasta in MUC1_FASTAS for name in (fasta, f"{fasta}.fai")),
@@ -151,7 +151,7 @@ SEED_FASTAS = ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa")
 #: Every non-derivable artefact the data repository commits, and therefore everything the
 #: release spec has to pin by digest: a build can reproduce anything else from an upstream
 #: source, but these exist only because someone committed them.
-REQUIRED_SEEDS = (*SEED_FASTAS, "vntr_db_advntr.zip", "filter_config.json")
+REQUIRED_SEEDS = (*SEED_FASTAS, "vntr_db_advntr_v2.zip", "filter_config.json")
 
 #: The MUC1 FASTAs that are not seeds are, by construction, derivation outputs - so the
 #: spec must declare a derivation for each. Derived from the frozen member set rather than
@@ -177,8 +177,8 @@ EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "build input for the merged-motif derivation; the pipeline never reads it",
     ),
     (
-        "vntr_db_advntr.zip",
-        "source archive for vntr_db_advntr/*.db, which ship extracted; shipping both duplicates them",
+        "vntr_db_advntr_v2.zip",
+        "source archive for vntr_db_advntr_v2/*.db, which ship extracted; shipping both duplicates them",
     ),
     (
         "install_provenance.json",
@@ -989,7 +989,7 @@ def file_provenance(relative: str, asset: Asset, spec: dict[str, Any]) -> dict[s
     if relative in SEED_FASTAS:
         return {"produced_by": "seed committed in the data repository"}
     if relative in ADVNTR_DATABASES:
-        return {"produced_by": "extracted from vntr_db_advntr.zip"}
+        return {"produced_by": "extracted from vntr_db_advntr_v2.zip"}
     if relative.endswith(".fai"):
         return {"produced_by": f"samtools faidx {relative[: -len('.fai')]}"}
 

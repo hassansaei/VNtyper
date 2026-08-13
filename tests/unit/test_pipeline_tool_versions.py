@@ -79,7 +79,11 @@ def test_requesting_advntr_declares_advntr(tmp_path: Path) -> None:
     the config declares a tool of that name.
     """
     config = deepcopy(MINIMAL_CONFIG)
-    config["tools"]["advntr"] = "mamba run -n envadvntr advntr"
+    # A command whose `--version` reports a span-aware adVNTR. The real
+    # `mamba run -n envadvntr advntr` is refused before the run when the installed
+    # adVNTR predates the recorded genomic end (#268), which is the point of the
+    # check -- but this test is about tool declaration, not model compatibility.
+    config["tools"]["advntr"] = "echo 2.0.4 #"
 
     harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"])
 

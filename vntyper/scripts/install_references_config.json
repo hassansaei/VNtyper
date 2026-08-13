@@ -122,9 +122,9 @@
 
   "vntyper_references": {
     "vntr_db_advntr": {
-      "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/9f57431e289a9b742a98407c0a83f7a67da65ee7/seeds/vntr_db_advntr.zip",
-      "target_path": "vntr_db_advntr.zip",
-      "source_sha256": "90a619f6aa2ee7d038b6d8703a5736d92fd483e8b4bfad4a5ad07480bf8f7ff1",
+      "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/28e6a0a55f169326d5cfd7431f9bca5aa049f8ca/seeds/vntr_db_advntr_v2.zip",
+      "target_path": "vntr_db_advntr_v2.zip",
+      "source_sha256": "b7e7a8a10e26b5058eedb766ec38d01a900e29780c4d48dabeaec67199615190",
       "extract_to": "."
     }
   },
@@ -178,7 +178,7 @@
   "common_references": [
     {"config_key": "muc1_motifs_rev_com",        "installed_path": "MUC1_motifs_Rev_com.fa"},
     {"config_key": "code_adVNTR_RUs",            "installed_path": "code-adVNTR_RUs.fa"},
-    {"config_key": "advntr_reference_vntr_hg19", "installed_path": "vntr_db_advntr/hg19_muc1.db"},
-    {"config_key": "advntr_reference_vntr_hg38", "installed_path": "vntr_db_advntr/hg38_muc1.db"}
+    {"config_key": "advntr_reference_vntr_hg19", "installed_path": "vntr_db_advntr_v2/hg19_muc1.db"},
+    {"config_key": "advntr_reference_vntr_hg38", "installed_path": "vntr_db_advntr_v2/hg38_muc1.db"}
   ]
 }

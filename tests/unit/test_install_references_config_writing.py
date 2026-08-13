@@ -28,8 +28,8 @@ class TestCanonicalKeys:
 
     def test_the_advntr_keys_name_the_databases_not_the_zip(self, tmp_path, install_config):
         keys = canonical_reference_keys(install_config, tmp_path)
-        assert str(keys["advntr_reference_vntr_hg19"]).endswith("vntr_db_advntr/hg19_muc1.db")
-        assert str(keys["advntr_reference_vntr_hg38"]).endswith("vntr_db_advntr/hg38_muc1.db")
+        assert str(keys["advntr_reference_vntr_hg19"]).endswith("vntr_db_advntr_v2/hg19_muc1.db")
+        assert str(keys["advntr_reference_vntr_hg38"]).endswith("vntr_db_advntr_v2/hg38_muc1.db")
 
     def test_both_shark_regions_are_written(self, tmp_path, install_config):
         keys = canonical_reference_keys(install_config, tmp_path)
