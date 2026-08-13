@@ -42,6 +42,7 @@ from vntyper.scripts.reference_resolution import resolve_from_mapping
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
+from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)
 from vntyper.scripts.summary import (
@@ -113,8 +114,10 @@ def run_pipeline(
     bed_file=None,
     log_level=logging.INFO,
     sample_name=None,
+    sample_name_is_explicit=False,
     log_file=None,
     summary_formats=None,  # New parameter: list of additional summary output formats (e.g., ['csv', 'tsv'])
+    report_igv=DEFAULT_REPORT_IGV,
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -149,9 +152,20 @@ def run_pipeline(
         bed_file (Path, optional): BED file for MUC1 analysis.
         log_level (int, optional): Logging level.
         sample_name (str, optional): Sample name for labeling results.
+        sample_name_is_explicit (bool, optional): Whether `sample_name` is the
+            operator's own `--sample-name` rather than a name `handle_pipeline`
+            derived from an input path. Recorded in the run summary beside the name
+            itself, because the report has to finish deriving a derived one
+            (`S1_R1.fastq` -> `S1`) and must leave an explicit one alone - and the
+            string on its own cannot say which it is (#242).
         log_file (str, optional): Path to the log file.
         summary_formats (list, optional): Additional summary output formats to generate.
             Supported formats are 'csv' and 'tsv'. JSON summary is always generated.
+        report_igv (str, optional): How the report carries its alignment browser -
+            one of `report_assets.REPORT_IGV_MODES`. Threaded through from
+            `--report-igv` on the `pipeline` subcommand, because an ordinary run
+            reaches `generate_summary_report` here rather than through
+            `vntyper report` (#242).
 
     Raises:
         ValueError: Various input validation errors.
@@ -279,6 +293,13 @@ def run_pipeline(
         summary = start_summary(
             version=VERSION,
             input_files=input_files,
+            # The same string Kestrel embeds below, so the report and the VCF cannot
+            # name the same run differently (#242). `start_summary` runs before any
+            # step, so this is on disk from the first `record_step` onwards. The
+            # provenance flag travels with it because the string alone cannot say
+            # whether it is a name or a `Path.stem` still to be derived.
+            sample_name=sample_name,
+            sample_name_is_explicit=sample_name_is_explicit,
             reference_assembly_requested=reference_assembly,
             reference_key_used=reference_provenance.key_used,
             reference_path=reference_provenance.path,
@@ -488,6 +509,13 @@ def run_pipeline(
             coverage_calculator=calculate_vntr_coverage,
             region_resolver=get_region_string_with_fallback,
         )
+        # The exact span the coverage stage consumed - resolved here and, until
+        # #242, thrown away. The report could not otherwise state it: reading
+        # `config["default_values"]["reference_assembly"]` back would mislabel any
+        # `--reference-assembly` override and cannot reconstruct `--custom-regions`
+        # at all. `record_step` below serialises the whole summary dict, not just
+        # the step, so setting it here puts it on disk immediately.
+        summary["region_resolved"] = vntr_region
         cov_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
             summary,
@@ -676,6 +704,14 @@ def run_pipeline(
         bed_out = os.path.join(dirs["kestrel"], "output.bed")
         fasta_reference = config["reference_data"]["muc1_reference_vntr"]
 
+        # `generate_summary_report` reads `pipeline_summary.json` back **from
+        # disk**, and the final `write_summary` below runs after it. Every
+        # top-level key set since the last `record_step` would therefore be
+        # missing from the report even though the finished file carries it. This
+        # makes the file match the summary in hand at the moment it is read,
+        # rather than relying on a later `record_step` happening to fire (#242).
+        write_summary(summary, summary_file_path)
+
         generate_summary_report(
             output_dir,
             template_dir,
@@ -687,6 +723,7 @@ def run_pipeline(
             flanking=config.get("default_values", {}).get("flanking", 50),
             vcf_file=vcf_file,  # Can be .gz, .vcf, or None - handled gracefully
             config=config,
+            report_igv=report_igv,
         )
         logger.info(f"Summary report generated: {report_file}")
 

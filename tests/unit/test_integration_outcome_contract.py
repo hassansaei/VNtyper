@@ -1,7 +1,7 @@
 """Pure checks for strict, value-bearing real-integration outcome declarations."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest import mock
 
 import pytest
@@ -81,6 +81,32 @@ def test_declared_failures_do_not_retain_unreachable_success_expectations() -> N
                 stale[case["test_name"]] = retained
 
     assert stale == {}
+
+
+def test_cases_that_require_an_igv_sidecar_request_sidecar_mode() -> None:
+    """The harness must translate legacy sidecar contracts after the default changed."""
+    groups = load_test_config()["integration_tests"].values()
+    cases = [case for group in groups if isinstance(group, list) for case in group]
+    sidecar_cases = [case for case in cases if "igv_report.html" in case.get("expected_files", [])]
+
+    assert len(sidecar_cases) == 7
+    for case in sidecar_cases:
+        input_kind: Literal["bam", "cram"] = "cram" if "cram" in case else "bam"
+        input_path = Path(case[input_kind])
+        request = orchestration._request_from_case(case, input_kind, (input_path,), Path("output"))
+        options = request.cli_options
+        mode_index = options.index("--report-igv")
+        assert options[mode_index + 1] == "sidecar", case["test_name"]
+
+    explicitly_off = {**sidecar_cases[0], "cli_options": [*sidecar_cases[0]["cli_options"], "--report-igv=off"]}
+    request = orchestration._request_from_case(
+        explicitly_off,
+        "bam",
+        (Path(explicitly_off["bam"]),),
+        Path("output"),
+    )
+    assert request.cli_options[-1] == "--report-igv=off"
+    assert "--report-igv" not in request.cli_options
 
 
 def test_clean_remapped_paired_bam_retains_a_real_advntr_success_contract() -> None:

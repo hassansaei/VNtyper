@@ -16,14 +16,17 @@ IGV generation is never triggered -- ``bed_file`` is left unset, so
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from jinja2 import DictLoader
 
 import vntyper
 from vntyper.cli import load_config
-from vntyper.scripts import generate_report, summary_steps
+from vntyper.scripts import generate_report, report_context_contract, report_formatting, summary, summary_steps
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -115,7 +118,7 @@ def positive_summary(tmp_path):
 def test_a_report_is_written(positive_summary) -> None:
     html = render(positive_summary)
     assert html.lstrip().startswith("<!DOCTYPE html>")
-    assert "Summary Report" in html
+    assert '<h1><i class="gene">MUC1</i> VNTR report — sample</h1>' in html
 
 
 def test_the_config_is_required(tmp_path) -> None:
@@ -132,7 +135,7 @@ def test_the_config_is_required(tmp_path) -> None:
 def test_a_missing_pipeline_summary_still_renders(tmp_path) -> None:
     """A report with nothing in it is a usable diagnostic; a traceback is not."""
     html = render(tmp_path)
-    assert "Summary Report" in html
+    assert '<h1><i class="gene">MUC1</i> VNTR report — unnamed sample</h1>' in html
     assert "Not calculated" in html
 
 
@@ -147,14 +150,23 @@ def test_every_coverage_statistic_reaches_the_html(positive_summary) -> None:
         assert value in html, f"coverage value {value} is missing from the report"
 
 
-def test_low_coverage_is_flagged_red(tmp_path) -> None:
+def test_low_coverage_is_marked_with_the_warning_glyph(tmp_path) -> None:
+    """The mark, not the hue.
+
+    This used to assert `color:red` and would have passed on any red anywhere on the
+    page - including the `Confidence` column's, which meant the *opposite* thing. The
+    glyph and its accessible name are what say a metric failed its cutoff; the colour
+    is a token now (`--state-caution`), so asserting the literal would pin a value the
+    stylesheet owns.
+    """
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 3.0}]),
         tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
     )
     html = render(tmp_path)
-    assert "color:red" in html
+    assert report_formatting.WARNING_ICON in html
+    assert 'aria-label="Warning"' in html
 
 
 def test_coverage_that_was_never_calculated_says_so(tmp_path) -> None:
@@ -223,10 +235,89 @@ def test_the_reported_verdict_agrees_with_the_figure_it_prints_at_the_boundary(t
 # ---------------------------------------------------------------------------
 
 
+#: Matches one results-table column heading whatever presentation it carries.
+#:
+#: The headings are no longer bare `<th>`: `report_formatting.annotate_table_columns`
+#: gives each one its column's alignment class, `scope="col"` and the one-line
+#: explanation the reader sees as hover text and reads in the reading key under the
+#: table. An exact-string assertion on `<th>Position</th>` therefore fails on markup
+#: that is *more* correct than it was, which is a guard rewarding the wrong thing.
+#: What matters is that the heading reaches the report, and that it is scoped.
+def _has_heading(html: str, heading: str) -> bool:
+    """Whether the report renders ``heading`` as a scoped column heading."""
+    pattern = rf"<th[^>]*\bscope=\"col\"[^>]*>{re.escape(heading)}</th>"
+    return re.search(pattern, html) is not None
+
+
 def test_the_kestrel_table_carries_the_display_headings(positive_summary) -> None:
     html = render(positive_summary)
     for heading in ("Position", "Depth (Variant)", "Depth (Region)", "Depth Score", "Confidence", "Flag"):
-        assert f"<th>{heading}</th>" in html
+        assert _has_heading(html, heading), f"the Kestrel table does not render {heading!r} as a scoped heading"
+
+
+def test_both_report_tables_show_the_complete_mutation_naming_record(tmp_path: Path) -> None:
+    """#271's naming evidence must survive the summary-to-HTML boundary.
+
+    Membership tests on display-column constants cannot catch a renderer dropping
+    the values before the template. This renders both real table paths with distinct
+    reconciled and per-caller names, then checks each value in its own table.
+    """
+    kestrel_naming = {
+        "Nomenclature": "59dupC",
+        "Nomenclature_Tier": "A",
+        "Nomenclature_Flags": "caller-disagreement",
+        "Nomenclature_Kestrel": "59_60insG",
+        "Nomenclature_adVNTR": "58_59insG",
+        "Ambiguity_Interval": "53_59",
+        "Repeat_Form": "53C[7]>53C[8]",
+        "Nomenclature_Note": "two-caller reconciliation",
+    }
+    advntr_naming = {
+        "Nomenclature": "1_5delGCCCA",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "low-support",
+        "Nomenclature_Kestrel": "60dupA",
+        "Nomenclature_adVNTR": "1_5delGCCCA",
+        "Ambiguity_Interval": "1_5",
+        "Repeat_Form": "outside a detectable tract",
+        "Nomenclature_Note": "caller-specific representation",
+    }
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, **kestrel_naming}]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{**ADVNTR_ESCAPING_ROW, **advntr_naming}]),
+    )
+
+    html = render(tmp_path)
+    kestrel_table = _kestrel_table(html)
+    advntr_table = html.split("<h2>adVNTR Identified Variants</h2>", 1)[1].split("</table>", 1)[0]
+
+    for heading in (
+        "MUC1 Name",
+        "Tier",
+        "Flags",
+        "Kestrel Name",
+        "adVNTR Name",
+        "Ambiguity",
+        "Repeat Form",
+        "Naming Note",
+    ):
+        assert _has_heading(kestrel_table, heading), f"the Kestrel table lost the {heading!r} column"
+    for value in kestrel_naming.values():
+        assert f">{value.replace('>', '&gt;')}<" in kestrel_table
+
+    # The adVNTR table now names these eight columns the way the Kestrel table above it
+    # already did, so the same field is not called `Nomenclature_Tier` in one table and
+    # `Tier` in the other. The source names are what `advntr_naming` is keyed by and
+    # what the summary and the TSV still carry; `ADVNTR_DISPLAY_HEADINGS` is the map
+    # between them, and reading it here is what keeps this test measuring the boundary
+    # rather than restating one side of it.
+    for source_name in advntr_naming:
+        heading = report_formatting.ADVNTR_DISPLAY_HEADINGS[source_name]
+        assert _has_heading(advntr_table, heading), f"the adVNTR table lost the {source_name!r} column"
+    for value in advntr_naming.values():
+        assert f">{value}<" in advntr_table
 
 
 def test_the_motif_column_reaches_the_report(positive_summary) -> None:
@@ -237,7 +328,7 @@ def test_the_motif_column_reaches_the_report(positive_summary) -> None:
     column at all -- lost the column entirely. `cohort_summary.py` keys on
     `Motif`, so the two reports disagreed about the same sample."""
     html = render(positive_summary)
-    assert "<th>Motif</th>" in html, "the Motif column is missing from the Kestrel table"
+    assert _has_heading(html, "Motif"), "the Motif column is missing from the Kestrel table"
 
 
 def test_the_motif_column_shows_the_annotated_motif_not_the_raw_pair(positive_summary) -> None:
@@ -250,14 +341,27 @@ def test_the_motif_column_shows_the_annotated_motif_not_the_raw_pair(positive_su
     assert ">X-5</td>" not in html
 
 
-def test_a_negative_run_still_has_a_motif_column(tmp_path) -> None:
-    """The negative placeholder row carries `Motif` and no `Motifs` at all, so
-    before the fix the column was absent from every negative report too."""
+def test_a_truncated_placeholder_row_is_still_not_a_result(tmp_path) -> None:
+    """A placeholder need not carry all ten columns to be a non-result.
+
+    This case used to pin that the negative placeholder kept its `Motif` column
+    (contract C3): the row carries `Motif` and no `Motifs` at all, which is the
+    shape that made the missing-column defect invisible to a positive run. The
+    column contract is now pinned where it is declared
+    (`test_the_kestrel_display_columns_key_on_the_annotated_motif`) and on a
+    positive run (`test_the_motif_column_reaches_the_report`), because a negative
+    run no longer renders a row at all - so what is left to check here is that a
+    partial placeholder is recognised as one rather than tabulated.
+    """
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_KESTREL, [{"Motif": "None", "Confidence": "Negative"}]),
     )
-    assert "<th>Motif</th>" in render(tmp_path)
+
+    html = render(tmp_path)
+
+    assert 'id="kestrel_table"' not in html, "a placeholder row was tabulated as a result"
+    assert "No variant detected by Kestrel" in visible_text(html)
 
 
 def test_the_kestrel_display_columns_key_on_the_annotated_motif() -> None:
@@ -271,37 +375,308 @@ def test_the_kestrel_display_columns_key_on_the_annotated_motif() -> None:
     assert "Motifs" not in KESTREL_DISPLAY_COLUMNS
 
 
-def test_the_confidence_column_is_colour_coded(positive_summary) -> None:
+def test_the_confidence_column_carries_a_class_and_no_hue(positive_summary) -> None:
+    """The literal carries a class and no colour since #242's contrast pass.
+
+    It was `color:red` on `High_Precision` - the *most* trustworthy call the pipeline
+    makes - one column from a red `Flag` glyph meaning the row is *not* to be trusted,
+    and it measured 4.00:1 against the page. A transitional underline had been added so
+    the two confidence values were not separated by hue alone; the hue and the underline
+    go together, because the label was always the honest channel. The class is the hook
+    the stylesheet hangs on, and it hangs no colour there. See
+    `tests/unit/test_report_presentation.py`, which computes the ratios from the shipped
+    stylesheet rather than from a table.
+    """
     html = render(positive_summary)
-    assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in html
+    assert '<span class="confidence confidence-high-precision">High_Precision</span>' in html
+    assert "color:red" not in html, "red is reserved for something being wrong"
 
 
-def test_a_negative_run_renders_its_placeholder_row(tmp_path) -> None:
-    """`output_empty_result` writes a `Motif` column and no `Motifs` at all --
-    the shape that made the missing-column defect invisible to a positive run."""
-    negative_row = {
-        "Motif": "None",
-        "Variant": "None",
-        "POS": "None",
-        "REF": "None",
-        "ALT": "None",
-        "Motif_sequence": "None",
-        "Estimated_Depth_AlternateVariant": "None",
-        "Estimated_Depth_Variant_ActiveRegion": "None",
-        "Depth_Score": "None",
-        "Confidence": "Negative",
-    }
+# ---------------------------------------------------------------------------
+# The Kestrel empty states - issue #242
+# ---------------------------------------------------------------------------
+
+#: What `kestrel_genotyping.output_empty_result` writes when Kestrel ran and called
+#: nothing: the literal string "None" in all nine value columns and `Negative` in
+#: `Confidence`. `summary.parse_tsv` splits the file on tabs and coerces nothing
+#: (AGENTS.md trap 5: all `parsed_result` values are strings), so this is exactly the
+#: row that reaches the report.
+NEGATIVE_KESTREL_ROW = {
+    "Motif": "None",
+    "Variant": "None",
+    "POS": "None",
+    "REF": "None",
+    "ALT": "None",
+    "Motif_sequence": "None",
+    "Estimated_Depth_AlternateVariant": "None",
+    "Estimated_Depth_Variant_ActiveRegion": "None",
+    "Depth_Score": "None",
+    "Confidence": "Negative",
+}
+
+#: Script and style bodies, which are not text the reader sees.
+_SCRIPT_OR_STYLE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+
+#: Any tag.
+_TAG = re.compile(r"<[^>]+>")
+
+
+def visible_text(html: str) -> str:
+    """Return what the report says, with its markup removed.
+
+    The defect this file's empty-state cases describe is a *reading*: the cells
+    ``None None None None None None None None NaN Negative`` under a heading
+    claiming to list identified variants. Asserting that against the raw HTML is
+    vacuous - every cell is separated by tags - so the tags come out first.
+
+    Args:
+        html: The rendered report.
+
+    Returns:
+        str: The document's text, whitespace collapsed.
+    """
+    return " ".join(_TAG.sub(" ", _SCRIPT_OR_STYLE.sub(" ", html)).split())
+
+
+def negative_summary(output_dir: Path) -> Path:
+    """Write a summary whose Kestrel step carries only the empty-result placeholder."""
+    write_summary(
+        output_dir,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [NEGATIVE_KESTREL_ROW]),
+        input_files={"bam": "NEG1.bam"},
+    )
+    return output_dir
+
+
+def test_a_negative_kestrel_run_renders_a_sentence_not_a_none_row(tmp_path) -> None:
+    """The commonest report in any cohort, and it read as a crashed pipeline.
+
+    ``output_empty_result`` writes the literal string ``"None"`` into all nine value
+    columns, and ``build_kestrel_frames`` coerced ``Depth_Score`` through
+    ``pd.to_numeric(errors="coerce")`` - so a negative sample's report tabulated
+    ``None None None None None None None None NaN Negative`` under the heading
+    "Kestrel Identified Variants".
+    """
+    text = visible_text(render(negative_summary(tmp_path)))
+
+    assert "None None" not in text, "the empty-result placeholder is still tabulated as a variant"
+    assert "NaN" not in text, "a coerced placeholder depth score is still displayed"
+    assert "No variant detected by Kestrel" in text
+
+
+def test_a_negative_kestrel_run_makes_no_row_count_claim(tmp_path) -> None:
+    """The count line says nothing was withheld; counting a non-result defeats it.
+
+    Rendered over the placeholder it read "Showing 1 of 1 Kestrel row; none flagged."
+    above a table containing no variant. The adVNTR side has always suppressed its
+    count line when it has no table, and this mirrors it.
+    """
+    html = render(negative_summary(tmp_path))
+
+    assert "Showing 1 of 1 Kestrel row" not in html
+    assert "Kestrel row" not in html, "a report with no Kestrel table still makes a Kestrel row-count claim"
+
+
+def test_an_absent_kestrel_step_does_not_emit_a_zero_column_table(tmp_path) -> None:
+    """``vntyper report`` renders a supplied summary, which need not have the step.
+
+    ``to_html`` on a frame with no columns produces a headerless, bodyless table -
+    a stray empty box beneath a heading. ``escaped_table_html`` returns "" for an
+    empty frame instead, which is the hook the authored sentence hangs on.
+    """
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]))
+
+    html = render(tmp_path)
+
+    assert 'id="kestrel_table"' not in html, "a report with no Kestrel step still emits an empty table"
+    assert '<tr style="text-align: right;">' not in html
+    assert "Kestrel genotyping was not performed" in visible_text(html)
+
+
+#: What ``record_step`` writes when a stage's result file is absent (#212). Built by
+#: calling the real recorder rather than by hand: the flag is the only structural
+#: evidence that "the step produced nothing" is not "the step found nothing", and a
+#: hand-written imitation of it would let the writer change shape without this noticing.
+_STEP_START = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).replace(tzinfo=None)
+_STEP_END = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc).replace(tzinfo=None)
+
+
+def unreadable_step(step_name: str, missing_result_file: Path) -> dict:
+    """Record one stage's step with a result file that does not exist, the way a run would.
+
+    Args:
+        step_name: One of the ``STEP_*`` constants.
+        missing_result_file: A path that is not there.
+
+    Returns:
+        dict: The step mapping ``record_step`` produced.
+    """
+    from vntyper.scripts.summary import record_step
+
+    summary: dict = {"steps": []}
+    record_step(summary, step_name, str(missing_result_file), "tsv", "the stage's command", _STEP_START, _STEP_END)
+    return summary["steps"][0]
+
+
+def unreadable_kestrel_step(missing_result_file: Path) -> dict:
+    """Record a Kestrel step whose result file does not exist, the way a run would."""
+    return unreadable_step(summary_steps.STEP_KESTREL, missing_result_file)
+
+
+def test_a_kestrel_result_file_that_is_missing_is_not_reported_as_a_negative(tmp_path) -> None:
+    """#212's other half, closed on the report side.
+
+    ``record_step`` flags the step ``result_file_missing`` because ``md5sum`` swallows
+    the ``FileNotFoundError`` and ``parse_tsv`` turns it into a comment and an empty
+    ``data`` list - which is exactly what a run that legitimately found nothing
+    produces. Nothing read that flag, so the report rendered the two identically; and
+    once the empty state was authored, the failure rendered as the *sentence* "No
+    variant detected by Kestrel in this sample."
+
+    A report that states a negative the run never established is the defect this whole
+    issue exists to remove, so the third state is rendered as its own.
+    """
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
-        tabular_step(summary_steps.STEP_KESTREL, [negative_row]),
+        unreadable_kestrel_step(tmp_path / "kestrel" / "kestrel_result.tsv"),
+        input_files={"bam": "NEG1.bam"},
     )
+
+    text = visible_text(render(tmp_path))
+
+    assert "No variant detected by Kestrel" not in text, "a step that produced nothing is reported as a negative"
+    assert "Kestrel genotyping was not performed" not in text, "the step did run; saying otherwise is a second claim"
+    assert "result file is missing or could not be read" in text
+    assert "this is not a negative" in text
+
+
+@pytest.mark.parametrize(
+    ("parsed_result", "case"),
+    [
+        (None, "record_step's initial value, left in place when parsing never ran"),
+        ({"error": "Error parsing file: boom"}, "record_step's parse-failure shape"),
+        ({"error": "Unsupported file type for result parsing: bed"}, "record_step's unsupported-type shape"),
+    ],
+    ids=["null", "parse-error", "unsupported-type"],
+)
+def test_a_kestrel_step_that_could_not_be_read_is_not_reported_as_a_negative(
+    tmp_path, parsed_result, case: str
+) -> None:
+    """Every shape ``record_step`` can leave behind when it did not get a result.
+
+    The missing-file flag is the common one; these are the others, and each is
+    recognised structurally rather than by the wording of a message.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        {"step": summary_steps.STEP_KESTREL, "parsed_result": parsed_result},
+    )
+
+    text = visible_text(render(tmp_path))
+
+    assert "No variant detected by Kestrel" not in text, f"{case} is reported as a negative"
+    assert "result file is missing or could not be read" in text
+
+
+def test_the_three_kestrel_states_do_not_read_alike(tmp_path) -> None:
+    """Ran and called nothing, did not run, could not be read: three facts, three states.
+
+    This is the same distinction #223 drew for an unreadable derived VCF and the one
+    ``screening_summary.NOT_PERFORMED`` draws for adVNTR: a stage that was never asked
+    to run has said nothing, a stage whose result could not be read has said nothing
+    either, and a report that renders either as a negative is asserting something the
+    run never established.
+
+    Each sentence is checked against *both* of the others, so collapsing any two of the
+    three back into one fails here rather than passing quietly.
+    """
+    states = {}
+    for name in ("ran", "absent", "unreadable"):
+        directory = tmp_path / name
+        directory.mkdir()
+        states[name] = directory
+    negative_summary(states["ran"])
+    write_summary(states["absent"], tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]))
+    write_summary(
+        states["unreadable"],
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        unreadable_kestrel_step(tmp_path / "gone.tsv"),
+    )
+
+    sentences = {
+        "ran": "No variant detected by Kestrel",
+        "absent": "Kestrel genotyping was not performed",
+        "unreadable": "result file is missing or could not be read",
+    }
+    rendered = {name: visible_text(render(directory)) for name, directory in states.items()}
+
+    for name, text in rendered.items():
+        assert sentences[name] in text, f"the {name} state does not say so"
+        for other, sentence in sentences.items():
+            if other != name:
+                assert sentence not in text, f"the {name} state also reads as the {other} state"
+
+
+def test_suppressing_the_placeholder_leaves_the_screening_state_alone(tmp_path) -> None:
+    """The state is computed from the rows, and a non-result was never one.
+
+    With the placeholder in the frame every configured Kestrel rule broke on its
+    ``Confidence`` condition and the block's ``default`` - "negative" - was returned;
+    an empty frame returns the same default by the shortest path in
+    ``compute_algorithm_result``. This pins that the two agree, so removing the row
+    from the table cannot move the screening verdict.
+    """
+    html = render(negative_summary(tmp_path))
+
+    assert 'data-state="no-finding"' in html
+    assert "Kestrel: negative" in visible_text(html)
+
+
+def test_a_row_that_names_a_variant_is_never_suppressed(tmp_path) -> None:
+    """Adversarial: a real call whose ``Confidence`` happens to be the placeholder token.
+
+    Suppression keys on the whole row being empty, not on one cell. A rule reading
+    ``Confidence == "Negative"`` alone would delete this variant from the report.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Confidence": "Negative"}]),
+    )
+
     html = render(tmp_path)
-    assert "Negative" in html
+
+    assert 'id="kestrel_table"' in html, "a row naming a position, a REF and an ALT was suppressed"
+    assert ">67</td>" in html
+    assert "Showing 1 of 1 Kestrel row; none flagged." in html
+
+
+def test_a_negative_run_still_names_its_sample_and_its_coverage(tmp_path) -> None:
+    """The empty state replaces the table, not the report.
+
+    A negative run is the commonest one in a cohort, so everything that makes the
+    file a record - who it is about, what was measured - has to survive the branch.
+    """
+    html = render(negative_summary(tmp_path))
+
+    assert '<h1><i class="gene">MUC1</i> VNTR report — NEG1</h1>' in html
+    assert _coverage_qc_cell(html) == "PASS"
 
 
 def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -> None:
-    """A formatting conversion failure keeps matching evidence and escaped display data."""
+    """A formatting conversion failure keeps matching evidence and display data.
+
+    The display frame carries the sample's own string **unescaped** here, and that is
+    deliberate: since the table is rendered through ``escaped_table_html`` the escaping
+    happens once, at render time, over every column not named in ``html_columns``.
+    Escaping here as well would double-escape it, so a motif sequence containing a ``<``
+    would reach the reader as the literal text ``&lt;``. What must stay true is that
+    nothing sample-derived reaches the HTML unescaped, which is asserted end to end by
+    ``test_every_kestrel_cell_but_the_two_we_build_is_escaped``.
+    """
     monkeypatch.setattr(generate_report.pd, "to_numeric", Mock(side_effect=ValueError("bad depth")))
     caplog.set_level(logging.WARNING, logger=generate_report.logger.name)
     caplog.clear()
@@ -313,8 +688,10 @@ def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -
     assert len(display_frame) == len(matching_frame) == 1
     assert matching_frame.loc[0, "Confidence"] == "High_Precision"
     assert matching_frame.loc[0, "Motif Sequence"] == "<untrusted>"
-    assert display_frame.loc[0, "Confidence"] == '<span style="color:red;font-weight:bold;">High_Precision</span>'
-    assert display_frame.loc[0, "Motif Sequence"] == "&lt;untrusted&gt;"
+    assert display_frame.loc[0, "Confidence"] == (
+        '<span class="confidence confidence-high-precision">High_Precision</span>'
+    )
+    assert display_frame.loc[0, "Motif Sequence"] == "<untrusted>"
     assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
         (logging.WARNING, "Could not convert 'Depth Score' to numeric: bad depth")
     ]
@@ -325,13 +702,109 @@ def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -
 # ---------------------------------------------------------------------------
 
 
-def summary_box_classes(html: str) -> str:
-    """Return the class attribute of the screening summary box."""
-    import re
+def provenance_region(html: str) -> str:
+    """The report from the ``Run provenance`` heading to the end of the document.
 
-    match = re.search(r'<p class="(summary-box[^"]*)"', html)
-    assert match, "the screening summary box is missing from the report"
+    The raw-state line ("Kestrel: negative . adVNTR: not performed . Coverage QC: PASS")
+    is rendered here rather than in the masthead: beside the state chips it printed the
+    same four facts twice over, once in words and once in the pipeline's own tokens.
+    Nothing about the line changed except which section it is filed in, and it is filed
+    with the schema version and the library digest it belongs beside.
+
+    Args:
+        html: The rendered report.
+
+    Returns:
+        str: The provenance section and everything after it.
+    """
+    marker = 'id="run-provenance"'
+    assert marker in html, "the report has no run-provenance section"
+    return html[html.index(marker) :]
+
+
+def masthead(html: str) -> str:
+    """The masthead element and everything in it."""
+    match = re.search(r'<header class="masthead"[^>]*>(.*?)</header>', html, re.DOTALL)
+    assert match, "the masthead is missing from the report"
     return match.group(1)
+
+
+def masthead_state(html: str) -> str:
+    """The computed screening state the masthead is drawn in."""
+    match = re.search(r'<header class="masthead"[^>]*\bdata-state="([^"]*)"', html, re.DOTALL)
+    assert match, "the masthead carries no computed state"
+    return match.group(1)
+
+
+def chip_value(html: str, label: str) -> str:
+    """The value of one masthead chip, by its label.
+
+    Args:
+        html: The rendered report.
+        label: The chip's visible label.
+
+    Returns:
+        str: The chip's visible value.
+    """
+    pattern = rf'<span class="chip-label">{re.escape(label)}</span>\s*<span class="chip-value">(.*?)</span>'
+    match = re.search(pattern, masthead(html), re.DOTALL)
+    assert match, f"the masthead has no {label!r} chip"
+    return " ".join(match.group(1).split())
+
+
+def chip_tone(html: str, label: str) -> str:
+    """The tone of one masthead chip, selected by its visible label.
+
+    Args:
+        html: The rendered report.
+        label: The chip's visible label.
+
+    Returns:
+        str: The chip's ``data-tone`` value.
+    """
+    pattern = rf'<li class="chip" data-tone="\s*([^"\s]+)">\s*<span class="chip-label">{re.escape(label)}</span>'
+    match = re.search(pattern, masthead(html), re.DOTALL)
+    assert match, f"the masthead has no {label!r} chip with a tone"
+    return match.group(1)
+
+
+def chip_labels(html: str) -> list[str]:
+    """Every chip label in the masthead, in scan order."""
+    return re.findall(r'<span class="chip-label">(.*?)</span>', masthead(html), re.DOTALL)
+
+
+def identity_value(html: str, term: str) -> str:
+    """The value of one masthead identity pair, by its term.
+
+    Args:
+        html: The rendered report.
+        term: The ``<dt>``'s text.
+
+    Returns:
+        str: The paired ``<dd>``'s visible text, whitespace collapsed.
+    """
+    match = re.search(rf"<dt>{re.escape(term)}</dt>\s*<dd[^>]*>(.*?)</dd>", masthead(html), re.DOTALL)
+    assert match, f"the identity strip has no {term!r}"
+    return " ".join(_TAG.sub(" ", match.group(1)).split())
+
+
+def screening_message(html: str) -> str:
+    """The configured screening message as the reader gets it, markup removed.
+
+    Read from the document rather than from the context, because the whole point of
+    withholding it is that the *reader* must not be shown a sentence chosen for a state
+    the run never reached. The parts are rejoined with a space: they are separate
+    elements now, and what is asserted is the wording, not the element boundaries.
+
+    Args:
+        html: The rendered report.
+
+    Returns:
+        str: The message's visible text, whitespace collapsed.
+    """
+    parts = re.findall(r'<p class="(?:headline|detail)">(.*?)</p>', masthead(html), re.DOTALL)
+    assert parts, "the screening message is missing from the masthead"
+    return " ".join(" ".join(_TAG.sub(" ", part).split()) for part in parts)
 
 
 def test_a_negative_screening_is_not_styled_as_a_finding(tmp_path) -> None:
@@ -347,13 +820,15 @@ def test_a_negative_screening_is_not_styled_as_a_finding(tmp_path) -> None:
         tabular_step(summary_steps.STEP_ADVNTR, []),
     )
     html = render(tmp_path)
-    assert "No variant detected by either genotyping method" in html
-    assert "summary-positive" not in summary_box_classes(html)
+    assert "No variant detected by either genotyping method" in screening_message(html)
+    assert masthead_state(html) == "no-finding"
 
 
 def test_a_positive_screening_is_styled_as_a_finding(positive_summary) -> None:
+    """The masthead is where the state is now, and `data-state` is the whole of it:
+    the state selects a colour, and no report renders the word."""
     html = render(positive_summary)
-    assert "summary-positive" in summary_box_classes(html)
+    assert masthead_state(html) == "finding"
 
 
 def test_an_advntr_only_finding_is_styled_as_a_finding(tmp_path) -> None:
@@ -365,23 +840,321 @@ def test_an_advntr_only_finding_is_styled_as_a_finding(tmp_path) -> None:
         tabular_step(summary_steps.STEP_KESTREL, []),
         tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
     )
-    assert "summary-positive" in summary_box_classes(render(tmp_path))
+    assert masthead_state(render(tmp_path)) == "finding"
 
 
 def test_a_run_with_no_results_at_all_is_not_styled_as_a_finding(tmp_path) -> None:
-    """No pipeline summary: Kestrel negative, adVNTR never run. Its configured
-    message is "No variant detected." -- which also lacks the giveaway word, so
-    an empty run rendered as a finding too."""
-    assert "summary-positive" not in summary_box_classes(render(tmp_path))
+    """No pipeline summary at all. This used to render the configured message for a
+    Kestrel negative -- "No variant detected." -- which is a claim about a sample no
+    stage in this run ever looked at."""
+    html = render(tmp_path)
+
+    assert masthead_state(html) != "finding"
+    assert screening_message(html) == "No summary available."
+
+
+def test_the_screening_state_reaches_the_report(positive_summary) -> None:
+    """I2: the computed screening state must reach the template, not just `is_positive`.
+
+    `positive_summary` is Kestrel-High_Precision, adVNTR-absent, well-covered -- so
+    this also pins the exact provenance line's wording for the common case.
+    """
+    html = render(positive_summary)
+    assert masthead_state(html) == "finding"
+    assert "Kestrel: High_Precision" in html
+    assert "adVNTR: not performed" in html
+    assert "Coverage QC: PASS" in html
+
+
+def test_a_negative_screening_state_carries_the_no_finding_state(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, []),
+        tabular_step(summary_steps.STEP_ADVNTR, []),
+    )
+    html = render(tmp_path)
+    assert masthead_state(html) == "no-finding"
+    assert "Kestrel: negative" in html
+    assert "adVNTR: negative" in html
+
+
+# ---------------------------------------------------------------------------
+# The masthead -- the state, and never a word for it
+# ---------------------------------------------------------------------------
+
+
+#: One summary per emphasis, and each is chosen rather than convenient. The negative
+#: assertion below is on *rendered text*, and one of the forty configured messages
+#: legitimately contains the word "finding" ("validate the finding using orthogonal
+#: methods", the High_Precision_flagged/none/pass rule) -- so the states are reached
+#: through summaries whose configured message does not, and the fixture check below
+#: fails if a future config edit changes that.
+def _summary_for(emphasis: str, tmp_path: Path) -> Path:
+    """Write a pipeline summary that computes the requested emphasis."""
+    steps = [tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW])]
+    if emphasis == "finding":
+        steps.append(tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    elif emphasis == "no-finding":
+        steps.append(tabular_step(summary_steps.STEP_KESTREL, []))
+        steps.append(tabular_step(summary_steps.STEP_ADVNTR, []))
+    else:
+        steps.append(unreadable_kestrel_step(tmp_path / "gone.tsv"))
+    write_summary(tmp_path, *steps, input_files={"bam": "S1.bam"})
+    return tmp_path
+
+
+@pytest.mark.parametrize("emphasis", ["finding", "no-finding", "indeterminate"])
+def test_emphasis_sets_the_masthead_state_attribute(tmp_path, emphasis) -> None:
+    assert masthead_state(render(_summary_for(emphasis, tmp_path))) == emphasis
+
+
+@pytest.mark.parametrize("emphasis", ["finding", "no-finding", "indeterminate"])
+def test_no_state_word_is_ever_rendered_as_text(tmp_path, emphasis) -> None:
+    """P1 resolved against creating a verdict word, so the negative test is the one
+    that matters. `finding`, `no-finding` and `indeterminate` select a colour and
+    nothing else; every word on screen is existing pipeline or configured vocabulary.
+
+    Asserted on extracted visible text rather than on the source, because `data-state`
+    puts all three words in the markup and would make a source assertion pass for the
+    wrong reason.
+    """
+    text = visible_text(render(_summary_for(emphasis, tmp_path))).lower()
+
+    for word in ("finding", "no-finding", "indeterminate"):
+        assert word not in text, f"the report renders the state word {word!r} to the reader"
+
+
+def test_the_masthead_leads_with_identity_then_state_then_the_message(positive_summary) -> None:
+    """Scan order, asserted as document order: who this is about, then the sentence the
+    configuration wrote, then what the run named, with the computed state beside them.
+
+    The chips moved *after* the sentence in the source and beside it on the screen. They
+    are the right-hand column of a two-column masthead: a column of sentences capped at a
+    readable measure left half of a 1,132px panel empty while the chips used a third of
+    theirs, so the two were stacked in a wide box rather than laid out in one. Source
+    order still leads with identity, and a reader with no CSS - or a screen reader
+    walking the document - gets identity, verdict, allele, then state.
+    """
+    block = masthead(render(positive_summary))
+
+    assert block.index('class="identity"') < block.index('class="headline"') < block.index('class="chips"')
+
+
+def test_the_identity_strip_keeps_each_label_with_its_value(positive_summary) -> None:
+    """Each pair is one flex item. With `display: contents` on the list every `dt` and
+    `dd` becomes an independent item and pairs split across line breaks -- measured, it
+    stranded REGION at the right edge at 1280px and shattered the strip at 390px."""
+    block = masthead(render(positive_summary))
+
+    pairs = re.findall(r"<div>\s*<dt>(.*?)</dt>\s*<dd[^>]*>", block, re.DOTALL)
+    assert pairs == ["Sample", "Assay", "Assembly", "Region"]
+    # The mechanism, not the absence of the alternative: a rule banning the string
+    # `display: contents` would fail on the stylesheet comment that explains why it is
+    # not used, which rewards deleting the explanation.
+    rules = _style_blocks((TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8"))
+    assert re.search(r"\.identity\s*>\s*div\s*\{[^}]*display:\s*flex", "\n".join(rules)), (
+        "each identity pair must be one flex item of its own"
+    )
+
+
+def test_the_identity_strip_names_the_sample_the_assay_and_the_coordinates(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        input_files={"bam": "S1.bam"},
+        reference_assembly_requested="hg19",
+        region_resolved="chr1:155184000-155194000",
+    )
+
+    html = render(tmp_path)
+
+    assert identity_value(html, "Sample") == "S1"
+    assert identity_value(html, "Assay") == "MUC1 coding VNTR genotyping"
+    assert identity_value(html, "Assembly") == "hg19"
+    assert identity_value(html, "Region") == "chr1:155,184,000-155,194,000"
+
+
+def test_a_provenance_value_the_run_did_not_record_is_drawn_as_absent(tmp_path) -> None:
+    """It says so in words either way; this is what stops it being *drawn* like a
+    recorded value, which is the difference between a fact and a blank."""
+    write_summary(tmp_path, input_files={"bam": "S1.bam"})
+
+    block = masthead(render(tmp_path))
+
+    assert block.count('class="unrecorded"') == 2, "assembly and region were both unrecorded here"
+    assert identity_value(render(tmp_path), "Assembly") == "not recorded by this run"
+
+
+def test_the_state_reaches_the_chip_row(positive_summary) -> None:
+    html = render(positive_summary)
+
+    # The two depth figures are chips as well. "How confident should I be" is the third
+    # question this report is opened with, and answering it used to mean holding a depth
+    # score from the table and two coverage figures from a section 250px below it.
+    assert chip_labels(html) == [
+        "Kestrel",
+        "adVNTR",
+        "Concordance",
+        "Coverage QC",
+        "Mean coverage",
+        "Flank depth",
+    ]
+    assert chip_value(html, "Kestrel") == "High precision"
+    assert chip_value(html, "Coverage QC") == "PASS"
+
+
+def test_an_unperformed_stage_does_not_render_as_negative(positive_summary) -> None:
+    """`positive_summary` has no adVNTR step at all."""
+    html = render(positive_summary)
+
+    assert chip_value(html, "adVNTR") == "Not performed"
+    assert "Negative" not in chip_value(html, "adVNTR")
+
+
+def test_concordance_is_not_assessable_when_one_stage_did_not_run(positive_summary) -> None:
+    """A result cannot agree or disagree with an absence."""
+    assert chip_value(render(positive_summary), "Concordance") == "Not assessable"
+
+
+def test_a_cross_match_hit_reaches_the_concordance_chip(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
+        tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "Yes"}]),
+    )
+
+    assert chip_value(render(tmp_path), "Concordance") == "Match"
+
+
+def test_the_coverage_gate_is_chipped_as_unevaluated_rather_than_passing(tmp_path) -> None:
+    """`quality_metrics_pass` stays True for a run with no coverage step - the screening
+    axis is deliberately unchanged by #172 - so the chip would otherwise be painted as a
+    pass beside a verdict saying the gate was never evaluated."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "Coverage QC") == "NOT_EVALUATED"
+    assert chip_tone(html, "Coverage QC") == "none"
+
+
+def test_a_failing_coverage_gate_is_chipped_as_a_caution(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 3.0}]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "Coverage QC") == "FAIL"
+    assert re.search(r'<li class="chip" data-tone="\s*caution">\s*<span class="chip-label">Coverage QC', html)
+
+
+def test_a_state_with_no_configured_rule_says_so_in_the_chip_row(tmp_path, monkeypatch) -> None:
+    """`matched_rule` is False only when the configuration has no message for the
+    computed state. The message the reader then sees is a fallback, and the chip row is
+    where that is said - otherwise a broken configuration renders as an ordinary report.
+    """
+    config = generate_report.load_report_config()
+    monkeypatch.setattr(generate_report, "load_report_config", lambda: {**config, "screening_summary_rules": []})
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "Screening rule") == "Not configured"
+    assert masthead_state(html) == "indeterminate"
+    assert screening_message(html) == "No summary available."
+
+
+def test_an_ordinary_report_carries_no_screening_rule_chip(positive_summary) -> None:
+    """Guard the guard: the chip is conditional, so it costs a healthy report nothing."""
+    assert "Screening rule" not in chip_labels(render(positive_summary))
+
+
+def test_the_research_use_statement_is_on_screen(positive_summary) -> None:
+    """It printed and did not display, so the one statement about what this artefact may
+    be used for was missing from the copy people actually read."""
+    from vntyper.scripts.report_identity import RESEARCH_USE_STATEMENT
+
+    block = masthead(render(positive_summary))
+
+    # It shares one block with the BAM-header warning: two things this report must say
+    # that are neither a result nor evidence, in one treatment rather than a grey box
+    # inside the masthead and a red box outside it.
+    assert 'class="notices"' in block
+    assert RESEARCH_USE_STATEMENT in block
+
+
+def test_the_configured_message_is_rendered_as_the_parts_it_was_authored_in(positive_summary) -> None:
+    """Each part is its own autoescaped element, so the message needs no `|safe` to get
+    its line breaks -- which is what used to exempt the whole sentence from escaping."""
+    block = masthead(render(positive_summary))
+
+    assert block.count('<p class="detail">') == 2
+    assert "<br>" not in block
+    assert screening_message(render(positive_summary)) == (
+        "Kestrel detected a high-precision pathogenic variant. "
+        "Note: adVNTR genotyping was not performed. "
+        "It is recommended to perform adVNTR and validate the result using orthogonal methods "
+        "(e.g., SNaPshot, long‐read sequencing)."
+    )
+
+
+def test_every_configured_message_survives_the_split_into_the_report(tmp_path) -> None:
+    """The round trip, end to end rather than against the config: what the reader gets is
+    the configured message with its separators turned into element boundaries."""
+    from vntyper.scripts.screening_summary import load_report_config, render_segments
+
+    rules = load_report_config()["screening_summary_rules"]
+    rule = next(
+        r
+        for r in rules
+        if r["conditions"]
+        == {"kestrel_result": "High_Precision", "advntr_result": "none", "quality_metrics_pass": True}
+    )
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    rendered = screening_message(render(tmp_path))
+
+    assert rendered == " ".join(render_segments(rule).split("<br>"))
+
+
+def test_the_provenance_line_never_prints_the_not_performed_token_raw(positive_summary) -> None:
+    """`advntr_result` is the literal `"none"` when the stage never ran -- distinct
+    from `"negative"`, which means it ran and found nothing. The provenance line must
+    render this as words a reader understands, not the raw internal token."""
+    html = render(positive_summary)
+    # The line is in the run-provenance section now, not the masthead: beside the state
+    # chips it printed the same four facts twice, once in words and once in the
+    # pipeline's own tokens. It says exactly what it said before, one section lower.
+    assert "adVNTR: not performed" in visible_text(provenance_region(html))
+    assert "adVNTR: none" not in html
 
 
 def test_the_template_no_longer_decides_emphasis_from_the_message_text() -> None:
     """Pinned at the template, because the substring test is the kind of thing
-    that gets reintroduced by someone reading the rendered output."""
+    that gets reintroduced by someone reading the rendered output.
+
+    The screening box's own `summary_is_positive` boolean is gone: the masthead reads
+    the three-way `screening_state.emphasis` instead, which is the same computed state
+    with the case it could not express restored. The cross-match box still carries the
+    boolean, and it is still computed rather than read out of its sentence - which is
+    what keeps `summary-positive` in the file and this assertion non-vacuous.
+    """
     template = (TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8")
-    assert "summary-positive" in template, "the class vanished; this assertion would be vacuous"
     assert "'negative' not in summary_text" not in template
-    assert "summary_is_positive" in template
+    assert "screening_state.emphasis" in template
+    # The cross-match box is gone from the shipped template, so the boolean it carried is
+    # no longer read here. It is not gone from the *contract*: `cross_match_is_positive`
+    # is still computed and still passed for configured templates, and it is recorded in
+    # `report_context_contract.DEPRECATED_KEYS` rather than dropped silently. What
+    # replaced the box is the `Concordance` chip built from the same computed state -
+    # which is the point of this test, so it is asserted here.
+    assert "cross_match_is_positive" in report_context_contract.DEPRECATED_KEYS
+    assert "cross_match_message" in report_context_contract.DEPRECATED_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +1164,215 @@ def test_the_template_no_longer_decides_emphasis_from_the_message_text() -> None
 
 def test_an_absent_advntr_step_says_it_was_not_performed(positive_summary) -> None:
     assert "adVNTR genotyping was not performed." in render(positive_summary)
+
+
+def test_the_advntr_not_performed_state_is_worded_once(positive_summary) -> None:
+    """One state, one sentence - and it is the template's.
+
+    ``generate_summary_report`` also built ``<p>adVNTR genotyping was not performed.</p>``
+    for this state, which the template's ``{% if advntr_available and advntr_highlight %}``
+    can never reach: when adVNTR is unavailable the guard is false and the branch
+    below that guard prints its own line. Two sentences for one state, one of them
+    unreachable. This counts what the reader actually gets.
+
+    The section's wording is no longer the disjunction "was not performed **or** no adVNTR
+    results are available": that covered three different facts with one hedge, and one of
+    the three was a stage that ran and lost its result.
+    """
+    text = visible_text(render(positive_summary))
+
+    assert "adVNTR genotyping was not performed for this sample." in text
+    assert "or no adVNTR results are available" not in text, "one sentence per state, and no hedging between them"
+    assert text.count("adVNTR genotyping was not performed") == 2, (
+        "the report should say this exactly twice - once in the configured screening message and once "
+        f"in the adVNTR section - and says it {text.count('adVNTR genotyping was not performed')} times"
+    )
+
+
+#: A row each stage calls, so "called" is a state with evidence in it.
+STAGE_ROWS: dict[str, list[dict]] = {
+    summary_steps.STEP_KESTREL: [KESTREL_ROW],
+    summary_steps.STEP_ADVNTR: [{"VID": "25561", "Flag": "Not flagged"}],
+}
+
+
+def _stage_step(step_name: str, execution: str, tmp_path: Path) -> dict | None:
+    """Build one stage's summary step in the requested execution state.
+
+    The four states are how a ``pipeline_summary.json`` records a stage, and the last two
+    are the whole of the Gate B defect: ``record_step`` writes a step whether or not the
+    result file exists (#212), so a stage that ran and lost its result leaves exactly the
+    shape a stage that genotyped and called nothing leaves. The failed one is produced by
+    the real recorder rather than by hand, so a change to what it writes is caught here.
+
+    Args:
+        step_name: The ``STEP_*`` constant naming the stage.
+        execution: ``called``, ``empty``, ``absent`` or ``failed``.
+        tmp_path: Where the missing result file would have been.
+
+    Returns:
+        dict | None: The step mapping, or None when the stage never ran.
+    """
+    if execution == "called":
+        return tabular_step(step_name, STAGE_ROWS[step_name])
+    if execution == "empty":
+        return tabular_step(step_name, [])
+    if execution == "absent":
+        return None
+    return unreadable_step(step_name, tmp_path / "gone" / "result.tsv")
+
+
+#: What the report must say about each stage in each execution state. The matrix reads all
+#: four surfaces from one document: stage section, provenance line, masthead headline and
+#: chip row. Only ``empty`` may read as a negative - that is the one state in which the
+#: stage established one.
+NEGATIVE_SENTENCE = {"Kestrel": "No variant detected by Kestrel", "adVNTR": "No pathogenic variants"}
+
+STAGE_EXECUTIONS: dict[str, dict[str, Any]] = {
+    "called": {
+        "provenance": None,
+        "section": None,
+        "chip": {"Kestrel": "High precision", "adVNTR": "Positive"},
+        "reads_as_a_negative": False,
+    },
+    "empty": {
+        "provenance": None,
+        "section": {"Kestrel": "No variant detected by Kestrel in this sample.", "adVNTR": "No pathogenic variants"},
+        "chip": {"Kestrel": "Negative", "adVNTR": "Negative"},
+        "reads_as_a_negative": True,
+    },
+    "absent": {
+        "provenance": "not performed",
+        "section": {"Kestrel": "Kestrel genotyping was not performed", "adVNTR": "adVNTR genotyping was not performed"},
+        "chip": {"Kestrel": "Not performed", "adVNTR": "Not performed"},
+        "reads_as_a_negative": False,
+    },
+    "failed": {
+        "provenance": "failed",
+        "section": {
+            "Kestrel": "Kestrel genotyping ran, but its result file is missing or could not be read",
+            "adVNTR": "adVNTR genotyping ran, but its result file is missing or could not be read",
+        },
+        "chip": {"Kestrel": "Not available", "adVNTR": "Not available"},
+        "reads_as_a_negative": False,
+    },
+}
+
+#: Which combinations leave the screening state unestablished, and therefore leave the
+#: rule-selected message unusable. It is not symmetric, and the asymmetry comes from the
+#: configuration rather than from a preference: ``advntr_result`` has a value for a stage
+#: that never ran (``none``, keyed on by ten of the forty rules), while ``kestrel_result``
+#: has none - an absent or unreadable Kestrel stage computes the block's ``default``,
+#: which is the same ``negative`` a stage that genotyped and called nothing produces.
+UNESTABLISHED_KESTREL = ("absent", "failed")
+UNESTABLISHED_ADVNTR = ("failed",)
+EXECUTION_ATTRIBUTE = {
+    "called": "performed",
+    "empty": "performed",
+    "absent": "not-performed",
+    "failed": "failed",
+}
+
+
+@pytest.mark.parametrize("kestrel_execution", list(STAGE_EXECUTIONS))
+@pytest.mark.parametrize("advntr_execution", list(STAGE_EXECUTIONS))
+def test_a_stage_that_established_nothing_is_never_reported_as_a_negative(
+    tmp_path, kestrel_execution, advntr_execution
+) -> None:
+    """Gate B's Critical, over the whole 4x4 matrix.
+
+    ``get_step_state`` distinguished the three states from the start, but its result
+    reached only the Kestrel *section*. The screening computation and the whole adVNTR
+    side asked merely whether the step was present, so an unreadable stage rendered as
+    "No variant detected."/"No pathogenic variants identified by adVNTR" and the
+    provenance line said ``negative``, while the Kestrel section immediately below said
+    "this is not a negative". One report, two contradictory statements.
+
+    Every surface is read out of one rendered document, so agreement between them is
+    what is asserted rather than each in isolation.
+    """
+    from vntyper.scripts.screening_summary import UNAVAILABLE_SUMMARY_MESSAGE
+
+    steps = [tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW])]
+    for step_name, execution in (
+        (summary_steps.STEP_KESTREL, kestrel_execution),
+        (summary_steps.STEP_ADVNTR, advntr_execution),
+    ):
+        step = _stage_step(step_name, execution, tmp_path)
+        if step is not None:
+            steps.append(step)
+    write_summary(tmp_path, *steps, input_files={"bam": "S1.bam"})
+
+    html = render(tmp_path)
+    text = visible_text(html)
+    established = kestrel_execution not in UNESTABLISHED_KESTREL and advntr_execution not in UNESTABLISHED_ADVNTR
+
+    masthead_tag = re.search(r'<header class="masthead"[^>]*>', html, re.DOTALL)
+    assert masthead_tag, "the report has no masthead opening tag"
+    tag = masthead_tag.group(0)
+    assert f'data-kestrel-execution="{EXECUTION_ATTRIBUTE[kestrel_execution]}"' in tag
+    assert f'data-advntr-execution="{EXECUTION_ATTRIBUTE[advntr_execution]}"' in tag
+
+    for label, execution in (("Kestrel", kestrel_execution), ("adVNTR", advntr_execution)):
+        expected = STAGE_EXECUTIONS[execution]
+        assert chip_value(html, label) == expected["chip"][label], (
+            f"the {label} chip does not state its {execution} execution state"
+        )
+        if expected["provenance"] is not None:
+            assert f"{label}: {expected['provenance']}" in text, (
+                f"the provenance line does not say {label} was {expected['provenance']!r}"
+            )
+        if expected["section"] is not None:
+            assert expected["section"][label] in text, f"the {label} section does not state its {execution} state"
+        if not expected["reads_as_a_negative"]:
+            assert NEGATIVE_SENTENCE[label] not in text, (
+                f"a {label} stage in the {execution!r} state still reads as {NEGATIVE_SENTENCE[label]!r}"
+            )
+
+    message = screening_message(html)
+    if established:
+        assert message != UNAVAILABLE_SUMMARY_MESSAGE, (
+            "the configured message is withheld from a run whose stages both reported"
+        )
+    else:
+        assert 'data-state="indeterminate"' in html, "a state one stage never established is not indeterminate"
+        assert message == UNAVAILABLE_SUMMARY_MESSAGE, (
+            f"the rule-selected message is still presented as authoritative: {message!r}"
+        )
+
+
+def test_concordance_is_not_assessable_without_two_performed_stages_even_if_cross_match_exists(tmp_path) -> None:
+    """The execution guard, isolated from the separate cross-match-availability guard."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "Yes"}]),
+    )
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "adVNTR") == "Not performed"
+    assert chip_value(html, "Concordance") == "Not assessable"
+
+
+def test_an_unreadable_advntr_step_says_so_rather_than_reporting_nothing_found(tmp_path) -> None:
+    """The third adVNTR state, in the section's own words.
+
+    The section had two branches for three facts, so the failure fell into the "not
+    performed or no results are available" disjunction - which is not what happened, and
+    which reads as an absence rather than as a stage that ran and lost its result.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        unreadable_step(summary_steps.STEP_ADVNTR, tmp_path / "advntr" / "output_adVNTR_result.tsv"),
+    )
+
+    text = visible_text(render(tmp_path))
+
+    assert "adVNTR genotyping ran, but its result file is missing or could not be read" in text
+    assert "adVNTR genotyping was not performed" not in text, "the stage did run; saying otherwise is a second claim"
 
 
 def test_an_advntr_step_with_no_rows_says_nothing_was_found(tmp_path) -> None:
@@ -415,7 +1397,12 @@ def test_advntr_rows_are_tabulated(tmp_path) -> None:
     )
     html = render(tmp_path)
     assert "25561" in html
-    assert "<th>NumberOfSupportingReads</th>" in html
+    # `Supporting Reads`, not `NumberOfSupportingReads`. The adVNTR table used to print
+    # its dataframe identifiers verbatim directly beneath a Kestrel table whose headings
+    # were English, so the same eight nomenclature fields appeared under two different
+    # names in one document. `ADVNTR_DISPLAY_HEADINGS` renames the rendered copy only:
+    # `advntr_df` keeps the source names, because the screening rules match on them.
+    assert _has_heading(html, "Supporting Reads")
 
 
 # ---------------------------------------------------------------------------
@@ -439,8 +1426,9 @@ def test_a_cross_match_hit_is_reported(tmp_path) -> None:
     )
     html = render(tmp_path)
 
-    assert "At least one match was found" in html
-    assert "summary-positive" in _cross_match_paragraph(html)
+    # The sentence is no longer rendered; the `Concordance` chip is what the reader sees,
+    # and it is built in `screening_summary.state_chips` from the same computed boolean.
+    assert chip_value(html, "Concordance") == "Match"
 
 
 def test_a_cross_match_miss_is_not_styled_as_a_hit(tmp_path) -> None:
@@ -460,8 +1448,7 @@ def test_a_cross_match_miss_is_not_styled_as_a_hit(tmp_path) -> None:
     )
     html = render(tmp_path)
 
-    assert "No matches were found" in html
-    assert "summary-positive" not in _cross_match_paragraph(html)
+    assert chip_value(html, "Concordance") != "Match"
 
 
 @pytest.mark.parametrize(
@@ -524,7 +1511,11 @@ def test_the_igv_fragments_are_used_when_a_report_exists(positive_summary, monke
         "extract_igv_content",
         lambda path: ('<div id="container">panel</div>', '{"headers": ["a"], "rows": []}', '{"0": "blob:x"}'),
     )
-    monkeypatch.setattr(generate_report, "run_igv_report", lambda *a, **k: None)
+
+    def _write_igv_report(*args, **kwargs) -> None:
+        Path(args[3]).write_text("ignored", encoding="utf-8")
+
+    monkeypatch.setattr(generate_report, "run_igv_report", _write_igv_report)
 
     bed = positive_summary / "output.bed"
     bed.write_text("chr1\t1\t2\n", encoding="utf-8")
@@ -537,7 +1528,7 @@ def test_the_igv_fragments_are_used_when_a_report_exists(positive_summary, monke
 
 def test_igv_extraction_failure_returns_empty_fragment(monkeypatch, caplog) -> None:
     """An unreadable optional IGV page preserves its exact three-part fallback."""
-    monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable IGV")))
+    monkeypatch.setattr(Path, "read_text", Mock(side_effect=OSError("unreadable IGV")))
     caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
     caplog.clear()
 
@@ -691,6 +1682,149 @@ def test_a_malicious_flag_in_a_stored_summary_is_server_escaped(tmp_path) -> Non
     assert ESCAPED in html
 
 
+#: The adVNTR row the escaping checks below plant a payload into. Kept beside them
+#: rather than reused from the numeric section, so a change to the precision
+#: specimen cannot quietly change what the trust-boundary checks are testing.
+ADVNTR_ESCAPING_ROW = {
+    "VID": 25561,
+    "Variant": "I22_G_LEN1",
+    "NumberOfSupportingReads": 14,
+    "MeanCoverage": 98.5,
+    "Pvalue": 1e-09,
+    "RU": "CGCGG",
+    "POS": 67,
+    "REF": "G",
+    "ALT": "GG",
+    "Flag": "Not flagged",
+}
+
+#: Every adVNTR display column except the one exemption, derived from the display
+#: table so a column added later is covered without editing this list. These are the
+#: cells a widened ``html_columns`` would expose.
+ADVNTR_ESCAPED_COLUMNS = tuple(column for column in generate_report.ADVNTR_DISPLAY_COLUMNS if column != "Flag")
+
+
+def advntr_summary(tmp_path: Path, **overrides) -> Path:
+    """Write a summary whose adVNTR step carries one row with ``overrides`` applied."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{**ADVNTR_ESCAPING_ROW, **overrides}]),
+    )
+    return tmp_path
+
+
+def test_a_malicious_flag_in_an_advntr_row_is_server_escaped(tmp_path) -> None:
+    """The adVNTR table's one escaping exemption, planted against.
+
+    #242 moved this table from a blanket ``to_html(escape=True)`` to the same
+    per-column model the Kestrel table uses: ``escape=False`` for the whole table,
+    with ``escape_frame_cells`` escaping every cell except ``Flag``, whose markup
+    ``flag_html`` builds *and escapes* itself. The two halves have to stay together.
+
+    **The concrete state this catches**: drop or reorder the ``flag_html`` call in
+    ``generate_summary_report`` while ``html_columns=("Flag",)`` stays. Nothing
+    raises, the table still renders, every other test still passes - and a
+    sample-derived ``Flag`` reaches the HTML unescaped. That is this codebase's
+    signature failure mode: a silently wrong call, not a crash.
+    """
+    html = render(advntr_summary(tmp_path, Flag=PAYLOAD))
+
+    assert PAYLOAD not in html
+    assert ESCAPED in html
+
+
+@pytest.mark.parametrize("column", ADVNTR_ESCAPED_COLUMNS)
+def test_every_other_advntr_cell_is_escaped(tmp_path, column: str) -> None:
+    """The columns the exemption does *not* cover, including the numeric ones.
+
+    A payload in a numeric column is not absurd: the value comes out of a supplied
+    ``pipeline_summary.json``, the formatters pass a non-numeric value through
+    untouched by design, and the whole table is rendered with ``escape=False``. So
+    each of these is escaped only because it is *not* named in ``html_columns`` -
+    which is exactly what widening that tuple would undo.
+    """
+    html = render(advntr_summary(tmp_path, **{column: PAYLOAD}))
+
+    assert PAYLOAD not in html, f"an adVNTR {column} value reached the HTML unescaped"
+    assert ESCAPED in html
+
+
+def test_an_advntr_flagged_row_states_its_reason_in_the_table(tmp_path) -> None:
+    """The adVNTR flag cell is rendered server-side too, not just Kestrel's.
+
+    Both tables lost their client-side flag renderer in #242, so both have to gain
+    the server-side one; the escaping check above passes vacuously if this table
+    stopped carrying a flag cell at all.
+    """
+    from vntyper.scripts.report_formatting import FLAG_WARNING_GLYPH
+
+    html = render(advntr_summary(tmp_path, Flag="Low_Depth"))
+
+    assert FLAG_WARNING_GLYPH in html
+    assert "Low_Depth" in html
+
+
+#: Every Kestrel display column except the two whose markup VNtyper builds itself and
+#: the one whose value never survives to be escaped. Derived from the display table so
+#: a column added later is covered without editing this list.
+#:
+#: ``Depth_Score`` is excluded because ``build_kestrel_frames`` runs it through
+#: ``pd.to_numeric(errors="coerce")``, so a non-numeric value is NaN before it reaches
+#: any escaping at all - covered by
+#: ``test_a_payload_in_the_depth_score_is_coerced_rather_than_escaped``.
+KESTREL_ESCAPED_COLUMNS = tuple(
+    column for column in generate_report.KESTREL_DISPLAY_COLUMNS if column not in ("Confidence", "Flag", "Depth_Score")
+)
+
+
+@pytest.mark.parametrize("column", KESTREL_ESCAPED_COLUMNS)
+def test_every_kestrel_cell_but_the_two_we_build_is_escaped(tmp_path, column: str) -> None:
+    """The Kestrel table's escaping, asserted where it is observable.
+
+    The table is rendered with ``escape=False`` - the ``Confidence`` span and the
+    ``Flag`` cell are markup VNtyper builds - so every other cell is escaped only
+    because ``escaped_table_html`` escapes it. #242 routed this table through that
+    helper instead of calling ``to_html`` directly; before that the frame was escaped a
+    step earlier, in ``build_kestrel_frames``. Either arrangement is correct and only
+    one of them may be in force, because doing both renders ``&lt;`` to the reader as
+    text. This is the assertion that survives the choice.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, column: PAYLOAD}]),
+    )
+
+    html = render(tmp_path)
+
+    assert PAYLOAD not in html, f"a Kestrel {column} value reached the HTML unescaped"
+    assert ESCAPED in html
+    assert "&amp;lt;" not in html, "the Kestrel table is escaped twice, so the reader sees the escape sequence"
+
+
+def test_a_payload_in_the_depth_score_is_coerced_rather_than_escaped(tmp_path) -> None:
+    """The one Kestrel column whose value cannot reach the escaping at all.
+
+    ``build_kestrel_frames`` sorts on ``Depth Score`` and runs the column through
+    ``pd.to_numeric(errors="coerce")`` first, so anything that is not a number is NaN
+    before the table is built. Asserted rather than assumed: it is the reason that
+    column is left out of the parametrisation above, and if the coercion moved, the
+    exclusion would silently stop covering anything.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Depth_Score": PAYLOAD}]),
+    )
+
+    html = render(tmp_path)
+
+    assert PAYLOAD not in html
+    assert ESCAPED not in html, "the payload survived the coercion, so this column does need escaping"
+
+
 def test_an_unstyled_confidence_value_is_escaped(tmp_path) -> None:
     """The Confidence column is the one cell that legitimately carries markup.
     A value with no configured style used to pass through untouched."""
@@ -712,9 +1846,19 @@ def test_the_pipeline_log_is_escaped(positive_summary) -> None:
 
 def test_escaping_does_not_neuter_the_status_icons(positive_summary) -> None:
     """The icons are pre-built HTML fragments we construct ourselves. Turning
-    autoescaping on without marking them would print the span markup as text."""
+    autoescaping on without marking them would print the span markup as text.
+
+    The literal gained `role="img"` and a name in #242's accessibility pass: a bare
+    `&#10004;` is announced as its code point or skipped, so the `Status` column
+    read as empty to a screen reader while looking complete on screen. Its colour is
+    now a custom property, which resolves in an inline `style` exactly as it does in a
+    stylesheet - `green` was the only pair in either report that already met AA, and it
+    follows the dark and print palettes with everything else now.
+    """
     html = render(positive_summary)
-    assert '<span style="color:green;font-weight:bold;">&#10004;</span>' in html
+    assert (
+        '<span style="color:var(--state-ok);font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>'
+    ) in html
     assert "&lt;span style=" not in html
 
 
@@ -727,7 +1871,7 @@ def test_escaping_does_not_neuter_the_screening_message(positive_summary) -> Non
 def test_escaping_does_not_neuter_the_results_tables(positive_summary) -> None:
     html = render(positive_summary)
     assert 'id="kestrel_table"' in html
-    assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in html
+    assert '<span class="confidence confidence-high-precision">High_Precision</span>' in html
 
 
 def test_escaping_does_not_neuter_the_igv_script_block(positive_summary) -> None:
@@ -736,11 +1880,37 @@ def test_escaping_does_not_neuter_the_igv_script_block(positive_summary) -> None
 
 
 #: Every context value the template is allowed to interpolate unescaped, and why.
+#:
+#: This is the audit record of the report's trust model, so each entry has to say
+#: what is actually true of the value today. **Neither results table is escaped by
+#: pandas.** Both go out through ``to_html(escape=False)``, because both carry
+#: markup VNtyper built, and both therefore rely on ``escape_frame_cells`` having
+#: escaped every cell first *except* the columns named in ``html_columns``. That
+#: exemption is per column and each exempted column escapes its own value; widening
+#: ``html_columns`` is what would expose a sample's string, not editing this dict.
 SAFE_BY_DESIGN = {
-    "kestrel_highlight": "pandas table; its cells are escaped by escape_frame_cells",
-    "advntr_highlight": "pandas table rendered with escape=True, or a fixed <p>",
-    "summary_text": "a configured clinical message carrying <br> line breaks",
+    "kestrel_highlight": (
+        "pandas table rendered with escape=False; escape_frame_cells escapes every cell except "
+        "`Confidence` and `Flag`, whose markup confidence_html and flag_html build and escape themselves"
+    ),
+    "advntr_highlight": (
+        "pandas table rendered with escape=False through escaped_table_html; escape_frame_cells escapes "
+        'every cell except `Flag`, whose markup flag_html builds and escapes itself - and "" for every '
+        "state that is not a table, each of which the template words itself"
+    ),
+    # `summary_text` is deliberately absent, and its removal is the point: it was marked
+    # safe only so that the line-break separators inside a configured message would
+    # render, which exempted the whole sentence from escaping to get a line break. The
+    # message is now rendered as the ordered parts it was authored in, each one an
+    # autoescaped element of its own.
     "cross_match_message": "one of two fixed sentences built in generate_report",
+    # The columns the results table folds away, printed under it because a
+    # nineteen-column table does not fit A4. `folded_record_html` builds the whole
+    # fragment and puts every heading *and* every cell through `escape_html` on the way
+    # in - it is markup this codebase constructs, from values it escapes itself, which
+    # is the same warrant the two results tables above carry.
+    "kestrel_folded_record": "a <dl> per row built by folded_record_html, every label and value escaped there",
+    "advntr_folded_record": "a <dl> per row built by folded_record_html, every label and value escaped there",
     "table_json": "a JavaScript literal spliced out of the IGV report",
     "session_dictionary": "a JavaScript literal spliced out of the IGV report",
     "mean_vntr_coverage_icon": "an HTML fragment built by report_formatting",
@@ -749,6 +1919,13 @@ SAFE_BY_DESIGN = {
     "q20_icon": "an HTML fragment built by report_formatting",
     "q30_icon": "an HTML fragment built by report_formatting",
     "passed_filter_icon": "an HTML fragment built by report_formatting",
+    "print_running_header_css": (
+        "a complete @page rule built by report_identity.print_running_header_css; it is not HTML at all, "
+        "and HTML escaping would be the wrong defence for it - every value inside it has been through "
+        "css_escaping.css_string_literal, which escapes for the CSS string and for the raw text element a "
+        "<style> is. test_report_presentation.py pins that this is the only expression any stylesheet may "
+        "carry and that generate_report fills it from that builder and nothing else"
+    ),
 }
 
 
@@ -873,11 +2050,17 @@ def test_the_requested_and_effective_reference_sources_are_shown_as_different(tm
 
 def test_an_older_summary_without_reference_selection_fields_still_renders(positive_summary) -> None:
     """A summary written before this change (or one with no BWA reference at all, e.g.
-    a BAM-only run) simply omits the four fields; the section must not appear rather
-    than rendering empty labels."""
+    a BAM-only run) simply omits the four fields.
+
+    Three of them stay conditional: they name a *file* the run opened, and a
+    missing label is the honest rendering of a run that opened none. The fourth
+    moved into the provenance block, where an absent value is stated rather than
+    left blank - the requested assembly is what selects the region even for a run
+    that reads no reference, so its absence is itself a fact about the run (#242).
+    """
     html = render(positive_summary)
 
-    assert "Reference assembly requested" not in html
+    assert _labeled_value(html, "Reference assembly requested") == "not recorded by this run"
     assert "Reference key used" not in html
     assert "Reference path" not in html
     assert "Effective reference source" not in html
@@ -933,3 +2116,913 @@ def test_the_same_summary_recorded_by_this_version_is_taken_at_face_value(tmp_pa
     html = render(tmp_path)
 
     assert _coverage_qc_cell(html) == "PASS", "a current summary's mean is already region-wide"
+
+
+# ---------------------------------------------------------------------------
+# No per-sample result row is ever hidden - issue #242
+# ---------------------------------------------------------------------------
+
+PER_SAMPLE_TEMPLATE = TEMPLATE_DIR / "report_template.html"
+
+#: Constructs that take a row out of the reader's view. Deliberately shape-based
+#: rather than name-based: banning the literal `toggleFlagged` would be satisfied by
+#: renaming it. ``.remove(`` is matched only with empty parentheses, so
+#: ``classList.remove("selected")`` - which removes a class, not an element - does not
+#: register.
+_ROW_HIDING_VERB = re.compile(
+    r"""
+      removeChild\s*\(
+    | \.remove\s*\(\s*\)
+    | \.detach\s*\(
+    | \.hide\s*\(
+    | \.filter\s*\(
+    | style\.display\s*=\s*['"]\s*none
+    | classList\.add\s*\(\s*['"](?:d-none|hidden|invisible)
+    | setAttribute\s*\(\s*['"]hidden
+    | \.hidden\s*=\s*true
+    """,
+    re.VERBOSE,
+)
+
+#: Words that mean the surrounding statement is talking about a table row. A verb
+#: from the list above is only an offence when it is applied to one of these.
+_ROW_SUBJECT = re.compile(r"\b(?:tr|nTr|aoData|row|rows|tbody|dataIndex)\b", re.IGNORECASE)
+
+#: A CSS declaration block that makes its subject unreadable.
+_CSS_HIDES = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden")
+
+#: ``tr`` as an element selector - not as part of ``.tr-thing`` or ``#tr``.
+_CSS_ROW_SELECTOR = re.compile(r"(?<![\w.#-])tr(?![\w-])")
+
+
+def _style_blocks(source: str) -> list[str]:
+    """Return the contents of every ``<style>`` element."""
+    return re.findall(r"<style[^>]*>(.*?)</style>", source, re.DOTALL)
+
+
+def test_no_per_sample_result_row_enters_a_hiding_path() -> None:
+    """No construct in the per-sample template can take a results row off the page.
+
+    The defect issue #242 is named after is not that a flag is styled badly; it is
+    that the row the screening summary narrates is *removed from the DOM* by a
+    client-side DataTables predicate before the reader sees the table. This is the
+    invariant that stops it coming back under another name.
+
+    **What this can see.** Four shapes, over the template source text: the name of
+    every construct the *cohort* report uses to withhold a row, none of which may
+    appear here; a JavaScript statement pairing a removal or hiding verb with a word
+    meaning "row"; a CSS rule that hides ``tr``; and an inline style that hides one.
+
+    The cohort's names are the right list to check against because they are what a
+    future change would reach for: the two reports are edited together, the cohort
+    legitimately filters, searches and pages (precondition P4), and copying one of its
+    blocks across is the most likely way the per-sample report reacquires a control
+    that removes evidence. DataTables' ``ext.search`` predicate is still named, even
+    though DataTables itself is gone, because that is what the original defect was and
+    a re-added dependency would bring it back verbatim.
+
+    **What this cannot see.** It is a tripwire, not a behavioural test - the unit
+    tier has no JavaScript engine. It cannot evaluate an expression, so a hiding
+    call assembled from string fragments, spread across lines, or reached through an
+    alias (``var f = el.remove; f.call(row)``) escapes it, as does any construct
+    whose shape is not one of the four. ``tests/browser/test_flagged_rows.py``
+    measures the visible row count in a real browser and is what actually proves the
+    rows are there; this exists so that a *renamed* filter fails in the tier
+    everybody runs.
+    """
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "table.sortable" in source, (
+        "the per-sample template enhances no table at all, so it has no table behaviour for these "
+        "assertions to be about and they would pass vacuously"
+    )
+
+    # Every name the cohort report's withholding controls carry. None may appear here.
+    withholding = {
+        "ext.search": "a DataTables row-visibility predicate, which removes rows from the DOM",
+        "table-toolbar": "the cohort's search-and-page-size toolbar",
+        "table-pager": "the cohort's pager, which shows one page of rows and hides the rest",
+        "pageSize": "a page size, which is how paging hides every row past the first page",
+        'type = "search"': "a search box, which hides every row that does not match",
+        "toggleFlagged": "the cohort's show/hide-flagged switch",
+    }
+    present = sorted(f"{name} ({why})" for name, why in withholding.items() if name in source)
+    assert present == [], f"the per-sample template has acquired a control that withholds rows: {present}"
+
+    offenders = [
+        (number, line.strip())
+        for number, line in enumerate(source.splitlines(), start=1)
+        if _ROW_HIDING_VERB.search(line) and _ROW_SUBJECT.search(line)
+    ]
+    assert offenders == [], f"the per-sample template applies a hiding construct to a row: {offenders}"
+
+    hidden_rows = [
+        (selector.strip(), body.strip())
+        for block in _style_blocks(source)
+        for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", block)
+        if _CSS_ROW_SELECTOR.search(selector) and _CSS_HIDES.search(body)
+    ]
+    assert hidden_rows == [], f"the per-sample template hides table rows with CSS: {hidden_rows}"
+
+    inline = re.findall(r"<tr[^>]*style=\"[^\"]*(?:display\s*:\s*none|visibility\s*:\s*hidden)", source)
+    assert inline == [], f"the per-sample template hides a row with an inline style: {inline}"
+
+
+def test_the_flag_switch_highlights_rather_than_filters() -> None:
+    """P4: hiding flagged rows is defensible for cohort triage and indefensible for
+    a single-patient read, so the per-sample switch changes emphasis only."""
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'id="highlightFlagged"' in source
+    assert "Highlight flagged values" in source
+    assert "toggleFlagged" not in source, "the per-sample report no longer has a show/hide flagged switch"
+    assert "Show flagged values" not in source
+
+
+def test_the_highlight_switch_survives_a_script_that_never_loaded() -> None:
+    """The handler must not share a ``<script>`` element with the jQuery code.
+
+    A ``$`` that never resolved throws at the top of its block and takes every
+    statement after it down with it, so a handler appended to that block works only
+    for readers whose browser reached the CDN - which is the shape of defect this
+    whole change is removing.
+    """
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+    blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", source, re.DOTALL)
+
+    owning = [block for block in blocks if "highlightFlagged" in block]
+    assert len(owning) == 1, f"expected exactly one script block to handle the switch, found {len(owning)}"
+    assert "$(" not in owning[0], "the highlight handler shares its block with jQuery code that can throw first"
+
+
+def test_the_cohort_report_keeps_all_three_of_its_affordances() -> None:
+    """Scope boundary, pinned: this change is per-sample only (precondition P4).
+
+    Removing DataTables removed the *implementation* of the cohort's flag filter, its
+    search and its paging in one go. All three are reviewed behaviour for triage across
+    samples, so all three were reimplemented rather than quietly dropped, and this is
+    what says so - two of three would otherwise look like a complete job.
+    """
+    cohort = (TEMPLATE_DIR / "cohort_summary_template.html").read_text(encoding="utf-8")
+
+    assert "toggleFlagged" in cohort, "the cohort flag filter was removed; that is a separate, reviewed decision"
+    assert 'type = "search"' in cohort, "the cohort report lost its search box"
+    assert "state.pageSize" in cohort and "table-pager" in cohort, "the cohort report lost its paging"
+    assert "Showing " in cohort, "the cohort report no longer says how many rows its controls are withholding"
+
+
+# ---------------------------------------------------------------------------
+# Every displayed number is computed on the server - issue #242
+# ---------------------------------------------------------------------------
+
+ADVNTR_ROW = {
+    "VID": 25561,
+    "Variant": "I22_G_LEN1",
+    "NumberOfSupportingReads": 14,
+    "MeanCoverage": 98.5,
+    "Pvalue": 1e-09,
+    "RU": "CGCGG",
+    "POS": 67,
+    "REF": "G",
+    "ALT": "GG",
+    "Flag": "Not flagged",
+}
+
+#: A Kestrel row whose every numeric column discriminates between the rounding rules.
+PRECISE_KESTREL_ROW = {**KESTREL_ROW, "Depth_Score": 0.010012}
+
+
+def test_no_displayed_number_is_computed_in_the_browser() -> None:
+    """``applyRounding`` rewrote every numeric cell of every initialised table."""
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "applyRounding" not in source
+    assert "roundValue" not in source
+    assert "toFixed" not in source
+
+
+def test_the_reader_is_not_shown_a_row_count_the_browser_computed() -> None:
+    """DataTables' "Showing 1 to 3 of 3 entries" footer is a second, contradictory
+    count: it counted the rows left *after* the filter had removed the others, and it
+    only existed when the CDNs resolved.
+
+    The per-sample report states its count once, from Python, out of the frame it
+    rendered (``kestrel_row_summary``). Nothing in the browser may state another - the
+    cohort report does, and it is allowed to precisely because its controls withhold
+    rows on purpose and a reader there needs to be told how many.
+    """
+    source = PER_SAMPLE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "{{ kestrel_row_summary }}" in source, "the server-side count line is gone; this test would be vacuous"
+    scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", source, re.DOTALL)
+    assert scripts, "the per-sample report has no scripts at all; this test would be vacuous"
+
+    # Comments are stripped. The template names the footer it removed, verbatim, in a
+    # comment explaining why it is gone; scanning the prose would make an accurate
+    # comment fail the build and reward deleting it.
+    code = [re.sub(r"/\*.*?\*/|//[^\n]*", "", block, flags=re.DOTALL) for block in scripts]
+    counting = [block for block in code if "Showing " in block or "table-status" in block]
+    assert counting == [], "a script in the per-sample report writes its own row count"
+
+
+@pytest.fixture
+def both_tables(tmp_path):
+    """A run with both algorithms reporting, at discriminating precision."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [PRECISE_KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [ADVNTR_ROW]),
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("column", "displayed"),
+    [
+        ("POS", ">67<"),
+        ("Estimated_Depth_AlternateVariant", ">120<"),
+        ("Estimated_Depth_Variant_ActiveRegion", ">12000<"),
+        ("Depth_Score", ">0.010012<"),
+        ("VID", ">25561<"),
+        ("NumberOfSupportingReads", ">14<"),
+        ("MeanCoverage", ">98.50<"),
+        ("Pvalue", ">1e-09<"),
+    ],
+)
+def test_each_numeric_column_reaches_the_html_already_formatted(both_tables, column, displayed) -> None:
+    """The string the reader sees is in the file, not assembled by a script."""
+    assert displayed in render(both_tables), f"{column} is not rendered as {displayed!r}"
+
+
+def test_a_p_value_is_not_destroyed_by_rounding(both_tables) -> None:
+    """``parseFloat((1e-9).toFixed(4)).toString()`` is ``"0"``: the online report
+    displayed a highly significant adVNTR p-value as zero."""
+    html = render(both_tables)
+
+    assert ">0<" not in html.split("<h2>adVNTR Identified Variants</h2>")[1].split("</table>")[0]
+
+
+# ---------------------------------------------------------------------------
+# The flag cell says why - issue #242
+# ---------------------------------------------------------------------------
+
+
+def _kestrel_table(html: str) -> str:
+    """Return the Kestrel table's markup."""
+    start = html.index('id="kestrel_table"')
+    return html[start : html.index("</table>", start)]
+
+
+def test_a_flagged_row_states_its_reason_in_the_table(tmp_path) -> None:
+    """The reason used to live only in a Bootstrap ``title`` on a glyph, so it was
+    invisible in print, invisible to a screen reader and absent when jQuery failed."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Flag": "Low_Depth"}]),
+    )
+
+    from vntyper.scripts.report_formatting import FLAG_WARNING_GLYPH
+
+    table = _kestrel_table(render(tmp_path))
+
+    assert "Low_Depth" in table
+    assert FLAG_WARNING_GLYPH in table
+
+
+def test_an_unflagged_row_is_marked_as_clean(positive_summary) -> None:
+    from vntyper.scripts.report_formatting import FLAG_OK_GLYPH
+
+    table = _kestrel_table(render(positive_summary))
+
+    assert "Not flagged" in table
+    assert FLAG_OK_GLYPH in table
+
+
+def test_the_kestrel_table_states_how_many_rows_are_shown(tmp_path) -> None:
+    """Rendered in Python from the frame, so it cannot contradict the table."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(
+            summary_steps.STEP_KESTREL,
+            [KESTREL_ROW, {**KESTREL_ROW, "Motif": "6", "Flag": "Low_Depth", "Depth_Score": 0.008}],
+        ),
+    )
+
+    assert "Showing 2 of 2 Kestrel rows; 1 flagged." in render(tmp_path)
+
+
+def test_the_advntr_table_states_how_many_rows_are_shown(both_tables) -> None:
+    assert "Showing 1 of 1 adVNTR row; none flagged." in render(both_tables)
+
+
+def test_a_run_with_no_advntr_table_makes_no_advntr_count_claim(positive_summary) -> None:
+    assert "adVNTR row" not in render(positive_summary)
+
+
+# ---------------------------------------------------------------------------
+# The report identifies itself (#242)
+# ---------------------------------------------------------------------------
+
+#: The four shapes `resolve_pipeline_input` produces (`pipeline_inputs.py:162-170`).
+#: The template branched on two of them, so a CRAM run and a single-end FASTQ run
+#: rendered an empty `Input Files:` line.
+INPUT_SHAPES = [
+    {"cram": "S1.cram"},
+    {"fastq1": "S1.fq.gz"},
+    {"bam": "S1.bam"},
+    {"fastq1": "a.fq", "fastq2": "b.fq"},
+]
+
+
+def _provenance_block(html: str) -> str:
+    """The provenance section of the rendered report, and nothing else.
+
+    The extraction stops at the first ``</div>``, which is only the end of the
+    block while the block contains no nested ``<div>``. If one is ever added, this
+    would silently return a prefix and every negative assertion made against it -
+    ``"hg19" not in ...`` above all - would pass by looking at less and less of the
+    report. That is a guard quietly becoming a no-op, so it is checked rather than
+    assumed.
+
+    Args:
+        html: The rendered report.
+
+    Returns:
+        str: The markup between the block's opening tag and its closing ``</div>``.
+    """
+    start = html.index('id="provenance"')
+    end = html.index("</div>", start)
+    block = html[start:end]
+    assert "<div" not in block, (
+        "the provenance block now contains a nested <div>, so this extraction stops at the "
+        "inner closing tag; every negative assertion made against the block is now vacuous. "
+        "Parse the block properly rather than deleting this check."
+    )
+    return block
+
+
+@pytest.mark.parametrize("inputs", INPUT_SHAPES)
+def test_every_input_shape_names_its_files(tmp_path, inputs) -> None:
+    """A report that does not say what it was run on is not a record of anything."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        input_files=inputs,
+    )
+
+    listed = _labeled_value(render(tmp_path), "Input Files")
+
+    for name in inputs.values():
+        assert name in listed, f"{name!r} is missing from the Input Files line"
+
+
+def test_the_title_carries_the_sample_name(tmp_path) -> None:
+    write_summary(tmp_path, input_files={"cram": "S1.cram"})
+
+    assert "<title>MUC1 VNTR report — S1" in render(tmp_path)
+
+
+def test_the_heading_carries_the_sample_name(tmp_path) -> None:
+    """Two tabs and a printed page are all indistinguishable without this."""
+    write_summary(tmp_path, input_files={"cram": "S1.cram"})
+
+    assert '<h1><i class="gene">MUC1</i> VNTR report — S1</h1>' in render(tmp_path)
+
+
+def test_the_header_names_the_assay_and_the_version(tmp_path) -> None:
+    write_summary(tmp_path, input_files={"bam": "S1.bam"}, version="2.0.18")
+
+    html = render(tmp_path)
+
+    assert identity_value(html, "Assay") == "MUC1 coding VNTR genotyping"
+    assert identity_value(html, "Sample") == "S1"
+    assert _labeled_value(html, "VNtyper Version") == "2.0.18"
+
+
+def test_the_printed_header_line_names_the_run_and_its_use(tmp_path) -> None:
+    """The line at the head of the printed record, rendered end to end.
+
+    It is ``display: none`` on screen and the only identity a filed sheet carries, so
+    every field it states has to survive the render - and, like everything else in the
+    report, it is escaped rather than interpolated into the stylesheet (see
+    ``tests/unit/test_report_presentation.py::test_no_value_is_interpolated_into_a_stylesheet``).
+    """
+    from vntyper.scripts.report_identity import RESEARCH_USE_STATEMENT
+
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        input_files={"bam": "S1.bam"},
+        version="2.0.18",
+        reference_assembly_requested="hg19",
+    )
+
+    header = re.search(r'<div class="print-header">(.*?)</div>', render(tmp_path), re.DOTALL)
+
+    assert header, "the report has no printed header line"
+    line = " ".join(header.group(1).split())
+    for value in ("S1", "MUC1 coding VNTR genotyping", "hg19", "VNtyper 2.0.18", RESEARCH_USE_STATEMENT):
+        assert value in line, f"the printed header line does not state {value!r}: {line!r}"
+
+
+def test_an_explicit_sample_name_wins_over_the_input_files(tmp_path) -> None:
+    write_summary(tmp_path, input_files={"cram": "S1.cram"})
+
+    html = render(tmp_path, sample_name="PATIENT_042")
+
+    assert "<title>MUC1 VNTR report — PATIENT_042" in html
+    assert identity_value(html, "Sample") == "PATIENT_042"
+
+
+def test_the_report_uses_the_name_the_run_recorded_for_itself(tmp_path) -> None:
+    """`vntyper pipeline -s PATIENT_042 --bam foo.bam` labels Kestrel's outputs
+    and its VCF header `PATIENT_042`. Until the run recorded that name, the report
+    could not see it and titled itself `foo` -- one run, two identities, in the
+    artefact that gets forwarded."""
+    write_summary(
+        tmp_path,
+        input_files={"bam": "foo.bam"},
+        sample_name="PATIENT_042",
+        sample_name_is_explicit=True,
+    )
+
+    html = render(tmp_path)
+
+    assert "<title>MUC1 VNTR report — PATIENT_042</title>" in html
+    assert identity_value(html, "Sample") == "PATIENT_042"
+    # The file it ran on is still stated; the two are different facts.
+    assert _labeled_value(html, "Input Files") == "foo.bam"
+
+
+def test_an_explicit_sample_name_beats_the_one_the_run_recorded(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        input_files={"bam": "foo.bam"},
+        sample_name="PATIENT_042",
+        sample_name_is_explicit=True,
+    )
+
+    html = render(tmp_path, sample_name="RENAMED")
+
+    assert identity_value(html, "Sample") == "RENAMED"
+
+
+def test_a_name_the_operator_chose_is_printed_however_it_looks(tmp_path) -> None:
+    """The hole the placeholder heuristic opened, end to end.
+
+    `handle_pipeline` rejects any run without `--bam`/`--cram`/`--fastq1`, so a
+    recorded `"sample"` can only have come from an operator typing
+    `--sample-name sample`. Discarding it titled the report `patient42` from
+    `patient42.bam` -- the very one-run/two-identities defect the recorded name
+    exists to close.
+    """
+    write_summary(
+        tmp_path,
+        input_files={"bam": "patient42.bam"},
+        sample_name="sample",
+        sample_name_is_explicit=True,
+    )
+
+    assert identity_value(render(tmp_path), "Sample") == "sample"
+
+
+def test_a_name_the_cli_derived_from_a_fastq_finishes_being_derived(tmp_path) -> None:
+    """The other half, and the commonest input shape there is.
+
+    `cli_handlers` records `Path("S1_R1.fastq.gz").stem`, which is `S1_R1.fastq` --
+    a half-stripped file name, not a sample name. Preferring the recorded value
+    without knowing where it came from printed that on the report where the
+    documented rule says `S1`.
+    """
+    write_summary(
+        tmp_path,
+        input_files={"fastq1": "S1_R1.fastq.gz"},
+        sample_name="S1_R1.fastq",
+        sample_name_is_explicit=False,
+    )
+
+    assert identity_value(render(tmp_path), "Sample") == "S1"
+
+
+def test_a_summary_written_between_the_two_commits_derives_its_recorded_name(tmp_path) -> None:
+    """A `sample_name` with no `sample_name_is_explicit` beside it.
+
+    That summary shape exists: it is what a run written after the name was recorded
+    and before its provenance was. The report cannot know, so it takes the branch
+    that is wrong least often -- `derive_sample_name` only ever changes a value that
+    ends in an input extension, which is exactly the shape the CLI's own derivation
+    leaves behind.
+    """
+    write_summary(tmp_path, input_files={"fastq1": "S1_R1.fastq.gz"}, sample_name="S1_R1.fastq")
+
+    assert identity_value(render(tmp_path), "Sample") == "S1"
+
+
+def test_a_summary_written_between_the_two_commits_keeps_a_name_that_is_not_a_file(tmp_path) -> None:
+    """The same shape, and the reason that branch is safe to take.
+
+    An operator's name is not a file name, so deriving leaves it alone. This is what
+    keeps the missing-key case from being the discard-the-name defect again.
+    """
+    write_summary(tmp_path, input_files={"bam": "foo.bam"}, sample_name="PATIENT_042")
+
+    assert identity_value(render(tmp_path), "Sample") == "PATIENT_042"
+
+
+def test_a_legacy_summary_with_no_recorded_name_derives_one_as_before(tmp_path) -> None:
+    """Every archived run predates the field. Adding a level above the derivation
+    must not change what those reports are called."""
+    write_summary(tmp_path, input_files={"fastq1": "S1_R1.fastq.gz", "fastq2": "S1_R2.fastq.gz"})
+
+    assert identity_value(render(tmp_path), "Sample") == "S1"
+
+
+def test_a_summary_with_no_input_files_still_names_the_report(tmp_path) -> None:
+    """A report with nothing to derive a name from must still be a report."""
+    write_summary(tmp_path)
+
+    html = render(tmp_path)
+
+    assert "<title>MUC1 VNTR report — unnamed sample" in html
+    assert _labeled_value(html, "Input Files") == "not recorded by this run"
+
+
+def test_a_malformed_input_files_value_costs_the_line_and_not_the_report(tmp_path) -> None:
+    """`vntyper report` renders a *supplied* summary (#207), so a wrong-typed
+    `input_files` must not replace the report with a traceback."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]), input_files=["sample.bam"])
+
+    html = render(tmp_path)
+
+    assert _labeled_value(html, "Input Files") == "not recorded by this run"
+    assert "<title>MUC1 VNTR report — unnamed sample" in html
+    assert _kestrel_table(html), "the rest of the report must still render"
+
+
+#: An injection payload carrying no ``/``. ``PAYLOAD`` does, and the sample name
+#: is taken from a *basename*, so ``</script>`` alone is stripped by the path
+#: split before any escaping happens -- which would make an escaping assertion on
+#: the title pass for the wrong reason.
+TITLE_PAYLOAD = "<img src=x onerror=alert(1)>"
+TITLE_ESCAPED = "&lt;img src=x onerror=alert(1)&gt;"
+
+
+def test_a_sample_name_derived_from_an_input_file_is_escaped(tmp_path) -> None:
+    """The name is derived from a sample-supplied basename, so it reaches
+    ``<title>`` and ``<h1>`` as attacker-influenced text."""
+    write_summary(tmp_path, input_files={"bam": f"{TITLE_PAYLOAD}.bam"})
+
+    html = render(tmp_path)
+
+    assert TITLE_PAYLOAD not in html
+    assert f"<title>MUC1 VNTR report — {TITLE_ESCAPED}</title>" in html
+    assert f'<h1><i class="gene">MUC1</i> VNTR report — {TITLE_ESCAPED}</h1>' in html
+
+
+def test_a_sample_name_in_the_printed_header_line_is_escaped(tmp_path) -> None:
+    """The printed header line states the name too, so it is the third place to check.
+
+    It is also the reason that line is a block in the document: the alternative was a
+    running header in the page margin, which would have put this value inside a
+    ``<style>`` element where HTML escaping means nothing.
+    """
+    write_summary(tmp_path, input_files={"bam": f"{TITLE_PAYLOAD}.bam"})
+
+    header = re.search(r'<div class="print-header">(.*?)</div>', render(tmp_path), re.DOTALL)
+
+    assert header, "the report has no printed header line"
+    assert TITLE_PAYLOAD not in header.group(1)
+    assert TITLE_ESCAPED in header.group(1)
+
+
+# ---------------------------------------------------------------------------
+# Provenance: recorded, or said to be absent -- never guessed (#242, P5)
+# ---------------------------------------------------------------------------
+
+
+def test_a_legacy_summary_renders_not_recorded(tmp_path) -> None:
+    """A summary written before this change carries none of the provenance
+    fields, and the report must say so rather than reading the config default.
+
+    ``config["default_values"]["reference_assembly"]`` is ``hg19``. Printing it
+    would mislabel every ``--reference-assembly`` override, and it cannot
+    reconstruct ``--custom-regions`` at all.
+    """
+    write_summary(tmp_path, version="2.0.11")
+
+    html = render(tmp_path)
+
+    assert "not recorded by this run" in html
+    assert "hg19" not in _provenance_block(html)
+
+
+def test_a_current_summary_prints_the_resolved_region(tmp_path) -> None:
+    write_summary(tmp_path, schema_version=1, region_resolved="chr1:155184000-155194000")
+
+    assert "chr1:155,184,000-155,194,000" in render(tmp_path)
+
+
+def test_the_provenance_block_reads_the_assembly_fields_already_recorded(tmp_path) -> None:
+    """Two of the four provenance rows are not new keys.
+
+    ``assembly_declared`` is ``reference_assembly_requested``, written by
+    ``start_summary``; ``assembly_detected`` is the ``BAM Header Parsing`` step's
+    ``assembly_text``. Recording either again under a second name would be the
+    divergent-source problem ``cli_report.py``'s docstring warns about.
+    """
+    write_summary(
+        tmp_path,
+        {
+            "step": summary_steps.STEP_BAM_HEADER,
+            "parsed_result": {"assembly_text": "GRCh38", "assembly_contig": "chr1"},
+        },
+        reference_assembly_requested="hg38_ensembl",
+        schema_version=1,
+        region_resolved="chr1:155184000-155194000",
+    )
+
+    block = _provenance_block(render(tmp_path))
+
+    assert "hg38_ensembl" in block
+    assert "GRCh38" in block
+    assert "chr1:155,184,000-155,194,000" in block
+    assert "not recorded by this run" not in block
+
+
+def test_the_summary_schema_version_is_shown(tmp_path) -> None:
+    write_summary(tmp_path, schema_version=1)
+
+    assert _labeled_value(render(tmp_path), "Summary schema version") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Run time is not render time
+# ---------------------------------------------------------------------------
+
+
+def test_the_run_time_and_the_render_time_are_both_shown(tmp_path) -> None:
+    write_summary(tmp_path, pipeline_start="2020-01-02T03:04:05.678901")
+
+    html = render(tmp_path)
+
+    assert _labeled_value(html, "Pipeline run started") == "2020-01-02 03:04:05 UTC"
+    # Both carry a zone, so a reader can subtract one from the other.
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+", _labeled_value(html, "This report rendered"))
+
+
+def test_re_rendering_an_archived_run_does_not_restamp_the_run_time(tmp_path) -> None:
+    """`vntyper report -o <finished run>` produced an artefact claiming to be
+    newer than the analysis, because the only date on it was `datetime.now()`."""
+    write_summary(tmp_path, pipeline_start="2020-01-02T03:04:05.678901")
+
+    first = _labeled_value(render(tmp_path), "Pipeline run started")
+    second = _labeled_value(render(tmp_path), "Pipeline run started")
+
+    assert first == second == "2020-01-02 03:04:05 UTC"
+
+
+def test_a_summary_with_no_start_time_says_so(tmp_path) -> None:
+    write_summary(tmp_path)
+
+    assert _labeled_value(render(tmp_path), "Pipeline run started") == "not recorded by this run"
+
+
+# ---------------------------------------------------------------------------
+# What the pipeline actually wrote, read back by the real report
+# ---------------------------------------------------------------------------
+
+
+def test_the_pipeline_puts_the_resolved_region_on_disk_before_the_report_reads_it(tmp_path) -> None:
+    """The write-ordering trap, pinned end to end.
+
+    ``pipeline_summary.json`` is written incrementally by ``record_step``, and
+    ``generate_summary_report`` reads it back **from disk** -- while the final
+    ``write_summary`` runs after the report. The resolved region does not exist
+    until the coverage stage, so a key set after the last ``record_step`` would
+    never reach the report at all.
+
+    This renders from the bytes that were on disk at the instant the pipeline
+    called the report generator, not from a hand-built summary, so it fails if
+    the ordering regresses even when the finished file is correct.
+    """
+    from tests.support.pipeline_harness import run_pipeline_under_harness
+
+    run_dir = tmp_path / "run"
+    captured: dict[str, str] = {}
+
+    def _capture(*args, **kwargs):
+        """Read the summary at the instant the pipeline asked for the report."""
+        captured["summary"] = (run_dir / "pipeline_summary.json").read_text(encoding="utf-8")
+
+    harness = run_pipeline_under_harness(run_dir, stage_side_effects={"generate_summary_report": _capture})
+    assert harness.error is None
+
+    on_disk = json.loads(captured["summary"])
+    assert on_disk["schema_version"] == summary.SUMMARY_SCHEMA_VERSION
+    assert on_disk["region_resolved"] == "chr1:155158000-155163000"
+
+    report_dir = tmp_path / "rendered"
+    report_dir.mkdir()
+    (report_dir / "pipeline_summary.json").write_text(captured["summary"], encoding="utf-8")
+
+    html = render(report_dir)
+
+    assert "chr1:155,158,000-155,163,000" in _provenance_block(html)
+    # The harness calls `run_pipeline` directly with `sample_name="sample"` and no
+    # provenance flag, so the run recorded a derived name; `derive_sample_name`
+    # leaves a value with no input extension alone, and the report says what the run
+    # said rather than second-guessing it from the basename.
+    assert "<title>MUC1 VNTR report — sample</title>" in html
+
+
+def test_the_operators_sample_name_survives_the_run_into_the_report(tmp_path) -> None:
+    """`-s` on `vntyper pipeline`, end to end, through what the pipeline wrote.
+
+    ``start_summary`` runs before any step, so the name is on disk from the first
+    ``record_step`` onwards -- the same write-ordering the resolved region needed,
+    with no new plumbing.
+    """
+    from tests.support.pipeline_harness import run_pipeline_under_harness
+
+    run_dir = tmp_path / "run"
+    captured: dict[str, str] = {}
+
+    def _capture(*args, **kwargs):
+        captured["summary"] = (run_dir / "pipeline_summary.json").read_text(encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        run_dir,
+        sample_name="PATIENT_042",
+        stage_side_effects={"generate_summary_report": _capture},
+    )
+    assert harness.error is None
+
+    assert json.loads(captured["summary"])["sample_name"] == "PATIENT_042"
+    # The same string the run handed Kestrel, so the report and the VCF agree.
+    assert harness.kwargs("run_kestrel")["sample_name"] == "PATIENT_042"
+
+    report_dir = tmp_path / "rendered"
+    report_dir.mkdir()
+    (report_dir / "pipeline_summary.json").write_text(captured["summary"], encoding="utf-8")
+
+    assert "<title>MUC1 VNTR report — PATIENT_042</title>" in render(report_dir)
+
+
+# ---------------------------------------------------------------------------
+# The configured template context is a public compatibility contract
+# ---------------------------------------------------------------------------
+
+
+def test_every_nondeprecated_context_key_is_referenced_by_the_shipped_template(tmp_path, monkeypatch) -> None:
+    """Adding a context value that no shipped template renders creates silent debt."""
+    write_summary(tmp_path)
+    captured: dict[str, object] = {}
+    real_environment = generate_report.Environment
+
+    def environment_spy(*args, **kwargs):
+        environment = real_environment(*args, **kwargs)
+        real_get_template = environment.get_template
+
+        def get_template(name, *get_args, **get_kwargs):
+            template = real_get_template(name, *get_args, **get_kwargs)
+            if name != "report_template.html":
+                return template
+
+            class TemplateSpy:
+                def render(self, context):
+                    captured.update(context)
+                    return template.render(context)
+
+            return TemplateSpy()
+
+        environment.get_template = get_template
+        return environment
+
+    monkeypatch.setattr(generate_report, "Environment", environment_spy)
+    render(tmp_path)
+
+    shipped_loader = generate_report.FileSystemLoader(TEMPLATE_DIR)
+    loaded_templates: list[str] = []
+    real_get_source = shipped_loader.get_source
+
+    def get_source(environment, template):
+        loaded_templates.append(template)
+        return real_get_source(environment, template)
+
+    monkeypatch.setattr(shipped_loader, "get_source", get_source)
+    shipped_environment = real_environment(
+        loader=shipped_loader,
+        autoescape=generate_report.select_autoescape(["html"]),
+    )
+    referenced = report_context_contract.jinja_referenced_paths_recursive(
+        shipped_environment,
+        "report_template.html",
+    )
+    unused = report_context_contract.unreferenced_runtime_context_paths(
+        captured,
+        referenced_paths=referenced,
+        deprecated_paths=report_context_contract.DEPRECATED_KEYS,
+    )
+    assert unused == set(), f"dead context keys: {sorted(unused)}"
+    assert "_report_base.html" in loaded_templates, "the recursive audit did not follow the shipped include"
+
+    root_source = (TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8")
+    matched_rule_branch = "{% if not screening_state.matched_rule %}"
+    assert root_source.count(matched_rule_branch) == 1
+    mutated_environment = real_environment(
+        loader=DictLoader(
+            {
+                "report_template.html": root_source.replace(matched_rule_branch, "{% if false %}"),
+                "_report_base.html": (TEMPLATE_DIR / "_report_base.html").read_text(encoding="utf-8"),
+            }
+        )
+    )
+    without_matched_rule = report_context_contract.jinja_referenced_paths_recursive(
+        mutated_environment,
+        "report_template.html",
+    )
+    assert report_context_contract.unreferenced_runtime_context_paths(
+        captured,
+        referenced_paths=without_matched_rule,
+        deprecated_paths=report_context_contract.DEPRECATED_KEYS,
+    ) == {"screening_state.matched_rule"}
+
+    screening_state = captured["screening_state"]
+    assert isinstance(screening_state, dict)
+    screening_state["unused_new_key"] = "silent debt"
+    assert report_context_contract.unreferenced_runtime_context_paths(
+        captured,
+        referenced_paths=referenced,
+        deprecated_paths=report_context_contract.DEPRECATED_KEYS,
+    ) == {"screening_state.unused_new_key"}
+
+
+def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_path, monkeypatch) -> None:
+    """The configurable template directory makes the old context keys a public API."""
+    template_dir = tmp_path / "legacy-template"
+    template_dir.mkdir()
+    (template_dir / "report_template.html").write_text(
+        "|".join(
+            (
+                "{{ percent_vntr_uncovered_color }}",
+                "{{ mean_vntr_coverage_color }}",
+                "{{ duplication_rate_color }}",
+                "{{ q20_color }}",
+                "{{ q30_color }}",
+                "{{ passed_filter_color }}",
+                "{{ screening_state.kestrel_result }}",
+                "{{ screening_state.advntr_result }}",
+                "{{ igv_content|safe }}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 100},
+                    "after_filtering": {"q20_rate": 0.9, "q30_rate": 0.6},
+                },
+                "duplication": {"rate": 0.2},
+                "filtering_result": {"passed_filter_reads": 90},
+            }
+        ),
+        encoding="utf-8",
+    )
+    bed_file = tmp_path / "sites.bed"
+    bed_file.write_text("chr1\t1\t2\n", encoding="utf-8")
+
+    def write_igv_report(bed_file, bam_file, fasta_file, output_html, **kwargs) -> None:
+        Path(output_html).write_text(
+            '<div id="container"><p id="legacy-igv">legacy alignment view</p></div>\n'
+            'const tableJson = {"headers":[],"rows":[]}\n'
+            'const sessionDictionary = {"0":"session0.json"}\n'
+            "</body>\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(generate_report, "run_igv_report", write_igv_report)
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(template_dir),
+        report_file="legacy.html",
+        log_file=None,
+        bed_file=str(bed_file),
+        config=load_config(None),
+    )
+
+    rendered = (tmp_path / "legacy.html").read_text(encoding="utf-8")
+    assert rendered.startswith("green|green|red|green|red|green|High_Precision|none|")
+    assert '<p id="legacy-igv">legacy alignment view</p>' in rendered

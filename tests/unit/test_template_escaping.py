@@ -33,7 +33,11 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
+#: Every template file this package ships, the shared token layer included -- it is
+#: template source and no linter reaches it either, so the checks below apply to it as
+#: much as to the two reports that ``{% include %}`` it.
 TEMPLATES = (
+    Path("vntyper/templates/_report_base.html"),
     Path("vntyper/templates/cohort_summary_template.html"),
     Path("vntyper/templates/report_template.html"),
 )
@@ -59,19 +63,52 @@ def test_no_template_concatenates_a_variable_into_parsed_markup(template: Path) 
     assert offenders == [], f"{template} splices a variable into markup that gets reparsed: {offenders}"
 
 
-@pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
-def test_the_flag_tooltip_title_is_set_through_attr(template: Path) -> None:
+#: Templates that still build the flag cell in the browser. The per-sample report no
+#: longer does: #242 moved that rendering to ``report_formatting.flag_html``, so the
+#: reason is text in the file rather than a tooltip assembled by a script, and the
+#: two checks below have nothing left to look at there. They are not weakened for the
+#: cohort report, which keeps its flag mark and therefore keeps the sink.
+CLIENT_SIDE_FLAG_TEMPLATES = (Path("vntyper/templates/cohort_summary_template.html"),)
+
+
+@pytest.mark.parametrize("template", CLIENT_SIDE_FLAG_TEMPLATES, ids=lambda p: p.name)
+def test_the_flag_tooltip_title_is_set_as_an_attribute_value(template: Path) -> None:
+    """The reason reaches the tooltip as a value, never as a fragment of markup.
+
+    jQuery's ``.attr(name, value)`` and the DOM's ``setAttribute(name, value)`` are the
+    same guarantee: the second argument is a string, not something an HTML parser is
+    asked to read. The call moved from the first to the second when jQuery left (#242);
+    what must not come back is a ``title="`` assembled by concatenation.
+    """
     source = template.read_text(encoding="utf-8")
-    assert ".attr('title', originalText)" in source, (
-        f"{template} must set the tooltip title with .attr(), which takes a value rather than a fragment"
+    assert 'setAttribute("title", reason)' in source, (
+        f"{template} must set the tooltip title with setAttribute(), which takes a value rather than a fragment"
+    )
+    assert 'title="' not in source.split("<script>")[-1], (
+        f"{template} builds a title attribute inside a markup string in its script"
     )
 
 
-@pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
-def test_the_flag_cell_is_emptied_before_the_mark_is_appended(template: Path) -> None:
-    """``.empty().append()`` replaces the cell's content without an HTML parse."""
+@pytest.mark.parametrize("template", CLIENT_SIDE_FLAG_TEMPLATES, ids=lambda p: p.name)
+def test_the_flag_cell_is_replaced_with_a_node_rather_than_a_string(template: Path) -> None:
+    """``replaceChildren(node)`` replaces the cell's content without an HTML parse."""
     source = template.read_text(encoding="utf-8")
-    assert "$flagCell.empty().append(" in source, f"{template} must rebuild the flag cell with DOM APIs"
+    assert "cell.replaceChildren(mark)" in source, f"{template} must rebuild the flag cell with DOM APIs"
+    assert "mark.textContent =" in source, f"{template} must write the glyph as text, not as markup"
+
+
+def test_the_per_sample_flag_cell_is_no_longer_built_in_the_browser() -> None:
+    """The other half of narrowing the two checks above: the sink is gone, not moved.
+
+    ``report_formatting.flag_html`` escapes the value and the table names ``Flag`` in
+    ``html_columns``, so ``escape_frame_cells`` escapes every other cell -- the same
+    per-column exemption the ``Confidence`` span already had.
+    """
+    source = Path("vntyper/templates/report_template.html").read_text(encoding="utf-8")
+
+    assert "updateFlagColumn" not in source
+    assert "data-original" not in source
+    assert "tooltip" not in source
 
 
 def test_the_igv_variant_table_writes_text_not_markup() -> None:

@@ -8,7 +8,8 @@ results/
 ├── pipeline_summary.csv         # Optional (--summary-formats csv)
 ├── pipeline_summary.tsv         # Optional (--summary-formats tsv)
 ├── pipeline.log                 # Pipeline execution log
-├── summary_report.html          # HTML report with IGV visualization
+├── summary_report.html          # Self-contained HTML report (IGV mode is configurable)
+├── igv_report.html              # Optional self-contained sidecar (--report-igv sidecar)
 ├── predefined_regions_<assembly>.bed  # Region BED file (e.g., hg19, hg38)
 ├── kestrel/
 │   ├── kestrel_result.tsv       # Final genotyping result
@@ -84,6 +85,88 @@ Confidence is assigned based on empirically validated depth score thresholds fro
 
 !!! tip
     A result with confidence `Negative` means no MUC1-VNTR frameshift variant was detected -- it does not necessarily mean the sample is truly negative.
+
+## How summary_report.html Displays Numbers
+
+Every numeric column in the per-sample HTML report is now formatted server-side and
+written into the file by VNtyper.
+Until the fix for issue #242 the report shipped a small script that rewrote every numeric
+cell of every table with `toFixed(4)` in the reader's browser, so the number on
+screen depended on whether three content delivery networks were reachable -- the archived
+file said one thing to a reader online and another to a reader offline.
+
+Removing that script changes the printed form of some columns. **No value changed; only
+its rendering did.** The `kestrel_result.tsv`, `pipeline_summary.json` and adVNTR TSV
+outputs are untouched, and remain the source to parse. If you scrape the HTML report,
+these are the columns whose text differs.
+
+| Table | Column | Displayed before | Displayed now | Why |
+|-------|--------|------------------|---------------|-----|
+| Kestrel | `POS`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion` | `67`, `120`, `12000` | unchanged | Whole numbers, no decimals |
+| Kestrel | `Depth_Score` | `0.01` | `0.010012` | Six decimal places. The confidence calibration is stated to five (0.00469 and 0.00515), so four was coarser than the thresholds the value is judged against, and a score of 0.00001234 printed as `0` |
+| adVNTR | `VID`, `NumberOfSupportingReads`, `POS` | `25561`, `14`, `67` | unchanged | Whole numbers, no decimals |
+| adVNTR | `MeanCoverage` | `98.5`, `40` | `98.50`, `40.00` | Always two decimal places, so every mean states the same precision |
+| adVNTR | `Pvalue` | `0`, `0.0001` | `1e-09`, `0.000123` | Three significant figures. The old `toFixed(4)` displayed `1e-9` as `0` |
+
+### The Kestrel table's column order changed
+
+`Motif_sequence` is now the **last** column of the per-sample report's Kestrel table,
+after the confidence, flag and nomenclature fields. It used to be sixth, between `ALT`
+and `Estimated_Depth_AlternateVariant`.
+
+The real motif sequence is 121 bp. Sixth, it pushed `Confidence` and `Flag` off the right
+edge of a 1280px screen, so the two columns a reader opens the report for were the ones
+that scrolled out of sight while the widest and least-scanned column sat in the middle.
+Last, it is the column that scrolls -- which is the correct one to lose.
+
+**This is a display order only.** `kestrel_result.tsv` is unchanged, and so is every
+other output; if you parse anything, parse those. If you scrape the HTML report by column
+*position*, this is a breaking change and you should key on the heading text instead. The
+`cohort_summary.html` Kestrel table declares its own column order and is **not** affected.
+
+Further display changes in the same release:
+
+- **The adVNTR table's headings are English**, matching the Kestrel table above it:
+  `NumberOfSupportingReads` is `Supporting Reads`, `Pvalue` is `P-value`, `RU` is
+  `Repeat Unit`, and the eight naming fields take the same headings the Kestrel table
+  already used -- `Nomenclature` is `MUC1 Name`, `Nomenclature_Tier` is `Tier`,
+  `Ambiguity_Interval` is `Ambiguity`, and so on. The two tables previously named the
+  same field two different ways in one document. `advntr_result.tsv` is unchanged and
+  keeps the source names; if you scrape the HTML, key on the new heading text.
+- **A semicolon-separated list is spaced.** `Nomenclature_Flags` renders as
+  `known-variant; motif-context-diverges; position-ambiguous` rather than with bare
+  semicolons, so a cell narrow enough to wrap breaks between flags instead of inside
+  one. The separator is unchanged; splitting on `;` and stripping is unaffected.
+- **Numbers are aligned on their own axis** and set with tabular figures, and each
+  column heading carries a one-line explanation as hover text. Every coded value the
+  tables print -- the tier letter and each nomenclature flag -- is also spelled out in
+  words in a **reading key printed underneath the tables**, so the explanation is on
+  paper and needs no pointer.
+- **The `Flag` column shows the reason in words**, beside a tick or a cross, instead of a
+  glyph whose reason appeared only in a hover tooltip. The reason is therefore in the
+  printed page, readable by a screen reader, and present when scripts do not run.
+- **Flagged variant rows are never hidden.** The per-sample report's switch is now
+  *Highlight flagged values*: it changes emphasis and removes nothing. A row-count line
+  above each table states how many rows are shown out of how many exist. The
+  [cohort report](cohort-analysis.md) keeps its show/hide filter, where hiding flagged
+  rows across many samples is a triage aid rather than a way to hide one sample's evidence.
+  Note that the cohort report still rounds its numbers in the browser; that is tracked
+  separately.
+
+## summary_report.html Artifact Modes
+
+`--report-igv embedded` (the default) produces one self-contained report. `sidecar`
+writes a small summary plus a self-contained `igv_report.html`, and `off` omits the
+alignment browser without removing any table row. The last verification specimen was
+**78,486 bytes without alignment data** and **575,762 bytes with embedded alignment
+data**, compared with **2,002,405 bytes** fetched by the previous report's 11 CDN tags.
+These are measured specimen sizes, not fixed limits; the tables and other sample content
+also contribute to the file.
+
+Embedded alignment viewing uses the browser's `DecompressionStream` support, with a
+2023 cross-browser floor of Chrome 80+, Safari 16.4+ or Firefox 113+. On an older
+browser, the alignment panel explains the limitation and the complete variant tables
+remain readable.
 
 ## Pipeline Summary JSON
 

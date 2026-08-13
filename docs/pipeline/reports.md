@@ -10,23 +10,33 @@ The sample report (`summary_report.html`) is generated at the end of each pipeli
 
 **Variant Summary Table**
 
-The Kestrel results are displayed in a sortable table with columns for motif, variant type, position, REF/ALT alleles, motif sequence, depth metrics, depth score, confidence level, and flag status. Confidence labels are color-coded:
+The Kestrel results are displayed in a sortable table with columns for motif, variant type, position, REF/ALT alleles, depth metrics, depth score, confidence level, flag status, the mutation-naming record, and motif sequence. The naming record includes the reconciled MUC1 name, confidence tier and flags, both callers' own names, ambiguity interval, repeat form and naming note; it is not collapsed to the reconciled name because caller disagreement is evidence the reader needs. See [MUC1 Nomenclature](nomenclature.md).
 
-- High_Precision / High_Precision* -- highlighted in red (positive finding)
-- Low_Precision -- highlighted in orange (requires validation)
-- Negative -- no color (no variant detected)
+Confidence is written as a labelled pill rather than encoded only by an alert colour:
 
-If adVNTR was run, its results appear in a separate table showing VID, variant state, supporting read count, mean coverage, p-value, repeat unit, REF/ALT, and flag status.
+- High_Precision / High_Precision* -- high-precision call
+- Low_Precision -- lower-precision call
+- Negative -- no variant detected
+
+If adVNTR was run, its results appear in a separate table showing VID, variant state, supporting read count, mean coverage, p-value, repeat unit, REF/ALT, flag status and the same complete mutation-naming record.
 
 **Screening Summary**
 
-An interpretive text block summarizes the combined result. The summary is generated from a rule-based system defined in `report_config.json` that considers:
+The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The chips state the Kestrel result, adVNTR result, concordance and Coverage QC; an unmatched configuration also gets a **Screening rule: Not configured** chip. They use existing pipeline vocabulary such as **High precision**, **Not performed**, **Not assessable**, **PASS** and **FAIL**.
+
+**The masthead produces no verdict word.** Its internal `finding`, `no-finding` and `indeterminate` emphasis states select styling only and are never printed as labels. The words a reader sees come from the pipeline state and the configured interpretive message.
+
+The text is generated from a rule-based system defined in `report_config.json` that considers:
 
 - Kestrel result category (High_Precision, Low_Precision, flagged variants, negative)
 - adVNTR result category (positive, negative, not performed)
 - Quality metrics pass/fail status
 
-The screening summary states what the combined evidence supports, including where orthogonal validation is recommended.
+The screening summary states what the combined evidence supports, including where orthogonal validation is recommended. Each configured message is stored both verbatim (`message`) and as the ordered parts it is rendered in (`segments`); the two are kept in step by a round-trip check, and a configuration supplying only `message` still renders.
+
+A stage that ran without producing a readable result is reported as neither a positive nor a negative. When either genotyping stage is in that state, the configured message is withheld -- it was selected by matching a state the run never established -- and the masthead is drawn in its indeterminate state instead.
+
+Immediately after the message, a screening-provenance line repeats the raw evidence in words: Kestrel state, adVNTR state and Coverage QC. The report's separate **Provenance** block records the requested and detected assemblies, analysed region and summary schema version. For an older run that did not persist one of those fields, the value is **not recorded by this run**; VNtyper does not guess from the current configuration.
 
 **Cross-Match Summary**
 
@@ -66,14 +76,61 @@ The report embeds an interactive IGV genome browser view using the [igv-reports]
 
 The flanking region parameter (default: 50 bp) controls how much sequence context is shown around each variant position. This is configurable in `config.json` under `default_values.flanking`.
 
+`--report-igv` controls how this view is packaged:
+
+| Mode | Result |
+|------|--------|
+| `embedded` (default) | The verified, compressed igv.js library and the alignment session are carried in `summary_report.html`. |
+| `sidecar` | The summary stays small and a self-contained `igv_report.html` is written beside it. |
+| `off` | No alignment browser is generated; the result tables remain complete. |
+
+In the last verification specimen, the self-contained report measured **78,486 bytes without alignment data** and **575,762 bytes with embedded alignment data**. The old report fetched **2,002,405 bytes** over 11 CDN tags in addition to its file. These figures describe the measured specimen rather than a fixed size guarantee; sample content changes the final byte count.
+
+The embedded library is expanded with `DecompressionStream`. This sets a 2023 cross-browser floor for the alignment panel: Chrome 80+, Safari 16.4+ or Firefox 113+. An older browser receives an authored explanation, while the tables and all variant evidence remain available.
+
 !!! info "VCF compression"
     If bcftools is installed, the INDEL VCF is compressed and sorted for optimal IGV performance. If bcftools is unavailable, the uncompressed VCF is used. The report generation handles both cases gracefully.
+
+### Printing and archiving
+
+The report is written to be printed: the printed sheet is the artefact that gets filed, forwarded and read years later, so it carries its own identity. **Every** page repeats the sample, the assay, the reference assembly, the VNtyper version and the time the run started in the page margin, and is numbered `Page N of M` so a print that lost a sheet is visible as one — a sheet separated from the rest still says what it is a sheet of. The detailed coverage table prints in place of the basic view, results tables print in full rather than clipped to the screen's column widths, and the on-screen switches are omitted because paper has no switches.
+
+The running header is a paged-CSS feature that only Chromium implements, so the first page additionally states the same identity as an ordinary line of the document. In Chromium that line is redundant with the margin; in Firefox and WebKit, which drop page margin boxes silently, it is the only identity the printed record has.
+
+The pipeline log is the deliberate exception. It prints as a one-line pointer back to the HTML original rather than as pages of DEBUG output, whether or not the reader had it expanded.
+
+!!! warning "One thing a collapsed section costs a reader with JavaScript disabled"
+    Sections such as **Variants** are collapsible. The report is served with them **open**, so an ordinary print carries them; if a reader collapses one and then prints, a small script reopens it for the duration of the print and closes it again afterwards.
+
+    That script is the only mechanism that works. Measured in Chromium 151: a section the reader collapsed prints its heading and **none of its contents** when JavaScript is disabled, and no stylesheet can change that — `open` is an HTML attribute rather than a style, and the browser hides a closed section's contents in a way an author stylesheet cannot reach. Firefox and WebKit ignore the paged-CSS features this report relies on altogether.
+
+    So with scripting off, print the report **as it opens** — do not collapse a section first. If a print is missing a section, its heading will still be on the page where the contents should have been.
+
+### Custom template context compatibility
+
+`paths.template_dir` may point at a custom Jinja template directory, so the values
+VNtyper passes to `report_template.html` are a public compatibility interface. VNtyper
+2.x continues to provide the deprecated keys below even though the shipped template no
+longer reads them. They are scheduled for removal in **VNtyper 3.0.0**, not before:
+
+- `percent_vntr_uncovered_color`, `mean_vntr_coverage_color`,
+  `duplication_rate_color`, `q20_color`, `q30_color`, and `passed_filter_color`;
+- `igv_content`;
+- `screening_state.kestrel_result` and `screening_state.advntr_result`.
+
+For new custom templates, use the accessible `*_icon` fragments and the semantic state
+tokens in `_report_base.html` instead of raw colour names. Build alignment presentation
+from the structured IGV/session values used by the shipped template rather than
+`igv_content`. Use `screening_state.kestrel_state_text` and
+`screening_state.advntr_state_text` for reader-facing algorithm state: unlike the raw
+result fields, those values distinguish a negative result from a stage that was not
+performed or failed to produce readable evidence.
 
 ## Cohort Report
 
 The cohort summary module (`cohort_summary.py`) aggregates results from multiple pipeline runs into a single report. It scans a directory structure for `pipeline_summary.json` files and constructs:
 
-- **Sample result table** -- aggregated variant calls, confidence levels, and flags across all samples
+- **Sample result table** -- aggregated variant calls, confidence levels, flags and complete mutation-naming records across all samples
 - **Donut charts** -- interactive Plotly visualizations showing the distribution of results (positive/negative/low precision) across the cohort
 - **Coverage statistics** -- per-sample VNTR coverage metrics
 - **Runtime statistics** -- pipeline execution times

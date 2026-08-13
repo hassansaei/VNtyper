@@ -1,0 +1,890 @@
+{#
+  The token layer, shared by report_template.html and cohort_summary_template.html.
+
+  This is a partial, pulled in with `{% include %}` rather than a base both templates
+  `extend`. The two reports share a stylesheet and nothing else - no block structure, no
+  common body, no shared markup - and an include says exactly that. Both renderers build
+  a `FileSystemLoader` over the configured template directory (`generate_report.py` and
+  `cohort_summary.py`), so this file is reachable from both, including from a directory
+  supplied through `config.json`'s `paths.template_dir`.
+
+  It carries no Jinja2 expression of its own, and `tests/unit/test_report_presentation.py`
+  pins that on its own. A `<style>` is a raw text element, CSS is not an HTML context, and
+  autoescaping does not protect it - so a value reaches a stylesheet only through
+  `css_escaping.css_string_literal`, and only in the per-sample report, which builds the
+  whole `@page` rule in Python and interpolates that one fragment. This file, being shared
+  and reachable from a configured `paths.template_dir`, keeps the stronger guarantee of
+  interpolating nothing at all.
+
+  What is here and what is not: the token scale, the two palettes, and every rule the two
+  reports both need. A rule only one report needs stays in that report. There is exactly
+  one `@media print` block and it lives here, because `_at_rule_body`-style readers -
+  and browsers merging two blocks - both do better with one.
+#}
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* ==========================================================================
+   VNtyper report - token layer
+
+   Zero external hosts. No webfont either: the system stack costs nothing to
+   fetch and is the only stack guaranteed to exist on an air-gapped machine,
+   which is the machine this report is most often read on.
+
+   The names below are the interface. Rules elsewhere in either template refer
+   to them and never restate a colour: `test_report_presentation.py` parses this
+   block, computes every foreground-on-surface contrast ratio in all three
+   palettes, and separately fails if any `color`/`background` in either template
+   names a colour of its own. A table of colours in a test would go on passing
+   while the stylesheet drifted underneath it, which is how `lightskyblue`
+   survived every previous accessibility pass.
+   ========================================================================== */
+:root {
+  color-scheme: light dark;
+
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+
+  --step--2: 0.6875rem;   /* 11px  labels */
+  --step--1: 0.8125rem;   /* 13px  tables, notes */
+  --step-0:  1rem;        /* 16px  body */
+  --step-1:  1.125rem;    /* 18px  h3 */
+  --step-2:  1.5rem;      /* 24px  h2, headline */
+  --step-3:  1.875rem;
+
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+  --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+
+  --measure: 68ch;
+  --radius: 6px;
+
+  /* Light palette. Every pair below is asserted >= 4.5:1 by
+     tests/unit/test_report_presentation.py, computed from this stylesheet. */
+  --paper:     #fcfcfb;
+  --surface:   #ffffff;
+  --sunken:    #f4f5f4;
+  --ink:       #14181d;
+  --ink-muted: #5b6570;
+  --hairline:  #e2e5e9;
+  --accent:    #0f5d6b;
+
+  --state-finding: #9b2c1f;
+  --state-caution: #8a5a00;
+  --state-ok:      #1c6b3f;
+  --state-none:    #5b6570;
+
+  /* The alignment browser's ground, and the only pair here that is the same colour in
+     every palette. igv.js paints its own light theme from inside a minified bundle this
+     document evaluates but does not style, so in dark mode the panel rendered as a bare
+     white slab with white-on-white form controls in it. It cannot be re-tinted from
+     here, so it is committed to instead: a genome browser is a light instrument, its
+     base colours encode the four bases, and this is the convention its readers have.
+     Declared as tokens rather than as two literals in the per-sample template, because
+     every colour in either report resolves through this block - including the ones
+     deliberately exempt from the palette switch. 17.36:1. */
+  --instrument-paper: #ffffff;
+  --instrument-ink:   #14181d;
+
+  --focus: var(--accent);
+  --motion: 120ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper:     #0f1216;
+    --surface:   #161a20;
+    --sunken:    #12161b;
+    --ink:       #e6e9ed;
+    --ink-muted: #95a0ac;
+    --hairline:  #252b33;
+    --accent:    #5fd0dd;
+
+    --state-finding: #ff8f7a;
+    --state-caution: #f0b429;
+    --state-ok:      #5fd08a;
+    --state-none:    #95a0ac;
+  }
+}
+
+/* A reader who asked their operating system for less motion gets none. The
+   disclosure triangle and the switch knob are the only things that move here,
+   and neither carries information. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion: 0ms; }
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* No `margin` here: each report keeps its own page gutter. The per-sample report
+   used to set `font-size: 80%` over a 'Lucida Grande' stack, which is where the
+   12.8px body text a 390px phone rendered at an effective ~5.1px came from. */
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: var(--step-0)/1.55 var(--font-sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* --- tables --------------------------------------------------------------
+   The wrapper both reports put round a results table. It was defined in the
+   cohort template only, so in the per-sample report `.table-container` was a
+   class that styled nothing at all - and the rule below needs somewhere to
+   scroll, or a table wider than the page pushes the whole document sideways. */
+.table-container {
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+  /* A results table is nineteen columns wide and the reader has to be told there is
+     more of it to the right. The shadow is painted by the scroll container itself:
+     two `local` layers sit on the content and two `scroll` layers stay pinned to the
+     edges, so the shadow is drawn only on the side that still has content behind it
+     and disappears when that end is reached. It costs no script, and a reader with no
+     pointer - who cannot discover the overflow by hovering - sees it too. */
+  background-image:
+    linear-gradient(to right, var(--surface), transparent 12px),
+    linear-gradient(to left, var(--surface), transparent 12px),
+    linear-gradient(to right, color-mix(in oklab, var(--ink) 16%, transparent), transparent 12px),
+    linear-gradient(to left, color-mix(in oklab, var(--ink) 16%, transparent), transparent 12px);
+  background-position: left center, right center, left center, right center;
+  background-repeat: no-repeat;
+  background-size: 24px 100%, 24px 100%, 12px 100%, 12px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+
+/* The name of the table, for a reader who arrives at it from find-in-page or from a
+   screen reader's table list, and on paper where a scrolled-past heading is not
+   above it any more. `caption-side: top` is the default; it is stated because a
+   caption that renders under its table reads as a footnote. */
+caption {
+  caption-side: top;
+  text-align: left;
+  padding: var(--s-3) var(--s-4) var(--s-2);
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+/* `width: auto` + `min-width: 100%` lets columns size to their content and lets
+   the table outgrow its container into `.table-container`, instead of
+   distributing width evenly and squeezing "Not flagged" onto two lines. One
+   nominated column absorbs the slack. This used to be stated twice - once for
+   `table` and once for `table.table`, at a specificity chosen to beat Bootstrap's
+   `.table { width: 100% }`. Bootstrap is gone (#242), so there is nothing left to
+   out-rank and one declaration says it. */
+table {
+  border-collapse: collapse;
+  width: auto;
+  min-width: 100%;
+}
+.col-grow { width: 100%; }
+
+thead {
+  position: sticky;
+  top: 0;
+}
+
+/* The heading row was `lightskyblue` with `color: white` - 1.72:1, the worst
+   pair in either report and the one on every column of every table. */
+/* The heading row was `lightskyblue` with `color: white` - 1.72:1, the worst pair in
+   either report and the one on every column of every table.
+
+   The padding is on the cell, not only on the button: a reader with no script gets a
+   heading and no button, and `padding: 0` printed that heading hard against the cell
+   border. The button below takes the padding back off with a negative margin, so the
+   whole cell is still the hit target rather than the text alone - which is the reason
+   the padding moved to the button in the first place, kept without the no-script cost.
+   `top: 0` on `thead` is what makes the heading stick, and it needs an opaque
+   background to stick *over*: `--sunken` is one. */
+thead th {
+  background: var(--sunken);
+  color: var(--ink);
+  padding: var(--s-2) var(--s-3);
+}
+
+/* --- sortable column headings --------------------------------------------
+   The heading of a sortable column is a real `<button>`, added by each report's
+   own script rather than written into the markup, because it is a control that
+   only works when a script runs: printing an affordance that does nothing is the
+   same defect as a switch that focuses and does nothing. With no script, the
+   heading is a heading and every row is still there in the order the pipeline
+   wrote it.
+
+   Sorting reorders rows and never removes them, which is the whole reason it is
+   allowed in the per-sample report at all: a failed script and a working one show
+   the same evidence in a different order.
+
+   `all: unset` is what makes a button look like the heading it replaces; the
+   padding moves off `thead th` and onto the button so the whole cell is the hit
+   target rather than the text alone. */
+thead th button {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-1);
+  /* The cell's own padding, taken back off and re-applied here, so the control fills
+     the cell edge to edge and the heading is still padded when no script ran. */
+  margin: calc(var(--s-2) * -1) calc(var(--s-3) * -1);
+  width: calc(100% + 2 * var(--s-3));
+  padding: var(--s-2) var(--s-3);
+  /* 44px, which is the target size WCAG 2.2's Target Size (Minimum) asks for and the
+     one every touch platform's own guidance settles on. Measured at 390px these were
+     40.8px tall, and they are the most numerous control in the document. */
+  min-height: 2.75rem;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+}
+thead th button:hover { color: var(--accent); }
+/* The sort direction, as a triangle beside the heading. `aria-sort` on the `th`
+   is the same fact for a screen reader, and it is the attribute the script sets;
+   this rule only draws it. */
+thead th button::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border: 4px solid transparent;
+  opacity: 0;
+  transition: opacity var(--motion) ease;
+}
+th[aria-sort="ascending"] button::after {
+  border-bottom-color: currentColor;
+  opacity: 1;
+  margin-bottom: 4px;
+}
+th[aria-sort="descending"] button::after {
+  border-top-color: currentColor;
+  opacity: 1;
+  margin-top: 4px;
+}
+
+/* A numeric column's header shares the axis of its values. Header left and
+   value right is the most common way a data table lies about alignment. */
+thead th.num button { justify-content: flex-end; }
+
+/* Cells wrap. They used to clamp to `max-width: 150px` with `text-overflow:
+   ellipsis` and reveal the rest on `:hover`, so the 121 bp motif sequence was
+   readable only with a pointer and not at all on paper, and the `Flag` reason
+   needed a `td:last-child` exception to escape the same fate. Moving
+   `Motif_sequence` last - which is what stops it pushing `Confidence` and `Flag`
+   off a 1280px screen - would have handed that exception to the motif and taken
+   it back off the flag. A cell that wraps needs no exception at all: the widest
+   column absorbs the width, the table outgrows `.table-container`, and
+   `.table-container` scrolls. Nothing in this report is behind a hover. */
+/* **Cell rhythm.** `thead th button` has carried `8px 12px` since #242 and the data
+   cells had nothing at all, so they rendered at the user agent's 1px: roomy headings
+   over cramped figures, and the two never shared a rhythm. The table also never took
+   the 13px step the scale declares for it (`--step--1`, commented "tables, notes"),
+   so nineteen columns of 16px text is a large part of why the Kestrel table measured
+   2123px inside a 1422px frame. Both stated once, here, for both reports. */
+.table td,
+.table th {
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--step--1);
+}
+
+/* **Text reads from a left edge; numbers read from a right one.** Everything was
+   centred, so a full-sentence naming note, a 121 bp sequence and `53C[7]>53C[8]` had no
+   shared edge to compare from - which contradicts the reason `mono-cell` exists two
+   rules below, that these are the columns where two values are compared for equality.
+   Centring survives on nothing: `.num` takes the figures right, and the rest start
+   where the eye returns to. */
+.table td,
+.table th { text-align: left; }
+/* `overflow-wrap: break-word`, not `word-break: break-word`. The second one lets the
+   browser take a column's minimum width down to a single character, which is how
+   "High_Precision" ended up broken across two lines in a column with room to spare;
+   the first breaks a word only when it would otherwise overflow, and leaves the
+   column's minimum at the longest word. `max-width` is what keeps a 121 bp motif
+   sequence from claiming 121 characters of width - it wraps at about three
+   comfortable lines. Neither one clips: nothing here is `overflow: hidden`, and the
+   print block unsets the width outright. */
+.table td {
+  overflow-wrap: break-word;
+  max-width: 44ch;
+  vertical-align: top;
+}
+/* Only the data cells may break inside a word. `word-break: break-word` applied to
+   the headings too, which is what squeezed a column narrower than the word naming
+   it and printed "Confidence" as "Confidenc e" - the print block has always had to
+   undo it, and there is no reason it should hold on screen either. */
+.table th {
+  word-break: normal;
+  overflow-wrap: normal;
+}
+th { white-space: pre-wrap; }
+
+/* --- per-column presentation ----------------------------------------------
+   The three classes below have been declared here since #242 and were emitted by
+   nothing at all, so every figure in both results tables was centred, every
+   identifier was set in the body face, and no column absorbed the table's slack.
+   `report_formatting.annotate_table_columns` is what writes them now.
+
+   Numbers share a right-hand axis and a fixed digit width, which is what lets a
+   reader compare 0.009410 with 0.004690 by looking rather than by reading. A
+   centred column of decimals hides exactly the digit that separates them. */
+.table td.num,
+.table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* An identifier, a coordinate, an allele or a sequence is read character by
+   character, and the proportional face closes up the letter pairs that matter most
+   in one: `53C[7]` and `53C[1]` differ by a glyph. Not a costume for "technical" -
+   these are the columns where two values are compared for equality. */
+.table td.mono-cell {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+/* A floor for the columns holding several tokens or a sentence. Auto table layout was
+   giving the flag list a column narrower than one of its flags, so a single-variant row
+   stood 244px tall with 180px of white under every other cell in it. */
+.table td.wide-cell,
+.table th.wide-cell { min-width: 18ch; }
+
+/* --- how much of a row to look at -----------------------------------------
+   **A column, never a row.** A hidden row is evidence the reader cannot know exists,
+   which is the defect #242 is named after and which nothing in the per-sample report
+   may do. A column the reader folds away is the opposite: the control names the full
+   count on its own label, it defaults to the shorter set and says so, every column it
+   folds is already stated in the masthead's allele panel or derived by the column
+   beside it, the whole table prints either way (below), and with no script running
+   there is no class on the table and every column is shown. More, not less, is the
+   failure mode.
+
+   The class goes on the `<table>`, so the two results tables are independent and a
+   reader who opened one of them wide is not opening the other. */
+.table.essential-columns td.col-optional,
+.table.essential-columns th.col-optional { display: none; }
+
+.column-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: var(--step--1);
+}
+.column-mode legend {
+  float: left;
+  padding: 0;
+  margin-right: var(--s-3);
+  font-size: var(--step--2);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.column-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 2.75rem;
+  cursor: pointer;
+}
+.column-mode input { accent-color: var(--accent); margin: 0; }
+
+/* A column heading carrying its own explanation says so. The help is *also* printed
+   under the table, so this dotted rule is a shortcut to something already on the
+   page rather than the only route to it. */
+thead th[title] button { text-decoration: underline dotted currentColor; text-underline-offset: 4px; }
+
+/* --- the row's own label stays put ----------------------------------------
+   Scrolled 700px right in a nineteen-column table, a reader has lost `Motif`,
+   `Variant` and `Position` and cannot tell which row they are reading. The first
+   column is the row's name, so it stays. `background: inherit` takes the row's
+   computed background, which is what carries the hover tint across the frozen cell
+   instead of leaving a stripe of `--surface` behind it. */
+.table thead th:first-child,
+.table tbody td:first-child {
+  position: sticky;
+  left: 0;
+  /* `inherit` on the *heading* cell resolved against a `<tr>` with no background of
+     its own, so the frozen cell was transparent: a white notch in the heading row at
+     rest, and at `scrollLeft > 0` the columns slid visibly through it - "Motif" and
+     "Flag" drawn on top of each other and both illegible, during exactly the scroll
+     this column was frozen to survive. The body cell is separately correct, because
+     its row *does* carry one, and it has to stay `inherit` to keep the hover tint. */
+  background: inherit;
+  /* The seam, as a shadow rather than a border: a border would occupy layout width
+     and shift every column, and this cell is painted over its neighbour. */
+  box-shadow: 1px 0 0 var(--hairline);
+}
+.table thead th:first-child { z-index: 2; background: var(--sunken); }
+.table tbody td:first-child { z-index: 1; }
+/* `thead` is already sticky; a `<th>` needs the sticky background of its own row to
+   paint over the cells sliding under it. */
+.table thead th { background: var(--sunken); }
+
+/* A scroll container that only a pointer can reach is a third of the evidence a
+   keyboard reader cannot get to. `tabindex="0"` on the wrapper makes it a scrollable
+   region the arrow keys drive, which is what the ARIA practice for a scrollable
+   region asks for; the `role` and the name come with it in the markup. */
+.table-container:focus-visible,
+#igvContainer:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Row colour, and who owns it. Until #242 this had to be stated three times over -
+   for `table`, for Bootstrap's `.table` and for DataTables' `table.dataTable` - at a
+   specificity chosen to beat two CDN stylesheets this file could not edit. Both are
+   gone, so these are simply the rules, and the report's row backgrounds are the
+   report's own for the first time. */
+table { color: var(--ink); background: var(--surface); }
+tbody tr { background-color: var(--surface); }
+/* Reading across nineteen columns is the thing this row treatment exists for, and
+   `--sunken` on `--surface` is a 1.03:1 difference - a hover nobody can see is a
+   hover that is not there. The tint is mixed from the accent so it reads as the
+   pointer's own mark rather than as a second row state, it is weak enough that the
+   flagged-value highlight still wins, and `:hover` is emphasis only: no rule here
+   may take a row out of the reader's view.
+
+   `@media (hover: hover)` keeps it off a touch device, where a tap leaves the tint
+   behind on the last row touched and it reads as a selection nobody made. */
+@media (hover: hover) {
+  tbody tr:hover { background-color: color-mix(in oklab, var(--accent) 8%, var(--surface)); }
+}
+
+/* **No zebra in the per-sample report.** A stripe competes with the one row treatment
+   in those tables that carries meaning, the flagged-value highlight, and `#f2f2f2`
+   under an inline `orange` was the 1.76:1 pair. That used to be enforced only by not
+   emitting Bootstrap's `table-striped` class - so it was a claim in a comment with no
+   rule and no test behind it, and re-adding the class passed the whole suite. Now that
+   Bootstrap is gone the class means whatever this stylesheet says it means, and it says
+   it in one place: the rule below, which only the **cohort** report's own stylesheet
+   turns on. `tests/unit/test_report_presentation.py` and
+   `tests/browser/test_flagged_rows.py` are what hold the per-sample report to a single
+   row background - one in the source, one measured in a browser.
+
+   The cohort keeps its stripes deliberately: a cohort table is a triage scan across
+   samples, its flagged rows are filtered rather than tinted, and reading across a wide
+   row is what a stripe is for. */
+
+.table-count,
+.count-line {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  margin: var(--s-1) 0 var(--s-3);
+}
+
+/* --- flags ----------------------------------------------------------------
+   "Highlight flagged values" adds `.highlight-flagged` to the results tables. It
+   is emphasis and nothing else: no rule here, and no script in either template,
+   may take a row out of the reader's view. */
+.highlight-flagged .flag-flagged {
+  background: color-mix(in oklab, var(--state-caution) 12%, transparent);
+  outline: 1px solid var(--state-caution);
+}
+/* The mark and its reason are one phrase and stay on one line: "Not flagged" broke
+   into "✔ Not" / "flagged" in a column narrow enough to allow it, which reads as two
+   facts. Print undoes this along with every other screen width constraint. */
+.flag-clean,
+.flag-flagged { white-space: nowrap; }
+/* The mark is the smallest thing in either report that carries a state, and it is a
+   glyph rather than a word, so it needs a size of its own: inheriting the table's
+   `--step--1` renders a 13px tick where a 16px one was intended. That size used to be
+   an inline `font-size: 16px` on the element the cohort script built, and it was lost
+   when the colour moved out of the script and into these classes - the weight came
+   with it and the size did not. Stated once here, in the scale, for both reports. */
+.flag-glyph {
+  font-weight: 700;
+  font-size: var(--step-0);
+  line-height: 1;
+}
+/* Two shapes, one colour source. The per-sample report nests the glyph inside the
+   wrapper (`report_formatting.flag_html`); the cohort report rebuilds its flag cell in
+   the browser and its cell is required to hold exactly one `<span>`, so there the two
+   classes land on the same element. Matching both is what let `updateFlagColumn` stop
+   painting the mark itself with `.css({color: 'red'})` at runtime - a literal `red` at
+   4.00:1, in the one place a stylesheet guard cannot see. */
+.flag-flagged .flag-glyph,
+.flag-flagged.flag-glyph,
+.flag-flagged .flag-reason { color: var(--state-caution); }
+.flag-clean .flag-glyph,
+.flag-clean.flag-glyph { color: var(--state-ok); }
+.flag-clean .flag-reason { color: var(--ink-muted); }
+
+/* --- confidence -----------------------------------------------------------
+   Confidence is the pipeline's own vocabulary, not a state, and it renders as
+   plain text in the page's ink. It used to be an inline colour: `High_Precision`
+   - the *most* trustworthy call there is - was `red`, 4.00:1 on white and 3.57:1
+   on a striped row, one column away from a red glyph that means the row is *not*
+   to be trusted. `Low_Precision` was `orange` at 1.97:1 and 1.76:1. Red now means
+   "something is wrong" and nothing else, and the difference between the two
+   values is the word, which is the only channel that survives greyscale, print
+   and a red-green deficiency alike. The class is the hook a deployment can style
+   against; the shipped report gives it no hue.
+
+   **It is a class, not a pill, and that is a decision rather than an omission.** The
+   task brief called for "a pill class"; the visual contract it points at renders
+   Confidence as plain unstyled text in the variant table it shows, and declares no
+   `.confidence` rule at all. The contract wins, because a bordered chip on every line of
+   a results table is furniture competing with the flagged-value treatment - the
+   same argument that removed the zebra. What is kept from the brief is the class, which
+   is what the tests assert and what a deployment restyles. The one declaration is
+   weight: the verdict column is the one a reader scans for, and weight is a non-colour
+   channel. */
+.confidence { font-weight: 600; }
+
+/* --- controls -------------------------------------------------------------
+   The input itself is the switch - `appearance: none` and a box, rather than a
+   hidden input with a `<label>` drawing a fake one from its pseudo-elements.
+   That is what makes it focusable, announced, and the same control online and
+   offline: it no longer depends on a CDN stylesheet having reached the reader. */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-5);
+  align-items: center;
+  margin-bottom: var(--s-4);
+}
+/* The label is the control's target, not just its name - the whole of it toggles the
+   input it wraps. It is sized to 44px so that is true of a thumb as well as a pointer:
+   the input itself is 36x20, which is the size the switch wants to *look*, and pairing
+   that with a target the same size is how a small control becomes a hard one. */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 2.75rem;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+.switch input {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 2.25rem;
+  height: 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--sunken);
+  position: relative;
+  cursor: pointer;
+  transition: background var(--motion) ease, border-color var(--motion) ease;
+  flex: none;
+}
+.switch input::after {
+  content: "";
+  position: absolute;
+  inset: 2px auto 2px 2px;
+  width: 0.875rem;
+  border-radius: 999px;
+  background: var(--ink-muted);
+  transition: transform var(--motion) ease, background var(--motion) ease;
+}
+.switch input:checked {
+  background: color-mix(in oklab, var(--accent) 16%, var(--surface));
+  border-color: var(--accent);
+}
+.switch input:checked::after {
+  transform: translateX(1rem);
+  background: var(--accent);
+}
+.switch-label { font-size: var(--step--1); }
+
+/* Focus that cannot be seen is focus that cannot be used. Neither template
+   styled it before, and on a `display: none` input there was no box for the
+   engine's default ring to be drawn around either. */
+.switch input:focus-visible,
+summary:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* --- disclosure -----------------------------------------------------------
+   Disclosures are native. This used to be a hidden checkbox, a `<label>` styled
+   to look like a header, and a sibling `<div>` whose `max-height` was animated
+   from 0 - which needed `input[type='checkbox'] { display: none }` to work, an
+   unscoped rule that took all four of the page's interactive inputs out of the
+   focus order and out of the accessibility tree at once (#242). `<details>` is
+   focusable, is announced with its open/closed state, is opened by find-in-page
+   and is opened by printing. None of that was true of the thing it replaces. */
+details {
+  margin-bottom: var(--s-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--step--1);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: var(--sunken);
+  border-radius: calc(var(--radius) - 1px);
+  list-style: none;
+}
+details[open] > summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+summary:hover { color: var(--accent); }
+/* The default marker is replaced, not removed: the triangle below is the same
+   affordance drawn where the flex layout can place it. */
+summary::-webkit-details-marker { display: none; }
+summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border: 5px solid transparent;
+  border-left-color: currentColor;
+  transition: transform var(--motion) ease-out;
+  flex: none;
+}
+details[open] > summary::before { transform: rotate(90deg) translateX(-2px); }
+.details-body {
+  padding: var(--s-2) var(--s-4) var(--s-4);
+  max-height: 350px;
+  overflow: auto;
+}
+
+/*
+  ================== Print is a build target (#242) ==================
+
+  The archived PDF outlives the HTML it came from: it is what gets filed,
+  attached to an email and read years later. Until this block existed neither
+  template contained a single author media rule - measured in the browser,
+  `document.styleSheets` reported `mediaRules: []` - so the printed page
+  inherited every screen affordance, including the ones that exist only because
+  a screen can be hovered and scrolled.
+
+  What the margin boxes may carry was measured in the supported engine rather
+  than assumed. Chromium 151 honours `@page` margin boxes and the
+  `counter(page)`/`counter(pages)` in them, so every sheet is numbered and a
+  truncated print is visible. It does **not** implement `string()`: a `content`
+  list containing one is dropped whole, taking its literal prefix with it, so the
+  identity cannot be carried into the margin *from the document*. Of the two ways
+  to put it there anyway, one is still refused and one is now taken:
+
+    * a `position: fixed` header, which Chromium does repeat on every sheet but
+      does not reserve space for, so it lands on top of the first line of every
+      page after the first. Still refused;
+    * interpolating the identity into a stylesheet. A `<style>` is a raw text
+      element, CSS is not an HTML context, the sample name is derived from a
+      sample-supplied basename and the report is a file people forward - so this
+      was refused for as long as there was no escaper. `css_escaping.py` is that
+      escaper, `report_identity.print_running_header_css` builds the whole rule
+      from it, and the per-sample report writes the finished fragment into a
+      `<style>` of its own. **Not here**: this file is shared with the cohort
+      report and carries no Jinja2 expression, which is what lets
+      `test_report_presentation.py` hold it to exactly that.
+
+  So this file's `@page` carries what is fixed - the page number - and the
+  per-sample report adds the identity boxes to it. Its grey is the one literal
+  colour left in this file: a `@page` margin box sits outside the document tree and
+  whether a custom property declared on `:root` reaches it was not measured here, so
+  it is not worth a token that might resolve to nothing.
+*/
+.print-header { display: none; }
+
+@page {
+  size: A4 portrait;
+  margin: 18mm 14mm 18mm;
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font-size: 8pt;
+    color: #333333;
+  }
+}
+
+@media print {
+  /* Print is always the light palette, whatever the screen was set to, and it is
+     a darker one: toner is not a backlight. */
+  :root {
+    --paper:   #ffffff;
+    --surface: #ffffff;
+    --sunken:  #f4f5f4;
+    --ink:       #000000;
+    --ink-muted: #333333;
+    --hairline:  #999999;
+    --accent:    #000000;
+
+    --state-finding: #8a1c10;
+    --state-caution: #6b4500;
+    --state-ok:      #14532b;
+    --state-none:    #333333;
+  }
+
+  .report-header {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  /* The printed record's header line: who, what, which assembly, which version,
+     and what the artefact may be used for - above everything else, on the sheet
+     that gets filed. */
+  .print-header {
+    display: block;
+    font-size: 8pt;
+    color: var(--ink-muted);
+    border-bottom: 0.5pt solid var(--hairline);
+    padding-bottom: 2mm;
+    margin-bottom: 4mm;
+  }
+  /* Controls that cannot be operated on paper. Printing a switch beside its
+     label states an option the reader does not have. */
+  .controls,
+  .column-mode,
+  .no-print {
+    display: none !important;
+  }
+  /* **The printed record is always the whole row - beneath the table, not inside it.**
+     A nineteen-column table lays out at 1,442px on a 718px sheet: restoring every
+     column here is what put 757px of the Kestrel table, the 121 bp motif sequence among
+     it, off the right edge of every printed page with nothing saying so. The table
+     prints the columns that fit, and `.record-appendix` prints every folded value under
+     it, labelled, one block per row. The control itself is removed above, because a
+     radio beside its label states an option paper does not have. */
+  .table.essential-columns { table-layout: auto; }
+  .print-only,
+  .record-appendix {
+    display: block !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-top: var(--s-3);
+  }
+  .record-row {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    padding-top: var(--s-2);
+  }
+  .record-row h3 {
+    margin: 0 0 var(--s-1);
+    font-size: 9pt;
+    color: var(--ink-muted);
+  }
+  .record-appendix dl {
+    display: grid;
+    grid-template-columns: minmax(28mm, auto) 1fr;
+    gap: 1mm var(--s-3);
+    margin: 0;
+    font-size: 8pt;
+  }
+  .record-appendix dt { font-weight: 600; color: var(--ink-muted); }
+  .record-appendix dd { margin: 0; overflow-wrap: anywhere; }
+  /* The detailed coverage view is what prints: it carries the eight statistics
+     and the QC verdict that the basic view does not, and on screen it is
+     revealed by a switch that has just been removed. Both would state the mean
+     twice. (Per-sample only; the cohort report has neither element.) */
+  #basicCoverageView {
+    display: none !important;
+  }
+  #detailedCoverageView {
+    display: block !important;
+  }
+  /* Nothing scrolls on paper, so nothing may be reachable only by scrolling.
+     `.table-container` is the screen's horizontal scroller and has to let the
+     whole table through here - and with nothing scrolling, the edge shadow that
+     says "there is more to the right" is a claim about a page that has all of it.
+     `position: sticky` is the same argument: a frozen column and a repeating
+     heading are answers to scrolling, and `thead { display: table-header-group }`
+     below is what repeats the heading on paper instead. */
+  .table-container {
+    overflow: visible;
+    border: 0.5pt solid var(--hairline);
+    background-image: none;
+  }
+  .table thead th,
+  .table tbody td:first-child,
+  .table thead th:first-child {
+    position: static;
+    box-shadow: none;
+  }
+  /* No clipping, so the whole value prints. `overflow-wrap: anywhere` is the
+     other half: a 121 bp motif sequence is one unbroken string with nowhere to
+     break, so it overflows the table's own width and is clipped again. Measured
+     in Chromium: 100 of 121 bases without it, all 121 with it. */
+  .table td,
+  .table th,
+  .table td:last-child,
+  .flag-clean,
+  .flag-flagged {
+    white-space: normal !important;
+    overflow: visible;
+    max-width: none;
+  }
+  /* **Only the sequence may break inside a word, and only it.** `anywhere` was on
+     every data cell, and measured in the printed PDF it split values mid-token: VID
+     `25561` over three lines as "25"/"56"/"1", `6.78e-07` as "6.78e"/"-07",
+     `0.009410` as "0.009"/"410", `59dupC` as "59du"/"pC". A number broken mid-digit
+     on a record somebody files and transcribes from is a hazard, not a cosmetic
+     defect. The 121 bp motif sequence is the one value with genuinely nowhere to
+     break - it is a single unbroken string - so it keeps `anywhere` and everything
+     else breaks only between words.
+
+     The headings keep their words whole, which is also what stops the layout
+     squeezing a column narrower than the word naming it: with `word-break:
+     break-word` in force everywhere, "Confidence" printed as "Confidenc e". */
+  .table td {
+    overflow-wrap: break-word;
+  }
+  .table td.mono-cell.col-grow,
+  .table td.sequence-cell {
+    overflow-wrap: anywhere;
+  }
+  .table th {
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+  .details-body {
+    max-height: none;
+    overflow: visible;
+  }
+  /* A heading at the foot of a page belongs to the table on the next one, and a
+     row split across the fold is a row read twice or not at all. */
+  h2 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  thead {
+    display: table-header-group;
+  }
+  /* Every disclosure prints open. This is the no-JS half of the belt and braces:
+     measured with scripting off, Chromium does *not* reveal a closed `<details>`
+     this way, because the UA hides its content in a way no author rule reaches -
+     the `beforeprint` handler in the per-sample report is what opens them there.
+     The rule is what an engine that honours the author cascade needs, and it
+     costs nothing. */
+  details > summary ~ * {
+    display: block !important;
+  }
+  /* The log is the exception, and it is stated rather than implied: it is pages
+     of DEBUG output, it is in the HTML original either way, and the handler skips
+     it for the same reason. Two class selectors beat the two type selectors
+     above, so this wins without a further `!important` fight. */
+  .log-section > .details-body {
+    display: none !important;
+  }
+  .log-section::after {
+    content: "The full pipeline log is in the HTML original of this report.";
+    display: block;
+    padding: 0 var(--s-4) var(--s-4);
+    font-size: 8pt;
+    color: var(--ink-muted);
+  }
+}
+</style>

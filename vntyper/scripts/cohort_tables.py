@@ -14,29 +14,40 @@ in a browser, and every cell of every table is a value read out of a sample's ow
 assembly, the version. None of that is markup VNtyper built, so none of it may reach the
 page as markup (#190).
 
-Exactly one cell in the three tables is markup VNtyper built: the ``Confidence`` colour
-span :func:`confidence_span` produces. It is named as an ``html_columns`` exemption at
-the one call site that needs it rather than by turning escaping off for a whole table,
-which is what ``to_html(escape=False)`` used to do here.
+Exactly one cell in the three tables is markup VNtyper built: the ``Confidence`` span
+:func:`confidence_span` produces. It is named as an ``html_columns`` exemption at the one
+call site that needs it rather than by turning escaping off for a whole table, which is
+what ``to_html(escape=False)`` used to do here.
 
 Extracted from ``cohort_summary.py`` in Task 22 of the #181-#197 follow-ups.
 ``tests/unit/test_cohort_tables.py`` covers the seam and
 ``tests/unit/test_cohort_summary_escaping.py`` covers the rendered page.
 """
 
-import html
 import logging
 from typing import Any
 
 import pandas as pd
 
-from vntyper.scripts.report_formatting import escaped_table_html
+from vntyper.scripts.report_formatting import confidence_html, escaped_table_html
 
 logger = logging.getLogger(__name__)
 
 #: CSS classes every table in the cohort report carries. Named once so the three tables
 #: cannot drift apart, and so the renderer call sites read as what they are.
-TABLE_CLASSES = "table table-bordered table-striped hover compact order-column table-sm"
+#:
+#: All three are the cohort report's own now (#242). ``table-bordered``, ``hover``,
+#: ``compact``, ``order-column`` and ``table-sm`` came from Bootstrap and DataTables and
+#: went with them; ``table`` is the hook the shared token layer's cell rules select on,
+#: ``table-striped`` is drawn by a rule in the cohort template itself, and ``sortable``
+#: is what the cohort's script looks for when it turns column headings into buttons.
+#:
+#: The stripe stays here and stays absent from the per-sample report, deliberately: a
+#: cohort table is a triage scan across many samples where reading along a wide row is
+#: the task, and its flagged rows are filtered rather than tinted, so a stripe competes
+#: with nothing. In a per-sample report it competes with the flagged-value highlight,
+#: which is the one row treatment there that carries meaning.
+TABLE_CLASSES = "table table-striped sortable"
 
 #: Kestrel result columns, in display order. ``Sample`` first; columns absent from the
 #: frame are skipped, because a negative run's results carry neither ``Flag`` nor the
@@ -93,39 +104,37 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
 #: than as a table-wide `escape=False`, so widening it is a visible edit.
 KESTREL_HTML_COLUMNS: tuple[str, ...] = ("Confidence",)
 
-#: Colour applied to each recognised confidence label in the cohort's Kestrel table.
-_CONFIDENCE_COLOURS = {
-    "Low_Precision": "orange",
-    "High_Precision": "red",
-    "High_Precision*": "red",
-}
-
 
 def confidence_span(value: Any) -> Any:
     """
-    Wrap a confidence label in its colour, escaping the label itself.
+    Wrap a confidence label in its class, escaping the label itself.
+
+    The class and the escaping are :func:`report_formatting.confidence_html`'s, so the
+    two reports cannot label the same value differently. The colour that used to be
+    inlined here is gone: ``orange`` measured 1.76:1 against this table's own striped
+    rows and 1.97:1 against a plain one, and ``red`` - on ``High_Precision``, the most
+    trustworthy call there is - measured 3.57:1 and 4.00:1. See
+    :data:`report_formatting.CONFIDENCE_CLASSES` for why neither is replaced by another
+    hue.
 
     Args:
         value: The ``Confidence`` cell. Any type; only ``str`` is styled.
 
     Returns:
-        The cell as markup - a coloured ``<span>`` for a recognised label, the escaped
+        The cell as markup - a classed ``<span>`` for a recognised label, the escaped
         text for anything else, and non-strings unchanged so pandas keeps formatting
-        numbers and NA itself.
+        numbers and NA itself. That last case is the one behavioural difference from
+        :func:`report_formatting.confidence_html`, which stringifies.
     """
     if not isinstance(value, str):
         return value
-    text = html.escape(value, quote=True)
-    colour = _CONFIDENCE_COLOURS.get(value)
-    if colour is None:
-        return text
-    return f'<span style="color:{colour};font-weight:bold;">{text}</span>'
+    return confidence_html(value)
 
 
 def kestrel_table_html(kestrel_df: pd.DataFrame) -> str:
     """Render the cohort's Kestrel results table.
 
-    The ``Confidence`` column is rewritten into a colour span on a **copy**, so the
+    The ``Confidence`` column is rewritten into a classed span on a **copy**, so the
     frame the caller goes on to export as CSV/TSV/JSON stays plain text. That column is
     then the table's single escaping exemption: the exemption is for the span, not for
     whatever lands in the column - an unrecognised value falls through unstyled and is

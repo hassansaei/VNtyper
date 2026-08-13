@@ -396,12 +396,12 @@
       "rationale": "vntyper/scripts/generate_report.py::build_kestrel_frames: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_kestrel_conversion_failure_preserves_both_frames and failure remains observable via WARNING log and retained frames"
     },
     {
-      "path": "vntyper/scripts/generate_report.py",
+      "path": "vntyper/scripts/igv_report.py",
       "symbol": "extract_igv_content",
       "normal_count": 1,
       "all_count": 1,
       "category": "C",
-      "rationale": "vntyper/scripts/generate_report.py::extract_igv_content: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_igv_extraction_failure_returns_empty_fragment and failure remains observable via ERROR log"
+      "rationale": "vntyper/scripts/igv_report.py::extract_igv_content: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_igv_extraction_failure_returns_empty_fragment and failure remains observable via ERROR log"
     },
     {
       "path": "vntyper/scripts/generate_report.py",
@@ -782,7 +782,7 @@
       "observable_via": "WARNING log and retained frames"
     },
     {
-      "path": "vntyper/scripts/generate_report.py",
+      "path": "vntyper/scripts/igv_report.py",
       "symbol": "extract_igv_content",
       "disposition": "preserved-contract",
       "outcome": "Returns the exact tuple of three empty strings.",

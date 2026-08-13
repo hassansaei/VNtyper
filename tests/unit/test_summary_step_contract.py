@@ -383,3 +383,64 @@ def test_get_step_data_tolerates_a_non_data_parsed_result() -> None:
 
 def test_get_step_handles_a_summary_with_no_steps_key() -> None:
     assert summary_steps.get_step({}, summary_steps.STEP_KESTREL) is None
+
+
+# ---------------------------------------------------------------------------
+# Three states, not two - #212 read back
+# ---------------------------------------------------------------------------
+
+
+def test_a_step_that_is_not_recorded_is_absent() -> None:
+    assert summary_steps.get_step_state({"steps": []}, summary_steps.STEP_KESTREL) == summary_steps.STEP_ABSENT
+
+
+def test_a_step_that_produced_rows_was_read() -> None:
+    summary = _summary(summary_steps.STEP_KESTREL)
+    assert summary_steps.get_step_state(summary, summary_steps.STEP_KESTREL) == summary_steps.STEP_READ
+
+
+def test_a_step_that_found_nothing_was_still_read() -> None:
+    """The distinction this exists for: an empty result is a result.
+
+    ``kestrel_result.tsv`` with a header and no rows is what a run that genotyped and
+    called nothing writes, and it must stay distinguishable from one that wrote no file
+    at all - otherwise the third state would swallow every negative report.
+    """
+    summary = {"steps": [{"step": summary_steps.STEP_KESTREL, "parsed_result": {"comments": [], "data": []}}]}
+
+    assert summary_steps.get_step_state(summary, summary_steps.STEP_KESTREL) == summary_steps.STEP_READ
+
+
+@pytest.mark.parametrize(
+    ("step", "case"),
+    [
+        (
+            {"step": summary_steps.STEP_KESTREL, "result_file_missing": True, "parsed_result": {"data": []}},
+            "record_step's missing-file flag (#212)",
+        ),
+        ({"step": summary_steps.STEP_KESTREL, "parsed_result": None}, "record_step's initial value"),
+        ({"step": summary_steps.STEP_KESTREL}, "no parsed_result at all"),
+        (
+            {"step": summary_steps.STEP_KESTREL, "parsed_result": {"error": "Error parsing file: boom"}},
+            "record_step's parse-failure shape",
+        ),
+    ],
+    ids=["missing-file", "null", "absent", "parse-error"],
+)
+def test_a_step_whose_result_could_not_be_read_says_so(step: dict, case: str) -> None:
+    """Each signal is structural, and none of them is a message read for its wording.
+
+    ``parse_tsv`` also records its failure as a *comment* on an otherwise ordinary
+    result, and that is deliberately not matched here: recognising it would mean
+    string-matching "Error parsing TSV file" against text a legitimate comment could
+    carry. The missing-file flag covers the case that produces it.
+    """
+    assert summary_steps.get_step_state({"steps": [step]}, summary_steps.STEP_KESTREL) == (
+        summary_steps.STEP_UNREADABLE
+    ), case
+
+
+def test_the_three_states_are_distinct_values() -> None:
+    """A caller branches on these, so two of them being equal would be silent."""
+    states = (summary_steps.STEP_ABSENT, summary_steps.STEP_READ, summary_steps.STEP_UNREADABLE)
+    assert len(set(states)) == 3, states

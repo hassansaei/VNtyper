@@ -46,6 +46,14 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3.0",  # Prevent stuck tests
     "pytest-xdist>=3.0",  # Parallel test execution (67-81% faster)
+    # The `browser` tier (tests/browser, `make test-browser`). The report is an HTML
+    # file people open in a browser, and three of its behaviours - the DataTables flag
+    # filter, the client-side rounding and the CDN assets - only exist once a real
+    # JavaScript engine has run, so the unit tier cannot see them at all. Lower-bounded
+    # rather than pinned: the tier asserts on the report's own DOM, not on the plugin.
+    # The browser binary itself is not a Python package - install it with
+    # `playwright install chromium`.
+    "pytest-playwright>=0.5",
     # Python 3.10 has no stdlib tomllib; the BLE001 policy guard uses this only
     # while running the unit tier, so it belongs in the test-only extra.
     "tomli>=2.0.1; python_version < '3.11'",
@@ -142,8 +150,20 @@ version = {attr = "vntyper.version.__version__"}
 ]
 "vntyper" = [
     "config.json",
+    # Every file under vntyper/templates/ is named here, not matched by a glob, so
+    # adding one is a deliberate packaging decision rather than an accident of the
+    # pattern. `_report_base.html` was missing until #242: a wheel built without it
+    # raised TemplateNotFound at render time for *both* reports, and nothing caught
+    # it because an editable checkout always has the file on disk.
+    "templates/_report_base.html",
     "templates/report_template.html",
     "templates/cohort_summary_template.html",
+    "templates/igv_report_template.html",
+    # The vendored igv.js, gzipped, and the notice recording where it came from,
+    # under what licence, and with which digests. Named one by one for the same
+    # reason the templates are.
+    "assets/igv-3.0.2.min.js.gz",
+    "assets/NOTICE.md",
     "dependencies/kestrel/*.jar",
     "modules/shark/shark_config.json",
     "modules/advntr/advntr_config.json",

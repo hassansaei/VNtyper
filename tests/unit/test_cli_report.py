@@ -160,6 +160,33 @@ def test_an_explicit_flanking_value_is_used(tmp_path, bound_calls) -> None:
     assert bound_calls[0].arguments["flanking"] == 120
 
 
+def test_an_explicit_sample_name_reaches_the_generator(tmp_path, bound_calls) -> None:
+    """``--sample-name`` is what the report is *called*, and it is the one identity
+    value the summary cannot supply -- so it has to survive the call site, which is
+    exactly what was broken for three other arguments before #179."""
+    cli.main(["report", "-o", str(tmp_path), "--sample-name", "PATIENT_042"])
+
+    assert bound_calls[0].arguments["sample_name"] == "PATIENT_042"
+
+
+def test_the_short_sample_name_flag_reaches_the_generator(tmp_path, bound_calls) -> None:
+    """``-s`` is how ``vntyper pipeline`` already spells it."""
+    cli.main(["report", "-o", str(tmp_path), "-s", "PATIENT_042"])
+
+    assert bound_calls[0].arguments["sample_name"] == "PATIENT_042"
+
+
+def test_no_sample_name_leaves_the_generator_to_derive_one(tmp_path, bound_calls) -> None:
+    """Passing None is not the same as passing nothing here: the generator reads
+    ``input_files`` out of the summary and derives the name itself, which is why
+    the pipeline needs no new argument to get a named report."""
+    cli.main(["report", "-o", str(tmp_path)])
+
+    bound = bound_calls[0]
+    bound.apply_defaults()
+    assert bound.arguments["sample_name"] is None
+
+
 def test_the_handler_no_longer_carries_a_call_arg_ignore() -> None:
     """The ``# type: ignore[call-arg]`` existed only to keep mypy green while the
     call was known-wrong. Leaving it behind would hide the next such defect."""
@@ -345,7 +372,18 @@ def test_vntyper_report_reaches_run_igv_report_with_all_three_tracks(tmp_path, m
     bam, bed, vcf = _kestrel_run(tmp_path)
 
     calls: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(generate_report, "run_igv_report", lambda *a, **k: calls.append((a, k)))
+
+    def _write_valid_igv_report(*args, **kwargs) -> None:
+        calls.append((args, kwargs))
+        Path(args[3]).write_text(
+            '<div id="container"><div id="igvDiv"></div></div>\n'
+            'const tableJson = {"headers":["unique_id"],"rows":[["0"]]}\n'
+            'const sessionDictionary = {"0":"session0.json"}\n'
+            "</body>\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(generate_report, "run_igv_report", _write_valid_igv_report)
 
     cli.main(["report", "-o", str(tmp_path)])
 

@@ -6,7 +6,66 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.21 (Current)
+## 2.0.22 (Current)
+
+**The report carried the right facts in the wrong order.**
+
+2.0.21 made the per-sample report a faithful record: no code path can hide a variant
+row, and the document resolves nothing off-machine. What it did not settle is where any
+of it sits. Measured at 1440x1000 on a real specimen, the first variant table began at
+y=1580 of a 3142px document — half way down, 1.6 viewport-scrolls, behind 536px of
+provenance panels. The reconciled MUC1 name, its tier, its ambiguity interval, its
+repeat form and both callers' own names were columns 11 to 18 of a nineteen-column
+table, a third of which sat past the right edge of a container that gave no sign there
+was more. Nothing anywhere in the artefact said what a tier or a nomenclature flag
+meant.
+
+`<main class="container">` matched no rule in this template — `.container` was declared
+only in the cohort one — so the page had no gutter but the browser's 8px default and no
+measure at all: provenance lines ran 180 characters, the row-count line 224. At 390px
+the document scrolled 200px sideways. The headline, the one sentence stating what was
+found, tied "Pipeline Log" on size and lost to it on weight.
+
+**The masthead now answers "what is it called" beside "was anything found":** the
+reconciled name, its tier, the ambiguity interval, the repeat form, both caller names
+and the flags, with the verdict prose held to a readable measure and the state chips —
+including both depth figures — in a column beside it. The tier badge says *which*
+tier-A condition the call missed, derived from the flags through the caller's own
+constants, instead of listing five possibilities and leaving the reader to choose.
+
+**The results tables lead the evidence** and open on twelve essential columns, with the
+rest one radio away. It folds columns and never rows: the control names the full count,
+every folded column is either restated in the masthead or derived by the column beside
+it, and a reader with no script sees every column. Run provenance moved to the foot of
+the document; the BAM-header warning did not, because an alignment the pipeline cannot
+vouch for changes how every number below it reads.
+
+**The printed record is complete for the first time.** A nineteen-column table lays out
+at 1442px on a 718px sheet, so 757px of it — the 121 bp motif sequence included — fell
+off every printed page with nothing saying so. The table now prints the columns that
+fit and every folded value prints beneath it, labelled, one block per row.
+
+Table craft: pandas' `border="1"` grey is gone, data cells take the 13px step and real
+padding instead of the browser's 1px, numbers share a right-hand axis with tabular
+figures, the first column freezes, the scroll container is a focusable named region,
+every heading carries `scope` and its own explanation, and both tables have a caption.
+The alignment panel commits to a light ground in both palettes, because igv.js paints
+its own light theme and in dark mode rendered as a white slab with a 1.22:1 track
+label. Sorting is no longer offered on a single-row table, which took the document from
+45 tab stops to seven.
+
+### Output-format changes
+
+Display only; every TSV is unchanged.
+
+- The adVNTR table's headings are English, matching the Kestrel table above it:
+  `NumberOfSupportingReads` is `Supporting Reads`, `Pvalue` is `P-value`, `RU` is
+  `Repeat Unit`, and the eight naming fields take the headings the Kestrel table
+  already used. If you scrape the HTML, key on the new heading text.
+- A semicolon-separated flag list is spaced, so a cell narrow enough to wrap breaks
+  between flags instead of inside one.
+
+## 2.0.21
 
 **adVNTR fetched a quarter of the GRCh38 MUC1 array; it now fetches all of it.**
 

@@ -21,9 +21,27 @@ import logging
 from pathlib import Path
 
 from vntyper.scripts.reference_registry import list_assemblies
+from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV, REPORT_IGV_MODES
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
+
+#: ``--report-igv``'s choices and default, taken from the module that implements them
+#: rather than restated here. Two spellings of the same list is how a mode ends up
+#: accepted by the parser and rejected by the generator.
+REPORT_IGV_CHOICES = REPORT_IGV_MODES
+REPORT_IGV_DEFAULT = DEFAULT_REPORT_IGV
+
+#: One help string, used by both subcommands. `pipeline` and `report` produce the same
+#: artifact by different routes, so an option that read differently on the two would be
+#: describing a difference that does not exist.
+REPORT_IGV_HELP = (
+    "How the report carries its alignment browser. 'embedded' (default) writes the "
+    "vendored, gzipped igv.js into the report, so the archived file is a complete "
+    "alignment browser needing neither a second file nor a network - about 500 KB. "
+    "'sidecar' leaves it out and points the reader at the self-contained "
+    "igv_report.html written beside it. 'off' produces no alignment browser at all."
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -180,6 +198,17 @@ def build_parser() -> argparse.ArgumentParser:
             "(supported: csv, tsv). JSON is always generated."
         ),
     )
+    # Declared on `pipeline` as well as on `report` because an ordinary run never goes
+    # through the `report` subcommand: `handle_pipeline` calls `run_pipeline`, which
+    # calls `generate_summary_report` itself. An option only `report` accepted would be
+    # unreachable for every run that produces a report in the first place (#242).
+    parser_pipeline.add_argument(
+        "--report-igv",
+        type=str,
+        default=REPORT_IGV_DEFAULT,
+        choices=list(REPORT_IGV_CHOICES),
+        help=REPORT_IGV_HELP,
+    )
 
     # Subcommand: report
     parser_report = subparsers.add_parser(
@@ -224,6 +253,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Flanking region size for IGV reports.",
+    )
+    parser_report.add_argument(
+        "-s",
+        "--sample-name",
+        type=str,
+        default=None,
+        help=(
+            "What the report calls its sample, in the title, the heading and the header block. "
+            "Derived from the run's own input file names when omitted."
+        ),
+    )
+    parser_report.add_argument(
+        "--report-igv",
+        type=str,
+        default=REPORT_IGV_DEFAULT,
+        choices=list(REPORT_IGV_CHOICES),
+        help=REPORT_IGV_HELP,
     )
 
     # Subcommand: cohort

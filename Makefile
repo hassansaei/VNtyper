@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures docker-cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures docker-cram-fixtures test test-unit test-browser test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -31,6 +31,7 @@ help:
 	@echo "  make verify-test-data        - Verify test data exists and has correct checksums"
 	@echo "  make test                    - Run all tests (needs test data + Docker)"
 	@echo "  make test-unit               - Run unit tests only"
+	@echo "  make test-browser            - Run browser tests (needs a Playwright browser)"
 	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
 	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
 	@echo "  make test-scripts-cov        - Measure scripts-only unit coverage"
@@ -193,16 +194,42 @@ verify-test-data:
 	@echo "$(GREEN)✓ Test data verification complete$(RESET)"
 
 # Testing targets
+#
+# THE FOUR BARE-`pytest` TARGETS (test, test-cov, test-quiet, test-verbose) EXCLUDE THE
+# BROWSER TIER, and that is not in tension with the note on `test-unit` below.
+# `pytest.ini` sets `testpaths = tests`, so a bare `pytest` collects `tests/browser` and
+# the target then needs a Playwright browser binary on every machine that runs it - which
+# `make all` (-> `test`) would impose on everyone. These targets select nothing, so the
+# predicate is the only thing that can exclude the tier. `test-unit` selects
+# `-m unit tests/unit`, by path AND by marker, so there the same predicate would be inert
+# and would imply browser tests carry the `unit` marker. Different targets, same rule:
+# state the exclusion exactly where it does something.
+#
+# `-m` does not combine across repeated flags (it overrides), so if one of these ever
+# gains a marker expression of its own, fold "not browser" into that single expression.
 test:
 	@echo "$(BLUE)Running all tests (with live logging)...$(RESET)"
 	@echo "$(BLUE)Note: Live logging shows real-time progress for slow tests$(RESET)"
-	pytest
+	pytest -m "not browser"
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
+# `-m unit tests/unit` selects by path AND by marker, so tests/browser is already
+# unreachable from here. Do not add `-m "not browser"`: it would be inert, and it would
+# imply browser tests carry the `unit` marker, which they must not - they need a real
+# browser engine and so cannot run on a fresh clone, which is what this tier guarantees.
 test-unit:
 	@echo "$(BLUE)Running unit tests (fast)...$(RESET)"
 	pytest -m unit tests/unit -o log_cli=false
 	@echo "$(GREEN)✓ Unit tests complete$(RESET)"
+
+# The browser tier (#242). Deliberately outside `check-all` and outside the coverage
+# floor: it needs a Playwright browser binary (`playwright install chromium`) and the
+# network, so gating a fresh clone on it would make the pre-PR gate unrunnable. It
+# measures nothing for `fail_under`, which stays a unit-tier figure.
+test-browser:
+	@echo "$(BLUE)Running browser tests (needs a Playwright browser)...$(RESET)"
+	pytest tests/browser -m browser
+	@echo "$(GREEN)✓ Browser tests complete$(RESET)"
 
 # Inner dev loop: last-failed first, stop at the first failure.
 test-fast:
@@ -371,19 +398,21 @@ test-advntr:
 	pytest tests/integration/test_pipeline_integration.py::test_advntr_input -v
 	@echo "$(GREEN)✓ adVNTR test complete$(RESET)"
 
+# `-m "not browser"` on these three for the reason given above the `test` target: they
+# select nothing, so without it they collect tests/browser and need a browser binary.
 test-cov:
 	@echo "$(BLUE)Running tests with coverage...$(RESET)"
-	pytest --cov=vntyper --cov-report=html --cov-report=term
+	pytest -m "not browser" --cov=vntyper --cov-report=html --cov-report=term
 	@echo "$(GREEN)✓ Coverage report generated in htmlcov/$(RESET)"
 
 test-quiet:
 	@echo "$(BLUE)Running tests with minimal output...$(RESET)"
-	pytest -o log_cli=false -q
+	pytest -m "not browser" -o log_cli=false -q
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 test-verbose:
 	@echo "$(BLUE)Running tests with detailed output...$(RESET)"
-	pytest -v -s
+	pytest -m "not browser" -v -s
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 # Maintenance targets

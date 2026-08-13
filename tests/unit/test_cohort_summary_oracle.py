@@ -121,9 +121,161 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved once, and the reason is recorded here because a changed fingerprint with
-#: no explanation should be read as the worst case:
+#: It has moved six times, and each reason is recorded here because a changed
+#: fingerprint with no explanation should be read as the worst case.
 #:
+#: Move 6 (#242 - the CDN tags leave, and the cohort's table behaviour is rewritten)
+#: --------------------------------------------------------------------------------
+#: * **Old**: ``7240600f1c89ffa78a9d26882e977ea3ff60db08702e864bac90f0c01adc4a15``
+#: * **New**: ``fb36948e8d30555deb7dfc513de915b038990e03cd69a38f0e65f8e84e8080ad``
+#:
+#: **Cause: five removed tags, one class attribute, and stylesheet rules.** Nothing in
+#: this report's *data* moved. Verified before the constant was changed, by rendering
+#: this file's own fixture against the previous commit's two template files through
+#: ``paths.template_dir`` - with ``cohort_tables.TABLE_CLASSES`` monkeypatched back to
+#: its old value - and reproducing ``7240600f…`` exactly, then diffing the two canonical
+#: documents. Everything the diff contains is one of:
+#:
+#: * the two ``<link rel="stylesheet">`` tags (Bootstrap, DataTables) and the three
+#:   ``<script src>`` tags (jQuery, Bootstrap, DataTables) leaving the document;
+#: * ``TABLE_CLASSES`` on all three tables:
+#:   ``table table-bordered table-striped hover compact order-column table-sm`` ->
+#:   ``table table-striped sortable``. Five of the seven old names were Bootstrap's or
+#:   DataTables' and styled nothing this repository ships once those two left;
+#:   ``table-striped`` is now drawn by a rule in this report's own stylesheet, and
+#:   ``sortable`` is what its script looks for;
+#: * rules and comments in the shared token layer (the sortable heading's button, the
+#:   flag glyph's font size, the row-colour rules losing their Bootstrap/DataTables
+#:   specificity twins, the ``.dataTables_wrapper`` chrome going away) and in this
+#:   template's own ``<style>`` (the zebra rule, the toolbar and pager).
+#:
+#: ``[TABLES]``'s cell contents, ``[CHART-VALUES]``, ``[CHART-LABELS]``,
+#: ``[CHART-TOTALS]`` and ``[IMAGES]`` are byte-identical, and both documents contain
+#: the same 14 ``<tr>``. The rewritten script - the vanilla filter, search, paging, flag
+#: mark and sort that replace DataTables - does not appear in the diff at all, because
+#: ``_skeleton`` replaces every script body with ``<SCRIPT-BODY>``;
+#: ``tests/browser/test_cohort_table_behaviour.py`` and
+#: ``tests/browser/test_cohort_flag_marks.py`` are what measure that half.
+#:
+#: Move 5 (#242, task 7 review - the runtime-painted flag glyph)
+#: -------------------------------------------------------------
+#: * **Old**: ``e99096fe0db6105b39de0b0b216bc57ec6a968004431a4c0a7d34061db4b0dfc``
+#: * **New**: ``7240600f1c89ffa78a9d26882e977ea3ff60db08702e864bac90f0c01adc4a15``
+#:
+#: **Cause: two selectors and three CSS comments.** ``updateFlagColumn`` was still
+#: painting this report's flag glyph in the browser with
+#: ``.css({color: isClean ? 'green' : 'red'})`` - a literal ``red`` at 4.00:1 against
+#: the page, the same defect ``report_formatting.flag_html`` was fixed for, surviving in
+#: the one place a stylesheet scan cannot see. The mark now carries
+#: ``flag-clean flag-glyph`` / ``flag-flagged flag-glyph`` and the shared token layer
+#: gained ``.flag-clean.flag-glyph`` and ``.flag-flagged.flag-glyph`` so that one
+#: element carrying both classes is coloured, as well as the nested shape the per-sample
+#: report builds. The three comments correct the "No zebra" claim (it was true of
+#: neither report; it is now true of the per-sample one and the cohort's stripes are
+#: named as deliberate) and record why ``.confidence`` is a class rather than a pill.
+#:
+#: **Verified before it was moved**, by rendering the branch tip's two template files
+#: from ``git show`` through ``paths.template_dir`` and diffing the canonical documents:
+#: five hunks, all inside ``[SKELETON]`` and all after line 342. ``[TABLES]``,
+#: ``[CHART-VALUES]``, ``[CHART-LABELS]``, ``[CHART-TOTALS]`` and ``[IMAGES]`` are
+#: byte-identical, and the change to ``updateFlagColumn`` itself does not appear at all
+#: because ``_skeleton`` replaces every script body with ``<SCRIPT-BODY>`` -
+#: ``tests/browser/test_cohort_flag_marks.py`` is what measures that half.
+#:
+#: Move 4 (#242 - the printed running header)
+#: ------------------------------------------
+#: * **Old**: ``171c90650179a14916efd70fd1167818585b8a29c3ee260fae932ac9cd103487``
+#: * **New**: ``e99096fe0db6105b39de0b0b216bc57ec6a968004431a4c0a7d34061db4b0dfc``
+#:
+#: **Cause: one CSS comment, and nothing else.** The shared token layer's note about
+#: the ``@page`` margin boxes said the two ways of putting the identity in the margin
+#: were "both refused". One of them is now taken - the per-sample report interpolates
+#: an escaped ``@page`` rule into a ``<style>`` of its own - so the note would
+#: otherwise have been false. A CSS comment is rendered output, so the digest moves.
+#:
+#: **Verified before it was moved**, by diffing the canonical documents: the whole
+#: difference is the one comment inside ``[SKELETON]``. No ``[TABLES]``,
+#: ``[CHART-*]`` or ``[IMAGES]`` section changed, and no selector, declaration or
+#: rendered value did either. The cohort report has no ``@page`` identity boxes and
+#: gains none: the builder is called only by ``generate_report.py``.
+#:
+#: Move 3 (#242, task 7 - one token layer, two reports)
+#: ----------------------------------------------------
+#: * **Old**: ``9c31e01d5c4fe1792bad4824a1a4e32cb94c4edd325ff53154f5be9970c1a761``
+#: * **New**: ``171c90650179a14916efd70fd1167818585b8a29c3ee260fae932ac9cd103487``
+#:
+#: **Verified before it was moved.** The pre-change template was extracted from ``HEAD``
+#: into a scratch directory, rendered through ``config.json``'s own
+#: ``paths.template_dir`` knob with the pre-change ``confidence_span`` restored, and
+#: reproduced ``9c31e01d...`` exactly. Nothing in the working tree was reverted to do it.
+#:
+#: **Cause: one cell of markup changed, and the page's head was replaced.** The canonical
+#: document goes from 443 lines to 901 and the whole difference is seven hunks:
+#:
+#: 1. ``[TABLES]``, twice - and this is the only *rendered value* that moved. The Kestrel
+#:    table's ``Confidence`` cells went from
+#:    ``<span style="color:red;font-weight:bold;">High_Precision</span>`` to
+#:    ``<span class="confidence confidence-high-precision">High_Precision</span>``, and
+#:    the ``Low_Precision`` row from ``color:orange`` to
+#:    ``class="confidence confidence-low-precision"``. Measured: ``orange`` was 1.76:1
+#:    against this table's own striped rows and 1.97:1 against a plain one; ``red`` was
+#:    3.57:1 and 4.00:1, and it sat on ``High_Precision``, the most trustworthy call the
+#:    pipeline makes, one column from a red ``Flag`` glyph that means the opposite. The
+#:    column selection, the column order, every other cell value, the pandas scaffolding
+#:    and the per-column escaping exemptions are byte-identical.
+#: 2. ``[SKELETON]``, the same two cells again, because the skeleton contains the tables.
+#: 3. ``[SKELETON]``, the page head: the viewport meta and the shared stylesheet moved
+#:    into ``templates/_report_base.html``, which both reports now ``{% include %}``, and
+#:    the truncation block, the switch, the focus ring and the ``prefers-reduced-motion``
+#:    rule are no longer written out here as a near-copy of the per-sample report's. The
+#:    cohort report gains what only the per-sample one had: a ``@media print`` block and
+#:    ``@page`` numbering.
+#:
+#: ``[CHART-VALUES]``, ``[CHART-LABELS]``, ``[CHART-TOTALS]`` and ``[IMAGES]`` carry no
+#: hunk at all - both donut charts' segment values, their labels, both centre totals and
+#: the image counts are unchanged, so the sample-level categorisation this oracle exists
+#: to watch did not move.
+#:
+#: **The cohort report's filtering, searching and paging are still untouched** (#242,
+#: precondition P4), and so are its plots.
+#:
+#: Move 2 (#242, task 4 - accessibility)
+#: -------------------------------------
+#: * **Old**: ``9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645``
+#: * **New**: ``9c31e01d5c4fe1792bad4824a1a4e32cb94c4edd325ff53154f5be9970c1a761``
+#:
+#: **Cause: the page skeleton changed; no rendered value did.** The canonical document is
+#: 443 lines and ``[SKELETON]`` starts at line 151. Every hunk of the before/after diff
+#: begins at line 155 or later, so ``[TABLES]``, ``[CHART-VALUES]``, ``[CHART-LABELS]``,
+#: ``[CHART-TOTALS]`` and ``[IMAGES]`` are byte-identical: the three rendered tables, both
+#: donut charts' segment values, labels and centre totals, and the image counts, all
+#: unchanged. Five hunks, all of them markup the reader never reads as data:
+#:
+#: 1. ``<meta name="viewport" content="width=device-width, initial-scale=1">`` - absent
+#:    from both templates, so a 390px phone laid the page out at 980px;
+#: 2. a new stylesheet block: the ``.switch`` treatment (``appearance: none`` on the input
+#:    itself), a ``:focus-visible`` outline, and a ``prefers-reduced-motion`` rule;
+#: 3. ``<div class="container">`` became ``<main class="container">`` - the page had no
+#:    landmark at all;
+#: 4. the flag switch: the Bootstrap ``custom-control-input``/``custom-control-label``
+#:    pair became a ``<label class="switch" for="toggleFlagged">`` wrapping the input and
+#:    a ``<span class="switch-label" id="toggleFlaggedLabel">``. The id exists because the
+#:    switch's handler rewrites that text, and rewriting the ``<label>`` would delete the
+#:    input nested inside it;
+#: 5. the matching ``</div>`` became ``</main>``.
+#:
+#: The `role="img"`/`aria-label` added to the flag mark in ``updateFlagColumn`` does *not*
+#: appear in this diff: ``_skeleton`` replaces every script body with ``<SCRIPT-BODY>``, so
+#: the oracle cannot see it. ``tests/unit/test_template_escaping.py`` is what still holds
+#: that function's two escaping properties.
+#:
+#: **The cohort report's filtering, searching and paging are deliberately untouched.**
+#: Hiding flagged rows is defensible for triage across samples and indefensible for a
+#: single-patient read (#242, precondition P4), which is why only the per-sample report
+#: lost its filter.
+#:
+#: Move 1 (a fixture correction)
+#: -----------------------------
 #: * **Old**: ``d82eb3745e5a8f1f118659d8e5853492ad1b5b7b2b424be11a54e1c79c1c28ee``
 #: * **New**: ``9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645``
 #:
@@ -146,7 +298,7 @@ pytestmark = pytest.mark.unit
 #: **Re-derived, and it did not move, when the two cohort defects were fixed** (the
 #: in-place annotation and the non-deterministic sample order). It was re-derived twice
 #: under `PYTHONHASHSEED=0` and `PYTHONHASHSEED=12345` in separate interpreters and both
-#: produced `9889773a...`, which is the value already recorded above. Each fix was also
+#: produced `9889773a...`, which is move 1's result above. Each fix was also
 #: applied on its own and neither moved it. That is the expected result rather than a
 #: surprise, and it says something worth keeping:
 #:
@@ -171,7 +323,18 @@ pytestmark = pytest.mark.unit
 #: neither. The evidence for that fix is
 #: `test_cohort_inputs.py::test_processes_with_different_hash_seeds_discover_the_same_order`,
 #: which spawns five interpreters under five seeds, and it covers directory inputs only.
-EXPECTED_FINGERPRINT = "9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645"
+#: **Moved once, deliberately, by #242's report presentation pass.** The previous value
+#: was ``fb36948e8d30555deb7dfc513de915b038990e03cd69a38f0e65f8e84e8080ad``. The only
+#: change to this report's *content* is that ``escaped_table_html`` now renders with
+#: ``border=0``: pandas' default wrote ``border="1"`` into every table it produced, and a
+#: presentation attribute is a colour no stylesheet can see - it painted a 1px ``inset``
+#: grey at 3.95:1 on every cell, square-cornered, inside the report's own hairline frame.
+#: The canonical document was diffed line by line against the recorded one before this
+#: constant was touched: the ``[TABLES]``, ``[CHART-VALUES]``, ``[CHART-LABELS]``,
+#: ``[CHART-TOTALS]`` and ``[IMAGES]`` sections are byte-identical, and every other line
+#: that moved is inside the shared token layer's ``<style>`` or its comments. No cell
+#: value, no column, no row order and no chart datum changed.
+EXPECTED_FINGERPRINT = "bf5c1d831c61090abd4cc6031c635e6b2858e42c2dab30f6218bfb8e12d7f21b"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
@@ -210,6 +373,16 @@ def _fingerprint(html: str) -> tuple[str, str]:
         tuple[str, str]: The canonical document (for diffing on failure) and its
         SHA-256 hex digest.
     """
+    # **Normalised once, before anything is extracted.** The volatile fragments were
+    # replaced inside `_skeleton` only, so every section taken from `html` above it -
+    # `[TABLES]` first among them - carried the raw text. Measured: the cohort report
+    # renders `<p><strong>Report Date:</strong> 2026-08-13 20:42:42</p>` inside the span
+    # `_TABLE` captures, so the digest moved whenever the clock's seconds ticked between
+    # two runs and this oracle was flaky at a rate nobody had cause to notice while the
+    # recorded value was stale anyway. Three consecutive runs produced three digests.
+    # Doing the substitutions here makes every section measure the same document.
+    html = _UUID.sub("<UUID>", _TIMESTAMP.sub("<TIMESTAMP>", html))
+
     parts = [
         "[TABLES]",
         *_TABLE.findall(html),

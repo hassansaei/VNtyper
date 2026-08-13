@@ -22,10 +22,26 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+#: Version of the ``pipeline_summary.json`` layout this module writes.
+#:
+#: Nothing versioned the summary before, so a consumer could not tell "this run
+#: did not record the region" from "this run predates the field" - and the report
+#: has to distinguish them, because the only honest rendering of the second is to
+#: say the value was not recorded rather than to substitute a configured default
+#: (#242). Bump this when a key is added, removed or changes meaning.
+#:
+#: Schema 2 adds ``sample_name_is_explicit``. Schema 1 recorded ``sample_name`` alone,
+#: which cannot distinguish the operator's ``--sample-name`` from a name the CLI
+#: derived from an input path - and the report has to, because the second is a
+#: ``Path.stem`` it must finish deriving while the first is a name to print verbatim.
+SUMMARY_SCHEMA_VERSION = 2
+
 
 def start_summary(
     version=None,
     input_files=None,
+    sample_name=None,
+    sample_name_is_explicit=False,
     reference_assembly_requested=None,
     reference_key_used=None,
     reference_path=None,
@@ -56,6 +72,23 @@ def start_summary(
     Args:
         version (str, optional): vntyper version. Defaults to "unknown" if not provided.
         input_files (dict, optional): Dictionary of input files. Defaults to empty dict.
+        sample_name (str, optional): What the run calls this sample - the same string
+            Kestrel embeds in its outputs and VCF header. Recorded verbatim, including
+            the literal ``"sample"`` ``cli_handlers`` falls back to when it can resolve
+            nothing: this is the run's own record of what it used, and deciding what to
+            do with a value belongs to the consumer, not here. Without it the HTML
+            report had no way to reach the operator's ``--sample-name`` and derived a
+            different name from the input basename, so one run produced two identities
+            (#242).
+        sample_name_is_explicit (bool, optional): Whether ``sample_name`` is the
+            operator's own ``--sample-name`` (True) or a name ``cli_handlers`` derived
+            from an input path (False). The string cannot answer this and guessing from
+            its shape was wrong in both directions: a derived ``S1_R1.fastq`` is a
+            ``Path.stem`` the report must finish deriving into ``S1``, while an explicit
+            ``sample`` is a name to print as given. Recording the provenance beside the
+            value is what lets the report do both without changing the string Kestrel
+            names its output files with. Defaults to False - a caller that does not say
+            did not have an operator's name to record.
         reference_assembly_requested (str, optional): The ``--reference-assembly`` label
             the run was asked for. Recorded regardless of input type: even a BAM/CRAM
             run that reads no reference file still uses this to select the correct
@@ -74,17 +107,28 @@ def start_summary(
             For BAM and CRAM, the alignment plan's own source label instead.
 
     Returns:
-        dict: A summary dictionary with pipeline start timestamp, version, input files,
-        the effective reference selection, and an empty steps list.
+        dict: A summary dictionary with its schema version, pipeline start timestamp,
+        version, input files, the run's sample name and where it came from, the
+        effective reference selection,
+        a placeholder for the region the run resolves later, and an empty steps list.
     """
     return {
+        "schema_version": SUMMARY_SCHEMA_VERSION,
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
+        "sample_name": sample_name,
+        "sample_name_is_explicit": bool(sample_name_is_explicit),
         "reference_assembly_requested": reference_assembly_requested,
         "reference_key_used": reference_key_used,
         "reference_path": reference_path,
         "reference_source_effective": reference_source_effective,
+        # The span the coverage stage actually worked over. It is not known yet -
+        # `calculate_alignment_coverage` resolves it mid-run - but the key exists
+        # from the start so that schema 1 means "this field is present", and an
+        # absent one means the summary predates it rather than that the run
+        # declined to say (#242).
+        "region_resolved": None,
         "steps": [],
     }
 

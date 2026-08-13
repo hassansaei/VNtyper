@@ -32,6 +32,7 @@ import pandas as pd
 import pytest
 
 from vntyper.scripts import screening_summary as ss
+from vntyper.scripts import summary_steps
 from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 
 pytestmark = pytest.mark.unit
@@ -306,6 +307,84 @@ def test_every_rule_has_a_non_empty_message(report_config) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ScreeningSummary.emphasis -- how the report should style the state
+# ---------------------------------------------------------------------------
+
+
+def _summary(
+    *,
+    is_positive: bool,
+    matched_rule: bool,
+    quality_metrics_pass: bool = True,
+    text: str = "message",
+    kestrel_result: str = "High_Precision",
+    advntr_result: str = ss.NOT_PERFORMED,
+    kestrel_execution: str = ss.EXECUTION_PERFORMED,
+    advntr_execution: str = ss.EXECUTION_PERFORMED,
+) -> "ss.ScreeningSummary":
+    """Build a `ScreeningSummary` with only the axes each test cares about named."""
+    return ss.ScreeningSummary(
+        text=text,
+        is_positive=is_positive,
+        kestrel_result=kestrel_result,
+        advntr_result=advntr_result,
+        quality_metrics_pass=quality_metrics_pass,
+        matched_rule=matched_rule,
+        kestrel_execution=kestrel_execution,
+        advntr_execution=advntr_execution,
+    )
+
+
+def test_an_unmatched_rule_is_indeterminate_not_negative() -> None:
+    """`matched_rule` is the reason this property exists: a state with no configured
+    rule is unknown, not a negative (see the module docstring)."""
+    summary = _summary(is_positive=False, matched_rule=False)
+    assert summary.emphasis == "indeterminate"
+
+
+def test_an_unmatched_rule_stays_indeterminate_even_when_positive() -> None:
+    """The other ordering: `matched_rule is False` wins over `is_positive` too.
+
+    Both algorithms called positive but no rule covers the combination is exactly the
+    case `matched_rule` exists to catch -- it must not be reported as a finding just
+    because `is_positive` happens to be True.
+    """
+    summary = _summary(is_positive=True, matched_rule=False)
+    assert summary.emphasis == "indeterminate"
+
+
+def test_a_matched_positive_rule_is_a_finding() -> None:
+    summary = _summary(is_positive=True, matched_rule=True)
+    assert summary.emphasis == "finding"
+
+
+def test_a_matched_negative_rule_is_a_no_finding() -> None:
+    summary = _summary(is_positive=False, matched_rule=True)
+    assert summary.emphasis == "no-finding"
+
+
+def test_a_finding_with_failing_quality_metrics_is_still_a_finding() -> None:
+    """QC is orthogonal to emphasis. It never suppresses a call.
+
+    The rule table describes exactly this combination as a pathogenic finding with
+    low-quality metrics (report_config.json), and ``is_positive`` is derived from the
+    algorithm calls independently of QC by design (screening_summary.py). An earlier
+    draft of this plan let failed QC force "indeterminate", which would have silently
+    reclassified a confirmed pathogenic call with poor coverage as "state unknown" --
+    contradicting the rule table, which describes exactly that combination as a
+    finding with low-quality metrics, and contradicting ``is_positive`` itself.
+    """
+    summary = _summary(is_positive=True, matched_rule=True, quality_metrics_pass=False)
+    assert summary.emphasis == "finding"
+
+
+def test_a_no_finding_with_failing_quality_metrics_is_still_a_no_finding() -> None:
+    """The mirror case: failing QC does not manufacture a finding either."""
+    summary = _summary(is_positive=False, matched_rule=True, quality_metrics_pass=False)
+    assert summary.emphasis == "no-finding"
+
+
+# ---------------------------------------------------------------------------
 # build_screening_summary, driven the way the report drives it
 # ---------------------------------------------------------------------------
 
@@ -448,7 +527,14 @@ def test_widening_the_quality_axis_cannot_change_positivity(report_config) -> No
 
 
 def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
-    """An internal screening dependency failure yields the explicit unavailable state."""
+    """An internal screening dependency failure yields the explicit unavailable state.
+
+    This is also the only path through `build_screening_summary` that leaves
+    `matched_rule` False in practice: all 40 reachable (kestrel_result, advntr_result,
+    quality_metrics_pass) combinations resolve to a configured rule (see
+    `test_every_reachable_state_has_its_own_message`), so `emphasis == "indeterminate"`
+    is genuinely exceptional and cannot mislabel an ordinary all-negative report.
+    """
     with (
         mock.patch.object(ss, "compute_algorithm_result", side_effect=RuntimeError("boom")),
         caplog.at_level(logging.ERROR, logger="vntyper.scripts.screening_summary"),
@@ -461,13 +547,13 @@ def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
     assert summary.advntr_result == ""
     assert summary.quality_metrics_pass is False
     assert summary.matched_rule is False
+    assert summary.emphasis == "indeterminate"
     records = [record for record in caplog.records if record.name == "vntyper.scripts.screening_summary"]
     assert [record.levelno for record in records] == [logging.ERROR]
 
 
 def test_a_state_with_no_rule_warns_rather_than_going_quiet(caplog, report_config) -> None:
-    """The fallback is indistinguishable from a real negative in the HTML, so
-    the only trace it leaves is this log line."""
+    """An uncovered state keeps its axes but withholds the misleading fallback."""
     stripped = {**report_config, "screening_summary_rules": []}
     with caplog.at_level(logging.WARNING, logger="vntyper.scripts.screening_summary"):
         summary = ss.build_screening_summary(
@@ -475,6 +561,352 @@ def test_a_state_with_no_rule_warns_rather_than_going_quiet(caplog, report_confi
         )
 
     assert summary.matched_rule is False
-    assert summary.text == report_config["screening_summary_default"]
+    assert summary.text == ss.UNAVAILABLE_SUMMARY_MESSAGE
+    assert summary.segments == (ss.UNAVAILABLE_SUMMARY_MESSAGE,)
+    assert summary.kestrel_result == "High_Precision"
+    assert summary.advntr_result == ss.NOT_PERFORMED
+    assert summary.quality_metrics_pass is True
     assert summary.is_positive is True, "the state is still positive even with no message for it"
+    assert summary.emphasis == "indeterminate"
     assert any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Execution state -- a stage that ran and produced nothing readable is not a
+# negative, and the message chosen for the state it did not establish is not
+# authoritative (#242, Gate B)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("step_state", "expected"),
+    [
+        (summary_steps.STEP_READ, ss.EXECUTION_PERFORMED),
+        (summary_steps.STEP_ABSENT, ss.EXECUTION_NOT_PERFORMED),
+        (summary_steps.STEP_UNREADABLE, ss.EXECUTION_FAILED),
+    ],
+)
+def test_each_step_state_maps_to_one_execution_state(step_state, expected) -> None:
+    """``get_step_state`` already distinguishes three states; this is the only
+    translation of them into the vocabulary the report presents."""
+    assert ss.execution_state(step_state) == expected
+
+
+def test_an_unrecognised_step_state_is_treated_as_a_failure() -> None:
+    """The conservative direction. A state this module does not recognise has
+    established nothing about the sample, so it must not be presented as a result."""
+    assert ss.execution_state("something-new") == ss.EXECUTION_FAILED
+
+
+#: One failed stage each, with the other reporting normally.
+ONE_STAGE_FAILED = [
+    (ss.EXECUTION_FAILED, ss.EXECUTION_PERFORMED),
+    (ss.EXECUTION_PERFORMED, ss.EXECUTION_FAILED),
+]
+
+
+@pytest.mark.parametrize(("kestrel", "advntr"), ONE_STAGE_FAILED, ids=["kestrel", "advntr"])
+def test_a_failed_stage_makes_the_screening_state_indeterminate(kestrel: str, advntr: str) -> None:
+    """Either algorithm is enough. A rule was selected by matching a state one of
+    the two stages never established, so the state as a whole is not established."""
+    summary = _summary(is_positive=False, matched_rule=True, kestrel_execution=kestrel, advntr_execution=advntr)
+    assert summary.emphasis == "indeterminate"
+
+
+@pytest.mark.parametrize(("kestrel", "advntr"), ONE_STAGE_FAILED, ids=["kestrel", "advntr"])
+def test_a_failed_stage_outranks_a_positive_call(kestrel: str, advntr: str) -> None:
+    """The other ordering, and the one that matters: a Kestrel call cannot make a
+    report authoritative about a state adVNTR never established, and vice versa."""
+    summary = _summary(is_positive=True, matched_rule=True, kestrel_execution=kestrel, advntr_execution=advntr)
+    assert summary.emphasis == "indeterminate"
+
+
+def test_an_advntr_stage_that_was_never_asked_to_run_is_not_a_failure() -> None:
+    """An adVNTR-less run is the commonest run there is, and the rule table covers it.
+
+    Ten of the forty rules are keyed on ``advntr_result == "none"`` and say in words
+    that the stage was not performed, so the state *is* established. Treating this like a
+    failure would make every adVNTR-less report indeterminate.
+    """
+    summary = _summary(is_positive=True, matched_rule=True, advntr_execution=ss.EXECUTION_NOT_PERFORMED)
+    assert summary.state_is_established is True
+    assert summary.emphasis == "finding"
+
+
+def test_an_absent_kestrel_stage_leaves_the_state_unestablished() -> None:
+    """The asymmetry, and where it comes from.
+
+    ``kestrel_result`` has no value for "did not run": an absent Kestrel step hands
+    ``compute_algorithm_result`` an empty frame and gets the block's ``default`` back -
+    the same ``negative`` a stage that genotyped and called nothing produces. So the rule
+    that matches is one keyed on a Kestrel negative, and the report would state a negative
+    for a stage that never ran. ``vntyper report`` can legitimately be handed such a
+    summary (#207), so this is reachable rather than theoretical.
+    """
+    summary = _summary(is_positive=False, matched_rule=True, kestrel_execution=ss.EXECUTION_NOT_PERFORMED)
+    assert summary.state_is_established is False
+    assert summary.emphasis == "indeterminate"
+
+
+def test_a_failed_kestrel_stage_withholds_the_configured_message(report_config, caplog) -> None:
+    """The Gate B defect, at its source.
+
+    ``record_step`` writes an empty ``data`` list for a Kestrel stage whose result
+    file is missing (#212) -- the same shape a run that genotyped and called nothing
+    produces -- so ``compute_algorithm_result`` returns the block's ``default`` and the
+    rule table hands back "No variant detected." A report that prints that sentence is
+    asserting a negative the run never reached.
+    """
+    with caplog.at_level(logging.WARNING, logger="vntyper.scripts.screening_summary"):
+        summary = ss.build_screening_summary(
+            pd.DataFrame(),
+            pd.DataFrame(),
+            False,
+            _passing(),
+            report_config,
+            kestrel_execution=ss.EXECUTION_FAILED,
+        )
+
+    assert summary.text == ss.UNAVAILABLE_SUMMARY_MESSAGE
+    assert summary.emphasis == "indeterminate"
+    assert summary.kestrel_execution == ss.EXECUTION_FAILED
+    assert any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+def test_a_failed_advntr_stage_withholds_the_configured_message(report_config) -> None:
+    """The half the first fix missed: only Kestrel's step state reached the report,
+    so an unreadable adVNTR stage was reported as "No pathogenic variants identified"."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+        advntr_execution=ss.EXECUTION_FAILED,
+    )
+
+    assert summary.text == ss.UNAVAILABLE_SUMMARY_MESSAGE
+    assert summary.emphasis == "indeterminate"
+
+
+def test_a_run_that_states_its_stages_ran_keeps_its_configured_message(report_config) -> None:
+    """Guard the guard: withholding must be reachable *and* avoidable, or the two
+    tests above would pass against a module that never renders a message at all."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+        kestrel_execution=ss.EXECUTION_PERFORMED,
+        advntr_execution=ss.EXECUTION_NOT_PERFORMED,
+    )
+
+    assert summary.text != ss.UNAVAILABLE_SUMMARY_MESSAGE
+    assert summary.emphasis == "finding"
+
+
+def test_the_execution_states_default_to_the_two_state_model_they_replace(report_config) -> None:
+    """A caller that says nothing gets exactly the model that existed before: Kestrel
+    ran, and adVNTR ran if and only if ``advntr_available`` says so. No default asserts
+    anything the old signature could not."""
+    performed = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), True, _passing(), report_config)
+    absent = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, _passing(), report_config)
+
+    assert performed.kestrel_execution == absent.kestrel_execution == ss.EXECUTION_PERFORMED
+    assert performed.advntr_execution == ss.EXECUTION_PERFORMED
+    assert absent.advntr_execution == ss.EXECUTION_NOT_PERFORMED
+
+
+@pytest.mark.parametrize(
+    ("execution", "result", "expected"),
+    [
+        (ss.EXECUTION_PERFORMED, "High_Precision", "High_Precision"),
+        (ss.EXECUTION_PERFORMED, "negative", "negative"),
+        (ss.EXECUTION_NOT_PERFORMED, "none", "not performed"),
+        (ss.EXECUTION_FAILED, "negative", "failed"),
+    ],
+)
+def test_the_provenance_word_says_the_execution_state_before_the_result(execution, result, expected) -> None:
+    """The raw state line prints the computed result only when there is one. The last
+    row is the defect: an unreadable stage computes the block's ``default``, so a line
+    that printed the result would read "Kestrel: negative"."""
+    assert ss.algorithm_state_text(execution, result) == expected
+
+
+# ---------------------------------------------------------------------------
+# The configured messages, as the ordered parts the report renders
+# ---------------------------------------------------------------------------
+
+
+def rule_id(rule: dict) -> str:
+    """Name one screening rule by the state it covers."""
+    conditions = rule["conditions"]
+    qc = "qc-pass" if conditions["quality_metrics_pass"] else "qc-fail"
+    return f"{conditions['kestrel_result']}-{conditions['advntr_result'].replace(' ', '-')}-{qc}"
+
+
+ALL_RULES = ss.load_report_config()["screening_summary_rules"]
+
+
+def test_the_shipped_rule_table_is_loaded() -> None:
+    """Guard the guard: an empty table makes every parametrised assertion below vacuous."""
+    assert len(ALL_RULES) == 40
+
+
+def test_ten_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
+    """Five Kestrel states times two coverage-QC states, derived from conditions."""
+    assert ss.NOT_PERFORMED == "none"
+
+    not_performed_rules = [rule for rule in ALL_RULES if rule["conditions"]["advntr_result"] == "none"]
+
+    assert len(not_performed_rules) == 10
+
+
+@pytest.mark.parametrize("rule", ALL_RULES, ids=rule_id)
+def test_rendering_reproduces_the_exact_legacy_message(rule) -> None:
+    """The migration's whole contract, asserted on rendering rather than on shape.
+
+    The configured wording is clinical text that nothing here may reword, only split. A
+    test that asserted "every rule has two segments" would pass against a migration that
+    dropped a sentence from the nine three-part rules; this one cannot.
+    """
+    assert ss.render_segments(rule) == rule["message"]
+
+
+@pytest.mark.parametrize("rule", ALL_RULES, ids=rule_id)
+def test_no_segment_carries_the_separator_it_was_split_on(rule) -> None:
+    """Each part is rendered as an element of its own and autoescaped with everything
+    else, so a ``<br>`` surviving inside one would reach the reader as literal text."""
+    for segment in ss.message_segments(rule):
+        assert ss.SEGMENT_SEPARATOR not in segment
+
+
+def test_a_rule_with_only_a_message_still_renders() -> None:
+    """``segments`` is optional, forever.
+
+    ``report_config.json`` is configuration: a deployment may ship its own, and one
+    written before this migration - or by hand today - carries only ``message`` keys.
+    """
+    rule = {"message": "One sentence.<br>And another."}
+
+    assert ss.message_segments(rule) == ("One sentence.", "And another.")
+    assert ss.render_segments(rule) == rule["message"]
+
+
+def test_a_rule_with_no_message_at_all_renders_nothing_rather_than_raising() -> None:
+    """A malformed rule costs its sentence, not the report."""
+    assert ss.message_segments({}) == ("",)
+
+
+def test_the_summary_carries_the_matched_rule_segments(report_config) -> None:
+    """End to end: what the report renders is what the matched rule declared."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]), pd.DataFrame(), False, _passing(), report_config
+    )
+
+    assert len(summary.segments) > 1, "this state's message has three parts; one would mean it was not split"
+    assert ss.SEGMENT_SEPARATOR.join(summary.segments) == summary.text
+
+
+def test_a_summary_built_without_segments_still_renders_as_parts() -> None:
+    """A caller holding only the message - a test, or a third party - must not put a
+    literal ``<br>`` in front of the reader."""
+    summary = _summary(is_positive=False, matched_rule=True, text="First.<br>Second.")
+
+    assert summary.rendered_segments == ("First.", "Second.")
+
+
+# ---------------------------------------------------------------------------
+# The chip row -- the computed state in words
+# ---------------------------------------------------------------------------
+
+
+def _chips(summary, report_config, *, available=False, positive=False) -> dict[str, ss.StateChip]:
+    """The chip row, keyed by label."""
+    chips = ss.state_chips(summary, report_config, cross_match_available=available, cross_match_is_positive=positive)
+    return {chip.label: chip for chip in chips}
+
+
+def _one_stage_in(execution: str, algorithm: str) -> "ss.ScreeningSummary":
+    """A summary with one algorithm in the named execution state and the other reporting."""
+    kestrel = execution if algorithm == ss.KESTREL_LABEL else ss.EXECUTION_PERFORMED
+    advntr = execution if algorithm == ss.ADVNTR_LABEL else ss.EXECUTION_PERFORMED
+    return _summary(is_positive=False, matched_rule=True, kestrel_execution=kestrel, advntr_execution=advntr)
+
+
+@pytest.mark.parametrize("algorithm", [ss.KESTREL_LABEL, ss.ADVNTR_LABEL])
+def test_a_stage_that_did_not_run_is_not_chipped_as_a_negative(algorithm, report_config) -> None:
+    """The chip is the most compressed thing the report says about a stage, so it is the
+    one most easily read as a verdict. It must never carry one the run did not reach."""
+    chip = _chips(_one_stage_in(ss.EXECUTION_NOT_PERFORMED, algorithm), report_config)[algorithm]
+
+    assert chip.value == ss.NOT_PERFORMED_CHIP
+    assert "egative" not in chip.value
+
+
+@pytest.mark.parametrize("algorithm", [ss.KESTREL_LABEL, ss.ADVNTR_LABEL])
+def test_a_stage_that_lost_its_result_is_not_chipped_as_a_negative(algorithm, report_config) -> None:
+    chip = _chips(_one_stage_in(ss.EXECUTION_FAILED, algorithm), report_config)[algorithm]
+
+    assert chip.value == ss.NOT_AVAILABLE_CHIP
+    assert chip.tone == ss.TONE_CAUTION
+
+
+def test_a_called_stage_is_chipped_with_the_word_the_pipeline_computed(report_config) -> None:
+    summary = _summary(is_positive=True, matched_rule=True, kestrel_result="High_Precision")
+
+    chip = _chips(summary, report_config)[ss.KESTREL_LABEL]
+
+    assert chip.value == "High precision"
+    assert chip.tone == ss.TONE_FINDING
+
+
+def test_a_negative_call_is_chipped_without_the_finding_tone(report_config) -> None:
+    summary = _summary(is_positive=False, matched_rule=True, kestrel_result="negative")
+
+    chip = _chips(summary, report_config)[ss.KESTREL_LABEL]
+
+    assert chip.value == "Negative"
+    assert chip.tone == ss.TONE_NONE
+
+
+@pytest.mark.parametrize("algorithm", ["kestrel", "advntr"])
+def test_every_configured_result_has_a_chip_word(algorithm, report_config) -> None:
+    """Tied to the shipped configuration, so a renamed ``result`` cannot leave a chip
+    printing a raw token with an underscore in it."""
+    logic = report_config["algorithm_logic"][algorithm]
+    assert logic["rules"], "no rules loaded; this assertion would be vacuous"
+    for rule in [*logic["rules"], {"result": logic["default"]}]:
+        word = ss.result_word(rule["result"])
+        assert "_" not in word
+        assert word[:1].isupper()
+
+
+def test_concordance_is_not_assessable_when_one_stage_did_not_run(report_config) -> None:
+    """A result cannot agree or disagree with an absence, and a chip saying either would
+    be the same defect as reporting an absence as a negative."""
+    summary = _summary(is_positive=True, matched_rule=True, advntr_execution=ss.EXECUTION_NOT_PERFORMED)
+
+    chip = _chips(summary, report_config, available=True, positive=True)[ss.CONCORDANCE_LABEL]
+
+    assert chip.value == ss.NOT_ASSESSABLE_CHIP
+
+
+def test_concordance_is_not_assessable_when_the_cross_match_stage_produced_nothing(report_config) -> None:
+    summary = _summary(is_positive=True, matched_rule=True)
+
+    chip = _chips(summary, report_config, available=False)[ss.CONCORDANCE_LABEL]
+
+    assert chip.value == ss.NOT_ASSESSABLE_CHIP
+
+
+@pytest.mark.parametrize(
+    ("positive", "expected"), [(True, ss.MATCH_CHIP), (False, ss.NO_MATCH_CHIP)], ids=["match", "no-match"]
+)
+def test_concordance_reports_the_cross_match_stage_when_both_stages_ran(positive, expected, report_config) -> None:
+    summary = _summary(is_positive=True, matched_rule=True)
+
+    chip = _chips(summary, report_config, available=True, positive=positive)[ss.CONCORDANCE_LABEL]
+
+    assert chip.value == expected

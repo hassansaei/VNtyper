@@ -343,3 +343,53 @@ def test_run_pipeline_still_takes_no_output_name_parameter() -> None:
     parameters = inspect.signature(run_pipeline).parameters
     assert parameters, "run_pipeline has no parameters; this assertion would be vacuous"
     assert "output_name" not in parameters
+
+
+# --------------------------------------------------------------------------------------
+# Where the sample name came from (#242)
+# --------------------------------------------------------------------------------------
+
+
+def test_an_operators_sample_name_is_recorded_as_explicit(tmp_path: Path) -> None:
+    """``--sample-name`` is a name, and the run says so.
+
+    Without the flag the summary carries a bare string, and the report cannot tell
+    ``--sample-name sample`` from the ``"sample"`` the CLI falls back to - which is
+    how a valid explicit name came to be discarded.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    stub = _run_handler(["pipeline", "-o", str(tmp_path), "--bam", "in.bam", "-s", "PATIENT_042"])
+
+    assert stub.call_args.kwargs["sample_name"] == "PATIENT_042"
+    assert stub.call_args.kwargs["sample_name_is_explicit"] is True
+
+
+@pytest.mark.parametrize(
+    "argv_tail,expected_name",
+    [
+        (["--bam", "in.bam"], "in"),
+        (["--cram", "in.cram"], "in"),
+        (["--fastq1", "S1_R1.fastq.gz"], "S1_R1.fastq"),
+    ],
+)
+def test_a_name_derived_from_an_input_path_is_recorded_as_derived(
+    argv_tail: list[str], expected_name: str, tmp_path: Path
+) -> None:
+    """The three reachable derivations, and the value each one actually records.
+
+    The FASTQ case is the one that matters: ``Path("S1_R1.fastq.gz").stem`` is
+    ``S1_R1.fastq``, a half-stripped file name. It stays that here on purpose -
+    ``run_kestrel`` builds its output filenames from this same string - and the flag
+    is what lets the report finish deriving it into ``S1`` without renaming anything.
+
+    Args:
+        argv_tail: The input flags for this shape.
+        expected_name: The name the handler records for it.
+        tmp_path: Pytest temporary directory.
+    """
+    stub = _run_handler(["pipeline", "-o", str(tmp_path), *argv_tail])
+
+    assert stub.call_args.kwargs["sample_name"] == expected_name
+    assert stub.call_args.kwargs["sample_name_is_explicit"] is False

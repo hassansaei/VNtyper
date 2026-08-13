@@ -28,50 +28,124 @@ Two things about this module are load-bearing and easy to break:
 import json
 import logging
 import os
-import subprocess
+import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from vntyper.scripts.coverage_qc import evaluate_coverage_qc
+from vntyper.scripts import report_assets
+from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
+from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
+    ADVNTR_CELL_FORMATS,
+    ADVNTR_DISPLAY_CELL_FORMATS,
     ADVNTR_DISPLAY_COLUMNS,
+    ADVNTR_DISPLAY_HEADINGS,
+    ADVNTR_ESSENTIAL_COLUMNS,
     EMPTY_SESSION_DICTIONARY,
     EMPTY_TABLE_JSON,
+    KESTREL_DISPLAY_CELL_FORMATS,
     KESTREL_DISPLAY_COLUMNS,
+    KESTREL_ESSENTIAL_COLUMNS,
     MISSING_AS_OK,
+    annotate_table_columns,
     confidence_html,
-    escape_frame_cells,
-    extract_igv_fragments,
+    drop_empty_result_rows,
+    escaped_table_html,
+    flag_html,
+    flagged_row_count,
+    folded_record_html,
+    format_number_columns,
     js_json_literal,
+    nomenclature_legend,
+    numeric_headings,
     parse_coverage_stats,
+    row_count_statement,
     select_display_columns,
+    space_flag_tokens,
     summarise_fastp,
     threshold_icon,
+    variant_identity,
 )
-from vntyper.scripts.screening_summary import build_screening_summary, load_report_config
+from vntyper.scripts.report_identity import (
+    ASSAY_NAME,
+    GENE_SYMBOL,
+    NOT_RECORDED,
+    REPORT_TITLE_DESCRIPTION,
+    REPORT_TITLE_PREFIX,
+    RESEARCH_USE_STATEMENT,
+    SAMPLE_NAME_EXPLICIT_KEY,
+    format_input_files,
+    format_region,
+    format_run_timestamp,
+    input_file_names,
+    print_running_header_css,
+    recorded_or_not,
+    resolve_sample_name,
+)
+from vntyper.scripts.screening_summary import (
+    algorithm_state_text,
+    build_screening_summary,
+    execution_state,
+    load_report_config,
+    state_chips,
+)
 
 # These five names are matched by exact string comparison against what pipeline.py
 # records. A typo does not fail - it silently drops a report section (AGENTS.md
 # trap 5), so they are named, never spelled out.
 from vntyper.scripts.summary_steps import (
+    STEP_ABSENT,
     STEP_ADVNTR,
     STEP_BAM_HEADER,
     STEP_COVERAGE,
     STEP_CROSS_MATCH,
     STEP_KESTREL,
+    STEP_READ,
+    STEP_UNREADABLE,
     get_step,
     get_step_data,
     get_step_result,
+    get_step_state,
 )
 
 logger = logging.getLogger(__name__)
 
 #: Shown when a coverage figure could not be computed.
 NOT_CALCULATED = "Not calculated"
+
+#: How each results table names itself in its visible/total row-count statement.
+KESTREL_ROW_NOUN = "Kestrel"
+ADVNTR_ROW_NOUN = "adVNTR"
+
+#: A failed embedded-mode generator page is moved here before its temporary
+#: directory is cleaned. The fixed single-segment name keeps the evidence inside the
+#: run output and makes repeated failures converge on one predictable artifact.
+IGV_FAILURE_DIAGNOSTIC_FILENAME = "igv_report.failed.html"
+
+#: CSS classes on both per-sample results tables. Named once so the two cannot drift.
+#:
+#: Every Bootstrap and DataTables class is gone with the CDN tags that gave them meaning
+#: (#242): ``table-bordered``, ``table-sm``, ``hover``, ``compact`` and ``order-column``
+#: styled nothing this repository ships, and leaving them would have left the next reader
+#: to work out which of five class names were live. Two remain and both are ours:
+#: ``table`` is the hook the shared token layer's cell rules select on, and ``sortable``
+#: is what the report's own script looks for when it turns column headings into buttons.
+#:
+#: **No ``table-striped``.** A stripe competes with the one row treatment in these tables
+#: that carries meaning, the flagged-value highlight, and it was the ``#f2f2f2`` under the
+#: old inline ``orange`` that measured 1.76:1. That used to be enforced only by not
+#: emitting a Bootstrap class - a claim with no rule and no test behind it - so re-adding
+#: it passed the whole suite. The row background is now the report's own, and
+#: ``tests/unit/test_report_presentation.py`` and ``tests/browser/test_flagged_rows.py``
+#: hold it to one value: one in the source, one measured in a real browser. The cohort
+#: report keeps its stripes (``cohort_tables.TABLE_CLASSES``), and its own stylesheet is
+#: what draws them now.
+PER_SAMPLE_TABLE_CLASSES = "table sortable"
 
 
 def load_pipeline_summary(summary_file_path):
@@ -96,105 +170,6 @@ def load_pipeline_summary(summary_file_path):
     except Exception as e:
         logger.error("Failed to load pipeline summary: %s", e)
         return {}
-
-
-def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None):
-    """
-    Wrapper around `create_report` IGV command. If config is provided and flanking
-    is not explicitly set, we fall back to config's default_values.flanking.
-    Skips passing None for track arguments (vcf_file or bam_file).
-    """
-    logger.debug("run_igv_report called with:")
-    logger.debug("  bed_file=%s", bed_file)
-    logger.debug("  bam_file=%s", bam_file)
-    logger.debug("  fasta_file=%s", fasta_file)
-    logger.debug("  output_html=%s", output_html)
-    logger.debug("  vcf_file=%s", vcf_file)
-    logger.debug("  flanking=%s", flanking)
-
-    if config is not None and flanking == 50:
-        flanking = config.get("default_values", {}).get("flanking", 50)
-        logger.debug("Flanking region set to %s based on config.", flanking)
-
-    bed_file = str(bed_file) if bed_file else None
-    bam_file = str(bam_file) if bam_file else None
-    fasta_file = str(fasta_file) if fasta_file else None
-    output_html = str(output_html) if output_html else None
-
-    igv_report_cmd = [
-        "create_report",
-        bed_file,
-        "--flanking",
-        str(flanking),
-        "--fasta",
-        fasta_file,
-        "--tracks",
-    ]
-
-    # Build tracks list with defensive programming (verify files exist)
-    # Follows SOLID principles: defensive checks + clear logging
-    tracks = []
-
-    if vcf_file:
-        # Verify file exists before adding to tracks (defensive programming)
-        if os.path.exists(vcf_file):
-            tracks.append(str(vcf_file))
-            logger.debug(f"Adding VCF track: {vcf_file}")
-        else:
-            logger.warning(f"VCF file specified but not found: {vcf_file}. Skipping VCF track.")
-    else:
-        logger.info("No VCF file provided. IGV report will not include VCF track.")
-
-    if bam_file:
-        if os.path.exists(bam_file):
-            tracks.append(str(bam_file))
-            logger.debug(f"Adding BAM track: {bam_file}")
-        else:
-            logger.warning(f"BAM file specified but not found: {bam_file}. Skipping BAM track.")
-
-    if not tracks:
-        logger.error("No valid tracks (VCF or BAM) available for IGV report. Report may be empty or fail.")
-
-    igv_report_cmd.extend(tracks)
-    igv_report_cmd.extend(["--output", output_html])
-
-    logger.debug("IGV report command: %s", " ".join([str(x) for x in igv_report_cmd if x]))
-    try:
-        logger.info("Running IGV report: %s", " ".join([str(x) for x in igv_report_cmd if x]))
-        subprocess.run(igv_report_cmd, check=True)
-        logger.info("IGV report successfully generated at %s", output_html)
-    except subprocess.CalledProcessError as e:
-        logger.error("Error generating IGV report: %s", e)
-        raise
-    except Exception as e:
-        logger.error("Unexpected error generating IGV report: %s", e)
-        raise
-
-
-def extract_igv_content(igv_report_html):
-    """
-    Reads the generated IGV HTML report and extracts the IGV content,
-    the tableJson variable, and the sessionDictionary variable from the script.
-    Returns empty strings if not found or on error.
-
-    Args:
-        igv_report_html (str or Path): Path to the page ``create_report`` wrote.
-
-    Returns:
-        tuple[str, str, str]: The container markup, ``tableJson`` and
-        ``sessionDictionary``. All three are empty on any read failure.
-    """
-    logger.debug("extract_igv_content called with igv_report_html=%s", igv_report_html)
-    try:
-        with open(igv_report_html) as f:
-            content = f.read()
-    except FileNotFoundError:
-        logger.error("IGV report file not found: %s", igv_report_html)
-        return "", "", ""
-    except Exception as e:
-        logger.error("Unexpected error reading IGV report: %s", e)
-        return "", "", ""
-    return extract_igv_fragments(content)
 
 
 def load_fastp_output(fastp_file):
@@ -246,13 +221,29 @@ def build_kestrel_frames(kestrel_data):
     colour-coded HTML. Colour-coding the frame the summary reads would make every
     ``Confidence`` comparison fail against a ``<span>``.
 
+    A run that genotyped and called nothing is *not* a run with a result. Kestrel
+    records one there anyway - ``output_empty_result`` writes a row of the literal
+    string ``"None"`` with ``Confidence`` set to ``Negative``, so that
+    ``kestrel_result.tsv`` has a body - and both frames used to carry it: the table
+    rendered ``None None None None None None None None NaN Negative`` and the count
+    line called it one Kestrel row (#242). It is dropped here, before either frame
+    exists, so the display, the count and the screening match all see the same rows.
+
+    Dropping it cannot move the screening verdict. ``compute_algorithm_result`` reads
+    only the first row and every configured Kestrel rule breaks on that row's
+    ``Confidence``, so the block's ``default`` - "negative" - is what it returned with
+    the placeholder present, and an empty frame returns the same default by the
+    shortest path.
+
     Args:
         kestrel_data (list[dict]): The ``Kestrel Genotyping`` step's rows.
 
     Returns:
         tuple[pandas.DataFrame, pandas.DataFrame]: The frame to render, and the
-        unformatted frame to match on. Both are empty when there are no rows.
+        unformatted frame to match on. Both are empty when there are no rows, and when
+        the only row is the empty-result placeholder.
     """
+    kestrel_data = drop_empty_result_rows(kestrel_data) if kestrel_data else kestrel_data
     if not kestrel_data:
         logger.warning("No Kestrel data found in pipeline summary.")
         return pd.DataFrame(), pd.DataFrame()
@@ -267,14 +258,23 @@ def build_kestrel_frames(kestrel_data):
         frame = frame.sort_values(by="Depth Score", ascending=False)
 
     matching_frame = frame.copy()
+
+    # Every displayed number is produced here, by the formatter its column declares.
+    # The browser used to do it, table-agnostically and only when three CDNs
+    # resolved, so the same file read differently online and offline (#242). The
+    # matching frame is copied first and keeps the unformatted values, because the
+    # screening rules compare against them.
+    frame = space_flag_tokens(format_number_columns(frame, KESTREL_DISPLAY_CELL_FORMATS))
+
     if "Confidence" in frame.columns:
         frame["Confidence"] = frame["Confidence"].apply(confidence_html)
+    if "Flag" in frame.columns:
+        frame["Flag"] = frame["Flag"].apply(flag_html)
 
-    # The table is rendered with escape=False so the colour-coded Confidence span
-    # survives, which means every other cell has to be escaped here. `Confidence`
-    # is excluded because `confidence_html` has already escaped its own value.
-    frame = escape_frame_cells(frame, html_columns=("Confidence",))
-
+    # The remaining cells are escaped by `escaped_table_html`, which renders the frame -
+    # once, naming `Confidence` and `Flag` as the columns whose markup we built and which
+    # escaped their own values. Escaping here as well would double-escape every other
+    # cell, so a motif sequence containing a `<` would reach the reader as `&lt;`.
     logger.debug("Kestrel data extracted from summary and formatted.")
     return frame, matching_frame
 
@@ -361,6 +361,8 @@ def generate_summary_report(
     flanking=50,
     vcf_file=None,
     config=None,
+    sample_name=None,
+    report_igv=report_assets.DEFAULT_REPORT_IGV,
 ):
     """
     Generates a summary report based on a pipeline summary JSON file.
@@ -381,9 +383,23 @@ def generate_summary_report(
         flanking (int, optional): Size of the flanking region for IGV reports.
         vcf_file (str, optional): Path to the sorted/indexed VCF file.
         config (dict): Main configuration dictionary (passed from the pipeline).
+        sample_name (str, optional): What the report calls its sample, in the
+            title, the heading and the header block. Reachable through
+            ``vntyper report --sample-name``; the pipeline passes nothing and the
+            name is derived from the summary's own ``input_files`` instead - see
+            :func:`~vntyper.scripts.report_identity.resolve_sample_name`.
+        report_igv (str, optional): How the report carries its alignment browser -
+            one of :data:`~vntyper.scripts.report_assets.REPORT_IGV_MODES`.
+            ``embedded`` (the default) writes the vendored, gzipped igv.js into the
+            document, so the archived file is a complete alignment browser needing
+            neither a second file nor a network. ``sidecar`` leaves it out and
+            points the reader at the self-contained ``igv_report.html`` beside it.
+            ``off`` produces no alignment browser at all. Reachable as
+            ``--report-igv`` on both ``vntyper pipeline`` and ``vntyper report``.
 
     Raises:
-        ValueError: If config is not provided.
+        ValueError: If config is not provided, or ``report_igv`` is not a recognised
+            mode, or the vendored asset fails its digest check.
     """
     logger.debug("---- DEBUG: Entered generate_summary_report ----")
     logger.debug(
@@ -429,6 +445,22 @@ def generate_summary_report(
     input_files = pipeline_summary.get("input_files", {})
     pipeline_version = pipeline_summary.get("version", "unknown")
 
+    # Who this report is about (#242). Every report was titled "Summary Report",
+    # so two of them were indistinguishable in two browser tabs and a printed one
+    # carried no identity at all. Three levels: an explicit `--sample-name` here,
+    # then the name the *run* recorded - the same string Kestrel embedded, so the
+    # report and the VCF cannot disagree - then a derivation from `input_files`,
+    # which is what every summary written before the field existed still uses.
+    # `sample_name_is_explicit` says which of the two shapes the recorded name has:
+    # an operator's name to print verbatim, or a `Path.stem` to finish deriving.
+    resolved_sample_name = resolve_sample_name(
+        sample_name,
+        *input_file_names(input_files),
+        recorded=pipeline_summary.get("sample_name"),
+        recorded_is_explicit=pipeline_summary.get(SAMPLE_NAME_EXPLICIT_KEY),
+    )
+    logger.info("Report sample name resolved to %r.", resolved_sample_name)
+
     # How the run's reference was actually resolved (#163) - the BWA reference for
     # FASTQ, or whatever the alignment plan proved for BAM/CRAM, never a BWA path a
     # BAM/CRAM run never opened (MAJOR 5, milestone-5 PR-2 review; see
@@ -444,7 +476,14 @@ def generate_summary_report(
     # Header info from the BAM Header Parsing step, whose parsed_result is a flat
     # object rather than {"data": [...]}.
     header_info = get_step_result(pipeline_summary, STEP_BAM_HEADER)
-    header_warning = header_info.get("warning", "")
+    # The template puts the word "Warning:" in front of this, because that word is what
+    # carries the meaning for a reader who does not see the colour. The recorded string
+    # begins with `WARNING: ` of its own (`fastq_bam_processing.py`), so the one
+    # genuinely urgent sentence in the report rendered as "Warning: WARNING: ...".
+    # Stripped here rather than in the step that records it: the summary is a stored
+    # artefact that other tooling reads, and this is a presentation decision about one
+    # rendering of it.
+    header_warning = re.sub(r"^\s*WARNING:\s*", "", header_info.get("warning", "") or "")
     alignment_pipeline = header_info.get("alignment_pipeline", "")
     assembly_text = header_info.get("assembly_text", "")
     assembly_contig = header_info.get("assembly_contig", "")
@@ -494,35 +533,131 @@ def generate_summary_report(
         percent_vntr_uncovered_threshold,
     )
 
+    # Three states, not two, for **both** algorithms. "Recorded" is not "produced a
+    # readable result": when `kestrel_result.tsv` is absent, `record_step` flags the step
+    # `result_file_missing` and still records it with an empty `data` list (#212) - the
+    # same shape a run that genotyped and called nothing produces. Asking only whether the
+    # step is present therefore renders a failed stage as a negative, which is a claim the
+    # run never established.
+    #
+    # `get_step_state` distinguished the three from the start, but its result used to reach
+    # only the Kestrel *section*: the screening computation and the whole adVNTR side still
+    # asked whether the step was present, so an unreadable adVNTR stage produced "No
+    # pathogenic variants identified by adVNTR" and `adVNTR: negative` while the Kestrel
+    # section two headings up said "this is not a negative".
+    kestrel_state = get_step_state(pipeline_summary, STEP_KESTREL)
     kestrel_df, kestrel_df_raw = build_kestrel_frames(get_step_data(pipeline_summary, STEP_KESTREL))
 
-    advntr_available = get_step(pipeline_summary, STEP_ADVNTR) is not None
+    # `advntr_available` is now "produced a result to match on", not "has a step". That is
+    # what makes `advntr_result` the `NOT_PERFORMED` token rather than the block's
+    # "negative" default for a stage that ran and lost its result; the execution axis
+    # beside it is what keeps the two apart in everything the reader sees.
+    advntr_state = get_step_state(pipeline_summary, STEP_ADVNTR)
+    advntr_available = advntr_state == STEP_READ
     advntr_df = build_advntr_frame(get_step_data(pipeline_summary, STEP_ADVNTR))
 
     pipeline_log_content = load_pipeline_log(log_file)
 
-    # IGV report generation (if applicable)
-    if bed_file and os.path.exists(bed_file):
+    # IGV report generation (if applicable). `off` skips it outright: the mode says
+    # the run wants no alignment browser, and running `create_report` anyway would
+    # spend the time and write the file for nothing.
+    if report_igv not in report_assets.REPORT_IGV_MODES:
+        msg = f"Unknown --report-igv mode {report_igv!r}; expected one of {', '.join(report_assets.REPORT_IGV_MODES)}."
+        logger.error(msg)
+        raise ValueError(msg)
+
+    temporary_igv_dir = None
+    igv_operation_error: Exception | None = None
+    if report_igv == report_assets.REPORT_IGV_OFF:
+        logger.info("--report-igv off: no alignment browser is produced for this run.")
+        igv_report_file = None
+        igv_content, table_json, session_dictionary = "", "", ""
+    elif bed_file and os.path.exists(bed_file):
         logger.info("Running IGV report for BED file: %s", bed_file)
-        igv_report_file = Path(output_dir) / "igv_report.html"
-        run_igv_report(
-            bed_file,
-            bam_file,
-            fasta_file,
-            igv_report_file,
-            flanking=flanking,
-            vcf_file=vcf_file,
-            config=config,
-        )
+        if report_igv == report_assets.REPORT_IGV_EMBEDDED:
+            temporary_igv_dir = tempfile.TemporaryDirectory(prefix=".vntyper-igv-", dir=output_dir)
+            igv_report_file = Path(temporary_igv_dir.name) / "igv_report.html"
+        else:
+            igv_report_file = Path(output_dir) / "igv_report.html"
+        try:
+            run_igv_report(
+                bed_file,
+                bam_file,
+                fasta_file,
+                igv_report_file,
+                flanking=flanking,
+                vcf_file=vcf_file,
+                config=config,
+                report_igv=report_igv,
+            )
+            if not igv_report_file.exists():
+                msg = "The IGV generator completed without writing its expected report."
+                logger.error(msg)
+                raise ValueError(msg)
+
+            igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
+            try:
+                if not igv_content or not table_json.strip() or not session_dictionary.strip():
+                    raise ValueError("one or more required fragments are empty")
+                table_value = json.loads(table_json.removesuffix(";").strip())
+                session_value = json.loads(session_dictionary.removesuffix(";").strip())
+                if not isinstance(table_value, dict) or not isinstance(session_value, dict):
+                    raise ValueError("tableJson and sessionDictionary must be JSON objects")
+            except ValueError as error:
+                msg = "The generated IGV report could not be validated; the summary report was not written."
+                logger.error(msg)
+                raise ValueError(msg) from error
+            table_json = js_json_literal(table_json, EMPTY_TABLE_JSON)
+            session_dictionary = js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY)
+        except Exception as error:
+            igv_operation_error = error
+            if temporary_igv_dir is not None and igv_report_file.exists():
+                try:
+                    diagnostic_file = contained_output_path(
+                        output_dir,
+                        IGV_FAILURE_DIAGNOSTIC_FILENAME,
+                        "IGV failure diagnostic",
+                    )
+                    igv_report_file.replace(diagnostic_file)
+                    logger.error("Preserved failed IGV generator output at %s", diagnostic_file)
+                except (OSError, ValueError) as preservation_error:
+                    logger.error(
+                        "Could not preserve failed IGV generator output at %s: %s",
+                        IGV_FAILURE_DIAGNOSTIC_FILENAME,
+                        preservation_error,
+                    )
+            raise
+        finally:
+            if temporary_igv_dir is not None:
+                try:
+                    temporary_igv_dir.cleanup()
+                except Exception as cleanup_error:
+                    if igv_operation_error is None:
+                        raise
+                    logger.error(
+                        "Could not clean temporary IGV directory after %s: %s",
+                        type(igv_operation_error).__name__,
+                        cleanup_error,
+                    )
     else:
         logger.warning("BED file does not exist or not provided. Skipping IGV report generation.")
         igv_report_file = None
-
-    if igv_report_file and igv_report_file.exists():
-        igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
-    else:
-        logger.warning("IGV report file not found. Skipping IGV content.")
         igv_content, table_json, session_dictionary = "", "", ""
+
+    # Whether this run has an alignment session at all. The template branches on it to
+    # author the right "there is no alignment view here" sentence *in the markup*, which
+    # is what makes that sentence true for a reader with scripting off - and it is also
+    # what decides whether the 497 KB payload is written at all. A report with no
+    # alignments carries none of it.
+    session_literal = js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY)
+    igv_session_available = session_literal.strip() not in ("", EMPTY_SESSION_DICTIONARY)
+    igv_payload = report_assets.igv_payload(report_igv) if igv_session_available else None
+    if igv_payload is None:
+        logger.info(
+            "No igv.js payload written into the report (mode=%s, alignment session=%s).",
+            report_igv,
+            igv_session_available,
+        )
 
     fastp = summarise_fastp(load_fastp_output(Path(output_dir) / "fastq_bam_processing/output.json"))
 
@@ -537,25 +672,70 @@ def generate_summary_report(
     q30_icon, q30_color = threshold_icon(fastp.q30_rate, q30_rate_cutoff)
     pf_icon, pf_color = threshold_icon(fastp.passed_filter_rate, passed_filter_rate_cutoff)
 
-    kestrel_html = kestrel_df.to_html(
+    # "" for an empty frame, which is what the template's authored empty states hang
+    # on. This used to call `to_html` directly, bypassing the helper written for
+    # exactly this: an empty frame produced a headerless, bodyless `<table>` - a stray
+    # empty box under the heading - and every cell was escaped a step earlier instead.
+    kestrel_html = escaped_table_html(
+        kestrel_df,
+        classes=PER_SAMPLE_TABLE_CLASSES,
+        html_columns=("Confidence", "Flag"),
         table_id="kestrel_table",
-        classes="table table-bordered table-striped hover compact order-column table-sm",
-        index=False,
-        escape=False,
+    )
+    # Per-column alignment, face and column help, added to the rendered markup rather
+    # than carried in the frame: they are presentation over a column, and pandas has no
+    # way to attach either to one. Every number in both results tables was centred and
+    # the `.num`, `.mono-cell` and `.col-grow` rules the stylesheet has carried since
+    # #242 were emitted by nothing at all.
+    kestrel_html = annotate_table_columns(
+        kestrel_html,
+        list(kestrel_df.columns),
+        numeric=numeric_headings(KESTREL_DISPLAY_CELL_FORMATS),
+        essential=KESTREL_ESSENTIAL_COLUMNS,
+        caption="Kestrel variant calls, with the MUC1 name reconciled from both callers",
+    )
+    kestrel_row_summary = (
+        row_count_statement(len(kestrel_df), flagged_row_count(kestrel_df_raw), noun=KESTREL_ROW_NOUN)
+        if kestrel_html
+        else ""
     )
     logger.debug("Kestrel results converted to HTML.")
 
-    if not advntr_available:
-        advntr_html = "<p>adVNTR genotyping was not performed.</p>"
-        logger.debug("adVNTR was not performed; adding message to report.")
-    elif advntr_df.empty:
-        advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
-        logger.debug("adVNTR was performed but no variants identified; adding negative message.")
+    advntr_row_summary = ""
+    advntr_folded_record = ""
+    if not advntr_available or advntr_df.empty:
+        # Every adVNTR state that is not a table is worded by the template, the way the
+        # Kestrel side already does it. Two of the four used to be built here instead:
+        # the not-performed paragraph was unreachable - the template's
+        # `{% if advntr_available and advntr_highlight %}` cannot render it, and the
+        # branch beneath that guard printed its own, differently worded line - and the
+        # empty-result paragraph *was* reached, and was rendered inside the bordered
+        # `.table-container` as if it were a table. One state, one sentence, one place.
+        advntr_html = ""
+        logger.debug("adVNTR produced no rows to tabulate; the template states which state it is in.")
     else:
-        advntr_html = advntr_df.to_html(
-            classes="table table-bordered table-striped hover compact table-sm",
-            index=False,
+        # Rendered from a copy: `advntr_df` itself is what the screening rules match
+        # on (`VID`, `Flag`), so it has to keep the unformatted values.
+        advntr_display = space_flag_tokens(format_number_columns(advntr_df, ADVNTR_CELL_FORMATS))
+        # Headings, on the copy that is rendered. Formatting runs first because
+        # `ADVNTR_CELL_FORMATS` is keyed by the source names, which is also why this
+        # cannot simply move into `build_advntr_frame`.
+        advntr_display = advntr_display.rename(columns=ADVNTR_DISPLAY_HEADINGS)
+        if "Flag" in advntr_display.columns:
+            advntr_display["Flag"] = advntr_display["Flag"].apply(flag_html)
+        advntr_html = annotate_table_columns(
+            escaped_table_html(
+                advntr_display,
+                classes=PER_SAMPLE_TABLE_CLASSES,
+                html_columns=("Flag",),
+            ),
+            list(advntr_display.columns),
+            numeric=numeric_headings(ADVNTR_DISPLAY_CELL_FORMATS),
+            essential=ADVNTR_ESSENTIAL_COLUMNS,
+            caption="adVNTR variant calls, with the MUC1 name reconciled from both callers",
         )
+        advntr_row_summary = row_count_statement(len(advntr_df), flagged_row_count(advntr_df), noun=ADVNTR_ROW_NOUN)
+        advntr_folded_record = folded_record_html(advntr_display, ADVNTR_ESSENTIAL_COLUMNS, noun=ADVNTR_ROW_NOUN)
         logger.debug("adVNTR results converted to HTML.")
 
     cross_match_message, cross_match_is_positive = build_cross_match_summary(pipeline_summary)
@@ -581,6 +761,8 @@ def generate_summary_report(
         advntr_available,
         coverage_qc,
         report_config,
+        kestrel_execution=execution_state(kestrel_state),
+        advntr_execution=execution_state(advntr_state),
     )
     logger.debug("Summary text generated: %s", screening.text)
 
@@ -598,26 +780,145 @@ def generate_summary_report(
         """
         return None if value is None else round(value, 2)
 
+    # The printed running header, built here so that the template interpolates one
+    # opaque fragment into its `<style>` rather than five values. Every value is put
+    # through the CSS escaper by `print_running_header_css`, and there is no other way
+    # into that stylesheet: `tests/unit/test_report_presentation.py` fails on any other
+    # expression inside a `<style>`, and on any `<style>` expression that is not this
+    # one marked `|safe`.
+    #
+    # These three locals are computed once and used twice - here and in the context
+    # below - because the margin box and the document's own header block must not be
+    # able to disagree about what the report is of.
+    assembly_declared_text = recorded_or_not(reference_assembly_requested)
+    run_time_text = format_run_timestamp(pipeline_summary.get("pipeline_start"))
+    running_header_css = print_running_header_css(
+        sample_name=resolved_sample_name,
+        assay_name=ASSAY_NAME,
+        assembly=assembly_declared_text,
+        pipeline_version=str(pipeline_version),
+        run_time=run_time_text,
+    )
+
     context = {
         "kestrel_highlight": kestrel_html,
+        # The two facts the empty states branch on, both derived from the computed
+        # state rather than from the shape of the data - which is what conflated them.
+        # `vntyper report` renders a supplied summary (#207) that need not carry the
+        # step at all, and a run whose Kestrel stage failed carries one that produced
+        # nothing; rendering either as "found nothing" asserts something the run never
+        # established. (adVNTR still asks only whether its step is recorded. Its
+        # section already words the absent case as a disjunction rather than as a
+        # negative, so the same conflation there is not the same defect - but it is the
+        # same shape, and it is worth closing separately.)
+        "kestrel_step_recorded": kestrel_state != STEP_ABSENT,
+        "kestrel_result_unreadable": kestrel_state == STEP_UNREADABLE,
+        # The same three facts on the adVNTR side, which had only two branches for them.
+        # Its absent-case wording used to be a disjunction ("was not performed or no
+        # adVNTR results are available") that covered the failure by being vague about
+        # it; each state now says which one it is.
+        "advntr_step_recorded": advntr_state != STEP_ABSENT,
+        "advntr_result_unreadable": advntr_state == STEP_UNREADABLE,
+        # The visible/total statement beside each table, counted here from the frame.
+        # DataTables' own "Showing 1 to 3 of 3 entries" footer is switched off: it is
+        # a second count that contradicts this one whenever a CDN fails (#242). It is
+        # empty when there is no table: the sentence exists to say that nothing was
+        # withheld from the rows below it, so counting a non-result defeats its purpose.
+        "kestrel_row_summary": kestrel_row_summary,
+        # The folded columns, printed under each table because a nineteen-column table
+        # does not fit A4 and silently lost ten of them - the 121 bp motif sequence
+        # among them - off the right edge of every sheet.
+        "kestrel_folded_record": folded_record_html(kestrel_df, KESTREL_ESSENTIAL_COLUMNS, noun=KESTREL_ROW_NOUN),
+        "advntr_folded_record": advntr_folded_record,
         "advntr_highlight": advntr_html,
+        "advntr_row_summary": advntr_row_summary,
         "advntr_available": advntr_available,
         "log_content": pipeline_log_content,
+        # Deprecated custom-template API, retained through VNtyper 2.x. The shipped
+        # template now builds its alignment panel from the structured JSON/session
+        # fields below, but configured legacy templates may still splice this fragment.
+        # See report_context_contract.DEPRECATED_KEYS.
         "igv_content": igv_content,
         # Interpolated straight into a <script> block, so they must parse even
         # when there is no IGV report at all.
         "table_json": js_json_literal(table_json, EMPTY_TABLE_JSON),
-        "session_dictionary": js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY),
-        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
-        "input_files": input_files,
+        "session_dictionary": session_literal,
+        # The alignment browser. `igv_payload` is the base64 of the vendored, gzipped
+        # igv.js and is None unless this run has a session *and* the mode is
+        # `embedded`; the template writes the `IGV_GZ_B64` constant only when it is
+        # there, so a sample with no alignments carries no library. It is interpolated
+        # into a double-quoted JavaScript string under autoescaping rather than marked
+        # `|safe`: base64's alphabet contains none of the five characters Jinja2
+        # escapes, so escaping is a no-op over it, and
+        # `test_the_embedded_payload_survives_the_round_trip_into_the_document`
+        # decodes it back out of the rendered file and checks it against the pinned
+        # digest rather than assuming that.
+        "igv_payload": igv_payload,
+        "igv_mode": report_igv,
+        "igv_version": report_assets.IGV_VERSION,
+        "igv_session_available": igv_session_available,
+        # One line for the Provenance block: which library, which digest, and where it
+        # is. Built in the pure module because choosing the wording is presentation
+        # logic over a computed state (AGENTS.md trap 11).
+        "igv_provenance": report_assets.igv_provenance(report_igv),
+        # Two timestamps, labelled, because they are different facts. `report_date`
+        # is `datetime.now()` at render, so re-running `vntyper report` over an
+        # archived run restamped the only date on the page and the artefact
+        # silently claimed to be newer than the analysis (#242). Both carry a zone:
+        # the run time is UTC and this one is the rendering machine's local time,
+        # so printing them unqualified beside each other invites the reader to
+        # subtract them.
+        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "run_date": run_time_text,
+        # The mapping is rendered by iterating it, not by branching on its shape:
+        # the template tested for `fastq1 and fastq2` or `bam`, so the other two
+        # shapes `resolve_pipeline_input` emits rendered an empty line.
+        "input_files_text": format_input_files(input_files),
+        "sample_name": resolved_sample_name,
+        "assay_name": ASSAY_NAME,
+        "report_title_prefix": REPORT_TITLE_PREFIX,
+        # The two halves of the same title. `<title>` and the printed running header
+        # take the whole string above, because neither can carry markup; the `<h1>`
+        # takes these, so the gene symbol can be set in italics the way a gene symbol
+        # is. Both are interpolated under autoescaping - nothing here is marked safe.
+        "report_gene_symbol": GENE_SYMBOL,
+        "report_title_description": REPORT_TITLE_DESCRIPTION,
+        # Printed on every archived page. The printed record is the artefact that
+        # outlives the HTML, and it is the one that gets filed and forwarded.
+        "research_use_statement": RESEARCH_USE_STATEMENT,
+        # The only value in either template that is interpolated into a stylesheet,
+        # and the only one that may be: it is a fragment VNtyper built, with every
+        # sample-derived value already escaped for CSS *and* for the raw text element
+        # a `<style>` is.
+        "print_running_header_css": running_header_css,
         "pipeline_version": pipeline_version,
-        "reference_assembly_requested": reference_assembly_requested,
+        # The provenance block. Two of these four rows are *not* new summary keys:
+        # `assembly_declared` is the `reference_assembly_requested` `start_summary`
+        # has always written, and `assembly_detected` is the BAM-header step's
+        # `assembly_text`. Recording either again under a second name would be the
+        # divergent-source problem `cli_report.py`'s docstring warns about. Every
+        # row says `not recorded by this run` when its source is absent - never
+        # `config["default_values"]["reference_assembly"]`, which would mislabel any
+        # `--reference-assembly` override and cannot reconstruct `--custom-regions`.
+        "summary_schema_version": recorded_or_not(pipeline_summary.get("schema_version")),
+        # The words a provenance value renders as when the run recorded nothing for it.
+        # Passed in rather than restated in the template, so the masthead can mark those
+        # values as absent instead of drawing them as if they were facts - and so the
+        # phrase itself exists in exactly one place (`report_identity.NOT_RECORDED`).
+        "not_recorded": NOT_RECORDED,
+        "assembly_declared": assembly_declared_text,
+        "assembly_detected": recorded_or_not(assembly_text),
+        "region_resolved": format_region(pipeline_summary.get("region_resolved")),
+        # `reference_assembly_requested` and `assembly_text` are deliberately absent:
+        # they reach the template as `assembly_declared` and `assembly_detected`
+        # above. Passing the raw values too would put the same fact in the context
+        # twice under two names, which is how the template came to have two places
+        # that could disagree about the assembly.
         "reference_key_used": reference_key_used,
         "reference_path": reference_path,
         "reference_source_effective": reference_source_effective,
         "header_warning": header_warning,
         "alignment_pipeline": alignment_pipeline,
-        "assembly_text": assembly_text,
         "assembly_contig": assembly_contig,
         "mean_vntr_coverage": shown(coverage["mean"]),
         "median_vntr_coverage": shown(coverage["median"]),
@@ -639,7 +940,15 @@ def generate_summary_report(
         "depth_sum_reference_length": shown(coverage["depth_sum_reference_length"]),
         "depth_counting_policy": shown(coverage["depth_counting_policy"]),
         "coverage_qc": coverage_qc.status,
+        # Whether there was anything to judge. `quality_metrics_pass` stays True for a run
+        # with no coverage step at all - the screening axis is unchanged by #172's
+        # honesty fix - so the chip would otherwise be painted "passing" beside a status
+        # that says the gate was never evaluated.
+        "coverage_qc_measured": coverage_qc.status != COVERAGE_QC_NOT_EVALUATED,
         "percent_vntr_uncovered_icon": uncovered_icon,
+        # The six raw colour names are deprecated custom-template API retained through
+        # VNtyper 2.x. Shipped templates use semantic tokens and the accessible icon
+        # fragments instead; see report_context_contract.DEPRECATED_KEYS.
         "percent_vntr_uncovered_color": uncovered_color,
         "mean_vntr_coverage_icon": coverage_icon,
         "mean_vntr_coverage_color": coverage_color,
@@ -657,10 +966,64 @@ def generate_summary_report(
         "passed_filter_icon": pf_icon,
         "passed_filter_color": pf_color,
         "sequencing_str": fastp.sequencing,
-        "summary_text": screening.text,
-        "summary_is_positive": screening.is_positive,
+        # The configured message as the ordered parts it was authored in, each rendered as
+        # an element of its own and autoescaped with everything else. It used to be one
+        # `{{ summary_text|safe }}`, marked safe for no reason but the `<br>` separators
+        # inside it - so the whole sentence was exempt from escaping to get a line break.
+        # `report_config.json` now carries the split beside the verbatim message, and
+        # `screening_summary.render_segments` is what pins that the two still agree.
+        "screening_segments": screening.rendered_segments,
+        # The state as words, computed in the pure module: a chip is the most compressed
+        # thing the report says about a stage, so it is the one most easily misread as a
+        # verdict, and none of these words may be one the run did not reach.
+        "state_chips": state_chips(
+            screening,
+            report_config,
+            cross_match_available=bool(cross_match_message),
+            cross_match_is_positive=cross_match_is_positive,
+        ),
+        # The full computed screening state, not just `is_positive` - so a report
+        # whose state matched no rule (`emphasis == "indeterminate"`) is distinguishable
+        # from a genuine negative rather than rendering identically (#242 I2).
+        "screening_state": {
+            # Deprecated custom-template API retained through VNtyper 2.x. The shipped
+            # provenance line consumes the honest execution-aware `*_state_text`
+            # values below instead; see report_context_contract.DEPRECATED_KEYS.
+            "kestrel_result": screening.kestrel_result,
+            "advntr_result": screening.advntr_result,
+            "quality_metrics_pass": screening.quality_metrics_pass,
+            "matched_rule": screening.matched_rule,
+            "emphasis": screening.emphasis,
+            # The binding report-context contract exposes execution separately from
+            # algorithm result: performed-and-empty is a negative result, while a
+            # stage that did not run or failed established no such result.
+            "execution": {
+                "kestrel": screening.kestrel_execution,
+                "advntr": screening.advntr_execution,
+            },
+            # What the provenance line prints for each algorithm. Built here rather than
+            # branched on in the template because the choice is presentation logic over
+            # computed state, and that lives in the pure modules (AGENTS.md trap 11) -
+            # and because printing `kestrel_result` unconditionally is the defect: a
+            # stage that produced nothing computes the block's "negative" default.
+            "kestrel_state_text": algorithm_state_text(screening.kestrel_execution, screening.kestrel_result),
+            "advntr_state_text": algorithm_state_text(screening.advntr_execution, screening.advntr_result),
+        },
         "cross_match_message": cross_match_message,
         "cross_match_is_positive": cross_match_is_positive,
+        # What the run named, at the top of the report rather than in column eleven of a
+        # nineteen-column table. Built from the *unformatted* frames: the displayed
+        # Kestrel frame carries markup in its `Confidence` and `Flag` cells, and the
+        # nomenclature columns are read as text. It is None when no row carries a name,
+        # which is what the masthead branches on - a run that named nothing must not
+        # render an empty allele panel.
+        "variant_identity": variant_identity(kestrel_df_raw, advntr_df),
+        # Every coded nomenclature value these rows actually use, in words. A tier is a
+        # bare letter and a flag is a kebab-case token; both were printed with nothing
+        # anywhere in the artefact saying what they meant. Only the terms present are
+        # listed, and they are printed rather than put behind a hover, because this
+        # report is read on paper as often as on a screen.
+        "nomenclature_legend": nomenclature_legend(kestrel_df_raw, advntr_df),
     }
 
     try:

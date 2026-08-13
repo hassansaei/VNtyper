@@ -39,6 +39,7 @@ Neither exists — use the commands above.
 | Lint | `make lint` |
 | Type check | `make type-check` |
 | Fast tests (what CI runs) | `make test-unit` |
+| Browser tests (needs a browser engine) | `make test-browser` |
 | Inner loop (fail-fast) | `make test-fast` |
 | Unit coverage + floor | `make test-unit-cov` |
 | Scripts-only coverage proof | `make test-scripts-cov` |
@@ -305,7 +306,7 @@ limit.
 
 - `pytest.ini` at the repo root is the live config. The `[tool.pytest.ini_options]`
   block in `pyproject.toml` is **dead** — pytest.ini takes precedence. Edit `pytest.ini`.
-- Markers: `unit`, `integration`, `docker`, `smoke`, `slow`. `smoke` is the fast image
+- Markers: `unit`, `integration`, `docker`, `browser`, `golden`, `smoke`, `slow`. `smoke` is the fast image
   tier (`make test-docker-smoke`, ~1 s): it asserts the built image's *structure* — that
   every reference path `config.json` declares actually exists in it, that the three conda
   envs and their interpreters are present, that adVNTR imports under Python 2.7, and that
@@ -313,6 +314,36 @@ limit.
   and it derives its assertions from the config inside the container rather than from a
   hardcoded list, so it cannot drift. Smoke tests carry **only** the `smoke` marker —
   adding `docker` too would make the slow tier re-run them.
+- **`browser` is one of five directory tiers (`tests/browser`, `make test-browser`) and nothing gates
+  on it.** The report is an HTML file people open in a browser, and its DataTables flag
+  filter, its client-side rounding and its three CDN `<script>` tags do not exist until a
+  JavaScript engine has run — so `tests/unit/test_generate_report.py` can assert on
+  everything the report *is* and nothing about what it *does*. The tier renders one real
+  report through `generate_summary_report` and opens it twice: once with the network
+  reachable, once with every non-`file://` request route-blocked in the browser rather
+  than trusted to be unreachable. It needs `pytest-playwright` (declared in the `dev`
+  extra) plus a browser binary (`playwright install chromium`) and the network, so it is
+  deliberately outside `make check-all`, outside CI and outside the coverage floor —
+  `fail_under` stays a unit-tier figure. `test_the_report_reads_identically_online_and_offline`
+  is the standing acceptance check for issue #242 and is **green**: the report now reads
+  the same with and without a network. It was red when the tier landed (1 of 3 Kestrel
+  rows online against 3 of 3 offline, at different precision), and it is kept so that the
+  next change cannot reintroduce that. `make test-browser` is expected to pass.
+  **Two marker rules that look inconsistent and are not.** `make test-unit` needs no
+  `-m "not browser"`: it selects `-m unit tests/unit`, by path *and* by marker, so it
+  cannot reach the tier, and the predicate would wrongly imply browser tests carry the
+  `unit` marker. `make test`, `test-cov`, `test-quiet` and `test-verbose` **do** carry it:
+  they invoke a bare `pytest`, `testpaths = tests` then collects `tests/browser`, and
+  `make all` depends on `test` — so without the predicate the convenience gate demands a
+  browser binary from everyone. State the exclusion where it does something.
+  The online pass must *prove* it was online (a working jQuery/DataTables in the page,
+  and no error statuses), because a machine with no network, or a CDN answering with
+  something unusable, otherwise turns it into a second offline pass and the comparison
+  compares a report with itself.
+- **`golden` is the fifth directory tier** (`tests/golden`,
+  `pytest -m golden tests/golden`). It compares against a known-truth simulated cohort
+  supplied through `VNTYPER_SIM_ROOT` and `VNTYPER_ADVNTR_ROOT`, skips without those
+  inputs, and deliberately remains outside `make check-all`.
 - **Every new unit test file must declare `pytestmark = pytest.mark.unit`.** CI runs
   `pytest -m unit`, so an unmarked file silently never runs. This is enforced by
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
@@ -535,7 +566,8 @@ summary | release-summary | none | always records success, failure, skipped jobs
     table; `report_formatting.py` owns the icons, the column projections and the IGV
     fragment splicing. Put new pure logic there, not back in `generate_report.py`.
     Two rules that are easy to break: emphasis in the report comes from the computed
-    state (`summary_is_positive`), never from searching the message text, and the
+    state (`screening_state.emphasis`, and `cross_match_is_positive` for the
+    cross-match box), never from searching the message text, and the
     Jinja2 environment autoescapes — anything you mark `|safe` must be a fragment
     VNtyper built, not a value read from a sample. `tests/unit/test_generate_report.py`
     enforces both. (`vntyper report` itself was broken until #179 — the handler passed

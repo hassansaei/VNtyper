@@ -14,6 +14,8 @@ by running the whole pipeline:
 
 import json
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -193,17 +195,29 @@ def test_select_display_columns_does_not_mutate_its_input() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Confidence colouring
+# Confidence classification
+#
+# There is no hue in either literal below, and that is the change #242's contrast
+# pass made. `High_Precision` - the most trustworthy call the pipeline makes - was
+# `color:red`, one column from a red `Flag` glyph meaning the opposite, and it
+# measured 4.00:1 against white and 3.57:1 against a striped cohort row.
+# `Low_Precision` was `color:orange` at 1.97:1 and 1.76:1. A transitional underline
+# had been added so the two were not separated by hue alone; both go together here,
+# because the honest channel was always the label and the label is text in the cell
+# in every branch. `test_report_presentation.py` asserts the rule these literals are
+# an instance of, and computes the ratios from the shipped stylesheet.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("value", ["High_Precision", "High_Precision*"])
-def test_high_precision_is_red(value) -> None:
-    assert rf.confidence_html(value) == f'<span style="color:red;font-weight:bold;">{value}</span>'
+def test_high_precision_carries_its_class_and_no_colour(value) -> None:
+    assert rf.confidence_html(value) == f'<span class="confidence confidence-high-precision">{value}</span>'
 
 
-def test_low_precision_is_orange() -> None:
-    assert rf.confidence_html("Low_Precision") == '<span style="color:orange;font-weight:bold;">Low_Precision</span>'
+def test_low_precision_carries_its_own_class() -> None:
+    assert rf.confidence_html("Low_Precision") == (
+        '<span class="confidence confidence-low-precision">Low_Precision</span>'
+    )
 
 
 def test_an_unstyled_confidence_passes_through() -> None:
@@ -316,7 +330,7 @@ def test_confidence_html_escapes_an_unstyled_value() -> None:
 
 
 def test_confidence_html_escapes_inside_the_span_too() -> None:
-    assert rf.confidence_html("Low_Precision").startswith('<span style="color:orange')
+    assert rf.confidence_html("Low_Precision").startswith('<span class="confidence')
 
 
 def test_escape_html_escapes_quotes() -> None:
@@ -494,3 +508,700 @@ class TestCoverageNullToken:
         verdict = evaluate_coverage_qc(stats["mean"], stats["percent_uncovered"], 100.0, 50.0)
 
         assert verdict.status == COVERAGE_QC_NOT_EVALUATED
+
+
+# ---------------------------------------------------------------------------
+# Server-side number formatting - issue #242
+# ---------------------------------------------------------------------------
+#
+# Until #242 the report shipped a jQuery ``applyRounding()`` that rewrote **every**
+# numeric cell of **every** initialised table to four decimal places and then
+# stripped trailing zeroes. It ran in the reader's browser, so the number on screen
+# was a property of the reader's network rather than of the run, and it was
+# table-agnostic, so it applied one rule to a genomic position, a depth score and a
+# p-value alike.
+#
+# The baseline below was captured from a report rendered by this repository and
+# opened in chromium with the three CDNs reachable, **before** ``applyRounding`` was
+# removed. ``online`` is what that reader saw; ``server`` is what the report now
+# writes into the file. Where they differ the divergence is deliberate and named.
+
+
+@dataclass(frozen=True)
+class NumericRendering:
+    """One value's pre-#242 online rendering beside its rendering now.
+
+    Attributes:
+        table: ``kestrel`` or ``advntr`` - which format table declares the column.
+        column: The result column name.
+        stored: The value as it appears in ``pipeline_summary.json``.
+        online: What the browser displayed for it before #242, measured.
+        server: What the report renders for it now.
+        divergence: Why the two differ, or "" when they agree.
+    """
+
+    table: str
+    column: str
+    stored: object
+    online: str
+    server: str
+    divergence: str = ""
+
+    def __repr__(self) -> str:
+        return f"{self.table}.{self.column}={self.stored!r}"
+
+
+NUMERIC_RENDERINGS = (
+    # -- Kestrel ---------------------------------------------------------------
+    NumericRendering("kestrel", "POS", 67, "67", "67"),
+    NumericRendering("kestrel", "Estimated_Depth_AlternateVariant", 120, "120", "120"),
+    NumericRendering("kestrel", "Estimated_Depth_Variant_ActiveRegion", 12000, "12000", "12000"),
+    NumericRendering(
+        "kestrel",
+        "Depth_Score",
+        0.010012,
+        "0.01",
+        "0.010012",
+        "the confidence thresholds are 0.00469 and 0.00515, so four decimal places is coarser "
+        "than the calibration the number is judged against",
+    ),
+    NumericRendering(
+        "kestrel",
+        "Depth_Score",
+        0.00001234,
+        "0",
+        "0.000012",
+        "four decimal places rendered a real depth score as the value 0",
+    ),
+    # -- adVNTR ----------------------------------------------------------------
+    NumericRendering("advntr", "VID", 25561, "25561", "25561"),
+    NumericRendering("advntr", "NumberOfSupportingReads", 14, "14", "14"),
+    NumericRendering("advntr", "POS", 67, "67", "67"),
+    NumericRendering("advntr", "MeanCoverage", 132.45, "132.45", "132.45"),
+    NumericRendering(
+        "advntr",
+        "MeanCoverage",
+        98.5,
+        "98.5",
+        "98.50",
+        "trailing zeroes are kept so every mean states the same precision",
+    ),
+    NumericRendering(
+        "advntr",
+        "Pvalue",
+        1e-09,
+        "0",
+        "1e-09",
+        "four decimal places destroyed a highly significant p-value, displaying it as 0",
+    ),
+    NumericRendering(
+        "advntr",
+        "Pvalue",
+        0.0001234,
+        "0.0001",
+        "0.000123",
+        "three significant figures keep the value rather than truncating it at four decimals",
+    ),
+    NumericRendering("advntr", "Pvalue", 0.04999, "0.05", "0.05"),
+)
+
+#: Which declaration in ``report_formatting`` governs each table.
+FORMAT_TABLES = {"kestrel": "KESTREL_CELL_FORMATS", "advntr": "ADVNTR_CELL_FORMATS"}
+
+
+def rendered_cell(case: NumericRendering) -> str:
+    """Render one stored value through the formatter its column declares.
+
+    Args:
+        case: The recorded rendering.
+
+    Returns:
+        str: The cell text the report writes.
+    """
+    formats = getattr(rf, FORMAT_TABLES[case.table])
+    frame = pd.DataFrame({case.column: [case.stored]})
+    return str(rf.format_number_columns(frame, formats).loc[0, case.column])
+
+
+@pytest.mark.parametrize("case", NUMERIC_RENDERINGS, ids=repr)
+def test_each_numeric_column_renders_the_string_recorded_for_it(case: NumericRendering) -> None:
+    """Every displayed number is produced here, by the column's declared formatter."""
+    assert rendered_cell(case) == case.server
+
+
+@pytest.mark.parametrize("case", [c for c in NUMERIC_RENDERINGS if not c.divergence], ids=repr)
+def test_a_column_with_no_named_divergence_still_reads_as_it_did_online(case: NumericRendering) -> None:
+    """Where the browser's rule was harmless, the server reproduces it exactly."""
+    assert rendered_cell(case) == case.online
+
+
+@pytest.mark.parametrize("case", [c for c in NUMERIC_RENDERINGS if c.divergence], ids=repr)
+def test_every_divergence_from_the_online_rendering_is_a_declared_one(case: NumericRendering) -> None:
+    """A rendering may only differ from the measured baseline with a recorded reason."""
+    assert rendered_cell(case) != case.online, (
+        f"{case} no longer diverges from the online rendering; drop the recorded reason: {case.divergence}"
+    )
+
+
+def test_every_displayed_column_declares_how_its_value_is_rendered() -> None:
+    """A new display column must state its formatter rather than inherit a default.
+
+    **Sets, deliberately - so this says nothing about column order.** The order is an
+    observable output format recorded as a migration in
+    ``docs/user-guide/output-files.md``, and it is pinned by
+    ``test_report_presentation.py::test_the_motif_sequence_is_the_last_kestrel_column``
+    and ``::test_the_flag_column_precedes_the_motif_sequence``. Reading this comparison
+    as an order check is how the move went unenforced for a commit.
+    """
+    assert set(rf.KESTREL_CELL_FORMATS) == set(rf.KESTREL_DISPLAY_COLUMNS)
+    assert set(rf.ADVNTR_CELL_FORMATS) == set(rf.ADVNTR_DISPLAY_COLUMNS)
+
+
+def test_nomenclature_columns_are_text_and_the_real_motif_remains_last() -> None:
+    """Main's nomenclature fields must not undo #242's width/format contracts."""
+    nomenclature = (
+        "Nomenclature",
+        "Nomenclature_Tier",
+        "Nomenclature_Flags",
+        "Nomenclature_Kestrel",
+        "Nomenclature_adVNTR",
+        "Ambiguity_Interval",
+        "Repeat_Form",
+        "Nomenclature_Note",
+    )
+
+    assert tuple(rf.KESTREL_DISPLAY_COLUMNS)[-9:-1] == nomenclature
+    assert tuple(rf.KESTREL_DISPLAY_COLUMNS)[-1] == "Motif_sequence"
+    assert tuple(rf.ADVNTR_DISPLAY_COLUMNS)[-8:] == nomenclature
+    assert {rf.KESTREL_CELL_FORMATS[column] for column in nomenclature} == {rf.FORMAT_TEXT}
+    assert {rf.ADVNTR_CELL_FORMATS[column] for column in nomenclature} == {rf.FORMAT_TEXT}
+
+
+def test_every_declared_format_names_a_real_formatter() -> None:
+    declared = set(rf.KESTREL_CELL_FORMATS.values()) | set(rf.ADVNTR_CELL_FORMATS.values())
+    assert declared <= set(rf.CELL_FORMATTERS), f"undefined formats: {sorted(declared - set(rf.CELL_FORMATTERS))}"
+
+
+def test_an_undeclared_numeric_column_fails_loudly(caplog) -> None:
+    """The point of the per-column table: silence is the failure mode being removed."""
+    caplog.set_level(logging.ERROR, logger=rf.logger.name)
+    frame = pd.DataFrame({"POS": [67], "Novel_Score": [1.5]})
+
+    with pytest.raises(ValueError, match="Novel_Score"):
+        rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS)
+
+    assert any("Novel_Score" in record.getMessage() for record in caplog.records)
+
+
+def test_a_non_numeric_placeholder_passes_through_untouched() -> None:
+    """``output_empty_result`` writes the string "None" into every numeric column."""
+    frame = pd.DataFrame({"POS": ["None"], "Depth_Score": ["None"]})
+
+    formatted = rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS)
+
+    assert formatted.loc[0, "POS"] == "None"
+    assert formatted.loc[0, "Depth_Score"] == "None"
+
+
+def test_a_missing_value_is_not_rendered_as_a_number() -> None:
+    frame = pd.DataFrame({"Depth_Score": [float("nan")]})
+
+    formatted = rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS)
+
+    assert pd.isna(formatted.loc[0, "Depth_Score"])
+
+
+@pytest.mark.parametrize("cells", [[True], [True, "not a number"]], ids=["numpy-bool", "python-bool"])
+def test_a_boolean_is_not_silently_rendered_as_a_digit(cells: list) -> None:
+    """``bool`` is a ``numbers.Integral``, so rendering it would print True as ``1``
+    and change what the cell says. Both spellings are covered because the dtype
+    decides which one pandas hands out: a bool column yields ``numpy.bool_``, and a
+    mixed column yields the Python ``bool`` the explicit guard exists for."""
+    formatted = rf.format_number_columns(pd.DataFrame({"POS": cells}), rf.KESTREL_CELL_FORMATS)
+
+    assert bool(formatted.loc[0, "POS"]) is True
+    assert not isinstance(formatted.loc[0, "POS"], str)
+
+
+def test_an_absent_value_passes_through_rather_than_becoming_a_number() -> None:
+    formatted = rf.format_number_columns(pd.DataFrame({"POS": [None]}), rf.KESTREL_CELL_FORMATS)
+
+    assert formatted.loc[0, "POS"] is None
+
+
+def test_formatting_does_not_mutate_its_input() -> None:
+    frame = pd.DataFrame({"POS": [67.0]})
+
+    rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS)
+
+    assert frame.loc[0, "POS"] == 67.0
+
+
+def test_a_column_absent_from_the_frame_is_skipped() -> None:
+    """A negative Kestrel run carries neither the depth columns nor ``Flag``."""
+    frame = pd.DataFrame({"POS": [67]})
+
+    assert list(rf.format_number_columns(frame, rf.KESTREL_CELL_FORMATS).columns) == ["POS"]
+
+
+# ---------------------------------------------------------------------------
+# The flag cell - issue #242
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("clean", ["Not flagged", "Not applicable", ""])
+def test_a_clean_flag_renders_the_passing_glyph(clean: str) -> None:
+    markup = rf.flag_html(clean)
+
+    assert rf.FLAG_OK_GLYPH in markup
+    assert rf.FLAG_WARNING_GLYPH not in markup
+    assert rf.FLAG_FLAGGED_CLASS not in markup
+
+
+def test_a_flagged_value_renders_the_reason_as_text() -> None:
+    """The reason must survive print, a screen reader and a failed script load -
+    which a ``title`` attribute on a bare glyph does not."""
+    markup = rf.flag_html("Low_Depth")
+
+    assert "Low_Depth" in markup
+    assert rf.FLAG_WARNING_GLYPH in markup
+    assert rf.FLAG_FLAGGED_CLASS in markup
+    assert "title=" not in markup, "the reason is text in the cell, not a hover-only attribute"
+
+
+def test_a_flag_value_is_escaped_before_it_becomes_markup() -> None:
+    """``Flag`` reaches the report out of a supplied ``pipeline_summary.json`` (#207)."""
+    markup = rf.flag_html("<img src=x onerror=alert(1)>")
+
+    assert "<img" not in markup
+    assert "&lt;img src=x onerror=alert(1)&gt;" in markup
+
+
+def test_a_non_string_flag_is_stringified_rather_than_dropped() -> None:
+    assert "1" in rf.flag_html(1)
+
+
+# ---------------------------------------------------------------------------
+# The row-count statement - issue #242
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("total", "flagged", "expected"),
+    [
+        (3, 2, "Showing 3 of 3 Kestrel rows; 2 flagged."),
+        (1, 0, "Showing 1 of 1 Kestrel row; none flagged."),
+        (1, 1, "Showing 1 of 1 Kestrel row; 1 flagged."),
+        (0, 0, "Showing 0 of 0 Kestrel rows; none flagged."),
+    ],
+)
+def test_the_row_count_statement_says_how_many_rows_are_shown(total: int, flagged: int, expected: str) -> None:
+    """Rendered from the frame in Python, never read back out of DataTables' footer."""
+    assert rf.row_count_statement(total, flagged, noun="Kestrel") == expected
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        (pd.DataFrame({"Flag": ["Not flagged", "Low_Depth", "Not applicable"]}), 1),
+        (pd.DataFrame({"Flag": ["Not flagged"]}), 0),
+        (pd.DataFrame({"Flag": [""]}), 0),
+        (pd.DataFrame({"Motif": ["5"]}), 0),
+        (pd.DataFrame(), 0),
+    ],
+)
+def test_flagged_row_count_counts_only_the_rows_carrying_a_reason(frame: pd.DataFrame, expected: int) -> None:
+    assert rf.flagged_row_count(frame) == expected
+
+
+# ---------------------------------------------------------------------------
+# The empty-result placeholder - issue #242
+# ---------------------------------------------------------------------------
+
+
+def test_the_placeholder_a_negative_run_writes_is_recognised(tmp_path) -> None:
+    """The two ends of the contract, bound together in one test.
+
+    ``kestrel_genotyping.output_empty_result`` writes the row and ``summary.parse_tsv``
+    is what turns it into the mapping the report reads - it splits on tabs and coerces
+    nothing, so the literal string ``"None"`` is what arrives. Constructing the row by
+    hand here would let the writer change shape without this failing, which is the
+    silently-wrong-call failure mode AGENTS.md warns about: the report would go back to
+    tabulating a non-result and every test would still pass.
+    """
+    from vntyper.scripts.kestrel_genotyping import output_empty_result
+    from vntyper.scripts.summary import parse_tsv
+
+    output_empty_result(str(tmp_path), ["## VNtyper Kestrel result"])
+    rows = parse_tsv(str(tmp_path / "kestrel_result.tsv"))["data"]
+
+    assert len(rows) == 1, "output_empty_result no longer writes exactly one placeholder row"
+    assert rf.is_empty_result_row(rows[0]), f"the placeholder {rows[0]} is not recognised as one"
+    assert rf.drop_empty_result_rows(rows) == []
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({"Motif": "None", "Confidence": "Negative"}, True),
+        ({"Confidence": "Negative"}, True),
+        ({"Motif": "None", "POS": "", "Confidence": "Negative"}, True),
+        ({"Motif": "None", "POS": None, "Confidence": "Negative"}, True),
+        ({"Motif": "None", "POS": float("nan"), "Confidence": "Negative"}, True),
+        ({"Motif": "5", "POS": "67", "Confidence": "Negative"}, False),
+        ({"Motif": "None", "POS": "67", "Confidence": "Negative"}, False),
+        ({"Motif": "None", "Confidence": "High_Precision"}, False),
+        ({"Motif": "None"}, False),
+        ({}, False),
+    ],
+)
+def test_a_row_is_a_placeholder_only_when_it_names_no_variant(row: dict, expected: bool) -> None:
+    """Both halves are required, and the second is what keeps a real call safe.
+
+    ``Confidence == "Negative"`` alone is not the test: a report is a record, and a rule
+    that deleted every row carrying that label would delete a real variant the moment a
+    future calibration used it. A row is a non-result only when it also names nothing -
+    no position, no REF, no ALT, no motif.
+    """
+    assert rf.is_empty_result_row(row) is expected
+
+
+def test_dropping_placeholders_keeps_every_other_row_and_its_order() -> None:
+    first = {"Motif": "5", "POS": "67", "Confidence": "High_Precision"}
+    second = {"Motif": "6", "POS": "68", "Confidence": "Low_Precision"}
+
+    kept = rf.drop_empty_result_rows([first, {"Motif": "None", "Confidence": "Negative"}, second])
+
+    assert kept == [first, second]
+
+
+def test_dropping_placeholders_does_not_modify_its_input() -> None:
+    rows = [{"Motif": "None", "Confidence": "Negative"}]
+
+    rf.drop_empty_result_rows(rows)
+
+    assert rows == [{"Motif": "None", "Confidence": "Negative"}]
+
+
+# ---------------------------------------------------------------------------
+# escaped_table_html
+# ---------------------------------------------------------------------------
+
+
+def test_an_empty_frame_renders_no_table_at_all() -> None:
+    """The authored-empty-state hook: ``to_html`` on an empty frame is a stray box."""
+    assert rf.escaped_table_html(pd.DataFrame(), classes="table") == ""
+
+
+def test_a_table_can_be_given_the_id_its_selectors_use() -> None:
+    """The per-sample Kestrel table is addressed as ``#kestrel_table`` by the browser
+    tier and by the template's DataTables initialisation, so routing it through this
+    helper has to keep the id it had when it called ``to_html`` directly."""
+    markup = rf.escaped_table_html(pd.DataFrame({"POS": [67]}), classes="table", table_id="kestrel_table")
+
+    assert 'id="kestrel_table"' in markup
+
+
+def test_a_table_with_no_id_asked_for_carries_none() -> None:
+    """The cohort tables share one stylesheet and are addressed by class."""
+    assert "id=" not in rf.escaped_table_html(pd.DataFrame({"POS": [67]}), classes="table")
+
+
+# ---------------------------------------------------------------------------
+# Per-column presentation (#242 report pass)
+#
+# `annotate_table_columns` writes alignment, face, width floor, `scope` and the
+# column's own explanation onto a table pandas has already rendered. It counts cells
+# from each `<tr>`, which is exact for `to_html(index=False)` output and is the part
+# worth pinning: an off-by-one here silently right-aligns a sequence column and sets a
+# p-value in the body face, and both look plausible.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def naming_frame() -> pd.DataFrame:
+    """A one-row Kestrel display frame carrying the columns the classes key on."""
+    return pd.DataFrame(
+        [
+            {
+                "Motif": "L",
+                "Position": 67,
+                "REF": "G",
+                "Depth Score": "0.009410",
+                "MUC1 Name": "59dupC",
+                "Tier": "B",
+                "Flags": "known-variant; position-ambiguous",
+                "Motif Sequence": "GGCCACCACCCTG",
+            }
+        ]
+    )
+
+
+def test_numeric_headings_names_only_the_columns_holding_numbers() -> None:
+    numeric = rf.numeric_headings(rf.KESTREL_DISPLAY_CELL_FORMATS)
+
+    assert "Depth Score" in numeric
+    assert "Position" in numeric
+    # A text column must not be right-aligned onto a numeric axis it does not share.
+    assert "Motif Sequence" not in numeric
+    assert "Confidence" not in numeric
+
+
+def test_every_display_heading_of_both_tables_has_column_help() -> None:
+    """A heading with no explanation is one the reading key cannot introduce.
+
+    Both tables' headings are checked together because the pass that humanised the
+    adVNTR headings is the same pass that wrote these sentences, and a heading added to
+    either table later should fail here rather than render a bare column name with no
+    way for a first-time reader to find out what it holds.
+    """
+    headings = {*rf.KESTREL_DISPLAY_COLUMNS.values(), *rf.ADVNTR_DISPLAY_HEADINGS.values()}
+
+    missing = sorted(heading for heading in headings if heading not in rf.COLUMN_HELP)
+
+    assert missing == [], f"these column headings carry no explanation: {missing}"
+
+
+def test_the_advntr_headings_cover_exactly_the_advntr_display_columns() -> None:
+    """The rename map and the projection order are two halves of one decision."""
+    assert tuple(rf.ADVNTR_DISPLAY_HEADINGS) == rf.ADVNTR_DISPLAY_COLUMNS
+
+
+def test_annotate_table_columns_aligns_numbers_and_sets_identifiers_in_mono(naming_frame) -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(naming_frame, classes="table"),
+        list(naming_frame.columns),
+        numeric=rf.numeric_headings(rf.KESTREL_DISPLAY_CELL_FORMATS),
+    )
+
+    assert '<td class="num">67</td>' in markup
+    assert '<td class="num">0.009410</td>' in markup
+    assert '<td class="mono-cell">G</td>' in markup
+    assert '<td class="mono-cell">59dupC</td>' in markup
+    # The flag list gets a width floor rather than a face or an axis.
+    assert '<td class="wide-cell">known-variant; position-ambiguous</td>' in markup
+    # And a plain text column keeps all three off.
+    assert "<td>L</td>" in markup
+
+
+def test_annotate_table_columns_scopes_every_heading_and_explains_it(naming_frame) -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(naming_frame, classes="table"),
+        list(naming_frame.columns),
+    )
+
+    for heading in naming_frame.columns:
+        assert f'scope="col" title="{rf.escape_html(rf.COLUMN_HELP[heading])}">{heading}</th>' in markup
+
+
+def test_annotate_table_columns_gives_one_column_the_tables_slack(naming_frame) -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(naming_frame, classes="table"),
+        list(naming_frame.columns),
+    )
+
+    assert markup.count("col-grow") == 1
+    assert "col-grow" in markup.split(">Motif Sequence</th>")[0].rsplit("<th", 1)[-1]
+
+
+def test_annotate_table_columns_names_the_table(naming_frame) -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(naming_frame, classes="table"),
+        list(naming_frame.columns),
+        caption="Kestrel variant calls",
+    )
+
+    assert "<caption>Kestrel variant calls</caption>" in markup
+    assert markup.index("<caption>") < markup.index("<thead>")
+
+
+def test_annotate_table_columns_escapes_a_caption() -> None:
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(pd.DataFrame([{"A": 1}]), classes="table"),
+        ["A"],
+        caption='<script>"x"</script>',
+    )
+
+    assert "<script>" not in markup.split("</caption>")[0].split("<caption>")[1]
+    assert "&lt;script&gt;" in markup
+
+
+def test_annotate_table_columns_leaves_an_empty_table_alone() -> None:
+    """`escaped_table_html` returns "" for an empty frame, and "" is what the template's
+    authored empty states branch on. Annotating it into a non-empty string would render
+    an empty box under the heading instead of the sentence saying which kind of nothing
+    this is."""
+    assert rf.annotate_table_columns("", ["A"], caption="never rendered") == ""
+
+
+def test_annotate_table_columns_drops_the_inline_alignment_pandas_writes(naming_frame) -> None:
+    """An inline `text-align` on the header row is a declaration no stylesheet can see."""
+    rendered = rf.escaped_table_html(naming_frame, classes="table")
+    assert "text-align: right" in rendered
+
+    markup = rf.annotate_table_columns(rendered, list(naming_frame.columns))
+
+    assert "text-align" not in markup
+
+
+def test_a_rendered_table_carries_no_presentation_border(naming_frame) -> None:
+    """pandas writes `border="1"`, which painted a grey no palette owns on every cell."""
+    assert 'border="1"' not in rf.escaped_table_html(naming_frame, classes="table")
+
+
+def test_space_flag_tokens_breaks_a_flag_list_between_flags() -> None:
+    frame = pd.DataFrame([{"Nomenclature_Flags": "known-variant;motif-context-diverges"}])
+
+    spaced = rf.space_flag_tokens(frame)
+
+    assert spaced["Nomenclature_Flags"][0] == "known-variant; motif-context-diverges"
+    # The input is not modified, and a frame with no flag column passes straight through.
+    assert frame["Nomenclature_Flags"][0] == "known-variant;motif-context-diverges"
+    other = pd.DataFrame([{"Motif": "L"}])
+    assert rf.space_flag_tokens(other) is other
+
+
+# ---------------------------------------------------------------------------
+# What the run named
+# ---------------------------------------------------------------------------
+
+
+KESTREL_NAMED = {
+    "MUC1 Name": "59dupC",
+    "Tier": "B",
+    "Flags": "known-variant;position-ambiguous",
+    "Kestrel Name": "59dupC",
+    "adVNTR Name": "59dupC",
+    "Ambiguity": "53_59",
+    "Repeat Form": "53C[7]>53C[8]",
+    "Naming Note": "matches a described MUC1 variant; requires validation",
+}
+
+ADVNTR_NAMED = {
+    "Nomenclature": "59dupC",
+    "Nomenclature_Tier": "B",
+    "Nomenclature_Flags": "known-variant",
+    "Nomenclature_Kestrel": "59dupC",
+    "Nomenclature_adVNTR": "59dupC",
+    "Ambiguity_Interval": "53_59",
+    "Repeat_Form": "53C[7]>53C[8]",
+    "Nomenclature_Note": "matches a described MUC1 variant; requires validation",
+}
+
+
+def named(*frames: pd.DataFrame) -> dict[str, Any]:
+    """:func:`variant_identity`, asserted to have found a name.
+
+    It returns None for a run that named nothing, which is the branch the masthead
+    hangs its "render no allele panel at all" on and which
+    `test_variant_identity_is_none_when_no_row_carries_a_name` covers directly. Every
+    other test here is about what the qualifiers say once there *is* a name, so the
+    narrowing happens once, here, rather than as an `assert` at the top of each.
+    """
+    identity = rf.variant_identity(*frames)
+    assert identity is not None, "expected these rows to carry a name"
+    return identity
+
+
+def test_variant_identity_reads_the_kestrel_display_headings() -> None:
+    identity = named(pd.DataFrame([KESTREL_NAMED]))
+
+    assert identity["name"] == "59dupC"
+    assert identity["tier"] == "B"
+    assert identity["tier_label"] == rf.NOMENCLATURE_TIERS["B"][0]
+    assert identity["ambiguity"] == "53_59"
+    assert identity["repeat_form"] == "53C[7]>53C[8]"
+    assert identity["callers_agree"] is True
+    assert [flag["token"] for flag in identity["flags"]] == ["known-variant", "position-ambiguous"]
+    assert all(flag["meaning"] for flag in identity["flags"])
+
+
+def test_variant_identity_reads_the_advntr_source_names_too() -> None:
+    """The two frames spell these columns differently and both are read.
+
+    ``build_kestrel_frames`` projects through the display headings before the matching
+    frame is copied; ``build_advntr_frame`` renames nothing. Reading one spelling would
+    have summarised whichever caller happened to use it.
+    """
+    identity = named(pd.DataFrame([ADVNTR_NAMED]))
+
+    assert identity["name"] == "59dupC"
+    assert identity["tier"] == "B"
+    assert identity["ambiguity"] == "53_59"
+
+
+def test_variant_identity_is_none_when_no_row_carries_a_name() -> None:
+    """A run that named nothing must not render an empty allele panel."""
+    assert rf.variant_identity(pd.DataFrame(), pd.DataFrame()) is None
+    assert rf.variant_identity(pd.DataFrame([{"Motif": "L", "MUC1 Name": ""}])) is None
+
+
+def test_variant_identity_never_chooses_between_two_names() -> None:
+    """Picking one would be the top of the report deciding which variant is shown.
+
+    Both names are returned, and every qualifier is withheld: a tier and an ambiguity
+    interval belong to one name, and attaching them to a list of names would be a claim
+    no row made.
+    """
+    identity = named(pd.DataFrame([KESTREL_NAMED, {**KESTREL_NAMED, "MUC1 Name": "60dupA", "Tier": "A"}]))
+
+    assert identity["name"] == "59dupC"
+    assert identity["other_names"] == ["60dupA"]
+    assert identity["tier"] == ""
+    assert identity["ambiguity"] == ""
+    assert identity["flags"] == []
+
+
+def test_variant_identity_withholds_a_qualifier_the_rows_disagree_on() -> None:
+    rows = [KESTREL_NAMED, {**KESTREL_NAMED, "Ambiguity": "1_5"}]
+
+    identity = named(pd.DataFrame(rows))
+
+    assert identity["name"] == "59dupC"
+    assert identity["ambiguity"] == ""
+    # A qualifier the rows do agree on is still stated.
+    assert identity["repeat_form"] == "53C[7]>53C[8]"
+
+
+def test_variant_identity_does_not_claim_agreement_the_callers_did_not_reach() -> None:
+    identity = named(pd.DataFrame([{**KESTREL_NAMED, "adVNTR Name": "58_59insG"}]))
+
+    assert identity["callers_agree"] is False
+
+
+def test_nomenclature_legend_explains_only_the_terms_these_rows_use() -> None:
+    entries = rf.nomenclature_legend(pd.DataFrame([KESTREL_NAMED]))
+    terms = [entry["term"] for entry in entries]
+
+    assert terms == ["Tier B", "known-variant", "position-ambiguous"]
+    assert entries[0]["label"] == rf.NOMENCLATURE_TIERS["B"][0]
+    assert all(entry["meaning"] for entry in entries)
+    # A tier this sample never reached is not explained at it.
+    assert "Tier A" not in terms
+
+
+def test_nomenclature_legend_is_empty_for_a_run_that_named_nothing() -> None:
+    assert rf.nomenclature_legend(pd.DataFrame(), pd.DataFrame()) == []
+
+
+def test_every_flag_the_caller_can_set_is_explained() -> None:
+    """The vocabulary is closed and declared in one place, so the key can be complete.
+
+    A flag with no sentence here reaches the reader as an unexplained kebab-case token,
+    which is the defect the reading key exists to close - and it would do so silently,
+    because the key only lists the terms a sample actually carries.
+    """
+    from vntyper.scripts import nomenclature
+
+    declared = {
+        value for name, value in vars(nomenclature).items() if name.startswith("FLAG_") and isinstance(value, str)
+    }
+
+    missing = sorted(declared - set(rf.NOMENCLATURE_FLAG_MEANINGS))
+
+    assert missing == [], f"these nomenclature flags have no explanation: {missing}"
+
+
+def test_every_tier_the_caller_can_assign_is_explained() -> None:
+    assert set(rf.NOMENCLATURE_TIERS) == {"A", "B", "C"}
+    assert all(label and meaning for label, meaning in rf.NOMENCLATURE_TIERS.values())

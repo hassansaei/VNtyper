@@ -112,28 +112,32 @@ def test_the_additional_statistics_table_is_escaped(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_confidence_colour_span_is_still_markup(tmp_path) -> None:
+def test_the_confidence_span_is_still_markup(tmp_path) -> None:
     """
     The one genuinely constructed fragment in these tables, preserved deliberately.
 
-    `Confidence` is rewritten to a coloured `<span>` before rendering. It is built here
+    `Confidence` is rewritten to a classed `<span>` before rendering. It is built here
     from a value the config supplies, so it is the single exemption, and it is passed as
     an explicit `html_columns` entry rather than by turning escaping off wholesale.
+
+    The span carries a class and no colour since #242's contrast pass: `color:red` on
+    `High_Precision` measured 3.57:1 against this table's striped rows. See
+    `report_formatting.CONFIDENCE_CLASSES`.
     """
     frame = pd.DataFrame([{"Sample": "s1", "Confidence": "High_Precision"}])
 
     html = _render(tmp_path, kestrel_df=frame)
 
-    assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in html
+    assert '<span class="confidence confidence-high-precision">High_Precision</span>' in html
 
 
-def test_a_low_precision_call_keeps_its_own_colour(tmp_path) -> None:
-    """Both branches of the colour rule render, not just the one the first test hits."""
+def test_a_low_precision_call_keeps_its_own_class(tmp_path) -> None:
+    """Both branches of the rule render, not just the one the first test hits."""
     frame = pd.DataFrame([{"Sample": "s1", "Confidence": "Low_Precision"}])
 
     html = _render(tmp_path, kestrel_df=frame)
 
-    assert '<span style="color:orange;font-weight:bold;">Low_Precision</span>' in html
+    assert '<span class="confidence confidence-low-precision">Low_Precision</span>' in html
 
 
 def test_a_confidence_value_that_is_not_ours_is_still_escaped(tmp_path) -> None:
