@@ -30,6 +30,12 @@ REPO_ROOT = UNIT_DIR.parents[1]
 # A module defines tests if it has a top-level `def test_*` or a `class Test*`.
 _DEFINES_TESTS = re.compile(r"^\s*(?:async\s+def\s+test_|def\s+test_|class\s+Test)", re.MULTILINE)
 
+# The `browser` marker, declared either module-wide or on an individual test.
+_DECLARES_BROWSER_MARKER = re.compile(
+    r"^\s*(?:pytestmark\s*=.*pytest\.mark\.browser|@pytest\.mark\.browser)",
+    re.MULTILINE,
+)
+
 
 def test_every_unit_file_is_selected_by_the_unit_marker(request: pytest.FixtureRequest) -> None:
     """Every test file under tests/unit/ must be selected by `pytest -m unit`.
@@ -85,6 +91,42 @@ def test_no_test_modules_outside_the_known_tiers() -> None:
     assert not stray, (
         f"These test modules live outside tests/{{{','.join(sorted(allowed))}}}: {stray}. "
         "Move real tests into a tier; rename helpers so they do not start with 'test_'."
+    )
+
+
+def test_every_browser_file_declares_the_browser_marker() -> None:
+    """Every test module under tests/browser/ must carry the ``browser`` marker.
+
+    ``make test-browser`` runs ``pytest tests/browser -m browser``, so a module
+    that forgets the marker is collected, deselected and never run - the same
+    silent hole ``test_every_unit_file_is_selected_by_the_unit_marker`` closes for
+    the unit tier, and ``--strict-markers`` cannot catch it because an omission is
+    not a misspelling. Widening ``allowed`` above to admit the tier is what makes
+    this necessary: the directory check alone now accepts an unmarked file.
+
+    This one works off the source text rather than the session's collected items,
+    because a ``pytest -m unit`` run never collects the browser tier and so has
+    nothing to inspect.
+
+    Raises:
+        AssertionError: If a browser module defining tests declares no marker.
+    """
+    browser_dir = UNIT_DIR.parent / "browser"
+    if not browser_dir.is_dir():
+        pytest.skip("tests/browser is absent from this checkout")
+
+    unmarked = []
+    for path in sorted(browser_dir.rglob("test_*.py")):
+        source = path.read_text(encoding="utf-8")
+        if not _DEFINES_TESTS.search(source):
+            continue
+        if not _DECLARES_BROWSER_MARKER.search(source):
+            unmarked.append(str(path.relative_to(browser_dir)))
+
+    assert not unmarked, (
+        f"These files under tests/browser/ define tests but never declare the `browser` marker, so "
+        f"`pytest tests/browser -m browser` silently deselects them: {unmarked}. "
+        "Add `pytestmark = pytest.mark.browser` immediately after the imports."
     )
 
 

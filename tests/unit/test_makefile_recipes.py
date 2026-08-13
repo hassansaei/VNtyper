@@ -182,6 +182,34 @@ def test_repository_coverage_thresholds_remain_independent() -> None:
     assert re.search(r"^PATCH_COVERAGE_TARGET\s*\?=\s*80$", text, re.MULTILINE)
 
 
+def test_unselective_pytest_targets_exclude_the_browser_tier() -> None:
+    """A bare `pytest` target must not require a Playwright browser binary.
+
+    `pytest.ini` sets `testpaths = tests`, so any target invoking `pytest` with no
+    path and no marker collects `tests/browser`. `make all` depends on `test`, so
+    without the predicate the whole convenience gate needs a browser installed.
+    These four select nothing, which is exactly why the exclusion belongs to them.
+    """
+    recipes = _recipes()
+    for target in ("test", "test-cov", "test-quiet", "test-verbose"):
+        assert 'pytest -m "not browser"' in recipes[target], (
+            f"`make {target}` runs a bare pytest, so it collects tests/browser and needs a "
+            'browser binary. Add -m "not browser".'
+        )
+
+
+def test_the_unit_target_does_not_carry_an_inert_browser_predicate() -> None:
+    """`test-unit` selects by path AND marker, so the predicate would say nothing.
+
+    Adding it there would also imply browser tests carry the `unit` marker, which
+    they must not - the tier cannot run on a fresh clone. The distinction from the
+    four targets above is deliberate and this pins both halves of it.
+    """
+    unit = _recipes()["test-unit"]
+    assert "pytest -m unit tests/unit" in unit
+    assert "browser" not in unit
+
+
 def test_mypy_runtime_and_test_scopes_are_deliberately_separate() -> None:
     recipes = _recipes()
     assert "mypy vntyper/ docker/app/ scripts/" in recipes["type-check"]

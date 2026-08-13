@@ -194,10 +194,23 @@ verify-test-data:
 	@echo "$(GREEN)✓ Test data verification complete$(RESET)"
 
 # Testing targets
+#
+# THE FOUR BARE-`pytest` TARGETS (test, test-cov, test-quiet, test-verbose) EXCLUDE THE
+# BROWSER TIER, and that is not in tension with the note on `test-unit` below.
+# `pytest.ini` sets `testpaths = tests`, so a bare `pytest` collects `tests/browser` and
+# the target then needs a Playwright browser binary on every machine that runs it - which
+# `make all` (-> `test`) would impose on everyone. These targets select nothing, so the
+# predicate is the only thing that can exclude the tier. `test-unit` selects
+# `-m unit tests/unit`, by path AND by marker, so there the same predicate would be inert
+# and would imply browser tests carry the `unit` marker. Different targets, same rule:
+# state the exclusion exactly where it does something.
+#
+# `-m` does not combine across repeated flags (it overrides), so if one of these ever
+# gains a marker expression of its own, fold "not browser" into that single expression.
 test:
 	@echo "$(BLUE)Running all tests (with live logging)...$(RESET)"
 	@echo "$(BLUE)Note: Live logging shows real-time progress for slow tests$(RESET)"
-	pytest
+	pytest -m "not browser"
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 # `-m unit tests/unit` selects by path AND by marker, so tests/browser is already
@@ -385,19 +398,21 @@ test-advntr:
 	pytest tests/integration/test_pipeline_integration.py::test_advntr_input -v
 	@echo "$(GREEN)✓ adVNTR test complete$(RESET)"
 
+# `-m "not browser"` on these three for the reason given above the `test` target: they
+# select nothing, so without it they collect tests/browser and need a browser binary.
 test-cov:
 	@echo "$(BLUE)Running tests with coverage...$(RESET)"
-	pytest --cov=vntyper --cov-report=html --cov-report=term
+	pytest -m "not browser" --cov=vntyper --cov-report=html --cov-report=term
 	@echo "$(GREEN)✓ Coverage report generated in htmlcov/$(RESET)"
 
 test-quiet:
 	@echo "$(BLUE)Running tests with minimal output...$(RESET)"
-	pytest -o log_cli=false -q
+	pytest -m "not browser" -o log_cli=false -q
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 test-verbose:
 	@echo "$(BLUE)Running tests with detailed output...$(RESET)"
-	pytest -v -s
+	pytest -m "not browser" -v -s
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 # Maintenance targets

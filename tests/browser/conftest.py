@@ -6,19 +6,22 @@ Why this tier exists
 the HTML that comes out, which is everything the report *is* on the server side.
 It cannot see what the report *does*, because the unit tier has no JavaScript
 engine (``tests/unit/test_template_escaping.py`` says so in as many words). Three
-of the report's behaviours only exist once a browser has run its scripts:
+of the report's behaviours existed only once a browser had run its scripts, and
+all three were defects (#242):
 
-* the DataTables custom search filter hides every row whose ``Flag`` is anything
-  other than ``Not flagged``/``Not applicable``/empty, unless the reader ticks a
-  toggle they have no reason to know about;
-* ``applyRounding`` rewrites every numeric cell to four decimal places *in the
-  DOM*, so the figure on screen is not the figure in the file;
-* both of those live behind jQuery, DataTables and Bootstrap loaded from three
-  CDNs, so a reader with no network gets neither - and gets no warning either.
+* a DataTables custom search predicate hid every row whose ``Flag`` was anything
+  other than ``Not flagged``/``Not applicable``/empty, unless the reader ticked a
+  toggle they had no reason to know about;
+* ``applyRounding`` rewrote every numeric cell to four decimal places *in the
+  DOM*, so the figure on screen was not the figure in the file;
+* both lived behind jQuery, DataTables and Bootstrap loaded from three CDNs, so a
+  reader with no network got neither - and got no warning either.
 
-Together that means the same file reads differently depending on the reader's
-network, which is issue #242. This tier renders one report and opens it twice,
-once with the network reachable and once with everything but ``file://`` blocked.
+Together that meant the same file read differently depending on the reader's
+network. This tier renders one report and opens it twice, once with the network
+reachable and once with everything but ``file://`` blocked, and holds the report
+to reading the same either way. The first two behaviours are gone; the CDN tags
+are still there, which is why the online pass still has to prove it was online.
 
 Purity
 ------
@@ -40,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from playwright.sync_api import Browser, BrowserContext, Page, Request, Route
+from playwright.sync_api import Browser, BrowserContext, Page, Request, Response, Route
 
 import vntyper
 from vntyper.cli import load_config
@@ -61,18 +64,24 @@ KESTREL_ROW_SELECTOR = "#kestrel_table tbody tr"
 #: How many Kestrel rows the fixture puts in the report.
 EXPECTED_KESTREL_ROWS = 3
 
-#: A ``Flag`` value the shipped client-side filter treats as clean, so the row
-#: carrying it survives online.
+#: A ``Flag`` value the removed client-side predicate treated as clean, so the row
+#: carrying it was the one that survived online.
+#:
+#: These two constants describe the specimen, and a test that asserts on them
+#: alone asserts nothing - it would still pass if they were changed to values the
+#: predicate never hid. Every guard that depends on which side of the predicate a
+#: value falls therefore spells the allowlist out as a literal of its own and
+#: cross-checks these against it.
 CLEAN_FLAG = "Not flagged"
 
-#: ``Flag`` values the shipped client-side filter hides, so the rows carrying them
-#: disappear online while staying in the file. No shipped configuration produces
+#: ``Flag`` values the removed client-side predicate hid, so the rows carrying them
+#: disappeared online while staying in the file. No shipped configuration produces
 #: one - ``report_config.json`` declares no ``flag_rules`` key at all - so the
 #: fixture states them directly rather than hoping a rule fires.
 HIDDEN_FLAGS = ("Low_Depth", "Depth_Score_Below_Threshold")
 
 #: Three Kestrel rows: one clean, two flagged. Every ``Depth_Score`` carries more
-#: than four decimal places, which is what makes the browser's ``applyRounding``
+#: than four decimal places, which is what made the removed ``applyRounding``
 #: observable (``0.010012`` in the file, ``0.01`` on screen).
 KESTREL_ROWS: tuple[dict[str, Any], ...] = (
     {
@@ -133,13 +142,21 @@ COVERAGE_ROW: dict[str, Any] = {
 }
 
 #: Collect the visible rows of the Kestrel table and normalise their whitespace.
-#: DataTables removes filtered rows from the DOM rather than hiding them, so the
-#: ``offsetParent`` check is belt and braces against a future filter that hides
-#: them with CSS instead.
+#: The removed DataTables predicate took filtered rows out of the DOM rather than
+#: hiding them, so the ``offsetParent`` check is belt and braces against a future
+#: filter that hides them with CSS instead.
 _VISIBLE_ROW_TEXT = """
 els => els.filter(e => e.offsetParent !== null)
           .map(e => e.textContent.replace(/\\s+/g, ' ').trim())
 """
+
+#: Whether the third-party scripts the report still loads actually initialised.
+#: ``requestfailed`` cannot answer this: a 404, a 503 and a 200 carrying unusable
+#: JavaScript all leave the transport layer happy and the page unenhanced.
+_ENHANCEMENT_STATE = """() => ({
+    jquery: (window.jQuery && window.jQuery.fn) ? window.jQuery.fn.jquery : null,
+    dataTable: !!(window.jQuery && window.jQuery.fn && window.jQuery.fn.dataTable),
+})"""
 
 
 def _tabular_step(name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -207,11 +224,12 @@ def rendered_report(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def failed_requests() -> dict[Page, list[str]]:
-    """Per-page record of the requests the browser could not complete.
+    """Per-page record of the requests that failed at the **transport** layer.
 
-    An online pass run on a machine with no network is indistinguishable from an
-    offline pass, and would make the determinism check pass while proving
-    nothing. This is how a test tells the difference.
+    This is a necessary but nowhere near sufficient signal that a pass was online:
+    ``requestfailed`` fires for a dropped connection or a blocked route, and not
+    for an HTTP 404 or 503. Pair it with :data:`error_responses` and
+    :func:`enhancement_state`, which see the cases it cannot.
 
     Returns:
         dict: Page -> the URLs that failed, filled in by :func:`open_report`.
@@ -220,7 +238,26 @@ def failed_requests() -> dict[Page, list[str]]:
 
 
 @pytest.fixture
-def open_report(browser: Browser, failed_requests: dict[Page, list[str]]) -> Iterator[Callable[..., Page]]:
+def error_responses() -> dict[Page, list[str]]:
+    """Per-page record of the responses that came back with an error status.
+
+    A CDN that answers 404 or 503 completes the request as far as the transport
+    layer is concerned, so :data:`failed_requests` stays empty while the page is
+    left unenhanced - which makes an online pass indistinguishable from an offline
+    one. This is the half of the evidence that sees those.
+
+    Returns:
+        dict: Page -> ``"<status> <url>"`` for every response at 400 or above.
+    """
+    return {}
+
+
+@pytest.fixture
+def open_report(
+    browser: Browser,
+    failed_requests: dict[Page, list[str]],
+    error_responses: dict[Page, list[str]],
+) -> Iterator[Callable[..., Page]]:
     """Return a callable that opens a report in a browser, online or offline.
 
     Each call gets its **own browser context**. Two independent page loads are
@@ -230,7 +267,8 @@ def open_report(browser: Browser, failed_requests: dict[Page, list[str]]) -> Ite
 
     Args:
         browser: Playwright browser, supplied by ``pytest-playwright``.
-        failed_requests: Registry to record each page's failed requests in.
+        failed_requests: Registry to record each page's transport failures in.
+        error_responses: Registry to record each page's error statuses in.
 
     Yields:
         Callable: ``open_report(path, *, offline=False) -> Page``.
@@ -242,12 +280,23 @@ def open_report(browser: Browser, failed_requests: dict[Page, list[str]]) -> Ite
         contexts.append(context)
         page = context.new_page()
         failures: list[str] = []
+        errors: list[str] = []
         failed_requests[page] = failures
+        error_responses[page] = errors
         page.on("requestfailed", lambda request: failures.append(_describe_failure(request)))
+        page.on("response", lambda response: _record_error_response(response, errors))
         if offline:
             page.route("**/*", _block_everything_but_local_files)
         page.goto(path.as_uri(), wait_until="load")
-        logger.info("Opened %s (offline=%s); %d request(s) failed: %s", path, offline, len(failures), failures)
+        logger.info(
+            "Opened %s (offline=%s); %d transport failure(s) %s; %d error response(s) %s",
+            path,
+            offline,
+            len(failures),
+            failures,
+            len(errors),
+            errors,
+        )
         return page
 
     yield _open
@@ -266,6 +315,37 @@ def _describe_failure(request: Request) -> str:
         str: A one-line description for an assertion message.
     """
     return f"{request.failure} {request.url}"
+
+
+def _record_error_response(response: Response, errors: list[str]) -> None:
+    """Record a response whose status says the browser did not get what it asked for.
+
+    Args:
+        response: The response the page received.
+        errors: The page's registry, appended to in place.
+    """
+    if response.status >= 400:
+        errors.append(f"{response.status} {response.url}")
+
+
+def enhancement_state(page: Page) -> dict[str, Any]:
+    """Report whether the page's third-party scripts actually initialised.
+
+    The report still loads jQuery and DataTables from CDNs, and every one of the
+    behaviours this tier compares depends on them having run. Asking the page
+    itself is the only way to know: a script served as a 200 of unusable
+    JavaScript leaves no trace in either request registry.
+
+    Args:
+        page: An already-loaded page.
+
+    Returns:
+        dict: ``jquery`` (the version string, or ``None``) and ``dataTable``
+        (whether the DataTables plugin is registered on jQuery).
+    """
+    state: dict[str, Any] = page.evaluate(_ENHANCEMENT_STATE)
+    logger.info("Third-party enhancement state: %s", state)
+    return state
 
 
 @pytest.fixture

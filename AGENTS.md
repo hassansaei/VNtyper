@@ -324,13 +324,22 @@ limit.
   than trusted to be unreachable. It needs `pytest-playwright` (declared in the `dev`
   extra) plus a browser binary (`playwright install chromium`) and the network, so it is
   deliberately outside `make check-all`, outside CI and outside the coverage floor —
-  `fail_under` stays a unit-tier figure. `make test-unit` needs no `-m "not browser"`: it
-  selects `-m unit tests/unit`, by path *and* by marker, so it cannot reach the tier, and
-  the extra predicate would wrongly imply browser tests carry the `unit` marker.
-  `test_the_report_reads_identically_online_and_offline` is the acceptance check for
-  issue #242 and **fails until that issue is fixed** — today the same file shows an online
-  reader one Kestrel row and an offline reader three, at different precision. A red
-  `make test-browser` is the expected state until the fix lands; it blocks no gate.
+  `fail_under` stays a unit-tier figure. `test_the_report_reads_identically_online_and_offline`
+  is the standing acceptance check for issue #242 and is **green**: the report now reads
+  the same with and without a network. It was red when the tier landed (1 of 3 Kestrel
+  rows online against 3 of 3 offline, at different precision), and it is kept so that the
+  next change cannot reintroduce that. `make test-browser` is expected to pass.
+  **Two marker rules that look inconsistent and are not.** `make test-unit` needs no
+  `-m "not browser"`: it selects `-m unit tests/unit`, by path *and* by marker, so it
+  cannot reach the tier, and the predicate would wrongly imply browser tests carry the
+  `unit` marker. `make test`, `test-cov`, `test-quiet` and `test-verbose` **do** carry it:
+  they invoke a bare `pytest`, `testpaths = tests` then collects `tests/browser`, and
+  `make all` depends on `test` — so without the predicate the convenience gate demands a
+  browser binary from everyone. State the exclusion where it does something.
+  The online pass must *prove* it was online (a working jQuery/DataTables in the page,
+  and no error statuses), because a machine with no network, or a CDN answering with
+  something unusable, otherwise turns it into a second offline pass and the comparison
+  compares a report with itself.
 - **Every new unit test file must declare `pytestmark = pytest.mark.unit`.** CI runs
   `pytest -m unit`, so an unmarked file silently never runs. This is enforced by
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
