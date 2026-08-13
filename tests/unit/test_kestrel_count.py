@@ -20,6 +20,7 @@ Kestrel's counting parameters exactly: nothing downstream will re-derive them.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -37,7 +38,7 @@ def _command(**overrides) -> str:
     Returns:
         str: The rendered command.
     """
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "kmer_size": 20,
         "kanalyze_path": "k/kanalyze.jar",
         "output_dir": "/out",
