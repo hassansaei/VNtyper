@@ -118,7 +118,20 @@ MAPPABLE_RUS: dict[int, str] = {
 _RU_ROTATION: int = nomenclature_config["advntr"]["rotation_offset"]
 
 #: Reads supporting a call below which the top confidence is withheld.
+#:
+#: The benchmark's ``output.bam`` splits reads across many pair records, so per-locus
+#: support is often 1-3 even where ``Estimated_Depth_AlternateVariant`` aggregates to
+#: tens; a name is only as good as the reads under it.
 MIN_SUPPORT_FOR_TIER_A: int = nomenclature_config["thresholds"]["min_support_for_high_confidence"]
+
+#: Evidence source -> the caller that produced it.
+#:
+#: ``kestrel_vcf`` and ``kestrel_bam`` map to the same caller. The BAM is Kestrel's
+#: own alignment, not a second opinion on it, so the two agreeing is one caller
+#: agreeing with itself. Treating them as independent would let Kestrel outvote
+#: adVNTR by corroborating its own placement, and would satisfy the tier-A
+#: requirement for "two independent sources" without any second opinion existing.
+CALLER_OF: dict[str, str] = nomenclature_config["sources"]["caller_of"]
 
 #: MUC1 variants described in the literature, name -> the report they come from.
 #:
@@ -542,11 +555,26 @@ def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ..
     )
 
 
-#: Reads supporting a call below which tier A is withheld. The benchmark's
-#: `output.bam` splits reads across many pair records, so per-locus support is often
-#: 1-3 even where `Estimated_Depth_AlternateVariant` aggregates to tens; a name is
-#: only as good as the reads under it.
-MIN_SUPPORT_FOR_TIER_A = 5
+def _is_corroborated(sources: set[str]) -> bool:
+    """Do these sources amount to independent corroboration?
+
+    Two conditions, and both matter. At least two sources must name the allele, and
+    they must come from at least two distinct callers -- otherwise ``kestrel_vcf``
+    and ``kestrel_bam``, which are one caller read twice, would look like the two
+    independent sources tier A requires.
+
+    Args:
+        sources: The ``source`` fields of the calls naming one allele.
+
+    Returns:
+        bool: True when the allele is independently corroborated.
+    """
+    if len(sources) < 2:
+        return False
+    # An unrecognised source is assumed to be its own caller: a new source added
+    # without a config entry is treated as independent rather than silently folded
+    # into an existing caller, which would hide a disagreement.
+    return len({CALLER_OF.get(source, source) for source in sources}) >= 2
 
 
 def reconcile(
@@ -598,28 +626,49 @@ def reconcile(
         net = primary.net_length
         return _undetermined("unknown", net, "reconciled", tuple(sorted(flags)))
 
-    # Independence is counted over the calls that actually carry the name, never over
-    # every call supplied. Counting all of them let an *unnamed* call -- an adVNTR
-    # state in an unmappable repeat unit, say -- donate a second `source` to two
-    # duplicate rows from one caller, so a single caller's placement could be
-    # promoted as though two had agreed on it.
-    naming_sources = {call.source for call in named}
-    agree = len({call.name for call in named}) == 1 and len(naming_sources) > 1
-    if named and len({call.name for call in named}) > 1:
+    # Which sources back each candidate allele. Independence is counted over the calls
+    # that actually carry a name, never over every call supplied: counting all of them
+    # let an *unnamed* call -- an adVNTR state in an unmappable repeat unit, say --
+    # donate a second `source` to two duplicate rows from one caller, so a single
+    # caller's placement could be promoted as though two had agreed on it.
+    backing: dict[str, set[str]] = {}
+    for call in named:
+        backing.setdefault(str(call.name), set()).add(call.source)
+
+    if len(backing) > 1:
         flags.add(FLAG_CALLER_DISAGREEMENT)
+
+    # An allele two independent callers name outvotes one that only a single caller
+    # does. Measured on the benchmark this is what recovers the `insG` families:
+    # Kestrel's VCF places them one base 3' of truth, while adVNTR and the reads
+    # independently agree on the right position (129 -> 135 of 200, no name lost).
+    #
+    # Only an unambiguous majority decides. Two corroborated alleles are a genuine
+    # conflict rather than a vote to settle, and zero leaves the existing order
+    # intact -- which is what keeps "VCF primary" true whenever nothing outvotes it.
+    corroborated = [name for name, sources in backing.items() if _is_corroborated(sources)]
+    winner = corroborated[0] if len(corroborated) == 1 else None
+
+    chosen = next((call for call in named if call.name == winner), None) if winner is not None else None
+    if chosen is None:
+        chosen = named[0] if named else None
+    chosen_name = chosen.name if chosen is not None else None
+
+    # Independence is judged on the chosen allele's own backing, not on every name
+    # seen. A dissenting source is not part of the agreement it dissents from.
+    backing_sources = backing.get(str(chosen_name), set()) if chosen_name is not None else set()
+    agree = _is_corroborated(backing_sources)
 
     # Support must belong to the agreeing evidence. A sample-wide maximum would let a
     # well-covered but unrelated observation lend its depth to a 1-read agreement.
     effective_support = support
     if supports is not None:
-        relevant = [supports.get(source) for source in naming_sources]
+        relevant = [supports.get(source) for source in backing_sources]
         present = [value for value in relevant if value is not None]
         effective_support = min(present) if present else None
 
     if effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
         flags.add(FLAG_LOW_READ_SUPPORT)
-
-    chosen_name = named[0].name if named else None
 
     # Known variants are used to *check* a name, never to make one. Matching the
     # literature says somebody has described this allele before -- a weaker and
@@ -640,10 +689,9 @@ def reconcile(
     ):
         tier = "A"
 
-    if not named:
+    if chosen is None:
         return _undetermined(primary.event, primary.net_length, "reconciled", tuple(sorted(flags)))
 
-    chosen = named[0]
     return Nomenclature(
         name=chosen.name,
         event=chosen.event,
@@ -653,7 +701,7 @@ def reconcile(
         ambiguity=chosen.ambiguity,
         repeat_form=chosen.repeat_form,
         net_length=chosen.net_length,
-        source="reconciled" if len(naming_sources) > 1 else chosen.source,
+        source="reconciled" if len(backing_sources) > 1 else chosen.source,
     )
 
 

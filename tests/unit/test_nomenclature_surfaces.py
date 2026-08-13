@@ -33,7 +33,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def test_the_named_stage_is_final_plus_the_five_columns() -> None:
+def test_the_named_stage_is_final_plus_the_nomenclature_columns() -> None:
     added = tuple(column for column in STAGE_COLUMNS["named"] if column not in STAGE_COLUMNS["final"])
     assert added == NOMENCLATURE_COLUMNS
 
@@ -164,6 +164,79 @@ def _write_caller_outputs(tmp_path, advntr_state: str, support: str) -> tuple[Pa
         f"25561\t{advntr_state}\t{support}\tduplication, position-ambiguous\tB\t\t53_59\t53C[7]>53C[8]\n"
     )
     return kestrel, advntr
+
+
+def _write_disagreeing_outputs(tmp_path) -> tuple[Path, Path]:
+    """Kestrel and adVNTR naming different alleles at the same locus.
+
+    The real ``insG`` shape: Kestrel's VCF places the insertion one base 3' of where
+    adVNTR places it.
+    """
+    kestrel = tmp_path / "kestrel_result.tsv"
+    kestrel.write_text(
+        "## VNtyper Kestrel result\n"
+        "Motifs\tPOS\tREF\tALT\tConfidence\tEstimated_Depth_AlternateVariant\t"
+        "Motif_fasta\tPOS_fasta\tNomenclature\tNomenclature_Tier\tNomenclature_Flags\t"
+        "Ambiguity_Interval\tRepeat_Form\tNomenclature_Note\t"
+        "Nomenclature_Kestrel\tNomenclature_adVNTR\n"
+        "X-X\t61\tT\tTC\tHigh_Precision\t40\tX-X\t61\t59_60insG\tB\t\t\t\t"
+        "representation of the caller's call, not a described variant; requires validation\t"
+        "59_60insG\t\n"
+    )
+    advntr = tmp_path / "output_adVNTR_result.tsv"
+    advntr.write_text(
+        "VID\tVariant\tNumberOfSupportingReads\tNomenclature\tNomenclature_Tier\t"
+        "Nomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\tNomenclature_Note\t"
+        "Nomenclature_Kestrel\tNomenclature_adVNTR\n"
+        "25561\tI23_2_C_LEN1\t40\t58_59insG\tB\t\t\t\t\t\t58_59insG\n"
+    )
+    return kestrel, advntr
+
+
+def test_each_caller_keeps_its_own_name_when_they_disagree(tmp_path) -> None:
+    """Overwriting both files with one verdict destroyed the per-caller information.
+
+    Which caller said what is the evidence a reader needs in order to weigh a
+    disagreement at all; collapsing it to a single cell throws that away.
+    """
+    kestrel, advntr = _write_disagreeing_outputs(tmp_path)
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    for path, sep_kwargs in ((kestrel, {"comment": "#"}), (advntr, {})):
+        written = pd.read_csv(path, sep="\t", dtype=str, **sep_kwargs)
+        assert written.loc[0, "Nomenclature_Kestrel"] == "59_60insG"
+        assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
+
+
+def test_a_disagreement_is_declared_on_both_files(tmp_path) -> None:
+    kestrel, advntr = _write_disagreeing_outputs(tmp_path)
+    reconcile_caller_outputs(kestrel, advntr)
+
+    for path, sep_kwargs in ((kestrel, {"comment": "#"}), (advntr, {})):
+        written = pd.read_csv(path, sep="\t", dtype=str, **sep_kwargs)
+        assert "caller-disagreement" in written.loc[0, "Nomenclature_Flags"]
+        assert written.loc[0, "Nomenclature_Tier"] != "A"
+
+
+def test_the_kestrel_file_is_complete_without_advntr_having_run(tmp_path) -> None:
+    """adVNTR is optional; Kestrel is not.
+
+    The primary surface must carry its own name and a full set of columns whether or
+    not the optional module ever ran, so nothing downstream depends on it.
+    """
+    frame = kestrel_stage_frame("final")
+    named = annotate_kestrel_frame(frame)
+    for column in NOMENCLATURE_COLUMNS:
+        assert column in named.columns
+    assert named.loc[0, "Nomenclature_Kestrel"] == named.loc[0, "Nomenclature"]
+    assert named.loc[0, "Nomenclature_adVNTR"] == "", "adVNTR did not run; it reported nothing"
+
+
+def test_the_advntr_frame_records_its_own_name_as_the_advntr_column() -> None:
+    frame = pd.DataFrame([{"VID": "25561", "Variant": "I22_2_G_LEN1", "NumberOfSupportingReads": "24"}])
+    named = annotate_advntr_frame(frame)
+    assert named.loc[0, "Nomenclature_adVNTR"] == "59dupC"
+    assert named.loc[0, "Nomenclature_Kestrel"] == ""
 
 
 def test_two_agreeing_callers_reach_tier_a_in_the_written_files(tmp_path) -> None:

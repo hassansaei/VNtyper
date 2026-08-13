@@ -30,6 +30,99 @@ def _advntr_dupc() -> Nomenclature:
     return call
 
 
+def _from_reads(name: str, event: str) -> Nomenclature:
+    """A call recovered from ``output.bam`` -- Kestrel's own alignment."""
+    return Nomenclature(
+        name=name,
+        event=event,
+        unit="X",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=1,
+        source="kestrel_bam",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Independent-caller majority
+# ---------------------------------------------------------------------------
+
+
+def test_two_independent_callers_outvote_a_single_dissenting_caller() -> None:
+    """The real ``insG`` case, where the VCF alone is wrong.
+
+    Kestrel places the whole ``insG`` family one base 3' of truth. adVNTR and the
+    reads independently say ``58_59insG``; the Kestrel VCF alone says ``59_60insG``.
+    Two sources from two different callers outvote one, so the name that two
+    independent lines of evidence support is the one reported.
+    """
+    merged = reconcile(
+        from_kestrel("X-X", 61, "T", "TC"),
+        from_advntr("I23_2_C_LEN1")[0],
+        _from_reads("58_59insG", "insertion"),
+    )
+    assert merged.name == "58_59insG"
+
+
+def test_kestrel_agreeing_with_its_own_alignment_is_not_a_majority() -> None:
+    """``kestrel_bam`` is Kestrel's alignment, not a second opinion on it.
+
+    Counting the two as independent would let one caller outvote the other simply by
+    agreeing with itself, which is not evidence about the allele.
+    """
+    merged = reconcile(
+        from_kestrel("X-X", 61, "T", "TC"),
+        _from_reads("59_60insG", "insertion"),
+        from_advntr("I23_2_C_LEN1")[0],
+    )
+    assert merged.name == "59_60insG", "the VCF stands; nothing outvoted it"
+    assert "caller-disagreement" in merged.flags
+
+
+def test_kestrel_agreeing_with_its_own_alignment_never_reaches_tier_a() -> None:
+    """The false-confidence path that adding the reads as a third source opens.
+
+    ``59dupC`` is a described variant with ample support and no divergent context,
+    so every other tier-A condition is met: only the independence of the two sources
+    stands between this and a confidently stated name resting on one caller.
+    """
+    merged = reconcile(
+        _kestrel_dupc(),
+        _from_reads("59dupC", "duplication"),
+        supports={"kestrel_vcf": 40, "kestrel_bam": 40},
+    )
+    assert merged.tier != "A"
+
+
+def test_the_reads_corroborating_a_second_caller_still_reach_tier_a() -> None:
+    """Independence is the test, not which source the name came from."""
+    merged = reconcile(
+        _advntr_dupc(),
+        _from_reads("59dupC", "duplication"),
+        supports={"advntr": 40, "kestrel_bam": 40},
+    )
+    assert merged.tier == "A"
+
+
+def test_support_is_taken_from_the_sources_backing_the_chosen_name() -> None:
+    """A dissenting source's depth is not the agreement's depth.
+
+    The two callers backing ``58_59insG`` are both deep; the Kestrel VCF dissents on
+    a single read. Letting the dissent set the depth would withhold tier A from an
+    agreement that is in fact well covered.
+    """
+    merged = reconcile(
+        from_kestrel("X-X", 61, "T", "TC"),
+        from_advntr("I23_2_C_LEN1")[0],
+        _from_reads("58_59insG", "insertion"),
+        supports={"kestrel_vcf": 1, "advntr": 40, "kestrel_bam": 40},
+    )
+    assert merged.name == "58_59insG"
+    assert "low-read-support" not in merged.flags
+
+
 # ---------------------------------------------------------------------------
 # Promotion to tier A
 # ---------------------------------------------------------------------------

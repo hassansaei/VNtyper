@@ -48,6 +48,14 @@
     },
     "rotation_offset": 39
   },
+  "sources": {
+    "_comment": "Which caller each evidence source belongs to. kestrel_vcf and kestrel_bam are one caller seen twice -- the BAM is Kestrel's own alignment -- so their agreement is one opinion, not two independent ones.",
+    "caller_of": {
+      "kestrel_vcf": "kestrel",
+      "kestrel_bam": "kestrel",
+      "advntr": "advntr"
+    }
+  },
   "thresholds": {
     "min_support_for_high_confidence": 5,
     "bam_flank": 8,

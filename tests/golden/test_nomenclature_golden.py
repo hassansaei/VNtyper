@@ -254,9 +254,11 @@ def _hybrid() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
                 except ValueError:
                     supports["kestrel_vcf"] = None
 
-            merged = reconcile(*calls, supports=supports)
-
-            if is_candidate(merged):
+            # Mirrors `reconcile_caller_outputs`: the reads are a third source,
+            # consulted only where the two callers leave the locus open, then every
+            # source is voted on at once.
+            bam_calls = []
+            if is_candidate(reconcile(*calls, supports=supports)):
                 bed = kestrel_dir / "output.bed"
                 if bed.is_file():
                     fields = bed.read_text().split()
@@ -266,7 +268,17 @@ def _hybrid() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
                             consensus = rescuer.rescue(contig, position)
                             fetches += rescuer.fetches
                         if consensus is not None:
-                            merged = refine(merged, from_bam(contig, consensus))
+                            bam_call = from_bam(contig, consensus)
+                            if bam_call is not None:
+                                bam_calls.append(bam_call)
+                                seen = supports.get("kestrel_bam")
+                                supports["kestrel_bam"] = (
+                                    consensus.support if seen is None else min(seen, consensus.support)
+                                )
+
+            merged = reconcile(*calls, *bam_calls, supports=supports)
+            for bam_call in bam_calls:
+                merged = refine(merged, bam_call)
 
             if merged.name == EXPECTED_NAME[klass]:
                 correct[klass] += 1
@@ -354,10 +366,15 @@ def test_the_hybrid_total_does_not_regress() -> None:
     and BAM-only columns in §2.6 -- 96+9+9+6+3+7+4+2 -- so reaching it requires
     knowing, per class, which of the two methods to believe. A policy that has to
     decide without truth cannot: preferring the reads costs more than it gains
-    wherever the VCF was already right. 129 is what one uniform rule achieves.
+    wherever the VCF was already right.
+
+    135 is what one uniform rule achieves, one short of that oracle bound. Naively
+    preferring the reads scored 129 and cost `dupA` 6->1 and `insCCCC` 9->3; letting
+    two *independent* sources outvote a third gains 6 and loses none, because the
+    reads may only overturn the VCF when the second caller agrees with them.
     """
     correct, _, _, _ = _hybrid()
-    assert sum(correct.values()) >= 129
+    assert sum(correct.values()) >= 135
 
 
 def test_the_bam_rescue_recovers_alleles_the_vcf_could_not() -> None:
