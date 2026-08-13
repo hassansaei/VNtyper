@@ -59,23 +59,28 @@ def test_every_unit_file_is_selected_by_the_unit_marker(request: pytest.FixtureR
 
 
 def test_no_test_modules_outside_the_known_tiers() -> None:
-    """Test modules must live under tests/unit, tests/integration or tests/docker.
+    """Test modules must live under a tier some command actually runs.
 
     A ``test_*.py`` anywhere else is either a mis-placed test that no tier runs,
     or a helper module whose name makes a real collection failure invisible.
+
+    ``golden`` is a tier like the others, run by
+    ``pytest -m golden tests/golden``. It is deliberately outside ``make
+    check-all``: it compares against a known-truth simulated cohort supplied via
+    ``VNTYPER_SIM_ROOT`` and ``VNTYPER_ADVNTR_ROOT``, and skips without them.
 
     Raises:
         AssertionError: If a stray test module is found.
     """
     tests_root = UNIT_DIR.parent
-    allowed = {"unit", "integration", "docker"}
+    allowed = {"unit", "integration", "docker", "golden"}
     stray = [
         str(path.relative_to(tests_root))
         for path in tests_root.rglob("test_*.py")
         if path.relative_to(tests_root).parts[0] not in allowed
     ]
     assert not stray, (
-        f"These test modules live outside tests/{{unit,integration,docker}}: {stray}. "
+        f"These test modules live outside tests/{{{','.join(sorted(allowed))}}}: {stray}. "
         "Move real tests into a tier; rename helpers so they do not start with 'test_'."
     )
 

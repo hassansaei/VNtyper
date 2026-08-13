@@ -136,6 +136,7 @@ nav:
     - Kestrel Genotyping: pipeline/kestrel.md
     - Scoring & Confidence: pipeline/scoring-and-confidence.md
     - Variant Flagging: pipeline/flagging.md
+    - MUC1 Nomenclature: pipeline/nomenclature.md
     - Optional Modules: pipeline/optional-modules.md
     - Reports & Visualization: pipeline/reports.md
   - Development:

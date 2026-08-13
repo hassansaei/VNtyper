@@ -89,6 +89,19 @@ KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
     "Depth_Score": "Depth Score",
     "Confidence": "Confidence",
     "Flag": "Flag",
+    # MUC1 nomenclature. The heading says "name" rather than a coordinate system
+    # because the tier decides what the cell holds: a bare name only at tier A,
+    # otherwise the event, or a frameshift statement with no number at all.
+    "Nomenclature": "MUC1 Name",
+    "Nomenclature_Tier": "Tier",
+    "Nomenclature_Flags": "Flags",
+    # Both callers are shown, not just the verdict: where they disagree, which one
+    # said what is the evidence a reader needs in order to weigh that verdict.
+    "Nomenclature_Kestrel": "Kestrel Name",
+    "Nomenclature_adVNTR": "adVNTR Name",
+    "Ambiguity_Interval": "Ambiguity",
+    "Repeat_Form": "Repeat Form",
+    "Nomenclature_Note": "Naming Note",
 }
 
 #: adVNTR result columns, in display order. Unlike Kestrel these are not renamed.
@@ -103,6 +116,14 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "REF",
     "ALT",
     "Flag",
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Nomenclature_Flags",
+    "Nomenclature_Kestrel",
+    "Nomenclature_adVNTR",
+    "Ambiguity_Interval",
+    "Repeat_Form",
+    "Nomenclature_Note",
 )
 
 #: Inline style per ``Confidence`` value. A value not listed renders unstyled.

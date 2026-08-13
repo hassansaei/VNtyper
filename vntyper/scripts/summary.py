@@ -137,8 +137,14 @@ def parse_tsv(file_path):
     try:
         with open(file_path, encoding="utf-8") as f:
             for line_number, raw_line in enumerate(f, start=1):
-                line = raw_line.strip()
-                if not line:
+                # Strip the line ending only. `.strip()` also removes the trailing
+                # tab of a row whose last column is empty, which makes a well-formed
+                # row arrive one field short and be discarded as ragged below --
+                # silently, since nothing about the row is actually wrong. Every
+                # nullable column is the empty string by contract, so whenever one is
+                # last that dropped real data.
+                line = raw_line.rstrip("\r\n")
+                if not line.strip():
                     continue
                 if line.startswith("#"):
                     comments.append(line.lstrip("#").strip())
@@ -164,6 +170,54 @@ def parse_tsv(file_path):
         comments.append(f"Error parsing TSV file: {e}")
 
     return {"comments": comments, "data": data}
+
+
+def refresh_step(summary, step_name, write_summary_path=None):
+    """Re-read a recorded step's result file and update its parsed result and md5.
+
+    A step is normally recorded once, when it finishes. The cross-caller nomenclature
+    stage runs *after* the Kestrel step has been recorded and rewrites
+    ``kestrel_result.tsv`` in place, so without this the summary -- and the HTML
+    report and cohort tables built from it -- keep the pre-reconciliation row: the
+    tier before promotion, and an empty adVNTR column. The stored checksum no longer
+    matched the file on disk either.
+
+    Args:
+        summary (dict): The summary to update in place.
+        step_name (str): The recorded step to refresh.
+        write_summary_path (str, optional): Rewrite the summary file after updating.
+
+    Returns:
+        bool: True when a step was found and refreshed.
+    """
+    for record in summary.get("steps", []):
+        if record.get("step") != step_name:
+            continue
+        result_file = record.get("result_file")
+        if not result_file or not os.path.exists(result_file):
+            logger.debug(f"Cannot refresh step '{step_name}': {result_file} is absent.")
+            return False
+        record["md5sum"] = md5sum(result_file)
+        # No handler here: each parser already converts its own failure into an
+        # ``error`` entry rather than raising, so wrapping this would add a blind
+        # except that can never fire.
+        record["parsed_result"] = _parse_by_type(result_file, record.get("file_type", "tsv"))
+        if write_summary_path:
+            write_summary(summary, write_summary_path)
+        return True
+    logger.debug(f"Cannot refresh step '{step_name}': it is not in the summary.")
+    return False
+
+
+def _parse_by_type(result_file, file_type):
+    """Parse a result file according to its recorded type."""
+    if file_type.lower() == "tsv":
+        return parse_tsv(result_file)
+    if file_type.lower() == "csv":
+        return parse_csv(result_file)
+    if file_type.lower() == "json":
+        return parse_json_file(result_file)
+    return {"error": f"Unsupported file type for result parsing: {file_type}"}
 
 
 def parse_csv(file_path):

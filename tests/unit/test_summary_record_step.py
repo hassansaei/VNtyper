@@ -21,7 +21,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.support.pipeline_harness import run_pipeline_under_harness
-from vntyper.scripts.summary import record_step
+from vntyper.scripts.summary import record_step, refresh_step
 
 pytestmark = pytest.mark.unit
 
@@ -123,3 +123,31 @@ def test_conversion_summary_uses_the_first_routed_fastq_from_the_nonempty_tuple(
     summary = json.loads((output_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
     conversion = next(step for step in summary["steps"] if step["step"] == "BAM to FASTQ Conversion")
     assert conversion["result_file"] == routed[0]
+
+
+def test_refresh_step_picks_up_a_result_file_rewritten_after_recording(tmp_path) -> None:
+    """A step recorded before its file is rewritten must not keep the stale copy.
+
+    The cross-caller nomenclature stage rewrites ``kestrel_result.tsv`` after the
+    Kestrel step has been recorded. Without refreshing, the summary -- and the HTML
+    report and cohort tables built from it, which read the summary rather than the TSV
+    -- keep the pre-reconciliation row: the tier before promotion and an empty adVNTR
+    column. The stored checksum no longer matched the file on disk either.
+    """
+    result = tmp_path / "kestrel_result.tsv"
+    result.write_text("A\tB\n1\told\n")
+    summary: dict = {"steps": []}
+    record_step(summary, "Kestrel Genotyping", str(result), "tsv", "cmd", _START, _END)
+    stale_md5 = summary["steps"][0]["md5sum"]
+    assert summary["steps"][0]["parsed_result"]["data"] == [{"A": "1", "B": "old"}]
+
+    result.write_text("A\tB\n1\tnew\n")
+    assert refresh_step(summary, "Kestrel Genotyping") is True
+
+    assert summary["steps"][0]["parsed_result"]["data"] == [{"A": "1", "B": "new"}]
+    assert summary["steps"][0]["md5sum"] != stale_md5
+
+
+def test_refresh_step_reports_an_unknown_step_rather_than_raising() -> None:
+    """A summary without the step is a no-op, not an exception."""
+    assert refresh_step({"steps": []}, "Kestrel Genotyping") is False

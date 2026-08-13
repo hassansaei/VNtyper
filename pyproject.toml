@@ -137,6 +137,7 @@ version = {attr = "vntyper.version.__version__"}
     "kestrel_config.json",
     "install_references_config.json",
     "report_config.json",
+    "nomenclature_config.json",
     "calibration.json",
 ]
 "vntyper" = [
