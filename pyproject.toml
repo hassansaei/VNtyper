@@ -46,6 +46,14 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3.0",  # Prevent stuck tests
     "pytest-xdist>=3.0",  # Parallel test execution (67-81% faster)
+    # The `browser` tier (tests/browser, `make test-browser`). The report is an HTML
+    # file people open in a browser, and three of its behaviours - the DataTables flag
+    # filter, the client-side rounding and the CDN assets - only exist once a real
+    # JavaScript engine has run, so the unit tier cannot see them at all. Lower-bounded
+    # rather than pinned: the tier asserts on the report's own DOM, not on the plugin.
+    # The browser binary itself is not a Python package - install it with
+    # `playwright install chromium`.
+    "pytest-playwright>=0.5",
     # Python 3.10 has no stdlib tomllib; the BLE001 policy guard uses this only
     # while running the unit tier, so it belongs in the test-only extra.
     "tomli>=2.0.1; python_version < '3.11'",

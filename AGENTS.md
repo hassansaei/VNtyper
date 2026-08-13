@@ -39,6 +39,7 @@ Neither exists — use the commands above.
 | Lint | `make lint` |
 | Type check | `make type-check` |
 | Fast tests (what CI runs) | `make test-unit` |
+| Browser tests (needs a browser engine) | `make test-browser` |
 | Inner loop (fail-fast) | `make test-fast` |
 | Unit coverage + floor | `make test-unit-cov` |
 | Scripts-only coverage proof | `make test-scripts-cov` |
@@ -305,7 +306,7 @@ limit.
 
 - `pytest.ini` at the repo root is the live config. The `[tool.pytest.ini_options]`
   block in `pyproject.toml` is **dead** — pytest.ini takes precedence. Edit `pytest.ini`.
-- Markers: `unit`, `integration`, `docker`, `smoke`, `slow`. `smoke` is the fast image
+- Markers: `unit`, `integration`, `docker`, `browser`, `smoke`, `slow`. `smoke` is the fast image
   tier (`make test-docker-smoke`, ~1 s): it asserts the built image's *structure* — that
   every reference path `config.json` declares actually exists in it, that the three conda
   envs and their interpreters are present, that adVNTR imports under Python 2.7, and that
@@ -313,6 +314,23 @@ limit.
   and it derives its assertions from the config inside the container rather than from a
   hardcoded list, so it cannot drift. Smoke tests carry **only** the `smoke` marker —
   adding `docker` too would make the slow tier re-run them.
+- **`browser` is the fourth tier (`tests/browser`, `make test-browser`) and nothing gates
+  on it.** The report is an HTML file people open in a browser, and its DataTables flag
+  filter, its client-side rounding and its three CDN `<script>` tags do not exist until a
+  JavaScript engine has run — so `tests/unit/test_generate_report.py` can assert on
+  everything the report *is* and nothing about what it *does*. The tier renders one real
+  report through `generate_summary_report` and opens it twice: once with the network
+  reachable, once with every non-`file://` request route-blocked in the browser rather
+  than trusted to be unreachable. It needs `pytest-playwright` (declared in the `dev`
+  extra) plus a browser binary (`playwright install chromium`) and the network, so it is
+  deliberately outside `make check-all`, outside CI and outside the coverage floor —
+  `fail_under` stays a unit-tier figure. `make test-unit` needs no `-m "not browser"`: it
+  selects `-m unit tests/unit`, by path *and* by marker, so it cannot reach the tier, and
+  the extra predicate would wrongly imply browser tests carry the `unit` marker.
+  `test_the_report_reads_identically_online_and_offline` is the acceptance check for
+  issue #242 and **fails until that issue is fixed** — today the same file shows an online
+  reader one Kestrel row and an offline reader three, at different precision. A red
+  `make test-browser` is the expected state until the fix lands; it blocks no gate.
 - **Every new unit test file must declare `pytestmark = pytest.mark.unit`.** CI runs
   `pytest -m unit`, so an unmarked file silently never runs. This is enforced by
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;

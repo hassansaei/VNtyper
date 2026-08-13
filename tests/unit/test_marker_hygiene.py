@@ -59,23 +59,31 @@ def test_every_unit_file_is_selected_by_the_unit_marker(request: pytest.FixtureR
 
 
 def test_no_test_modules_outside_the_known_tiers() -> None:
-    """Test modules must live under tests/unit, tests/integration or tests/docker.
+    """Test modules must live in one of the four declared tiers.
 
-    A ``test_*.py`` anywhere else is either a mis-placed test that no tier runs,
-    or a helper module whose name makes a real collection failure invisible.
+    The tiers are ``tests/unit`` (pure, what CI gates on), ``tests/integration``
+    (needs the Zenodo archive), ``tests/docker`` (needs a Docker daemon) and
+    ``tests/browser`` (needs a real browser engine; ``make test-browser``, #242).
+    ``tests/browser`` is the newest and is deliberately listed here rather than
+    tolerated: the report is a file people open in a browser, and its DataTables
+    filtering and client-side rounding do not exist until JavaScript has run, so
+    they are invisible to every other tier.
+
+    A ``test_*.py`` outside all four is either a mis-placed test that no tier
+    runs, or a helper module whose name makes a real collection failure invisible.
 
     Raises:
         AssertionError: If a stray test module is found.
     """
     tests_root = UNIT_DIR.parent
-    allowed = {"unit", "integration", "docker"}
+    allowed = {"unit", "integration", "docker", "browser"}
     stray = [
         str(path.relative_to(tests_root))
         for path in tests_root.rglob("test_*.py")
         if path.relative_to(tests_root).parts[0] not in allowed
     ]
     assert not stray, (
-        f"These test modules live outside tests/{{unit,integration,docker}}: {stray}. "
+        f"These test modules live outside tests/{{{','.join(sorted(allowed))}}}: {stray}. "
         "Move real tests into a tier; rename helpers so they do not start with 'test_'."
     )
 
@@ -106,6 +114,6 @@ def test_root_pytest_ini_is_the_single_live_marker_authority() -> None:
     pytest_ini = (REPO_ROOT / "pytest.ini").read_text(encoding="utf-8")
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "--strict-markers" in pytest_ini
-    for marker in ("unit", "integration", "docker", "smoke", "slow"):
+    for marker in ("unit", "integration", "docker", "browser", "smoke", "slow"):
         assert f"{marker}:" in pytest_ini
     assert "[tool.pytest.ini_options]" not in pyproject
