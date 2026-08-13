@@ -6,7 +6,137 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.18 (Current)
+## 2.0.20 (Current)
+
+**MUC1 variants are reported by their literature name, with an explicit confidence
+tier.**
+
+Kestrel and adVNTR each report in their own internal coordinate frame — `POS 67 G>GG`,
+`I22_2_G_LEN1` — and neither emitted the naming the MUC1 literature uses. Both are now
+translated into a single name such as `59dupC`, carried in new columns
+(`Nomenclature`, `Nomenclature_Tier`, `Nomenclature_Flags`, `Ambiguity_Interval`,
+`Repeat_Form`, `Nomenclature_Note`, `Nomenclature_Kestrel`, `Nomenclature_adVNTR`)
+across the Kestrel and adVNTR result TSVs, the pipeline summary and the HTML report.
+Negative runs keep their existing narrower schema: no variant, no name.
+
+`Nomenclature` is the reconciled verdict; `Nomenclature_Kestrel` and
+`Nomenclature_adVNTR` record what each caller said on its own, so a disagreement stays
+legible in either result file rather than being collapsed into a single opinion.
+adVNTR is optional — when it has not run its column is empty and the Kestrel result
+stands alone.
+
+The name carries **no `c.` prefix**. `c.` asserts a coding-DNA reference sequence, and
+no transcript places this tract at positions 53–59. See
+[MUC1 Nomenclature](../pipeline/nomenclature.md).
+
+The tier decides what may be printed. Only tier A emits a bare number, and reaching it
+requires two independent callers agreeing after normalisation, a matching motif context
+and sufficient read support — no single caller can promote itself. Tier B states the
+event and its ambiguity window; tier C states the frameshift and stops. This exists
+because a confident wrong name is worse than an honest "allele undetermined": on the
+simulated benchmark, Kestrel places the whole `insG` family one position 3′ of truth,
+and those records look clean in isolation.
+
+Where the VCF cannot express what the reads show — Kestrel has no representation for a
+delins — the existing `output.bam` is consulted for that call only, and adjacent
+non-matching CIGAR blocks are merged to recover the allele. The reads may supply a name
+the VCF lacked but may not veto one it has.
+
+The one exception is corroboration by a second caller: where adVNTR and the reads
+independently name the same allele and Kestrel's VCF names another, the two outvote
+the one. "Independent" means a different caller — Kestrel's VCF agreeing with Kestrel's
+own alignment is one opinion, not two, and neither outvotes anything nor promotes a
+tier.
+
+A read consensus may not settle a locus where the two callers describe *different
+events*: that is a conflict rather than a gap, and of the 20 benchmark loci where the
+reads were the only thing naming one, just 6 were right. Refusing the ten that rest on
+one or two reads gives up one correct name and withholds nine wrong ones.
+
+Measured on 200 known-truth simulated samples: 134 named correctly, none of the tier-A
+names disagreeing with truth, and no name emitted for any of the 200 negative controls.
+
+Also fixes a result row whose last column is empty being dropped from
+`pipeline_summary.json` as malformed, which could fail the cross-match step on a run
+that had otherwise succeeded.
+
+## 2.0.19
+
+**Kestrel counts k-mers on more than one thread.**
+
+### Changed
+
+- **Kestrel-mode k-mer counting runs as its own threaded step (#262).** Kestrel 1.0.1 builds a
+  KAnalyze `CountModule` and configures almost nothing on it: `getCountModule()` sets the k-mer
+  size, the temporary directory, the post-count filter and the free-segment flag, but calls none
+  of `setKmerThreadCount`, `setSplitThreadCount` or `setThreads`. Counting therefore ran at the
+  compile-time defaults of one k-mer thread and one split thread, while being the large majority
+  of Kestrel's work on an unmapped-dominated input.
+
+  VNtyper now runs the bundled `kanalyze.jar` as its own step and hands Kestrel the resulting
+  indexed k-mer count. This is a supported Kestrel input, verified in the bytecode rather than
+  assumed: `IkcCountMap.preModuleRun` adopts a supplied `ikc` file, sets `rmLastTemp = false`
+  so Kestrel never deletes a count file it was handed, and skips its own count module.
+
+  The run's `--threads` budget is divided across KAnalyze's three *concurrent* stages rather
+  than passed to each — they are independent stages, so passing `--threads N` to all three would
+  start roughly 2.5N workers. Measured end to end on `example_7a61_hg19_subset.bam`: **29.5 s →
+  17.4 s at `--threads 8`** (1.68x). At the shipped default of `--threads 4` the gain is modest
+  (1.10x), because the budget is treated as a total rather than a per-stage multiplier; operators
+  who want the larger win should raise `--threads`.
+
+  `kestrel_settings.split_counting` defaults to true. Setting it false restores the
+  single-command path exactly — it is an operator kill switch, not a fallback: nothing selects
+  it automatically, and a failed counting step raises rather than silently re-running the work
+  internally. `keep_ikc` retains the count file for diagnosis, and the path a run took is
+  recorded as `kestrel_counting_mode` in the pipeline summary.
+
+- **Unmapped-read extraction is one samtools process (#262).** The whole-file extraction was a
+  decode-to-SAM-text, pipe, and re-parse; it is now a single `samtools view`. Genuinely
+  throwaway BAMs are written at BGZF level 0, and the produced alignment is indexed only when
+  something will read the index.
+
+- **The startup tool-version log lists only the tools a run uses (#262).** Keys such as `shark`
+  and `advntr` no longer appear in an ordinary Kestrel run. The cohort, online and
+  install-references stacks are imported on first use, taking `import vntyper.cli` from
+  0.35–0.39 s and ~116 MB to 0.19–0.20 s and ~82 MB.
+
+  **None of this changes a genotype.** The golden-cohort gate compares the two sides across 78
+  pipeline cases, three probes and the cohort cases: **every genotype-bearing artefact is
+  identical**, as are the report tables, pipeline steps, CRAM read-set evidence and `output.bed`.
+  The only artefact that differs is the executed command stream, which changes by construction;
+  its delta was classified case by case rather than waived unread. See
+  `docs/development/golden-cohort-gate.md`.
+
+### Fixed
+
+- **`additional_settings` can no longer desynchronise the two Kestrel commands (#262).** When
+  Kestrel is handed a pre-built count file it validates only the k-size, so a count file built
+  with a different minimum count or minimizer size is silently accepted and silently different —
+  which moves `Depth_Score`. Under split counting, `kestrel_settings.additional_settings` is now
+  an allowlist of options that provably cannot reach the counter, and a count-affecting value
+  such as `--mincount 3` is refused with a message naming it. The shipped default is `""`, so no
+  shipped configuration is affected; an operator who needs those options sets
+  `split_counting: false`.
+
+- **A k-mer attempt never adopts an existing directory (#262).** Each attempt owns
+  `<output>/kmer_<size>/`, which is removed on every exit path. Adopting a directory that
+  already exists would delete data the run did not write, so the run refuses to start instead.
+
+### Internal
+
+- The golden-cohort gate gained an `--expect-command-delta` mode: a caller may declare in advance
+  that the executed command stream changes on purpose, which keeps that one artefact out of the
+  verdict while every other delta stays fatal. The rendered summary names each case whose delta
+  was waived, because a declaration nobody reads attests nothing. The gate also compares
+  `output.bed`, which the collector never read — #203's one-base interval shift would have been
+  invisible to it.
+
+- The waiver policy moved out of `golden_cohort/compare.py` into `golden_cohort/waiver.py`. It is
+  the one rule in the harness that can turn a check off, and `render_text` had been recomputing
+  half of it inline.
+
+## 2.0.18
 
 **`--threads` reaches adVNTR, and adVNTR can use it.**
 

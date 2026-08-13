@@ -209,6 +209,13 @@ def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tm
     it writes, and every one of them must land in the run's output directory.
     The input index is already present in the proven plan and is never rebuilt.
 
+    Run with ``needs_advntr=True`` since #262, because that is now the only
+    configuration in which the merged BAM is indexed at all -- the index's only
+    consumers are ``run_advntr`` and ``downsample_bam_if_needed``. Left at the default
+    this test's own anti-vacuity assertion fires, which is the correct outcome: a
+    destination test over zero index commands proves nothing. What it measures is
+    unchanged; only the configuration that produces the commands has narrowed.
+
     Args:
         tmp_path: Pytest temporary directory.
     """
@@ -251,6 +258,7 @@ def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tm
                 unmapped_scan="indexed",
             ),
             fast_mode=False,
+            needs_advntr=True,
         )
 
     indexed = [pair for command in issued for pair in _index_destinations(command)]

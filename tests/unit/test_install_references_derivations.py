@@ -58,7 +58,7 @@ SEED_SHA256 = {
     "MUC1_motifs_Rev_com.fa": "7e6589f2388f3a08da6fb3bffa1fe22f10a5e03ec618b883fa6f07bcf1cb3e47",
     "code-adVNTR_RUs.fa": "c21d631cf894e388c8cb76d7bbd2a51ebf4a27cd1a9158f50971cd831d8aa26e",
     "filter_config.json": "d2190ed78695efe9b1b8105c97479391b81129cf641410dfb88feb1c1ffea085",
-    "vntr_db_advntr.zip": "90a619f6aa2ee7d038b6d8703a5736d92fd483e8b4bfad4a5ad07480bf8f7ff1",
+    "vntr_db_advntr_v2.zip": "b7e7a8a10e26b5058eedb766ec38d01a900e29780c4d48dabeaec67199615190",
 }
 
 
@@ -1463,7 +1463,7 @@ class TestProcessVntyperReferencesVerifiesSeeds:
     def _zip_bytes() -> bytes:
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
-            archive.writestr("vntr_db_advntr/hg19_muc1.db", "hg19 db")
+            archive.writestr("vntr_db_advntr_v2/hg19_muc1.db", "hg19 db")
         return buffer.getvalue()
 
     def test_a_freshly_downloaded_database_matching_its_digest_is_extracted(self, tmp_path, monkeypatch):
@@ -1481,7 +1481,7 @@ class TestProcessVntyperReferencesVerifiesSeeds:
 
         install_references.process_vntyper_references(config, tmp_path, "bwa", True, {})
 
-        assert (tmp_path / "vntr_db_advntr" / "hg19_muc1.db").exists()
+        assert (tmp_path / "vntr_db_advntr_v2" / "hg19_muc1.db").exists()
 
     def test_a_stale_preexisting_database_is_rejected_not_silently_extracted(self, tmp_path, monkeypatch):
         """MAJOR 3 names `vntr_db_advntr.zip` explicitly: a stale or corrupted copy
@@ -1620,13 +1620,13 @@ class TestPartialSelectionAgainstTheShippedConfig:
             "MUC1_motifs_Rev_com.fa": hashlib.sha256((tmp_path / "MUC1_motifs_Rev_com.fa").read_bytes()).hexdigest(),
             "filter_config.json": hashlib.sha256((tmp_path / "filter_config.json").read_bytes()).hexdigest(),
             "code-adVNTR_RUs.fa": hashlib.sha256(b">seed\nACGT\n").hexdigest(),
-            "vntr_db_advntr.zip": hashlib.sha256(advntr_zip).hexdigest(),
+            "vntr_db_advntr_v2.zip": hashlib.sha256(advntr_zip).hexdigest(),
         }
         for entry in config["own_repository_references"]["raw_files"]:
             digest = seed_digests.get(entry["target_path"])
             if digest is not None:
                 entry["source_sha256"] = digest
-        config["vntyper_references"]["vntr_db_advntr"]["source_sha256"] = seed_digests["vntr_db_advntr.zip"]
+        config["vntyper_references"]["vntr_db_advntr"]["source_sha256"] = seed_digests["vntr_db_advntr_v2.zip"]
 
         probe = tmp_path / "probe.gz"
         _gz(probe, genome)
@@ -1650,8 +1650,8 @@ class TestPartialSelectionAgainstTheShippedConfig:
         """A stand-in for vntr_db_advntr.zip carrying both databases the config names."""
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
-            archive.writestr("vntr_db_advntr/hg19_muc1.db", "hg19 db")
-            archive.writestr("vntr_db_advntr/hg38_muc1.db", "hg38 db")
+            archive.writestr("vntr_db_advntr_v2/hg19_muc1.db", "hg19 db")
+            archive.writestr("vntr_db_advntr_v2/hg38_muc1.db", "hg38 db")
         return buffer.getvalue()
 
     def test_a_single_assembly_selection_derives_its_own_region_and_skips_the_other(self, tmp_path, monkeypatch):
@@ -1679,8 +1679,8 @@ class TestPartialSelectionAgainstTheShippedConfig:
 
         install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1, skip_indexing=True)
 
-        assert (tmp_path / "vntr_db_advntr" / "hg19_muc1.db").exists()
-        assert (tmp_path / "vntr_db_advntr" / "hg38_muc1.db").exists()
+        assert (tmp_path / "vntr_db_advntr_v2" / "hg19_muc1.db").exists()
+        assert (tmp_path / "vntr_db_advntr_v2" / "hg38_muc1.db").exists()
 
     def test_the_common_references_the_config_names_are_all_present_afterwards(self, tmp_path, monkeypatch):
         """Every `common_references` entry is what Task 13 will check before deleting files."""
@@ -1985,7 +1985,7 @@ class TestShippedConfig:
         }
         digests = {name: raw_files[name] for name in ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa")}
         digests["filter_config.json"] = raw_files["filter_config.json"]
-        digests["vntr_db_advntr.zip"] = config["vntyper_references"]["vntr_db_advntr"]["source_sha256"]
+        digests["vntr_db_advntr_v2.zip"] = config["vntyper_references"]["vntr_db_advntr"]["source_sha256"]
 
         assert digests == SEED_SHA256
 
@@ -2031,8 +2031,8 @@ class TestShippedConfig:
     def test_the_bundle_pointer_names_the_common_asset_and_its_digest(self):
         bundle = _shipped_config()["bundle"]
         assert bundle["repository"] == "berntpopp/vntyper-data"
-        assert bundle["release_tag"] == "refs-v1"
-        assert bundle["common_asset"] == "vntyper-references-refs-v1-muc1.tar.gz"
+        assert bundle["release_tag"] == "refs-v2"
+        assert bundle["common_asset"] == "vntyper-references-refs-v2-muc1.tar.gz"
         assert bundle["common_asset_sha256"]
 
 

@@ -5,6 +5,7 @@ import importlib.resources as pkg_resources
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -174,6 +175,14 @@ def get_tool_version(command, version_flag):
             return "unknown"
         if "advntr" in command:
             lines = output.split("\n")
+            # adVNTR >= 2.0.4 answers --version with a bare version string. Older
+            # releases have no --version flag at all and print their help banner, whose
+            # third line carries the version -- so both shapes are read here, and a
+            # release that answers neither stays "unknown", which callers treat as
+            # too old rather than as acceptable.
+            bare = re.match(r"^\s*(\d+\.\d+\.\d+)\s*$", lines[0]) if lines else None
+            if bare:
+                return bare.group(1)
             if len(lines) >= 3 and "adVNTR" in lines[2]:
                 return lines[2].split(": ")[0].split(" ")[1]
             return "unknown"
@@ -200,18 +209,41 @@ def get_tool_version(command, version_flag):
         return "unknown"
 
 
-def get_tool_versions(config):
+#: Tool names that are never version-probed, whatever the caller declares.
+#:
+#: ``kanalyze`` is a JAR with no version flag of its own. It ships beside ``kestrel.jar``
+#: and is versioned with it, so kestrel's probe already covers it; probing it would
+#: execute the JAR.
+#:
+#: ``shark`` has no branch in :func:`get_tool_version`, which therefore returns
+#: ``"unknown"`` for it unconditionally. Gating a probe that cannot answer would spend
+#: 36 ms per run to learn nothing, so it is dropped rather than gated. Reporting a real
+#: SHARK version needs a parser here, not an entry in the caller's set.
+UNPROBED_TOOLS = frozenset({"kanalyze", "shark"})
+
+
+def get_tool_versions(config, *, tools_in_use):
     """
-    Retrieves the versions of the tools specified in the config and returns them as a
-    dictionary.
+    Retrieves the versions of the tools this run will actually invoke.
+
+    Probing every configured tool cost every Kestrel-only run a
+    ``mamba run -n envadvntr advntr`` (315 ms) and a ``mamba run -n shark_env shark``
+    (36 ms) for a value that is assigned once and logged once. The caller names the
+    tools instead, because the set follows from the **input type as well as** the
+    enabled modules: fastp and BWA belong to the FASTQ path and no module list can say
+    so.
 
     Args:
         config (dict): The configuration dictionary.
+        tools_in_use (Collection[str]): Names from ``config["tools"]`` this run will
+            invoke. Names absent from the config are skipped, as are the members of
+            :data:`UNPROBED_TOOLS`.
 
     Returns:
         dict: A dictionary with tool names as keys and their version strings as values.
     """
     tools = config.get("tools", {})
+    requested = set(tools_in_use) - UNPROBED_TOOLS
     versions = {}
 
     # Define version commands for each tool
@@ -227,6 +259,8 @@ def get_tool_versions(config):
     }
 
     for tool, command in tools.items():
+        if tool not in requested:
+            continue
         version_flag = version_commands.get(tool, "")
         # Special handling for kestrel as it needs the java_path in front.
         # The flag is folded into ``command`` here, so it must not ALSO be passed to

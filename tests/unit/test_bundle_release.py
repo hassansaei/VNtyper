@@ -81,7 +81,7 @@ DERIVED = (
 )
 
 #: The four non-derivable artefacts the data repository commits.
-SEEDS = ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa", "vntr_db_advntr.zip", "filter_config.json")
+SEEDS = ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa", "vntr_db_advntr_v2.zip", "filter_config.json")
 
 TAG = "refs-v1"
 
@@ -128,9 +128,9 @@ def refs(tmp_path: Path) -> Path:
     for name in MUC1_FASTAS:
         _write(root / name, f">{name}\nACGTACGT\n".encode())
         _write(root / f"{name}.fai", f"{name}\t8\t{len(name) + 2}\t8\t9\n".encode())
-    _write(root / "vntr_db_advntr" / "hg19_muc1.db", b"hg19 advntr database")
-    _write(root / "vntr_db_advntr" / "hg38_muc1.db", b"hg38 advntr database")
-    _write(root / "vntr_db_advntr.zip", b"PK the advntr database archive")
+    _write(root / "vntr_db_advntr_v2" / "hg19_muc1.db", b"hg19 advntr database")
+    _write(root / "vntr_db_advntr_v2" / "hg38_muc1.db", b"hg38 advntr database")
+    _write(root / "vntr_db_advntr_v2.zip", b"PK the advntr database archive")
     _write(root / "filter_config.json", b'{"1": ["2"]}')
     _write(root / "install_references.log", b"2026-08-11 [INFO] Logging initialized.\n")
     return root
@@ -257,7 +257,7 @@ class TestAssetGrouping:
     def test_the_muc1_asset_carries_every_muc1_fasta_its_index_and_both_databases(self, refs: Path) -> None:
         (asset,) = [a for a in bundle_release.plan_assets(refs, TAG, []) if a.reference_id is None]
         expected = {name for fasta in MUC1_FASTAS for name in (fasta, f"{fasta}.fai")}
-        expected |= {"vntr_db_advntr/hg19_muc1.db", "vntr_db_advntr/hg38_muc1.db"}
+        expected |= {"vntr_db_advntr_v2/hg19_muc1.db", "vntr_db_advntr_v2/hg38_muc1.db"}
         assert set(asset.members) == expected
 
 
@@ -309,7 +309,7 @@ class TestEveryFileIsAccountedFor:
             "install_references.log",
             "md5_checksums.txt",
             "filter_config.json",
-            "vntr_db_advntr.zip",
+            "vntr_db_advntr_v2.zip",
             "alignment/chr1.hg38.fa.gz",
             "install_provenance.json",
         ],
@@ -428,7 +428,7 @@ class TestArchiveLayout:
                 shipped |= set(tar.getnames())
         assert "install_references.log" not in shipped
         assert "filter_config.json" not in shipped
-        assert "vntr_db_advntr.zip" not in shipped
+        assert "vntr_db_advntr_v2.zip" not in shipped
 
 
 class TestReleaseLevelOutputs:
@@ -466,7 +466,7 @@ class TestReleaseLevelOutputs:
         assert "bwa index" in entries["alignment/chr1.hg38.fa.bwt"]["produced_by"]
         assert "samtools faidx" in entries["muc1_region_hg19.fa"]["produced_by"]
         assert "seed" in entries["MUC1_motifs_Rev_com.fa"]["produced_by"]
-        assert "vntr_db_advntr.zip" in entries["vntr_db_advntr/hg19_muc1.db"]["produced_by"]
+        assert "vntr_db_advntr_v2.zip" in entries["vntr_db_advntr_v2/hg19_muc1.db"]["produced_by"]
 
     def test_the_verification_report_records_every_digest_it_checked(self, built: Path) -> None:
         report = json.loads((built / "verification-report.json").read_text(encoding="utf-8"))
@@ -1123,9 +1123,9 @@ class TestVerifySeeds:
     def test_a_missing_seed_is_named(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         seeds = self._seed_dir(tmp_path)
         spec = self._spec(tmp_path, seeds)
-        (seeds / "vntr_db_advntr.zip").unlink()
+        (seeds / "vntr_db_advntr_v2.zip").unlink()
         assert verify_seeds.main(["--spec", str(spec), "--seeds", str(seeds)]) == 1
-        assert "vntr_db_advntr.zip" in caplog.text
+        assert "vntr_db_advntr_v2.zip" in caplog.text
 
     def test_an_empty_seeds_block_is_rejected(self, tmp_path: Path) -> None:
         seeds = self._seed_dir(tmp_path)

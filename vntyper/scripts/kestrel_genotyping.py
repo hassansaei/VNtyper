@@ -37,6 +37,7 @@ from vntyper.scripts.confidence_assignment import (
 )
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
+from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.motif_processing import (
@@ -46,6 +47,7 @@ from vntyper.scripts.motif_processing import (
     preprocessing_deletion,
     preprocessing_insertion,
 )
+from vntyper.scripts.nomenclature_annotate import annotate_kestrel_frame
 from vntyper.scripts.scoring import (
     extract_frameshifts,
     split_depth_and_calculate_frame_score,
@@ -210,6 +212,7 @@ def run_kestrel(
     sample_name,
     log_level=logging.INFO,
     cwd=None,
+    threads=4,
 ):
     """
     Main entry point to run the Kestrel jar for MUC1 genotyping, then
@@ -234,6 +237,12 @@ def run_kestrel(
         log_level (int): Logging level (INFO, DEBUG, etc.).
         cwd (str, optional): Working directory to use when running Java/Kestrel.
             Important for Java initialization.
+        threads (int, optional): The run's total thread budget, allocated across
+            KAnalyze's three concurrent counting stages. Appended **after** ``cwd``
+            rather than inserted before it: this signature permits positional calls,
+            so a new parameter in front of the existing optional ones would silently
+            rebind them for any external caller. Defaults to 4, matching
+            ``config.json``'s ``default_values.threads``.
 
     Raises:
         RuntimeError: If Kestrel fails for a given k-mer size, or if no configured
@@ -252,6 +261,15 @@ def run_kestrel(
     log_level_str = logging.getLevelName(log_level)
 
     additional_settings = kestrel_settings.get("additional_settings", "")
+    # Every new key is read with `.get` and a shipped default: `--config-path` replaces
+    # the whole config rather than merging, so a replacement config legitimately lacks
+    # all of them (trap 2). `kestrel_config` itself is a module global read at import
+    # time, so tests patch the global rather than passing a config (trap 1).
+    java_opts_count = kestrel_settings.get("java_opts_count", "")
+    java_opts_call = kestrel_settings.get("java_opts_call", "-XX:+UseSerialGC")
+    split_counting = kestrel_settings.get("split_counting", True)
+    keep_ikc = kestrel_settings.get("keep_ikc", False)
+    kanalyze_path = config["tools"].get("kanalyze", DEFAULT_KANALYZE_PATH)
 
     # #212: a pre-existing output.vcf used to skip the whole stage and `return`, which
     # also skipped the two statements that turn a VCF into a result. Re-running into a
@@ -278,6 +296,11 @@ def run_kestrel(
         log_level=log_level_str,
         sample_name=sample_name,
         additional_settings=additional_settings,
+        java_opts_call=java_opts_call,
+        java_opts_count=java_opts_count,
+        kanalyze_path=kanalyze_path,
+        threads=threads,
+        split_counting=split_counting,
     )
     invocations = plan_kestrel_invocations(
         fastq_files=fastq_files,
@@ -293,15 +316,12 @@ def run_kestrel(
 
     for invocation in invocations:
         kmer_size = invocation.kmer_size
-        kmer_command = invocation.command
-        log_file = str(invocation.log_file)
 
-        logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
-
-        if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
-            logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
-            raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
-
+        # Counting, calling and their cleanup live in `kestrel_counting` (AGENTS.md
+        # rule 3): this file is well over the ~650-line guideline and the split is the
+        # region that changed. `run_command` is passed so the module attribute the test
+        # suite patches is the one that runs.
+        execute_attempt(invocation, cwd=cwd, keep_ikc=keep_ikc, run_command=run_command)
         logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
 
         if vcf_path.is_file():
@@ -539,6 +559,11 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
             from vntyper.scripts.flagging import add_flags
 
             processed_df = add_flags(processed_df, flagging_rules, duplicates_config=duplicates_config)
+
+    # Name the variants before writing. Doing it here rather than in a later stage is
+    # what makes one edit reach every surface: the TSV below, the pipeline summary
+    # built from this same frame, and the HTML report all inherit the columns.
+    processed_df = annotate_kestrel_frame(processed_df, output_dir)
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")

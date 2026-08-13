@@ -306,7 +306,7 @@ limit.
 
 - `pytest.ini` at the repo root is the live config. The `[tool.pytest.ini_options]`
   block in `pyproject.toml` is **dead** — pytest.ini takes precedence. Edit `pytest.ini`.
-- Markers: `unit`, `integration`, `docker`, `browser`, `smoke`, `slow`. `smoke` is the fast image
+- Markers: `unit`, `integration`, `docker`, `browser`, `golden`, `smoke`, `slow`. `smoke` is the fast image
   tier (`make test-docker-smoke`, ~1 s): it asserts the built image's *structure* — that
   every reference path `config.json` declares actually exists in it, that the three conda
   envs and their interpreters are present, that adVNTR imports under Python 2.7, and that
@@ -314,7 +314,7 @@ limit.
   and it derives its assertions from the config inside the container rather than from a
   hardcoded list, so it cannot drift. Smoke tests carry **only** the `smoke` marker —
   adding `docker` too would make the slow tier re-run them.
-- **`browser` is the fourth tier (`tests/browser`, `make test-browser`) and nothing gates
+- **`browser` is one of five directory tiers (`tests/browser`, `make test-browser`) and nothing gates
   on it.** The report is an HTML file people open in a browser, and its DataTables flag
   filter, its client-side rounding and its three CDN `<script>` tags do not exist until a
   JavaScript engine has run — so `tests/unit/test_generate_report.py` can assert on
@@ -340,6 +340,10 @@ limit.
   and no error statuses), because a machine with no network, or a CDN answering with
   something unusable, otherwise turns it into a second offline pass and the comparison
   compares a report with itself.
+- **`golden` is the fifth directory tier** (`tests/golden`,
+  `pytest -m golden tests/golden`). It compares against a known-truth simulated cohort
+  supplied through `VNTYPER_SIM_ROOT` and `VNTYPER_ADVNTR_ROOT`, skips without those
+  inputs, and deliberately remains outside `make check-all`.
 - **Every new unit test file must declare `pytestmark = pytest.mark.unit`.** CI runs
   `pytest -m unit`, so an unmarked file silently never runs. This is enforced by
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
@@ -629,8 +633,15 @@ summary | release-summary | none | always records success, failure, skipped jobs
     here before, which is exactly the drift this note now warns against instead of
     restating a new one.)
     Adding `scripts/bundle_release.py` (milestone 5, the reference bundle
-    builder) took the directory to all 40 Python files and `make test-scripts-cov` to
+    builder) took the directory to 40 Python files and `make test-scripts-cov` to
     7,806 of 8,340 measured units, or 93.60%, over 5,665 passing unit tests.
+    Adding `scripts/golden_cohort/waiver.py` (#262, the gate's declared-delta waiver
+    policy, extracted out of `compare.py`) took it to all 41 Python files and
+    `make test-scripts-cov` to 7,869 of 8,392 measured units, or 93.77%, over 6,299
+    passing unit tests. **A new file under `scripts/` must update this sentence** -
+    `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
+    counts `scripts/**/*.py` and fails until it does, which is the tripwire working, not
+    a flaky test.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:

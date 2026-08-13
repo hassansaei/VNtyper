@@ -131,6 +131,47 @@ STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
         "POS_fasta",
         "flag_filter_pass",
     ),
+    # Nomenclature is computed after filtering, so it forms a terminal stage rather
+    # than widening ``final``. Every earlier stage's columns stay a subset of every
+    # later stage's, which is the invariant ``test_builders`` asserts.
+    "named": (
+        "Motifs",
+        "Variant",
+        "POS",
+        "REF",
+        "ALT",
+        "Sample",
+        "Motif_sequence",
+        "Del",
+        "Estimated_Depth_AlternateVariant",
+        "Estimated_Depth_Variant_ActiveRegion",
+        "ref_len",
+        "alt_len",
+        "Frame_Score",
+        "is_frameshift",
+        "direction",
+        "frameshift_amount",
+        "is_valid_frameshift",
+        "Depth_Score",
+        "Confidence",
+        "depth_confidence_pass",
+        "haplo_count",
+        "alt_filter_pass",
+        "motif_filter_pass",
+        "Motif",
+        "Flag",
+        "Motif_fasta",
+        "POS_fasta",
+        "flag_filter_pass",
+        "Nomenclature",
+        "Nomenclature_Tier",
+        "Nomenclature_Flags",
+        "Ambiguity_Interval",
+        "Repeat_Form",
+        "Nomenclature_Note",
+        "Nomenclature_Kestrel",
+        "Nomenclature_adVNTR",
+    ),
 }
 
 
@@ -257,6 +298,13 @@ def kestrel_stage_frame(stage: str, rows: int = 1, **overrides: Any) -> pd.DataF
         records.append(enriched)
 
     frame = pd.DataFrame(records)
+    if stage == "named":
+        # Use the real annotator rather than literal values: the nomenclature module
+        # is pure, so this stays a pure builder, and a builder that invented its own
+        # names would drift from what the pipeline actually writes.
+        from vntyper.scripts.nomenclature_annotate import annotate_kestrel_frame
+
+        frame = annotate_kestrel_frame(frame)
     return frame[list(STAGE_COLUMNS[stage])]
 
 

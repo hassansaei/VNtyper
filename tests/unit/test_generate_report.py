@@ -632,7 +632,7 @@ def masthead(html: str) -> str:
 
 def masthead_state(html: str) -> str:
     """The computed screening state the masthead is drawn in."""
-    match = re.search(r'<header class="masthead" data-state="([^"]*)"', html)
+    match = re.search(r'<header class="masthead"[^>]*\bdata-state="([^"]*)"', html, re.DOTALL)
     assert match, "the masthead carries no computed state"
     return match.group(1)
 
@@ -1137,6 +1137,12 @@ STAGE_EXECUTIONS: dict[str, dict[str, Any]] = {
 #: which is the same ``negative`` a stage that genotyped and called nothing produces.
 UNESTABLISHED_KESTREL = ("absent", "failed")
 UNESTABLISHED_ADVNTR = ("failed",)
+EXECUTION_ATTRIBUTE = {
+    "called": "performed",
+    "empty": "performed",
+    "absent": "not-performed",
+    "failed": "failed",
+}
 
 
 @pytest.mark.parametrize("kestrel_execution", list(STAGE_EXECUTIONS))
@@ -1171,6 +1177,12 @@ def test_a_stage_that_established_nothing_is_never_reported_as_a_negative(
     html = render(tmp_path)
     text = visible_text(html)
     established = kestrel_execution not in UNESTABLISHED_KESTREL and advntr_execution not in UNESTABLISHED_ADVNTR
+
+    masthead_tag = re.search(r'<header class="masthead"[^>]*>', html, re.DOTALL)
+    assert masthead_tag, "the report has no masthead opening tag"
+    tag = masthead_tag.group(0)
+    assert f'data-kestrel-execution="{EXECUTION_ATTRIBUTE[kestrel_execution]}"' in tag
+    assert f'data-advntr-execution="{EXECUTION_ATTRIBUTE[advntr_execution]}"' in tag
 
     for label, execution in (("Kestrel", kestrel_execution), ("adVNTR", advntr_execution)):
         expected = STAGE_EXECUTIONS[execution]

@@ -122,6 +122,20 @@ KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
     "Depth_Score": "Depth Score",
     "Confidence": "Confidence",
     "Flag": "Flag",
+    # MUC1 nomenclature. The heading says "name" rather than a coordinate system
+    # because the tier decides how precise the available name may be.
+    "Nomenclature": "MUC1 Name",
+    "Nomenclature_Tier": "Tier",
+    "Nomenclature_Flags": "Flags",
+    # Both callers are shown, not just the verdict: where they disagree, which one
+    # said what is the evidence a reader needs in order to weigh that verdict.
+    "Nomenclature_Kestrel": "Kestrel Name",
+    "Nomenclature_adVNTR": "adVNTR Name",
+    "Ambiguity_Interval": "Ambiguity",
+    "Repeat_Form": "Repeat Form",
+    "Nomenclature_Note": "Naming Note",
+    # Keep the 121 bp motif last even as later output fields are added: the two
+    # confidence/flag columns must not be displaced by the widest value (#242).
     "Motif_sequence": "Motif Sequence",
 }
 
@@ -137,6 +151,14 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "REF",
     "ALT",
     "Flag",
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Nomenclature_Flags",
+    "Nomenclature_Kestrel",
+    "Nomenclature_adVNTR",
+    "Ambiguity_Interval",
+    "Repeat_Form",
+    "Nomenclature_Note",
 )
 
 #: How a displayed value is turned into text. Every column of both results tables
@@ -174,6 +196,14 @@ KESTREL_CELL_FORMATS: dict[str, str] = {
     "Depth_Score": FORMAT_SIX_DECIMALS,
     "Confidence": FORMAT_TEXT,
     "Flag": FORMAT_TEXT,
+    "Nomenclature": FORMAT_TEXT,
+    "Nomenclature_Tier": FORMAT_TEXT,
+    "Nomenclature_Flags": FORMAT_TEXT,
+    "Nomenclature_Kestrel": FORMAT_TEXT,
+    "Nomenclature_adVNTR": FORMAT_TEXT,
+    "Ambiguity_Interval": FORMAT_TEXT,
+    "Repeat_Form": FORMAT_TEXT,
+    "Nomenclature_Note": FORMAT_TEXT,
     "Motif_sequence": FORMAT_TEXT,
 }
 
@@ -201,6 +231,14 @@ ADVNTR_CELL_FORMATS: dict[str, str] = {
     "REF": FORMAT_TEXT,
     "ALT": FORMAT_TEXT,
     "Flag": FORMAT_TEXT,
+    "Nomenclature": FORMAT_TEXT,
+    "Nomenclature_Tier": FORMAT_TEXT,
+    "Nomenclature_Flags": FORMAT_TEXT,
+    "Nomenclature_Kestrel": FORMAT_TEXT,
+    "Nomenclature_adVNTR": FORMAT_TEXT,
+    "Ambiguity_Interval": FORMAT_TEXT,
+    "Repeat_Form": FORMAT_TEXT,
+    "Nomenclature_Note": FORMAT_TEXT,
 }
 
 #: ``Flag`` values that mean "nothing to report". These are the three the shipped

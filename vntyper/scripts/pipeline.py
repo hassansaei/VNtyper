@@ -9,8 +9,6 @@ from vntyper.scripts.alignment_preflight import run_preflight
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.archive_safety import create_safe_archive
 from vntyper.scripts.artifact_names import select_best_vcf_file
-
-# Import cross-match functions from cross_match.py
 from vntyper.scripts.cross_match import (
     cross_match_variants,
     extract_results_from_pipeline_summary,
@@ -26,6 +24,9 @@ from vntyper.scripts.fastq_bam_processing import (
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
+
+# Import cross-match functions from cross_match.py
+from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
 from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
     prepare_alignment_target,
@@ -49,6 +50,7 @@ from vntyper.scripts.summary import (
     convert_summary_to_tsv,
     end_summary,
     record_step,
+    refresh_step,
     start_summary,
     write_summary,
 )
@@ -61,6 +63,7 @@ from vntyper.scripts.summary_steps import (
     STEP_BAM_HEADER,
     STEP_COVERAGE,
     STEP_CROSS_MATCH,
+    STEP_KESTREL,
 )
 from vntyper.scripts.utils import (
     create_output_directories,
@@ -257,7 +260,22 @@ def run_pipeline(
         dirs = create_output_directories(output_dir)
         logger.info(f"Created output directories in: {output_dir}")
 
-        tool_versions = get_tool_versions(config)
+        # Probing every configured tool shelled out to adVNTR (315 ms) and SHARK (36 ms)
+        # on every Kestrel-only run for a value that is only logged. The set is derived
+        # from the input type as well as the modules: fastp and BWA belong to the FASTQ
+        # path and are never invoked for BAM or CRAM, which `extra_modules` cannot say.
+        # A requested module is named only when the config declares a tool of that name,
+        # so this cannot assert the existence of an entry it has not read (trap 2).
+        # Whether anything will read `<name>_sliced.bam.bai`. The conversion stage is
+        # given the answer rather than `extra_modules`, so it cannot grow further
+        # dependencies on module state it has no business knowing.
+        needs_advntr = "advntr" in extra_modules
+
+        tools_in_use = {"samtools", "kestrel", "java_path"}
+        if input_type == "FASTQ":
+            tools_in_use |= {"fastp", "bwa"}
+        tools_in_use |= {module for module in extra_modules if module in config.get("tools", {})}
+        tool_versions = get_tool_versions(config, tools_in_use=tools_in_use)
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
         # What the run actually used, not what BWA was configured with (MAJOR 5,
@@ -311,6 +329,7 @@ def run_pipeline(
                 delete_intermediates=delete_intermediates,
                 keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
+                needs_advntr=needs_advntr,
             )
             kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
             if not kestrel_fastq_files:
@@ -459,6 +478,7 @@ def run_pipeline(
                 delete_intermediates=delete_intermediates,
                 keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
+                needs_advntr=needs_advntr,
             )
             kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
             if not kestrel_fastq_files:
@@ -519,6 +539,7 @@ def run_pipeline(
             summary=summary,
             summary_file_path=summary_file_path,
             runner=run_kestrel,
+            threads=threads,
         )
         logger.info(
             "Kestrel genotyping completed."
@@ -531,6 +552,11 @@ def run_pipeline(
                     load_advntr_config,
                     process_advntr_output,
                     run_advntr,
+                )
+                from vntyper.modules.advntr.model_provenance import (
+                    describe_model,
+                    detect_advntr_version,
+                    require_compatible_advntr,
                 )
             except ImportError as exc:
                 logger.error(f"adVNTR module import failed: {exc}")
@@ -556,6 +582,23 @@ def run_pipeline(
                 raise ValueError("adVNTR reference path not found in configuration.")
 
             logger.debug(f"adVNTR reference set to: {advntr_reference}")
+
+            # Which model a run resolved decides which reads adVNTR can ever see: the
+            # fetch window comes from the model's own content. Validate before running,
+            # because the failure mode is a confident result over a truncated locus
+            # rather than an error (#268).
+            advntr_model = describe_model(advntr_reference)
+            require_compatible_advntr(advntr_model, detect_advntr_version(config))
+            # Top-level, not inside record_step: this is run state, and a step record is
+            # not where state belongs.
+            summary["advntr_model"] = advntr_model
+            logger.info(
+                "adVNTR model %s (%s), window %s bp over %s",
+                advntr_model["sha256"][:12],
+                advntr_model["schema_version"],
+                advntr_model["window_bp"],
+                advntr_model["genomic_interval"],
+            )
 
             max_cov = module_args.get("advntr", {}).get("max_coverage")
             sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
@@ -587,6 +630,22 @@ def run_pipeline(
                 output_ext = advntr_output_extension(advntr_settings)
                 output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
                 process_advntr_output(output_path, dirs["advntr"], "output", config=config)
+                # Tier A needs two independent callers agreeing, which no single
+                # caller stage can see. Without this step production could never
+                # emit a tier-A name however well the two agreed (#nomenclature).
+                if reconcile_caller_outputs(
+                    os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
+                    os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
+                ):
+                    # The Kestrel step was recorded before this ran, so the summary
+                    # still holds the pre-reconciliation row -- and the HTML report
+                    # and cohort tables are built from the summary, not the TSV. Its
+                    # checksum no longer matched the rewritten file either.
+                    refresh_step(
+                        summary,
+                        STEP_KESTREL,
+                        write_summary_path=summary_file_path,
+                    )
                 advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,

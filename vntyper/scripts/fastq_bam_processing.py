@@ -92,6 +92,7 @@ def process_bam_to_fastq(
     delete_intermediates=True,
     keep_intermediates=False,
     bed_file=None,
+    needs_advntr: bool = False,
 ):
     """
     Process alignment files by slicing, filtering, and converting to FASTQ.
@@ -111,6 +112,13 @@ def process_bam_to_fastq(
         keep_intermediates (bool, optional): If True, keeps intermediate files for later
             use unless ``delete_intermediates`` is True. Defaults to False.
         bed_file (Path, optional): Path to a BED file specifying regions for MUC1 analysis.
+        needs_advntr (bool, optional): Whether adVNTR will read ``<name>_sliced.bam``.
+            Its index has exactly one consumer -- ``run_advntr`` and
+            ``downsample_bam_if_needed``, both behind ``--extra-modules advntr`` -- so
+            writing it in Kestrel-only mode is dead work. Coverage reads the alignment
+            plan's own view, not this file. A validated boolean rather than the module
+            list, because this stage has no business knowing about module state beyond
+            that one question. Defaults to False.
     Returns:
         tuple: Paths to the generated FASTQ files (R1, R2, other, single).
 
@@ -146,6 +154,7 @@ def process_bam_to_fastq(
         bed_file=bed_file,
         threads=threads,
         fast_mode=fast_mode,
+        needs_advntr=needs_advntr,
     )
     log_file_slice = Path(output) / f"{output_name}_slice.log"
     logger.info(f"Executing region slicing with command: {command_slice}")
@@ -165,6 +174,13 @@ def process_bam_to_fastq(
             plan=plan,
             output_bam=unmapped_bam,
             threads=threads,
+            # Only when it is genuinely throwaway. The merge consumes it on the next
+            # line, but the removal below is gated on `delete_intermediates`, which
+            # defaults to False all the way up to the CLI -- so in an ordinary run this
+            # file survives in the output directory and goes into the archive. Writing
+            # a surviving file at BGZF level 0 would ship a roughly 3x larger BAM, the
+            # same regression the merge output is left compressed to avoid.
+            uncompressed=delete_intermediates,
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
         logger.info(f"Executing filtering with command: {command_filter}")
@@ -200,19 +216,23 @@ def process_bam_to_fastq(
         final_bam = final_bam_renamed
         logger.info(f"Renamed merged BAM file to {final_bam}")
 
-        # No output_bai here, deliberately: final_bam is the merged BAM this stage
-        # just wrote inside `output`, so samtools' default destination beside it is
-        # already inside the output directory (#162).
-        command_index = build_samtools_index_command(
-            samtools_path=samtools_path,
-            bam_file=final_bam,
-            threads=threads,
-        )
-        log_file_index = Path(output) / f"{output_name}_index.log"
-        logger.info(f"Re-indexing BAM file with command: {command_index}")
-        if not run_command(command_index, str(log_file_index), critical=True):
-            logger.error("Re-indexing BAM file failed.")
-            raise RuntimeError("Re-indexing BAM file failed.")
+        # #162 kept the index beside the merged BAM inside `output`, and no output_bai
+        # is passed for exactly that reason: samtools' default destination is already
+        # inside the output directory. Its only consumers are run_advntr and
+        # downsample_bam_if_needed, both behind --extra-modules advntr; coverage reads
+        # the alignment plan's own view, not this file. Writing it in Kestrel-only mode
+        # is dead work -- 58 ms at --threads 4, 244 ms at --threads 1.
+        if needs_advntr:
+            command_index = build_samtools_index_command(
+                samtools_path=samtools_path,
+                bam_file=final_bam,
+                threads=threads,
+            )
+            log_file_index = Path(output) / f"{output_name}_index.log"
+            logger.info(f"Re-indexing BAM file with command: {command_index}")
+            if not run_command(command_index, str(log_file_index), critical=True):
+                logger.error("Re-indexing BAM file failed.")
+                raise RuntimeError("Re-indexing BAM file failed.")
 
     # Convert final BAM to FASTQ
     final_fastq_1 = Path(output) / f"{output_name}_R1.fastq.gz"

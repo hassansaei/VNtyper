@@ -656,6 +656,26 @@ def test_every_displayed_column_declares_how_its_value_is_rendered() -> None:
     assert set(rf.ADVNTR_CELL_FORMATS) == set(rf.ADVNTR_DISPLAY_COLUMNS)
 
 
+def test_nomenclature_columns_are_text_and_the_real_motif_remains_last() -> None:
+    """Main's nomenclature fields must not undo #242's width/format contracts."""
+    nomenclature = (
+        "Nomenclature",
+        "Nomenclature_Tier",
+        "Nomenclature_Flags",
+        "Nomenclature_Kestrel",
+        "Nomenclature_adVNTR",
+        "Ambiguity_Interval",
+        "Repeat_Form",
+        "Nomenclature_Note",
+    )
+
+    assert tuple(rf.KESTREL_DISPLAY_COLUMNS)[-9:-1] == nomenclature
+    assert tuple(rf.KESTREL_DISPLAY_COLUMNS)[-1] == "Motif_sequence"
+    assert tuple(rf.ADVNTR_DISPLAY_COLUMNS)[-8:] == nomenclature
+    assert {rf.KESTREL_CELL_FORMATS[column] for column in nomenclature} == {rf.FORMAT_TEXT}
+    assert {rf.ADVNTR_CELL_FORMATS[column] for column in nomenclature} == {rf.FORMAT_TEXT}
+
+
 def test_every_declared_format_names_a_real_formatter() -> None:
     declared = set(rf.KESTREL_CELL_FORMATS.values()) | set(rf.ADVNTR_CELL_FORMATS.values())
     assert declared <= set(rf.CELL_FORMATTERS), f"undefined formats: {sorted(declared - set(rf.CELL_FORMATTERS))}"

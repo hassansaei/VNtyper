@@ -12,8 +12,8 @@ authors:
     orcid: "https://orcid.org/0000-0002-3679-1081"
 repository-code: "https://github.com/hassansaei/VNtyper"
 license: BSD-3-Clause
-version: "2.0.18"
-date-released: "2026-08-12"
+version: "2.0.20"
+date-released: "2026-08-13"
 doi: "10.5281/zenodo.19744166"
 identifiers:
   - type: doi

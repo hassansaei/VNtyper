@@ -258,6 +258,24 @@ def test_decision_fails_closed_without_an_observed_extraction_command() -> None:
             "samtools view -b -f 4 -@ 4 - -o /run/fastq_bam_processing/output_unmapped.bam",
             "stream",
         ),
+        # The single-process stream shape (#262): no shell pipe, no `set`, no '*'.
+        # Keyed on the absence of the index query, which is the property that actually
+        # distinguishes a whole-file decode from an indexed fetch.
+        (
+            "samtools view -b -f 4 -u -T reference.fa -@ 4 input.cram -o /run/fastq_bam_processing/output_unmapped.bam",
+            "stream",
+        ),
+        # Without a reference, and without a thread flag at one thread.
+        (
+            "samtools view -b -f 4 -u input.bam -o /run/fastq_bam_processing/output_unmapped.bam",
+            "stream",
+        ),
+        # The -X custom-index form of the indexed fetch still classifies as indexed.
+        (
+            "samtools view -b -f 4 -u -@ 4 -X input.cram /proc/9/fd/3 '*' "
+            "-o /run/fastq_bam_processing/output_unmapped.bam",
+            "indexed",
+        ),
     ],
 )
 def test_command_log_records_the_executed_scan(tmp_path: Path, command: str, expected_mode: str) -> None:
@@ -311,6 +329,44 @@ def test_command_log_rejects_an_unknown_command_that_references_the_unmapped_bam
     assert problems == [
         "A-178-2 command log references the unmapped BAM but no recognized extraction mode was observed"
     ]
+
+
+def test_a_command_that_writes_the_target_without_filtering_is_still_unrecognised(tmp_path: Path) -> None:
+    """Widening the stream branch must not turn every write into a recognised scan.
+
+    Keying `stream` on "not indexed" is only safe because the `-f 4` and `-o <target>`
+    guards sit above it. Dropping either would make an arbitrary command that touches
+    the unmapped BAM look like a proven whole-file extraction.
+    """
+    target = "/run/fastq_bam_processing/output_unmapped.bam"
+    commands_log = tmp_path / "commands.jsonl"
+    commands_log.write_text(
+        json.dumps({"command": f"samtools view -b -u input.cram -o {target}", "shell": True}) + "\n",
+        encoding="utf-8",
+    )
+
+    mode, observed_command, problems = cram_evidence.observe_unmapped_scan(commands_log, Path(target))
+
+    assert mode is None
+    assert observed_command is None
+    assert problems == [
+        "A-178-2 command log references the unmapped BAM but no recognized extraction mode was observed"
+    ]
+
+
+def test_a_flag_four_command_writing_somewhere_else_is_not_observed(tmp_path: Path) -> None:
+    """The target guard is what keeps an unrelated flag-4 command out of the evidence."""
+    target = "/run/fastq_bam_processing/output_unmapped.bam"
+    commands_log = tmp_path / "commands.jsonl"
+    commands_log.write_text(
+        json.dumps({"command": "samtools view -b -f 4 -u input.cram -o /somewhere/else.bam", "shell": True}) + "\n",
+        encoding="utf-8",
+    )
+
+    mode, observed_command, problems = cram_evidence.observe_unmapped_scan(commands_log, Path(target))
+
+    assert mode is None
+    assert problems == ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"]
 
 
 @pytest.mark.parametrize(

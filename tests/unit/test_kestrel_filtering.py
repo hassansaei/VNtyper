@@ -555,7 +555,9 @@ class TestConstructKestrelCommand:
             "--maxalignstates 40 --maxhapstates 40 "
             "-r /ref/muc1.fa -o /out/output.vcf "
             "-sSAMPLE1 /in/R1.fastq.gz /in/R2.fastq.gz "
-            "--hapfmt sam -p /out/output.sam --logstderr --logstdout "
+            # --logstderr removed (#262): OptLogStderr and OptLogStdout set the same
+            # field, so --logstdout -- emitted second -- always won. No behaviour change.
+            "--hapfmt sam -p /out/output.sam --logstdout "
             "--loglevel INFO --temploc /out"
         )
 

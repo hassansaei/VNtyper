@@ -29,6 +29,17 @@ from typing import Any
 
 from golden_cohort import HARNESS_VERSION, artifacts
 
+# The waiver policy - which deltas are fatal, and the one a caller may declare away -
+# lives in its own module because it is the only rule here that can turn a check off.
+# Imported rather than re-implemented, so ``compare.fatal_deltas`` and
+# ``waiver.fatal_deltas`` are the same object and cannot drift.
+from golden_cohort.waiver import (
+    DECLARABLE_DELTA,
+    DECLARED_DELTA_HEADING,
+    fatal_deltas,
+    waived_cases,
+)
+
 logger = logging.getLogger(__name__)
 
 #: Artefact name -> (comparison kind, key columns). The kinds are ``scalar`` (compared with
@@ -50,6 +61,10 @@ PIPELINE_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "pipeline_steps": ("sequence", ()),
     "pipeline_step_records": ("opaque", ()),
     "executed_commands": ("sequence", ()),
+    # BED is headerless, so this cannot be a ``table``: ``read_tsv`` would consume the
+    # first variant row as a column header and then compare one fewer row than the file
+    # has. It is collected as the file's lines, in file order, and compared as a sequence.
+    "output_bed": ("sequence", ()),
 }
 
 #: The cohort artefacts, which no run of this gate before now has compared at all.
@@ -363,6 +378,8 @@ def compare_sides(
     normalisation: list[dict[str, str]],
     before_rules: list[Any],
     after_rules: list[Any],
+    *,
+    expect_command_delta: bool = False,
 ) -> dict[str, Any]:
     """Compare two completed sides case by case.
 
@@ -374,6 +391,9 @@ def compare_sides(
         normalisation: The manifest to embed in the result.
         before_rules: The baseline side's normalisation rules.
         after_rules: The candidate side's normalisation rules.
+        expect_command_delta: Whether the caller declared that the executed command
+            stream changes on purpose. Defaults to False, which keeps the gate's
+            existing meaning exactly.
 
     Returns:
         dict[str, Any]: The full comparison document.
@@ -428,6 +448,9 @@ def compare_sides(
         }
         _fold_expectation_into_deltas(cases[case_id])
 
+    for case in cases.values():
+        case["fatal_deltas"] = fatal_deltas(case, expect_command_delta=expect_command_delta)
+
     summary = _summarise(cases)
     blocked = sorted(case_id for case_id, case in cases.items() if case.get("blocked"))
     launch_ok = bool(before_side.get("launch_verified")) and bool(after_side.get("launch_verified"))
@@ -443,6 +466,7 @@ def compare_sides(
         "after": _side_summary(after_side),
         "matrix_check": matrix.get("check"),
         "attestation_grade": attestation_grade,
+        "expect_command_delta": expect_command_delta,
         "normalisation": normalisation,
         "uncompared": UNCOMPARED,
         "summary": summary,
@@ -528,7 +552,10 @@ def _summarise(cases: dict[str, Any]) -> dict[str, Any]:
         cases: The per-case comparison results.
 
     Returns:
-        dict[str, Any]: Per-artefact counts and the ids that carry each delta.
+        dict[str, Any]: Per-artefact counts, the ids that carry each delta, and the
+        subset of those ids whose deltas are fatal. The two case lists are reported
+        separately on purpose: the page names every delta while the verdict is decided
+        by the fatal ones, so a declared command delta is visible and still passes.
     """
     per_artifact: dict[str, dict[str, Any]] = {}
     for case_id, case in cases.items():
@@ -547,6 +574,9 @@ def _summarise(cases: dict[str, Any]) -> dict[str, Any]:
         "per_artifact": dict(sorted(per_artifact.items())),
         "cases_total": len(cases),
         "cases_with_any_delta": sorted(case_id for case_id, case in cases.items() if case.get("deltas")),
+        "cases_with_fatal_delta": sorted(
+            case_id for case_id, case in cases.items() if case.get("fatal_deltas", case.get("deltas"))
+        ),
     }
 
 
@@ -570,6 +600,12 @@ def _verdict(
     the documented one. It is exactly as free of deltas as ``IDENTICAL`` and attests
     strictly less, and the two used to be indistinguishable.
 
+    ``DELTAS`` is decided on ``cases_with_fatal_delta`` rather than
+    ``cases_with_any_delta``, which is what lets a caller declare a command-stream change
+    (see :func:`fatal_deltas`) without weakening anything else. Summaries built by hand
+    that carry only the older key fall back to it, so the two read the same for every
+    caller that never declares one.
+
     Args:
         summary: The rolled-up summary.
         blocked: Cohort cases that were refused.
@@ -587,7 +623,7 @@ def _verdict(
         return "UNVERIFIED"
     if unmet:
         return "EXPECTATIONS_UNMET"
-    if summary["cases_with_any_delta"]:
+    if summary.get("cases_with_fatal_delta", summary["cases_with_any_delta"]):
         return "DELTAS"
     return "IDENTICAL" if attestation_grade else "REDUCED"
 
@@ -667,6 +703,19 @@ def render_text(result: dict[str, Any]) -> str:
         if check.get("skipped"):
             lines.append("A case filter was in force, so this run is not attestation-grade.")
         lines.extend(f"- **Differs from the gate page**: {mismatch}" for mismatch in check.get("mismatches", []))
+        lines.append("")
+
+    waived = waived_cases(result)
+    if waived:
+        lines.append(DECLARED_DELTA_HEADING)
+        lines.append("")
+        lines.append(
+            "These cases executed a different command stream and the caller declared that in advance, so the "
+            "delta did not fail the gate. It is still a delta: read it in the JSON result under "
+            f"`cases.<id>.artefacts.{DECLARABLE_DELTA}` and confirm it is only the change you intended."
+        )
+        lines.append("")
+        lines.extend(f"- `{case_id}`" for case_id in waived)
         lines.append("")
 
     if result.get("expectations_unmet"):

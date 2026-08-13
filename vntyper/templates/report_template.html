@@ -376,7 +376,10 @@
           `tests/unit/test_generate_report.py` asserts that no report prints one.
           Every word here is either the pipeline's own or the configuration's.
         #}
-        <header class="masthead" data-state="{{ screening_state.emphasis }}">
+        <header class="masthead"
+                data-state="{{ screening_state.emphasis }}"
+                data-kestrel-execution="{{ screening_state.execution.kestrel }}"
+                data-advntr-execution="{{ screening_state.execution.advntr }}">
             {#
               One `<div>` per label/value pair, so a pair is one flex item and can
               never be split across a line break. A value the run did not record is

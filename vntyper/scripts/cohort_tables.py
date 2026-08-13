@@ -66,6 +66,14 @@ KESTREL_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Depth_Score",
     "Confidence",
     "Flag",
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Nomenclature_Flags",
+    "Nomenclature_Kestrel",
+    "Nomenclature_adVNTR",
+    "Ambiguity_Interval",
+    "Repeat_Form",
+    "Nomenclature_Note",
 )
 
 #: adVNTR result columns, in display order.
@@ -81,6 +89,14 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "REF",
     "ALT",
     "Flag",
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Nomenclature_Flags",
+    "Nomenclature_Kestrel",
+    "Nomenclature_adVNTR",
+    "Ambiguity_Interval",
+    "Repeat_Form",
+    "Nomenclature_Note",
 )
 
 #: The one escaping exemption in the whole cohort report: the column

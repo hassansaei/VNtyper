@@ -939,6 +939,13 @@ def generate_summary_report(
             "quality_metrics_pass": screening.quality_metrics_pass,
             "matched_rule": screening.matched_rule,
             "emphasis": screening.emphasis,
+            # The binding report-context contract exposes execution separately from
+            # algorithm result: performed-and-empty is a negative result, while a
+            # stage that did not run or failed established no such result.
+            "execution": {
+                "kestrel": screening.kestrel_execution,
+                "advntr": screening.advntr_execution,
+            },
             # What the provenance line prints for each algorithm. Built here rather than
             # branched on in the template because the choice is presentation logic over
             # computed state, and that lives in the pure modules (AGENTS.md trap 11) -

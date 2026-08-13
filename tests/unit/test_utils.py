@@ -316,8 +316,14 @@ def test_tool_version_unexpected_failure_returns_unknown(caplog):
 # ---------------------------------------------------------------------------
 
 
-def test_get_tool_versions_maps_each_configured_tool_to_its_parsed_version():
-    """utils.py:213-235 -- the config-driven fan-out to get_tool_version."""
+def test_get_tool_versions_maps_each_named_tool_to_its_parsed_version():
+    """The config-driven fan-out to get_tool_version.
+
+    The fan-out is now over the intersection of ``config["tools"]`` and the caller's
+    declared set rather than over the whole config (#262), so this names all three
+    tools to keep measuring exactly what it measured before: that each configured tool
+    reaches ``get_tool_version`` with its own command and version flag.
+    """
     config = {
         "tools": {
             "fastp": "/usr/bin/fastp",
@@ -330,7 +336,7 @@ def test_get_tool_versions_maps_each_configured_tool_to_its_parsed_version():
         return f"{command}::{version_flag}"
 
     with patch("vntyper.scripts.utils.get_tool_version", side_effect=fake_get_tool_version) as mocked:
-        versions = get_tool_versions(config)
+        versions = get_tool_versions(config, tools_in_use={"fastp", "samtools", "java_path"})
 
     assert versions == {
         "fastp": "/usr/bin/fastp::",
@@ -342,8 +348,8 @@ def test_get_tool_versions_maps_each_configured_tool_to_its_parsed_version():
 
 
 def test_get_tool_versions_with_no_tools_configured_returns_an_empty_dict():
-    """utils.py:213-214 -- config.get("tools", {}) with nothing configured."""
-    assert get_tool_versions({}) == {}
+    """config.get("tools", {}) with nothing configured, whatever the caller declares."""
+    assert get_tool_versions({}, tools_in_use={"samtools", "kestrel"}) == {}
 
 
 #: Tail of the real ``java -jar kestrel.jar -h`` output: the last line is what
@@ -387,7 +393,7 @@ def test_get_tool_versions_passes_the_kestrel_help_flag_exactly_once():
         "vntyper.scripts.utils.subprocess.run",
         return_value=_completed_process(),
     ) as mocked_run:
-        get_tool_versions(config)
+        get_tool_versions(config, tools_in_use={"kestrel", "java_path"})
 
     kestrel_calls = [call for call in mocked_run.call_args_list if "-jar" in call.args[0]]
     assert len(kestrel_calls) == 1, "expected exactly one subprocess.run call built for kestrel"
@@ -427,7 +433,7 @@ def test_get_tool_versions_reports_the_kestrel_version_from_its_help_banner():
         return _completed_process(stdout=KESTREL_HELP_OUTPUT if "-jar" in argv else JAVA_VERSION_OUTPUT)
 
     with patch("vntyper.scripts.utils.subprocess.run", side_effect=fake_run):
-        versions = get_tool_versions(config)
+        versions = get_tool_versions(config, tools_in_use={"kestrel", "java_path"})
 
     assert versions == {
         "kestrel": "1.0.1",
@@ -893,3 +899,113 @@ def test_validate_fastq_file_wraps_unexpected_read_errors(tmp_path, caplog):
         validate_fastq_file(str(fastq_file))
 
     assert _logged(caplog.records, "Error validating FASTQ file")
+
+
+# ---------------------------------------------------------------------------
+# get_tool_versions probes only what the run will invoke (#262)
+# ---------------------------------------------------------------------------
+
+#: Every tool ``config.json`` ships, so a test can name any subset as in use.
+ALL_TOOLS = {
+    "fastp": "fastp",
+    "samtools": "samtools",
+    "bwa": "bwa",
+    "advntr": "mamba run -n envadvntr advntr",
+    "shark": "mamba run -n shark_env shark",
+    "kanalyze": "vntyper/dependencies/kestrel/kanalyze.jar",
+    "kestrel": "vntyper/dependencies/kestrel/kestrel.jar",
+    "java_path": "java",
+}
+
+
+def _probed(tools, tools_in_use):
+    """Record the commands ``get_tool_versions`` actually shells out for.
+
+    Args:
+        tools: The ``config["tools"]`` mapping.
+        tools_in_use: The names the caller declares this run will invoke.
+
+    Returns:
+        tuple[list[str], dict[str, str]]: The probed commands and the returned versions.
+    """
+    commands: list[str] = []
+
+    def record(command, version_flag):
+        commands.append(command)
+        return "1.0"
+
+    with patch("vntyper.scripts.utils.get_tool_version", side_effect=record):
+        versions = get_tool_versions({"tools": tools}, tools_in_use=tools_in_use)
+    return commands, versions
+
+
+def test_only_the_named_tools_are_probed():
+    """A Kestrel-only BAM run needs neither adVNTR, SHARK, fastp nor BWA.
+
+    ``mamba run -n envadvntr advntr`` costs 315 ms on every run -- adVNTR's own import,
+    not mamba's overhead -- and the result is only ever logged.
+    """
+    commands, versions = _probed(ALL_TOOLS, {"samtools", "kestrel", "java_path"})
+
+    assert not any("advntr" in command or "shark" in command for command in commands)
+    assert not any(command.startswith(("fastp", "bwa")) for command in commands)
+    assert set(versions) == {"samtools", "kestrel", "java_path"}
+
+
+def test_kanalyze_is_never_probed_even_when_it_is_in_use():
+    """It is a JAR with no version flag of its own; probing it would execute the JAR.
+
+    It ships and is versioned with kestrel, so kestrel's version already covers it.
+    """
+    commands, versions = _probed(ALL_TOOLS, {"samtools", "kanalyze", "kestrel"})
+
+    assert not any("kanalyze" in command for command in commands)
+    assert "kanalyze" not in versions
+
+
+def test_shark_is_never_probed_even_when_it_is_in_use():
+    """get_tool_version has no SHARK branch and returns "unknown" unconditionally.
+
+    Gating a probe that can only ever answer "unknown" would spend 36 ms to learn
+    nothing. Dropping it is the honest choice; a real answer needs a parser, not a gate.
+    """
+    commands, versions = _probed(ALL_TOOLS, {"samtools", "shark"})
+
+    assert not any("shark" in command for command in commands)
+    assert "shark" not in versions
+
+
+def test_advntr_is_probed_when_it_is_in_use():
+    """The saving must come from not running adVNTR, not from never reporting it."""
+    commands, versions = _probed(ALL_TOOLS, {"samtools", "advntr"})
+
+    assert any("advntr" in command for command in commands)
+    assert versions["advntr"] == "1.0"
+
+
+def test_a_replacement_config_without_kanalyze_still_works():
+    """--config-path replaces the whole config, so the key may be absent (trap 2)."""
+    tools = {name: command for name, command in ALL_TOOLS.items() if name != "kanalyze"}
+
+    _, versions = _probed(tools, {"samtools", "kanalyze", "kestrel"})
+
+    assert set(versions) == {"samtools", "kestrel"}
+
+
+def test_a_name_in_use_that_the_config_does_not_declare_is_skipped():
+    """The caller names what the run invokes; the config decides what exists."""
+    _, versions = _probed({"samtools": "samtools"}, {"samtools", "bwa"})
+
+    assert versions == {"samtools": "1.0"}
+
+
+def test_the_kestrel_help_flag_is_still_folded_in_exactly_once():
+    """The special case must survive the filtering, argv and all."""
+    config = {"tools": {"kestrel": "/opt/kestrel/kestrel-1.0.1.jar", "java_path": "/usr/bin/java"}}
+
+    with patch("vntyper.scripts.utils.subprocess.run", return_value=_completed_process()) as mocked_run:
+        get_tool_versions(config, tools_in_use={"kestrel", "java_path"})
+
+    kestrel_calls = [call for call in mocked_run.call_args_list if "-jar" in call.args[0]]
+    assert len(kestrel_calls) == 1
+    assert kestrel_calls[0].args[0] == ["/usr/bin/java", "-jar", "/opt/kestrel/kestrel-1.0.1.jar", "-h"]

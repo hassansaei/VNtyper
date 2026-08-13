@@ -349,6 +349,22 @@ def _write_side(root: Path, label: str, tree: str, expect_marker: str, cases, *,
     return side
 
 
+def _write_commands(root: Path, case_id: str, commands) -> None:
+    """Write one side's recorded command stream for a case.
+
+    Args:
+        root: The side's run root.
+        case_id: The case whose commands these are.
+        commands: The command strings, in execution order.
+    """
+    log_dir = root / "logs" / case_id
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "commands.jsonl").write_text(
+        "".join(json.dumps({"command": command, "shell": True}) + "\n" for command in commands),
+        encoding="utf-8",
+    )
+
+
 def _compare(tmp_path: Path, before_cases, after_cases, **kwargs):
     """Run ``compare_sides`` over two written run roots.
 
@@ -438,8 +454,13 @@ def test_pipeline_artifact_reader_retains_the_causal_guard_count(tmp_path: Path)
 
 
 def test_evidence_validation_changes_bump_the_harness_minor_version() -> None:
-    """Tightening which CRAM runs can earn attestation changes the instrument."""
-    assert HARNESS_VERSION == "1.4.0"
+    """Tightening which CRAM runs can earn attestation changes the instrument.
+
+    1.5.0 widens the compared set with ``output_bed`` and adds the declared
+    command-delta mode (#262). Both change what a recorded result means, so a result
+    document must be able to say which instrument produced it.
+    """
+    assert HARNESS_VERSION == "1.5.0"
 
 
 def test_two_sides_that_both_produced_nothing_are_not_identical(tmp_path: Path) -> None:
@@ -591,3 +612,230 @@ def test_a_statistics_export_missing_from_one_side_is_a_delta_not_a_skip() -> No
     assert compare.diff_table(before, None, ("Sample",))["status"] != "absent_both"
     assert compare.diff_table(before, None, ("Sample",))["status"] != "identical"
     assert compare.diff_table(None, before, ("Sample",))["status"] != "identical"
+
+
+# ---------------------------------------------------------------------------
+# The declared command delta (#262)
+# ---------------------------------------------------------------------------
+
+
+def _command_case(before_commands, after_commands, **artefacts):
+    """Diff one case built from two command streams plus optional artefacts.
+
+    Args:
+        before_commands: The baseline side's ``executed_commands``.
+        after_commands: The candidate side's ``executed_commands``.
+        **artefacts: ``name=(before_value, after_value)`` for any other artefact.
+
+    Returns:
+        dict: The :func:`compare.diff_case` result.
+    """
+    before: dict[str, Any] = {"executed_commands": before_commands}
+    after: dict[str, Any] = {"executed_commands": after_commands}
+    for name, (left, right) in artefacts.items():
+        before[name] = left
+        after[name] = right
+    return compare.diff_case(before, after, compare.PIPELINE_ARTIFACTS)
+
+
+def test_a_declared_command_delta_is_reported_but_not_fatal() -> None:
+    """Performance work changes the command stream on purpose.
+
+    The delta stays in ``deltas`` so the report always names it; only its fatality
+    changes. A mode that hid the delta would be worse than no mode at all, because the
+    whole point is that a human reads what changed.
+    """
+    case = _command_case(["a", "b"], ["a", "x", "b"])
+
+    assert "executed_commands" in case["deltas"]
+    assert compare.fatal_deltas(case, expect_command_delta=True) == []
+
+
+def test_an_undeclared_command_delta_is_still_fatal() -> None:
+    """Without the declaration the gate keeps its existing meaning exactly."""
+    case = _command_case(["a"], ["a", "b"])
+
+    assert compare.fatal_deltas(case, expect_command_delta=False) == ["executed_commands"]
+
+
+def test_a_result_delta_is_always_fatal_even_when_a_command_delta_is_declared() -> None:
+    """The exemption is one artefact wide; a genotype change is never excusable."""
+    tables = (_table([{"Motifs": "4-5", "POS": "1"}]), _table([{"Motifs": "4-5", "POS": "2"}]))
+    case = _command_case(["a"], ["a", "b"], kestrel_result=tables)
+
+    assert compare.fatal_deltas(case, expect_command_delta=True) == ["kestrel_result"]
+
+
+def test_a_non_genotype_delta_is_still_fatal_under_the_declaration() -> None:
+    """``report_tables`` and ``pipeline_steps`` are deliberate gate failures today.
+
+    An exemption phrased as "fatal only if genotype-bearing" would silently weaken
+    every one of them, which is why the rule is the inverse: everything stays fatal
+    except ``executed_commands``.
+    """
+    case = _command_case(["a"], ["a"], report_tables=({"x": 1}, {"x": 2}))
+
+    assert compare.fatal_deltas(case, expect_command_delta=True) == ["report_tables"]
+
+
+def test_the_expectation_delta_is_fatal_under_the_declaration() -> None:
+    """A case that did not do what it declared is not excused by a command delta."""
+    case = _command_case(["a", "b"], ["a", "x", "b"])
+    case["expectation_problems"] = {"before": ["expected exit 0, got 1"]}
+    compare._fold_expectation_into_deltas(case)
+
+    assert compare.fatal_deltas(case, expect_command_delta=True) == ["EXPECTATION"]
+
+
+def test_output_bed_is_compared_as_an_ordered_line_sequence() -> None:
+    """BED is headerless, so ``read_tsv`` would eat the first variant row as a header."""
+    assert compare.PIPELINE_ARTIFACTS["output_bed"] == ("sequence", ())
+
+
+def test_a_changed_bed_interval_is_a_delta() -> None:
+    """#203 moved every BED interval by one base and no gate would have seen it."""
+    case = _command_case(
+        ["a"],
+        ["a"],
+        output_bed=(["motif-1\t66\t67"], ["motif-1\t67\t68"]),
+    )
+
+    assert compare.fatal_deltas(case, expect_command_delta=True) == ["output_bed"]
+
+
+def test_the_bed_collector_reads_the_lines_it_finds(tmp_path: Path) -> None:
+    """Collected as lines, in file order, with no header interpretation."""
+    case_dir = tmp_path / "case"
+    (case_dir / "kestrel").mkdir(parents=True)
+    (case_dir / "kestrel" / "output.bed").write_text("m-1\t66\t67\nm-2\t10\t11\n", encoding="utf-8")
+    rules = normalise.build_rules(source_root=tmp_path, run_root=tmp_path)
+
+    collected = artifacts.read_pipeline_case(case_dir, tmp_path / "logs", rules)
+
+    assert collected["output_bed"] == ["m-1\t66\t67", "m-2\t10\t11"]
+
+
+def test_an_absent_bed_collects_as_none_rather_than_an_empty_list(tmp_path: Path) -> None:
+    """A negative case writes no BED at all, and ``None`` is what makes that absent_both.
+
+    An empty list would compare equal to a *present* but empty file, which is a
+    different run.
+    """
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    rules = normalise.build_rules(source_root=tmp_path, run_root=tmp_path)
+
+    assert artifacts.read_pipeline_case(case_dir, tmp_path / "logs", rules)["output_bed"] is None
+
+
+def test_an_empty_bed_collects_as_an_empty_list_not_none(tmp_path: Path) -> None:
+    """Present-and-empty must be distinguishable from never-written."""
+    case_dir = tmp_path / "case"
+    (case_dir / "kestrel").mkdir(parents=True)
+    (case_dir / "kestrel" / "output.bed").write_text("", encoding="utf-8")
+    rules = normalise.build_rules(source_root=tmp_path, run_root=tmp_path)
+
+    assert artifacts.read_pipeline_case(case_dir, tmp_path / "logs", rules)["output_bed"] == []
+
+
+def test_a_declared_command_delta_makes_the_whole_run_identical(tmp_path: Path) -> None:
+    """End to end: the flag is what lets a performance change be validated at all."""
+    before: CaseSpec = {"a5c1_hg19_subset": (0, [], _GOOD_FILES)}
+    after: CaseSpec = {"a5c1_hg19_subset": (0, [], _GOOD_FILES)}
+    before_root, after_root = tmp_path / "before", tmp_path / "after"
+    before_side = _write_side(before_root, "before", "/trees/base", "absent", before, head="a" * 40)
+    after_side = _write_side(after_root, "after", "/trees/cand", "present", after, head="b" * 40)
+    _write_commands(before_root, "a5c1_hg19_subset", ["samtools view -h in.bam | samtools view -b -f 4 -"])
+    _write_commands(after_root, "a5c1_hg19_subset", ["samtools view -b -f 4 -u in.bam -o u.bam"])
+    rules = normalise.build_rules(source_root=Path("/trees/x"), run_root=before_root)
+
+    undeclared = compare.compare_sides(
+        before_root, after_root, before_side, after_side, normalise.manifest(rules), rules, rules
+    )
+    declared = compare.compare_sides(
+        before_root,
+        after_root,
+        before_side,
+        after_side,
+        normalise.manifest(rules),
+        rules,
+        rules,
+        expect_command_delta=True,
+    )
+
+    assert undeclared["verdict"] == "DELTAS"
+    assert declared["verdict"] == "IDENTICAL"
+    assert declared["expect_command_delta"] is True
+    assert declared["cases"]["a5c1_hg19_subset"]["deltas"] == ["executed_commands"]
+
+
+def test_a_result_delta_still_fails_the_run_when_the_command_delta_is_declared(tmp_path: Path) -> None:
+    """The declaration must not become a blanket pass."""
+    good: CaseSpec = {"a5c1_hg19_subset": (0, [], _GOOD_FILES)}
+    changed: CaseSpec = {
+        "a5c1_hg19_subset": (
+            0,
+            [],
+            {**_GOOD_FILES, "kestrel/kestrel_result.tsv": "## VNtyper\nMotifs\tPOS\n4-5\t2\n"},
+        )
+    }
+    before_root, after_root = tmp_path / "before", tmp_path / "after"
+    before_side = _write_side(before_root, "before", "/trees/base", "absent", good, head="a" * 40)
+    after_side = _write_side(after_root, "after", "/trees/cand", "present", changed, head="b" * 40)
+    _write_commands(before_root, "a5c1_hg19_subset", ["samtools view -h in.bam"])
+    _write_commands(after_root, "a5c1_hg19_subset", ["samtools view -b in.bam"])
+    rules = normalise.build_rules(source_root=Path("/trees/x"), run_root=before_root)
+
+    result = compare.compare_sides(
+        before_root,
+        after_root,
+        before_side,
+        after_side,
+        normalise.manifest(rules),
+        rules,
+        rules,
+        expect_command_delta=True,
+    )
+
+    assert result["verdict"] == "DELTAS"
+    assert result["cases"]["a5c1_hg19_subset"]["fatal_deltas"] == ["kestrel_result"]
+
+
+def test_the_report_says_which_cases_had_a_waived_command_delta(tmp_path: Path) -> None:
+    """``IDENTICAL`` must never be printed without saying what was waived to earn it.
+
+    This is the same failure ``REDUCED`` exists to prevent: a clean word over a run that
+    attests strictly less than the word implies. The declaration is only worth anything
+    if the reader is told which cases used it and can go and read the diff.
+    """
+    cases: CaseSpec = {"a5c1_hg19_subset": (0, [], _GOOD_FILES)}
+    before_root, after_root = tmp_path / "before", tmp_path / "after"
+    before_side = _write_side(before_root, "before", "/trees/base", "absent", cases, head="a" * 40)
+    after_side = _write_side(after_root, "after", "/trees/cand", "present", cases, head="b" * 40)
+    _write_commands(before_root, "a5c1_hg19_subset", ["samtools view -h in.bam"])
+    _write_commands(after_root, "a5c1_hg19_subset", ["samtools view -b in.bam"])
+    rules = normalise.build_rules(source_root=Path("/trees/x"), run_root=before_root)
+
+    text = compare.render_text(
+        compare.compare_sides(
+            before_root,
+            after_root,
+            before_side,
+            after_side,
+            normalise.manifest(rules),
+            rules,
+            rules,
+            expect_command_delta=True,
+        )
+    )
+
+    assert compare.DECLARED_DELTA_HEADING in text
+    assert "a5c1_hg19_subset" in text
+
+
+def test_the_report_does_not_mention_a_waiver_when_none_was_declared(tmp_path: Path) -> None:
+    """The default run's report must read exactly as it did before this mode existed."""
+    cases: CaseSpec = {"a5c1_hg19_subset": (0, [], _GOOD_FILES)}
+    result = _compare(tmp_path, cases, cases)
+
+    assert compare.DECLARED_DELTA_HEADING not in compare.render_text(result)

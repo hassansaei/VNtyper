@@ -21,6 +21,7 @@ Modules:
     runner: Execute one side of the comparison.
     artifacts: Read one run's comparable artefacts off disk.
     normalise: The substitutions applied to everything that differs by construction.
+    waiver: Which deltas are fatal, and the single one a caller may declare away.
     compare: Diff two sides and report.
 """
 
@@ -41,4 +42,12 @@ from __future__ import annotations
 #:
 #: 1.4.0 requires the observed extraction mode to match the declared forced mode and
 #: makes an unsafe forced-indexed attestation prove its causal exit-before-work shape.
-HARNESS_VERSION = "1.4.0"
+#:
+#: 1.5.0 compares ``output.bed``, which the collector never read, and adds the declared
+#: command-delta mode: a caller may state in advance that the executed command stream
+#: changes on purpose, which keeps that one delta out of the verdict while leaving every
+#: other delta - genotype, report, step, evidence and expectation - fatal. A run recorded
+#: under 1.5.0 with the declaration in force attests strictly less about the command
+#: stream than one without it, so the result document and the rendered report both say
+#: which cases used it.
+HARNESS_VERSION = "1.5.0"
