@@ -203,6 +203,21 @@ def test_a_well_formed_gzip_of_the_wrong_library_is_refused(tmp_path: Path, monk
         report_assets.igv_payload(report_assets.REPORT_IGV_EMBEDDED)
 
 
+def test_a_verified_library_that_can_close_its_script_element_is_refused(tmp_path: Path, monkeypatch) -> None:
+    """A future repin must fail closed before raw source can escape its script element."""
+    unsafe_source = b'window.igv = {note: "</ScRiPt>"};\n'
+    unsafe_gzip = gzip.compress(unsafe_source, compresslevel=9, mtime=0)
+    asset = tmp_path / "igv-3.0.2.min.js.gz"
+    asset.write_bytes(unsafe_gzip)
+
+    monkeypatch.setattr(report_assets, "IGV_ASSET_PATH", asset)
+    monkeypatch.setattr(report_assets, "IGV_GZIP_SHA256", hashlib.sha256(unsafe_gzip).hexdigest())
+    monkeypatch.setattr(report_assets, "IGV_SHA256", hashlib.sha256(unsafe_source).hexdigest())
+
+    with pytest.raises(ValueError, match="case-insensitive script-closing sequence"):
+        report_assets.igv_library_source()
+
+
 def test_the_provenance_line_states_the_version_and_the_source_digest() -> None:
     """What the report prints, and the reader checks upstream.
 

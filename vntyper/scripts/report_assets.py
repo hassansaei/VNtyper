@@ -172,7 +172,8 @@ def _read_verified_asset() -> tuple[bytes, bytes]:
         tuple[bytes, bytes]: The compressed asset and its decompressed source.
 
     Raises:
-        ValueError: If either digest does not match, or the asset is missing.
+        ValueError: If either digest does not match, the asset is missing, or the
+            verified source could close the sidecar's raw-text script element.
     """
     if not IGV_ASSET_PATH.is_file():
         msg = (
@@ -185,6 +186,13 @@ def _read_verified_asset() -> tuple[bytes, bytes]:
     _verify_bytes(compressed, IGV_GZIP_SHA256, f"Vendored asset {IGV_ASSET_PATH.name}")
     source = gzip.decompress(compressed)
     _verify_bytes(source, IGV_SHA256, f"Decompressed igv.js {IGV_VERSION}")
+    if b"</script" in source.lower():
+        msg = (
+            f"Decompressed igv.js {IGV_VERSION} contains a case-insensitive script-closing sequence and cannot "
+            "be inserted as raw text into the controlled IGV sidecar template."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
     return compressed, source
 
 
@@ -195,7 +203,8 @@ def igv_library_source() -> bytes:
         bytes: The decompressed library.
 
     Raises:
-        ValueError: If either digest does not match, or the asset is missing.
+        ValueError: If either digest does not match, the asset is missing, or the
+            verified source cannot be inserted safely into the sidecar.
     """
     return _read_verified_asset()[1]
 

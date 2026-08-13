@@ -325,6 +325,47 @@ def test_the_sidecar_uses_the_verified_library_without_standalone_fetches(tmp_pa
     assert json.loads(extracted[2]) == STUB_SESSION_DICTIONARY
 
 
+def test_the_sidecar_serialises_generated_json_safely_without_changing_its_values(tmp_path: Path, monkeypatch) -> None:
+    """Sample text cannot alter script tokenisation, while JavaScript receives it unchanged."""
+    table_probe = '</script><p id="table-probe">table value</p>'
+    session_probe = '</ScRiPt><p id="session-probe">session value</p>'
+    table_json = {
+        "headers": ["unique_id", "CHROM", "NOTE"],
+        "rows": [["0", "chr1", table_probe]],
+    }
+    session_json = {"0": f"data:application/json,{session_probe}"}
+
+    def _capture(cmd, **kwargs):
+        template = Path(cmd[cmd.index("--template") + 1]).read_text(encoding="utf-8")
+        rendered = template.replace('"@TABLE_JSON@"', json.dumps(table_json)).replace(
+            '"@SESSION_DICTIONARY@"', json.dumps(session_json)
+        )
+        Path(cmd[cmd.index("--output") + 1]).write_text(rendered, encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(igv_report.subprocess, "run", _capture)
+    sidecar = tmp_path / "igv_report.html"
+
+    generate_report.run_igv_report(
+        bed_file=tmp_path / "regions.bed",
+        bam_file=None,
+        fasta_file=tmp_path / "ref.fa",
+        output_html=sidecar,
+        report_igv=report_assets.REPORT_IGV_SIDECAR,
+    )
+
+    page = sidecar.read_text(encoding="utf-8")
+    assert '</script><p id=\\"table-probe\\">' not in page
+    assert '</ScRiPt><p id=\\"session-probe\\">' not in page
+    assert page.lower().count("</script") == 2, "sample JSON introduced extra HTML script-closing tokens"
+    assert "\\u003c/script>" in page
+    assert "\\u003c/ScRiPt>" in page
+
+    _, emitted_table, emitted_session = generate_report.extract_igv_content(sidecar)
+    assert json.loads(emitted_table) == table_json
+    assert json.loads(emitted_session) == session_json
+
+
 def test_embedded_generation_does_not_build_an_unused_second_library(tmp_path: Path, monkeypatch) -> None:
     """The one-file mode uses the local extraction template without inlining igv.js twice."""
     captured: list[list[str]] = []
@@ -453,6 +494,77 @@ def test_what_each_mode_leaves_in_the_output_directory(
 
     assert "summary_report.html" in written
     assert ("igv_report.html" in written) is expect_sidecar, f"mode={mode} left {written}"
+
+
+def test_embedded_malformed_generator_output_stops_the_report_and_preserves_evidence(
+    run_with_alignments: Path, monkeypatch
+) -> None:
+    """An extraction failure is not evidence that the run produced no alignment session."""
+    malformed = "<!doctype html><p>generator completed but fragments are absent</p>\n"
+
+    def _write_malformed(bed_file, bam_file, fasta_file, output_html, **kwargs) -> None:
+        Path(output_html).write_text(malformed, encoding="utf-8")
+
+    monkeypatch.setattr(generate_report, "run_igv_report", _write_malformed)
+
+    with pytest.raises(ValueError, match="generated IGV report could not be validated"):
+        _render(run_with_alignments, report_igv=report_assets.REPORT_IGV_EMBEDDED)
+
+    assert not (run_with_alignments / "summary_report.html").exists()
+    diagnostic = run_with_alignments / "igv_report.failed.html"
+    assert diagnostic.read_text(encoding="utf-8") == malformed
+    assert diagnostic.resolve().parent == run_with_alignments.resolve()
+    assert list(run_with_alignments.glob(".vntyper-igv-*")) == []
+
+
+def test_embedded_cleanup_does_not_mask_the_generator_exception(run_with_alignments: Path, monkeypatch) -> None:
+    """A cleanup failure stays secondary to the generator error and its partial evidence."""
+
+    class CleanupFailure:
+        def __init__(self, *, prefix: str, dir: str | Path) -> None:
+            self.name = str(Path(dir) / f"{prefix}test")
+            Path(self.name).mkdir()
+
+        def cleanup(self) -> None:
+            raise OSError("cleanup failed")
+
+    partial = "<!doctype html><p>generator failed after writing this evidence</p>\n"
+
+    def _fail_after_write(bed_file, bam_file, fasta_file, output_html, **kwargs) -> None:
+        Path(output_html).write_text(partial, encoding="utf-8")
+        raise RuntimeError("primary generator failure")
+
+    monkeypatch.setattr(generate_report.tempfile, "TemporaryDirectory", CleanupFailure)
+    monkeypatch.setattr(generate_report, "run_igv_report", _fail_after_write)
+
+    with pytest.raises(RuntimeError, match="primary generator failure"):
+        _render(run_with_alignments, report_igv=report_assets.REPORT_IGV_EMBEDDED)
+
+    assert (run_with_alignments / "igv_report.failed.html").read_text(encoding="utf-8") == partial
+    assert not (run_with_alignments / "summary_report.html").exists()
+
+
+def test_embedded_failure_diagnostic_does_not_replace_an_external_symlink(
+    run_with_alignments: Path, tmp_path_factory, monkeypatch
+) -> None:
+    """The fixed diagnostic name cannot replace a link that resolves outside the run."""
+    external_dir = tmp_path_factory.mktemp("external-igv-evidence")
+    external_file = external_dir / "do-not-replace.html"
+    external_file.write_text("outside evidence\n", encoding="utf-8")
+    diagnostic_link = run_with_alignments / "igv_report.failed.html"
+    diagnostic_link.symlink_to(external_file)
+
+    def _write_malformed(bed_file, bam_file, fasta_file, output_html, **kwargs) -> None:
+        Path(output_html).write_text("<p>malformed generated page</p>\n", encoding="utf-8")
+
+    monkeypatch.setattr(generate_report, "run_igv_report", _write_malformed)
+
+    with pytest.raises(ValueError, match="generated IGV report could not be validated"):
+        _render(run_with_alignments, report_igv=report_assets.REPORT_IGV_EMBEDDED)
+
+    assert diagnostic_link.is_symlink()
+    assert external_file.read_text(encoding="utf-8") == "outside evidence\n"
+    assert not (run_with_alignments / "summary_report.html").exists()
 
 
 def test_an_unknown_mode_stops_the_render(run_with_alignments: Path) -> None:

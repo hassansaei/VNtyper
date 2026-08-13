@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -10,7 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from vntyper.scripts import report_assets
-from vntyper.scripts.report_formatting import extract_igv_fragments
+from vntyper.scripts.report_formatting import (
+    EMPTY_SESSION_DICTIONARY,
+    EMPTY_TABLE_JSON,
+    IGV_SESSION_DICTIONARY_MARKER,
+    IGV_TABLE_JSON_MARKER,
+    extract_igv_fragments,
+    js_json_literal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +123,30 @@ def run_igv_report(
     if report_igv == report_assets.REPORT_IGV_SIDECAR:
         output_path = Path(output_html)
         generated = output_path.read_text(encoding="utf-8")
+        for marker, fallback, name in (
+            (IGV_TABLE_JSON_MARKER, EMPTY_TABLE_JSON, "tableJson"),
+            (IGV_SESSION_DICTIONARY_MARKER, EMPTY_SESSION_DICTIONARY, "sessionDictionary"),
+        ):
+            marker_count = generated.count(marker)
+            if marker_count != 1:
+                msg = f"Generated IGV sidecar does not contain exactly one {name} marker; found {marker_count}."
+                logger.error(msg)
+                raise ValueError(msg)
+            value_start = generated.index(marker) + len(marker)
+            value_end = generated.find("\n", value_start)
+            if value_end == -1:
+                value_end = len(generated)
+            fragment = generated[value_start:value_end].strip()
+            candidate = fragment.removesuffix(";").strip()
+            try:
+                json.loads(candidate)
+            except ValueError as error:
+                msg = f"Generated IGV sidecar contains invalid {name} JSON."
+                logger.error(msg)
+                raise ValueError(msg) from error
+            safe_fragment = js_json_literal(fragment, fallback)
+            generated = generated[:value_start] + safe_fragment + generated[value_end:]
+
         marker_count = generated.count(report_assets.IGV_REPORT_LIBRARY_MARKER)
         if marker_count != 1:
             msg = f"Generated IGV sidecar does not contain exactly one verified library marker; found {marker_count}."

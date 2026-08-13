@@ -372,7 +372,18 @@ def test_vntyper_report_reaches_run_igv_report_with_all_three_tracks(tmp_path, m
     bam, bed, vcf = _kestrel_run(tmp_path)
 
     calls: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(generate_report, "run_igv_report", lambda *a, **k: calls.append((a, k)))
+
+    def _write_valid_igv_report(*args, **kwargs) -> None:
+        calls.append((args, kwargs))
+        Path(args[3]).write_text(
+            '<div id="container"><div id="igvDiv"></div></div>\n'
+            'const tableJson = {"headers":["unique_id"],"rows":[["0"]]}\n'
+            'const sessionDictionary = {"0":"session0.json"}\n'
+            "</body>\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(generate_report, "run_igv_report", _write_valid_igv_report)
 
     cli.main(["report", "-o", str(tmp_path)])
 

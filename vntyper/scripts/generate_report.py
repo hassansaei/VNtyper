@@ -109,6 +109,11 @@ NOT_CALCULATED = "Not calculated"
 KESTREL_ROW_NOUN = "Kestrel"
 ADVNTR_ROW_NOUN = "adVNTR"
 
+#: A failed embedded-mode generator page is moved here before its temporary
+#: directory is cleaned. The fixed single-segment name keeps the evidence inside the
+#: run output and makes repeated failures converge on one predictable artifact.
+IGV_FAILURE_DIAGNOSTIC_FILENAME = "igv_report.failed.html"
+
 #: CSS classes on both per-sample results tables. Named once so the two cannot drift.
 #:
 #: Every Bootstrap and DataTables class is gone with the CDN tags that gave them meaning
@@ -542,6 +547,7 @@ def generate_summary_report(
         raise ValueError(msg)
 
     temporary_igv_dir = None
+    igv_operation_error: Exception | None = None
     if report_igv == report_assets.REPORT_IGV_OFF:
         logger.info("--report-igv off: no alignment browser is produced for this run.")
         igv_report_file = None
@@ -564,14 +570,55 @@ def generate_summary_report(
                 config=config,
                 report_igv=report_igv,
             )
-            if igv_report_file.exists():
-                igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
-            else:
-                logger.warning("IGV report file not found. Skipping IGV content.")
-                igv_content, table_json, session_dictionary = "", "", ""
+            if not igv_report_file.exists():
+                msg = "The IGV generator completed without writing its expected report."
+                logger.error(msg)
+                raise ValueError(msg)
+
+            igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
+            try:
+                if not igv_content or not table_json.strip() or not session_dictionary.strip():
+                    raise ValueError("one or more required fragments are empty")
+                table_value = json.loads(table_json.removesuffix(";").strip())
+                session_value = json.loads(session_dictionary.removesuffix(";").strip())
+                if not isinstance(table_value, dict) or not isinstance(session_value, dict):
+                    raise ValueError("tableJson and sessionDictionary must be JSON objects")
+            except ValueError as error:
+                msg = "The generated IGV report could not be validated; the summary report was not written."
+                logger.error(msg)
+                raise ValueError(msg) from error
+            table_json = js_json_literal(table_json, EMPTY_TABLE_JSON)
+            session_dictionary = js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY)
+        except Exception as error:
+            igv_operation_error = error
+            if temporary_igv_dir is not None and igv_report_file.exists():
+                try:
+                    diagnostic_file = contained_output_path(
+                        output_dir,
+                        IGV_FAILURE_DIAGNOSTIC_FILENAME,
+                        "IGV failure diagnostic",
+                    )
+                    igv_report_file.replace(diagnostic_file)
+                    logger.error("Preserved failed IGV generator output at %s", diagnostic_file)
+                except (OSError, ValueError) as preservation_error:
+                    logger.error(
+                        "Could not preserve failed IGV generator output at %s: %s",
+                        IGV_FAILURE_DIAGNOSTIC_FILENAME,
+                        preservation_error,
+                    )
+            raise
         finally:
             if temporary_igv_dir is not None:
-                temporary_igv_dir.cleanup()
+                try:
+                    temporary_igv_dir.cleanup()
+                except Exception as cleanup_error:
+                    if igv_operation_error is None:
+                        raise
+                    logger.error(
+                        "Could not clean temporary IGV directory after %s: %s",
+                        type(igv_operation_error).__name__,
+                        cleanup_error,
+                    )
     else:
         logger.warning("BED file does not exist or not provided. Skipping IGV report generation.")
         igv_report_file = None
