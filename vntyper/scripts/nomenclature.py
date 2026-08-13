@@ -26,10 +26,17 @@ Research use only.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
+
 __all__ = [
     "CANONICAL_UNIT",
+    "MOTIFS",
+    "PAIRS",
     "UNIT_LENGTH",
+    "Nomenclature",
     "ambiguity_interval",
+    "from_kestrel",
     "name_edit",
     "normalise",
     "repeat_form",
@@ -44,7 +51,60 @@ CANONICAL_UNIT = "GCCCACGGTGTCACCTCGGCCCCGGACACCAGGCCGGCCCCGGGCTCCACCGCCCCCCCA"
 #: Every MUC1 repeat unit is 60 bp.
 UNIT_LENGTH = 60
 
+#: Flag vocabulary. Stable, kebab-case, and closed: a consumer may match on these.
+FLAG_POSITION_AMBIGUOUS = "position-ambiguous"
+FLAG_SPANS_UNIT_JUNCTION = "spans-unit-junction"
+FLAG_MOTIF_CONTEXT_DIVERGES = "motif-context-diverges"
+FLAG_ALLELE_UNREPRESENTABLE = "allele-unrepresentable-in-vcf"
+FLAG_LOW_READ_SUPPORT = "low-read-support"
+FLAG_CALLER_DISAGREEMENT = "caller-disagreement"
+FLAG_LENGTH_TRUNCATED = "length-truncated"
+
 _COMPLEMENT = str.maketrans("ACGTacgtNn", "TGCAtgcaNn")
+
+_REFERENCE_DIR = Path(__file__).resolve().parents[2] / "reference"
+_MOTIF_FASTA = _REFERENCE_DIR / "MUC1_motifs_Rev_com.fa"
+_PAIR_FASTA = _REFERENCE_DIR / "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa"
+
+
+def _read_fasta(path: Path) -> dict[str, str]:
+    """Parse a small FASTA into ``{name: sequence}``.
+
+    Deliberately hand-rolled: this runs once at import and adding Biopython for it
+    would be a new dependency for twenty lines of work.
+
+    Args:
+        path: The FASTA file.
+
+    Returns:
+        dict[str, str]: Record name (first whitespace-delimited token) to sequence.
+        Empty when the file is absent, so importing this module never fails on a
+        checkout whose reference data has not been downloaded.
+    """
+    if not path.is_file():
+        return {}
+
+    records: dict[str, str] = {}
+    name: str | None = None
+    chunks: list[str] = []
+    for line in path.read_text().splitlines():
+        if line.startswith(">"):
+            if name is not None:
+                records[name] = "".join(chunks)
+            name = line[1:].strip().split()[0] if line[1:].strip() else ""
+            chunks = []
+        elif line.strip():
+            chunks.append(line.strip())
+    if name is not None:
+        records[name] = "".join(chunks)
+    return records
+
+
+#: Motif symbol -> 60 bp unit on the genomic plus strand, as Kestrel sees it.
+MOTIFS: dict[str, str] = _read_fasta(_MOTIF_FASTA)
+
+#: Pair name ``<L>-<R>`` -> its 120 bp sequence, which is ``seq(R) ++ seq(L)``.
+PAIRS: dict[str, str] = _read_fasta(_PAIR_FASTA)
 
 
 def revcomp(sequence: str) -> str:
@@ -110,6 +170,9 @@ def normalise(unit: str, start: int, end: int, inserted: str) -> tuple[int, int,
     Returns:
         tuple[int, int, str]: The 3'-most ``(start, end, inserted)``.
     """
+    if end > len(unit) or start < 1:
+        return start, end, inserted
+
     start, end, inserted = _trim(unit, start, end, inserted)
     length = len(unit)
 
@@ -176,6 +239,9 @@ def _roll_5prime(unit: str, start: int, end: int, inserted: str) -> tuple[int, i
     Returns:
         tuple[int, int, str]: The 5'-most ``(start, end, inserted)``.
     """
+    if end > len(unit):
+        return start, end, inserted
+
     if not inserted:
         while start > 1 and unit[end - 1] == unit[start - 2]:
             start, end = start - 1, end - 1
@@ -204,6 +270,9 @@ def ambiguity_interval(unit: str, start: int, end: int, inserted: str) -> tuple[
         the edit cannot shift at all (a 1 bp window carries no information) or when it
         is a delins, which is anchored by definition.
     """
+    if end > len(unit) or start < 1:
+        return None
+
     start, end, inserted = _trim(unit, start, end, inserted)
 
     if inserted and end >= start:
@@ -267,6 +336,9 @@ def repeat_form(unit: str, start: int, end: int, inserted: str) -> str | None:
         str | None: The repeat form, or ``None`` when the edit does not sit in a
         detectable tract or does not change that tract's length.
     """
+    if end > len(unit) or start < 1:
+        return None
+
     start, end, inserted = _trim(unit, start, end, inserted)
 
     if inserted and end >= start:
@@ -316,3 +388,233 @@ def _name_insertion(unit: str, start: int, inserted: str) -> str:
         return f"{left - len(inserted) + 1}_{left}dup{inserted}"
 
     return f"{left}_{left + 1}ins{inserted}"
+
+
+def _event_of(start: int, end: int, inserted: str) -> str:
+    """Classify a normalised edit.
+
+    Args:
+        start: 1-based inclusive start.
+        end: 1-based inclusive end; ``start - 1`` for an insertion.
+        inserted: The inserted bases; empty for a deletion.
+
+    Returns:
+        str: One of ``duplication``, ``insertion``, ``deletion``, ``delins``,
+        ``substitution``.
+    """
+    if end < start:
+        return "insertion"
+    if not inserted:
+        return "deletion"
+    if start == end and len(inserted) == 1:
+        return "substitution"
+    return "delins"
+
+
+@dataclass(frozen=True)
+class Nomenclature:
+    """One caller record, named.
+
+    The spec states two things that must be read together: ``name`` is ``None`` only
+    at tier C (§3.1), yet tier B must emit "no bare number" (§3.3). Both hold because
+    they describe different layers -- this object carries the *computed* name so
+    :func:`reconcile` can compare callers, and the output serializer renders that
+    number only at tier A. Never surface ``name`` directly for a tier-B call.
+
+    Attributes:
+        name: The computed positional name, e.g. ``59dupC``. ``None`` at tier C,
+            where no position may be stated at all. Not for direct display below
+            tier A -- see :func:`render`.
+        event: ``duplication`` | ``insertion`` | ``deletion`` | ``delins`` |
+            ``substitution``.
+        unit: The motif symbol the name is anchored on, ``None`` when undetermined.
+        tier: ``A`` | ``B`` | ``C``.
+        flags: Kebab-case flags from the closed vocabulary above.
+        ambiguity: Inclusive window in which every anchor is the same allele, or
+            ``None`` when the edit cannot shift.
+        repeat_form: ``53C[7]>53C[8]``, or ``None`` outside a detectable tract.
+        net_length: Change in length, e.g. ``+1`` for a duplication.
+        source: ``kestrel_vcf`` | ``kestrel_bam`` | ``advntr``.
+    """
+
+    name: str | None
+    event: str
+    unit: str | None
+    tier: str
+    flags: tuple[str, ...]
+    ambiguity: tuple[int, int] | None
+    repeat_form: str | None
+    net_length: int
+    source: str
+
+
+def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ...]) -> Nomenclature:
+    """Build a tier-C result: a frameshift statement with no number in it.
+
+    Args:
+        event: The event class, as far as it is known.
+        net_length: Change in length.
+        source: The caller the record came from.
+        flags: Why the allele is undetermined.
+
+    Returns:
+        Nomenclature: A tier-C value with ``name``, ``unit``, ``ambiguity`` and
+        ``repeat_form`` all ``None``.
+    """
+    return Nomenclature(
+        name=None,
+        event=event,
+        unit=None,
+        tier="C",
+        flags=flags,
+        ambiguity=None,
+        repeat_form=None,
+        net_length=net_length,
+        source=source,
+    )
+
+
+def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
+    """Translate one Kestrel VCF record into MUC1 nomenclature.
+
+    Kestrel reports on a 120 bp merged pair ``<L>-<R>`` whose sequence is
+    ``seq(R) ++ seq(L)``, on the genomic plus strand. MUC1 is a minus-strand gene, so
+    the edit is reverse-complemented into the coding frame before it is normalised --
+    HGVS's "3'-most" is 3' of the *coding* sequence, which here is genomic-left.
+
+    The position is then projected onto the canonical ``X`` unit and normalised there.
+    Anchoring on the motif Kestrel assigned instead would name the canonical
+    duplication ``57dupC`` on a pair whose motif carries only 5xC. When the assigned
+    motif's local context differs from ``X``, the projection is flagged and the tier
+    capped, so a projected name never claims top confidence on its own.
+
+    Args:
+        motifs: The ``Motifs`` field, e.g. ``S-C``.
+        pos: 1-based position on the 120 bp pair.
+        ref: Reference allele.
+        alt: Alternate allele.
+
+    Returns:
+        Nomenclature: The named record; tier C when the record cannot be placed.
+    """
+    net = len(alt) - len(ref)
+
+    pair = PAIRS.get(motifs)
+    if pair is None or not 1 <= pos <= len(pair) or not ref or not alt:
+        return _undetermined("insertion" if net > 0 else "deletion", net, "kestrel_vcf", ())
+
+    pair_length = len(pair)
+
+    # Resolve the edit in *pair* coordinates on the plus strand. This is deliberately
+    # arithmetic on POS/REF/ALT rather than a trim against a reference unit: the two
+    # observed shapes of the canonical duplication, `G>GG` and `C>CG`, carry different
+    # anchor bases but insert the same G after the same pair position, and only the
+    # arithmetic makes them agree.
+    if len(alt) > len(ref) and alt.startswith(ref):
+        inserted_plus = alt[len(ref) :]
+        anchor_plus = pos + len(ref) - 1
+        # The gap after plus position `a` is the gap after coding position
+        # `pair_length - a`, because reverse complement swaps which side it sits on.
+        coding_left = pair_length - anchor_plus
+        coding_start, coding_end = coding_left + 1, coding_left
+        inserted = revcomp(inserted_plus)
+    elif len(ref) > len(alt) and ref.startswith(alt):
+        del_lo = pos + len(alt)
+        del_hi = pos + len(ref) - 1
+        coding_start, coding_end = pair_length + 1 - del_hi, pair_length + 1 - del_lo
+        inserted = ""
+    else:
+        coding_start = pair_length + 1 - (pos + len(ref) - 1)
+        coding_end = pair_length + 1 - pos
+        inserted = revcomp(alt)
+
+    if not 1 <= coding_start <= pair_length + 1:
+        return _undetermined("insertion" if net > 0 else "deletion", net, "kestrel_vcf", ())
+
+    # Normalise in the 120 bp pair frame FIRST, so a shift may legally cross the unit
+    # junction, and only then assign the unit (spec §3.2). Order matters: a delGCCCA
+    # record arrives as a deletion at pair 57-61, straddling the junction, and rolls
+    # 3' to pair 61-65 -- entirely inside the second unit, where it is a clean
+    # `1_5delGCCCA`. Assigning the unit first would have frozen it across the seam.
+    coding_pair = revcomp(pair)
+    coding_start, coding_end, inserted = normalise(coding_pair, coding_start, coding_end, inserted)
+
+    # The coding pair reads coding(L) ++ coding(R): reverse-complementing
+    # seq(R) ++ seq(L) swaps the halves as well as the strand.
+    junction_flags: tuple[str, ...] = ()
+    if coding_start <= UNIT_LENGTH < coding_end:
+        junction_flags = (FLAG_SPANS_UNIT_JUNCTION,)
+
+    left, right = motifs.split("-", 1)[0], motifs.split("-", 1)[-1]
+
+    if coding_start > UNIT_LENGTH:
+        symbol = right
+        start = coding_start - UNIT_LENGTH
+        end = coding_end - UNIT_LENGTH
+    else:
+        symbol = left
+        start, end = coding_start, coding_end
+
+    # An insertion landing before position 1 of a unit sits exactly on the junction.
+    # The array is tandem, so that gap is equally "after position 60 of the unit 5'
+    # of it" -- and naming it there is what turns a meaningless `0_1insA` into the
+    # `60dupA` the allele actually is. A coordinate of 0 is never emitted.
+    if end < start and start == 1:
+        start, end = UNIT_LENGTH + 1, UNIT_LENGTH
+        symbol = left if coding_start > UNIT_LENGTH else right
+
+    assigned = MOTIFS.get(symbol)
+
+    upper = UNIT_LENGTH + 1 if end < start else UNIT_LENGTH
+    if not 1 <= start <= upper:
+        return _undetermined("insertion" if net > 0 else "deletion", net, "kestrel_vcf", junction_flags)
+
+    # A span still crossing the junction after normalisation cannot be projected onto
+    # a single 60 bp unit, so it is named against the coding pair and anchored on the
+    # unit holding its 5' end -- leaving an end above 60, never a negative one.
+    if junction_flags:
+        context = coding_pair
+        start, end = coding_start, coding_end
+    else:
+        context = CANONICAL_UNIT
+
+    name = name_edit(context, start, end, inserted)
+    window = ambiguity_interval(context, start, end, inserted)
+    tract = repeat_form(context, start, end, inserted)
+    norm_start, norm_end, norm_inserted = normalise(context, start, end, inserted)
+    event = _event_of(norm_start, norm_end, norm_inserted)
+    if event == "insertion" and name and "dup" in name:
+        event = "duplication"
+
+    flags: list[str] = list(junction_flags)
+    if window is not None:
+        flags.append(FLAG_POSITION_AMBIGUOUS)
+
+    # Does the motif Kestrel assigned actually look like X where the name lands?
+    span_lo = window[0] if window else start
+    span_hi = window[1] if window else max(end, start)
+    if assigned is None:
+        flags.append(FLAG_MOTIF_CONTEXT_DIVERGES)
+    else:
+        coding_assigned = revcomp(assigned)
+        lo = max(1, span_lo - 1)
+        hi = min(UNIT_LENGTH, span_hi + 1)
+        if coding_assigned[lo - 1 : hi] != CANONICAL_UNIT[lo - 1 : hi]:
+            flags.append(FLAG_MOTIF_CONTEXT_DIVERGES)
+
+    # A single caller never reaches tier A. Tier A requires agreement between two
+    # independent sources (spec §3.3), and the benchmark shows why: Kestrel places
+    # the whole insG family one position 3' of truth, so a lone Kestrel record that
+    # looks perfectly clean still names the wrong allele. Promotion is `reconcile`'s
+    # job; translation only reports what one caller said.
+    return Nomenclature(
+        name=name,
+        event=event,
+        unit=symbol if junction_flags else "X",
+        tier="B",
+        flags=tuple(flags),
+        ambiguity=window,
+        repeat_form=tract,
+        net_length=net,
+        source="kestrel_vcf",
+    )
