@@ -153,13 +153,25 @@ def _at_rule_body(source: str, prelude: str) -> str:
     ``([^{}]+)\\{([^{}]*)\\}`` split used elsewhere in this file cannot see it. This
     walks the braces instead.
 
+    **Comments are stripped here, not by the caller.** Every reader in this file used to
+    be responsible for passing ``_markup()`` output, and one - :func:`_palettes` - passed
+    raw source. Both templates and the token layer document at length what they do, and
+    the token layer's own header comment contains the words ``@media print``: the search
+    found the prose, took the next ``{`` after it, and returned the *light* ``:root``
+    body as the print block. The whole light palette then went unmeasured. An asymmetry
+    that only one of five callers got wrong is a property of this function, not of that
+    caller, so it lives here now and no caller can reintroduce it.
+
     Args:
-        source: A template's source text.
+        source: A template's source text, with or without its comments.
         prelude: The at-rule's prelude, e.g. ``"@media print"``.
 
     Returns:
-        str: Everything between the rule's braces, or "" when it is absent.
+        str: Everything between the rule's braces, or "" when it is absent. The text
+        returned is from the comment-stripped source, so a caller subtracting it from
+        its own input must strip comments too.
     """
+    source = _COMMENT.sub("", source)
     start = source.find(prelude)
     if start == -1:
         return ""
@@ -320,10 +332,21 @@ def _palettes() -> dict[str, dict[str, str]]:
     light palette updated with its own overrides - which is also the only way to notice
     a redefinition that *removes* a token the light palette had.
 
+    The source is comment-stripped **before** the two media bodies are located and
+    subtracted from it. Both halves matter and neither is belt-and-braces for the
+    other: locating on raw source found the words ``@media print`` in the token layer's
+    header comment and returned the light ``:root`` as the print block, and subtracting
+    a comment-stripped body from raw source would find no match and leave the print
+    palette's ``:root`` in the light one. Either way "light" stopped being the light
+    palette. :func:`_at_rule_body` now strips on the way in; this strips on the way in
+    as well so that ``str.replace`` has something to match.
+    ``test_a_palette_is_the_palette_it_names`` is the guard.
+
     Returns:
         dict[str, dict[str, str]]: ``light``, ``dark`` and ``print`` -> token -> colour.
     """
-    source = SHARED_PARTIAL.read_text(encoding="utf-8") if SHARED_PARTIAL.is_file() else ""
+    raw = SHARED_PARTIAL.read_text(encoding="utf-8") if SHARED_PARTIAL.is_file() else ""
+    source = _COMMENT.sub("", raw)
     dark = _at_rule_body(source, "@media (prefers-color-scheme: dark)")
     printed = _at_rule_body(source, "@media print")
 
@@ -340,17 +363,50 @@ def _palettes() -> dict[str, dict[str, str]]:
     }
 
 
+#: A ``<script>`` element with a body of its own, i.e. not a ``src=`` include.
+_INLINE_SCRIPT = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.DOTALL)
+
+#: A JavaScript line comment. ``_COMMENT`` handles the block form; the templates' own
+#: JavaScript is commented with ``//`` and those comments are prose - they name the
+#: literals they replaced (``red``, ``green``) and the issue numbers they cite look like
+#: hex colours (``#242``, ``#216``, ``#207``). Scanning them would make an accurate
+#: comment fail the build and reward deleting it, which is the same rule ``_COMMENT``
+#: exists for. The lookbehind keeps a ``https://`` inside a string from eating the rest
+#: of its line.
+_JS_LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")
+
+
 def _paint_declarations() -> list[tuple[str, str, str]]:
     """Every colour a rendered report paints text or a surface with.
 
-    Two sources, because the report's colour comes from two places: the stylesheets in
-    the templates (the shared partial included), and the inline ``style`` attributes
-    ``report_formatting`` and ``cohort_tables`` build into table cells.
+    **Three sources, and the third is the one that was missing.** The report's colour
+    comes from the stylesheets in the templates (the shared partial included), from the
+    inline ``style`` attributes ``report_formatting`` and ``cohort_tables`` build into
+    table cells, and from the templates' own JavaScript. The cohort report's
+    ``updateFlagColumn`` repainted its flag glyph at runtime with a literal ``red``
+    (4.00:1) and ``green`` for a whole release, in the one place a scan of ``<style>``
+    blocks and Python constants could never see - a guard that claims every colour
+    resolves through ``:root`` has to read the scripts too, and the failure mode of not
+    reading them is silent.
 
-    ``@page`` bodies are excluded. Their margin boxes sit outside the document tree and
-    whether a ``:root`` custom property reaches them was not measured in the supported
-    engine, so the page number keeps a literal grey rather than a token that might
-    resolve to nothing.
+    Script bodies are scanned for colour *literals* rather than for declarations,
+    because a colour reaches the DOM from JavaScript in too many shapes to enumerate
+    (``.css({...})``, ``style.color =``, ``setProperty``, a class name built from a
+    string). Anything that looks like a CSS colour in a script is reported; the price
+    is that a script that legitimately needed the word "red" would have to say so.
+
+    **What this deliberately does not cover, and where it lives instead:**
+
+    * ``@page`` margin boxes, in this file's stylesheets *and* in
+      ``report_identity.print_running_header_css``, which builds a whole ``@page`` rule
+      in Python. A margin box sits outside the document tree, whether a ``:root``
+      custom property reaches one was not measured in the supported engine, and both
+      places carry the same deliberate ``#333333``. Excluded here rather than silently
+      passing.
+    * Bootstrap's and DataTables' own stylesheets. They are third-party, they arrive
+      from a CDN, and they leave with the CDN tags in the next change. Where their
+      cascade would show through, the token layer restates the token value at a
+      higher specificity; that is a fact about the shipped rules, not about this scan.
 
     Returns:
         list[tuple[str, str, str]]: ``(where, property, value)`` for each declaration.
@@ -360,10 +416,14 @@ def _paint_declarations() -> list[tuple[str, str, str]]:
     for template in (*TEMPLATES, SHARED_PARTIAL):
         if not template.is_file():
             continue
-        for block in _style_blocks(_COMMENT.sub("", template.read_text(encoding="utf-8"))):
+        source = _COMMENT.sub("", template.read_text(encoding="utf-8"))
+        for block in _style_blocks(source):
             page_rule = _at_rule_body(block, "@page")
             scanned = block.replace(page_rule, "") if page_rule else block
             found += [(template.name, name, value) for name, value in _PAINT_DECLARATION.findall(scanned)]
+        for script in _INLINE_SCRIPT.findall(source):
+            code = _JS_LINE_COMMENT.sub("", script)
+            found += [(f"{template.name} (script)", "colour literal", literal) for literal in _literal_colours(code)]
 
     for where, markup in _rendered_inline_styles():
         for style in re.findall(r'style="([^"]*)"', markup):
@@ -491,13 +551,69 @@ def test_every_token_pair_meets_wcag_aa() -> None:
     assert failures == [], f"token pairs below {WCAG_AA_NORMAL_TEXT}:1 for normal text: {failures}"
 
 
+def test_an_at_rule_named_only_in_a_comment_is_not_a_rule() -> None:
+    """:func:`_at_rule_body` reads CSS, and prose about CSS is not CSS.
+
+    Both templates and the token layer document at length what they do, and the token
+    layer's header comment contains the words ``@media print``. Searching raw source
+    found that prose, took the next ``{`` after it - the opening brace of ``:root`` -
+    and returned the light palette as the print block. Synthetic input here rather than
+    the shipped file, so the guard keeps meaning after the comment is reworded.
+    """
+    real = (
+        "{# there is exactly one @media print block #}\n<style>\n@media print { :root { --ink: #000000; } }\n</style>"
+    )
+    assert "--ink: #000000" in _at_rule_body(real, "@media print")
+
+    prose_only = "<!-- the @media print block lives in the token layer -->\n<style>\nbody { color: red; }\n</style>"
+    assert _at_rule_body(prose_only, "@media print") == "", "prose naming an at-rule was read as the rule"
+
+
+def test_a_palette_is_the_palette_it_names() -> None:
+    """The collapse that made the assertion above vacuous, guarded at its cause.
+
+    ``_palettes`` located ``@media print`` in raw source, matched the token layer's own
+    header comment, and returned the light ``:root`` as the print body - which it then
+    subtracted, so "light" was rebuilt from the *print* block. Measured:
+    ``palettes["light"] == palettes["print"]``, the light palette every on-screen reader
+    sees was never measured at all, and restoring ``--ink: #ffffff`` on
+    ``--sunken: lightskyblue`` - the 1.72:1 pair this task exists to remove - left
+    ``test_every_token_pair_meets_wcag_aa`` green.
+
+    Nothing here transcribes a colour. It asserts that the three palettes are three,
+    and that each redefining block actually redefines something relative to light.
+    """
+    source = _COMMENT.sub("", SHARED_PARTIAL.read_text(encoding="utf-8"))
+    overrides = {
+        "dark": _root_tokens(_at_rule_body(source, "@media (prefers-color-scheme: dark)")),
+        "print": _root_tokens(_at_rule_body(source, "@media print")),
+    }
+    palettes = _palettes()
+
+    inks = {name: palette.get("--ink") for name, palette in palettes.items()}
+    assert len(set(inks.values())) == 3, f"the three palettes do not have three inks: {inks}"
+
+    for name, tokens in overrides.items():
+        assert tokens, f"the {name} block redefines no colour token at all"
+        differing = [token for token in tokens if palettes["light"].get(token) != tokens[token]]
+        assert differing, (
+            f'every token the {name} block redefines already carries that value in "light", so "light" '
+            f"was rebuilt from the {name} block and the palette on screen is never measured"
+        )
+
+
 def test_no_report_colour_is_declared_outside_the_token_layer() -> None:
     """The other half: a token layer nothing uses proves nothing.
 
-    Every ``color`` and ``background`` the two reports paint with has to resolve through
-    ``:root``, or the test above measures a palette the page does not use. This is the
-    check that fails when a literal comes back - which is how ``lightskyblue`` and
-    ``orange`` survived every previous accessibility pass.
+    Every ``color`` and ``background`` the two reports paint with - from a stylesheet,
+    from an inline ``style`` this codebase builds, or from their own JavaScript - has to
+    resolve through ``:root``, or the test above measures a palette the page does not
+    use. This is the check that fails when a literal comes back, which is how
+    ``lightskyblue`` and ``orange`` survived every previous accessibility pass, and how
+    the cohort report's runtime-painted flag glyph survived one more.
+
+    :func:`_paint_declarations` states exactly what is scanned and what is not; read it
+    before treating a green run here as "no literal colour exists anywhere".
     """
     surface = _palettes()["light"].get("--surface", _ASSUMED_PAGE_BACKGROUND)
     offenders = [
@@ -697,6 +813,63 @@ def test_no_confidence_value_is_distinguished_by_colour(renderer: str, value: st
     assert rf.CONFIDENCE_CLASSES[value] in markup, f"{renderer} drops the class the stylesheet hangs on: {markup}"
 
 
+# ---------------------------------------------------------------------------
+# The Kestrel column order - an output-format migration
+#
+# `docs/user-guide/output-files.md` records the move of `Motif_sequence` to the
+# end as a breaking change for anything scraping the report by column position.
+# Nothing enforced it: `test_report_formatting.py`'s
+# `test_every_displayed_column_declares_how_its_value_is_rendered` compares
+# *sets*, and the two browser guards were deliberately made order-agnostic, so
+# putting the column back where it was passed the whole suite while the
+# documentation went on promising otherwise.
+# ---------------------------------------------------------------------------
+
+
+def test_the_motif_sequence_is_the_last_kestrel_column() -> None:
+    """The real motif is 121 bp; the 13-character unit fixture is not representative.
+
+    Sixth, it pushed ``Confidence`` and ``Flag`` off a 1280px screen - the two columns
+    a reader opens the report for became the ones that scrolled, while the widest and
+    least-scanned column sat in the middle. Last, it is the column that scrolls.
+    """
+    order = list(rf.KESTREL_DISPLAY_COLUMNS)
+
+    assert order[-1] == "Motif_sequence", (
+        f"`Motif_sequence` is not the last Kestrel display column: {order}. "
+        "docs/user-guide/output-files.md records that position as an output-format migration."
+    )
+
+
+def test_the_flag_column_precedes_the_motif_sequence() -> None:
+    """Stated separately because it is the half that survives a future column.
+
+    A twelfth column appended after ``Motif_sequence`` would break the assertion above
+    and might legitimately be the right thing to do; what may not happen is
+    ``Motif_sequence`` going back in front of the two columns the move was made for.
+    """
+    order = list(rf.KESTREL_DISPLAY_COLUMNS)
+
+    assert order.index("Flag") < order.index("Motif_sequence")
+    assert order.index("Confidence") < order.index("Motif_sequence")
+
+
+def test_the_column_order_migration_is_documented() -> None:
+    """An output-format change a user can be broken by is recorded where they read.
+
+    The pairing is the point: the test above pins the order, and this pins that the
+    order is written down. Changing one without the other is what turns a migration
+    note into a promise nobody kept.
+    """
+    migration = (Path(vntyper.__file__).resolve().parents[1] / "docs" / "user-guide" / "output-files.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Motif_sequence` is now the **last** column" in migration, (
+        "docs/user-guide/output-files.md no longer records the Kestrel column-order migration"
+    )
+
+
 @pytest.mark.parametrize("value", sorted(rf.CONFIDENCE_CLASSES))
 def test_the_confidence_label_is_always_present_as_text(value: str) -> None:
     """Whatever the styling does, the value itself is words in the cell."""
@@ -810,17 +983,26 @@ def test_the_rules_both_reports_need_are_declared_once() -> None:
         )
 
 
-def test_print_unsets_the_truncation_clamp() -> None:
-    """``.table td`` clamps to 150px with ``overflow: hidden`` and reveals on hover.
+def test_print_unsets_every_screen_width_constraint_on_a_cell() -> None:
+    """Nothing the screen does to make a cell fit may reach paper.
 
-    The motif sequence is 121 bp in real data and paper has no hover, so the archived
-    record carried a truncated sequence with an ellipsis where the evidence was.
+    The clamp this originally guarded - ``max-width: 150px`` with ``overflow: hidden``
+    and a ``:hover`` reveal - is **gone**, not moved: it put the 121 bp motif sequence
+    behind a pointer and out of the archived PDF entirely, and its ``td:last-child``
+    exception would have swapped from the ``Flag`` reason to the motif when
+    ``Motif_sequence`` moved last. What remains on screen is a soft wrap boundary
+    (``max-width: 44ch``), a ``white-space: nowrap`` on the flag phrase so "Not flagged"
+    is not read as two facts, and ``.table-container``'s horizontal scroll.
+
+    All three are screen affordances, and paper has none of them, so the print block
+    still has to unset all three. These assertions did not change when the clamp went;
+    only what they are protecting the reader from did.
     """
     block = _print_block()
 
     assert "max-width: none" in block
     assert "white-space: normal" in block
-    assert "overflow: visible" in block, "the cell is still clipped by overflow: hidden"
+    assert "overflow: visible" in block, "a cell or its scroll container is still clipped in print"
 
 
 def test_print_gives_an_unbroken_sequence_somewhere_to_break() -> None:

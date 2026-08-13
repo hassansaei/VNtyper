@@ -643,7 +643,15 @@ def test_every_divergence_from_the_online_rendering_is_a_declared_one(case: Nume
 
 
 def test_every_displayed_column_declares_how_its_value_is_rendered() -> None:
-    """A new display column must state its formatter rather than inherit a default."""
+    """A new display column must state its formatter rather than inherit a default.
+
+    **Sets, deliberately - so this says nothing about column order.** The order is an
+    observable output format recorded as a migration in
+    ``docs/user-guide/output-files.md``, and it is pinned by
+    ``test_report_presentation.py::test_the_motif_sequence_is_the_last_kestrel_column``
+    and ``::test_the_flag_column_precedes_the_motif_sequence``. Reading this comparison
+    as an order check is how the move went unenforced for a commit.
+    """
     assert set(rf.KESTREL_CELL_FORMATS) == set(rf.KESTREL_DISPLAY_COLUMNS)
     assert set(rf.ADVNTR_CELL_FORMATS) == set(rf.ADVNTR_DISPLAY_COLUMNS)
 

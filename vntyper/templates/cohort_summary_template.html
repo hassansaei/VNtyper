@@ -165,6 +165,15 @@
           // a screen reader skips outright. That is strictly worse than the bare
           // glyph this replaced, because a bare ✓ at least announces as a
           // character. So the empty case is named for what it is.
+          //
+          // The mark carries classes, not a colour. It used to be
+          // `.css({color: isClean ? 'green' : 'red'})`, which repainted the glyph at
+          // runtime with a literal `red` at 4.00:1 against the page - the same defect
+          // `report_formatting.flag_html` was fixed for, surviving here because a
+          // stylesheet guard cannot see into a script. The two classes land on one
+          // element because this cell is required to hold exactly one `<span>`
+          // (`tests/browser/test_cohort_flag_marks.py`); the shared token layer matches
+          // that shape as well as the nested one the per-sample report builds.
           var isClean = (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "");
           var markName = originalText === "" ? "No flag recorded" : originalText;
           var $mark = $('<span>')
@@ -172,7 +181,7 @@
               .attr('title', originalText)
               .attr('role', 'img')
               .attr('aria-label', markName)
-              .css({ 'color': isClean ? 'green' : 'red', 'font-size': '16px' })
+              .addClass(isClean ? 'flag-clean flag-glyph' : 'flag-flagged flag-glyph')
               .text(isClean ? '✓' : '✖');
           $flagCell.empty().append($mark);
         }

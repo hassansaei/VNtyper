@@ -121,8 +121,33 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved four times, and each reason is recorded here because a changed
+#: It has moved five times, and each reason is recorded here because a changed
 #: fingerprint with no explanation should be read as the worst case.
+#:
+#: Move 5 (#242, task 7 review - the runtime-painted flag glyph)
+#: -------------------------------------------------------------
+#: * **Old**: ``e99096fe0db6105b39de0b0b216bc57ec6a968004431a4c0a7d34061db4b0dfc``
+#: * **New**: ``7240600f1c89ffa78a9d26882e977ea3ff60db08702e864bac90f0c01adc4a15``
+#:
+#: **Cause: two selectors and three CSS comments.** ``updateFlagColumn`` was still
+#: painting this report's flag glyph in the browser with
+#: ``.css({color: isClean ? 'green' : 'red'})`` - a literal ``red`` at 4.00:1 against
+#: the page, the same defect ``report_formatting.flag_html`` was fixed for, surviving in
+#: the one place a stylesheet scan cannot see. The mark now carries
+#: ``flag-clean flag-glyph`` / ``flag-flagged flag-glyph`` and the shared token layer
+#: gained ``.flag-clean.flag-glyph`` and ``.flag-flagged.flag-glyph`` so that one
+#: element carrying both classes is coloured, as well as the nested shape the per-sample
+#: report builds. The three comments correct the "No zebra" claim (it was true of
+#: neither report; it is now true of the per-sample one and the cohort's stripes are
+#: named as deliberate) and record why ``.confidence`` is a class rather than a pill.
+#:
+#: **Verified before it was moved**, by rendering the branch tip's two template files
+#: from ``git show`` through ``paths.template_dir`` and diffing the canonical documents:
+#: five hunks, all inside ``[SKELETON]`` and all after line 342. ``[TABLES]``,
+#: ``[CHART-VALUES]``, ``[CHART-LABELS]``, ``[CHART-TOTALS]`` and ``[IMAGES]`` are
+#: byte-identical, and the change to ``updateFlagColumn`` itself does not appear at all
+#: because ``_skeleton`` replaces every script body with ``<SCRIPT-BODY>`` -
+#: ``tests/browser/test_cohort_flag_marks.py`` is what measures that half.
 #:
 #: Move 4 (#242 - the printed running header)
 #: ------------------------------------------
@@ -265,7 +290,7 @@ pytestmark = pytest.mark.unit
 #: neither. The evidence for that fix is
 #: `test_cohort_inputs.py::test_processes_with_different_hash_seeds_discover_the_same_order`,
 #: which spawns five interpreters under five seeds, and it covers directory inputs only.
-EXPECTED_FINGERPRINT = "e99096fe0db6105b39de0b0b216bc57ec6a968004431a4c0a7d34061db4b0dfc"
+EXPECTED_FINGERPRINT = "7240600f1c89ffa78a9d26882e977ea3ff60db08702e864bac90f0c01adc4a15"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")

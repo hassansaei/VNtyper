@@ -196,8 +196,18 @@ thead th.num button { justify-content: flex-end; }
 }
 th { white-space: pre-wrap; }
 
-/* No zebra. A stripe competes with the one row treatment that carries meaning,
-   and `#f2f2f2` under an inline `orange` was the 1.76:1 pair. */
+/* No zebra in the per-sample report: a stripe competes with the one row treatment
+   in those tables that carries meaning, the flagged-value highlight, and `#f2f2f2`
+   under an inline `orange` was the 1.76:1 pair. There is no rule here to say that
+   with - `table-striped` is a Bootstrap class and the fix is to stop emitting it,
+   which `generate_report.PER_SAMPLE_TABLE_CLASSES` does. A rule here could not have
+   done it anyway: `.table-striped tbody tr:nth-of-type(odd)` is (0,2,2) and outranks
+   the row background below.
+
+   The **cohort** report still emits it (`cohort_tables.TABLE_CLASSES`), so its tables
+   are still striped. That is deliberate rather than missed: a cohort table is a triage
+   scan across samples, its flagged rows are filtered rather than tinted, and its look
+   is not this change's business. */
 
 /* Bootstrap 4.5 sets `.table { color: #212529 }` and DataTables sets
    `table.dataTable tbody tr { background-color: #fff }`. Both come from a CDN
@@ -246,9 +256,17 @@ table.dataTable tbody tr:hover { background-color: var(--sunken); }
 .flag-clean,
 .flag-flagged { white-space: nowrap; }
 .flag-glyph { font-weight: 700; }
+/* Two shapes, one colour source. The per-sample report nests the glyph inside the
+   wrapper (`report_formatting.flag_html`); the cohort report rebuilds its flag cell in
+   the browser and its cell is required to hold exactly one `<span>`, so there the two
+   classes land on the same element. Matching both is what let `updateFlagColumn` stop
+   painting the mark itself with `.css({color: 'red'})` at runtime - a literal `red` at
+   4.00:1, in the one place a stylesheet guard cannot see. */
 .flag-flagged .flag-glyph,
+.flag-flagged.flag-glyph,
 .flag-flagged .flag-reason { color: var(--state-caution); }
-.flag-clean .flag-glyph { color: var(--state-ok); }
+.flag-clean .flag-glyph,
+.flag-clean.flag-glyph { color: var(--state-ok); }
 .flag-clean .flag-reason { color: var(--ink-muted); }
 
 /* --- confidence -----------------------------------------------------------
@@ -260,7 +278,17 @@ table.dataTable tbody tr:hover { background-color: var(--sunken); }
    "something is wrong" and nothing else, and the difference between the two
    values is the word, which is the only channel that survives greyscale, print
    and a red-green deficiency alike. The class is the hook a deployment can style
-   against; the shipped report gives it no hue. */
+   against; the shipped report gives it no hue.
+
+   **It is a class, not a pill, and that is a decision rather than an omission.** The
+   task brief called for "a pill class"; the visual contract it points at renders
+   Confidence as plain unstyled text in the variant table it shows, and declares no
+   `.confidence` rule at all. The contract wins, because a bordered chip on every line of
+   a results table is furniture competing with the flagged-value treatment - the
+   same argument that removed the zebra. What is kept from the brief is the class, which
+   is what the tests assert and what a deployment restyles. The one declaration is
+   weight: the verdict column is the one a reader scans for, and weight is a non-colour
+   channel. */
 .confidence { font-weight: 600; }
 
 /* --- controls -------------------------------------------------------------

@@ -100,6 +100,18 @@ NOT_CALCULATED = "Not calculated"
 KESTREL_ROW_NOUN = "Kestrel"
 ADVNTR_ROW_NOUN = "adVNTR"
 
+#: CSS classes on both per-sample results tables. Named once so the two cannot drift.
+#:
+#: **No ``table-striped``** (#242). Bootstrap's
+#: ``.table-striped tbody tr:nth-of-type(odd)`` is specificity (0,2,2) and outranks the
+#: token layer's own row background, so the stripe won wherever it was applied - and a
+#: stripe competes with the one row treatment in these tables that carries meaning, the
+#: flagged-value highlight. It was also the ``#f2f2f2`` under the old inline ``orange``
+#: that measured 1.76:1. The cohort report keeps it for now
+#: (``cohort_tables.TABLE_CLASSES``): its tables are a triage scan across samples rather
+#: than a single patient's evidence, and changing its look is not this change's business.
+PER_SAMPLE_TABLE_CLASSES = "table table-bordered hover compact table-sm"
+
 
 def load_pipeline_summary(summary_file_path):
     """
@@ -624,7 +636,7 @@ def generate_summary_report(
     # empty box under the heading - and every cell was escaped a step earlier instead.
     kestrel_html = escaped_table_html(
         kestrel_df,
-        classes="table table-bordered table-striped hover compact order-column table-sm",
+        classes=PER_SAMPLE_TABLE_CLASSES + " order-column",
         html_columns=("Confidence", "Flag"),
         table_id="kestrel_table",
     )
@@ -654,7 +666,7 @@ def generate_summary_report(
             advntr_display["Flag"] = advntr_display["Flag"].apply(flag_html)
         advntr_html = escaped_table_html(
             advntr_display,
-            classes="table table-bordered table-striped hover compact table-sm",
+            classes=PER_SAMPLE_TABLE_CLASSES,
             html_columns=("Flag",),
         )
         advntr_row_summary = row_count_statement(len(advntr_df), flagged_row_count(advntr_df), noun=ADVNTR_ROW_NOUN)
