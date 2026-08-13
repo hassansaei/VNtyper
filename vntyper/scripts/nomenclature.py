@@ -27,12 +27,11 @@ Research use only.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 __all__ = [
     "CANONICAL_UNIT",
     "MOTIFS",
-    "PAIRS",
+    "pair_sequence",
     "UNIT_LENGTH",
     "Nomenclature",
     "ambiguity_interval",
@@ -62,49 +61,79 @@ FLAG_LENGTH_TRUNCATED = "length-truncated"
 
 _COMPLEMENT = str.maketrans("ACGTacgtNn", "TGCAtgcaNn")
 
-_REFERENCE_DIR = Path(__file__).resolve().parents[2] / "reference"
-_MOTIF_FASTA = _REFERENCE_DIR / "MUC1_motifs_Rev_com.fa"
-_PAIR_FASTA = _REFERENCE_DIR / "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa"
+#: Motif symbol -> 60 bp unit on the genomic plus strand, as Kestrel sees it.
+#:
+#: Embedded rather than read from ``reference/MUC1_motifs_Rev_com.fa`` because that
+#: directory is downloaded, not checked in: importing this module from a fresh clone
+#: or an installed wheel must not depend on it. ``tests`` asserts this table is
+#: byte-identical to the shipped FASTA whenever that FASTA is present, so the two
+#: cannot drift.
+#:
+#: The 551-record pair reference is deliberately *not* embedded: every one of its
+#: records is ``seq(R) ++ seq(L)`` over these same 34 motifs -- verified across all
+#: 551 -- so :func:`pair_sequence` derives it and 69 kB of duplication is avoided.
+MOTIFS: dict[str, str] = {
+    "1": "CACAGCATTCTTCTCAGTAGAGCTGGGCACTGAACTTCTCTGGGTAGCCGAAGTCTCCTT",
+    "2": "CTGAGTGGTGGAGGAGCCTGAACCGGGGCTGTGGCTGGAGAGTACGCTGCTGGTCATACT",
+    "3": "CCAGGTGGCAGCTGAACCTGAAGCTGGTTCCGTGGCCGGGGCCAGAGTGACATCCTGTCC",
+    "4": "TGGCGGGGTGGTGGAGCCCAGGGCTGGCCTGGTGACTGGGACCGAGGTGACATCCTGTCC",
+    "4p": "TGGTGGGGTGGTGGAGCCCAGGGCTGGCCTGGTGACTGGGACCGAGGTGACATCCTGTCC",
+    "5": "TGGGGGGGCGGTGGAGCCCGGGGCTGGCTTGTTGTCCGGGGCTGAGGTGACATCGTGGGC",
+    "5C": "TTGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCTGAGGTGACATCGTGGGC",
+    "X": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "A": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
+    "B": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
+    "C": "TTGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "D": "TGGGGGGGCGGTGGAGCCCGGGGCGGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "E": "TGCGGGCGCGGTGGAGCCCGGGGCGGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "F": "TGTGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "G": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "H": "TGGGGCGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "I": "TGGGGGCGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "J": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGTGCCGAGGTGACACCGTGGGC",
+    "K": "TGGGGGGGCGGTGGAGCCCAGGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
+    "V": "TGGGGGTGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "W": "CGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "6": "CGGGGCCGGGGTGGAGCCCGGGGCCCGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "6p": "CGGGGCCGGGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "7": "CGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGCTGGGGGGGCGGTGGAGCC",
+    "8": "CAAGGCGGGCCTGTTGTCCGGGGCCGAGGTGACACCATGGGCTGGGGGGGCGGTGGAGCC",
+    "9": "TGAGCCTGATGCAGAGCCTGAGGCCGAGGTGACATTGTGGACTGGAGGGGCGGTGGAGCC",
+    "L": "TGGGGCGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCTGAGGTGACACCGTGGGC",
+    "M": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGTGCCGAGGTGACACCGTGGGC",
+    "N": "TGGGGGGGCGGTGGAGCCCGTGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
+    "O": "TGGGGGGGCGGTGGAGCCTGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "P": "TGGGGGGGCGGTGGAGCCCGGGGCTGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "Q": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACTGTGGGC",
+    "R": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGTGCCCGAGGTGACACCGTGGGC",
+    "S": "TGCGGGGGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCTGAGGTGACACCGTGGGC",
+}
+
+#: Where the embedded table came from, for the provenance test.
+MOTIF_FASTA_NAME = "MUC1_motifs_Rev_com.fa"
 
 
-def _read_fasta(path: Path) -> dict[str, str]:
-    """Parse a small FASTA into ``{name: sequence}``.
+def pair_sequence(motifs: str) -> str | None:
+    """Build the 120 bp Kestrel pair reference for a ``<L>-<R>`` label.
 
-    Deliberately hand-rolled: this runs once at import and adding Biopython for it
-    would be a new dependency for twenty lines of work.
+    A pair record holds ``seq(R) ++ seq(L)`` -- reverse-complementing it therefore
+    swaps the halves as well as the strand, so the coding pair reads
+    ``coding(L) ++ coding(R)``.
 
     Args:
-        path: The FASTA file.
+        motifs: The ``Motifs`` field, e.g. ``S-C``.
 
     Returns:
-        dict[str, str]: Record name (first whitespace-delimited token) to sequence.
-        Empty when the file is absent, so importing this module never fails on a
-        checkout whose reference data has not been downloaded.
+        str | None: The 120 bp plus-strand sequence, or ``None`` when the label is
+        malformed or names a motif that does not exist.
     """
-    if not path.is_file():
-        return {}
-
-    records: dict[str, str] = {}
-    name: str | None = None
-    chunks: list[str] = []
-    for line in path.read_text().splitlines():
-        if line.startswith(">"):
-            if name is not None:
-                records[name] = "".join(chunks)
-            name = line[1:].strip().split()[0] if line[1:].strip() else ""
-            chunks = []
-        elif line.strip():
-            chunks.append(line.strip())
-    if name is not None:
-        records[name] = "".join(chunks)
-    return records
-
-
-#: Motif symbol -> 60 bp unit on the genomic plus strand, as Kestrel sees it.
-MOTIFS: dict[str, str] = _read_fasta(_MOTIF_FASTA)
-
-#: Pair name ``<L>-<R>`` -> its 120 bp sequence, which is ``seq(R) ++ seq(L)``.
-PAIRS: dict[str, str] = _read_fasta(_PAIR_FASTA)
+    left, _, right = motifs.partition("-")
+    if not _:
+        return None
+    left_seq, right_seq = MOTIFS.get(left), MOTIFS.get(right)
+    if left_seq is None or right_seq is None:
+        return None
+    return right_seq + left_seq
 
 
 def revcomp(sequence: str) -> str:
@@ -499,7 +528,7 @@ def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
     """
     net = len(alt) - len(ref)
 
-    pair = PAIRS.get(motifs)
+    pair = pair_sequence(motifs)
     if pair is None or not 1 <= pos <= len(pair) or not ref or not alt:
         return _undetermined("insertion" if net > 0 else "deletion", net, "kestrel_vcf", ())
 

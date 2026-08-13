@@ -9,11 +9,22 @@ strand, so naming happens after a reverse complement into the coding frame.
 Research use only.
 """
 
+from pathlib import Path
+
 import pytest
 
-from vntyper.scripts.nomenclature import CANONICAL_UNIT, MOTIFS, PAIRS, from_kestrel
+from vntyper.scripts.nomenclature import (
+    CANONICAL_UNIT,
+    MOTIF_FASTA_NAME,
+    MOTIFS,
+    from_kestrel,
+    pair_sequence,
+    revcomp,
+)
 
 pytestmark = pytest.mark.unit
+
+_REFERENCE = Path(__file__).resolve().parents[2] / "reference"
 
 
 # ---------------------------------------------------------------------------
@@ -21,17 +32,76 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def test_the_reference_tables_are_the_shipped_ones() -> None:
+def test_the_motif_table_is_complete() -> None:
     assert len(MOTIFS) == 34
-    assert len(PAIRS) == 551
     assert all(len(unit) == 60 for unit in MOTIFS.values())
 
 
-def test_a_pair_record_is_right_then_left() -> None:
+def test_canonical_x_is_the_reverse_complement_of_plus_x() -> None:
+    """The two frames must describe one unit, or every name is off by a strand."""
+    assert revcomp(MOTIFS["X"]) == CANONICAL_UNIT
+
+
+def test_the_embedded_table_matches_the_shipped_fasta() -> None:
+    """Provenance: the embedded table is a copy, so prove it has not drifted.
+
+    ``reference/`` is downloaded rather than checked in, so this skips where it is
+    absent -- but where it exists, the two must agree byte for byte.
+    """
+    fasta = _REFERENCE / MOTIF_FASTA_NAME
+    if not fasta.is_file():
+        pytest.skip(f"{MOTIF_FASTA_NAME} not installed")
+
+    shipped: dict[str, str] = {}
+    name = None
+    chunks: list[str] = []
+    for line in fasta.read_text().splitlines():
+        if line.startswith(">"):
+            if name:
+                shipped[name] = "".join(chunks)
+            name, chunks = line[1:].strip().split()[0], []
+        elif line.strip():
+            chunks.append(line.strip())
+    if name:
+        shipped[name] = "".join(chunks)
+
+    assert MOTIFS == shipped
+
+
+def test_a_pair_is_right_then_left() -> None:
     """``S-C`` is seq(C) ++ seq(S), not seq(S) ++ seq(C)."""
-    pair = PAIRS["S-C"]
+    pair = pair_sequence("S-C")
+    assert pair is not None
     assert pair[:60] == MOTIFS["C"]
     assert pair[60:] == MOTIFS["S"]
+
+
+def test_every_shipped_pair_record_is_derivable_from_the_motifs() -> None:
+    """The 551-record pair FASTA is not embedded because it is redundant.
+
+    If a single record disagreed, deriving it would silently name against the
+    wrong reference, so this proves the redundancy across all 551.
+    """
+    fasta = _REFERENCE / "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa"
+    if not fasta.is_file():
+        pytest.skip("pair FASTA not installed")
+
+    records: dict[str, str] = {}
+    name = None
+    chunks: list[str] = []
+    for line in fasta.read_text().splitlines():
+        if line.startswith(">"):
+            if name:
+                records[name] = "".join(chunks)
+            name, chunks = line[1:].strip().split()[0], []
+        elif line.strip():
+            chunks.append(line.strip())
+    if name:
+        records[name] = "".join(chunks)
+
+    assert len(records) == 551
+    mismatched = [key for key, value in records.items() if pair_sequence(key) != value]
+    assert mismatched == []
 
 
 # ---------------------------------------------------------------------------
