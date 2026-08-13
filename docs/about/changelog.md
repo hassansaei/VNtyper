@@ -6,7 +6,45 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.20 (Current)
+## 2.0.21 (Current)
+
+**adVNTR fetched a quarter of the GRCh38 MUC1 array; it now fetches all of it.**
+
+The read-fetch window is not configured anywhere — adVNTR derives it from the model's
+own content. `get_length()` sums the stored repeat units, and that sum was used as a
+genomic end coordinate. The two agree only when the units tile the array end to end
+exactly once, and the shipped hg38 model did not: it carried hg19's units verbatim,
+840 bp for an array GRCh38 holds at 3,525 bp. Anything BWA placed in the remaining 76%
+was never fetched, on every GRCh38 run since the model was moved to that assembly.
+
+Measured on 400 simulated samples (200 carriers / 200 matched non-carriers, ~208x,
+GRCh38): adVNTR detects **132/200 carriers before and 176/200 after**, with the 68
+samples that emitted no state at all reduced to 24. Cost is 2.6x adVNTR wall-clock and
+1.3x peak memory — the HMM is unchanged, only the number of fetched reads grows. Four
+carriers are lost, all the canonical dupC at 12–22 supporting reads against 165–266x
+coverage, where the wider window's larger coverage denominator pushes them past
+`p < 0.001`. That figure is post-selection performance on the model-development cohort,
+not an independent validation estimate.
+
+This requires **adVNTR >= 2.0.4** and reference bundle **refs-v2**, and the pipeline now
+refuses to run rather than genotype with a mismatched pair: an adVNTR predating the
+recorded genomic end would silently reproduce the old window, and a v1 model carries it
+regardless of the binary. `pipeline_summary.json` gains a top-level `advntr_model`
+record — digest, schema version, VID, genomic interval, window and segment shape — so a
+result can be traced to the model that produced it.
+
+Existing installations are unaffected until they reinstall references: bundles are
+pinned by release tag and digest, and refs-v1 remains published.
+
+A rebuilt 53-segment model was also built and measured. It rescues all 24 carriers this
+release still misses but loses 15% of those it detects, projecting no better overall at
+9.1x runtime, so it is not shipped ([#272](https://github.com/hassansaei/VNtyper/issues/272)).
+
+See [#268](https://github.com/hassansaei/VNtyper/issues/268),
+[berntpopp/adVNTR#1](https://github.com/berntpopp/adVNTR/issues/1) and
+[berntpopp/vntyper-data#1](https://github.com/berntpopp/vntyper-data/issues/1).
+
+## 2.0.20
 
 **MUC1 variants are reported by their literature name, with an explicit confidence
 tier.**
