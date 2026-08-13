@@ -2,411 +2,83 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <!--
-      Without this a phone lays the page out at 980px and scales it down: a 390px
-      device rendered the 12.8px body text at an effective ~5.1px (#242). Both
-      report templates were missing it.
-    -->
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ report_title_prefix }} — {{ sample_name }}</title>
     <!-- Include Bootstrap CSS for styling -->
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <!-- Include DataTables CSS for table styling -->
     <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
 
-    <!-- IGV-specific styles -->
-    <style type="text/css">
-        body {
-            font-size: 80%;
-            font-family: 'Lucida Grande', Verdana, Arial, Sans-Serif;
-        }
-    </style>
+    <!--
+      The token layer, and the viewport meta, shared with the cohort report. It is
+      pulled in *after* the two CDN stylesheets on purpose: at equal specificity the
+      later rule wins, which is how the tokens beat Bootstrap's own body and table
+      colours for the one release both are loaded. Everything the two reports share -
+      the colour scale, the type and spacing scales, the switch, the focus ring, the
+      disclosure, the results-table mechanics and the whole print block - lives there.
+      What is left below is what only this report has.
+    -->
+    {% include "_report_base.html" %}
 
-    <!-- IGV selector table style -->
     <style>
-        thead {
-            position: sticky;
-            top: 0;
-        }
+        /* The IGV variant selector table. `tr { cursor: default }` undoes the
+           pointer the old row-level click handler implied; the row is not the
+           control any more, the button in it is. */
         tr {
             cursor: default;
         }
-        tr:nth-child(even) {
-            background-color: #f2f2f2;
-        }
-        tr:hover {
-            background-color: lightblue;
-        }
-        th {
-            background-color: lightskyblue;
-            color: white;
-            cursor: pointer;
-        }
         .selected {
-            background-color: lightblue !important;
-            outline: solid thin darkblue !important;
-        }
-        /* Custom table cell style with character limit */
-        .table td, .table th {
-            text-align: center;
-            word-break: break-word;
-        }
-        .table td {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 150px;
-            cursor: pointer;
-        }
-        .table td:hover {
-            overflow: visible;
-            white-space: normal;
-            max-width: none;
-            position: relative;
-            z-index: 10;
-            background-color: #fff;
-            border: 1px solid #ddd;
-        }
-        th {
-            white-space: pre-wrap;
-        }
-        /* The Flag column is last in both results tables and states its reason in
-           words (#242). The ellipsis rule above would clip that reason, which is
-           the same "the reader cannot see it" defect in a different form. */
-        .table td:last-child {
-            white-space: normal;
-            overflow: visible;
-            max-width: none;
-        }
-        /* "Highlight flagged values" adds this class to the results tables. It is
-           emphasis and nothing else: no rule here, and no script in this file, may
-           take a row out of the reader's view. */
-        .highlight-flagged .flag-flagged {
-            background-color: #ffe0e0;
-            outline: 1px solid #cc0000;
-        }
-        .table-count {
-            font-size: 0.95em;
-            color: #444;
-            margin: 0.25em 0 0.75em 0;
-        }
-        /*
-          Disclosures are native. This used to be a hidden checkbox, a `<label>`
-          styled to look like a header, and a sibling `<div>` whose `max-height`
-          was animated from 0 - which needed `input[type='checkbox'] {display:
-          none}` to work, an unscoped rule that took all four of the page's
-          interactive inputs out of the focus order and out of the accessibility
-          tree at once (#242). `<details>` is focusable, is announced with its
-          open/closed state, is opened by find-in-page and is opened by printing.
-          None of that was true of the thing it replaces.
-        */
-        details {
-            margin-bottom: 1.2rem;
-            border: 1px solid #ccc;
-            border-radius: 7px;
-            background: #fff;
-        }
-        summary {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.75rem 1rem;
-            cursor: pointer;
-            font-weight: bold;
-            font-family: monospace;
-            font-size: 1.1rem;
-            text-transform: uppercase;
-            background: #dddddd;
-            border-radius: 6px;
-            list-style: none;
-        }
-        details[open] > summary {
-            border-bottom-left-radius: 0;
-            border-bottom-right-radius: 0;
-        }
-        summary:hover {
-            color: #00248f;
-        }
-        /* The default marker is replaced, not removed: the triangle below is the
-           same affordance drawn where the flex layout can place it. */
-        summary::-webkit-details-marker {
-            display: none;
-        }
-        summary::before {
-            content: "";
-            width: 0;
-            height: 0;
-            border: 5px solid transparent;
-            border-left-color: currentColor;
-            transition: transform .2s ease-out;
-            flex: none;
-        }
-        details[open] > summary::before {
-            transform: rotate(90deg) translateX(-2px);
-        }
-        .details-body {
-            padding: .5rem 1rem 1rem;
-            max-height: 350px;
-            overflow: auto;
-        }
-        /*
-          The switches. The input itself is the switch - `appearance: none` and a
-          box, rather than a hidden input with a `<label>` drawing a fake one from
-          its pseudo-elements. That is what makes it focusable, announced, and the
-          same control online and offline: it no longer depends on Bootstrap's
-          stylesheet having reached the reader.
-        */
-        .controls {
-            display: flex;
-            flex-wrap: wrap;
-            gap: .5rem 1.5rem;
-            align-items: center;
-            margin-bottom: 1rem;
-        }
-        .switch {
-            display: inline-flex;
-            align-items: center;
-            gap: .5rem;
-            cursor: pointer;
-            margin-bottom: 0;
-        }
-        .switch input {
-            appearance: none;
-            -webkit-appearance: none;
-            margin: 0;
-            width: 2.25rem;
-            height: 1.25rem;
-            border: 1px solid #767676;
-            border-radius: 999px;
-            background: #eeeeee;
-            position: relative;
-            cursor: pointer;
-            flex: none;
-        }
-        .switch input::after {
-            content: "";
-            position: absolute;
-            inset: 2px auto 2px 2px;
-            width: 0.875rem;
-            border-radius: 999px;
-            background: #595959;
-            transition: transform .12s ease, background .12s ease;
-        }
-        .switch input:checked {
-            background: #d7e9ec;
-            border-color: #0f5d6b;
-        }
-        .switch input:checked::after {
-            transform: translateX(1rem);
-            background: #0f5d6b;
-        }
-        .switch-label {
-            font-size: 0.95rem;
-        }
-        /* Focus that cannot be seen is focus that cannot be used. Nothing in this
-           file styled it before, and on a `display: none` input there was no box
-           for the engine's default ring to be drawn around either. */
-        .switch input:focus-visible,
-        summary:focus-visible,
-        button:focus-visible,
-        a:focus-visible {
-            outline: 3px solid #0f5d6b;
-            outline-offset: 2px;
+            background-color: var(--sunken) !important;
+            outline: 2px solid var(--accent) !important;
         }
         /* Per-row control of the IGV variant table. `<tr onclick>` had no keyboard
            path at all; a real button brings Enter, Space and a focus ring free. */
         .variant-select {
             font: inherit;
             padding: .1rem .6rem;
-            border: 1px solid #767676;
-            border-radius: 4px;
-            background: #ffffff;
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            background: var(--surface);
+            color: var(--ink);
             cursor: pointer;
             white-space: nowrap;
         }
         #variant_table tr[aria-selected="true"] .variant-select {
             font-weight: bold;
         }
-        /* A reader who asked their operating system for less motion gets none.
-           The disclosure triangle and the switch knob are the only things that
-           move, and neither carries information. */
-        @media (prefers-reduced-motion: reduce) {
-            *,
-            *::before,
-            *::after {
-                animation: none !important;
-                transition: none !important;
-                scroll-behavior: auto !important;
-            }
-        }
         .summary-box {
-            border: 2px solid #666;
-            padding: 8px;
-            margin: 10px 0;
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            background: var(--surface);
+            padding: var(--s-3);
+            margin: var(--s-3) 0;
         }
         .summary-positive {
             font-weight: bold;
         }
         /* The identity block is also the printed report's header: on paper it is
            the only thing that says whose report this is, so it must not be split
-           across a page boundary. */
+           across a page boundary. The rule that does that is in the print block of
+           the shared token layer. */
         .report-header {
-            margin-bottom: 1em;
+            margin-bottom: var(--s-4);
         }
         /* Style for header info section */
         .header-info {
-            margin-bottom: 1em;
-            padding: 0.5em;
-            border: 1px solid #ddd;
-            background-color: #f9f9f9;
+            margin-bottom: var(--s-4);
+            padding: var(--s-2);
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            background-color: var(--sunken);
         }
         .header-info p {
             margin: 0.5em 0;
         }
-        /*
-          ================== Print is a build target (#242) ==================
-
-          The archived PDF outlives the HTML it came from: it is what gets filed,
-          attached to an email and read years later. Until this block existed
-          neither template contained a single author media rule - measured in the
-          browser, `document.styleSheets` reported `mediaRules: []` - so the
-          printed page inherited every screen affordance, including the ones that
-          exist only because a screen can be hovered and scrolled.
-
-          What the margin boxes may carry was measured in the supported engine
-          rather than assumed. Chromium 151 honours `@page` margin boxes and the
-          `counter(page)`/`counter(pages)` in them, so every sheet is numbered and
-          a truncated print is visible. It does **not** implement `string()`: a
-          `content` list containing one is dropped whole, taking its literal prefix
-          with it, so the identity cannot be carried into the margin from the
-          document. The two ways to put it there anyway are both refused here:
-
-            * interpolating the sample name into this stylesheet - a `<style>` is a
-              raw text element, CSS is not an HTML context, the name is derived from
-              a sample-supplied basename, and the report is a file people forward;
-            * a `position: fixed` header, which Chromium does repeat on every sheet
-              but does not reserve space for, so it lands on top of the first line
-              of every page after the first.
-
-          So the identity is a block at the head of the printed document, written
-          from escaped values like everything else, and the margin boxes carry only
-          what is fixed: the page number.
-        */
-        .print-header {
-            display: none;
-        }
-        @page {
-            size: A4 portrait;
-            margin: 18mm 14mm 18mm;
-            @bottom-right {
-                content: "Page " counter(page) " of " counter(pages);
-                font-size: 8pt;
-                color: #333333;
-            }
-        }
-        @media print {
-            .report-header {
-                break-inside: avoid;
-                page-break-inside: avoid;
-            }
-            /* The printed record's header line: who, what, which assembly, which
-               version, and what the artefact may be used for - above everything
-               else, on the sheet that gets filed. */
-            .print-header {
-                display: block;
-                font-size: 8pt;
-                color: #333333;
-                border-bottom: 0.5pt solid #999999;
-                padding-bottom: 2mm;
-                margin-bottom: 4mm;
-            }
-            /* Controls that cannot be operated on paper. Printing a switch beside
-               its label states an option the reader does not have. */
-            .controls,
-            .no-print {
-                display: none !important;
-            }
-            /* The detailed coverage view is what prints: it carries the eight
-               statistics and the QC verdict that the basic view does not, and on
-               screen it is revealed by a switch that has just been removed. Both
-               would state the mean twice. */
-            #basicCoverageView {
-                display: none !important;
-            }
-            #detailedCoverageView {
-                display: block !important;
-            }
-            /* No clipping, so the whole value prints. `.table td` clamps to 150px
-               with `overflow: hidden` and reveals the rest on `:hover`; the motif
-               sequence is 121 bp in real data and paper has no hover, so the
-               archived record carried an ellipsis where the evidence was.
-               `overflow-wrap: anywhere` is the other half: unsetting the clamp
-               leaves an unbroken 121-character string with nowhere to break, and it
-               overflows the table's own width and is clipped again. Measured in
-               Chromium: 100 of 121 bases without it, all 121 with it. */
-            .table td,
-            .table th,
-            .table td:last-child {
-                white-space: normal !important;
-                overflow: visible;
-                max-width: none;
-            }
-            /* Only the data cells may break inside a word - that is what lets the
-               121 bp sequence fit into eleven columns across 182mm of A4. The
-               headings keep their words whole, which is also what stops the layout
-               squeezing a column narrower than the word naming it: with
-               `word-break: break-word` in force everywhere, "Confidence" printed as
-               "Confidenc e". */
-            .table td {
-                overflow-wrap: anywhere;
-            }
-            .table th {
-                word-break: normal;
-                overflow-wrap: normal;
-            }
-            /* Nothing scrolls on paper, so nothing may be reachable only by
-               scrolling. */
-            .details-body {
-                max-height: none;
-                overflow: visible;
-            }
-            /* A heading at the foot of a page belongs to the table on the next one,
-               and a row split across the fold is a row read twice or not at all. */
-            h2 {
-                break-after: avoid;
-                page-break-after: avoid;
-            }
-            tr {
-                break-inside: avoid;
-                page-break-inside: avoid;
-            }
-            thead {
-                display: table-header-group;
-            }
-            /* Every disclosure prints open. This is the no-JS half of the belt and
-               braces: measured with scripting off, Chromium does *not* reveal a
-               closed `<details>` this way, because the UA hides its content in a
-               way no author rule reaches - the `beforeprint` handler at the foot of
-               this file is what opens them here. The rule is what an engine that
-               honours the author cascade needs, and it costs nothing. */
-            details > summary ~ * {
-                display: block !important;
-            }
-            /* The log is the exception, and it is stated rather than implied: it is
-               pages of DEBUG output, it is in the HTML original either way, and the
-               handler skips it for the same reason. Two class selectors beat the
-               two type selectors above, so this wins without a further
-               `!important` fight. */
-            .log-section > .details-body {
-                display: none !important;
-            }
-            .log-section::after {
-                content: "The full pipeline log is in the HTML original of this report.";
-                display: block;
-                padding: 0 1rem 1rem;
-                font-size: 8pt;
-                color: #333333;
-            }
+        /* The BAM-header warning. It was `style="color: red"` - 3.80:1 against the
+           panel it sits in, on the one genuinely urgent thing the report says. The
+           word "Warning:" and `role="alert"` carry the meaning; the colour is now a
+           state token and is legible in both palettes and on paper. */
+        .header-warning {
+            color: var(--state-finding);
         }
     </style>
 
@@ -499,7 +171,7 @@
                   front of them, and "Warning:" carries the same meaning in words.
                 #}
                 {% if header_warning %}
-                    <p style="color: red;" role="alert"><strong>Warning:</strong> {{ header_warning }}</p>
+                    <p class="header-warning" role="alert"><strong>Warning:</strong> {{ header_warning }}</p>
                 {% endif %}
             </div>
         {% endif %}
@@ -884,20 +556,25 @@
         // test_no_per_sample_result_row_enters_a_hiding_path` and the browser tier
         // both fail if it does.
         $(document).ready(function() {
-            // Sorting and column widths only. Paging, searching and the row-count
-            // footer are off because each of them decides, in the browser, which
-            // rows a reader of a single-patient report is allowed to see. `order` is
-            // empty so the table keeps the order the pipeline wrote it in - the
-            // DataTables default would re-sort it on the first column.
+            // Sorting only. Paging, searching and the row-count footer are off
+            // because each of them decides, in the browser, which rows a reader of a
+            // single-patient report is allowed to see. `order` is empty so the table
+            // keeps the order the pipeline wrote it in - the DataTables default would
+            // re-sort it on the first column.
+            //
+            // No `columnDefs` width either. It set every column to 150px, which is
+            // the "distributing width evenly" that `table { width: auto }` in the
+            // shared token layer exists to stop: eleven fixed columns do not fit
+            // 1108px, so the browser squeezed them all and "Not flagged" wrapped onto
+            // two lines while a 121 bp motif sequence wrapped onto seventeen. Columns
+            // size to their content now and the table scrolls inside
+            // `.table-container` - which is why `Motif_sequence` is the last column.
             $('table:not(#detailedCoverageView table)').DataTable({
                 "paging": false,
                 "searching": false,
                 "info": false,
                 "order": [],
-                "autoWidth": false,
-                "columnDefs": [
-                    { "width": "150px", "targets": "_all" }
-                ]
+                "autoWidth": false
             });
         });
     </script>

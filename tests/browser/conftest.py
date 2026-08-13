@@ -64,6 +64,44 @@ KESTREL_ROW_SELECTOR = "#kestrel_table tbody tr"
 #: How many Kestrel rows the fixture puts in the report.
 EXPECTED_KESTREL_ROWS = 3
 
+
+def kestrel_column_text(heading: str) -> str:
+    """Return JS that reads one visible Kestrel column, keyed on its heading.
+
+    Positional selectors are what this replaces, and they were wrong the moment
+    ``KESTREL_DISPLAY_COLUMNS`` moved ``Motif_sequence`` to the end (#242): the
+    ``Flag`` cell stopped being ``td:last-child`` and ``Depth Score`` stopped being
+    ``td:nth-child(9)``, and both checks went on running against whatever cell had
+    taken the position. Reading the heading row makes the guard say what it means and
+    survive the next reorder, which is also what the migration note in
+    ``docs/user-guide/output-files.md`` tells anyone scraping the report to do.
+
+    Args:
+        heading: The column's heading text, as the report renders it.
+
+    Returns:
+        str: A JavaScript expression for ``eval_on_selector_all`` over
+        :data:`KESTREL_ROW_SELECTOR`, evaluating to one whitespace-normalised string
+        per visible row. A row with no such column yields ``""``.
+    """
+    return f"""
+els => {{
+    const table = els.length ? els[0].closest('table') : null;
+    const headings = table && table.tHead
+        ? Array.from(table.tHead.rows[0].cells).map(cell => cell.textContent.trim())
+        : [];
+    const index = headings.indexOf({heading!r});
+    return els.filter(row => row.offsetParent !== null)
+              .map(row => {{
+                  const cells = row.querySelectorAll('td');
+                  return index >= 0 && cells.length > index
+                      ? cells[index].textContent.replace(/\\s+/g, ' ').trim()
+                      : '';
+              }});
+}}
+"""
+
+
 #: A ``Flag`` value the removed client-side predicate treated as clean, so the row
 #: carrying it was the one that survived online.
 #:

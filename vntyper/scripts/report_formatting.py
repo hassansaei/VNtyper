@@ -21,8 +21,8 @@ Four groups live here:
   of a missing value; :func:`threshold_icon` takes that treatment as an argument
   instead.
 * **Table formatting.** Column selection and renaming for the Kestrel table, the
-  colour-coding of the ``Confidence`` column, the ``Flag`` cell, and the
-  per-column number formatting the browser used to do (#242).
+  ``Confidence`` column's class, the ``Flag`` cell, and the per-column number
+  formatting the browser used to do (#242).
 * **Row counts.** The visible/total statement printed beside each results table,
   computed from the frame rather than read back out of DataTables' footer.
 * **IGV fragment extraction.** ``create_report`` writes a standalone HTML page;
@@ -32,7 +32,7 @@ Four groups live here:
 Functions:
     threshold_icon: Value + cutoff to (icon, colour)
     select_display_columns: Project and rename a results frame for display
-    confidence_html: Colour-code one ``Confidence`` value
+    confidence_html: Classify one ``Confidence`` value
     flag_html: One ``Flag`` value to a glyph plus its reason in words
     format_number_columns: Render a frame's numbers with the formatter each column declares
     flagged_row_count: How many rows of a results frame carry a flag
@@ -70,10 +70,19 @@ logger = logging.getLogger(__name__)
 #: rather than about the direction of the comparison: ``OK_ICON`` is also what a
 #: metric that was never measured renders as (:data:`MISSING_AS_OK`), so a name
 #: like "within the cutoff" would be false there.
-WARNING_ICON = '<span style="color:red;font-weight:bold;" role="img" aria-label="Warning">&#9888;</span>'
+#:
+#: Both colours are tokens from ``templates/_report_base.html`` rather than the CSS
+#: keywords they used to be. ``red`` measured 4.00:1 against the page, under the 4.5:1
+#: a foreground needs; ``green`` measured 5.14:1 and was the only pair in either report
+#: that met it. A custom property resolves in an inline ``style`` exactly as it does in
+#: a stylesheet, so these two fragments still carry their own presentation and now
+#: follow the light, dark and print palettes with everything else.
+WARNING_ICON = (
+    '<span style="color:var(--state-caution);font-weight:bold;" role="img" aria-label="Warning">&#9888;</span>'
+)
 
 #: Green tick, shown when a metric passes its threshold.
-OK_ICON = '<span style="color:green;font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>'
+OK_ICON = '<span style="color:var(--state-ok);font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>'
 
 #: What a metric with no value at all renders as. The coverage rows show a tick
 #: (the report has always treated "not calculated" as "not a problem"); the fastp
@@ -95,18 +104,25 @@ MISSING_AS_BLANK: tuple[str, str] = ("", "")
 #: ``left-right`` pair Kestrel emits; ``Motif`` is the motif the variant was
 #: annotated onto, which is what ``cohort_summary.py`` shows and what the heading
 #: has always claimed to be.
+#: ``Motif_sequence`` is **last**, and that is an observable output-format change
+#: recorded in ``docs/user-guide/output-files.md``. It used to be sixth. The real motif
+#: sequence is 121 bp - the 13-character value in the unit fixtures is not
+#: representative - so at 1280px it pushed ``Confidence`` and ``Flag`` off the right
+#: edge of the table: the two columns a reader opens the report for became the ones
+#: that scrolled, while the widest and least-scanned column sat in the middle. Last, it
+#: is the column that scrolls, which is the correct one to lose.
 KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
     "Motif": "Motif",
     "Variant": "Variant",
     "POS": "Position",
     "REF": "REF",
     "ALT": "ALT",
-    "Motif_sequence": "Motif Sequence",
     "Estimated_Depth_AlternateVariant": "Depth (Variant)",
     "Estimated_Depth_Variant_ActiveRegion": "Depth (Region)",
     "Depth_Score": "Depth Score",
     "Confidence": "Confidence",
     "Flag": "Flag",
+    "Motif_sequence": "Motif Sequence",
 }
 
 #: adVNTR result columns, in display order. Unlike Kestrel these are not renamed.
@@ -153,12 +169,12 @@ KESTREL_CELL_FORMATS: dict[str, str] = {
     "POS": FORMAT_INTEGER,
     "REF": FORMAT_TEXT,
     "ALT": FORMAT_TEXT,
-    "Motif_sequence": FORMAT_TEXT,
     "Estimated_Depth_AlternateVariant": FORMAT_INTEGER,
     "Estimated_Depth_Variant_ActiveRegion": FORMAT_INTEGER,
     "Depth_Score": FORMAT_SIX_DECIMALS,
     "Confidence": FORMAT_TEXT,
     "Flag": FORMAT_TEXT,
+    "Motif_sequence": FORMAT_TEXT,
 }
 
 #: The same decisions keyed by the heading each Kestrel column is renamed to, which
@@ -204,22 +220,25 @@ FLAG_WARNING_GLYPH = "&#10006;"
 FLAG_FLAGGED_CLASS = "flag-flagged"
 FLAG_CLEAN_CLASS = "flag-clean"
 
-#: Inline style per ``Confidence`` value. A value not listed renders unstyled.
+#: CSS classes per ``Confidence`` value. A value not listed renders as bare text.
 #:
-#: Each hue is paired with an underline style, so the distinction between a
-#: high-precision and a low-precision call is not carried by colour alone (#242):
-#: red and orange are the same grey in print, in greyscale and to a reader with a
-#: red-green deficiency, and both values were bold, so the hue was the whole of the
-#: difference beyond the label. The label itself is text either way.
+#: **There is no hue here, and that is the change.** This used to be an inline style
+#: per value: ``High_Precision`` - the *most* trustworthy call the pipeline makes - was
+#: ``color:red``, one column away from a red ``Flag`` glyph that means the row is *not*
+#: to be trusted, and it measured 4.00:1 against white and 3.57:1 against a striped
+#: cohort row. ``Low_Precision`` was ``color:orange`` at 1.97:1 and 1.76:1. A
+#: transitional underline was added so the two were not separated by hue alone; both
+#: the hue and the underline go together here, because the honest channel was always
+#: the label, and the label is text in the cell in every branch.
 #:
-#: The hues are unchanged here on purpose. ``orange`` on white is roughly 2:1, well
-#: under the 4.5:1 a body-text colour needs, and correcting that is the contrast
-#: work later in this plan rather than something to fold into an accessibility
-#: change that is about keyboard operation.
-CONFIDENCE_STYLES: dict[str, str] = {
-    "Low_Precision": "color:orange;font-weight:bold;text-decoration:underline dotted;",
-    "High_Precision": "color:red;font-weight:bold;text-decoration:underline solid;",
-    "High_Precision*": "color:red;font-weight:bold;text-decoration:underline solid;",
+#: What is left is a class. The report's stylesheet renders it as plain text in the
+#: page's own ink (``templates/_report_base.html``), and red now means "something is
+#: wrong" and nothing else, anywhere on the page. A deployment that wants a treatment
+#: has a hook to hang one on; VNtyper ships none.
+CONFIDENCE_CLASSES: dict[str, str] = {
+    "Low_Precision": "confidence confidence-low-precision",
+    "High_Precision": "confidence confidence-high-precision",
+    "High_Precision*": "confidence confidence-high-precision",
 }
 
 #: How each coverage field is coerced for display. The keys must be exactly
@@ -316,26 +335,27 @@ def select_display_columns(df: pd.DataFrame, columns: dict[str, str]) -> pd.Data
 
 
 def confidence_html(value: Any) -> str:
-    """Colour-code one ``Confidence`` value for display.
+    """Classify one ``Confidence`` value for display.
 
     The label is escaped either way. This is the one cell of the Kestrel table
     that legitimately carries markup, which is why the table is rendered with
-    ``escape=False``; a value with no configured style therefore used to reach
+    ``escape=False``; a value with no configured class therefore used to reach
     the HTML untouched.
 
     Args:
         value: The confidence label.
 
     Returns:
-        str: The escaped label, wrapped in a coloured span when it has a
-        configured style.
+        str: The escaped label, wrapped in a classed span when it has a
+        configured class. The span carries no colour: see
+        :data:`CONFIDENCE_CLASSES`.
     """
     key = value if isinstance(value, str) else str(value)
     text = escape_html(key)
-    style = CONFIDENCE_STYLES.get(key)
-    if style is None:
+    css_class = CONFIDENCE_CLASSES.get(key)
+    if css_class is None:
         return text
-    return f'<span style="{style}">{text}</span>'
+    return f'<span class="{css_class}">{text}</span>'
 
 
 def flag_html(value: Any) -> str:
@@ -354,6 +374,11 @@ def flag_html(value: Any) -> str:
     when the table is rendered so that :func:`escape_frame_cells` leaves it alone
     and escapes everything else.
 
+    The glyph used to carry ``style="color:red"`` / ``color:green`` of its own. Both
+    are now taken from the wrapper's class in ``templates/_report_base.html``, so the
+    two marks follow the light, dark and print palettes instead of measuring 4.00:1
+    against the page in the one that mattered.
+
     Args:
         value: The ``Flag`` cell value.
 
@@ -364,10 +389,9 @@ def flag_html(value: Any) -> str:
     clean = key in FLAG_CLEAN_VALUES
     glyph = FLAG_OK_GLYPH if clean else FLAG_WARNING_GLYPH
     css_class = FLAG_CLEAN_CLASS if clean else FLAG_FLAGGED_CLASS
-    colour = "green" if clean else "red"
     return (
         f'<span class="{css_class}">'
-        f'<span class="flag-glyph" style="color:{colour};font-weight:bold;" aria-hidden="true">{glyph}</span> '
+        f'<span class="flag-glyph" aria-hidden="true">{glyph}</span> '
         f'<span class="flag-reason">{escape_html(key)}</span>'
         f"</span>"
     )

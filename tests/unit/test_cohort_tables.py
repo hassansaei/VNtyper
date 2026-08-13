@@ -78,15 +78,23 @@ def _escaped_probe(column: str) -> str:
 
 
 @pytest.mark.parametrize(
-    "label,colour",
+    "label,modifier",
     [
-        ("Low_Precision", "orange"),
-        ("High_Precision", "red"),
-        ("High_Precision*", "red"),
+        ("Low_Precision", "confidence-low-precision"),
+        ("High_Precision", "confidence-high-precision"),
+        ("High_Precision*", "confidence-high-precision"),
     ],
 )
-def test_each_recognised_confidence_label_gets_its_colour(label: str, colour: str) -> None:
-    assert confidence_span(label) == f'<span style="color:{colour};font-weight:bold;">{label}</span>'
+def test_each_recognised_confidence_label_gets_its_class(label: str, modifier: str) -> None:
+    """The span carries a class and no hue since #242's contrast pass.
+
+    `orange` measured 1.76:1 against this table's own striped rows and `red` 3.57:1,
+    and `red` sat on `High_Precision` - the most trustworthy call the pipeline makes.
+    The two starred and unstarred high-precision labels share one class deliberately:
+    they are one verdict, and `High_Precision*` falling through unclassed would leave
+    the strongest calls as the only ones with no hook at all.
+    """
+    assert confidence_span(label) == f'<span class="confidence {modifier}">{label}</span>'
 
 
 def test_an_unrecognised_label_is_returned_as_escaped_text_with_no_span() -> None:
@@ -167,10 +175,10 @@ def test_a_column_that_is_not_a_display_column_is_dropped() -> None:
     assert _headings(kestrel_table_html(frame)) == ["Sample"]
 
 
-def test_the_confidence_column_becomes_a_colour_span() -> None:
+def test_the_confidence_column_becomes_a_classed_span() -> None:
     frame = pd.DataFrame([{"Sample": "s1", "Confidence": "High_Precision"}])
 
-    assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in kestrel_table_html(frame)
+    assert '<span class="confidence confidence-high-precision">High_Precision</span>' in kestrel_table_html(frame)
 
 
 def test_confidence_is_the_only_column_exempt_from_escaping() -> None:

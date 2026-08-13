@@ -194,29 +194,28 @@ def test_select_display_columns_does_not_mutate_its_input() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Confidence colouring
+# Confidence classification
 #
-# Both literals below gained an underline in #242's accessibility pass, and the
-# two underline styles differ from one another on purpose. Red and orange are the
-# same grey in print, in greyscale and to a reader with a red-green deficiency, and
-# both values were already bold - so the hue was the entire difference between a
-# high-precision and a low-precision call beyond the label itself. The hues are
-# unchanged here; correcting `orange` on white (roughly 2:1) is the contrast work
-# later in the same plan. `test_report_presentation.py` asserts the rule these
-# literals are an instance of.
+# There is no hue in either literal below, and that is the change #242's contrast
+# pass made. `High_Precision` - the most trustworthy call the pipeline makes - was
+# `color:red`, one column from a red `Flag` glyph meaning the opposite, and it
+# measured 4.00:1 against white and 3.57:1 against a striped cohort row.
+# `Low_Precision` was `color:orange` at 1.97:1 and 1.76:1. A transitional underline
+# had been added so the two were not separated by hue alone; both go together here,
+# because the honest channel was always the label and the label is text in the cell
+# in every branch. `test_report_presentation.py` asserts the rule these literals are
+# an instance of, and computes the ratios from the shipped stylesheet.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("value", ["High_Precision", "High_Precision*"])
-def test_high_precision_is_red_and_solid_underlined(value) -> None:
-    assert rf.confidence_html(value) == (
-        f'<span style="color:red;font-weight:bold;text-decoration:underline solid;">{value}</span>'
-    )
+def test_high_precision_carries_its_class_and_no_colour(value) -> None:
+    assert rf.confidence_html(value) == f'<span class="confidence confidence-high-precision">{value}</span>'
 
 
-def test_low_precision_is_orange_and_dotted_underlined() -> None:
+def test_low_precision_carries_its_own_class() -> None:
     assert rf.confidence_html("Low_Precision") == (
-        '<span style="color:orange;font-weight:bold;text-decoration:underline dotted;">Low_Precision</span>'
+        '<span class="confidence confidence-low-precision">Low_Precision</span>'
     )
 
 
@@ -330,7 +329,7 @@ def test_confidence_html_escapes_an_unstyled_value() -> None:
 
 
 def test_confidence_html_escapes_inside_the_span_too() -> None:
-    assert rf.confidence_html("Low_Precision").startswith('<span style="color:orange')
+    assert rf.confidence_html("Low_Precision").startswith('<span class="confidence')
 
 
 def test_escape_html_escapes_quotes() -> None:

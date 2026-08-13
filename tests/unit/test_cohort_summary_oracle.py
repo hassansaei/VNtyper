@@ -121,8 +121,48 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved twice, and each reason is recorded here because a changed fingerprint with
-#: no explanation should be read as the worst case.
+#: It has moved three times, and each reason is recorded here because a changed
+#: fingerprint with no explanation should be read as the worst case.
+#:
+#: Move 3 (#242, task 7 - one token layer, two reports)
+#: ----------------------------------------------------
+#: * **Old**: ``9c31e01d5c4fe1792bad4824a1a4e32cb94c4edd325ff53154f5be9970c1a761``
+#: * **New**: ``171c90650179a14916efd70fd1167818585b8a29c3ee260fae932ac9cd103487``
+#:
+#: **Verified before it was moved.** The pre-change template was extracted from ``HEAD``
+#: into a scratch directory, rendered through ``config.json``'s own
+#: ``paths.template_dir`` knob with the pre-change ``confidence_span`` restored, and
+#: reproduced ``9c31e01d...`` exactly. Nothing in the working tree was reverted to do it.
+#:
+#: **Cause: one cell of markup changed, and the page's head was replaced.** The canonical
+#: document goes from 443 lines to 901 and the whole difference is seven hunks:
+#:
+#: 1. ``[TABLES]``, twice - and this is the only *rendered value* that moved. The Kestrel
+#:    table's ``Confidence`` cells went from
+#:    ``<span style="color:red;font-weight:bold;">High_Precision</span>`` to
+#:    ``<span class="confidence confidence-high-precision">High_Precision</span>``, and
+#:    the ``Low_Precision`` row from ``color:orange`` to
+#:    ``class="confidence confidence-low-precision"``. Measured: ``orange`` was 1.76:1
+#:    against this table's own striped rows and 1.97:1 against a plain one; ``red`` was
+#:    3.57:1 and 4.00:1, and it sat on ``High_Precision``, the most trustworthy call the
+#:    pipeline makes, one column from a red ``Flag`` glyph that means the opposite. The
+#:    column selection, the column order, every other cell value, the pandas scaffolding
+#:    and the per-column escaping exemptions are byte-identical.
+#: 2. ``[SKELETON]``, the same two cells again, because the skeleton contains the tables.
+#: 3. ``[SKELETON]``, the page head: the viewport meta and the shared stylesheet moved
+#:    into ``templates/_report_base.html``, which both reports now ``{% include %}``, and
+#:    the truncation block, the switch, the focus ring and the ``prefers-reduced-motion``
+#:    rule are no longer written out here as a near-copy of the per-sample report's. The
+#:    cohort report gains what only the per-sample one had: a ``@media print`` block and
+#:    ``@page`` numbering.
+#:
+#: ``[CHART-VALUES]``, ``[CHART-LABELS]``, ``[CHART-TOTALS]`` and ``[IMAGES]`` carry no
+#: hunk at all - both donut charts' segment values, their labels, both centre totals and
+#: the image counts are unchanged, so the sample-level categorisation this oracle exists
+#: to watch did not move.
+#:
+#: **The cohort report's filtering, searching and paging are still untouched** (#242,
+#: precondition P4), and so are its plots.
 #:
 #: Move 2 (#242, task 4 - accessibility)
 #: -------------------------------------
@@ -208,7 +248,7 @@ pytestmark = pytest.mark.unit
 #: neither. The evidence for that fix is
 #: `test_cohort_inputs.py::test_processes_with_different_hash_seeds_discover_the_same_order`,
 #: which spawns five interpreters under five seeds, and it covers directory inputs only.
-EXPECTED_FINGERPRINT = "9c31e01d5c4fe1792bad4824a1a4e32cb94c4edd325ff53154f5be9970c1a761"
+EXPECTED_FINGERPRINT = "171c90650179a14916efd70fd1167818585b8a29c3ee260fae932ac9cd103487"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")

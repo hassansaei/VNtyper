@@ -38,7 +38,14 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page
 
-from tests.browser.conftest import CLEAN_FLAG, EXPECTED_KESTREL_ROWS, HIDDEN_FLAGS, enhancement_state
+from tests.browser.conftest import (
+    CLEAN_FLAG,
+    EXPECTED_KESTREL_ROWS,
+    HIDDEN_FLAGS,
+    KESTREL_ROW_SELECTOR,
+    enhancement_state,
+    kestrel_column_text,
+)
 
 pytestmark = pytest.mark.browser
 
@@ -68,11 +75,15 @@ _EXPECTED_DEPTH_SCORES = ("0.010012", "0.008034", "0.006001")
 #: glyph is chosen.
 _FLAG_REASON_SELECTOR = "#kestrel_table tbody tr .flag-reason"
 
-#: The first cell of each Kestrel row (``Motif``).
+#: The first cell of each Kestrel row (``Motif``). Still first after the column-order
+#: change, and still the column the table is read from left to right by.
 _MOTIF_SELECTOR = "#kestrel_table tbody tr td:first-child"
 
-#: The ninth cell of each Kestrel row (``Depth Score``), 1-indexed by CSS.
-_DEPTH_SCORE_SELECTOR = "#kestrel_table tbody tr td:nth-child(9)"
+#: The ``Depth Score`` column, keyed on its heading. It used to be
+#: ``td:nth-child(9)``, which is ``Confidence`` now that ``Motif_sequence`` is last -
+#: a positional selector goes on matching a cell after the column it named has moved,
+#: so it fails on the value rather than on the position and reads as a data defect.
+_DEPTH_SCORE_TEXT = kestrel_column_text("Depth Score")
 
 _CELL_TEXT = "els => els.map(e => e.textContent.replace(/\\s+/g, ' ').trim())"
 
@@ -131,7 +142,8 @@ def test_the_fixture_is_a_specimen_that_can_show_the_divergence(
     )
     assert _texts(page, _FLAG_REASON_SELECTOR) == list(_EXPECTED_FLAG_REASONS)
     assert _texts(page, _MOTIF_SELECTOR) == list(_EXPECTED_MOTIFS)
-    assert _texts(page, _DEPTH_SCORE_SELECTOR) == list(_EXPECTED_DEPTH_SCORES)
+    depth_scores: list[str] = page.eval_on_selector_all(KESTREL_ROW_SELECTOR, _DEPTH_SCORE_TEXT)
+    assert depth_scores == list(_EXPECTED_DEPTH_SCORES)
 
 
 def test_the_report_reads_identically_online_and_offline(

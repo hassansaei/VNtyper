@@ -87,6 +87,21 @@ these are the columns whose text differs.
 | adVNTR | `MeanCoverage` | `98.5`, `40` | `98.50`, `40.00` | Always two decimal places, so every mean states the same precision |
 | adVNTR | `Pvalue` | `0`, `0.0001` | `1e-09`, `0.000123` | Three significant figures. Rounding to four decimals displayed a highly significant p-value as zero |
 
+### The Kestrel table's column order changed
+
+`Motif_sequence` is now the **last** column of the per-sample report's Kestrel table,
+after `Flag`. It used to be sixth, between `ALT` and `Estimated_Depth_AlternateVariant`.
+
+The real motif sequence is 121 bp. Sixth, it pushed `Confidence` and `Flag` off the right
+edge of a 1280px screen, so the two columns a reader opens the report for were the ones
+that scrolled out of sight while the widest and least-scanned column sat in the middle.
+Last, it is the column that scrolls -- which is the correct one to lose.
+
+**This is a display order only.** `kestrel_result.tsv` is unchanged, and so is every
+other output; if you parse anything, parse those. If you scrape the HTML report by column
+*position*, this is a breaking change and you should key on the heading text instead. The
+`cohort_summary.html` Kestrel table declares its own column order and is **not** affected.
+
 Two further display changes in the same release:
 
 - **The `Flag` column shows the reason in words**, beside a tick or a cross, instead of a

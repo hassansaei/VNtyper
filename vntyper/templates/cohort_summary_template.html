@@ -2,92 +2,26 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <!-- Without this a phone lays the page out at 980px and scales it down (#242).
-       Both report templates were missing it. -->
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cohort Summary Report</title>
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
+
+  <!-- The token layer, and the viewport meta, shared with the per-sample report.
+       Included after the two CDN stylesheets so that at equal specificity the token
+       values win. The switch, the focus ring, the results-table mechanics and the
+       print block used to be written out here and in `report_template.html`
+       separately; the truncation block was byte-identical in both. What is left
+       below is what only the cohort report has. -->
+  {% include "_report_base.html" %}
+
   <style>
     body { margin: 20px; }
     h1, h2, h3 { text-align: center; margin-top: 20px; }
     .container { max-width: 1600px; margin-left: auto; margin-right: auto; }
+    /* `.table-container` itself is defined in the token layer, which is where its
+       horizontal scroll comes from; the width and centring are the cohort's own. */
     .table-container { width: 90%; margin: 0 auto; text-align: center; }
     .plot { margin: 20px auto; display: block; max-width: 500px; }
-    .table td, .table th { text-align: center; word-break: break-word; }
-    th { white-space: pre-wrap; }
-    
-    /* New CSS for truncating text and showing full text on hover */
-    .table td {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 150px; /* Adjust this value based on your needs */
-      cursor: pointer;
-    }
-  
-    .table td:hover {
-      overflow: visible;
-      white-space: normal;
-      max-width: none;
-      position: relative;
-      z-index: 10;
-      background-color: #fff;
-      border: 1px solid #ddd;
-    }
-
-    /* The flag switch. The input is the control: `appearance: none` and a box,
-       rather than a Bootstrap `custom-control-input` that is invisible until
-       Bootstrap's stylesheet arrives from a CDN. Same treatment as the
-       per-sample report, so the two reports are operated the same way (#242). */
-    .controls { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; align-items: center; margin-bottom: 1rem; }
-    .switch { display: inline-flex; align-items: center; gap: .5rem; cursor: pointer; margin-bottom: 0; }
-    .switch input {
-      appearance: none;
-      -webkit-appearance: none;
-      margin: 0;
-      width: 2.25rem;
-      height: 1.25rem;
-      border: 1px solid #767676;
-      border-radius: 999px;
-      background: #eeeeee;
-      position: relative;
-      cursor: pointer;
-      flex: none;
-    }
-    .switch input::after {
-      content: "";
-      position: absolute;
-      inset: 2px auto 2px 2px;
-      width: 0.875rem;
-      border-radius: 999px;
-      background: #595959;
-      transition: transform .12s ease, background .12s ease;
-    }
-    .switch input:checked { background: #d7e9ec; border-color: #0f5d6b; }
-    .switch input:checked::after { transform: translateX(1rem); background: #0f5d6b; }
-    .switch-label { font-size: 0.95rem; }
-
-    /* Focus that cannot be seen is focus that cannot be used. Neither template
-       styled this at all. */
-    .switch input:focus-visible,
-    summary:focus-visible,
-    button:focus-visible,
-    a:focus-visible {
-      outline: 3px solid #0f5d6b;
-      outline-offset: 2px;
-    }
-
-    /* A reader who asked their operating system for less motion gets none. */
-    @media (prefers-reduced-motion: reduce) {
-      *,
-      *::before,
-      *::after {
-        animation: none !important;
-        transition: none !important;
-        scroll-behavior: auto !important;
-      }
-    }
   </style>
 </head>
 <body>
@@ -249,14 +183,16 @@
 
     $(document).ready(function() {
       // Initialize DataTables with preDrawCallback to update flag column only for tables with a Flag column.
+      // No `columnDefs` width: it set every column to 150px, which is the
+      // "distributing width evenly" that `table { width: auto }` in the shared token
+      // layer exists to stop. Columns size to their content and the table scrolls
+      // inside `.table-container`. Filtering, searching and paging are untouched -
+      // hiding flagged rows is defensible for triage across samples (#242, P4).
       var dataTables = $('table').DataTable({
         "paging": true,
         "searching": true,
         "info": true,
         "autoWidth": false,
-        "columnDefs": [
-          { "width": "150px", "targets": "_all" }
-        ],
         "preDrawCallback": function(settings) {
           updateFlagColumn(this.api().table().node());
         },

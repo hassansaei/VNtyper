@@ -36,27 +36,19 @@ from tests.browser.conftest import (
     HIDDEN_FLAGS,
     KESTREL_ROW_SELECTOR,
     enhancement_state,
+    kestrel_column_text,
 )
 
 pytestmark = pytest.mark.browser
 
-#: Read the Flag cell -- the last cell of each Kestrel row -- as the reader sees it.
-_FLAG_CELL_TEXT = """
-els => els.filter(e => e.offsetParent !== null)
-          .map(e => {
-              const cells = e.querySelectorAll('td');
-              return cells.length ? cells[cells.length - 1].textContent.replace(/\\s+/g, ' ').trim() : '';
-          })
-"""
+#: Read the Flag cell of each Kestrel row as the reader sees it. Keyed on the heading:
+#: it used to be "the last cell", which stopped being true when ``Motif_sequence`` moved
+#: to the end of ``KESTREL_DISPLAY_COLUMNS`` and left this reading the motif instead.
+_FLAG_CELL_TEXT = kestrel_column_text("Flag")
 
-#: Read the Depth Score cell (index 8 of the eleven display columns).
-_DEPTH_SCORE_TEXT = """
-els => els.filter(e => e.offsetParent !== null)
-          .map(e => {
-              const cells = e.querySelectorAll('td');
-              return cells.length > 8 ? cells[8].textContent.trim() : '';
-          })
-"""
+#: Read the Depth Score cell. Keyed on the heading for the same reason: it used to be
+#: index 8 of eleven, which is now ``Confidence``.
+_DEPTH_SCORE_TEXT = kestrel_column_text("Depth Score")
 
 
 def _require_online(

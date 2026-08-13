@@ -24,7 +24,7 @@ import pytest
 
 import vntyper
 from vntyper.cli import load_config
-from vntyper.scripts import generate_report, summary_steps
+from vntyper.scripts import generate_report, report_formatting, summary_steps
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -148,14 +148,23 @@ def test_every_coverage_statistic_reaches_the_html(positive_summary) -> None:
         assert value in html, f"coverage value {value} is missing from the report"
 
 
-def test_low_coverage_is_flagged_red(tmp_path) -> None:
+def test_low_coverage_is_marked_with_the_warning_glyph(tmp_path) -> None:
+    """The mark, not the hue.
+
+    This used to assert `color:red` and would have passed on any red anywhere on the
+    page - including the `Confidence` column's, which meant the *opposite* thing. The
+    glyph and its accessible name are what say a metric failed its cutoff; the colour
+    is a token now (`--state-caution`), so asserting the literal would pin a value the
+    stylesheet owns.
+    """
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 3.0}]),
         tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
     )
     html = render(tmp_path)
-    assert "color:red" in html
+    assert report_formatting.WARNING_ICON in html
+    assert 'aria-label="Warning"' in html
 
 
 def test_coverage_that_was_never_calculated_says_so(tmp_path) -> None:
@@ -285,17 +294,21 @@ def test_the_kestrel_display_columns_key_on_the_annotated_motif() -> None:
     assert "Motifs" not in KESTREL_DISPLAY_COLUMNS
 
 
-def test_the_confidence_column_is_colour_coded(positive_summary) -> None:
-    """The literal carries an underline since #242's accessibility pass.
+def test_the_confidence_column_carries_a_class_and_no_hue(positive_summary) -> None:
+    """The literal carries a class and no colour since #242's contrast pass.
 
-    Red and orange are the same grey in print, in greyscale and to a reader with a
-    red-green deficiency, and both confidence values were bold - so the hue was the
-    whole of the difference between a high-precision and a low-precision call. The
-    underline style is the non-colour half of that distinction; the hues themselves
-    are unchanged. See `tests/unit/test_report_presentation.py`.
+    It was `color:red` on `High_Precision` - the *most* trustworthy call the pipeline
+    makes - one column from a red `Flag` glyph meaning the row is *not* to be trusted,
+    and it measured 4.00:1 against the page. A transitional underline had been added so
+    the two confidence values were not separated by hue alone; the hue and the underline
+    go together, because the label was always the honest channel. The class is the hook
+    the stylesheet hangs on, and it hangs no colour there. See
+    `tests/unit/test_report_presentation.py`, which computes the ratios from the shipped
+    stylesheet rather than from a table.
     """
     html = render(positive_summary)
-    assert '<span style="color:red;font-weight:bold;text-decoration:underline solid;">High_Precision</span>' in html
+    assert '<span class="confidence confidence-high-precision">High_Precision</span>' in html
+    assert "color:red" not in html, "red is reserved for something being wrong"
 
 
 # ---------------------------------------------------------------------------
@@ -597,7 +610,7 @@ def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -
     assert matching_frame.loc[0, "Confidence"] == "High_Precision"
     assert matching_frame.loc[0, "Motif Sequence"] == "<untrusted>"
     assert display_frame.loc[0, "Confidence"] == (
-        '<span style="color:red;font-weight:bold;text-decoration:underline solid;">High_Precision</span>'
+        '<span class="confidence confidence-high-precision">High_Precision</span>'
     )
     assert display_frame.loc[0, "Motif Sequence"] == "<untrusted>"
     assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
@@ -1196,10 +1209,15 @@ def test_escaping_does_not_neuter_the_status_icons(positive_summary) -> None:
 
     The literal gained `role="img"` and a name in #242's accessibility pass: a bare
     `&#10004;` is announced as its code point or skipped, so the `Status` column
-    read as empty to a screen reader while looking complete on screen.
+    read as empty to a screen reader while looking complete on screen. Its colour is
+    now a custom property, which resolves in an inline `style` exactly as it does in a
+    stylesheet - `green` was the only pair in either report that already met AA, and it
+    follows the dark and print palettes with everything else now.
     """
     html = render(positive_summary)
-    assert '<span style="color:green;font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>' in html
+    assert (
+        '<span style="color:var(--state-ok);font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>'
+    ) in html
     assert "&lt;span style=" not in html
 
 
@@ -1212,7 +1230,7 @@ def test_escaping_does_not_neuter_the_screening_message(positive_summary) -> Non
 def test_escaping_does_not_neuter_the_results_tables(positive_summary) -> None:
     html = render(positive_summary)
     assert 'id="kestrel_table"' in html
-    assert '<span style="color:red;font-weight:bold;text-decoration:underline solid;">High_Precision</span>' in html
+    assert '<span class="confidence confidence-high-precision">High_Precision</span>' in html
 
 
 def test_escaping_does_not_neuter_the_igv_script_block(positive_summary) -> None:

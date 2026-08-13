@@ -33,7 +33,11 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
+#: Every template file this package ships, the shared token layer included -- it is
+#: template source and no linter reaches it either, so the checks below apply to it as
+#: much as to the two reports that ``{% include %}`` it.
 TEMPLATES = (
+    Path("vntyper/templates/_report_base.html"),
     Path("vntyper/templates/cohort_summary_template.html"),
     Path("vntyper/templates/report_template.html"),
 )
