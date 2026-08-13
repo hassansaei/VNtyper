@@ -24,6 +24,7 @@ def _kwargs(tmp_path: Path) -> dict[str, Any]:
         "sample_name": "patient-7",
         "log_level": logging.DEBUG,
         "cwd": "/project/root",
+        "threads": 4,
         "summary": {"steps": []},
         "summary_file_path": str(tmp_path / "pipeline_summary.json"),
         "runner": mock.Mock(),
@@ -49,6 +50,7 @@ def test_stage_forwards_the_complete_tuple_and_records_the_exact_summary(tmp_pat
         sample_name="patient-7",
         log_level=logging.DEBUG,
         cwd="/project/root",
+        threads=4,
     )
     positional = record.call_args.args
     assert positional[1:5] == (
@@ -110,3 +112,55 @@ def test_summary_failure_rolls_back_a_partially_appended_success_step(tmp_path: 
         run_kestrel_stage(**kwargs)
 
     assert summary["steps"] == []
+
+
+# ---------------------------------------------------------------------------
+# The thread budget reaches Kestrel (#262)
+# ---------------------------------------------------------------------------
+
+
+def test_the_stage_forwards_the_runs_thread_count(tmp_path: Path, monkeypatch) -> None:
+    """The KAnalyze counting step is what needs it; nothing else in the stage does."""
+    kwargs = _kwargs(tmp_path)
+    kwargs["threads"] = 11
+    monkeypatch.setattr(pipeline_kestrel, "record_step", mock.Mock())
+
+    run_kestrel_stage(**kwargs)
+
+    runner = kwargs["runner"]
+    assert isinstance(runner, mock.Mock)
+    assert runner.call_args.kwargs["threads"] == 11
+
+
+def test_the_stage_has_a_thread_default_so_existing_callers_still_bind(tmp_path: Path, monkeypatch) -> None:
+    """A required parameter would break every caller that has not been updated yet.
+
+    The default matches ``config.json``'s ``default_values.threads``, so a caller that
+    omits it gets the same allocation the CLI would have chosen.
+    """
+    kwargs = _kwargs(tmp_path)
+    del kwargs["threads"]
+    monkeypatch.setattr(pipeline_kestrel, "record_step", mock.Mock())
+
+    run_kestrel_stage(**kwargs)
+
+    runner = kwargs["runner"]
+    assert isinstance(runner, mock.Mock)
+    assert runner.call_args.kwargs["threads"] == 4
+
+
+def test_threads_is_appended_after_every_existing_run_kestrel_parameter() -> None:
+    """Inserting it earlier would silently rebind arguments for a positional caller.
+
+    ``run_kestrel``'s parameters are not keyword-only. Every caller in this repository
+    uses keywords, but an external one passing ``log_level`` and ``cwd`` positionally
+    would start passing ``cwd`` as ``threads`` if the new parameter went in front of
+    them -- which type-checks, runs, and produces a wrong thread allocation.
+    """
+    import inspect
+
+    from vntyper.scripts import kestrel_genotyping
+
+    names = list(inspect.signature(kestrel_genotyping.run_kestrel).parameters)
+
+    assert names[-3:] == ["log_level", "cwd", "threads"]

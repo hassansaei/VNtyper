@@ -25,6 +25,7 @@ def run_kestrel_stage(
     summary: dict[str, Any],
     summary_file_path: str,
     runner: Callable[..., None],
+    threads: int = 4,
 ) -> None:
     """Forward one complete routed read set and record success atomically.
 
@@ -38,6 +39,10 @@ def run_kestrel_stage(
         summary: Pipeline summary payload.
         summary_file_path: Incremental JSON summary destination.
         runner: Patchable Kestrel runner owned by the calling pipeline module.
+        threads: The run's total thread budget, forwarded to the runner for the
+            KAnalyze counting step. Defaults to 4, matching ``config.json``'s
+            ``default_values.threads``, so a caller that has not been updated still
+            binds.
 
     Raises:
         ValueError: If the routed tuple is empty, malformed, or contains duplicates.
@@ -67,6 +72,7 @@ def run_kestrel_stage(
         sample_name=sample_name,
         log_level=log_level,
         cwd=cwd,
+        threads=threads,
     )
     end = datetime.now(timezone.utc).replace(tzinfo=None)
 

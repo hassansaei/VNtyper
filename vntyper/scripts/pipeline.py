@@ -508,6 +508,7 @@ def run_pipeline(
             summary=summary,
             summary_file_path=summary_file_path,
             runner=run_kestrel,
+            threads=threads,
         )
         logger.info(
             "Kestrel genotyping completed."

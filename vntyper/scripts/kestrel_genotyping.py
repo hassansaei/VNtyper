@@ -210,6 +210,7 @@ def run_kestrel(
     sample_name,
     log_level=logging.INFO,
     cwd=None,
+    threads=4,
 ):
     """
     Main entry point to run the Kestrel jar for MUC1 genotyping, then
@@ -234,6 +235,12 @@ def run_kestrel(
         log_level (int): Logging level (INFO, DEBUG, etc.).
         cwd (str, optional): Working directory to use when running Java/Kestrel.
             Important for Java initialization.
+        threads (int, optional): The run's total thread budget, allocated across
+            KAnalyze's three concurrent counting stages. Appended **after** ``cwd``
+            rather than inserted before it: this signature permits positional calls,
+            so a new parameter in front of the existing optional ones would silently
+            rebind them for any external caller. Defaults to 4, matching
+            ``config.json``'s ``default_values.threads``.
 
     Raises:
         RuntimeError: If Kestrel fails for a given k-mer size, or if no configured
