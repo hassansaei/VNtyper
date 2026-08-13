@@ -115,14 +115,14 @@
 
   "bundle": {
     "repository": "berntpopp/vntyper-data",
-    "release_tag": "refs-v1",
-    "common_asset": "vntyper-references-refs-v1-muc1.tar.gz",
-    "common_asset_sha256": "ea60b47b149310941c2eb54a50a2f9f5c2425c9b9f203e7b8593ee08f49ca88b"
+    "release_tag": "refs-v2",
+    "common_asset": "vntyper-references-refs-v2-muc1.tar.gz",
+    "common_asset_sha256": "a31a103a7426e2dcc2b44c3c261308b45cf4547be16b0fb9384fe591e7ae54e8"
   },
 
   "vntyper_references": {
     "vntr_db_advntr": {
-      "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/28e6a0a55f169326d5cfd7431f9bca5aa049f8ca/seeds/vntr_db_advntr_v2.zip",
+      "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/a92a6a8813817b5ac594bd9d6ff920fca43a5f85/seeds/vntr_db_advntr_v2.zip",
       "target_path": "vntr_db_advntr_v2.zip",
       "source_sha256": "b7e7a8a10e26b5058eedb766ec38d01a900e29780c4d48dabeaec67199615190",
       "extract_to": "."
