@@ -17,7 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from vntyper.scripts.nomenclature import CANONICAL_UNIT, name_edit
+from vntyper.scripts.nomenclature import (
+    CANONICAL_UNIT,
+    ambiguity_interval,
+    name_edit,
+    normalise,
+    repeat_form,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -124,3 +130,83 @@ def test_round_trip_names_every_simulator_edit(mutation: str, symbol: str, defin
     expected = EXPECTED.get((mutation, symbol))
     if expected is not None:
         assert name == expected, f"{mutation}/{symbol}"
+
+
+# ---------------------------------------------------------------------------
+# Normalisation invariants
+# ---------------------------------------------------------------------------
+
+
+def test_every_anchor_inside_the_window_yields_one_name() -> None:
+    """Anchoring anywhere in the C-tract must give the same name.
+
+    This is the whole point of normalising: 59dupC, 53dupC and the older 27dupC
+    are one event, not three.
+    """
+    names = {name_edit(CANONICAL_UNIT, anchor, anchor - 1, "C") for anchor in range(53, 61)}
+    assert names == {"59dupC"}
+
+
+def test_normalisation_is_idempotent() -> None:
+    """Normalising an already-normalised edit must not move it again."""
+    once = normalise(CANONICAL_UNIT, 55, 54, "C")
+    twice = normalise(CANONICAL_UNIT, *once)
+    assert once == twice
+
+
+def test_a_deletion_anywhere_in_the_tract_yields_one_name() -> None:
+    """The same invariant for deletions, which roll by a different rule."""
+    names = {name_edit(CANONICAL_UNIT, anchor, anchor, "") for anchor in range(53, 60)}
+    assert names == {"59delC"}
+
+
+def test_junction_spanning_never_yields_a_coordinate_below_one() -> None:
+    """A span at the 5' edge stays on the unit; no negative or zero coordinate."""
+    name = name_edit(CANONICAL_UNIT, 1, 5, "")
+    assert name == "1_5delGCCCA"
+    assert "-" not in name
+    assert not name.startswith("0")
+
+
+# ---------------------------------------------------------------------------
+# Ambiguity interval -- nullable, emitted only when wider than 1 bp
+# ---------------------------------------------------------------------------
+
+
+def test_ambiguity_interval_spans_the_whole_c_tract() -> None:
+    """dupC is ambiguous across the 7xC tract: every anchor in 53-59 is the allele."""
+    assert ambiguity_interval(CANONICAL_UNIT, 59, 58, "C") == (53, 59)
+
+
+def test_ambiguity_interval_is_none_when_the_edit_cannot_shift() -> None:
+    """insG into an all-C tract is unambiguous: G never equals C, so it cannot roll."""
+    assert ambiguity_interval(CANONICAL_UNIT, 59, 58, "G") is None
+
+
+def test_ambiguity_interval_is_none_for_a_delins() -> None:
+    """A delins is anchored by definition, so it has no ambiguity window."""
+    assert ambiguity_interval(CANONICAL_UNIT, 54, 56, "AT") is None
+
+
+# ---------------------------------------------------------------------------
+# Repeat form -- nullable, emitted only inside a detectable tract
+# ---------------------------------------------------------------------------
+
+
+def test_repeat_form_counts_the_tract_before_and_after() -> None:
+    """States what was measured -- the tract went 7 -> 8 -- not which base was added."""
+    assert repeat_form(CANONICAL_UNIT, 59, 58, "C") == "53C[7]>53C[8]"
+
+
+def test_repeat_form_scales_to_a_longer_insertion() -> None:
+    """insCCCC is far clearer as 53C[11] than as 56_59dupCCCC."""
+    assert repeat_form(CANONICAL_UNIT, 59, 58, "CCCC") == "53C[7]>53C[11]"
+
+
+def test_repeat_form_counts_down_for_a_deletion() -> None:
+    assert repeat_form(CANONICAL_UNIT, 59, 59, "") == "53C[7]>53C[6]"
+
+
+def test_repeat_form_is_none_outside_any_tract() -> None:
+    """Position 2 sits in GCCCACGG..., no homopolymer run to report."""
+    assert repeat_form(CANONICAL_UNIT, 2, 2, "A") is None

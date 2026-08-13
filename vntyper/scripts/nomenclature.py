@@ -29,8 +29,10 @@ from __future__ import annotations
 __all__ = [
     "CANONICAL_UNIT",
     "UNIT_LENGTH",
+    "ambiguity_interval",
     "name_edit",
     "normalise",
+    "repeat_form",
     "revcomp",
 ]
 
@@ -158,6 +160,139 @@ def name_edit(unit: str, start: int, end: int, inserted: str) -> str:
 
     span = str(start) if start == end else f"{start}_{end}"
     return f"{span}delins{inserted}"
+
+
+def _roll_5prime(unit: str, start: int, end: int, inserted: str) -> tuple[int, int, str]:
+    """Shift an edit as far 5' as the sequence allows -- the mirror of :func:`normalise`.
+
+    Used only to find the far edge of an ambiguity window; names are always 3'-most.
+
+    Args:
+        unit: The repeat unit the edit applies to.
+        start: 1-based inclusive start.
+        end: 1-based inclusive end; ``start - 1`` for an insertion.
+        inserted: The inserted bases; empty for a deletion.
+
+    Returns:
+        tuple[int, int, str]: The 5'-most ``(start, end, inserted)``.
+    """
+    if not inserted:
+        while start > 1 and unit[end - 1] == unit[start - 2]:
+            start, end = start - 1, end - 1
+        return start, end, inserted
+
+    while start > 1 and inserted[-1] == unit[start - 2]:
+        inserted = inserted[-1] + inserted[:-1]
+        start, end = start - 1, end - 1
+    return start, end, inserted
+
+
+def ambiguity_interval(unit: str, start: int, end: int, inserted: str) -> tuple[int, int] | None:
+    """The span within which every anchor describes the same allele.
+
+    ``59dupC``, ``53dupC`` and the older ``27dupC`` are one event, not three. Stating
+    the window is what makes that visible.
+
+    Args:
+        unit: The repeat unit the edit applies to.
+        start: 1-based inclusive start.
+        end: 1-based inclusive end; ``start - 1`` for an insertion.
+        inserted: The inserted bases; empty for a deletion.
+
+    Returns:
+        tuple[int, int] | None: The inclusive ``(low, high)`` window, or ``None`` when
+        the edit cannot shift at all (a 1 bp window carries no information) or when it
+        is a delins, which is anchored by definition.
+    """
+    start, end, inserted = _trim(unit, start, end, inserted)
+
+    if inserted and end >= start:
+        return None
+
+    low_start, _, _ = _roll_5prime(unit, start, end, inserted)
+    high_start, high_end, _ = normalise(unit, start, end, inserted)
+
+    if inserted:
+        # An insertion anchor is interbase ("before position p"), so the reference
+        # bases it is indistinguishable from end one short of the 3'-most anchor.
+        low, high = low_start, high_start - 1
+    else:
+        low, high = low_start, high_end
+
+    if high <= low:
+        return None
+    return low, high
+
+
+def _tract_at(unit: str, position: int) -> tuple[int, str, int] | None:
+    """Find the homopolymer run covering a position.
+
+    Args:
+        unit: The repeat unit.
+        position: 1-based position expected to sit inside a run.
+
+    Returns:
+        tuple[int, str, int] | None: ``(start, base, count)`` for a run of at least two
+        identical bases, else ``None``.
+    """
+    if not 1 <= position <= len(unit):
+        return None
+
+    base = unit[position - 1]
+    start = position
+    while start > 1 and unit[start - 2] == base:
+        start -= 1
+    end = position
+    while end < len(unit) and unit[end] == base:
+        end += 1
+
+    count = end - start + 1
+    return (start, base, count) if count >= 2 else None
+
+
+def repeat_form(unit: str, start: int, end: int, inserted: str) -> str | None:
+    """Express the edit as a change in tract copy number.
+
+    ``53C[7]>53C[8]`` states what was actually measured -- the tract went from 7 to 8
+    copies -- instead of implying we know which base was added. It also scales: an
+    ``insCCCC`` reads ``53C[11]``, far clearer than ``56_59dupCCCC``.
+
+    Args:
+        unit: The repeat unit the edit applies to.
+        start: 1-based inclusive start.
+        end: 1-based inclusive end; ``start - 1`` for an insertion.
+        inserted: The inserted bases; empty for a deletion.
+
+    Returns:
+        str | None: The repeat form, or ``None`` when the edit does not sit in a
+        detectable tract or does not change that tract's length.
+    """
+    start, end, inserted = _trim(unit, start, end, inserted)
+
+    if inserted and end >= start:
+        return None
+
+    if inserted:
+        if len(set(inserted)) != 1:
+            return None
+        anchor = start - 1
+        delta = len(inserted)
+    else:
+        deleted = unit[start - 1 : end]
+        if not deleted or len(set(deleted)) != 1:
+            return None
+        anchor = start
+        delta = -(end - start + 1)
+
+    tract = _tract_at(unit, anchor)
+    if tract is None:
+        return None
+
+    tract_start, base, count = tract
+    if base != (inserted[0] if inserted else unit[start - 1]):
+        return None
+
+    return f"{tract_start}{base}[{count}]>{tract_start}{base}[{count + delta}]"
 
 
 def _name_insertion(unit: str, start: int, inserted: str) -> str:
