@@ -293,7 +293,17 @@ def format_note(signal: SubthresholdSignal, template: str) -> str | None:
     }
     try:
         rendered = template.format(**fields)
-    except (KeyError, IndexError, ValueError) as error:
+    except (AttributeError, IndexError, KeyError, ValueError) as error:
+        # The four `str.format` raises for an operator-supplied template, measured rather
+        # than guessed and pinned one per class by `TestRendering`:
+        #   AttributeError  {marker.upper.foo}   an attribute lookup that does not resolve
+        #   IndexError      {marker[9]}, {0}     an index, or a positional field
+        #   KeyError        {nope}               a field name that does not exist
+        #   ValueError      {marker, {events:s}  unterminated, or a bad format spec
+        # `AttributeError` was missing until Sourcery caught it on #276, and it was the one
+        # that mattered: this function's contract is that a misconfigured sentence costs the
+        # note and never the run, and an escaping AttributeError would have aborted report
+        # generation instead.
         logger.error("subthreshold_note.template is not renderable (%s); no note will be written.", error)
         return None
     return " ".join(rendered.split())

@@ -329,11 +329,39 @@ class TestRendering:
         assert "\n" not in note
         assert "\t" not in note
 
-    def test_a_template_naming_an_unknown_field_yields_no_note(self):
-        assert st.format_note(self.signal(), "{marker} {not_a_field}") is None
+    @pytest.mark.parametrize(
+        ("template", "raises"),
+        [
+            ("{marker} {not_a_field}", KeyError),
+            ("{marker} {", ValueError),
+            # The one Sourcery caught on #276. `str.format` resolves attributes, and a
+            # template that dereferences one raises AttributeError -- which used to escape
+            # and abort report generation, contradicting this function's own contract.
+            ("{marker.upper.foo}", AttributeError),
+            ("{marker[999]}", IndexError),
+            ("{0}", IndexError),
+            ("{events:s}", ValueError),
+            ("{events:{marker}}", ValueError),
+        ],
+    )
+    def test_a_template_the_operator_got_wrong_costs_the_note_and_not_the_run(self, template, raises):
+        """Guard the guard: each case asserts the exception class it stands for is really
+        the one raised, so the handler's tuple is pinned by behaviour rather than by
+        guesswork about what `str.format` does."""
+        with pytest.raises(raises):
+            # The same field values `format_note` supplies, so the guard cannot pass for a
+            # different reason than the assertion below -- `{marker[9]}` is in range for the
+            # real marker and out of range for a short stand-in.
+            template.format(
+                marker=st.NOTE_MARKER,
+                events=1,
+                noun="candidate variant",
+                best_depth_score="0.00312",
+                floor="0.00469",
+                rows=1,
+            )
 
-    def test_a_malformed_template_yields_no_note(self):
-        assert st.format_note(self.signal(), "{marker} {") is None
+        assert st.format_note(self.signal(), template) is None
 
     def test_the_rendered_note_is_findable(self):
         """The writer's output and the reader's matcher agree, which is the contract
