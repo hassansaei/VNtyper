@@ -13,6 +13,7 @@ and ``bool("False")`` is ``True`` -- so a cast would turn a failing gate into a 
 """
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -298,8 +299,9 @@ class TestRendering:
         "filtered out, not a call."
     )
 
-    def signal(self, **overrides) -> st.SubthresholdSignal:
-        values = {"events": 1, "rows": 1, "best_depth_score": 0.00312, "floor": 0.00469}
+    def signal(self, **overrides: float) -> st.SubthresholdSignal:
+        """A signal with only the fields a test cares about named."""
+        values: dict[str, Any] = {"events": 1, "rows": 1, "best_depth_score": 0.00312, "floor": 0.00469}
         values.update(overrides)
         return st.SubthresholdSignal(**values)
 
