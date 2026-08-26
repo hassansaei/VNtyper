@@ -167,6 +167,10 @@ version = {attr = "vntyper.version.__version__"}
     "dependencies/kestrel/*.jar",
     "modules/shark/shark_config.json",
     "modules/advntr/advntr_config.json",
+    # Provenance for the Polymorphic_Call denylist (#267). Packaged for the same reason
+    # `scripts/calibration.json` is: production never reads either, but an installed copy
+    # is what lets an operator see where a shipped constant came from.
+    "modules/advntr/advntr_calibration.json",
 ]
 
 # ===========================

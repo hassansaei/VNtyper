@@ -35,3 +35,4 @@ include vntyper/scripts/calibration.json
 # Include the configuration files for the modules
 include vntyper/modules/shark/shark_config.json
 include vntyper/modules/advntr/advntr_config.json
+include vntyper/modules/advntr/advntr_calibration.json
