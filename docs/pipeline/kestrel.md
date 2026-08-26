@@ -210,6 +210,80 @@ Only variants where **all** applicable filters are `True` are retained. From the
 
 The final result is written to `kestrel_result.tsv` with metadata headers (VNtyper 2 version, analysis date, reference file). A BED file (`output.bed`) is generated from the variant position for IGV visualization. An unfiltered pre-result file (`kestrel_pre_result.tsv`) is also saved for debugging.
 
+## The Below-Reporting-Floor Note
+
+A candidate that fails **only** the depth gate is a well-formed pathogenic-frame variant
+that was too faint to call. Until [#266](https://github.com/hassansaei/VNtyper/issues/266)
+it left no trace: the sample rendered identically to one where nothing was ever found.
+
+It now produces one extra `##` banner line in `kestrel_result.tsv`:
+
+```
+## VNtyper Kestrel result
+## VNtyper Version: 2.0.23
+## Analysis date: 2026-08-26 21:59:44
+## Reference file: reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
+## Subthreshold candidate: 4 candidate variants in the pathogenic frame identified below the
+   reporting floor (best Depth_Score 0.0040072, floor 0.00469); filtered out and NOT a call.
+   Depth_Score is a ratio against an active-region depth summed over the repeat array, so the
+   same read support scores lower on a longer allele.
+```
+
+**It is a comment, never a row.** `summary.parse_tsv` routes `#` lines into `comments` and
+`data` never sees them, so the 10-column negative placeholder is unchanged and nothing that
+reads the table can mistake a suppressed candidate for a call. `cross_match` and cohort
+mode read `parsed_result["data"]` only and never see it at all.
+
+### Which rows qualify
+
+A row is a subthreshold candidate only when **every** structural gate is explicitly `True`
+and `depth_confidence_pass` is explicitly `False`:
+
+| gate | why a failure disqualifies the row |
+|------|------------------------------------|
+| `is_frameshift`, `is_valid_frameshift` | not a pathogenic-frame event, so not a candidate for this locus at all |
+| `alt_filter_pass` | the configured ALT exclusion; not an admissible call shape |
+| `motif_filter_pass` | anchored in a motif partition the assay does not call from |
+| `flag_filter_pass` | **the decisive one.** The row carries a flag `kestrel_config.json` declares an artifact ([#174](https://github.com/hassansaei/VNtyper/issues/174)), and its `Depth_Score` may be excellent. Calling that "subthreshold" would say *weak signal* where the truth is *strong signal, deliberately discarded*. |
+
+A gate cell that carries no recognisable verdict — blank, `NaN`, an unexpected token —
+disqualifies the row in both directions. "Not `True`" and "`False`" are different claims,
+and a row whose depth verdict was never recorded is not one known to be subthreshold.
+
+### When it appears
+
+**Only on a sample that called nothing.** Measured on the 400-run simulated benchmark
+(200 carriers, 200 matched non-carriers, ~208x, GRCh38):
+
+| sample group | n | with an eligible subthreshold row |
+|---|---|---|
+| false negatives | 22 | **22** |
+| true negatives | 200 | **1** |
+| called samples | 178 | 85 |
+
+Printing it beside a call would put it on 48% of the positives, where the eligible rows are
+weaker descriptions of the event that *was* called. Which of several passing candidates gets
+reported is [#270](https://github.com/hassansaei/VNtyper/issues/270)'s subject.
+
+### What it does not do
+
+The reporting floor **did not move**. `depth_score_thresholds.low` is unchanged at
+`0.00469`, and a subthreshold candidate is not a call:
+[#147](https://github.com/hassansaei/VNtyper/issues/147) established that such variants must
+not be called, and that still holds. The screening state becomes `negative_subthreshold`,
+declared under `algorithm_logic.kestrel.non_finding_results` in `report_config.json`, so
+`is_finding` classifies it as a non-finding and neither the masthead chip nor the summary
+box is styled as a finding. Cohort mode counts the sample as `Negative`.
+
+The number itself needs care: `Depth_Score` is a ratio against an active-region depth summed
+over the repeat array, so one mutant unit among N copies scores roughly `1/N` regardless of
+sequencing depth. A given score therefore means something different on a long allele than on
+a short one, which is why the note says so in the output rather than only here.
+
+Set `subthreshold_note.enabled` to `false` in `kestrel_config.json` to restore the
+pre-#266 output exactly. The graded-confidence work this is the reporting mechanism for is
+[#173](https://github.com/hassansaei/VNtyper/issues/173).
+
 ## Reference
 
 Saei H. et al., *iScience* 26, 107171 (2023). All thresholds and heuristics in the postprocessing pipeline are derived from this publication.

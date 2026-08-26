@@ -171,3 +171,83 @@ Rows that survive the filter are ranked, and the selection priority is:
 This means a High_Precision unflagged variant will always be selected over a High_Precision flagged variant, even if the flagged variant has a higher depth score. This behavior ensures that flagged calls do not take priority over cleaner ones.
 
 Step 2 still applies to advisory flags only, since artifact-flagged rows are already gone by the time selection runs.
+
+## adVNTR Flagging Rules
+
+Everything above describes Kestrel's flags, declared in `kestrel_config.json`. The optional
+adVNTR module has its own three rules in `vntyper/modules/advntr/advntr_config.json`,
+evaluated by the same `add_flags` machinery against adVNTR's result frame.
+
+None of them is an artifact flag in the `artifact_flags` sense: adVNTR has no equivalent
+gate, so a flagged adVNTR call is still reported. `report_config.json` maps it to
+`positive flagged`, which `is_finding` still counts as a finding — the flag downgrades a
+call visibly, it does not withdraw it.
+
+| Rule | Condition | What it asserts |
+|------|-----------|-----------------|
+| `Low_Coverage` | `NumberOfSupportingReads < 10` | Too few supporting reads to be confident. A threshold, not a claim about the state. |
+| `Repeat_Unit_7` | `RU == '7'` | A call in repeat unit 7, an established recurrent artifact. |
+| `Polymorphic_Call` | `Variant in [...24 states...]` | The state string matches one of a list of recurrent events treated as artifacts. |
+
+### What `Polymorphic_Call` asserts, and where the list came from
+
+@hassansaei on [#267](https://github.com/hassansaei/VNtyper/issues/267): a polymorphic or
+artifact call is *"a recurrent event observed in positive and/or negative samples, likely
+originating from motif differences at that locus rather than a true pathogenic event"*.
+The entries were derived by running an older adVNTR — pre-2.0.4 — over the `renome`
+cohort and recording the states that recurred across many samples. **No per-entry
+observation count was retained.**
+
+That provenance now lives in `vntyper/modules/advntr/advntr_calibration.json`, one record
+per entry with a `status` of `confirmed_artifact` or `pending_renome_revalidation`.
+Production code never reads that file; `tests/unit/test_advntr_polymorphic_calls.py`
+asserts it and the live rule agree. It is the same pattern
+`vntyper/scripts/calibration.json` uses for the Kestrel constants.
+
+!!! warning "The key cannot separate an artifact from a pathogenic variant"
+    adVNTR's State string records the *shape* of an event — the repeat unit, the length,
+    and the **first inserted base only** (`advntr/vntr_finder.py`: *"If there are run of
+    insertions, the sequence might differ, but we just take the first base"*). It does not
+    record the allele.
+
+    So a recurrent benign single-base insertion and a pathogenic single-base duplication in
+    the same unit produce the **same string**, and no denylist keyed on that string can
+    tell them apart, whatever cohort it was derived from. The MUC1 array carries repeat
+    units with both `TTGGGGGG` and `TGGGGGGG`, so a G inserted into that run is placeable
+    either way — @hassansaei's note on #267, and the same ambiguity seen from the sequence
+    side.
+
+    Measured on the 400-run simulated benchmark (VNtyper 2.0.22, GRCh38, refs-v2): of the
+    172 carriers adVNTR detects, **8 carry a `Polymorphic_Call` row** — every one of the
+    5 `dupA` carriers it detects, and 3 of 7 `delGCCCA` carriers. No control sample
+    produced any adVNTR call at all.
+
+    Keying the flag on something richer than the state string is
+    [#267](https://github.com/hassansaei/VNtyper/issues/267)'s suggestion 4 and is not
+    decided.
+
+### Reachability: why the list is 24 entries and not 32
+
+Flagging runs **after** the pathogenic-frame filter (`advntr_processing_ins` /
+`advntr_processing_del`), which keeps only rows whose signed net indel change Δ satisfies
+`Δ % 3 == 1`. An entry that does not is removed before `add_flags` is ever reached and can
+never fire.
+
+Seven of the 32 shipped entries were in that state, and one was listed twice. They were
+removed in the #267 cleanup with the owner's agreement; replaying both lists over the
+adVNTR output of all 400 simulated samples changes **no** `Flag` value.
+
+`tests/unit/test_advntr_polymorphic_calls.py` runs the production filter arms over the
+live list, so a future unreachable entry fails the build. That matters here because the
+failure mode is silent: `evaluate_condition` downgrades a `NameError` to a warning and
+returns `False`, which is how `Polymorphic_Call` shipped misspelled as `Poylmorhic_Call`
+until `742b872`, and how `Repeat_Unit_7` shipped as `RU == 7` — comparing a string column
+against an integer — until `52f822e`.
+
+### What is still open
+
+23 of the 24 live entries are recorded as `pending_renome_revalidation`. @hassansaei asked
+on #267 for them to be re-measured against the re-analysed renome cohort and decided case
+by case; only `D58_2&D59_2` (and the separate `Repeat_Unit_7` rule) are confirmed. Until
+then they remain flagged exactly as shipped. Acting on that decision is a data edit to
+`advntr_config.json` and `advntr_calibration.json` — no code change.
