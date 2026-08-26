@@ -52,6 +52,17 @@ whether it is confirmed or awaiting re-validation. New tests run the production 
 the live list, so a future dead entry fails the build rather than disabling itself in
 silence — as `Poylmorhic_Call` and `RU == 7` both did.
 
+**One fix here is unrelated to either issue.** The cohort-report fingerprint oracle
+(`tests/unit/test_cohort_summary_oracle.py`) excluded the embedded base64 PNG *payloads* —
+"a hash that turns red on `pip install -U plotly` stops being read" — but pinned their
+count. plotly 6.9.0 emits four of its own 114-character scaffolding images where 7.0.0
+emits two, so the oracle went red on `main` itself the first time CI resolved dependencies
+afresh. Those two lines were the entire difference between the documents. The section is
+dropped and the fingerprint re-recorded; both dependency sets now produce a byte-identical
+document, and the property the section was for — an image with no payload is a broken chart
+— is now its own test that pins neither how many images there are nor that there are any.
+The charts' data is untouched and still pinned exactly.
+
 **Still open on #267:** 23 of the 24 live entries await re-measurement against the
 re-analysed renome cohort. On current code, 8 of the 172 carriers adVNTR detects carry a
 `Polymorphic_Call` row — including every `dupA` carrier it detects. adVNTR records only the

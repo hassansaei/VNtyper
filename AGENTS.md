@@ -668,6 +668,28 @@ summary | release-summary | none | always records success, failure, skipped jobs
     reconstructed from the commit before `52c4146596fef2d1e2402991fbab062ba8021889`;
     there is no exception or free-text waiver.
 
+18. **A characterisation fingerprint must exclude a dependency's scaffolding, not just
+    its payload.** `tests/unit/test_cohort_summary_oracle.py` hashes the assembled cohort
+    report. It excluded the embedded base64 PNG *payloads* on the stated grounds that "a
+    hash that turns red on `pip install -U plotly` stops being read" — and then pinned
+    their **count**, which is the same quantity one level up. Measured 2026-08-26: plotly
+    6.9.0 emits four 114-character scaffolding images and 7.0.0 emits two, so the oracle
+    went red on `main` itself the first time CI resolved dependencies afresh, with no
+    change to this project. The two `count=`/`nonempty=` lines were the *entire*
+    difference between the two documents.
+
+    Two rules follow. **Before adding a section to that document, ask whether a
+    dependency bump alone can move it** — a count, a length, an ordering and an
+    attribute set all can, not only a payload. And **a green run of that oracle proves
+    nothing about a fresh dependency resolution**: reproduce a CI-only fingerprint
+    failure with `uv venv --python 3.13 && uv pip install -e ".[dev]"` in a worktree at
+    the base commit before assuming the branch caused it. The conda `vntyper` env pins
+    older packages than CI resolves.
+
+    The replacement states the property rather than the quantity — no embedded image is
+    left without a payload — and is deliberately vacuous if plotly stops emitting any,
+    because their existence is plotly's business and not this project's.
+
 ## Never
 
 - Never create, move, or push a release tag as an agent. A tag alone no longer starts

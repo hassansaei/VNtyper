@@ -45,7 +45,8 @@ What it deliberately excludes, and why
   payloads were excluded but their *count* was pinned, and plotly 6.9.0 emits four of its
   114-character scaffolding images where 7.0.0 emits two. The digest went red on
   `main` itself under a fresh dependency resolution, with no change to this project.
-  `test_every_embedded_image_carries_a_payload` keeps the part that was about VNtyper.
+  `test_no_embedded_image_is_left_without_a_payload` keeps the part that was about
+  VNtyper, and states it so that it cannot go red for the same reason.
 * The report timestamp and plotly's per-figure UUIDs, which are new on every render.
 
 What this oracle does **not** cover
@@ -412,8 +413,8 @@ def _fingerprint(html: str) -> tuple[str, str]:
         # Nothing is lost. What the charts *say* is pinned exactly by [CHART-VALUES],
         # [CHART-LABELS] and [CHART-TOTALS] above; that every embedded image carries a
         # payload is asserted readably by
-        # `test_every_embedded_image_carries_a_payload`, which does not pin how many
-        # there are.
+        # `test_no_embedded_image_is_left_without_a_payload`, which does not pin how
+        # many there are, nor that there are any.
         "[SKELETON]",
         _skeleton(html),
     ]
@@ -627,17 +628,23 @@ def test_the_cohort_report_matches_its_recorded_fingerprint(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_every_embedded_image_carries_a_payload(tmp_path) -> None:
+def test_no_embedded_image_is_left_without_a_payload(tmp_path) -> None:
     """What the dropped ``[IMAGES]`` digest section was actually for.
 
-    An image rendered as an empty ``src`` is a broken chart, and that is worth catching.
-    How *many* images the page carries is plotly's business and changes between its
-    releases, so this asserts the property without pinning the count.
+    An image rendered with an empty ``src`` is a broken chart, and that is worth catching.
+
+    It is stated as a safety property over whatever images the page happens to carry, and
+    **deliberately not** as "there is at least one". Every such image today is plotly's own
+    114-character scaffolding, so requiring one to exist would assert something about
+    plotly's markup and would go red on the next release that stops emitting it -- which is
+    the exact failure this test was written to replace. If plotly emits none, this passing
+    vacuously is the correct outcome: the charts are pinned by their *data*, above.
     """
     srcs = _BASE64_PNG.findall(_render(tmp_path))
 
-    assert srcs, "the report embedded no images at all"
-    assert all(len(src) > 64 for src in srcs), "an embedded image carries no payload"
+    empty = [src for src in srcs if len(src) <= 64]
+
+    assert not empty, f"{len(empty)} of {len(srcs)} embedded images carry no payload"
 
 
 def test_the_kestrel_table_keeps_its_column_order(tmp_path) -> None:
