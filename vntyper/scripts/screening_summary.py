@@ -250,8 +250,8 @@ class ScreeningSummary:
 
         The two algorithms are treated differently, and the asymmetry is read off the
         configuration rather than chosen. ``advntr_result`` has a value for a stage that
-        never ran -- :data:`NOT_PERFORMED` -- and ten of the forty configured rules are
-        keyed on it, so an absent adVNTR stage is a state the table covers *in words*.
+        never ran -- :data:`NOT_PERFORMED` -- and twelve of the forty-eight configured rules
+        are keyed on it, so an absent adVNTR stage is a state the table covers *in words*.
         ``kestrel_result`` has no such value: a Kestrel stage that produced nothing hands
         :func:`compute_algorithm_result` an empty frame, which returns the block's
         ``default`` -- the same ``negative`` token a stage that genotyped and called
@@ -282,7 +282,7 @@ class ScreeningSummary:
         contradicting both the rule table and ``is_positive``.
 
         In practice ``matched_rule`` is False only through the ``except Exception``
-        path in :func:`build_screening_summary`: every one of the 40 reachable
+        path in :func:`build_screening_summary`: every one of the 48 reachable
         ``(kestrel_result, advntr_result, quality_metrics_pass)`` combinations
         resolves to a configured rule (``tests/unit/test_screening_summary.py::
         test_every_reachable_state_has_its_own_message``). So a ``"indeterminate"``

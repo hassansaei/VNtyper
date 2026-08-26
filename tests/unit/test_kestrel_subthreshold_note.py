@@ -273,6 +273,25 @@ class TestTheScoredEmptyBranch:
 
         assert not any(st.NOTE_MARKER in line for line in comments)
 
+    def test_the_combined_empty_branch_never_reads_a_stale_pre_result(self, tmp_path: Path):
+        """The *second* pre-scoring branch: the derived VCFs parsed, but preprocessing left
+        nothing to score. It runs before `process_kmer_results`, so any pre-result on disk
+        belongs to an earlier run into this directory and must not be described."""
+        pre_result(tmp_path / "kestrel_pre_result.tsv", [{}])
+        vcf = self.raw_vcf(tmp_path, self.RECORD)
+
+        with (
+            mock.patch.object(kg, "load_muc1_reference", return_value=pd.DataFrame()),
+            mock.patch.object(kg, "preprocessing_insertion", return_value=pd.DataFrame()),
+            mock.patch.object(kg, "preprocessing_deletion", return_value=pd.DataFrame()),
+        ):
+            assert kg.process_kestrel_output(str(tmp_path), vcf, "ref.fa", self.config(), {}) is None
+
+        comments, rows = read_back(tmp_path / "kestrel_result.tsv")
+
+        assert not any(st.NOTE_MARKER in line for line in comments), "a stale pre-result was described"
+        assert rows[0]["Confidence"] == "Negative"
+
     def test_the_unscored_empty_branch_never_reads_a_stale_pre_result(self, tmp_path: Path):
         """A pre-result left by an earlier run into the same directory must not be
         described as if it belonged to this one. The branch reached here -- both derived

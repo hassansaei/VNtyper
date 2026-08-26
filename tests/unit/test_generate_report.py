@@ -14,6 +14,7 @@ IGV generation is never triggered -- ``bed_file`` is left unset, so
 """
 
 import copy
+import html as html_module
 import json
 import logging
 import re
@@ -3106,7 +3107,51 @@ class TestSubthresholdNoteInTheReport:
 
         assert subthreshold.NOTE_MARKER not in html
 
+    def screening_text(self, html: str) -> str:
+        """The screening box's own sentences, and nothing else on the page.
+
+        Scoped deliberately. Searching the whole document for these phrases finds them in
+        the Kestrel-section note as well -- which is what the earlier version of this test
+        did, so it stayed green whether or not the screening state was promoted at all.
+        """
+        parts = re.findall(r'<p class="(?:headline|detail)">(.*?)</p>', html, re.DOTALL)
+        assert parts, "no screening segments were rendered"
+        return " ".join(html_module.unescape(part).strip() for part in parts)
+
     def test_the_screening_message_describes_the_suppressed_candidate(self, tmp_path):
+        """The screening box must say it, not merely the page somewhere."""
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], [SUBTHRESHOLD_NOTE]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        text = self.screening_text(render(tmp_path))
+
+        assert "below the reporting floor" in text
+        assert "not a call" in text
+        assert "No variant detected" not in text
+
+    def test_a_plain_negative_still_gets_the_plain_negative_message(self, tmp_path):
+        """Guard the guard: if the promoted message were the only one this file exercised,
+        the assertions above would not distinguish it from the shipped negative one."""
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], ["VNtyper Kestrel result"]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        text = self.screening_text(render(tmp_path))
+
+        assert "below the reporting floor" not in text
+        assert "No variant detected" in text
+
+    def test_the_kestrel_section_does_not_contradict_the_note_beside_it(self, tmp_path):
+        """`detected` and `called` are not synonyms. A section that says nothing was
+        detected, directly above a line saying a candidate was identified, is wrong on its
+        own terms -- and it is the exact surface this issue is about."""
         write_summary(
             tmp_path,
             tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
@@ -3116,8 +3161,23 @@ class TestSubthresholdNoteInTheReport:
 
         html = render(tmp_path)
 
-        assert "below the reporting floor" in html
-        assert "not a call" in html
+        assert "No variant called by Kestrel in this sample." in html
+        assert "No variant detected by Kestrel in this sample." not in html
+
+    def test_a_plain_negative_keeps_the_shipped_kestrel_sentence(self, tmp_path):
+        """The wording above is only for the subthreshold case; nothing was detected on a
+        plain negative and that sentence is shipped copy."""
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], ["VNtyper Kestrel result"]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        html = render(tmp_path)
+
+        assert "No variant detected by Kestrel in this sample." in html
+        assert "No variant called by Kestrel in this sample." not in html
 
     def test_the_masthead_is_not_styled_as_a_finding(self, tmp_path):
         """The whole point of #266's guard: a suppressed candidate must be impossible to
