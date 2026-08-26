@@ -53,6 +53,7 @@ from vntyper.scripts.scoring import (
     split_depth_and_calculate_frame_score,
     split_frame_score,
 )
+from vntyper.scripts.subthreshold import detect_from_file, format_note
 from vntyper.scripts.utils import load_config, run_command
 
 # Modularized functions for variant parsing/scoring/confidence
@@ -90,6 +91,22 @@ def load_kestrel_config(config_path=None):
 # Load the Kestrel configuration globally so it can be used
 # by run_kestrel() and subsequent steps
 kestrel_config = load_kestrel_config()
+
+
+#: The boolean gate columns :func:`filter_final_dataframe` requires and ANDs, in order.
+#:
+#: A module constant rather than a list inside that function because
+#: :func:`vntyper.scripts.subthreshold.detect` is handed it: eligibility for the #266
+#: below-reporting-floor note is "fails ``depth_confidence_pass`` and nothing else", and
+#: restating the gates there would let a seventh gate be added here and silently widen it.
+FILTER_COLUMNS: tuple[str, ...] = (
+    "is_frameshift",
+    "is_valid_frameshift",
+    "depth_confidence_pass",
+    "alt_filter_pass",
+    "motif_filter_pass",
+    "flag_filter_pass",
+)
 
 
 def generate_header(reference_vntr, version=VERSION):
@@ -433,6 +450,54 @@ def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
     return True
 
 
+def _subthreshold_note(output_dir, config):
+    """The #266 banner line for a sample that called nothing, or None.
+
+    Emitted only on the no-call path, and only from the one `output_empty_result` branch
+    that has a scored frame behind it. On the 400-sample simulated benchmark the eligible
+    set covers 22 of 22 false negatives and 1 of 200 true negatives -- but also 85 of 178
+    *called* samples, where the eligible rows are weaker descriptions of the event that was
+    called. Printing it there would be noise beside a call, which is the user confusion
+    @hassansaei warned about on #266; which of several passing candidates is reported is
+    #270's subject, not this one.
+
+    The two earlier `output_empty_result` branches run before anything is scored, so no
+    pre-result of this run exists there and reading one could only pick up a stale file from
+    an earlier run into the same output directory.
+
+    Args:
+        output_dir (str): The Kestrel output directory, holding `kestrel_pre_result.tsv`.
+        config (dict): The Kestrel configuration.
+
+    Returns:
+        str or None: The line, or None when the feature is off, nothing is eligible, or the
+        evidence cannot be read. Never raises: the note is an annotation, and losing one
+        must not cost a result.
+    """
+    settings = config.get("subthreshold_note", {})
+    if not settings.get("enabled", False):
+        return None
+    template = settings.get("template")
+    if not template:
+        logger.warning("subthreshold_note is enabled but carries no template; no note will be written.")
+        return None
+    # A partial configuration is an operator error the pipeline refuses elsewhere
+    # (`calculate_depth_score_and_assign_confidence` raises KeyError on one), but this is an
+    # annotation: a config without the floor should lose the note, not the run.
+    try:
+        floor = config["confidence_assignment"]["depth_score_thresholds"]["low"]
+    except (KeyError, TypeError):
+        logger.warning(
+            "No confidence_assignment.depth_score_thresholds.low in the Kestrel config; "
+            "no subthreshold note will be written."
+        )
+        return None
+    signal = detect_from_file(os.path.join(output_dir, "kestrel_pre_result.tsv"), FILTER_COLUMNS, floor)
+    if signal is None:
+        return None
+    return format_note(signal, template)
+
+
 def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config):
     """
     Processes the Kestrel output VCF files after Kestrel finishes.
@@ -544,7 +609,9 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
 
     if processed_df.empty:
         logger.warning("Final processed DataFrame is empty. Writing empty result.")
-        output_empty_result(output_dir, header)
+        # #266: the one empty-result branch with a scored frame behind it, and therefore the
+        # only one that can say anything about what was suppressed.
+        output_empty_result(output_dir, header, note=_subthreshold_note(output_dir, kestrel_config))
         return None
 
     # Flagging is now applied inside process_kmer_results() (step 6.5) so that
@@ -575,7 +642,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     return processed_df
 
 
-def output_empty_result(output_dir, header):
+def output_empty_result(output_dir, header, note=None):
     """
     Creates an empty result file with correct headers and a
     placeholder 'Negative' variant row to indicate no variants
@@ -584,6 +651,11 @@ def output_empty_result(output_dir, header):
     Args:
         output_dir (str): Path to where we place the resulting .tsv
         header (list of str): The header lines from generate_header().
+        note (str, optional): One extra banner line, appended after `header` as a `##`
+            comment. #266's below-reporting-floor note arrives this way. It is a comment
+            and never a row, so the 10-column placeholder schema below is unchanged and
+            no consumer that reads the table can mistake it for a call -- `parse_tsv`
+            routes `#` lines into `comments`, and `data` never sees them.
     """
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
 
@@ -601,8 +673,13 @@ def output_empty_result(output_dir, header):
     }
     empty_df = pd.DataFrame(empty_result_data)
 
+    banner = list(header)
+    if note:
+        banner.append(f"## {note}")
+        logger.info("Recording a below-reporting-floor note on an otherwise empty result.")
+
     with open(final_output_path, "w") as f:
-        f.write("\n".join(header) + "\n")
+        f.write("\n".join(banner) + "\n")
         empty_df.to_csv(f, sep="\t", index=False)
 
     logger.info(f"Empty result file with placeholder saved at {final_output_path}")
@@ -950,14 +1027,7 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
         return df
 
     # Columns every non-empty frame is required to carry
-    filter_cols = [
-        "is_frameshift",
-        "is_valid_frameshift",
-        "depth_confidence_pass",
-        "alt_filter_pass",
-        "motif_filter_pass",
-        "flag_filter_pass",
-    ]
+    filter_cols = FILTER_COLUMNS
 
     # Build a mask requiring all existing boolean filters == True
     final_mask = pd.Series(True, index=df.index)
