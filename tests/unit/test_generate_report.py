@@ -13,6 +13,7 @@ IGV generation is never triggered -- ``bed_file`` is left unset, so
 ``create_report`` is never invoked and the tier stays pure.
 """
 
+import copy
 import json
 import logging
 import re
@@ -26,7 +27,14 @@ from jinja2 import DictLoader
 
 import vntyper
 from vntyper.cli import load_config
-from vntyper.scripts import generate_report, report_context_contract, report_formatting, summary, summary_steps
+from vntyper.scripts import (
+    generate_report,
+    report_context_contract,
+    report_formatting,
+    subthreshold,
+    summary,
+    summary_steps,
+)
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -3026,3 +3034,139 @@ def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_
     rendered = (tmp_path / "legacy.html").read_text(encoding="utf-8")
     assert rendered.startswith("green|green|red|green|red|green|High_Precision|none|")
     assert '<p id="legacy-igv">legacy alignment view</p>' in rendered
+
+
+# ---------------------------------------------------------------------------
+# The below-reporting-floor note -- #266
+# ---------------------------------------------------------------------------
+
+SUBTHRESHOLD_NOTE = (
+    f"{subthreshold.NOTE_MARKER} 1 candidate variant in the pathogenic frame identified below "
+    "the reporting floor (best Depth_Score 0.0031, floor 0.00469); filtered out and NOT a call."
+)
+
+
+def kestrel_step_with_comments(rows: list[dict], comments: list[str]) -> dict:
+    """A Kestrel step carrying banner comments as ``summary.parse_tsv`` records them."""
+    return {"step": summary_steps.STEP_KESTREL, "parsed_result": {"comments": comments, "data": rows}}
+
+
+class TestSubthresholdNoteInTheReport:
+    """The note is rendered in the negative branch, escaped, and never beside a call."""
+
+    def test_the_note_renders_when_the_run_recorded_one(self, tmp_path):
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], ["VNtyper Kestrel result", SUBTHRESHOLD_NOTE]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        html = render(tmp_path)
+
+        assert subthreshold.NOTE_MARKER in html
+        assert "best Depth_Score 0.0031" in html
+
+    def test_no_note_renders_when_none_was_recorded(self, tmp_path):
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], ["VNtyper Kestrel result"]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        html = render(tmp_path)
+
+        assert subthreshold.NOTE_MARKER not in html
+
+    def test_the_note_is_escaped_rather_than_injected(self, tmp_path):
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], [f"{subthreshold.NOTE_MARKER} <script>alert(1)</script>"]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        html = render(tmp_path)
+
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_the_note_does_not_render_beside_a_call(self, tmp_path):
+        """It is never written on a called sample, and the template's branch makes that
+        structural rather than incidental: the negative branch is the only one that has it."""
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([KESTREL_ROW], [SUBTHRESHOLD_NOTE]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        html = render(tmp_path)
+
+        assert subthreshold.NOTE_MARKER not in html
+
+    def test_the_screening_message_describes_the_suppressed_candidate(self, tmp_path):
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], [SUBTHRESHOLD_NOTE]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        html = render(tmp_path)
+
+        assert "below the reporting floor" in html
+        assert "not a call" in html
+
+    def test_the_masthead_is_not_styled_as_a_finding(self, tmp_path):
+        """The whole point of #266's guard: a suppressed candidate must be impossible to
+        mistake for a call, by the chip's tone or by the emphasis the box is drawn with.
+
+        The raw token is *not* banned from the page -- the raw-state provenance line
+        prints every computed state verbatim, ``High_Precision_flagged`` included -- so
+        this asserts on the two places that carry a judgement instead.
+        """
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], [SUBTHRESHOLD_NOTE]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        html = render(tmp_path)
+
+        state = re.search(r'<header class="masthead"[^>]*\bdata-state="([^"]*)"', html, re.DOTALL)
+        # The chip's value sits in a nested span, so match the whole <li> and then look
+        # inside it -- a flat regex over the two would silently match nothing and pass.
+        chips = [
+            match
+            for match in re.finditer(r'<li class="chip" data-tone="([^"]*)">(.*?)</li>', html, re.DOTALL)
+            if "Negative subthreshold" in match.group(2)
+        ]
+
+        assert len(chips) == 1, "the chip must read as words, exactly once"
+        assert chips[0].group(1) == "none", "a suppressed candidate must not be toned as a finding"
+        assert state is not None
+        assert state.group(1) == "no-finding"
+
+    def test_an_older_report_config_withholds_the_note_entirely(self, tmp_path, monkeypatch):
+        """Promotion and rendering share one predicate. A configuration that cannot
+        describe the state renders exactly the report it rendered before #266 -- rather
+        than a `negative` message saying nothing was detected beside a line saying
+        something was."""
+        stripped = copy.deepcopy(generate_report.load_report_config())
+        stripped["algorithm_logic"]["kestrel"].pop("non_finding_results", None)
+        monkeypatch.setattr(generate_report, "load_report_config", lambda: stripped)
+
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], [SUBTHRESHOLD_NOTE]),
+            input_files={"bam": "sample.bam"},
+        )
+
+        html = render(tmp_path)
+
+        assert subthreshold.NOTE_MARKER not in html
+        assert "No variant detected by Kestrel in this sample." in html

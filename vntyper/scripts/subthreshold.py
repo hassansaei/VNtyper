@@ -260,7 +260,12 @@ def detect_from_file(
         return None
     try:
         frame = pd.read_csv(location, sep="\t")
-    except Exception as error:  # noqa: BLE001 - an unreadable annotation source must not abort a run
+    except (OSError, ValueError) as error:
+        # Narrow on purpose rather than a bare `except Exception`: this is a local read,
+        # not a process boundary, so it does not belong in the reviewed BLE001 inventory
+        # (AGENTS.md). The two cover what this call can actually raise -- `OSError` for the
+        # filesystem, and `ValueError` for both `pandas.errors.ParserError` (a ragged file)
+        # and `UnicodeDecodeError` (a non-UTF-8 one), each of which subclasses it.
         logger.warning("Could not read %s for the subthreshold note: %s", location, error)
         return None
     return detect(frame, gate_columns, floor)

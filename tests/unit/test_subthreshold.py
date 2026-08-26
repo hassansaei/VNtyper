@@ -248,8 +248,27 @@ class TestFileEntry:
     def test_a_directory_in_place_of_the_file_yields_no_signal(self, tmp_path: Path):
         assert st.detect_from_file(tmp_path, GATES, FLOOR) is None
 
-    def test_an_unparseable_file_yields_no_signal(self, tmp_path: Path):
-        path = tmp_path / "kestrel_pre_result.tsv"
+    @pytest.mark.parametrize(
+        ("name", "payload"),
+        [
+            # A ragged file: pandas.errors.ParserError, which subclasses ValueError.
+            ("ragged", b"a\tb\tc\n1\t2\n3\t4\t5\t6\t7\n"),
+            # Not UTF-8: UnicodeDecodeError, which also subclasses ValueError.
+            ("undecodable", b"a\tb\n\xff\xfe\t2\n"),
+        ],
+    )
+    def test_an_unparseable_file_yields_no_signal(self, tmp_path: Path, name, payload):
+        """These two really do raise. A file of NUL bytes does **not** -- pandas reads it
+        as a one-column empty frame -- so testing with that would exercise the empty-frame
+        path and leave the read handler uncovered while looking like it did not."""
+        path = tmp_path / f"{name}.tsv"
+        path.write_bytes(payload)
+
+        assert st.detect_from_file(path, GATES, FLOOR) is None
+
+    def test_a_file_of_nul_bytes_is_read_as_empty_rather_than_raising(self, tmp_path: Path):
+        """Pinned so the parametrisation above is not quietly reverted to this input."""
+        path = tmp_path / "nulls.tsv"
         path.write_bytes(b"\x00\x01\x02")
 
         assert st.detect_from_file(path, GATES, FLOOR) is None

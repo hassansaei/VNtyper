@@ -1221,6 +1221,19 @@
                 read. No Kestrel result is shown, and this is not a negative.</p>
         {% elif kestrel_step_recorded %}
             <p class="empty-state">No variant detected by Kestrel in this sample.</p>
+            {#
+              #266. One line, autoescaped, in the branch that renders a negative -- and only
+              there. It says a candidate was seen and suppressed; it is not a call, it
+              carries no statistics beyond its depth score, and nothing downstream reads it.
+              The state it produces, `negative_subthreshold`, is declared a non-finding in
+              `report_config.json`, so the masthead chip and the screening box are not
+              styled as findings either. `generate_report` withholds this whenever the
+              loaded configuration cannot describe that state, so the sentence above and
+              this line can never contradict each other.
+            #}
+            {% if kestrel_subthreshold_note %}
+                <p class="empty-state subthreshold-note">{{ kestrel_subthreshold_note }}</p>
+            {% endif %}
         {% else %}
             <p class="empty-state">Kestrel genotyping was not performed for this sample.</p>
         {% endif %}

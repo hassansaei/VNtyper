@@ -53,6 +53,7 @@ Functions:
     algorithm_state_text: One algorithm's state as the provenance line prints it
     message_segments: One configured message as the parts the report renders
     render_segments: Those parts reassembled, which must equal the message
+    supports_subthreshold: Whether this configuration can describe a subthreshold negative
     state_chips: The computed state as the masthead's chip row
     build_screening_summary: The three state axes to the configured message
 """
@@ -62,8 +63,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import pandas as pd
 
@@ -76,6 +78,16 @@ logger = logging.getLogger(__name__)
 #: Distinct from that block's ``default`` ("negative"), which means adVNTR ran and
 #: found nothing.
 NOT_PERFORMED = "none"
+
+#: The Kestrel state for a sample that called nothing but held a candidate failing only the
+#: depth gate (#266). It is a *described negative*, never a call: it is declared in
+#: ``report_config.json``'s ``algorithm_logic.kestrel.non_finding_results``, so
+#: :func:`is_finding` returns False for it and nothing styles it as a finding.
+#:
+#: The vocabulary is M6's (`.planning`'s milestone-7 reshape design), and only the
+#: vocabulary: ``state_reason``, the top-level ``algorithms`` block and execution-state
+#: pre-emption are that design's other half and remain deferred to #173/#223/#224.
+SUBTHRESHOLD_RESULT: Final[str] = "negative_subthreshold"
 
 #: How a stage's *execution* is reported, as distinct from what it called. The three
 #: values are :func:`~vntyper.scripts.summary_steps.get_step_state`'s three states in the
@@ -352,14 +364,27 @@ def result_word(result: str) -> str:
     return result.replace("_", " ").capitalize()
 
 
-def algorithm_chip(label: str, execution: str, result: str, default: str) -> StateChip:
+def algorithm_chip(
+    label: str,
+    execution: str,
+    result: str,
+    default: str,
+    non_finding: Sequence[str] = (),
+) -> StateChip:
     """One algorithm's chip: what it called, or that it called nothing.
+
+    This is a **second, independent** :func:`is_finding` call site --
+    :func:`build_screening_summary` makes the first, for ``is_positive``. They must be
+    given the same configuration or the masthead chip and the summary sentence can
+    disagree about the same sample, which is how #266's non-calling state would have been
+    toned as a finding while the sentence said otherwise.
 
     Args:
         label: :data:`KESTREL_LABEL` or :data:`ADVNTR_LABEL`.
         execution: One of the ``EXECUTION_*`` values.
         result: The computed result token.
         default: The algorithm block's configured ``default``.
+        non_finding: The block's configured ``non_finding_results``, if any.
 
     Returns:
         StateChip: The chip to render.
@@ -368,7 +393,7 @@ def algorithm_chip(label: str, execution: str, result: str, default: str) -> Sta
         return StateChip(label=label, value=NOT_PERFORMED_CHIP, tone=TONE_NONE)
     if execution != EXECUTION_PERFORMED:
         return StateChip(label=label, value=NOT_AVAILABLE_CHIP, tone=TONE_CAUTION)
-    tone = TONE_FINDING if is_finding(result, default) else TONE_NONE
+    tone = TONE_FINDING if is_finding(result, default, non_finding) else TONE_NONE
     return StateChip(label=label, value=result_word(result), tone=tone)
 
 
@@ -411,7 +436,8 @@ def state_chips(
 
     Args:
         summary: The computed screening state.
-        report_config: The parsed ``report_config.json``, for each block's ``default``.
+        report_config: The parsed ``report_config.json``, for each block's ``default``
+            and ``non_finding_results``.
         cross_match_available: Whether the cross-match stage produced a comparison.
         cross_match_is_positive: Whether that comparison found a match.
 
@@ -419,18 +445,22 @@ def state_chips(
         list[StateChip]: Kestrel, adVNTR and concordance, in scan order.
     """
     algorithm_logic = report_config.get("algorithm_logic", {})
+    kestrel_logic = algorithm_logic.get("kestrel", {})
+    advntr_logic = algorithm_logic.get("advntr", {})
     return [
         algorithm_chip(
             KESTREL_LABEL,
             summary.kestrel_execution,
             summary.kestrel_result,
-            algorithm_logic.get("kestrel", {}).get("default", FALLBACK_ALGORITHM_RESULT),
+            kestrel_logic.get("default", FALLBACK_ALGORITHM_RESULT),
+            kestrel_logic.get("non_finding_results", ()),
         ),
         algorithm_chip(
             ADVNTR_LABEL,
             summary.advntr_execution,
             summary.advntr_result,
-            algorithm_logic.get("advntr", {}).get("default", FALLBACK_ALGORITHM_RESULT),
+            advntr_logic.get("default", FALLBACK_ALGORITHM_RESULT),
+            advntr_logic.get("non_finding_results", ()),
         ),
         concordance_chip(summary, cross_match_available, cross_match_is_positive),
     ]
@@ -527,22 +557,59 @@ def compute_algorithm_result(df: pd.DataFrame, logic_config: dict[str, Any]) -> 
     return default
 
 
-def is_finding(result: str, default: str) -> bool:
+def supports_subthreshold(report_config: dict[str, Any]) -> bool:
+    """Whether this configuration can describe a below-reporting-floor negative (#266).
+
+    True only when the Kestrel block declares :data:`SUBTHRESHOLD_RESULT` under
+    ``non_finding_results``. A ``report_config.json`` written before #266 does not, and
+    two things then have to be suppressed **together**:
+
+    * the promotion, because :func:`is_finding` would classify the promoted token as a
+      finding under that configuration and the report would style a suppressed candidate
+      as a call -- the inversion #266 exists to prevent;
+    * the note's rendering, because the eight configured sentences that explain it are
+      absent too, and the legacy ones say "No variant detected by either genotyping
+      method" -- a report printing that beside a line announcing a candidate contradicts
+      itself.
+
+    One predicate for both is what keeps them from diverging. An older configuration
+    therefore produces exactly the report it produced before #266; the ``##`` line still
+    reaches ``kestrel_result.tsv``, where it cannot contradict anything, since the row it
+    sits above says ``Negative`` and the line itself says the candidate is not a call.
+
+    Args:
+        report_config: The parsed ``report_config.json``.
+
+    Returns:
+        bool: Whether the subthreshold state may be used.
+    """
+    kestrel_logic = report_config.get("algorithm_logic", {}).get("kestrel", {})
+    return SUBTHRESHOLD_RESULT in tuple(kestrel_logic.get("non_finding_results", ()))
+
+
+def is_finding(result: str, default: str, non_finding: Sequence[str] = ()) -> bool:
     """Whether one algorithm's state value represents a finding.
 
-    Derived from the configured ``default`` rather than a hardcoded list, so a
-    renamed ``result`` in ``report_config.json`` cannot silently invert this.
-    ``tests/unit/test_screening_summary.py`` asserts every shipped ``result``
-    classifies as a finding and every ``default`` does not.
+    Derived from configuration rather than from a list written into this function, so a
+    renamed ``result`` in ``report_config.json`` cannot silently invert this. That was
+    ``default`` alone until #266 added a state which is neither the default nor a finding
+    -- :data:`SUBTHRESHOLD_RESULT`, a negative the run can say something about. It is named
+    in the block's own ``non_finding_results``, so the derivation is unchanged in kind: the
+    configuration says which values are findings, and this reads it.
+
+    ``tests/unit/test_screening_summary.py`` asserts every shipped ``result`` classifies as
+    a finding unless it is declared here, and that every ``default`` does not.
 
     Args:
         result: The computed state value.
         default: The block's configured ``default``.
+        non_finding: The block's configured ``non_finding_results``, if any. Empty
+            restores the pre-#266 behaviour exactly.
 
     Returns:
         bool: True when the algorithm reported something.
     """
-    return result not in (default, NOT_PERFORMED, "")
+    return result not in (default, NOT_PERFORMED, "", *non_finding)
 
 
 def rule_matches(current: dict[str, Any], conditions: dict[str, Any]) -> bool:
@@ -591,6 +658,7 @@ def build_screening_summary(
     *,
     kestrel_execution: str | None = None,
     advntr_execution: str | None = None,
+    kestrel_subthreshold: bool = False,
 ) -> ScreeningSummary:
     """Compute the screening state and look up its configured message.
 
@@ -608,6 +676,11 @@ def build_screening_summary(
             all the older signature could say, so the default asserts nothing new.
         advntr_execution: The same for adVNTR. ``None`` derives it from
             ``advntr_available``, again restating the model that existed before.
+        kestrel_subthreshold: Whether the Kestrel stage recorded a candidate that failed
+            only the depth gate (#266). It promotes a *negative* to
+            :data:`SUBTHRESHOLD_RESULT` and can do nothing else: the promotion is guarded
+            on the computed result already equalling the block's ``default``, so a called
+            sample is unreachable however this flag arrives.
 
     Returns:
         ScreeningSummary: The state and its message.
@@ -625,6 +698,33 @@ def build_screening_summary(
         kestrel_result = compute_algorithm_result(kestrel_df, kestrel_logic)
         advntr_result = compute_algorithm_result(advntr_df, advntr_logic) if advntr_available else NOT_PERFORMED
         logger.debug("Computed Kestrel result: %s; adVNTR result: %s", kestrel_result, advntr_result)
+
+        kestrel_default = kestrel_logic.get("default", FALLBACK_ALGORITHM_RESULT)
+        kestrel_non_finding = tuple(kestrel_logic.get("non_finding_results", ()))
+        if kestrel_subthreshold and kestrel_result == kestrel_default:
+            # Fail-safe against an older `report_config.json`. A deployment may ship its
+            # own, and one written before #266 declares no `non_finding_results` -- under
+            # it `is_finding(SUBTHRESHOLD_RESULT, "negative")` is True and the promoted
+            # state would be styled as a *finding*, the exact inversion #266 forbids. So
+            # promote only when the loaded configuration says the value is not a finding.
+            # The `##` note in `kestrel_result.tsv` is unaffected either way: the report's
+            # Kestrel section renders it independently of the screening state.
+            if supports_subthreshold(report_config):
+                kestrel_result = SUBTHRESHOLD_RESULT
+                logger.info(
+                    "Kestrel called nothing but recorded a candidate below the reporting "
+                    "floor; the screening state is %s, which is not a finding.",
+                    SUBTHRESHOLD_RESULT,
+                )
+            else:
+                logger.warning(
+                    "A below-reporting-floor candidate was recorded, but report_config.json "
+                    "does not declare %r under algorithm_logic.kestrel.non_finding_results, "
+                    "so the screening state stays %r rather than risk rendering it as a "
+                    "finding.",
+                    SUBTHRESHOLD_RESULT,
+                    kestrel_result,
+                )
 
         quality_metrics_pass = coverage_qc.passed
 
@@ -653,8 +753,10 @@ def build_screening_summary(
                 quality_metrics_pass,
             )
 
-        is_positive = is_finding(kestrel_result, kestrel_logic.get("default", FALLBACK_ALGORITHM_RESULT)) or is_finding(
-            advntr_result, advntr_logic.get("default", FALLBACK_ALGORITHM_RESULT)
+        is_positive = is_finding(kestrel_result, kestrel_default, kestrel_non_finding) or is_finding(
+            advntr_result,
+            advntr_logic.get("default", FALLBACK_ALGORITHM_RESULT),
+            advntr_logic.get("non_finding_results", ()),
         )
     except Exception as ex:
         logger.error("Exception in build_screening_summary: %s", ex)

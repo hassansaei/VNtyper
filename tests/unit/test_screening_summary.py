@@ -24,6 +24,7 @@ The interpretive text itself is config-driven and stays that way (AGENTS.md): no
 assertion here pins the wording of a message, only which state gets one.
 """
 
+import copy
 import itertools
 import logging
 from unittest import mock
@@ -53,8 +54,17 @@ def advntr_logic(report_config) -> dict:
 
 
 def declared_results(logic: dict) -> list[str]:
-    """Every ``result`` a rule block can produce, plus its ``default``."""
-    return [rule["result"] for rule in logic["rules"]] + [logic["default"]]
+    """Every state value a rule block can produce, plus its ``default``.
+
+    ``non_finding_results`` is part of this and not an afterthought: #266's
+    ``negative_subthreshold`` is produced by a *promotion* in
+    ``build_screening_summary``, not by any entry in ``rules``, so a derivation that
+    read ``rules`` alone would leave the state matrix below at its old size and every
+    coverage assertion in this file would pass without ever seeing the new state.
+    """
+    declared = [rule["result"] for rule in logic["rules"]] + [logic["default"]]
+    declared += [value for value in logic.get("non_finding_results", ()) if value not in declared]
+    return declared
 
 
 # ---------------------------------------------------------------------------
@@ -87,12 +97,16 @@ def test_report_config_failure_returns_empty_mapping(monkeypatch, caplog, failur
 
 
 def test_the_kestrel_block_declares_the_expected_states(report_config) -> None:
+    """Six since #266. ``negative_subthreshold`` is declared under
+    ``non_finding_results`` rather than produced by a rule, because it is a promotion of
+    the default and not a verdict any row can carry."""
     assert set(declared_results(kestrel_logic(report_config))) == {
         "High_Precision",
         "High_Precision_flagged",
         "Low_Precision",
         "Low_Precision_flagged",
         "negative",
+        ss.SUBTHRESHOLD_RESULT,
     }
 
 
@@ -249,13 +263,22 @@ def reachable_states(report_config) -> list[dict]:
 def test_the_state_matrix_is_not_empty(report_config) -> None:
     """Guard the guard: an empty matrix passes the coverage test vacuously."""
     states = reachable_states(report_config)
-    assert len(states) == 5 * 4 * 2 == 40
+    assert len(states) == 6 * 4 * 2 == 48
 
 
 def state_is_positive(state, report_config) -> bool:
-    return ss.is_finding(state["kestrel_result"], kestrel_logic(report_config)["default"]) or ss.is_finding(
-        state["advntr_result"], advntr_logic(report_config)["default"]
-    )
+    """Whether a state is a finding, read exactly as production reads it.
+
+    Both blocks' ``non_finding_results`` are passed, because ``is_finding`` is what
+    ``build_screening_summary`` and ``algorithm_chip`` both consult; omitting them here
+    would make this helper claim ``negative_subthreshold`` is positive and demand a
+    "positive" message for a state that is deliberately not one.
+    """
+    kestrel = kestrel_logic(report_config)
+    advntr = advntr_logic(report_config)
+    return ss.is_finding(
+        state["kestrel_result"], kestrel["default"], kestrel.get("non_finding_results", ())
+    ) or ss.is_finding(state["advntr_result"], advntr["default"], advntr.get("non_finding_results", ()))
 
 
 def test_every_positive_state_has_its_own_message(report_config) -> None:
@@ -750,17 +773,24 @@ ALL_RULES = ss.load_report_config()["screening_summary_rules"]
 
 
 def test_the_shipped_rule_table_is_loaded() -> None:
-    """Guard the guard: an empty table makes every parametrised assertion below vacuous."""
-    assert len(ALL_RULES) == 40
+    """Guard the guard: an empty table makes every parametrised assertion below vacuous.
+
+    40 until #266 added ``negative_subthreshold``, a sixth Kestrel state, and with it the
+    8 rules the cartesian product requires.
+    """
+    assert len(ALL_RULES) == 48
 
 
-def test_ten_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
-    """Five Kestrel states times two coverage-QC states, derived from conditions."""
+def test_twelve_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
+    """Six Kestrel states times two coverage-QC states, derived from conditions.
+
+    Ten until #266's sixth Kestrel state.
+    """
     assert ss.NOT_PERFORMED == "none"
 
     not_performed_rules = [rule for rule in ALL_RULES if rule["conditions"]["advntr_result"] == "none"]
 
-    assert len(not_performed_rules) == 10
+    assert len(not_performed_rules) == 12
 
 
 @pytest.mark.parametrize("rule", ALL_RULES, ids=rule_id)
@@ -877,10 +907,13 @@ def test_every_configured_result_has_a_chip_word(algorithm, report_config) -> No
     printing a raw token with an underscore in it."""
     logic = report_config["algorithm_logic"][algorithm]
     assert logic["rules"], "no rules loaded; this assertion would be vacuous"
-    for rule in [*logic["rules"], {"result": logic["default"]}]:
-        word = ss.result_word(rule["result"])
-        assert "_" not in word
-        assert word[:1].isupper()
+    # `declared_results` rather than `rules` + `default`: #266's `negative_subthreshold`
+    # is produced by a promotion, so enumerating rules alone would leave the one state
+    # whose token has an underscore in it unchecked.
+    for result in declared_results(logic):
+        word = ss.result_word(result)
+        assert "_" not in word, result
+        assert word[:1].isupper(), result
 
 
 def test_concordance_is_not_assessable_when_one_stage_did_not_run(report_config) -> None:
@@ -910,3 +943,185 @@ def test_concordance_reports_the_cross_match_stage_when_both_stages_ran(positive
     chip = _chips(summary, report_config, available=True, positive=positive)[ss.CONCORDANCE_LABEL]
 
     assert chip.value == expected
+
+
+# ---------------------------------------------------------------------------
+# negative_subthreshold -- #266
+# ---------------------------------------------------------------------------
+
+
+def _without_the_declaration(report_config) -> dict:
+    """The shipped configuration as it would read if written before #266."""
+    stripped = copy.deepcopy(report_config)
+    stripped["algorithm_logic"]["kestrel"].pop("non_finding_results", None)
+    return stripped
+
+
+class TestSubthresholdPromotion:
+    """A depth-suppressed candidate makes a negative a *described* negative, never a call."""
+
+    def test_it_promotes_a_negative(self, report_config) -> None:
+        summary = ss.build_screening_summary(
+            pd.DataFrame(), pd.DataFrame(), False, _passing(), report_config, kestrel_subthreshold=True
+        )
+
+        assert summary.kestrel_result == ss.SUBTHRESHOLD_RESULT
+
+    def test_it_leaves_a_negative_alone_without_the_signal(self, report_config) -> None:
+        summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, _passing(), report_config)
+
+        assert summary.kestrel_result == "negative"
+
+    @pytest.mark.parametrize("kestrel_state", ["High_Precision", "High_Precision_flagged", "Low_Precision"])
+    def test_it_cannot_touch_a_called_sample(self, kestrel_state, report_config) -> None:
+        """The guard is on the computed result already equalling the block's own default,
+        so a called sample is unreachable however the flag arrives."""
+        summary = ss.build_screening_summary(
+            pd.DataFrame(KESTREL_FRAMES[kestrel_state]),
+            pd.DataFrame(),
+            False,
+            _passing(),
+            report_config,
+            kestrel_subthreshold=True,
+        )
+
+        assert summary.kestrel_result == kestrel_state
+
+    def test_a_promoted_state_is_not_a_finding(self, report_config) -> None:
+        summary = ss.build_screening_summary(
+            pd.DataFrame(), pd.DataFrame(), False, _passing(), report_config, kestrel_subthreshold=True
+        )
+
+        assert summary.is_positive is False
+        assert summary.emphasis == "no-finding"
+
+    def test_a_promoted_state_does_not_hide_an_advntr_finding(self, report_config) -> None:
+        """The state is not a finding; the sample can still be one."""
+        summary = ss.build_screening_summary(
+            pd.DataFrame(),
+            pd.DataFrame(ADVNTR_FRAMES["positive"]),
+            True,
+            _passing(),
+            report_config,
+            kestrel_subthreshold=True,
+        )
+
+        assert summary.kestrel_result == ss.SUBTHRESHOLD_RESULT
+        assert summary.is_positive is True
+
+    @pytest.mark.parametrize("advntr_state", ["positive", "positive flagged", "negative"])
+    @pytest.mark.parametrize("qc", [True, False])
+    def test_every_promoted_combination_has_its_own_message(self, advntr_state, qc, report_config) -> None:
+        summary = ss.build_screening_summary(
+            pd.DataFrame(),
+            pd.DataFrame(ADVNTR_FRAMES[advntr_state]),
+            True,
+            _passing() if qc else evaluate_coverage_qc(3.0, 0.9, 100, 50.0),
+            report_config,
+            kestrel_subthreshold=True,
+        )
+
+        assert summary.matched_rule is True
+        assert "below the reporting floor" in summary.text
+        assert "not a call" in summary.text
+
+    def test_the_advntr_positive_combinations_recommend_orthogonal_confirmation(self, report_config) -> None:
+        """@hassansaei on #266: a sample adVNTR calls where Kestrel has signal below its
+        threshold "should be flagged for orthogonal confirmation"."""
+        summary = ss.build_screening_summary(
+            pd.DataFrame(),
+            pd.DataFrame(ADVNTR_FRAMES["positive"]),
+            True,
+            _passing(),
+            report_config,
+            kestrel_subthreshold=True,
+        )
+
+        assert "rthogonal confirmation" in summary.text
+
+    def test_its_chip_reads_as_words_and_is_not_toned_as_a_finding(self, report_config) -> None:
+        """The chip is toned by an *independent* ``is_finding`` call site, so a fix to
+        ``is_positive`` alone would leave the masthead contradicting the sentence."""
+        summary = _summary(is_positive=False, matched_rule=True, kestrel_result=ss.SUBTHRESHOLD_RESULT)
+
+        chip = _chips(summary, report_config)[ss.KESTREL_LABEL]
+
+        assert chip.value == "Negative subthreshold"
+        assert chip.tone == ss.TONE_NONE
+
+
+class TestAnOlderConfigurationIsSuppressedCoherently:
+    """A ``report_config.json`` written before #266 must yield exactly the old report.
+
+    Promotion and rendering share one predicate, :func:`supports_subthreshold`. Splitting
+    them would let the state stay ``negative`` -- whose configured sentence says "No
+    variant detected by either genotyping method" -- while the Kestrel section announced a
+    candidate, and the report would contradict itself.
+    """
+
+    def test_the_shipped_configuration_supports_it(self, report_config) -> None:
+        assert ss.supports_subthreshold(report_config) is True
+
+    def test_a_configuration_without_the_declaration_does_not(self, report_config) -> None:
+        assert ss.supports_subthreshold(_without_the_declaration(report_config)) is False
+
+    def test_an_empty_configuration_does_not(self) -> None:
+        assert ss.supports_subthreshold({}) is False
+
+    def test_it_does_not_promote(self, report_config) -> None:
+        summary = ss.build_screening_summary(
+            pd.DataFrame(),
+            pd.DataFrame(),
+            False,
+            _passing(),
+            _without_the_declaration(report_config),
+            kestrel_subthreshold=True,
+        )
+
+        assert summary.kestrel_result == "negative"
+        assert summary.is_positive is False
+
+    def test_it_says_so(self, report_config, caplog) -> None:
+        with caplog.at_level(logging.WARNING, logger="vntyper.scripts.screening_summary"):
+            ss.build_screening_summary(
+                pd.DataFrame(),
+                pd.DataFrame(),
+                False,
+                _passing(),
+                _without_the_declaration(report_config),
+                kestrel_subthreshold=True,
+            )
+
+        assert any("non_finding_results" in record.message for record in caplog.records)
+
+
+class TestNonFindingResults:
+    def test_every_declared_non_finding_result_classifies_as_one(self, report_config) -> None:
+        block = kestrel_logic(report_config)
+        declared = block["non_finding_results"]
+
+        assert declared, "the guard is vacuous if nothing is declared"
+        for value in declared:
+            assert not ss.is_finding(value, block["default"], declared)
+
+    def test_a_declared_non_finding_would_otherwise_have_been_a_finding(self, report_config) -> None:
+        """Guard the guard: if the value were the default, the exclusion would prove
+        nothing about the new parameter."""
+        block = kestrel_logic(report_config)
+
+        for value in block["non_finding_results"]:
+            assert value != block["default"]
+            assert ss.is_finding(value, block["default"])
+
+    @pytest.mark.parametrize("algorithm", ["kestrel", "advntr"])
+    def test_every_rule_result_is_still_a_finding(self, algorithm, report_config) -> None:
+        block = report_config["algorithm_logic"][algorithm]
+        declared = block.get("non_finding_results", ())
+
+        for rule in block["rules"]:
+            assert ss.is_finding(rule["result"], block["default"], declared), rule["result"]
+
+    def test_a_block_without_the_key_behaves_exactly_as_before(self) -> None:
+        assert ss.is_finding("anything", "negative")
+        assert not ss.is_finding("negative", "negative")
+        assert not ss.is_finding(ss.NOT_PERFORMED, "negative")
