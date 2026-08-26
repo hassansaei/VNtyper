@@ -14,6 +14,7 @@ output directory.
 
 import csv
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 import pytest
@@ -207,3 +208,80 @@ class TestFilterColumns:
 
         with pytest.raises(ValueError, match="flag_filter_pass"):
             kg.filter_final_dataframe(frame, str(tmp_path))
+
+
+class TestTheScoredEmptyBranch:
+    """``process_kestrel_output``'s third empty-result branch is the only one that notes.
+
+    The other two run before anything is scored, so no pre-result of *this* run exists
+    there -- reading one would pick up a stale file from an earlier run into the same
+    output directory. That is the whole reason the note is wired to one call site.
+    """
+
+    META = "##fileformat=VCFv4.2\n"
+    HEADER = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    RECORD = "chr1\t100\t.\tC\tCC\t.\t.\tDP=10\n"
+
+    def raw_vcf(self, tmp_path: Path, body: str = "") -> Path:
+        path = tmp_path / "output.vcf"
+        path.write_text(self.META + self.HEADER + body, encoding="utf-8")
+        return path
+
+    def config(self) -> dict:
+        return {
+            "confidence_assignment": {"depth_score_thresholds": {"low": 0.00469}},
+            "subthreshold_note": {"enabled": True, "template": "{marker} {events} {noun} at {best_depth_score}"},
+        }
+
+    def drive(self, tmp_path: Path, *, eligible: bool):
+        """Run `process_kestrel_output` to its scored-empty branch.
+
+        The stages between the derived VCFs and the final filter are replaced: they need a
+        MUC1 reference and the whole scoring chain, none of which this branch depends on.
+        ``process_kmer_results`` writes the pre-result exactly as `filter_final_dataframe`
+        does in production, then returns the empty frame that selects the branch.
+        """
+        vcf = self.raw_vcf(tmp_path, self.RECORD)
+
+        def fake_process_kmer_results(combined_df, merged_motifs, output_dir, config):
+            row = {} if eligible else {st.DEPTH_GATE: True}
+            pre_result(Path(output_dir) / "kestrel_pre_result.tsv", [row])
+            return pd.DataFrame()
+
+        with (
+            mock.patch.object(kg, "load_muc1_reference", return_value=pd.DataFrame()),
+            mock.patch.object(kg, "preprocessing_insertion", return_value=pd.DataFrame([{"POS": 100}])),
+            mock.patch.object(kg, "preprocessing_deletion", return_value=pd.DataFrame()),
+            mock.patch.object(kg, "load_additional_motifs", return_value=pd.DataFrame()),
+            mock.patch.object(kg, "process_kmer_results", side_effect=fake_process_kmer_results),
+        ):
+            return kg.process_kestrel_output(str(tmp_path), vcf, "ref.fa", self.config(), {})
+
+    def test_a_scored_empty_result_with_an_eligible_row_carries_the_note(self, tmp_path: Path):
+        assert self.drive(tmp_path, eligible=True) is None
+
+        comments, rows = read_back(tmp_path / "kestrel_result.tsv")
+
+        assert any(st.NOTE_MARKER in line for line in comments)
+        assert len(rows) == 1
+        assert rows[0]["Confidence"] == "Negative"
+
+    def test_a_scored_empty_result_with_nothing_eligible_carries_none(self, tmp_path: Path):
+        assert self.drive(tmp_path, eligible=False) is None
+
+        comments, _ = read_back(tmp_path / "kestrel_result.tsv")
+
+        assert not any(st.NOTE_MARKER in line for line in comments)
+
+    def test_the_unscored_empty_branch_never_reads_a_stale_pre_result(self, tmp_path: Path):
+        """A pre-result left by an earlier run into the same directory must not be
+        described as if it belonged to this one. The branch reached here -- both derived
+        VCFs empty -- runs before anything is scored."""
+        pre_result(tmp_path / "kestrel_pre_result.tsv", [{}])
+
+        assert kg.process_kestrel_output(str(tmp_path), self.raw_vcf(tmp_path), "ref.fa", self.config(), {}) is None
+
+        comments, rows = read_back(tmp_path / "kestrel_result.tsv")
+
+        assert not any(st.NOTE_MARKER in line for line in comments), "a stale pre-result was described"
+        assert rows[0]["Confidence"] == "Negative"

@@ -181,6 +181,17 @@ class TestVerdictsAreThreeValued:
         assert signal.rows == 1
         assert signal.best_depth_score == pytest.approx(0.002)
 
+    def test_a_value_whose_item_call_raises_is_unknown_rather_than_a_verdict(self):
+        """A pandas Series has ``.item()``, and it raises unless the Series holds exactly
+        one element -- so a malformed frame can put one in a cell. Guessing a verdict for
+        it would be the failure this whole function exists to avoid."""
+        assert st._verdict(pd.Series([1, 2])) is None
+
+    def test_a_one_element_series_is_unwrapped_like_any_other_scalar(self):
+        """Guard the guard: if ``.item()`` never succeeded, the test above would pass for
+        the wrong reason."""
+        assert st._verdict(pd.Series([True])) is True
+
     def test_verdict_reads_every_shipped_spelling(self):
         """Pinned directly, because every mask above is built from this one function."""
         assert st._verdict(True) is True

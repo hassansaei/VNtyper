@@ -124,10 +124,9 @@ def _verdict(value: object) -> bool | None:
     if value is None or value is pd.NA:
         return None
     if isinstance(value, (int, float)):
-        try:
-            if pd.isna(value):
-                return None
-        except (TypeError, ValueError):
+        # `pd.isna` cannot raise for a plain int or float, and by here the value is one:
+        # every numpy scalar was unwrapped above. An `except` around this would be dead.
+        if pd.isna(value):
             return None
         if value == 1:
             return True
