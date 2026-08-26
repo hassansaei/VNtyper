@@ -6,7 +6,71 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.22 (Current)
+## 2.0.23 (Current)
+
+**What the output asserts about a variant, beyond present or absent.**
+
+Two issues on the same surface. [#266](https://github.com/hassansaei/VNtyper/issues/266):
+a Kestrel candidate that failed only the depth gate was deleted, so the sample rendered
+identically to one where nothing was ever found. [#267](https://github.com/hassansaei/VNtyper/issues/267):
+the adVNTR `Polymorphic_Call` denylist labels calls as known artifacts on evidence that
+cannot carry the distinction, and seven of its thirty-two entries could never fire at all.
+
+**A suppressed candidate now leaves one line.** `kestrel_result.tsv` gains a `##` banner
+line naming how many events were below the reporting floor and how close the strongest came
+to it. Measured on the 400-run simulated benchmark, that lands on 22 of 22 false negatives
+and 1 of 200 true negatives — and on the false negative `pair_3002` it reads
+`0.0040072` against a floor of `0.00469`, where the true negative reads `0.00084203`. That
+difference is what the output was throwing away.
+
+It is a comment and never a row: `parse_tsv` routes `#` lines into `comments`, so the
+10-column negative placeholder is untouched, `cross_match` and cohort mode never see it, and
+nothing that reads the table can mistake it for a call. The screening state becomes
+`negative_subthreshold`, declared a non-finding, so neither the masthead chip nor the summary
+box is styled as one. **The reporting floor did not move**, and a subthreshold candidate is
+still not a call ([#147](https://github.com/hassansaei/VNtyper/issues/147) stands).
+
+Eligibility is strict: every structural gate explicitly `True` and the depth gate explicitly
+`False`. A row killed by `flag_filter_pass` carries a declared artifact flag
+([#174](https://github.com/hassansaei/VNtyper/issues/174)) and may have an excellent depth
+score; calling that "subthreshold" would say *weak signal* where the truth is *strong signal,
+deliberately discarded*. Set `subthreshold_note.enabled` to `false` to restore the previous
+output exactly.
+
+Where adVNTR reports a finding on such a sample, the configured message now recommends
+orthogonal confirmation — @hassansaei's suggestion on #266.
+
+**The adVNTR denylist is 24 entries, not 32.** Flagging runs after the pathogenic-frame
+filter, so an entry whose signed net indel change is not `1 (mod 3)` is removed before
+`add_flags` is reached and can never fire. Seven were in that state and one was listed
+twice. Replaying both lists over the adVNTR output of all 400 simulated samples changes no
+`Flag` value.
+
+`advntr_calibration.json` now records what existed only in a GitHub comment: the cohort
+(`renome`), the criterion, the fact that no observation counts were retained, and per entry
+whether it is confirmed or awaiting re-validation. New tests run the production filter over
+the live list, so a future dead entry fails the build rather than disabling itself in
+silence — as `Poylmorhic_Call` and `RU == 7` both did.
+
+**One fix here is unrelated to either issue.** The cohort-report fingerprint oracle
+(`tests/unit/test_cohort_summary_oracle.py`) excluded the embedded base64 PNG *payloads* —
+"a hash that turns red on `pip install -U plotly` stops being read" — but pinned their
+count. plotly 6.9.0 emits four of its own 114-character scaffolding images where 7.0.0
+emits two, so the oracle went red on `main` itself the first time CI resolved dependencies
+afresh. Those two lines were the entire difference between the documents. The section is
+dropped and the fingerprint re-recorded; both dependency sets now produce a byte-identical
+document, and the property the section was for — an image with no payload is a broken chart
+— is now its own test that pins neither how many images there are nor that there are any.
+The charts' data is untouched and still pinned exactly.
+
+**Still open on #267:** 23 of the 24 live entries await re-measurement against the
+re-analysed renome cohort. On current code, 8 of the 172 carriers adVNTR detects carry a
+`Polymorphic_Call` row — including every `dupA` carrier it detects. adVNTR records only the
+first inserted base and the repeat unit, so a recurrent benign insertion and a pathogenic
+duplication of the same shape are the same string; no denylist keyed on it can separate
+them.
+
+## 2.0.22
 
 **The report carried the right facts in the wrong order.**
 

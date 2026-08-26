@@ -73,24 +73,22 @@ def _passing_frame(rows: int = 1) -> pd.DataFrame:
 def test_the_gate_columns_are_exactly_the_six_this_file_pins():
     """Guard against a seventh gate being added without a test.
 
-    ``filter_final_dataframe`` builds its list inline, so this reads the source
-    rather than importing a constant that does not exist. The hit-count assertion
-    matters: a scan that silently matches nothing would make every claim below
-    vacuous.
+    This used to read ``filter_final_dataframe``'s source, because the list was inline
+    and there was no constant to import -- the older docstring said exactly that. #266
+    extracted it to ``kestrel_genotyping.FILTER_COLUMNS`` so that
+    ``subthreshold.detect`` can be *handed* the gates rather than restating them, and
+    this now imports it. The contract is unchanged and the assertion is stronger: a
+    source scan can only see the text, while this sees the value both the filter and
+    the below-reporting-floor classifier actually use.
 
     The count was five until #174 added ``flag_filter_pass`` -- the config-driven
     artifact gate. Changing this number is the deliberate act that adding a gate
     requires; it is not maintenance.
     """
-    from pathlib import Path
+    from vntyper.scripts.kestrel_genotyping import FILTER_COLUMNS
 
-    source = Path("vntyper/scripts/kestrel_genotyping.py").read_text(encoding="utf-8")
-    body = source.split("filter_cols = [", 1)
-    assert len(body) == 2, "could not find the filter_cols list in filter_final_dataframe"
-    declared = body[1].split("]", 1)[0]
-    found = tuple(line.strip().strip(',"') for line in declared.strip().splitlines())
-    assert len(found) == 6, f"expected 6 gate columns in the source, found {len(found)}: {found}"
-    assert found == GATE_COLUMNS
+    assert len(FILTER_COLUMNS) == 6, f"expected 6 gate columns, found {len(FILTER_COLUMNS)}: {FILTER_COLUMNS}"
+    assert FILTER_COLUMNS == GATE_COLUMNS
 
 
 @pytest.mark.parametrize("gate", GATE_COLUMNS)

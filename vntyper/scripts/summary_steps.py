@@ -133,6 +133,26 @@ def get_step_result(summary: dict[str, Any], step_name: str) -> dict[str, Any]:
     return result if isinstance(result, dict) else {}
 
 
+def get_step_comments(summary: dict[str, Any], step_name: str) -> list[str]:
+    """Return a step's result-file comment lines, or an empty list.
+
+    ``summary.parse_tsv`` records every ``#`` line of a step's TSV here, with the leading
+    hashes stripped. #266's below-reporting-floor note travels on this channel: it is a
+    banner line, so it reaches the report without ever appearing in :func:`get_step_data`'s
+    rows, and no consumer reading the table can mistake it for a call.
+
+    Args:
+        summary: A parsed ``pipeline_summary.json`` mapping.
+        step_name: One of the ``STEP_*`` constants.
+
+    Returns:
+        list[str]: The comment lines. Empty when the step is absent, recorded none, or
+        recorded something that is not a list.
+    """
+    comments = get_step_result(summary, step_name).get("comments")
+    return comments if isinstance(comments, list) else []
+
+
 def get_step_data(summary: dict[str, Any], step_name: str) -> list[dict[str, Any]]:
     """Return a step's tabular rows, or an empty list.
 

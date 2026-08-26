@@ -1220,7 +1220,32 @@
             <p class="empty-state">Kestrel genotyping ran, but its result file is missing or could not be
                 read. No Kestrel result is shown, and this is not a negative.</p>
         {% elif kestrel_step_recorded %}
-            <p class="empty-state">No variant detected by Kestrel in this sample.</p>
+            {#
+              #266. `detected` and `called` are not synonyms here, and this branch is the
+              one place the difference is visible. When a candidate was seen and suppressed,
+              "No variant detected" is simply false -- one *was* detected, it was not
+              called -- and the line below it would then contradict the line above it. The
+              eight new screening messages make the same distinction, and this keeps the
+              Kestrel section saying the same thing they do.
+
+              The plain-negative wording is untouched: nothing was detected there, and that
+              sentence is shipped copy.
+            #}
+            {% if kestrel_subthreshold_note %}
+                <p class="empty-state">No variant called by Kestrel in this sample.</p>
+                {#
+                  One line, autoescaped. It says a candidate was seen and suppressed; it is
+                  not a call, it carries no statistics beyond its depth score, and nothing
+                  downstream reads it. The state it produces, `negative_subthreshold`, is
+                  declared a non-finding in `report_config.json`, so the masthead chip and
+                  the screening box are not styled as findings either. `generate_report`
+                  withholds this whenever the loaded configuration cannot describe that
+                  state, so a deployment that cannot explain the line never prints it.
+                #}
+                <p class="empty-state subthreshold-note">{{ kestrel_subthreshold_note }}</p>
+            {% else %}
+                <p class="empty-state">No variant detected by Kestrel in this sample.</p>
+            {% endif %}
         {% else %}
             <p class="empty-state">Kestrel genotyping was not performed for this sample.</p>
         {% endif %}

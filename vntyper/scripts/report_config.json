@@ -55,7 +55,8 @@
           "result": "Low_Precision_flagged"
         }
       ],
-      "default": "negative"
+      "default": "negative",
+      "non_finding_results": ["negative_subthreshold"]
     },
     "advntr": {
       "rules": [
@@ -575,6 +576,111 @@
       "message": "No variant detected; however, quality metrics are below threshold.<br>Note: adVNTR genotyping was not performed.<br>Re-assessment of sample quality is recommended.",
       "segments": [
         "No variant detected; however, quality metrics are below threshold.",
+        "Note: adVNTR genotyping was not performed.",
+        "Re-assessment of sample quality is recommended."
+      ]
+    },
+{
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "positive",
+        "quality_metrics_pass": true
+      },
+      "message": "Pathogenic variant identified by adVNTR while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is recommended.",
+      "segments": [
+        "Pathogenic variant identified by adVNTR while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.",
+        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
+        "Orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is recommended."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "positive",
+        "quality_metrics_pass": false
+      },
+      "message": "Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "segments": [
+        "Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.",
+        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
+        "Orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "positive flagged",
+        "quality_metrics_pass": true
+      },
+      "message": "Pathogenic variant identified by adVNTR with a flagged result, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Review the flagged adVNTR result and obtain orthogonal confirmation (e.g., SNaPshot, long‐read sequencing).",
+      "segments": [
+        "Pathogenic variant identified by adVNTR with a flagged result, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.",
+        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
+        "Review the flagged adVNTR result and obtain orthogonal confirmation (e.g., SNaPshot, long‐read sequencing)."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "positive flagged",
+        "quality_metrics_pass": false
+      },
+      "message": "Pathogenic variant identified by adVNTR with a flagged result and low-quality metrics, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Review the flagged adVNTR result; orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "segments": [
+        "Pathogenic variant identified by adVNTR with a flagged result and low-quality metrics, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.",
+        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
+        "Review the flagged adVNTR result; orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "negative",
+        "quality_metrics_pass": true
+      },
+      "message": "No variant called by either genotyping method. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Quality metrics are acceptable.",
+      "segments": [
+        "No variant called by either genotyping method. A Kestrel candidate below the reporting floor was identified and filtered out.",
+        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
+        "Quality metrics are acceptable."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "negative",
+        "quality_metrics_pass": false
+      },
+      "message": "No variant called by either genotyping method; quality metrics are below threshold. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Re-assessment of sample quality is recommended.",
+      "segments": [
+        "No variant called by either genotyping method; quality metrics are below threshold. A Kestrel candidate below the reporting floor was identified and filtered out.",
+        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
+        "Re-assessment of sample quality is recommended."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "none",
+        "quality_metrics_pass": true
+      },
+      "message": "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed.",
+      "segments": [
+        "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.",
+        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
+        "Note: adVNTR genotyping was not performed."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "none",
+        "quality_metrics_pass": false
+      },
+      "message": "No variant called by Kestrel; quality metrics are below threshold. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed.<br>Re-assessment of sample quality is recommended.",
+      "segments": [
+        "No variant called by Kestrel; quality metrics are below threshold. A Kestrel candidate below the reporting floor was identified and filtered out.",
+        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
         "Note: adVNTR genotyping was not performed.",
         "Re-assessment of sample quality is recommended."
       ]

@@ -86,6 +86,19 @@ class TestEveryRuleNameResolves:
         """A typo in a rule *key* renames the flag silently; ``Poylmorhic_Call`` did exactly that."""
         assert set(flagging_rules) == EXPECTED_FLAG_NAMES
 
+    def test_the_polymorphic_call_list_is_the_size_the_cleanup_left(self, flagging_rules):
+        """#267 removed 7 unreachable entries and 1 duplicate from the 32 that shipped.
+
+        ``tests/unit/test_advntr_polymorphic_calls.py`` owns the reachability argument and
+        the provenance record; this is the cheap tripwire in the file that already reads
+        these rules, so an edit to the list is noticed here even if that file is not run.
+        """
+        node = ast.parse(flagging_rules["Polymorphic_Call"], mode="eval").body
+        states = ast.literal_eval(node.comparators[0])
+
+        assert len(states) == 24
+        assert len(set(states)) == 24
+
     def test_every_rule_is_syntactically_valid_python(self, flagging_rules):
         for name, expression in flagging_rules.items():
             try:

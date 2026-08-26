@@ -444,3 +444,67 @@ def test_the_three_states_are_distinct_values() -> None:
     """A caller branches on these, so two of them being equal would be silent."""
     states = (summary_steps.STEP_ABSENT, summary_steps.STEP_READ, summary_steps.STEP_UNREADABLE)
     assert len(set(states)) == 3, states
+
+
+# ---------------------------------------------------------------------------
+# get_step_comments -- the channel #266's note travels on
+# ---------------------------------------------------------------------------
+
+
+class TestStepComments:
+    """``summary.parse_tsv`` records a TSV's ``#`` lines here, with the hashes stripped.
+
+    #266's below-reporting-floor note rides this channel precisely because it is *not*
+    ``data``: a banner comment reaches the report without any consumer of the table
+    being able to read it as a call.
+    """
+
+    def test_it_returns_the_comment_lines(self):
+        summary = {
+            "steps": [
+                {
+                    "step": summary_steps.STEP_KESTREL,
+                    "parsed_result": {"comments": ["VNtyper Kestrel result", "Subthreshold candidate: x"], "data": []},
+                }
+            ]
+        }
+
+        assert summary_steps.get_step_comments(summary, summary_steps.STEP_KESTREL) == [
+            "VNtyper Kestrel result",
+            "Subthreshold candidate: x",
+        ]
+
+    def test_an_absent_step_has_no_comments(self):
+        assert summary_steps.get_step_comments({"steps": []}, summary_steps.STEP_KESTREL) == []
+
+    def test_a_step_that_recorded_none_has_no_comments(self):
+        summary = {"steps": [{"step": summary_steps.STEP_KESTREL, "parsed_result": {"data": []}}]}
+
+        assert summary_steps.get_step_comments(summary, summary_steps.STEP_KESTREL) == []
+
+    def test_a_non_list_comments_value_is_ignored(self):
+        """``parsed_result`` is read off disk, so its shape is not guaranteed."""
+        summary = {"steps": [{"step": summary_steps.STEP_KESTREL, "parsed_result": {"comments": "oops"}}]}
+
+        assert summary_steps.get_step_comments(summary, summary_steps.STEP_KESTREL) == []
+
+    def test_an_unparsed_step_has_no_comments(self):
+        summary = {"steps": [{"step": summary_steps.STEP_KESTREL, "parsed_result": None}]}
+
+        assert summary_steps.get_step_comments(summary, summary_steps.STEP_KESTREL) == []
+
+    def test_comments_and_data_are_separate_channels(self):
+        """The property #266 depends on: nothing that reads rows can see the note."""
+        summary = {
+            "steps": [
+                {
+                    "step": summary_steps.STEP_KESTREL,
+                    "parsed_result": {"comments": ["Subthreshold candidate: x"], "data": [{"Confidence": "Negative"}]},
+                }
+            ]
+        }
+
+        rows = summary_steps.get_step_data(summary, summary_steps.STEP_KESTREL)
+
+        assert rows == [{"Confidence": "Negative"}]
+        assert all("Subthreshold" not in str(value) for row in rows for value in row.values())

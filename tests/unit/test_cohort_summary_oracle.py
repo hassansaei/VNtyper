@@ -41,6 +41,12 @@ What it deliberately excludes, and why
   are byte-stable for a given matplotlib/plotly build but change on a dependency bump,
   and a hash that turns red on `pip install -U plotly` stops being read. The chart *data*
   is extracted separately and is pinned exactly, so a miscounted cohort still fails.
+* **How many** such images there are, for the same reason and learned the hard way: the
+  payloads were excluded but their *count* was pinned, and plotly 6.9.0 emits four of its
+  114-character scaffolding images where 7.0.0 emits two. The digest went red on
+  `main` itself under a fresh dependency resolution, with no change to this project.
+  `test_no_embedded_image_is_left_without_a_payload` keeps the part that was about
+  VNtyper, and states it so that it cannot go red for the same reason.
 * The report timestamp and plotly's per-figure UUIDs, which are new on every render.
 
 What this oracle does **not** cover
@@ -334,7 +340,10 @@ pytestmark = pytest.mark.unit
 #: ``[CHART-TOTALS]`` and ``[IMAGES]`` sections are byte-identical, and every other line
 #: that moved is inside the shared token layer's ``<style>`` or its comments. No cell
 #: value, no column, no row order and no chart datum changed.
-EXPECTED_FINGERPRINT = "bf5c1d831c61090abd4cc6031c635e6b2858e42c2dab30f6218bfb8e12d7f21b"
+#: Re-recorded 2026-08-26 when the ``[IMAGES]`` section was dropped from the document.
+#: Verified identical under pandas 2.2.2 / plotly 6.9.0 and pandas 2.2.3 / plotly 7.0.0,
+#: which is the point of dropping it.
+EXPECTED_FINGERPRINT = "cd5c9a08ba03060bbd944a2a51b297d109ffbaff16f5cd636e646b5e3486dd2b"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
@@ -392,9 +401,20 @@ def _fingerprint(html: str) -> tuple[str, str]:
         *_CHART_LABELS.findall(html),
         "[CHART-TOTALS]",
         *_CHART_TOTAL.findall(html),
-        "[IMAGES]",
-        f"count={len(_BASE64_PNG.findall(html))}",
-        f"nonempty={sum(1 for src in _BASE64_PNG.findall(html) if len(src) > 64)}",
+        # No [IMAGES] section. It counted `data:image/png;base64,` occurrences, and every
+        # one of them is plotly's own 114-character scaffolding rather than anything this
+        # project renders -- plotly 6.9.0 emits four and plotly 7.0.0 emits two, so the
+        # digest turned red on a dependency bump with no VNtyper change at all. That is
+        # precisely the brittleness the payload exclusion below was written to avoid, and
+        # excluding the payload while pinning its count kept it. Measured 2026-08-26: with
+        # this section removed the two plotly versions produce byte-identical documents,
+        # and the whole difference between them was these two lines.
+        #
+        # Nothing is lost. What the charts *say* is pinned exactly by [CHART-VALUES],
+        # [CHART-LABELS] and [CHART-TOTALS] above; that every embedded image carries a
+        # payload is asserted readably by
+        # `test_no_embedded_image_is_left_without_a_payload`, which does not pin how
+        # many there are, nor that there are any.
         "[SKELETON]",
         _skeleton(html),
     ]
@@ -606,6 +626,25 @@ def test_the_cohort_report_matches_its_recorded_fingerprint(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 # The same facts stated readably, so a fingerprint failure can be localised
 # ---------------------------------------------------------------------------
+
+
+def test_no_embedded_image_is_left_without_a_payload(tmp_path) -> None:
+    """What the dropped ``[IMAGES]`` digest section was actually for.
+
+    An image rendered with an empty ``src`` is a broken chart, and that is worth catching.
+
+    It is stated as a safety property over whatever images the page happens to carry, and
+    **deliberately not** as "there is at least one". Every such image today is plotly's own
+    114-character scaffolding, so requiring one to exist would assert something about
+    plotly's markup and would go red on the next release that stops emitting it -- which is
+    the exact failure this test was written to replace. If plotly emits none, this passing
+    vacuously is the correct outcome: the charts are pinned by their *data*, above.
+    """
+    srcs = _BASE64_PNG.findall(_render(tmp_path))
+
+    empty = [src for src in srcs if len(src) <= 64]
+
+    assert not empty, f"{len(empty)} of {len(srcs)} embedded images carry no payload"
 
 
 def test_the_kestrel_table_keeps_its_column_order(tmp_path) -> None:

@@ -93,11 +93,13 @@ from vntyper.scripts.screening_summary import (
     execution_state,
     load_report_config,
     state_chips,
+    supports_subthreshold,
 )
 
 # These five names are matched by exact string comparison against what pipeline.py
 # records. A typo does not fail - it silently drops a report section (AGENTS.md
 # trap 5), so they are named, never spelled out.
+from vntyper.scripts.subthreshold import find_note
 from vntyper.scripts.summary_steps import (
     STEP_ABSENT,
     STEP_ADVNTR,
@@ -108,6 +110,7 @@ from vntyper.scripts.summary_steps import (
     STEP_READ,
     STEP_UNREADABLE,
     get_step,
+    get_step_comments,
     get_step_data,
     get_step_result,
     get_step_state,
@@ -548,6 +551,24 @@ def generate_summary_report(
     kestrel_state = get_step_state(pipeline_summary, STEP_KESTREL)
     kestrel_df, kestrel_df_raw = build_kestrel_frames(get_step_data(pipeline_summary, STEP_KESTREL))
 
+    # #266. The note is a `##` banner line on `kestrel_result.tsv`, so it arrives through
+    # `parsed_result["comments"]` and never through `data` -- it cannot become a row here.
+    #
+    # `supports_subthreshold` gates *both* uses of it: the state promotion below, and the
+    # rendering. A `report_config.json` written before #266 carries neither the
+    # `non_finding_results` declaration nor the eight sentences that explain the state, and
+    # its `negative` message says "No variant detected by either genotyping method" -- so
+    # rendering the line under that configuration would make the report contradict itself.
+    # One predicate for both keeps them from diverging.
+    kestrel_subthreshold_note = find_note(get_step_comments(pipeline_summary, STEP_KESTREL))
+    if kestrel_subthreshold_note and not supports_subthreshold(report_config):
+        logger.warning(
+            "A below-reporting-floor note was recorded, but this report_config.json does not "
+            "declare the subthreshold state; the note is withheld so the report cannot "
+            "contradict its own screening message. See issue #266."
+        )
+        kestrel_subthreshold_note = None
+
     # `advntr_available` is now "produced a result to match on", not "has a step". That is
     # what makes `advntr_result` the `NOT_PERFORMED` token rather than the block's
     # "negative" default for a stage that ran and lost its result; the execution axis
@@ -763,6 +784,7 @@ def generate_summary_report(
         report_config,
         kestrel_execution=execution_state(kestrel_state),
         advntr_execution=execution_state(advntr_state),
+        kestrel_subthreshold=kestrel_subthreshold_note is not None,
     )
     logger.debug("Summary text generated: %s", screening.text)
 
@@ -825,6 +847,7 @@ def generate_summary_report(
         # empty when there is no table: the sentence exists to say that nothing was
         # withheld from the rows below it, so counting a non-result defeats its purpose.
         "kestrel_row_summary": kestrel_row_summary,
+        "kestrel_subthreshold_note": kestrel_subthreshold_note,
         # The folded columns, printed under each table because a nineteen-column table
         # does not fit A4 and silently lost ten of them - the 121 bp motif sequence
         # among them - off the right edge of every sheet.
