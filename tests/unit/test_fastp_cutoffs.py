@@ -86,6 +86,26 @@ def test_build_fastp_cutoffs_rejects_each_invalid_configured_fraction(key: str, 
         module.build_fastp_cutoffs(thresholds)
 
 
+def test_build_fastp_cutoffs_normalizes_an_oversized_json_integer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A valid-JSON integer too large for float still follows the config error contract."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="duplication_rate"):
+        module.build_fastp_cutoffs(
+            {
+                "duplication_rate": 10**400,
+                "q20_rate": 0.8,
+                "q30_rate": 0.7,
+                "passed_filter_reads_rate": 0.8,
+            }
+        )
+
+    assert "duplication_rate" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("raw_rate", "expected"),
     [(None, None), (0.0, 0.0), (0.77654, 0.7765), (0.77655, 0.7766)],

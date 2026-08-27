@@ -36,7 +36,12 @@ def _validated_fraction(value: object, key: str) -> float:
         message = f"Config thresholds has invalid fastp cutoff {key!r}: expected a numeric fraction from 0 to 1."
         logger.error(message)
         raise ValueError(message)
-    fraction = float(value)
+    try:
+        fraction = float(value)
+    except OverflowError as error:
+        message = f"Config thresholds has invalid fastp cutoff {key!r}: expected a finite fraction from 0 to 1."
+        logger.error(message)
+        raise ValueError(message) from error
     if not math.isfinite(fraction) or not 0 <= fraction <= 1:
         message = f"Config thresholds has invalid fastp cutoff {key!r}: expected a finite fraction from 0 to 1."
         logger.error(message)
