@@ -289,6 +289,22 @@ def test_fastp_cutoff_configuration_rejects_missing_or_malformed_values(
         render(tmp_path, config=config)
 
 
+@pytest.mark.parametrize("thresholds", [[], "not-a-dictionary", None])
+def test_report_configuration_rejects_nondictionary_thresholds_at_render_time(
+    tmp_path, caplog: pytest.LogCaptureFixture, thresholds: object
+) -> None:
+    """The renderer fails loudly before any threshold consumer sees malformed configuration."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    config = copy.deepcopy(load_config(None))
+    config["thresholds"] = thresholds
+    caplog.set_level("ERROR", logger="vntyper.scripts.generate_report")
+
+    with pytest.raises(ValueError, match=re.escape("Config thresholds must be a dictionary.")):
+        render(tmp_path, config=config)
+
+    assert "Config thresholds must be a dictionary." in caplog.text
+
+
 def test_missing_fastp_rates_render_na_without_a_percent_sign(tmp_path) -> None:
     """Catch any missing optional rate becoming blank or carrying a percent sign."""
     write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
