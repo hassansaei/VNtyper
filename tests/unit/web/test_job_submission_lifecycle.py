@@ -281,23 +281,28 @@ def test_workspace_binding_failure_attempts_all_closes_and_preserves_the_primary
     real_open = workspace_module.os.open
     real_fstat = workspace_module.os.fstat
     real_close = workspace_module.os.close
-    opened: list[int] = []
-    close_attempts: list[int] = []
+    owned_descriptors: list[int] = []
+    owned_close_attempts: list[int] = []
+    input_close_failed = False
 
     def recording_open(path, *args, **kwargs):
         descriptor = real_open(path, *args, **kwargs)
-        opened.append(descriptor)
+        if len(owned_descriptors) < 2:
+            owned_descriptors.append(descriptor)
         return descriptor
 
     def fail_output_binding(descriptor: int):
-        if len(opened) == 2 and descriptor == opened[1]:
+        if len(owned_descriptors) == 2 and descriptor == owned_descriptors[1]:
             raise OSError("primary bind failure")
         return real_fstat(descriptor)
 
     def close_with_secondary_error(descriptor: int) -> None:
-        close_attempts.append(descriptor)
+        nonlocal input_close_failed
+        if descriptor in owned_descriptors and descriptor not in owned_close_attempts:
+            owned_close_attempts.append(descriptor)
         real_close(descriptor)
-        if opened and descriptor == opened[0]:
+        if owned_descriptors and descriptor == owned_descriptors[0] and not input_close_failed:
+            input_close_failed = True
             raise OSError("secondary close failure")
 
     monkeypatch.setattr(workspace_module.os, "open", recording_open)
@@ -309,21 +314,14 @@ def test_workspace_binding_failure_attempts_all_closes_and_preserves_the_primary
         with pytest.raises(RuntimeError, match="primary bind failure"):  # noqa: SIM117
             with job_workspace(str(tmp_path / "input"), str(tmp_path / "output"), "job-1"):
                 raise AssertionError("binding failure must prevent the context from yielding")
+
+        assert owned_close_attempts == owned_descriptors
+        assert not input_dir.exists()
+        assert not output_dir.exists()
     finally:
-        for descriptor in opened:
-            with suppress(OSError):
-                real_close(descriptor)
         for path in (input_dir, output_dir):
             if path.exists():
                 path.rmdir()
-
-    # ``os`` is a process-wide module, so this monkeypatch also observes any
-    # descriptor closes performed inside shutil.rmtree. Python 3.10 performs
-    # more of those than newer interpreters. The contract here is that both
-    # owned workspace descriptors are attempted before reclamation begins.
-    assert close_attempts[: len(opened)] == opened
-    assert not input_dir.exists()
-    assert not output_dir.exists()
 
 
 def test_workspace_construction_fstat_failure_closes_and_reclaims_every_bound_directory(
