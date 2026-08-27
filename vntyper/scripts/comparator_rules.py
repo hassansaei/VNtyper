@@ -204,7 +204,7 @@ def _operand_value(operand: Operand, row: Mapping[str, object], *, context: str)
 def _normalize_null(value: object) -> object:
     if value is None or value is pd.NA:
         return _NULL
-    if isinstance(value, float) and math.isnan(value):
+    if isinstance(value, (float, np.floating)) and math.isnan(value):
         return _NULL
     return value
 

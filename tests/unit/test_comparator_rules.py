@@ -257,6 +257,24 @@ def test_null_row_values_are_false_on_the_right_side(null_value: object) -> None
     assert evaluate_rule(compiled, {"Value": null_value}, context="test.rule") is False
 
 
+@pytest.mark.parametrize("nan_value", [np.float16("nan"), np.float32("nan"), np.float64("nan")])
+@pytest.mark.parametrize(
+    ("operator", "right"),
+    [
+        ("eq", literal("different family")),
+        ("lt", literal(10)),
+        ("in", literal(["different family"])),
+        ("casefold_eq", literal("different family")),
+    ],
+)
+def test_numpy_floating_nan_widths_normalize_to_null(
+    nan_value: object, operator: str, right: dict[str, object]
+) -> None:
+    compiled = validate_rule(rule(column("Value"), operator, right), allowed_columns=["Value"], context="test.rule")
+
+    assert evaluate_rule(compiled, {"Value": nan_value}, context="test.rule") is False
+
+
 @pytest.mark.parametrize(
     ("configured", "row", "expected_message"),
     [
