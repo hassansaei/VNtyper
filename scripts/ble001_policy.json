@@ -1,8 +1,8 @@
 {
   "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 97,
-    "ignore_noqa": 104,
+    "normal": 98,
+    "ignore_noqa": 105,
     "identities": 76,
     "categories": {
       "A": 28,
@@ -86,8 +86,8 @@
     {
       "path": "docker/app/tasks.py",
       "symbol": "run_vntyper_job",
-      "normal_count": 7,
-      "all_count": 7,
+      "normal_count": 8,
+      "all_count": 8,
       "category": "A",
       "rationale": "docker/app/tasks.py::run_vntyper_job: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },

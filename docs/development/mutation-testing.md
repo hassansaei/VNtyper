@@ -16,12 +16,12 @@ deliberate defect, runs the tests, and records whether anything failed. A
 
 ## Result
 
-**95 of 121 mutants killed - a raw mutation score of 78.5%.**
+**169 of 215 mutants killed - a raw mutation score of 78.6%.**
 
-Of the 26 survivors, 4 are hand-classified as
+Of the 46 survivors, 4 are hand-classified as
 *equivalent* (the mutation cannot change observable behaviour, so no test could
-ever kill it) and 22 are genuine gaps. Excluding the equivalent
-mutants the score is **81.2%** (95/117).
+ever kill it) and 42 are genuine gaps. Excluding the equivalent
+mutants the score is **80.1%** (169/211).
 
 Both numbers are given because neither alone is honest: the raw score
 understates the suite by counting unkillable mutants against it, and the
@@ -30,11 +30,12 @@ Every classification is listed below with its reason so it can be checked.
 
 | Module | Killed | Total | Raw score |
 | --- | ---: | ---: | ---: |
-| `vntyper/scripts/motif_processing.py` | 38 | 58 | 65.5% |
-| `vntyper/scripts/confidence_assignment.py` | 9 | 11 | 81.8% |
+| `vntyper/scripts/kestrel_genotyping.py` | 59 | 85 | 69.4% |
+| `vntyper/scripts/motif_processing.py` | 44 | 59 | 74.6% |
 | `vntyper/scripts/variant_parsing.py` | 6 | 7 | 85.7% |
 | `vntyper/scripts/motif_decisions.py` | 7 | 8 | 87.5% |
-| `vntyper/scripts/flagging.py` | 15 | 17 | 88.2% |
+| `vntyper/scripts/confidence_assignment.py` | 10 | 11 | 90.9% |
+| `vntyper/scripts/flagging.py` | 23 | 25 | 92.0% |
 | `vntyper/scripts/scoring.py` | 20 | 20 | 100.0% |
 
 ## Surviving mutants
@@ -47,10 +48,34 @@ kills one is a test that would have caught a real defect of that shape.
 
 | Module | Line | Mutation |
 | --- | ---: | --- |
-| `vntyper/scripts/confidence_assignment.py` | 133 | `0` &rarr; `1` |
 | `vntyper/scripts/confidence_assignment.py` | 138 | `-` &rarr; `+` |
-| `vntyper/scripts/motif_decisions.py` | 79 | `True` &rarr; `False` |
-| `vntyper/scripts/motif_processing.py` | 216 | `False` &rarr; `True` |
+| `vntyper/scripts/kestrel_genotyping.py` | 182 | `and` &rarr; `or` |
+| `vntyper/scripts/kestrel_genotyping.py` | 220 | `continue` &rarr; `break` |
+| `vntyper/scripts/kestrel_genotyping.py` | 284 | `20` &rarr; `21` |
+| `vntyper/scripts/kestrel_genotyping.py` | 285 | `30` &rarr; `31` |
+| `vntyper/scripts/kestrel_genotyping.py` | 286 | `30` &rarr; `31` |
+| `vntyper/scripts/kestrel_genotyping.py` | 368 | `break` &rarr; `continue` |
+| `vntyper/scripts/kestrel_genotyping.py` | 492 | `False` &rarr; `True` |
+| `vntyper/scripts/kestrel_genotyping.py` | 608 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 611 | `True` &rarr; `False` |
+| `vntyper/scripts/kestrel_genotyping.py` | 635 | `not` &rarr; `(deleted)` |
+| `vntyper/scripts/kestrel_genotyping.py` | 639 | `or` &rarr; `and` |
+| `vntyper/scripts/kestrel_genotyping.py` | 639 | `False` &rarr; `True` |
+| `vntyper/scripts/kestrel_genotyping.py` | 777 | `False` &rarr; `True` |
+| `vntyper/scripts/kestrel_genotyping.py` | 876 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 933 | `3` &rarr; `4` |
+| `vntyper/scripts/kestrel_genotyping.py` | 940 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 944 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 946 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 949 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 951 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 954 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 956 | `0` &rarr; `1` |
+| `vntyper/scripts/kestrel_genotyping.py` | 963 | `1` &rarr; `2` |
+| `vntyper/scripts/kestrel_genotyping.py` | 1031 | `False` &rarr; `True` |
+| `vntyper/scripts/kestrel_genotyping.py` | 1083 | `==` &rarr; `!=` |
+| `vntyper/scripts/kestrel_genotyping.py` | 1083 | `1` &rarr; `2` |
+| `vntyper/scripts/motif_decisions.py` | 86 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 231 | `==` &rarr; `!=` |
 | `vntyper/scripts/motif_processing.py` | 239 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 290 | `False` &rarr; `True` |
@@ -60,15 +85,11 @@ kills one is a test that would have caught a real defect of that shape.
 | `vntyper/scripts/motif_processing.py` | 337 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 341 | `False` &rarr; `True` |
 | `vntyper/scripts/motif_processing.py` | 367 | `True` &rarr; `False` |
-| `vntyper/scripts/motif_processing.py` | 487 | `True` &rarr; `False` |
-| `vntyper/scripts/motif_processing.py` | 491 | `-` &rarr; `+` |
-| `vntyper/scripts/motif_processing.py` | 491 | `1` &rarr; `2` |
-| `vntyper/scripts/motif_processing.py` | 495 | `>=` &rarr; `<` |
-| `vntyper/scripts/motif_processing.py` | 496 | `-` &rarr; `+` |
-| `vntyper/scripts/motif_processing.py` | 510 | `not` &rarr; `(deleted)` |
-| `vntyper/scripts/motif_processing.py` | 512 | `not` &rarr; `(deleted)` |
-| `vntyper/scripts/motif_processing.py` | 514 | `not` &rarr; `(deleted)` |
-| `vntyper/scripts/motif_processing.py` | 518 | `False` &rarr; `True` |
+| `vntyper/scripts/motif_processing.py` | 491 | `True` &rarr; `False` |
+| `vntyper/scripts/motif_processing.py` | 510 | `-` &rarr; `+` |
+| `vntyper/scripts/motif_processing.py` | 510 | `1` &rarr; `2` |
+| `vntyper/scripts/motif_processing.py` | 525 | `not` &rarr; `(deleted)` |
+| `vntyper/scripts/motif_processing.py` | 534 | `False` &rarr; `True` |
 
 ### Classified equivalent
 
@@ -89,8 +110,8 @@ not a supported input.
 
 | Module | Line | Mutation | Why it cannot be killed |
 | --- | ---: | --- | --- |
-| `vntyper/scripts/flagging.py` | 150 | `False` &rarr; `True` | `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly |
-| `vntyper/scripts/flagging.py` | 243 | `False` &rarr; `True` | `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name |
+| `vntyper/scripts/flagging.py` | 151 | `False` &rarr; `True` | `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly |
+| `vntyper/scripts/flagging.py` | 334 | `False` &rarr; `True` | `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name |
 | `vntyper/scripts/motif_processing.py` | 342 | `60` &rarr; `61` | `.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60 |
 | `vntyper/scripts/variant_parsing.py` | 114 | `0.0` &rarr; `1.0` | `.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469 |
 
@@ -103,7 +124,7 @@ committed, which is why this one exists.
 !!! note "The two totals are not directly comparable"
 
     Different mutant population, different modules: 62 mutants over eight
-    modules then, 121 over five now, generated by a different operator set.
+    modules then, 215 over 7 modules now, generated by a different operator set.
     A higher or lower headline number would not by itself mean the suite has
     improved or regressed. Only per-module figures on the same module carry
     across, and even those only loosely.
@@ -116,7 +137,7 @@ a fully green build.
 | `confidence_assignment.py` | Then | Now |
 | --- | ---: | ---: |
 | Line coverage | 100% | 100% |
-| Mutation score | 21% | 81.8% raw, 81.8% adjusted |
+| Mutation score | 21% | 90.9% raw, 90.9% adjusted |
 
 ## Reproducing this
 
@@ -247,36 +268,63 @@ VNtyper mutation testing - advisory score
 ============================================================
 
 Command:  make mutation
-Total:    121 mutants, 95 killed, 26 survived
-Score:    78.5%
-Duration: 5.0 min
+Total:    215 mutants, 169 killed, 46 survived
+Score:    78.6%
+Duration: 59.2 min
 
 Per module
 ------------------------------------------------------------
-  65.5%   38/ 58  vntyper/scripts/motif_processing.py
-  81.8%    9/ 11  vntyper/scripts/confidence_assignment.py
+  69.4%   59/ 85  vntyper/scripts/kestrel_genotyping.py
+  74.6%   44/ 59  vntyper/scripts/motif_processing.py
   85.7%    6/  7  vntyper/scripts/variant_parsing.py
   87.5%    7/  8  vntyper/scripts/motif_decisions.py
-  88.2%   15/ 17  vntyper/scripts/flagging.py
+  90.9%   10/ 11  vntyper/scripts/confidence_assignment.py
+  92.0%   23/ 25  vntyper/scripts/flagging.py
  100.0%   20/ 20  vntyper/scripts/scoring.py
 
 Surviving mutants  [E] = hand-classified equivalent, [ ] = genuine gap
 ------------------------------------------------------------
 vntyper/scripts/confidence_assignment.py
-  [ ] line  133  '0' -> '1'
   [ ] line  138  '-' -> '+'
 
 vntyper/scripts/flagging.py
-  [E] line  150  'False' -> 'True'
+  [E] line  151  'False' -> 'True'
           equivalent: `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly
-  [E] line  243  'False' -> 'True'
+  [E] line  334  'False' -> 'True'
           equivalent: `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name
 
+vntyper/scripts/kestrel_genotyping.py
+  [ ] line  182  'and' -> 'or'
+  [ ] line  220  'continue' -> 'break'
+  [ ] line  284  '20' -> '21'
+  [ ] line  285  '30' -> '31'
+  [ ] line  286  '30' -> '31'
+  [ ] line  368  'break' -> 'continue'
+  [ ] line  492  'False' -> 'True'
+  [ ] line  608  '0' -> '1'
+  [ ] line  611  'True' -> 'False'
+  [ ] line  635  'not' -> ''
+  [ ] line  639  'or' -> 'and'
+  [ ] line  639  'False' -> 'True'
+  [ ] line  777  'False' -> 'True'
+  [ ] line  876  '0' -> '1'
+  [ ] line  933  '3' -> '4'
+  [ ] line  940  '0' -> '1'
+  [ ] line  944  '0' -> '1'
+  [ ] line  946  '0' -> '1'
+  [ ] line  949  '0' -> '1'
+  [ ] line  951  '0' -> '1'
+  [ ] line  954  '0' -> '1'
+  [ ] line  956  '0' -> '1'
+  [ ] line  963  '1' -> '2'
+  [ ] line 1031  'False' -> 'True'
+  [ ] line 1083  '==' -> '!='
+  [ ] line 1083  '1' -> '2'
+
 vntyper/scripts/motif_decisions.py
-  [ ] line   79  'True' -> 'False'
+  [ ] line   86  'True' -> 'False'
 
 vntyper/scripts/motif_processing.py
-  [ ] line  216  'False' -> 'True'
   [ ] line  231  '==' -> '!='
   [ ] line  239  'True' -> 'False'
   [ ] line  290  'False' -> 'True'
@@ -288,15 +336,11 @@ vntyper/scripts/motif_processing.py
   [E] line  342  '60' -> '61'
           equivalent: `.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60
   [ ] line  367  'True' -> 'False'
-  [ ] line  487  'True' -> 'False'
-  [ ] line  491  '-' -> '+'
-  [ ] line  491  '1' -> '2'
-  [ ] line  495  '>=' -> '<'
-  [ ] line  496  '-' -> '+'
-  [ ] line  510  'not' -> ''
-  [ ] line  512  'not' -> ''
-  [ ] line  514  'not' -> ''
-  [ ] line  518  'False' -> 'True'
+  [ ] line  491  'True' -> 'False'
+  [ ] line  510  '-' -> '+'
+  [ ] line  510  '1' -> '2'
+  [ ] line  525  'not' -> ''
+  [ ] line  534  'False' -> 'True'
 
 vntyper/scripts/variant_parsing.py
   [E] line  114  '0.0' -> '1.0'

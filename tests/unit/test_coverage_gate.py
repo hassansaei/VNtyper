@@ -1,17 +1,15 @@
 """Unit tests for the coverage ratchet gate."""
 
+import ast
 import sys
 from pathlib import Path
 from unittest import mock
 
 import coverage
+import coverage_gate
 import pytest
 
 pytestmark = pytest.mark.unit
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-
-import coverage_gate  # noqa: E402
 
 # The floor is a ratchet: it only ever moves up. Pinning the literal here is the point -
 # a `>=` bound would let someone lower `fail_under` in pyproject.toml all the way to the
@@ -28,6 +26,35 @@ import coverage_gate  # noqa: E402
 # 86.23% and moved it to 86. See `test_branch_coverage_is_enabled` below for why the gap
 # has to be guarded.
 CURRENT_COVERAGE_FLOOR = 86.0
+
+
+def test_unit_tier_has_the_reviewed_top_level_sys_path_insert_inventory() -> None:
+    """Keep the remaining process-global path mutations visible as bounded debt.
+
+    The reviewed baseline contained 27 unconditional top-level calls. Moving the two
+    quality-gate imports to pytest's session-scoped ``pythonpath`` configuration must
+    leave exactly 25; the sibling mutations are deliberately outside this change.
+    Parsing the modules distinguishes executable top-level calls from source snippets
+    embedded in tests.
+    """
+    insertions = []
+    for path in sorted(Path(__file__).parent.glob("test_*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        for statement in module.body:
+            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+                continue
+            function = statement.value.func
+            if (
+                isinstance(function, ast.Attribute)
+                and function.attr == "insert"
+                and isinstance(function.value, ast.Attribute)
+                and function.value.attr == "path"
+                and isinstance(function.value.value, ast.Name)
+                and function.value.value.id == "sys"
+            ):
+                insertions.append(f"{path.name}:{statement.lineno}")
+
+    assert len(insertions) == 25, f"expected 25 reviewed top-level sys.path inserts, found {insertions}"
 
 
 def test_read_floor_returns_the_configured_value() -> None:

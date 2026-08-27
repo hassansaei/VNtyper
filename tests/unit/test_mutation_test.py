@@ -17,13 +17,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import mutation_test
 import pytest
 
 pytestmark = pytest.mark.unit
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-
-import mutation_test  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Numeric literal mutation
@@ -590,10 +587,23 @@ def test_a_scoped_run_does_not_report_other_modules_entries_as_stale(monkeypatch
     assert mutation_test.stale_equivalence_keys([result]) == []
 
 
-def test_every_committed_equivalence_entry_targets_a_real_module() -> None:
-    """A typo'd path in the classification table would silently never apply."""
-    for path, _line, _original, _replacement in mutation_test.EQUIVALENT_MUTANTS:
+def test_every_committed_equivalence_entry_targets_a_generated_mutant() -> None:
+    """A stale path or line in the classification table must not silently stop applying."""
+    candidates_by_path = {
+        path: {
+            mutant.key
+            for mutant in mutation_test.generate_mutants(
+                mutation_test.REAL_REPO_ROOT / path,
+                repo_root=mutation_test.REAL_REPO_ROOT,
+            )
+        }
+        for path in {key[0] for key in mutation_test.EQUIVALENT_MUTANTS}
+    }
+
+    for key in mutation_test.EQUIVALENT_MUTANTS:
+        path = key[0]
         assert path in mutation_test.TARGETS, path
+        assert key in candidates_by_path[path], key
 
 
 def test_the_page_records_that_branch_coverage_is_now_enabled() -> None:
@@ -676,6 +686,19 @@ def test_the_page_says_the_43_5_percent_baseline_is_not_directly_comparable() ->
     assert "not directly comparable" in page
 
 
+def test_the_baseline_comparison_counts_the_rendered_modules() -> None:
+    """The comparison must describe the supplied measurement, not a stale target count."""
+    results = [
+        mutation_test.ModuleResult(path="first.py", killed=1, survived=0),
+        mutation_test.ModuleResult(path="second.py", killed=1, survived=0),
+    ]
+
+    page = mutation_test.format_markdown(results, elapsed=1.0)
+
+    assert "2 over 2 modules now" in page
+    assert "over five now" not in page
+
+
 def test_the_markdown_page_embeds_the_raw_output_and_the_pyc_warning() -> None:
     """
     The committed docs page has to be the evidence, not a summary of it.
@@ -703,6 +726,16 @@ def test_every_declared_target_and_its_tests_exist() -> None:
         assert (mutation_test.REAL_REPO_ROOT / module).is_file(), module
         for test_path in test_paths:
             assert (mutation_test.REAL_REPO_ROOT / test_path).is_file(), test_path
+
+
+def test_the_call_selection_module_is_a_mutation_target() -> None:
+    """The call selector and result publisher must participate in mutation sweeps."""
+    module = "vntyper/scripts/kestrel_" + "genotyping.py"
+    scoped = mutation_test.TARGETS[module]
+
+    assert "tests/unit/test_haplo_count_and_selection.py" in scoped
+    assert "tests/unit/test_kestrel_result_publication.py" in scoped
+    assert "tests/unit/test_motif_exclusion_pipeline.py" in scoped
 
 
 # ---------------------------------------------------------------------------

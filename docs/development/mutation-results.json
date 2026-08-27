@@ -1,16 +1,11 @@
 {
-  "elapsed": 299.9935840070102,
+  "elapsed": 3554.3827589520006,
   "modules": [
     {
       "path": "vntyper/scripts/confidence_assignment.py",
-      "killed": 9,
-      "survived": 2,
+      "killed": 10,
+      "survived": 1,
       "survivors": [
-        {
-          "line": 133,
-          "original": "0",
-          "replacement": "1"
-        },
         {
           "line": 138,
           "original": "-",
@@ -26,14 +21,9 @@
     },
     {
       "path": "vntyper/scripts/motif_processing.py",
-      "killed": 38,
-      "survived": 20,
+      "killed": 44,
+      "survived": 15,
       "survivors": [
-        {
-          "line": 216,
-          "original": "False",
-          "replacement": "True"
-        },
         {
           "line": 231,
           "original": "==",
@@ -85,47 +75,27 @@
           "replacement": "False"
         },
         {
-          "line": 487,
+          "line": 491,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 491,
-          "original": "-",
-          "replacement": "+"
-        },
-        {
-          "line": 491,
-          "original": "1",
-          "replacement": "2"
-        },
-        {
-          "line": 495,
-          "original": ">=",
-          "replacement": "<"
-        },
-        {
-          "line": 496,
+          "line": 510,
           "original": "-",
           "replacement": "+"
         },
         {
           "line": 510,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 525,
           "original": "not",
           "replacement": ""
         },
         {
-          "line": 512,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 514,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 518,
+          "line": 534,
           "original": "False",
           "replacement": "True"
         }
@@ -137,7 +107,7 @@
       "survived": 1,
       "survivors": [
         {
-          "line": 79,
+          "line": 86,
           "original": "True",
           "replacement": "False"
         }
@@ -157,18 +127,155 @@
     },
     {
       "path": "vntyper/scripts/flagging.py",
-      "killed": 15,
+      "killed": 23,
       "survived": 2,
       "survivors": [
         {
-          "line": 150,
+          "line": 151,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 243,
+          "line": 334,
           "original": "False",
           "replacement": "True"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/kestrel_genotyping.py",
+      "killed": 59,
+      "survived": 26,
+      "survivors": [
+        {
+          "line": 182,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 220,
+          "original": "continue",
+          "replacement": "break"
+        },
+        {
+          "line": 284,
+          "original": "20",
+          "replacement": "21"
+        },
+        {
+          "line": 285,
+          "original": "30",
+          "replacement": "31"
+        },
+        {
+          "line": 286,
+          "original": "30",
+          "replacement": "31"
+        },
+        {
+          "line": 368,
+          "original": "break",
+          "replacement": "continue"
+        },
+        {
+          "line": 492,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 608,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 611,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 635,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 639,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 639,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 777,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 876,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 933,
+          "original": "3",
+          "replacement": "4"
+        },
+        {
+          "line": 940,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 944,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 946,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 949,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 951,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 954,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 956,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 963,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 1031,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 1083,
+          "original": "==",
+          "replacement": "!="
+        },
+        {
+          "line": 1083,
+          "original": "1",
+          "replacement": "2"
         }
       ]
     }

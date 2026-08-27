@@ -157,6 +157,38 @@ class TestSelectSingleBestVariant:
         assert len(result) == 1
         assert result.iloc[0]["Confidence"] == "High_Precision*"  # Wins on priority
 
+    def test_high_precision_beats_a_deeper_low_precision(self):
+        """High_Precision must beat a deeper, more-supported Low_Precision rival."""
+        df = pd.DataFrame(
+            {
+                "Confidence": ["High_Precision", "Low_Precision"],
+                "haplo_count": [10, 1000],
+                "Depth_Score": [0.010, 0.015],
+                "POS": [67, 54],
+                "Flag": ["Flagged", "Not flagged"],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        assert result.iloc[0]["Confidence"] == "High_Precision"
+        assert result.iloc[0]["POS"] == 67
+
+    def test_low_precision_beats_a_deeper_negative(self):
+        """Low_Precision must beat a deeper, more-supported Negative rival."""
+        df = pd.DataFrame(
+            {
+                "Confidence": ["Low_Precision", "Negative"],
+                "haplo_count": [10, 1000],
+                "Depth_Score": [0.010, 0.015],
+                "POS": [67, 54],
+                "Flag": ["Flagged", "Not flagged"],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        assert result.iloc[0]["Confidence"] == "Low_Precision"
+        assert result.iloc[0]["POS"] == 67
+
     def test_haplo_count_tie_breaker(self):
         """When Confidence and Depth_Score tied, highest haplo_count wins."""
         df = pd.DataFrame(

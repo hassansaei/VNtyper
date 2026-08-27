@@ -317,7 +317,7 @@ patch-coverage:
 		--fail-under=$(PATCH_COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Patch coverage >= $(PATCH_COVERAGE_TARGET)%$(RESET)"
 
-# Advisory mutation score over the five pure-decision modules.
+# Advisory mutation score over the modules listed in scripts/mutation_test.py TARGETS.
 #
 # ADVISORY. Nothing gates on it and nothing should: equivalent mutants have not been
 # hand-classified, so the printed score understates the truth by an unknown margin.

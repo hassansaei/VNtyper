@@ -98,15 +98,25 @@ def test_the_working_directory_is_captured_once_at_entry(tmp_path: Path, monkeyp
         os.chdir(wandered)
         return mock.DEFAULT
 
-    harness = run_pipeline_under_harness(
-        tmp_path / "out",
-        extra_modules=["advntr"],
-        stage_side_effects={"process_bam_to_fastq": _chdir_mid_run},
-    )
+    try:
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            extra_modules=["advntr"],
+            stage_side_effects={"process_bam_to_fastq": _chdir_mid_run},
+        )
 
-    assert os.getcwd() != expected, "the side effect did not actually change directory"
-    for stage in ("run_kestrel", "run_advntr"):
-        assert _cwd_of(harness, stage) == expected
+        assert os.getcwd() != expected, "the side effect did not actually change directory"
+        for stage in ("run_kestrel", "run_advntr"):
+            assert _cwd_of(harness, stage) == expected
+    finally:
+        # The side effect moves the *process* cwd. monkeypatch.chdir's teardown would
+        # restore it after the test, but nothing that runs between a failed assertion
+        # (or a harness exception) and that teardown may execute in `wandered` --
+        # restore what monkeypatch.chdir set, deterministically, and let its teardown
+        # then restore the original cwd as before.
+        os.chdir(run_dir)
+
+    assert os.getcwd() == str(run_dir), "the finally did not restore the harness entry directory"
 
 
 def test_an_unreadable_working_directory_falls_back_to_the_package_root(tmp_path: Path, monkeypatch) -> None:
