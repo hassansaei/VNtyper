@@ -226,12 +226,12 @@ def run_pipeline(
                 describe_model,
                 detect_advntr_version,
                 require_compatible_advntr,
+                require_verified_advntr_version,
             )
 
-            detected_advntr_version = detect_advntr_version(config, probe=AdvntrVersionProbe())
-            advntr_version_overrides["advntr"] = (
-                ".".join(str(part) for part in detected_advntr_version) if detected_advntr_version else "unknown"
-            )
+            advntr_version_outcome = detect_advntr_version(config, probe=AdvntrVersionProbe())
+            detected_advntr_version = require_verified_advntr_version(advntr_version_outcome)
+            advntr_version_overrides["advntr"] = ".".join(str(part) for part in detected_advntr_version)
 
             advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
             if not advntr_reference:

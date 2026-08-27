@@ -24,6 +24,8 @@ import sqlite3
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,24 @@ class AdvntrModelError(RuntimeError):
     """The resolved adVNTR model cannot be used with the available adVNTR."""
 
 
+class AdvntrProbeStatus(Enum):
+    """Terminal classification of one bounded adVNTR version probe."""
+
+    VERIFIED = "verified"
+    LAUNCH_FAILURE = "launch_failure"
+    UNPARSEABLE_SUCCESS = "unparseable_success"
+    TRANSIENT_EXHAUSTED = "transient_exhausted"
+
+
+@dataclass(frozen=True)
+class AdvntrVersionOutcome:
+    """Typed terminal result carried from the version subprocess to the pipeline guard."""
+
+    status: AdvntrProbeStatus
+    version: tuple[int, int, int] | None = None
+    message: str = ""
+
+
 class AdvntrVersionProbe:
     """Concurrency-safe successful-version cache scoped to one pipeline run.
 
@@ -85,23 +105,19 @@ class AdvntrVersionProbe:
         self._lock = threading.Lock()
         self._versions: dict[str, tuple[int, int, int]] = {}
 
-    def detect(self, command: str) -> tuple[int, int, int] | None:
-        """Return the configured command's parsed version, retrying measured lock contention.
+    def detect(self, command: str) -> AdvntrVersionOutcome:
+        """Classify the configured command after bounded lock-contention retries.
 
         Args:
             command: Configured adVNTR command, possibly a multi-token ``mamba run`` command.
 
         Returns:
-            The parsed three-part version, or None for a permanent launch failure or
-            successful but unparseable output.
-
-        Raises:
-            RuntimeError: If all attempts encounter the measured transient mamba lock failure.
+            A typed verified, launch-failure, unparseable-success, or exhausted outcome.
         """
         with self._lock:
             cached = self._versions.get(command)
             if cached is not None:
-                return cached
+                return AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=cached)
 
             argv = shlex.split(command) + shlex.split("--version")
             attempt = 1
@@ -109,29 +125,34 @@ class AdvntrVersionProbe:
                 try:
                     result = subprocess.run(argv, capture_output=True, text=True, check=False)
                 except FileNotFoundError:
-                    logger.error(f"Command not found: {command}")
-                    return None
+                    return AdvntrVersionOutcome(
+                        AdvntrProbeStatus.LAUNCH_FAILURE,
+                        message=f"adVNTR version launch failed: command not found: {command}.",
+                    )
                 except PermissionError:
-                    logger.error(f"Permission denied: {command}")
-                    return None
+                    return AdvntrVersionOutcome(
+                        AdvntrProbeStatus.LAUNCH_FAILURE,
+                        message=f"adVNTR version launch failed: permission denied: {command}.",
+                    )
                 except OSError as exc:
-                    logger.error(f"Failed to get adVNTR version for {command}: {exc}")
-                    return None
+                    return AdvntrVersionOutcome(
+                        AdvntrProbeStatus.LAUNCH_FAILURE,
+                        message=f"adVNTR version launch failed for {command}: {exc}.",
+                    )
 
                 combined_output = f"{result.stdout}\n{result.stderr}"
                 version = _parse_probe_output(result.stdout, result.stderr) if result.returncode == 0 else None
                 if version is not None:
                     self._versions[command] = version
-                    return version
+                    return AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=version)
 
                 if _is_transient_mamba_lock_failure(argv, combined_output):
                     if attempt == _VERSION_PROBE_ATTEMPTS:
                         msg = (
                             f"adVNTR version detection exhausted {_VERSION_PROBE_ATTEMPTS} attempts "
-                            "after a transient mamba launch failure."
+                            "after transient mamba launch failures."
                         )
-                        logger.error(msg)
-                        raise RuntimeError(msg)
+                        return AdvntrVersionOutcome(AdvntrProbeStatus.TRANSIENT_EXHAUSTED, message=msg)
                     logger.warning(
                         f"Transient mamba launch failure while detecting the adVNTR version; "
                         f"retrying ({attempt}/{_VERSION_PROBE_ATTEMPTS})."
@@ -141,9 +162,14 @@ class AdvntrVersionProbe:
                     continue
 
                 if result.returncode != 0:
-                    logger.error(f"adVNTR version command exited with status {result.returncode}.")
-                    return None
-                return None
+                    return AdvntrVersionOutcome(
+                        AdvntrProbeStatus.LAUNCH_FAILURE,
+                        message=f"adVNTR version launch failed: command exited with status {result.returncode}.",
+                    )
+                return AdvntrVersionOutcome(
+                    AdvntrProbeStatus.UNPARSEABLE_SUCCESS,
+                    message="adVNTR version command succeeded but its response was unparseable or ambiguous.",
+                )
 
 
 def _is_transient_mamba_lock_failure(argv: list[str], output: str) -> bool:
@@ -183,10 +209,8 @@ def parse_advntr_version(text: str | None) -> tuple[int, int, int] | None:
     return _parse_probe_output(text, "")
 
 
-def detect_advntr_version(
-    config: dict[str, Any], *, probe: AdvntrVersionProbe | None = None
-) -> tuple[int, int, int] | None:
-    """Ask the configured adVNTR which version it is.
+def detect_advntr_version(config: dict[str, Any], *, probe: AdvntrVersionProbe | None = None) -> AdvntrVersionOutcome:
+    """Return the typed terminal result of the configured adVNTR version probe.
 
     Args:
         config: Complete pipeline configuration containing ``tools.advntr``.
@@ -194,17 +218,35 @@ def detect_advntr_version(
             an isolated probe and therefore no process-global cache.
 
     Returns:
-        The parsed version, or None when a non-transient failure or malformed answer
-        prevents detection. Callers treat None as "too old" rather than "probably fine".
-
-    Raises:
-        RuntimeError: If the measured transient mamba launch failure exhausts its retries.
+        A typed verified, launch-failure, unparseable-success, or exhausted outcome.
     """
     command = config.get("tools", {}).get("advntr")
     if not command:
-        return None
+        return AdvntrVersionOutcome(
+            AdvntrProbeStatus.LAUNCH_FAILURE,
+            message="adVNTR version launch failed: no command is configured.",
+        )
     active_probe = probe if probe is not None else AdvntrVersionProbe()
     return active_probe.detect(command)
+
+
+def require_verified_advntr_version(outcome: AdvntrVersionOutcome) -> tuple[int, int, int]:
+    """Return a verified version or raise with the probe's class-specific terminal message.
+
+    Args:
+        outcome: Typed terminal result from :func:`detect_advntr_version`.
+
+    Returns:
+        The verified three-part adVNTR version.
+
+    Raises:
+        RuntimeError: If the command did not produce a verified version.
+    """
+    if outcome.status is AdvntrProbeStatus.VERIFIED:
+        assert outcome.version is not None
+        return outcome.version
+    logger.error(outcome.message)
+    raise RuntimeError(outcome.message)
 
 
 def describe_model(db_path: str | Path) -> dict[str, Any]:

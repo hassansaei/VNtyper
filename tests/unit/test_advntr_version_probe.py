@@ -12,9 +12,12 @@ import pytest
 
 from vntyper.modules.advntr.model_provenance import (
     AdvntrModelError,
+    AdvntrProbeStatus,
+    AdvntrVersionOutcome,
     AdvntrVersionProbe,
     detect_advntr_version,
     require_compatible_advntr,
+    require_verified_advntr_version,
 )
 
 pytestmark = pytest.mark.unit
@@ -36,6 +39,42 @@ def _result(*, status: int = 0, stdout: str = "", stderr: str = "") -> subproces
     return subprocess.CompletedProcess(ARGV, status, stdout=stdout, stderr=stderr)
 
 
+def _assert_verified(outcome: AdvntrVersionOutcome, version: tuple[int, int, int]) -> None:
+    """Assert the typed successful-probe contract and its exact version."""
+    assert outcome.status is AdvntrProbeStatus.VERIFIED
+    assert outcome.version == version
+    assert require_verified_advntr_version(outcome) == version
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_status", "expected_message"),
+    [
+        (
+            _result(status=127, stderr="not found\n"),
+            AdvntrProbeStatus.LAUNCH_FAILURE,
+            "adVNTR version launch failed: command exited with status 127.",
+        ),
+        (
+            _result(stdout="usage: advntr\n", stderr="Python 3.12.1 required\n"),
+            AdvntrProbeStatus.UNPARSEABLE_SUCCESS,
+            "adVNTR version command succeeded but its response was unparseable or ambiguous.",
+        ),
+    ],
+)
+def test_terminal_process_results_have_explicit_distinct_outcomes(
+    result: subprocess.CompletedProcess[str],
+    expected_status: AdvntrProbeStatus,
+    expected_message: str,
+) -> None:
+    """A permanent exit and a malformed success cannot collapse to the same None."""
+    with patch("vntyper.modules.advntr.model_provenance.subprocess.run", return_value=result):
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+
+    assert outcome == AdvntrVersionOutcome(expected_status, message=expected_message)
+    with pytest.raises(RuntimeError, match=expected_message.replace(".", r"\.")):
+        require_verified_advntr_version(outcome)
+
+
 def test_a_transient_mamba_lock_failure_is_retried_then_cached() -> None:
     """Removing the lock-output classification would return unknown on attempt one."""
     probe = AdvntrVersionProbe()
@@ -46,8 +85,8 @@ def test_a_transient_mamba_lock_failure_is_retried_then_cached() -> None:
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
-        assert detect_advntr_version(CONFIG, probe=probe) == (2, 0, 4)
-        assert detect_advntr_version(CONFIG, probe=probe) == (2, 0, 4)
+        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
+        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
 
     assert runner.call_args_list == [
         call(ARGV, capture_output=True, text=True, check=False),
@@ -65,7 +104,7 @@ def test_the_measured_process_lock_failure_is_independently_retried() -> None:
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
-        assert detect_advntr_version(CONFIG, probe=AdvntrVersionProbe()) == (2, 0, 4)
+        _assert_verified(detect_advntr_version(CONFIG, probe=AdvntrVersionProbe()), (2, 0, 4))
 
     assert runner.call_count == 2
     sleep.assert_called_once()
@@ -81,8 +120,8 @@ def test_a_valid_version_surrounded_by_mamba_lock_noise_is_accepted_without_retr
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
-        assert detect_advntr_version(CONFIG, probe=probe) == (2, 0, 4)
-        assert detect_advntr_version(CONFIG, probe=probe) == (2, 0, 4)
+        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
+        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
 
     assert runner.call_count == 1
     sleep.assert_not_called()
@@ -96,9 +135,11 @@ def test_transient_mamba_lock_failure_exhaustion_aborts_and_is_not_cached() -> N
         patch("vntyper.modules.advntr.model_provenance.subprocess.run", side_effect=responses) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep"),
     ):
-        with pytest.raises(RuntimeError, match="transient mamba launch failure"):
-            detect_advntr_version(CONFIG, probe=probe)
-        assert detect_advntr_version(CONFIG, probe=probe) == (2, 0, 4)
+        exhausted = detect_advntr_version(CONFIG, probe=probe)
+        assert exhausted.status is AdvntrProbeStatus.TRANSIENT_EXHAUSTED
+        with pytest.raises(RuntimeError, match="transient mamba launch failures"):
+            require_verified_advntr_version(exhausted)
+        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
 
     assert runner.call_count == 4
 
@@ -113,13 +154,15 @@ def test_status_zero_malformed_output_is_not_retried_cached_or_accepted() -> Non
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
-        assert detect_advntr_version(CONFIG, probe=probe) is None
-        assert detect_advntr_version(CONFIG, probe=probe) is None
+        first = detect_advntr_version(CONFIG, probe=probe)
+        second = detect_advntr_version(CONFIG, probe=probe)
 
     assert runner.call_count == 2
     sleep.assert_not_called()
-    with pytest.raises(AdvntrModelError, match="adVNTR unknown"):
-        require_compatible_advntr(V2_MODEL, None)
+    assert first.status is AdvntrProbeStatus.UNPARSEABLE_SUCCESS
+    assert second.status is AdvntrProbeStatus.UNPARSEABLE_SUCCESS
+    with pytest.raises(RuntimeError, match="unparseable or ambiguous"):
+        require_verified_advntr_version(first)
 
 
 def test_a_diagnostic_semver_before_the_answer_cannot_authorize_the_run() -> None:
@@ -128,8 +171,9 @@ def test_a_diagnostic_semver_before_the_answer_cannot_authorize_the_run() -> Non
         "vntyper.modules.advntr.model_provenance.subprocess.run",
         return_value=_result(stderr="warning libmamba 2.1.0\n2.0.3\n"),
     ) as runner:
-        version = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
 
+    version = require_verified_advntr_version(outcome)
     assert version == (2, 0, 3)
     assert runner.call_count == 1
     with pytest.raises(AdvntrModelError, match="adVNTR 2.0.3"):
@@ -142,12 +186,12 @@ def test_usage_text_and_python_semver_cannot_authorize_the_run() -> None:
         "vntyper.modules.advntr.model_provenance.subprocess.run",
         return_value=_result(stderr="usage: advntr [options]\nPython 3.12.1 required\n"),
     ) as runner:
-        version = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
 
-    assert version is None
+    assert outcome.status is AdvntrProbeStatus.UNPARSEABLE_SUCCESS
     assert runner.call_count == 1
-    with pytest.raises(AdvntrModelError, match="adVNTR unknown"):
-        require_compatible_advntr(V2_MODEL, version)
+    with pytest.raises(RuntimeError, match="unparseable or ambiguous"):
+        require_verified_advntr_version(outcome)
 
 
 def test_conflicting_strict_answers_fail_closed() -> None:
@@ -156,12 +200,12 @@ def test_conflicting_strict_answers_fail_closed() -> None:
         "vntyper.modules.advntr.model_provenance.subprocess.run",
         return_value=_result(stdout="2.0.4\n", stderr="adVNTR 2.0.3: legacy help\n"),
     ) as runner:
-        version = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
 
-    assert version is None
+    assert outcome.status is AdvntrProbeStatus.UNPARSEABLE_SUCCESS
     assert runner.call_count == 1
-    with pytest.raises(AdvntrModelError, match="adVNTR unknown"):
-        require_compatible_advntr(V2_MODEL, version)
+    with pytest.raises(RuntimeError, match="unparseable or ambiguous"):
+        require_verified_advntr_version(outcome)
 
 
 def test_benign_stdout_does_not_hide_a_bare_stderr_answer() -> None:
@@ -171,8 +215,8 @@ def test_benign_stdout_does_not_hide_a_bare_stderr_answer() -> None:
         "vntyper.modules.advntr.model_provenance.subprocess.run",
         return_value=_result(stdout="launcher note\n", stderr="2.0.4\n"),
     ) as runner:
-        assert detect_advntr_version(CONFIG, probe=probe) == (2, 0, 4)
-        assert detect_advntr_version(CONFIG, probe=probe) == (2, 0, 4)
+        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
+        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
 
     assert runner.call_count == 1
 
@@ -183,7 +227,7 @@ def test_an_explicit_legacy_advntr_answer_is_still_parsed() -> None:
         "vntyper.modules.advntr.model_provenance.subprocess.run",
         return_value=_result(stderr="usage: advntr\noptions:\nadVNTR 1.4.0: legacy help\n"),
     ):
-        assert detect_advntr_version(CONFIG, probe=AdvntrVersionProbe()) == (1, 4, 0)
+        _assert_verified(detect_advntr_version(CONFIG, probe=AdvntrVersionProbe()), (1, 4, 0))
 
 
 def test_a_parsed_incompatible_version_is_not_retried_or_accepted() -> None:
@@ -196,8 +240,9 @@ def test_a_parsed_incompatible_version_is_not_retried_or_accepted() -> None:
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
-        version = detect_advntr_version(CONFIG, probe=probe)
+        outcome = detect_advntr_version(CONFIG, probe=probe)
 
+    version = require_verified_advntr_version(outcome)
     assert version == (2, 0, 3)
     assert runner.call_count == 1
     sleep.assert_not_called()
@@ -218,7 +263,7 @@ def test_concurrent_callers_share_one_successful_probe() -> None:
         assert release.wait(timeout=5)
         return _result(stderr="2.0.4\n")
 
-    def detect() -> tuple[int, int, int] | None:
+    def detect() -> AdvntrVersionOutcome:
         barrier.wait(timeout=5)
         return detect_advntr_version(CONFIG, probe=probe)
 
@@ -229,7 +274,8 @@ def test_concurrent_callers_share_one_successful_probe() -> None:
         futures = [executor.submit(detect) for _ in range(callers)]
         assert started.wait(timeout=5)
         release.set()
-        assert [future.result(timeout=5) for future in futures] == [(2, 0, 4)] * callers
+        expected = AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4))
+        assert [future.result(timeout=5) for future in futures] == [expected] * callers
 
     assert runner.call_count == 1
 
@@ -242,9 +288,9 @@ def test_a_new_run_scoped_probe_starts_with_an_empty_cache() -> None:
         "vntyper.modules.advntr.model_provenance.subprocess.run",
         side_effect=[_result(stderr="2.0.4\n"), _result(stderr="2.1.0\n")],
     ) as runner:
-        assert detect_advntr_version(CONFIG, probe=first_run) == (2, 0, 4)
-        assert detect_advntr_version(CONFIG, probe=first_run) == (2, 0, 4)
-        assert detect_advntr_version(CONFIG, probe=second_run) == (2, 1, 0)
+        _assert_verified(detect_advntr_version(CONFIG, probe=first_run), (2, 0, 4))
+        _assert_verified(detect_advntr_version(CONFIG, probe=first_run), (2, 0, 4))
+        _assert_verified(detect_advntr_version(CONFIG, probe=second_run), (2, 1, 0))
 
     assert runner.call_count == 2
 
@@ -260,10 +306,11 @@ def test_lock_text_from_a_non_mamba_command_is_not_classified_as_transient() -> 
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
-        assert detect_advntr_version(config, probe=probe) is None
+        outcome = detect_advntr_version(config, probe=probe)
 
     assert runner.call_count == 1
     sleep.assert_not_called()
+    assert outcome.status is AdvntrProbeStatus.UNPARSEABLE_SUCCESS
 
 
 def test_a_package_cache_permission_error_is_not_process_lock_contention() -> None:
@@ -276,10 +323,11 @@ def test_a_package_cache_permission_error_is_not_process_lock_contention() -> No
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
-        assert detect_advntr_version(CONFIG, probe=AdvntrVersionProbe()) is None
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
 
     assert runner.call_count == 1
     sleep.assert_not_called()
+    assert outcome.status is AdvntrProbeStatus.LAUNCH_FAILURE
 
 
 def test_nonzero_clean_output_is_not_accepted_as_a_version() -> None:
@@ -288,35 +336,67 @@ def test_nonzero_clean_output_is_not_accepted_as_a_version() -> None:
         "vntyper.modules.advntr.model_provenance.subprocess.run",
         return_value=_result(status=2, stderr="2.0.4\n"),
     ):
-        assert detect_advntr_version(CONFIG, probe=AdvntrVersionProbe()) is None
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+    assert outcome.status is AdvntrProbeStatus.LAUNCH_FAILURE
 
 
 @pytest.mark.parametrize(
-    ("failure", "logged"),
+    ("failure", "message_fragment"),
     [
-        (FileNotFoundError("missing"), "Command not found"),
-        (PermissionError("denied"), "Permission denied"),
-        (OSError("exec failed"), "Failed to get adVNTR version"),
+        (FileNotFoundError("missing"), "command not found"),
+        (PermissionError("denied"), "permission denied"),
+        (OSError("exec failed"), "version launch failed for"),
     ],
 )
 def test_permanent_launch_exceptions_return_unknown_without_being_cached(
     failure: OSError,
-    logged: str,
+    message_fragment: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Removing a permanent-launch handler would bypass the compatibility refusal."""
     probe = AdvntrVersionProbe()
     caplog.set_level(logging.ERROR, logger="vntyper.modules.advntr.model_provenance")
     with patch("vntyper.modules.advntr.model_provenance.subprocess.run", side_effect=failure) as runner:
-        assert detect_advntr_version(CONFIG, probe=probe) is None
-        assert detect_advntr_version(CONFIG, probe=probe) is None
+        first = detect_advntr_version(CONFIG, probe=probe)
+        second = detect_advntr_version(CONFIG, probe=probe)
+        with pytest.raises(RuntimeError):
+            require_verified_advntr_version(first)
 
     assert runner.call_count == 2
-    assert logged in caplog.text
+    assert first.status is AdvntrProbeStatus.LAUNCH_FAILURE
+    assert second.status is AdvntrProbeStatus.LAUNCH_FAILURE
+    assert message_fragment in first.message
+    assert second.message == first.message
+    assert any(record.getMessage() == first.message for record in caplog.records)
+
+
+def test_concurrent_failures_are_never_cached() -> None:
+    """The shared lock serializes callers but only a verified tuple suppresses launches."""
+    callers = 4
+    barrier = threading.Barrier(callers)
+    probe = AdvntrVersionProbe()
+
+    def detect() -> AdvntrVersionOutcome:
+        barrier.wait(timeout=5)
+        return detect_advntr_version(CONFIG, probe=probe)
+
+    with (
+        patch(
+            "vntyper.modules.advntr.model_provenance.subprocess.run",
+            return_value=_result(stderr="usage: advntr [options]\n"),
+        ) as runner,
+        ThreadPoolExecutor(max_workers=callers) as executor,
+    ):
+        outcomes = [future.result(timeout=5) for future in [executor.submit(detect) for _ in range(callers)]]
+
+    assert [outcome.status for outcome in outcomes] == [AdvntrProbeStatus.UNPARSEABLE_SUCCESS] * callers
+    assert runner.call_count == callers
 
 
 def test_missing_command_returns_unknown_without_launching() -> None:
     """A partial configuration is not allowed to invent a bare executable name."""
     with patch("vntyper.modules.advntr.model_provenance.subprocess.run") as runner:
-        assert detect_advntr_version({"tools": {}}, probe=AdvntrVersionProbe()) is None
+        outcome = detect_advntr_version({"tools": {}}, probe=AdvntrVersionProbe())
     runner.assert_not_called()
+    assert outcome.status is AdvntrProbeStatus.LAUNCH_FAILURE
+    assert outcome.message == "adVNTR version launch failed: no command is configured."

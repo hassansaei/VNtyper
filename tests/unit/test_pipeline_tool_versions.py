@@ -181,15 +181,32 @@ def test_a_model_advntr_cannot_read_stops_the_run(tmp_path: Path, caplog: pytest
     than diagnosed from results that look confident.
     """
     config = deepcopy(MINIMAL_CONFIG)
-    config["tools"]["advntr"] = advntr_stub("2.0.3")
+    incompatible = subprocess.CompletedProcess(
+        [config["tools"]["advntr"], "--version"],
+        0,
+        stdout="",
+        stderr="2.0.3\n",
+    )
 
     # run_pipeline swallows every exception into sys.exit(1), so what the harness records
     # is the exit; the refusal itself is in the log. Both matter: the run must stop, and
     # it must say why.
     caplog.set_level("ERROR")
-    harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"], expect_failure=True)
+    with patch(
+        "vntyper.modules.advntr.model_provenance.subprocess.run",
+        return_value=incompatible,
+    ) as runner:
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            config=config,
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
 
     assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert runner.call_count == 1
+    harness.stages["run_kestrel"].assert_not_called()
     assert "Install adVNTR >= 2.0.4" in caplog.text
 
 
@@ -222,4 +239,115 @@ def test_a_malformed_startup_version_stops_before_kestrel_without_reprobing(
     assert harness.error.code == 1
     assert runner.call_count == 1
     harness.stages["run_kestrel"].assert_not_called()
-    assert "adVNTR unknown" in caplog.text
+    expected = "adVNTR version command succeeded but its response was unparseable or ambiguous."
+    assert any(record.getMessage() == expected for record in caplog.records)
+
+
+def test_a_permanent_launch_exception_stops_before_kestrel_with_its_own_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An environment launch failure remains distinct from a malformed tool answer."""
+    caplog.set_level("ERROR")
+    with patch(
+        "vntyper.modules.advntr.model_provenance.subprocess.run",
+        side_effect=FileNotFoundError("missing"),
+    ) as runner:
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert runner.call_count == 1
+    harness.stages["run_kestrel"].assert_not_called()
+    assert any(
+        record.getMessage().startswith("adVNTR version launch failed: command not found:") for record in caplog.records
+    )
+
+
+def test_a_permanent_nonzero_exit_stops_before_kestrel_with_its_status(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A completed launcher failure carries its status without becoming malformed output."""
+    config = deepcopy(MINIMAL_CONFIG)
+    failed = subprocess.CompletedProcess([config["tools"]["advntr"], "--version"], 127, stdout="", stderr="missing\n")
+
+    caplog.set_level("ERROR")
+    with patch(
+        "vntyper.modules.advntr.model_provenance.subprocess.run",
+        return_value=failed,
+    ) as runner:
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            config=config,
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert runner.call_count == 1
+    harness.stages["run_kestrel"].assert_not_called()
+    expected = "adVNTR version launch failed: command exited with status 127."
+    assert any(record.getMessage() == expected for record in caplog.records)
+
+
+def test_transient_exhaustion_stops_before_kestrel_with_a_bounded_launch_count(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Exhaustion is its own outcome after exactly three attempts and two waits."""
+    config = deepcopy(MINIMAL_CONFIG)
+    config["tools"]["advntr"] = "mamba run -n envadvntr advntr"
+    argv = ["mamba", "run", "-n", "envadvntr", "advntr", "--version"]
+    transient = subprocess.CompletedProcess(
+        argv,
+        1,
+        stdout="",
+        stderr="error libmamba Could not set lock (Resource temporarily unavailable)\n",
+    )
+
+    caplog.set_level("ERROR")
+    with (
+        patch(
+            "vntyper.modules.advntr.model_provenance.subprocess.run",
+            return_value=transient,
+        ) as runner,
+        patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
+    ):
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            config=config,
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert runner.call_count == 3
+    assert sleep.call_count == 2
+    harness.stages["run_kestrel"].assert_not_called()
+    expected = "adVNTR version detection exhausted 3 attempts after transient mamba launch failures."
+    assert any(record.getMessage() == expected for record in caplog.records)
+
+
+def test_a_verified_version_launches_once_and_reaches_kestrel(tmp_path: Path) -> None:
+    """The successful 2.0.4 path remains unchanged by terminal-outcome classification."""
+    config = deepcopy(MINIMAL_CONFIG)
+    verified = subprocess.CompletedProcess(
+        [config["tools"]["advntr"], "--version"],
+        0,
+        stdout="",
+        stderr="2.0.4\n",
+    )
+
+    with patch(
+        "vntyper.modules.advntr.model_provenance.subprocess.run",
+        return_value=verified,
+    ) as runner:
+        harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"])
+
+    assert harness.error is None
+    assert runner.call_count == 1
+    harness.stages["run_kestrel"].assert_called_once()
