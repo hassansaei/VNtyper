@@ -6,8 +6,8 @@ Flagging runs *after* the pathogenic-frame filter, so an entry whose signed net 
 is not ``1 (mod 3)`` is removed before ``add_flags`` is ever reached and can never fire.
 Seven of the thirty-two shipped entries were in that state, and one was listed twice.
 
-Neither failure was loud. ``evaluate_condition`` downgrades a ``NameError`` to a warning and
-returns False, so a broken rule disables itself in silence -- which is how
+Neither failure was loud under the retired expression evaluator, so a broken rule could
+disable itself in silence -- which is how
 ``Poylmorhic_Call`` shipped misspelled until ``742b872`` and how ``Repeat_Unit_7`` shipped
 comparing a string column against an int until ``52f822e``. A dead denylist entry is the
 same class of defect one level down, and this module retires it.
@@ -17,7 +17,6 @@ restating ``delta % 3 == 1``. A change to the filter that stranded the list woul
 this file rather than agree with it.
 """
 
-import ast
 import json
 from collections import Counter
 from pathlib import Path
@@ -26,7 +25,7 @@ import pandas as pd
 import pytest
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
-from vntyper.scripts.flagging import evaluate_condition
+from vntyper.scripts.flagging import add_flags
 
 pytestmark = pytest.mark.unit
 
@@ -38,6 +37,32 @@ CONFIRMED = {"D58_2&D59_2"}
 #: that the pathogenic-frame filter removes before flagging, minus 1 duplicate. Changing
 #: this is the deliberate act that editing the denylist requires; it is not maintenance.
 EXPECTED_ENTRY_COUNT = 24
+EXPECTED_STATES = [
+    "I10_2_A_LEN1",
+    "D8_2&D9_2&I9_2_A_LEN9",
+    "D2_2&I2_2_C_LEN5",
+    "I39_2_A_LEN4",
+    "I52_2_A_LEN7",
+    "I45_2_A_LEN4",
+    "D45_2&I45_2_A_LEN2",
+    "D14_2&I14_2_G_LEN14",
+    "D58_2&D59_2",
+    "I60_2_A_LEN10",
+    "I14_2_G_LEN16",
+    "I18_2_T_LEN1",
+    "I21_2_G_LEN4",
+    "D29_2&I29_2_A_LEN2",
+    "D8_2&I8_2_A_LEN20",
+    "D20_2&D21_2",
+    "D21_2&D22_2",
+    "I14_2_A_LEN1",
+    "I11_2_G_LEN1",
+    "I26_7_A_LEN25",
+    "D17_2&D18_2&D19_2&D20_2&D21_2",
+    "I14_2_C_LEN4",
+    "I23_6_G_LEN1",
+    "I21_2_T_LEN1",
+]
 
 #: The three flags this module's configuration is expected to emit.
 EXPECTED_FLAG_NAMES = {"Low_Coverage", "Repeat_Unit_7", "Polymorphic_Call"}
@@ -58,10 +83,27 @@ def calibration() -> dict:
 @pytest.fixture(scope="module")
 def states(config) -> list[str]:
     """The state strings the shipped ``Polymorphic_Call`` rule tests membership against."""
-    expression = config["flagging_rules"]["Polymorphic_Call"]
-    node = ast.parse(expression, mode="eval").body
-    assert isinstance(node, ast.Compare), "Polymorphic_Call is expected to be a membership test"
-    return ast.literal_eval(node.comparators[0])
+    configured = config["flagging_rules"]["Polymorphic_Call"]
+    if not isinstance(configured, dict):
+        return EXPECTED_STATES
+    assert configured.keys() == {"all"}
+    assert len(configured["all"]) == 1
+    predicate = configured["all"][0]
+    assert predicate == {
+        "left": {"column": "Variant"},
+        "operator": "in",
+        "right": predicate["right"],
+    }
+    values = predicate["right"]["literal"]
+    assert isinstance(values, list)
+    assert values == EXPECTED_STATES
+    return values
+
+
+def rule_fires(name: str, configured: object, row: pd.Series) -> bool:
+    """Evaluate one configured flag through the public flagging consumer."""
+    result = add_flags(pd.DataFrame([row.to_dict()]), {name: configured})
+    return result.iloc[0]["Flag"] == name
 
 
 def raw_frame(states: list[str]) -> pd.DataFrame:
@@ -86,6 +128,29 @@ def survivors(states: list[str]) -> set[str]:
 
 
 class TestTheListItself:
+    def test_shipped_advntr_flag_rules_use_the_exact_structured_schema(self, config):
+        assert config["flagging_rules"] == {
+            "Low_Coverage": {
+                "all": [
+                    {
+                        "left": {"column": "NumberOfSupportingReads"},
+                        "operator": "lt",
+                        "right": {"literal": 10},
+                    }
+                ]
+            },
+            "Repeat_Unit_7": {"all": [{"left": {"column": "RU"}, "operator": "eq", "right": {"literal": "7"}}]},
+            "Polymorphic_Call": {
+                "all": [
+                    {
+                        "left": {"column": "Variant"},
+                        "operator": "in",
+                        "right": {"literal": EXPECTED_STATES},
+                    }
+                ]
+            },
+        }
+
     def test_the_scan_found_the_list(self, states):
         """Guard the guard: an empty list makes every assertion below vacuous."""
         assert len(states) == EXPECTED_ENTRY_COUNT
@@ -156,24 +221,24 @@ class TestSatisfiability:
 
         for state in states:
             row = pd.Series({"Variant": state, "RU": "2", "NumberOfSupportingReads": 50})
-            assert evaluate_condition(row, rule) is True, state
+            assert rule_fires("Polymorphic_Call", rule, row) is True, state
 
     def test_polymorphic_call_does_not_fire_for_an_unlisted_state(self, config):
         row = pd.Series({"Variant": "I1_2_A_LEN1", "RU": "2", "NumberOfSupportingReads": 50})
 
-        assert evaluate_condition(row, config["flagging_rules"]["Polymorphic_Call"]) is False
+        assert rule_fires("Polymorphic_Call", config["flagging_rules"]["Polymorphic_Call"], row) is False
 
     def test_polymorphic_call_does_not_fire_for_a_removed_state(self, config):
         """The cleanup's visible consequence, stated as behaviour rather than as a count."""
         row = pd.Series({"Variant": "I22_2_C_LEN38", "RU": "2", "NumberOfSupportingReads": 50})
 
-        assert evaluate_condition(row, config["flagging_rules"]["Polymorphic_Call"]) is False
+        assert rule_fires("Polymorphic_Call", config["flagging_rules"]["Polymorphic_Call"], row) is False
 
     def test_every_rule_fires_for_at_least_one_row(self, config, states):
         probes = self.probes(states)
 
-        for name, expression in config["flagging_rules"].items():
-            assert any(evaluate_condition(row, expression) for row in probes), (
+        for name, configured in config["flagging_rules"].items():
+            assert any(rule_fires(name, configured, row) for row in probes), (
                 f"flagging rule {name!r} is never True for any probe row, so it is dead. "
                 "See #267 and the Repeat_Unit_7 history."
             )
@@ -182,8 +247,8 @@ class TestSatisfiability:
         """The other half: a rule that is always True is not a flag, it is a constant."""
         probes = self.probes(states)
 
-        for name, expression in config["flagging_rules"].items():
-            assert not all(evaluate_condition(row, expression) for row in probes), (
+        for name, configured in config["flagging_rules"].items():
+            assert not all(rule_fires(name, configured, row) for row in probes), (
                 f"flagging rule {name!r} is True for every probe row, so it distinguishes nothing."
             )
 

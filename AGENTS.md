@@ -131,7 +131,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
-  The reviewed BLE001 policy is 98 normal/105 including suppressions; its executable
+  The reviewed BLE001 policy is 96 normal/103 including suppressions; its executable
   inventory is `scripts/ble001_policy.json` and the policy tests. Not every broad
   handler is a process boundary, so do not globally select or mechanically narrow it.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
@@ -474,14 +474,18 @@ summary | release-summary | none | always records success, failure, skipped jobs
    argument. `--config-path` cannot override them; tests must patch the module global.
 2. **`--config-path` replaces the whole config, it does not merge.** Missing keys raise
    `KeyError` deep in the pipeline (`config["tools"]["java_path"]`, no `.get`).
-3. **Rule strings are `eval()`d against DataFrame column names, and the two modules that
-   do it now behave differently.** Grep the JSON configs before renaming any column.
-   - `flagging.py` (`evaluate_condition`) evaluates the flag conditions that
-     `kestrel_genotyping.py` and `advntr_genotyping.py` read out of
-     `kestrel_config.json` and `advntr_config.json`. It still **fails open**: a
-     `NameError` logs `logger.warning(...)` and returns `False`, and any other exception
-     logs `logger.error(...)` and returns `False`. So renaming a column silently turns a
-     flag off, and the run still exits 0. This is the trap.
+3. **The two configuration-driven rule consumers currently have different security
+   boundaries.** Grep the JSON configs before renaming any column.
+   - `flagging.py` validates Kestrel and adVNTR flag rules through the structured
+     comparator DSL before copying or iterating a DataFrame. The only operators are
+     `eq`, `lt`, `in`, and `casefold_eq`; null is false, types are not coerced, and
+     booleans are accepted only by same-family `eq`. Missing columns, malformed rules,
+     unsafe flag names, and incompatible non-null row values raise `ValueError` instead
+     of silently disabling a flag. A flag-name-scoped migration map accepts only each of
+     the five byte-exact expressions shipped immediately before #286; modified, custom,
+     or another flag's expression is rejected. Packaged configs still load at their
+     existing import-time locations, and validation occurs when the consuming flagging
+     stage begins rather than at module import.
    - `cross_match.py` (`match_variants`) evaluates `config["cross_match"]["match_logic"]`
      from `config.json`. It **no longer fails open** — commit `5ee1e4a` made it
      `logger.error(msg)` then `raise ValueError(msg)`, on `NameError`/`SyntaxError` and on

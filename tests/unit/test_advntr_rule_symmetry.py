@@ -32,6 +32,7 @@ import pytest
 from vntyper.modules.advntr import advntr_genotyping as advntr
 from vntyper.scripts.algorithm_rules import compute_algorithm_result
 from vntyper.scripts.cohort_summary import load_report_config
+from vntyper.scripts.flagging import add_flags
 
 pytestmark = pytest.mark.unit
 
@@ -69,6 +70,23 @@ def _advntr_flagging_rule_names() -> list[str]:
 #: The real flag names adVNTR's shipped flagging rules can emit, read from
 #: `advntr_config.json` rather than hardcoded.
 ADVNTR_FLAG_NAMES = _advntr_flagging_rule_names()
+
+
+def test_shipped_advntr_flags_are_structured_conjunctions() -> None:
+    config_path = Path(advntr.__file__).parent / "advntr_config.json"
+    configured = json.loads(config_path.read_text(encoding="utf-8"))["flagging_rules"]
+
+    assert set(configured) == set(ADVNTR_FLAG_NAMES)
+    assert all(isinstance(value, dict) and set(value) == {"all"} and value["all"] for value in configured.values())
+
+
+def test_advntr_does_not_accept_an_arbitrary_expression_string() -> None:
+    with pytest.raises(ValueError, match="unsupported legacy expression"):
+        add_flags(
+            pd.DataFrame({"NumberOfSupportingReads": [9]}),
+            {"Custom_Flag": "NumberOfSupportingReads < 10"},
+        )
+
 
 #: `algorithm_logic.advntr` exactly as it shipped before this fix: rule 2 guards on `Flag`
 #: alone, with no `VID` condition. Reconstructed here as a literal -- rather than read from

@@ -94,8 +94,22 @@ Controls Kestrel execution and the entire postprocessing pipeline (scoring, conf
     }
   },
   "flagging_rules": {
-    "False_Positive_4bp_Insertion": "(REF == 'C') and (ALT == 'CGGCA')",
-    "Low_Depth_Conserved_Motifs": "(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])"
+    "False_Positive_4bp_Insertion": {
+      "all": [
+        {"left": {"column": "REF"}, "operator": "eq", "right": {"literal": "C"}},
+        {"left": {"column": "ALT"}, "operator": "eq", "right": {"literal": "CGGCA"}}
+      ]
+    },
+    "Low_Depth_Conserved_Motifs": {
+      "all": [
+        {"left": {"column": "Depth_Score"}, "operator": "lt", "right": {"literal": 0.4}},
+        {
+          "left": {"column": "Motif"},
+          "operator": "in",
+          "right": {"literal": ["1", "2", "3", "4", "6", "7", "8", "9"]}
+        }
+      ]
+    }
   },
   "artifact_flags": ["False_Positive_4bp_Insertion"],
   "motif_filtering": {
@@ -133,10 +147,19 @@ Controls Kestrel execution and the entire postprocessing pipeline (scoring, conf
 
 A name listed in `artifact_flags` must also be raised by a `flagging_rules` entry, or it never matches anything. Excluded rows are not lost: they remain in `kestrel_pre_result.tsv` with `flag_filter_pass = False`.
 
+Each flag rule contains exactly one non-empty `all` list. Predicates contain exactly `left`, `operator`, and `right`; operands contain one `column` or `literal`. Available operators are `eq`, `lt`, `in`, and `casefold_eq`. Columns are validated against the frame available to the consumer before any row is processed. Null values make a predicate false, and VNtyper never coerces strings, numbers, or booleans between types.
+
+Calls, attributes, indexing, imports, comprehensions, lambdas, regular expressions, arithmetic, and nested boolean forms are not part of the schema and are never executed. The byte-exact last-release string
+
+```json
+"(REF == 'C') and (ALT == 'CGGCA')"
+```
+
+is accepted only as a migration input for `False_Positive_4bp_Insertion` and maps to the structured object shown above. Modified whitespace, added clauses, custom expression strings, and another flag's historical expression are rejected. New configuration must use structured rules. See [Variant Flagging](../pipeline/flagging.md#rule-schema-and-adding-custom-rules) for the complete schema and examples.
+
 !!! note "Emptying `artifact_flags` restores the previous behaviour"
     Setting `"artifact_flags": []` makes every flag advisory again --- exactly how
-    VNtyper behaved before the Issue #174 fix --- with no code change. The flag names
-    live only in this file, so narrowing or withdrawing the artifact rule is a
-    configuration edit.
+    VNtyper behaved before the Issue #174 fix --- with no code change. The artifact
+    decision lives in this file, so narrowing or withdrawing it is a configuration edit.
 
 See [Variant Flagging](../pipeline/flagging.md) for the full description of the two flag classes.

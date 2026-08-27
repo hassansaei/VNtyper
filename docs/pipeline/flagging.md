@@ -23,7 +23,7 @@ An advisory flag identifies a call that may be technically valid but warrants ad
 
 ## How Flagging Works
 
-Each flagging rule is defined as a named condition in `kestrel_config.json`. Rules are Python logical expressions evaluated against each row of the variant DataFrame. If a rule's condition evaluates to `True`, the corresponding flag name is appended to the variant's `Flag` column. Multiple flags are comma-separated. Variants matching no rules receive `Flag = "Not flagged"`.
+Each flagging rule is a named, structured conjunction in `kestrel_config.json`. VNtyper validates the complete rule set against the DataFrame's available columns before processing any row. If every predicate in a rule evaluates to `true`, the corresponding flag name is appended to the variant's `Flag` column. Multiple flags are comma-separated in configuration order. Variants matching no rules receive `Flag = "Not flagged"`.
 
 !!! info "Flagging occurs before variant selection"
     As of VNtyper 2 (Issue #145 fix), flagging is applied **before** the final variant selection step. This ensures that when multiple candidate variants pass all filters, unflagged variants are preferred over flagged ones. Previously, a flagged variant could be selected as the best call because flags were added after selection.
@@ -34,8 +34,13 @@ The default rules in `kestrel_config.json`:
 
 ### False_Positive_4bp_Insertion
 
-```
-(REF == 'C') and (ALT == 'CGGCA')
+```json
+{
+  "all": [
+    {"left": {"column": "REF"}, "operator": "eq", "right": {"literal": "C"}},
+    {"left": {"column": "ALT"}, "operator": "eq", "right": {"literal": "CGGCA"}}
+  ]
+}
 ```
 
 Flags a specific 4-bp insertion (C > CGGCA) that has been empirically observed as a recurrent false positive in the Kestrel output. This artifact likely arises from k-mer graph ambiguity in GC-rich regions of the VNTR.
@@ -44,8 +49,17 @@ This is the one flag the shipped configuration declares as an **artifact** (see 
 
 ### Low_Depth_Conserved_Motifs
 
-```
-(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])
+```json
+{
+  "all": [
+    {"left": {"column": "Depth_Score"}, "operator": "lt", "right": {"literal": 0.4}},
+    {
+      "left": {"column": "Motif"},
+      "operator": "in",
+      "right": {"literal": ["1", "2", "3", "4", "6", "7", "8", "9"]}
+    }
+  ]
+}
 ```
 
 Flags variants occurring in conserved repeat unit motifs (numbered motifs 1--9) when the depth score is below 0.4. These motifs are highly conserved across MUC1 VNTR alleles, making true pathogenic variants in these positions unlikely unless strongly supported by sequencing depth.
@@ -90,7 +104,7 @@ Emptying the list restores the previous behaviour, where every flag was advisory
 }
 ```
 
-The flag name is never written into the Python; `add_artifact_gate` reads the list from `kestrel_config.json`. Narrowing or withdrawing the artifact rule is therefore a configuration edit, made by whoever owns the domain judgement.
+The artifact decision is never written into Python; `add_artifact_gate` reads the list from `kestrel_config.json`. Narrowing or withdrawing the artifact rule is therefore a configuration edit, made by whoever owns the domain judgement. A separate, flag-name-scoped compatibility map contains the byte-exact previous rule solely to migrate last-release configuration.
 
 ## Duplicate Flagging
 
@@ -119,19 +133,7 @@ by the time flagging runs and raised `KeyError` if the toggle were ever enabled.
     it stays disabled in the shipped config ("We have already tested with this setup. I do not know what will
     happen if we turn it on!"). Enable it by setting `"enabled": true` in `kestrel_config.json`.
 
-## The `regex_match` Helper
-
-Flagging rules can use a built-in `regex_match(pattern, value)` function for pattern-based matching. For example:
-
-```json
-{
-  "Motif_X_Pattern": "regex_match('^X', Motif) and Depth_Score < 0.01"
-}
-```
-
-This flags variants where the motif name starts with "X" and the depth score is below 0.01. The function uses Python's `re.search` internally.
-
-## Adding Custom Rules
+## Rule Schema and Adding Custom Rules
 
 To add a new flagging rule:
 
@@ -141,12 +143,40 @@ To add a new flagging rule:
 ```json
 {
   "flagging_rules": {
-    "My_Custom_Flag": "(Depth_Score < 0.005) and (Variant == 'Insertion')"
+    "My_Custom_Flag": {
+      "all": [
+        {"left": {"column": "Depth_Score"}, "operator": "lt", "right": {"literal": 0.005}},
+        {"left": {"column": "Variant"}, "operator": "eq", "right": {"literal": "Insertion"}}
+      ]
+    }
   }
 }
 ```
 
-The condition string has access to all columns in the variant DataFrame at the time of evaluation, including: `REF`, `ALT`, `POS`, `Motif`, `Variant`, `Depth_Score`, `Confidence`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion`, and `is_valid_frameshift`.
+Every rule has exactly one key, `all`, whose value is a non-empty list. Every predicate has exactly `left`, `operator`, and `right`; each operand contains exactly one `column` or `literal`. A column must be in the explicit allowlist formed from the DataFrame columns available when flagging begins. Common Kestrel columns include `REF`, `ALT`, `POS`, `Motif`, `Variant`, `Depth_Score`, `Confidence`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion`, and `is_valid_frameshift`.
+
+The only operators are:
+
+| Operator | Meaning |
+|----------|---------|
+| `eq` | Strict same-family equality. Booleans compare only with booleans. |
+| `lt` | Numeric less-than; booleans are not numbers. |
+| `in` | Left scalar membership in a non-empty homogeneous right literal list. |
+| `casefold_eq` | String equality after Unicode case-folding. |
+
+`None`, `pd.NA`, and floating NaN make a predicate false. Values are never coerced: for example, `"7"` is not the number `7`. Missing columns, malformed rules, and incompatible non-null row values abort flagging instead of silently disabling a rule. Flag names must be non-empty strings, cannot contain commas, and cannot use the reserved result values `Not flagged` or `Not applicable`.
+
+Rules are JSON data, never executable source. Calls, attributes, indexing, imports, comprehensions, lambdas, regular expressions, arithmetic, `or`, `not`, and nested boolean forms are unsupported. Code-shaped text inside a `literal` remains inert data; a rule supplied as such a string is rejected.
+
+### Migrating a rule from the immediately preceding release
+
+The last-release Kestrel string
+
+```json
+"(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])"
+```
+
+migrates to the structured `Low_Depth_Conserved_Motifs` object shown above. For upgrade compatibility, VNtyper accepts only each flag name's byte-exact string from the release immediately before Issue #286. Whitespace edits, renamed columns, added clauses, custom strings, and another flag's historical expression are rejected. New and edited configurations must use the structured form.
 
 A new rule is **advisory** by default. It becomes an artifact rule only if you also add its name to `artifact_flags`, and you should only do so for a pattern that is not a candidate variant at all.
 
@@ -239,10 +269,11 @@ adVNTR output of all 400 simulated samples changes **no** `Flag` value.
 
 `tests/unit/test_advntr_polymorphic_calls.py` runs the production filter arms over the
 live list, so a future unreachable entry fails the build. That matters here because the
-failure mode is silent: `evaluate_condition` downgrades a `NameError` to a warning and
-returns `False`, which is how `Polymorphic_Call` shipped misspelled as `Poylmorhic_Call`
-until `742b872`, and how `Repeat_Unit_7` shipped as `RU == 7` — comparing a string column
-against an integer — until `52f822e`.
+the historical failure mode was silent: a missing expression name could disable a rule,
+which is how `Polymorphic_Call` shipped misspelled as `Poylmorhic_Call` until `742b872`,
+and loose expression typing allowed `Repeat_Unit_7` to ship as `RU == 7` — comparing a
+string column against an integer — until `52f822e`. Structured validation now rejects
+both defects before processing rows.
 
 ### What is still open
 

@@ -3,100 +3,158 @@ flagging.py
 
 Module for applying configurable flagging rules to a DataFrame output from a tool.
 This module provides functionality to add a flag column based on a set of logical rules
-defined in a JSON configuration. The flagging rules are specified as key-value pairs,
-where the key is the flag name to be added if the condition is met, and the value is a
-Python logical expression that is evaluated for each row. The condition is evaluated in a
-context that includes the row's column values as variables and a helper function
-`regex_match` for regex matching. Standard Python "in" operations are also supported.
+defined in a JSON configuration. Rules use the validated comparator data schema from
+``comparator_rules`` and are compiled against the DataFrame's columns before any row is
+processed.
 
 Example flagging rule:
 {
-    "High_Depth": "Depth_Score >= 0.2 and regex_match('^D', Motif)",
-    "Low_Depth": "Depth_Score < 0.2 or Motif in ['X', 'Y']"
+    "Low_Depth": {
+        "all": [
+            {
+                "left": {"column": "Depth_Score"},
+                "operator": "lt",
+                "right": {"literal": 0.2}
+            }
+        ]
+    }
 }
 """
 
 from __future__ import annotations
 
 import logging
-import re
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
+from typing import NoReturn
 
 import pandas as pd
 
+from vntyper.scripts.comparator_rules import CompiledRule, adapt_legacy_rule, evaluate_rule, validate_rule
+
 logger = logging.getLogger(__name__)
 
+_RESERVED_FLAG_NAMES = frozenset({"Not flagged", "Not applicable"})
+_LEGACY_FLAG_RULES: dict[str, dict[str, object]] = {
+    "False_Positive_4bp_Insertion": {
+        "(REF == 'C') and (ALT == 'CGGCA')": {
+            "all": [
+                {"left": {"column": "REF"}, "operator": "eq", "right": {"literal": "C"}},
+                {"left": {"column": "ALT"}, "operator": "eq", "right": {"literal": "CGGCA"}},
+            ]
+        }
+    },
+    "Low_Depth_Conserved_Motifs": {
+        "(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])": {
+            "all": [
+                {"left": {"column": "Depth_Score"}, "operator": "lt", "right": {"literal": 0.4}},
+                {
+                    "left": {"column": "Motif"},
+                    "operator": "in",
+                    "right": {"literal": ["1", "2", "3", "4", "6", "7", "8", "9"]},
+                },
+            ]
+        }
+    },
+    "Low_Coverage": {
+        "NumberOfSupportingReads < 10": {
+            "all": [
+                {
+                    "left": {"column": "NumberOfSupportingReads"},
+                    "operator": "lt",
+                    "right": {"literal": 10},
+                }
+            ]
+        }
+    },
+    "Repeat_Unit_7": {"RU == '7'": {"all": [{"left": {"column": "RU"}, "operator": "eq", "right": {"literal": "7"}}]}},
+    "Polymorphic_Call": {
+        "Variant in ['I10_2_A_LEN1', 'D8_2&D9_2&I9_2_A_LEN9', 'D2_2&I2_2_C_LEN5', "
+        "'I39_2_A_LEN4', 'I52_2_A_LEN7', 'I45_2_A_LEN4', 'D45_2&I45_2_A_LEN2', "
+        "'D14_2&I14_2_G_LEN14', 'D58_2&D59_2', 'I60_2_A_LEN10', 'I14_2_G_LEN16', "
+        "'I18_2_T_LEN1', 'I21_2_G_LEN4', 'D29_2&I29_2_A_LEN2', 'D8_2&I8_2_A_LEN20', "
+        "'D20_2&D21_2', 'D21_2&D22_2', 'I14_2_A_LEN1', 'I11_2_G_LEN1', 'I26_7_A_LEN25', "
+        "'D17_2&D18_2&D19_2&D20_2&D21_2', 'I14_2_C_LEN4', 'I23_6_G_LEN1', 'I21_2_T_LEN1']": {
+            "all": [
+                {
+                    "left": {"column": "Variant"},
+                    "operator": "in",
+                    "right": {
+                        "literal": [
+                            "I10_2_A_LEN1",
+                            "D8_2&D9_2&I9_2_A_LEN9",
+                            "D2_2&I2_2_C_LEN5",
+                            "I39_2_A_LEN4",
+                            "I52_2_A_LEN7",
+                            "I45_2_A_LEN4",
+                            "D45_2&I45_2_A_LEN2",
+                            "D14_2&I14_2_G_LEN14",
+                            "D58_2&D59_2",
+                            "I60_2_A_LEN10",
+                            "I14_2_G_LEN16",
+                            "I18_2_T_LEN1",
+                            "I21_2_G_LEN4",
+                            "D29_2&I29_2_A_LEN2",
+                            "D8_2&I8_2_A_LEN20",
+                            "D20_2&D21_2",
+                            "D21_2&D22_2",
+                            "I14_2_A_LEN1",
+                            "I11_2_G_LEN1",
+                            "I26_7_A_LEN25",
+                            "D17_2&D18_2&D19_2&D20_2&D21_2",
+                            "I14_2_C_LEN4",
+                            "I23_6_G_LEN1",
+                            "I21_2_T_LEN1",
+                        ]
+                    },
+                }
+            ]
+        }
+    },
+}
 
-def regex_match(pattern, value):
-    """
-    Helper function to perform regex matching.
+
+def _invalid_flagging(message: str) -> NoReturn:
+    logger.error(message)
+    raise ValueError(message)
+
+
+def _compile_flag_rules(flag_rules: object, columns: Collection[str]) -> tuple[tuple[str, CompiledRule], ...]:
+    """Validate and compile a complete ordered flag-rule mapping.
 
     Args:
-        pattern (str): Regular expression pattern.
-        value (any): The value to match against (converted to string).
+        flag_rules: Untrusted flag-name-to-rule mapping from configuration.
+        columns: Columns available in the consumer DataFrame.
 
     Returns:
-        bool: True if the pattern matches the string representation of value, else False.
+        Immutable ordered flag names and compiled rules.
+
+    Raises:
+        ValueError: If the rule mapping, a flag name, or any rule is invalid.
     """
-    try:
-        return bool(re.search(pattern, str(value)))
-    except Exception as e:
-        logger.error(f"Error in regex_match with pattern {pattern} and value {value}: {e}")
-        return False
+    if not isinstance(flag_rules, Mapping):
+        _invalid_flagging("flagging_rules must be a mapping of flag names to structured rules")
 
-
-def _sanitize_na(value):
-    """
-    Convert ``pd.NA`` to ``None`` so that expressions evaluated by
-    :func:`evaluate_condition` behave predictably.
-
-    Why only ``pd.NA``?
-    * ``pd.NA in [...]`` returns ``pd.NA``; ``bool(pd.NA)`` raises
-      ``TypeError: boolean value of NA is ambiguous``.
-    * ``None in [...]`` cleanly returns ``False``.
-    * ``np.nan`` is left untouched because numeric comparisons like
-      ``np.nan < 0.4`` already return ``False`` without raising.
-    """
-    if value is pd.NA:
-        return None
-    return value
-
-
-def evaluate_condition(row, condition):
-    """
-    Evaluates a condition in the context of a DataFrame row.
-
-    The local namespace is populated with the row's data and the helper function regex_match.
-    If a column referenced in the condition is missing, a warning is logged and the condition
-    evaluates to False for that row.
-
-    Args:
-        row (pd.Series): A row from the DataFrame.
-        condition (str): The condition to evaluate.
-
-    Returns:
-        bool: The boolean result of evaluating the condition for this row.
-    """
-    local_vars = {k: _sanitize_na(v) for k, v in row.items()}
-    local_vars["regex_match"] = regex_match
-    try:
-        result = eval(condition, {"__builtins__": {}}, local_vars)
-        return bool(result)
-    except NameError as ne:
-        logger.warning(f"NameError while evaluating condition '{condition}' with row {row.to_dict()}: {ne}")
-        return False
-    except Exception as e:
-        logger.error(f"Error evaluating condition '{condition}' with row {row.to_dict()}: {e}")
-        return False
+    compiled: list[tuple[str, CompiledRule]] = []
+    for flag, configured in flag_rules.items():
+        if not isinstance(flag, str) or not flag:
+            _invalid_flagging("flagging_rules flag name must be a non-empty string")
+        if "," in flag:
+            _invalid_flagging(f"flagging_rules flag name {flag!r} must not contain a comma")
+        if flag in _RESERVED_FLAG_NAMES:
+            _invalid_flagging(f"flagging_rules flag name {flag!r} is reserved")
+        context = f"flagging_rules.{flag}"
+        migrated = adapt_legacy_rule(configured, exact_rules=_LEGACY_FLAG_RULES.get(flag, {}), context=context)
+        compiled.append((flag, validate_rule(migrated, allowed_columns=columns, context=context)))
+    return tuple(compiled)
 
 
 def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None = None) -> pd.DataFrame:
     """
     Applies flagging rules to the DataFrame and adds a 'Flag' column with the matched flags.
 
-    For each row in the DataFrame, each flag rule is evaluated by applying the condition
-    to the row's values (and using the helper function regex_match if needed). If a rule's
-    condition evaluates to True for a given row, the flag name is added to that row's flag list.
+    The complete rule set is validated against the DataFrame columns before the frame is
+    copied or any row is processed. For each row, each compiled structured rule is then
+    evaluated. If a rule evaluates to True, the flag name is added to that row's flag list.
     If multiple flags apply, they are concatenated with a comma. If no flag is applied, the
     'Flag' column will be set to 'Not flagged'.
 
@@ -106,7 +164,7 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None
     Args:
         df (pd.DataFrame): The input DataFrame containing tool output.
         flag_rules (dict): A dictionary where keys are flag names and values are
-                           Python logical expressions (as strings) to be evaluated.
+            structured comparator rules.
         duplicates_config (dict, optional): Configuration for marking potential duplicates.
             Example structure:
             {
@@ -123,6 +181,8 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None
     Returns:
         pd.DataFrame: A copy of the input DataFrame with an added 'Flag' column.
     """
+    compiled_rules = _compile_flag_rules(flag_rules, df.columns)
+
     # Create a copy to avoid modifying the original DataFrame
     df_copy = df.copy()
     logger.debug("Created a copy of the DataFrame for flag processing.")
@@ -132,9 +192,15 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None
     logger.debug("Initialized flags list for each row.")
 
     # Evaluate each flag rule
-    for flag, condition in flag_rules.items():
-        logger.debug(f"Evaluating flag rule '{flag}': {condition}")
-        mask = df_copy.apply(lambda row, cond=condition: evaluate_condition(row, cond), axis=1)
+    for flag, compiled in compiled_rules:
+        context = f"flagging_rules.{flag}"
+        logger.debug(f"Evaluating validated flag rule '{flag}'.")
+        mask = df_copy.apply(
+            lambda row, compiled_rule=compiled, rule_context=context: evaluate_rule(
+                compiled_rule, row.to_dict(), context=rule_context
+            ),
+            axis=1,
+        )
         matching_count = mask.sum()
         logger.debug(f"Flag rule '{flag}' matched {matching_count} rows.")
         for i, condition_met in enumerate(mask):
