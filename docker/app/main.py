@@ -374,7 +374,10 @@ def run_vntyper(
     thread: int = Form(4, ge=1, le=64),
     reference_assembly: ReferenceAssembly = Form(ReferenceAssembly.HG38),
     fast_mode: bool = Form(False),
-    keep_intermediates: bool = Form(False),
+    keep_intermediates: bool = Form(
+        False,
+        description="Compatibility field: web jobs always keep intermediate files, so this value changes nothing.",
+    ),
     archive_results: bool = Form(False),
     email: str | None = Form(None, description="Optional email to receive results"),
     cohort_id: str | None = Form(None, description="Optional cohort identifier to associate the job"),
@@ -395,7 +398,7 @@ def run_vntyper(
     - **thread**: Number of threads to use for processing (1-64).
     - **reference_assembly**: Reference genome assembly to use ('hg19', 'hg38', 'GRCh37', 'GRCh38', 'hg19_ncbi', 'hg38_ncbi', 'hg19_ensembl', 'hg38_ensembl').
     - **fast_mode**: Boolean flag to enable fast mode processing.
-    - **keep_intermediates**: Boolean flag to keep intermediate files.
+    - **keep_intermediates**: Compatibility field: web jobs always keep intermediate files, so this value changes nothing.
     - **archive_results**: Boolean flag to archive results.
     - **email**: Optional email address to receive job notifications.
     - **cohort_id**: Optional cohort identifier to associate the job.

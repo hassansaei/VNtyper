@@ -3,7 +3,7 @@
 tests/unit/test_docker_installer_imports.py
 
 Guards the `refs` stage of `docker/Dockerfile.base` against a class of bug that no
-other unit test can see: it copies `install_references.py` (and now `reference_bundle.py`)
+other unit test can see: it copies `install_references.py` and its focused siblings
 into the image and runs the installer, but it copies *only* the files it names in `COPY`
 instructions. If either module gains a module-scope `from vntyper....` import of a
 sibling that the Dockerfile does not copy, the base image build fails at
@@ -31,9 +31,15 @@ DOCKERFILE_BASE = REPO_ROOT / "docker" / "Dockerfile.base"
 SCRIPTS_DIR = REPO_ROOT / "vntyper" / "scripts"
 
 # The modules the `refs` stage's installer invocation is known to need. Kept in sync by
-# hand with the module docstrings of the two files themselves; a third module added to
+# hand with the module docstrings of the files themselves; a new module added to
 # either import list must be added to both this tuple and the Dockerfile's COPY lines.
-_INSTALLER_MODULES = ("install_references", "reference_bundle")
+_INSTALLER_MODULES = (
+    "install_references",
+    "install_references_logging",
+    "reference_bundle",
+    "reference_download",
+    "reference_integrity",
+)
 
 
 #: The `refs` stage alone. A `COPY vntyper/scripts/x.py` in `envs` or `base` provisions
@@ -190,7 +196,7 @@ class TestTheGuardItself:
         with pytest.raises(AssertionError, match="no `FROM ... AS refs` stage"):
             _refs_stage_text("FROM scratch AS envs\nCOPY vntyper/scripts/install_references.py /opt/\n")
 
-    def test_the_real_dockerfile_copies_the_two_installer_modules(self) -> None:
+    def test_the_real_dockerfile_copies_every_installer_module(self) -> None:
         """Anchors the scoped regex against the file it actually guards."""
         if not DOCKERFILE_BASE.exists():
             pytest.skip("docker/Dockerfile.base not present in this checkout")

@@ -23,6 +23,20 @@ from vntyper.scripts.preflight_input_io import consumer_reachable_identity
 pytestmark = pytest.mark.unit
 
 
+def test_a_reader_returning_neither_text_nor_reason_raises_a_valueerror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A violated reader contract is reported as a repository error guard."""
+    from vntyper.scripts import preflight_input_io
+
+    monkeypatch.setattr(preflight_input_io, "try_read_bounded_regular_text", lambda *args, **kwargs: (None, None))
+
+    with pytest.raises(ValueError, match="neither"):
+        preflight_input_io.read_bounded_regular_text(
+            tmp_path / "x.fai", max_bytes=10, description="reference FASTA index"
+        )
+
+
 def _reference_reason_worker(path: str, sender: Connection) -> None:
     try:
         sender.send(("returned", alignment_preflight._reference_unavailable_reason(path)))

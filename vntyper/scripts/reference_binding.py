@@ -9,6 +9,7 @@ import secrets
 import stat
 from contextlib import suppress
 from pathlib import Path
+from typing import cast
 
 from vntyper.scripts.preflight_input_io import (
     consumer_reachable_identity,
@@ -207,7 +208,10 @@ class _InodeView:
         raise OSError(f"unable to allocate a temporary reference view beside {self._destination}")
 
     def _proc_target_is_exact(self) -> bool:
-        assert self._proc_target is not None
+        if self._proc_target is None:
+            message = "reference inode view consulted its proc target before open() recorded one"
+            logger.error(message)
+            raise ValueError(message)
         try:
             metadata = os.stat(self._proc_target)
         except OSError:
@@ -225,10 +229,10 @@ class _InodeView:
     def _install_proc_link(self) -> bool:
         if not self._proc_target_is_exact():
             return False
-        assert self._proc_target is not None
+        proc_target = cast(str, self._proc_target)
         try:
             # Exclusive create: a colliding entry is preserved, never replaced.
-            os.symlink(self._proc_target, self._destination)
+            os.symlink(proc_target, self._destination)
         except OSError:
             return False
         try:
@@ -238,7 +242,7 @@ class _InodeView:
             # cannot be recorded as owned. Remove exactly what was created here and fail
             # closed rather than leave an unowned entry behind.
             with suppress(OSError):
-                if os.readlink(self._destination) == self._proc_target:
+                if os.readlink(self._destination) == proc_target:
                     os.unlink(self._destination)
             raise OSError(f"published run-local reference view could not be identified: {error}") from error
         reachable, reason = consumer_reachable_identity(self._destination)

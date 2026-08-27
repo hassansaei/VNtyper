@@ -26,6 +26,28 @@ def _reference(path: Path) -> Path:
     return path
 
 
+def test_an_inode_view_without_a_proc_target_raises_a_valueerror_not_typeerror() -> None:
+    """F11: a missing proc target is rejected even with optimized Python."""
+    from vntyper.scripts.reference_binding import _InodeView
+
+    view = _InodeView.__new__(_InodeView)
+    view._proc_target = None
+
+    with pytest.raises(ValueError, match="proc target"):
+        view._proc_target_is_exact()
+
+
+def test_installing_an_inode_view_without_a_proc_target_raises_a_valueerror() -> None:
+    """The proc-link installer reaches the invariant guard before linking."""
+    from vntyper.scripts.reference_binding import _InodeView
+
+    view = _InodeView.__new__(_InodeView)
+    view._proc_target = None
+
+    with pytest.raises(ValueError, match="proc target"):
+        view._install_proc_link()
+
+
 def test_reference_binding_preserves_a_colliding_run_local_entry(tmp_path: Path) -> None:
     """A raced-in entry is never removed or overwritten while installing a view."""
     reference = _reference(tmp_path / "reference.fa")

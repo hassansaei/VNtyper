@@ -33,6 +33,7 @@ def test_cli_reference_and_single_fastq_values_survive_one_handler_contract(tmp_
             "single.fastq.gz",
             "--reference-fasta",
             str(reference),
+            "--keep-intermediates",
             "--output-dir",
             str(tmp_path / "out"),
         ]
@@ -63,6 +64,7 @@ def test_cli_reference_and_single_fastq_values_survive_one_handler_contract(tmp_
     assert runner.call_args.kwargs["fastq1"] == "single.fastq.gz"
     assert runner.call_args.kwargs["fastq2"] is None
     assert runner.call_args.kwargs["reference_fasta"] == reference
+    assert "keep_intermediates" not in runner.call_args.kwargs
 
 
 def test_cram_preflight_transport_and_four_fastq_routing_coexist_in_one_run(tmp_path: Path) -> None:
@@ -89,6 +91,7 @@ def test_cram_preflight_transport_and_four_fastq_routing_coexist_in_one_run(tmp_
     preflight = harness.kwargs("run_preflight")
     assert preflight["reference_fasta"] == str(reference)
     assert preflight["error_output_dir"] == str(tmp_path / "run" / "out")
+    assert "keep_intermediates" not in harness.kwargs("process_bam_to_fastq")
     assert harness.positional("route_converted_fastqs")[0] == produced
     kestrel = harness.kwargs("run_kestrel")
     assert kestrel["fastq_files"] == (routed_single,)

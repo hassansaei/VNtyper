@@ -39,10 +39,10 @@ def _config():
     """Build the smallest pipeline config ``run_kestrel`` reads.
 
     Returns:
-        dict: A config exposing only ``tools.java_path``, the one key the function
-        dereferences without a default.
+        dict: A config exposing the two tool keys the function dereferences
+            without a default.
     """
-    return {"tools": {"java_path": "java"}}
+    return {"tools": {"java_path": "java", "samtools": "/opt/vntyper/bin/samtools"}}
 
 
 def is_count(command):
@@ -160,6 +160,28 @@ def test_post_processing_runs_after_a_stale_vcf_is_replaced(tmp_path, monkeypatc
     _run(vcf, tmp_path)
 
     assert calls == ["bam", "post"]
+
+
+def test_the_sam_conversion_receives_configured_samtools_and_threads(tmp_path, monkeypatch):
+    """The converter receives the same executable and thread budget as the run."""
+    vcf = tmp_path / "output.vcf"
+    recorded = {}
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        vcf.write_text(USABLE_VCF, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        kg,
+        "convert_sam_to_bam_and_index",
+        lambda *args, **kwargs: recorded.update(args=args, kwargs=kwargs),
+    )
+    monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
+
+    _run(vcf, tmp_path)
+
+    assert recorded["kwargs"] == {"samtools_path": "/opt/vntyper/bin/samtools", "threads": 4}
 
 
 def test_the_vcf_a_later_kmer_size_writes_is_not_removed(tmp_path, monkeypatch):
@@ -444,7 +466,7 @@ def test_a_discarded_attempt_leaves_no_sam_for_a_later_one_to_convert(tmp_path, 
         return True
 
     monkeypatch.setattr(kg, "run_command", fake_run_command)
-    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda s, o: converted.append(Path(s).exists()))
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda s, o, **kwargs: converted.append(Path(s).exists()))
     monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
 
     _run(vcf, tmp_path)
@@ -558,7 +580,7 @@ def test_an_attempt_that_writes_no_vcf_also_leaves_no_sam(tmp_path, monkeypatch)
         return True
 
     monkeypatch.setattr(kg, "run_command", fake_run_command)
-    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda s, o: converted.append(Path(s).exists()))
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda s, o, **kwargs: converted.append(Path(s).exists()))
     monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
 
     _run(vcf, tmp_path)

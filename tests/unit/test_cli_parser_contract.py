@@ -32,6 +32,22 @@ from vntyper.scripts.reference_registry import list_assemblies
 
 pytestmark = pytest.mark.unit
 
+
+def test_keep_intermediates_remains_an_accepted_compatibility_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    """The append-only CLI contract survives after its inert Python plumbing is removed."""
+    parser = build_parser()
+    args = parser.parse_args(["pipeline", "--keep-intermediates", "--delete-intermediates"])
+
+    assert args.keep_intermediates is True
+    assert args.delete_intermediates is True
+    with pytest.raises(SystemExit) as help_exit:
+        parser.parse_args(["pipeline", "--help"])
+    assert help_exit.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "Compatibility flag: intermediate files" in help_text
+    assert "wins when --keep-intermediates is also given" in help_text
+
+
 #: One row per option: ``dest -> (option strings, action class, type name, default,
 #: required, choices, nargs)``. ``type name`` is ``None`` for options argparse stores
 #: verbatim. This is the contract; the parser is compared against it wholesale.

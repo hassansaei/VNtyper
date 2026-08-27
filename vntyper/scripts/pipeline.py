@@ -3,6 +3,7 @@ import os
 import sys
 import timeit
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 
 from vntyper.scripts.alignment_preflight import run_preflight
@@ -106,7 +107,6 @@ def run_pipeline(
     reference_key_used=None,
     reference_source_effective=None,
     fast_mode=False,
-    keep_intermediates=False,
     delete_intermediates=False,
     archive_results=False,
     archive_format="zip",
@@ -144,7 +144,6 @@ def run_pipeline(
             `reference_assembly`'s own source when a fallback was taken. Recorded in
             the run summary alongside `reference_key_used`.
         fast_mode (bool, optional): Skip filtering steps if True.
-        keep_intermediates (bool, optional): Keep intermediate files.
         delete_intermediates (bool, optional): Delete intermediate files after processing.
         archive_results (bool, optional): Archive results after completion.
         archive_format (str, optional): Format for archiving (zip or tar.gz).
@@ -236,7 +235,7 @@ def run_pipeline(
                 custom_regions=custom_regions,
                 reference_fasta=reference_fasta,
                 fast_mode=fast_mode,
-                alignment_validator=validate_bam_file,
+                alignment_validator=partial(validate_bam_file, samtools_path=config["tools"]["samtools"]),
                 validation_cwd=project_root,
             )
             alignment_header = prepared.alignment_header
@@ -327,7 +326,6 @@ def run_pipeline(
                 reference_assembly=reference_assembly,
                 fast_mode=fast_mode,
                 delete_intermediates=delete_intermediates,
-                keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
                 needs_advntr=needs_advntr,
             )
@@ -482,7 +480,6 @@ def run_pipeline(
                 reference_assembly=reference_assembly,
                 fast_mode=fast_mode,
                 delete_intermediates=delete_intermediates,
-                keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
                 needs_advntr=needs_advntr,
             )

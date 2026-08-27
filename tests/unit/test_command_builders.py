@@ -255,6 +255,40 @@ def test_the_index_command_is_pinned():
     assert command == "samtools index /out/output_sliced.bam"
 
 
+def test_the_sam_to_bam_command_defaults_to_the_historical_single_threaded_string():
+    """The new builder preserves the exact command emitted before extraction."""
+    command = command_builders.build_sam_to_bam_command(
+        samtools_path="samtools",
+        sam_file="/out/output.sam",
+        bam_file="/out/output.bam",
+    )
+
+    assert command == "samtools view -Sb /out/output.sam > /out/output.bam"
+
+
+def test_the_sam_to_bam_command_carries_configured_samtools_and_threads():
+    """The configured command prefix and non-default budget reach samtools view."""
+    command = command_builders.build_sam_to_bam_command(
+        samtools_path="/opt/vntyper/bin/samtools",
+        sam_file="/out/output.sam",
+        bam_file="/out/output.bam",
+        threads=6,
+    )
+
+    assert command == "/opt/vntyper/bin/samtools view -Sb -@ 6 /out/output.sam > /out/output.bam"
+
+
+def test_the_threaded_index_argv_is_pinned():
+    """The subprocess variant keeps ``-@`` and its value as separate argv tokens."""
+    argv = command_builders.build_threaded_samtools_index_argv(
+        samtools_path="/opt/vntyper/bin/samtools",
+        bam_file="/out/output.bam",
+        threads=6,
+    )
+
+    assert argv == ["/opt/vntyper/bin/samtools", "index", "-@", "6", "/out/output.bam"]
+
+
 def test_the_index_command_takes_an_output_path():
     """#210/#162: the index must be buildable somewhere other than beside the input.
 

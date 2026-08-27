@@ -151,7 +151,10 @@ class PrivateReferenceCache:
         self._directory_identities[directory] = (metadata.st_dev, metadata.st_ino)
 
     def _ensure_parent(self, destination: Path) -> None:
-        assert self._root is not None
+        if self._root is None:
+            message = "private CRAM reference cache used before its root directory was created"
+            logger.error(message)
+            raise ValueError(message)
         relative = destination.parent.relative_to(self._root)
         current = self._root
         for part in relative.parts:

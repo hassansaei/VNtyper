@@ -57,7 +57,6 @@ def _convert_to_four_fastqs(source: Path, assembly: str, output: Path, config: d
         reference_assembly=assembly,
         fast_mode=True,
         delete_intermediates=False,
-        keep_intermediates=True,
     )
     return tuple(Path(path) for path in paths)
 

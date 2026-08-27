@@ -54,7 +54,6 @@ def _run_conversion(
     plan: AlignmentPlan,
     *,
     fast_mode: bool,
-    keep_intermediates: bool = False,
     needs_advntr: bool = False,
 ) -> list[str]:
     """Run conversion with shell and filesystem effects recorded.
@@ -63,7 +62,6 @@ def _run_conversion(
         tmp_path: Test directory receiving generated output names.
         plan: Proven alignment plan consumed by the stage.
         fast_mode: Whether the slice is the run's final alignment.
-        keep_intermediates: Whether intermediates survive the run.
         needs_advntr: Whether adVNTR will read the produced alignment's index.
 
     Returns:
@@ -88,7 +86,6 @@ def _run_conversion(
             threads=4,
             config=CONFIG,
             fast_mode=fast_mode,
-            keep_intermediates=keep_intermediates,
             needs_advntr=needs_advntr,
             plan=plan,
         )
@@ -242,7 +239,7 @@ def test_conversion_leaves_the_input_tree_byte_identical(tmp_path: Path, file_fo
     assert _tree_digest(input_root) == before
 
 
-def test_keep_intermediates_regenerates_stale_artifacts_for_the_new_plan(tmp_path: Path) -> None:
+def test_stale_artifacts_are_regenerated_for_the_new_plan(tmp_path: Path) -> None:
     plan = _plan(tmp_path, "bam")
     run_dir = tmp_path / "run"
     stale_paths = [
@@ -255,7 +252,7 @@ def test_keep_intermediates_regenerates_stale_artifacts_for_the_new_plan(tmp_pat
     for stale_path in stale_paths:
         stale_path.write_bytes(b"prior-patient-artifact")
 
-    commands = _run_conversion(tmp_path, plan, fast_mode=True, keep_intermediates=True)
+    commands = _run_conversion(tmp_path, plan, fast_mode=True)
 
     assert len(commands) == 2
     assert plan.view_path in commands[0]

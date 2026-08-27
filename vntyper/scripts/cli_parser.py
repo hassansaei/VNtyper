@@ -157,12 +157,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser_pipeline.add_argument(
         "--keep-intermediates",
         action="store_true",
-        help="Keep intermediate files (e.g., BAM slices, temporary files).",
+        help="Compatibility flag: intermediate files (BAM slices, temporary files) are already kept by default, "
+        "so this flag changes nothing. Use --delete-intermediates to remove them.",
     )
     parser_pipeline.add_argument(
         "--delete-intermediates",
         action="store_true",
-        help="Delete intermediate files after processing (overrides --keep-intermediates).",
+        help="Delete intermediate files after processing (wins when --keep-intermediates is also given).",
     )
     parser_pipeline.add_argument(
         "--archive-results",

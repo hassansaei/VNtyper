@@ -178,5 +178,8 @@ def read_bounded_regular_text(
     text, reason = try_read_bounded_regular_text(path, max_bytes=max_bytes, description=description)
     if reason is not None:
         _reject(reason)
-    assert text is not None
+    if text is None:
+        message = f"{description} produced neither text nor a rejection reason: {path}"
+        logger.error(message)
+        raise ValueError(message)
     return text

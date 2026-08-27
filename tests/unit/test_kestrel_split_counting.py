@@ -34,7 +34,7 @@ USABLE_VCF = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINF
 
 def _config():
     """Return the smallest pipeline config ``run_kestrel`` reads."""
-    return {"tools": {"java_path": "java", "kanalyze": "kanalyze.jar"}}
+    return {"tools": {"java_path": "java", "kanalyze": "kanalyze.jar", "samtools": "samtools"}}
 
 
 def _settings(**overrides):
@@ -319,7 +319,7 @@ def test_a_replacement_config_without_any_of_the_new_keys_still_runs(tmp_path, m
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
 
-    _run_kestrel(tmp_path, config={"tools": {"java_path": "java"}})
+    _run_kestrel(tmp_path, config={"tools": {"java_path": "java", "samtools": "samtools"}})
 
     assert len(commands) == 2, "the shipped default is split counting"
     assert "kanalyze.jar" in commands[0], "the kanalyze path needs a shipped default too"

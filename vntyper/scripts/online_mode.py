@@ -1,6 +1,9 @@
 import logging
+import os
 import subprocess
+import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import requests
@@ -26,6 +29,74 @@ DEFAULT_POLL_INTERVAL_SECONDS = 10
 #: take well over an hour on a small runner, so this is generous - but it is finite,
 #: which the previous ``while True`` was not.
 DEFAULT_POLL_TIMEOUT_SECONDS = 4 * 60 * 60
+
+#: Short, bounded retries for idempotent API reads. The polling timeout owns
+#: long-horizon patience; this policy only rides out a connection or gateway hiccup.
+TRANSIENT_GET_ATTEMPTS = 3
+TRANSIENT_GET_BACKOFF_SECONDS = 2.0
+
+#: Downloaded archives are streamed in bounded pieces instead of being buffered in RAM.
+DOWNLOAD_CHUNK_SIZE = 1 << 20
+
+
+def _close_response(response: requests.Response, url: str) -> None:
+    """Release an HTTP response without masking the request's primary outcome.
+
+    Args:
+        response: Response whose connection should be released.
+        url: Request URL used in diagnostics.
+    """
+    try:
+        response.close()
+    except Exception as error:  # noqa: BLE001 - cleanup cannot mask the primary request or download outcome
+        logger.warning(f"Failed to close response from {url}: {error}")
+
+
+def _send_get_with_retries(
+    url: str,
+    send: Callable[[], requests.Response],
+    *,
+    attempts: int = TRANSIENT_GET_ATTEMPTS,
+    backoff_seconds: float = TRANSIENT_GET_BACKOFF_SECONDS,
+) -> requests.Response:
+    """Send an idempotent GET, retrying transient failures with backoff.
+
+    Connection errors, timeouts and 5xx responses are retried. A 4xx response is
+    returned to the caller as a fact about the request. Discarded 5xx responses are
+    closed here; the caller owns and must close the returned response.
+
+    Args:
+        url: URL used in diagnostics.
+        send: Zero-argument callable that performs the GET.
+        attempts: Maximum number of requests.
+        backoff_seconds: Initial sleep before a retry; subsequent sleeps double.
+
+    Returns:
+        The first non-5xx response, or the final 5xx response.
+
+    Raises:
+        RuntimeError: If every attempt failed before returning a response.
+    """
+    for attempt in range(1, attempts + 1):
+        final_attempt = attempt == attempts
+        try:
+            response = send()
+        except (requests.ConnectionError, requests.Timeout) as error:
+            if final_attempt:
+                message = f"{url} failed after {attempts} attempts: {error}"
+                logger.error(message)
+                raise RuntimeError(message) from error
+            logger.warning(f"{url} failed ({error}); attempt {attempt}/{attempts}")
+        else:
+            if response.status_code < 500 or final_attempt:
+                return response
+            logger.warning(f"{url} returned {response.status_code}; attempt {attempt}/{attempts}")
+            _close_response(response, url)
+        time.sleep(backoff_seconds * (2 ** (attempt - 1)))
+
+    message = f"{url} failed after {attempts} attempts"
+    logger.error(message)
+    raise RuntimeError(message)
 
 
 def subset_bam(bam_path, region, output_bam):
@@ -109,9 +180,14 @@ def submit_job(
         else:
             resp = requests.post(submit_url, files=files, data=data, timeout=60)
 
-    if resp.status_code != 200:
-        raise RuntimeError(f"Failed to submit job. Status: {resp.status_code}, Detail: {resp.text}")
-    return resp.json()
+    try:
+        if resp.status_code != 200:
+            message = f"Failed to submit job. Status: {resp.status_code}, Detail: {resp.text}"
+            logger.error(message)
+            raise RuntimeError(message)
+        return resp.json()
+    finally:
+        _close_response(resp, submit_url)
 
 
 def poll_job_status(
@@ -156,10 +232,15 @@ def poll_job_status(
     while True:
         polls += 1
         logger.info(f"Checking job status for {job_id}")
-        resp = requests.get(status_url, timeout=30)
-        if resp.status_code != 200:
-            raise RuntimeError(f"Failed to get job status. Status: {resp.status_code}, Detail: {resp.text}")
-        data = resp.json()
+        resp = _send_get_with_retries(status_url, lambda: requests.get(status_url, timeout=30))
+        try:
+            if resp.status_code != 200:
+                message = f"Failed to get job status. Status: {resp.status_code}, Detail: {resp.text}"
+                logger.error(message)
+                raise RuntimeError(message)
+            data = resp.json()
+        finally:
+            _close_response(resp, status_url)
         status = data.get("status", "")
         detail = data.get("error")
 
@@ -199,12 +280,33 @@ def download_results(api_url, job_id, output_dir):
     """
     dl_url = f"{api_url}/download/{job_id}/"
     logger.info(f"Downloading results from {dl_url}")
-    resp = requests.get(dl_url, timeout=60)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Failed to download results. Status: {resp.status_code}, Detail: {resp.text}")
-    zip_path = output_dir / f"{job_id}.zip"
-    with open(zip_path, "wb") as f:
-        f.write(resp.content)
+    resp = _send_get_with_retries(dl_url, lambda: requests.get(dl_url, timeout=60, stream=True))
+    output_path = Path(output_dir)
+    zip_path = output_path / f"{job_id}.zip"
+    temp_path = None
+    try:
+        if resp.status_code != 200:
+            message = f"Failed to download results. Status: {resp.status_code}, Detail: {resp.text}"
+            logger.error(message)
+            raise RuntimeError(message)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=output_path,
+            prefix=f".{job_id}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+            for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                if chunk:
+                    temp_file.write(chunk)
+        os.replace(temp_path, zip_path)
+    finally:
+        try:
+            _close_response(resp, dl_url)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
     logger.info(f"Results saved to {zip_path}")
 
 
@@ -270,6 +372,7 @@ def run_online_mode(
         resume (bool): Whether to resume a previous job.
 
     Raises:
+        ValueError: If ``resume`` is requested without a stored non-empty job id.
         RuntimeError: If the API returns no job id, or the job reaches any terminal
             status other than ``completed``. This used to be logged and swallowed, so
             ``main()`` exited 0 and a wrapping ``subprocess.run(..., check=True)`` saw
@@ -282,21 +385,29 @@ def run_online_mode(
     poll_interval = api_settings.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL_SECONDS)
     poll_timeout = api_settings.get("poll_timeout_seconds", DEFAULT_POLL_TIMEOUT_SECONDS)
 
-    # Use dynamic region resolution with fallback to legacy format
+    output_path = Path(output_dir)
+    job_id_file = output_path / "job_id.txt"
+
+    if resume:
+        job_id = job_id_file.read_text(encoding="utf-8").strip() if job_id_file.exists() else ""
+        if not job_id:
+            message = (
+                f"--resume was given but {job_id_file} contains no job to resume. "
+                "Run without --resume to submit a new job."
+            )
+            logger.error(message)
+            raise ValueError(message)
+        status = poll_job_status(api_url, job_id, poll_interval=poll_interval, timeout=poll_timeout)
+        _finish_job(api_url, job_id, status, output_path)
+        return
+
+    # Use dynamic region resolution with fallback to legacy format only when a new
+    # job was requested. A rejected resume must not invoke local alignment tooling.
     region = get_region_string_with_fallback(
         bam_file=bam, reference_assembly=reference_assembly, region_type="bam_region", config=config
     )
 
-    output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    job_id_file = output_path / "job_id.txt"
-
-    if resume and job_id_file.exists():
-        with open(job_id_file) as f:
-            job_id = f.read().strip()
-        status = poll_job_status(api_url, job_id, poll_interval=poll_interval, timeout=poll_timeout)
-        _finish_job(api_url, job_id, status, output_path)
-        return
 
     # Fresh submission
     subset_bam_path = output_path / "subset.bam"

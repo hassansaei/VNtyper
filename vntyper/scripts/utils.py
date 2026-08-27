@@ -26,7 +26,8 @@ def run_command(command, log_file, critical=False, cwd=None):
     ``shell=False`` argv list can express. Callers are responsible for quoting the
     values they interpolate into ``command``.
 
-    stdout and stderr are merged and streamed to ``log_file`` as the child runs. A
+    stdout and stderr are merged and streamed to ``log_file`` as the child runs.
+    Undecodable bytes are replaced with U+FFFD rather than aborting the stage. A
     non-zero exit status is logged at ERROR either way, so a failure is visible at the
     default log level; ``critical`` only decides whether it also aborts the pipeline.
 
@@ -59,11 +60,23 @@ def run_command(command, log_file, critical=False, cwd=None):
             stderr=subprocess.STDOUT,
             cwd=cwd,  # Explicitly set the working directory (or None to use inherited)
         )
-        for line in process.stdout:
-            decoded_line = line.decode()
-            lf.write(decoded_line)
-            logger.debug(decoded_line.strip())
-        process.wait()
+        try:
+            for line in process.stdout:
+                # Tool output is not guaranteed to be text. ``surrogateescape`` would
+                # only move an invalid byte's crash to the UTF-8 log write, so visibly
+                # replace it and let the command report its real exit status.
+                decoded_line = line.decode(errors="replace")
+                lf.write(decoded_line)
+                logger.debug(decoded_line.strip())
+        finally:
+            # Closing our pipe end unblocks a child writer; waiting always reaps it,
+            # including when iteration, log writing, or stdout.close() fails.
+            try:
+                close_stdout = getattr(process.stdout, "close", None)
+                if close_stdout is not None:
+                    close_stdout()
+            finally:
+                process.wait()
 
         if process.returncode != 0:
             # ERROR, not DEBUG: a non-critical failure returns False and the pipeline
@@ -339,7 +352,7 @@ def load_config(config_path=None):
             sys.exit(1)
 
 
-def validate_bam_file(file_path, cwd=None, log_dir=None):
+def validate_bam_file(file_path, cwd=None, log_dir=None, samtools_path="samtools"):
     """
     Validates the alignment file (BAM or CRAM) for existence, correct extension, and
     integrity using samtools quickcheck.
@@ -374,6 +387,10 @@ def validate_bam_file(file_path, cwd=None, log_dir=None):
             ``run_command`` opens the log before it runs anything, so deriving this
             path from the input made a read-only mount raise ``PermissionError``
             before quickcheck ever executed.
+        samtools_path (str, optional): samtools invocation, from
+            ``config["tools"]["samtools"]`` when the caller has a configuration.
+            The bare default serves callers without one. A config prefix may be several
+            shell words and is deliberately not quoted, matching ``command_builders``.
 
     Raises:
         ValueError: If any validation check fails.
@@ -401,7 +418,7 @@ def validate_bam_file(file_path, cwd=None, log_dir=None):
     # function aborts the run itself, by raising, so `run_command` does not also need
     # to -- and the exception callers see is the ValueError every other check here (and
     # `validate_fastq_file`) raises for unusable input.
-    command = f"samtools quickcheck -v {quote_path(file_path)}"
+    command = f"{samtools_path} quickcheck -v {quote_path(file_path)}"
     if log_dir is None:
         log_file = f"{file_path}.quickcheck.log"
     else:

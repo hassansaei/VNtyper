@@ -184,23 +184,24 @@ def _fake_download_from(release_dir: Path):
     """A `download_file` stand-in that copies from `release_dir` instead of the network.
 
     Mirrors the real function's contract closely enough for `install_from_bundle` to
-    behave identically under it: a missing asset raises `SystemExit`, matching what
-    `download_file` does when `urlretrieve` fails.
+    behave identically under it: a missing asset raises ``RuntimeError`` and a copied
+    asset reports that it was fetched.
 
     Args:
         release_dir: Directory the fake "release" assets live in.
 
     Returns:
-        Callable[[str, Path], None]: A `download_file(url, dest_path)` stand-in.
+        Callable[[str, Path], bool]: A `download_file(url, dest_path)` stand-in.
     """
     import shutil
 
-    def _download(url: str, dest_path: Path) -> None:
+    def _download(url: str, dest_path: Path) -> bool:
         source = release_dir / Path(url).name
         if not source.is_file():
-            raise SystemExit(1)
+            raise RuntimeError(f"Failed to download {url}: asset does not exist")
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(source, dest_path)
+        return True
 
     return _download
 
@@ -732,10 +733,11 @@ class TestInstallFromBundleDownloadFailure:
         with pytest.raises(RuntimeError) as excinfo:
             install_references.install_from_bundle(config, output_dir, ["hg19"])
 
-        message = str(excinfo.value)
-        assert "acme/vntyper-data" in message
-        assert "refs-v1" in message
-        assert hg19_asset in message
+        url = f"https://github.com/acme/vntyper-data/releases/download/refs-v1/{hg19_asset}"
+        assert str(excinfo.value) == (
+            f"failed to download {hg19_asset} from repository acme/vntyper-data, release refs-v1 ({url})"
+        )
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
         assert not output_dir.exists()
 
 

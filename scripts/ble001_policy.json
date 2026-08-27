@@ -1,11 +1,11 @@
 {
   "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 102,
-    "ignore_noqa": 108,
-    "identities": 77,
+    "normal": 97,
+    "ignore_noqa": 104,
+    "identities": 76,
     "categories": {
-      "A": 29,
+      "A": 28,
       "B": 16,
       "C": 32
     }
@@ -40,16 +40,8 @@
       "symbol": "CohortWorkspace.close",
       "normal_count": 3,
       "all_count": 3,
-      "category": "C",
-      "rationale": "docker/app/cohort_workspace.py::CohortWorkspace.close: fallback/continuation boundary; cleanup failures remain observable through ERROR logs while independent descriptor and reservation cleanup continues"
-    },
-    {
-      "path": "docker/app/failure_reporting.py",
-      "symbol": "report_pipeline_failure",
-      "normal_count": 3,
-      "all_count": 3,
-      "category": "C",
-      "rationale": "docker/app/failure_reporting.py::report_pipeline_failure: fallback/continuation boundary; failed-status, preflight-metadata, and email-reporting failures are isolated so the worker re-raises the exact pipeline exception, as pinned by tests/unit/web/test_failure_notification_resilience.py::test_failed_status_write_preserves_each_pipeline_exception and the sibling preflight/email resilience tests, with each secondary failure observable via ERROR log"
+      "category": "A",
+      "rationale": "docker/app/cohort_workspace.py::CohortWorkspace.close: cleanup boundary that records the first failure, attempts every independent cleanup, then re-raises so the task cannot report successful completion"
     },
     {
       "path": "docker/app/cohorts.py",
@@ -58,6 +50,14 @@
       "all_count": 2,
       "category": "A",
       "rationale": "docker/app/cohorts.py::_discard_partial_cohort: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "docker/app/failure_reporting.py",
+      "symbol": "report_pipeline_failure",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "C",
+      "rationale": "docker/app/failure_reporting.py::report_pipeline_failure: fallback/continuation boundary; failed-status, preflight-metadata, and email-reporting failures are isolated so the worker re-raises the exact pipeline exception, as pinned by tests/unit/web/test_failure_notification_resilience.py::test_failed_status_write_preserves_each_pipeline_exception and the sibling preflight/email resilience tests, with each secondary failure observable via ERROR log"
     },
     {
       "path": "docker/app/tasks.py",
@@ -436,12 +436,12 @@
       "rationale": "vntyper/scripts/install_references.py::check_executable_available: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_install_references.py::test_executable_probe_error_returns_false and failure remains observable via diagnostic log"
     },
     {
-      "path": "vntyper/scripts/install_references.py",
+      "path": "vntyper/scripts/reference_download.py",
       "symbol": "download_file",
       "normal_count": 1,
       "all_count": 1,
       "category": "A",
-      "rationale": "vntyper/scripts/install_references.py::download_file: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+      "rationale": "vntyper/scripts/reference_download.py::download_file: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
     {
       "path": "vntyper/scripts/install_references.py",
@@ -461,27 +461,19 @@
     },
     {
       "path": "vntyper/scripts/install_references.py",
-      "symbol": "process_ucsc_references",
-      "normal_count": 3,
-      "all_count": 3,
-      "category": "A",
-      "rationale": "vntyper/scripts/install_references.py::process_ucsc_references: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
-    },
-    {
-      "path": "vntyper/scripts/install_references.py",
-      "symbol": "process_vntyper_references",
-      "normal_count": 2,
-      "all_count": 2,
-      "category": "A",
-      "rationale": "vntyper/scripts/install_references.py::process_vntyper_references: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
-    },
-    {
-      "path": "vntyper/scripts/install_references.py",
       "symbol": "update_config",
       "normal_count": 2,
       "all_count": 2,
       "category": "A",
       "rationale": "vntyper/scripts/install_references.py::update_config: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/online_mode.py",
+      "symbol": "_close_response",
+      "normal_count": 0,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/online_mode.py::_close_response: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_online_mode.py::test_download_close_failure_cannot_mask_stream_failure_or_skip_cleanup and failure remains observable via WARNING log while the primary request or download outcome is preserved"
     },
     {
       "path": "vntyper/scripts/pipeline_guards.py",
@@ -629,15 +621,6 @@
     }
   ],
   "fail_open": [
-    {
-      "path": "docker/app/cohort_workspace.py",
-      "symbol": "CohortWorkspace.close",
-      "disposition": "preserved-contract",
-      "outcome": "Logs a staging or public-reservation cleanup failure, continues independent cleanup, and does not turn an otherwise complete cohort archive into a failed task.",
-      "rationale": "Best-effort scratch cleanup must not replace the completed cohort result, while descriptor-close failures still propagate after every close is attempted.",
-      "behavior_test": "tests/unit/web/test_tasks.py::test_cohort_analysis_logs_but_does_not_raise_when_removing_the_output_reservation_fails",
-      "observable_via": "ERROR log and successful cohort task outcome"
-    },
     {
       "path": "docker/app/failure_reporting.py",
       "symbol": "report_pipeline_failure",
@@ -808,6 +791,15 @@
       "rationale": "An executable whose availability cannot be proven is treated as unavailable during reference installation.",
       "behavior_test": "tests/unit/test_install_references.py::test_executable_probe_error_returns_false",
       "observable_via": "diagnostic log"
+    },
+    {
+      "path": "vntyper/scripts/online_mode.py",
+      "symbol": "_close_response",
+      "disposition": "preserved-contract",
+      "outcome": "Logs the response-close failure and preserves the primary request or download outcome without raising the cleanup error.",
+      "rationale": "Best-effort connection release must not mask a transport failure, skip temporary-file cleanup, or prevent a bounded retry of an idempotent GET.",
+      "behavior_test": "tests/unit/test_online_mode.py::test_download_close_failure_cannot_mask_stream_failure_or_skip_cleanup",
+      "observable_via": "WARNING log and preserved primary exception and temporary-file cleanup"
     },
     {
       "path": "vntyper/scripts/pipeline_guards.py",

@@ -89,7 +89,6 @@ def test_indexed_bam_recovery_handles_a_nonempty_all_unplaced_alignment(tmp_path
         config=config,
         plan=plan,
         fast_mode=False,
-        keep_intermediates=True,
         delete_intermediates=False,
         bed_file=bed,
     )
@@ -423,7 +422,6 @@ def test_atomic_bai_replacement_after_preflight_still_slices_the_proven_index_in
             config={"tools": {"samtools": "samtools"}},
             plan=plan,
             fast_mode=True,
-            keep_intermediates=True,
             bed_file=bed,
         )
         depth_output = tmp_path / "depth.tsv"
@@ -646,7 +644,6 @@ def test_nonfast_slice_and_complete_recovery_merge_is_a_disjoint_flag_four_union
             unmapped_scan="stream",
         ),
         fast_mode=False,
-        keep_intermediates=True,
         bed_file=bed,
     )
 

@@ -18,6 +18,7 @@ stage that chdirs mid-run cannot poison later stages; and an unreadable working
 directory falls back to the package root rather than raising.
 """
 
+import copy
 import json
 import logging
 import os
@@ -209,6 +210,16 @@ def test_a_cram_input_validates_with_the_working_directory(tmp_path: Path, monke
     harness = run_pipeline_under_harness(run_root / "out", bam=None, cram=str(cram))
 
     assert _cwd_of(harness, "validate_bam_file") == expected
+
+
+def test_validate_bam_file_receives_the_configured_samtools(tmp_path: Path) -> None:
+    """F1: the pipeline binds config's samtools path into the validator callback."""
+    config = copy.deepcopy(MINIMAL_CONFIG)
+    config["tools"]["samtools"] = "/opt/conda/envs/vntyper/bin/samtools"
+
+    harness = run_pipeline_under_harness(tmp_path / "out", config=config)
+
+    assert harness.kwargs("validate_bam_file")["samtools_path"] == "/opt/conda/envs/vntyper/bin/samtools"
 
 
 # ---------------------------------------------------------------------------

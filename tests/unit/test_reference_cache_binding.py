@@ -29,6 +29,15 @@ def _cache_entry(root: Path, digest: str) -> Path:
     return root / digest[:2] / digest[2:4] / digest[4:]
 
 
+def test_ensure_parent_before_the_cache_root_exists_raises_a_valueerror(tmp_path: Path) -> None:
+    """An uninitialized private cache cannot derive a destination parent."""
+    cache = PrivateReferenceCache.__new__(PrivateReferenceCache)
+    cache._root = None
+
+    with pytest.raises(ValueError, match="root"):
+        cache._ensure_parent(tmp_path / "cache" / "entry.fa")
+
+
 def test_compressed_header_reference_closes_its_underlying_descriptor(tmp_path: Path) -> None:
     reference = tmp_path / "reference.fa.gz"
     with gzip.open(reference, "wb") as handle:

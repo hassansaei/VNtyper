@@ -231,7 +231,7 @@ curl -O "http://localhost:8000/download/filename.zip"
   - `thread`: Number of threads to use (e.g., `4`).
   - `reference_assembly`: Reference genome assembly (e.g., `hg38`).
   - `fast_mode`: Enable fast mode (`true` or `false`).
-  - `keep_intermediates`: Retain intermediate files (`true` or `false`).
+  - `keep_intermediates`: Compatibility field; web jobs always keep intermediate files, so this value changes nothing (`true` or `false`).
   - `archive_results`: Archive results as a ZIP file (`true` or `false`).
 
 - **Accessing the API:**

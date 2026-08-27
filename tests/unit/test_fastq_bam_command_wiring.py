@@ -10,7 +10,7 @@ hand-rolls its own string next to it.
 Every expected string here was captured from the code as it stood *before*
 ``command_builders`` existed, so this file doubles as the proof that the
 extraction is behaviour-preserving. The only differences from that capture are the
-five deliberate fixes:
+six deliberate fixes:
 
 * ``set -o pipefail; `` on the three multi-stage pipes,
 * the CRAM unmapped-read extractor calling the configured samtools instead of a
@@ -21,18 +21,23 @@ five deliberate fixes:
   ``tee >(...)`` process substitution the shell does not wait for - see the
   section on that path below for the measurement, and
 * dedup-enabled fastp commands using one worker so the shared atomic duplicate
-  table retains a reproducible representative.
+  table retains a reproducible representative, and
+* the adVNTR downsample index carrying the same explicit ``-@`` budget as view
+  and sort.
 
 ``run_command`` is mocked throughout; nothing here starts a process.
 """
 
+import inspect
 import shlex
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from vntyper.scripts import alignment_processing, fastq_bam_processing
+from vntyper.scripts import pipeline as pipeline_module
 from vntyper.scripts.alignment_contract import AlignmentPlan
 
 # Mark all tests in this module as unit tests
@@ -101,6 +106,17 @@ def _run_bam_to_fastq(tmp_path, **overrides):
         fastq_bam_processing.process_bam_to_fastq(**kwargs)
 
     return recorder.commands
+
+
+def test_the_dead_keep_intermediates_parameter_is_gone() -> None:
+    """The compatibility flag remains accepted, but no Python stage receives its inert value.
+
+    Nineteen of the 24 append-only real-success contracts carry ``--keep-intermediates``;
+    the parser must keep accepting it even though retention is controlled solely by
+    ``delete_intermediates``.
+    """
+    assert "keep_intermediates" not in inspect.signature(fastq_bam_processing.process_bam_to_fastq).parameters
+    assert "keep_intermediates" not in inspect.signature(pipeline_module.run_pipeline).parameters
 
 
 # ---------------------------------------------------------------------------
@@ -247,13 +263,12 @@ def test_the_bam_normal_path_indexes_the_merge_for_advntr(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("delete_intermediates", "keep_intermediates", "expected_exists"),
-    [(False, False, True), (False, True, True), (True, False, False), (True, True, False)],
+    ("delete_intermediates", "expected_exists"),
+    [(False, True), (True, False)],
 )
-def test_delete_intermediates_overrides_keep(
+def test_delete_intermediates_alone_gates_removal(
     tmp_path: Path,
     delete_intermediates: bool,
-    keep_intermediates: bool,
     expected_exists: bool,
 ) -> None:
     unmapped = tmp_path / "output_unmapped.bam"
@@ -262,7 +277,6 @@ def test_delete_intermediates_overrides_keep(
         tmp_path,
         fast_mode=False,
         delete_intermediates=delete_intermediates,
-        keep_intermediates=keep_intermediates,
     )
     assert unmapped.exists() is expected_exists
 
@@ -1037,6 +1051,42 @@ def test_an_operator_supplied_region_records_not_measured_rather_than_a_wrong_fi
     assert stats["vntr_array_depth_sum"] is None
     assert stats["vntr_flank_mean_depth"] is None
     assert stats["mean"] == pytest.approx(5.0)
+
+
+def test_downsample_index_carries_the_thread_flag(tmp_path, monkeypatch):
+    """The downsample index uses the same explicit thread budget as view and sort."""
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"bam")
+    argvs: list[list[str]] = []
+
+    def fake_run(cmd, check=True):
+        argvs.append(list(cmd))
+        if "-o" in cmd:
+            Path(cmd[cmd.index("-o") + 1]).write_bytes(b"out")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(fastq_bam_processing.subprocess, "run", fake_run)
+    monkeypatch.setattr(fastq_bam_processing, "calculate_vntr_coverage", lambda **kwargs: {"mean": 600.0})
+    monkeypatch.setattr(fastq_bam_processing, "get_region_string_with_fallback", lambda **kwargs: "chr1:1-2")
+
+    result = fastq_bam_processing.downsample_bam_if_needed(
+        bam_path=bam,
+        max_coverage=300,
+        reference_assembly="hg19",
+        threads=4,
+        config={"tools": {"samtools": "/opt/vntyper/bin/samtools"}},
+        coverage_dir=tmp_path,
+        coverage_prefix="advntr_precheck",
+    )
+
+    assert argvs[-1] == [
+        "/opt/vntyper/bin/samtools",
+        "index",
+        "-@",
+        "4",
+        str(tmp_path / "sample_downsampled.sorted.bam"),
+    ]
+    assert result.name == "sample_downsampled.sorted.bam"
 
 
 # ---------------------------------------------------------------------------

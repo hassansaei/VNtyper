@@ -156,8 +156,8 @@ def handle_install_references(
         args: The parsed arguments.
         config: Unused; present for the uniform handler signature.
         parser: Used to reject ``--release-spec`` without ``--from-source``.
-        log_level_value: Unused; present for the uniform handler signature.
-        log_file_str: Unused; present for the uniform handler signature.
+        log_level_value: Already applied by `cli.py`; the installer preserves it.
+        log_file_str: Already applied by `cli.py`; the installer preserves its handler.
     """
     if args.derive_only and args.from_source:
         # Both build the derived files, but --derive-only deliberately downloads nothing.
@@ -468,7 +468,6 @@ def handle_pipeline(
         reference_key_used=reference_key_used,
         reference_source_effective=reference_source_effective,
         fast_mode=args.fast_mode,
-        keep_intermediates=args.keep_intermediates,
         delete_intermediates=args.delete_intermediates,
         archive_results=args.archive_results,
         archive_format=args.archive_format,

@@ -63,6 +63,20 @@ BAI_BYTES = b"index-bytes-for-sample.bam.bai"
 RESULT_BYTES = b"zipped-vntyper-results"
 
 
+def test_run_job_schema_marks_keep_intermediates_as_a_compatibility_noop(client) -> None:
+    """The multipart schema must not promise behavior its retained field cannot change."""
+    schema = client.get("/openapi.json").json()
+    body = schema["paths"]["/run-job/"]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
+    body_name = body["$ref"].rsplit("/", 1)[-1]
+    keep_intermediates = schema["components"]["schemas"][body_name]["properties"]["keep_intermediates"]
+
+    assert keep_intermediates["default"] is False
+    assert (
+        keep_intermediates["description"]
+        == "Compatibility field: web jobs always keep intermediate files, so this value changes nothing."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

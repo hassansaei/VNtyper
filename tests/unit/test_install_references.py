@@ -22,7 +22,6 @@ from vntyper.scripts.install_references import (
     check_executable_available,
     check_index_exists,
     detect_index_conflicts,
-    download_file,
     execute_index_command,
     get_enabled_aligners,
     load_install_config,
@@ -382,49 +381,6 @@ class TestCheckIndexExists:
         result = check_index_exists(ref_path, "bwa", aligner_info)
 
         assert result is True
-
-
-# =============================================================================
-# Test download_file()
-# =============================================================================
-
-
-@pytest.mark.unit
-class TestDownloadFile:
-    """Tests for file downloading."""
-
-    @patch("vntyper.scripts.install_references.urlretrieve")
-    def test_download_success(self, mock_urlretrieve, tmp_path):
-        """Test successful file download."""
-        dest_path = tmp_path / "download" / "file.txt"
-        url = "https://example.com/file.txt"
-
-        download_file(url, dest_path)
-
-        mock_urlretrieve.assert_called_once_with(url, dest_path)
-        assert dest_path.parent.exists()
-
-    @patch("vntyper.scripts.install_references.urlretrieve")
-    def test_download_file_exists(self, mock_urlretrieve, tmp_path):
-        """Test that existing files are not re-downloaded."""
-        dest_path = tmp_path / "existing.txt"
-        dest_path.write_text("existing content")
-        url = "https://example.com/file.txt"
-
-        download_file(url, dest_path)
-
-        # Should not call urlretrieve for existing file
-        mock_urlretrieve.assert_not_called()
-
-    @patch("vntyper.scripts.install_references.urlretrieve")
-    def test_download_failure(self, mock_urlretrieve, tmp_path):
-        """Test download failure handling."""
-        mock_urlretrieve.side_effect = Exception("Network error")
-        dest_path = tmp_path / "file.txt"
-        url = "https://example.com/file.txt"
-
-        with pytest.raises(SystemExit):
-            download_file(url, dest_path)
 
 
 # =============================================================================

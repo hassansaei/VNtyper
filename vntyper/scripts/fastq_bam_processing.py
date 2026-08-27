@@ -24,6 +24,7 @@ from vntyper.scripts.command_builders import (
     build_samtools_depth_command,
     build_samtools_index_command,
     build_samtools_merge_command,
+    build_threaded_samtools_index_argv,
 )
 from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 from vntyper.scripts.coverage_stats import (
@@ -93,7 +94,6 @@ def process_bam_to_fastq(
     reference_assembly="hg19",
     fast_mode=False,
     delete_intermediates=True,
-    keep_intermediates=False,
     bed_file=None,
     needs_advntr: bool = False,
 ):
@@ -111,9 +111,7 @@ def process_bam_to_fastq(
         fast_mode (bool, optional): If True, skips filtering of unmapped and partially
             mapped reads. Defaults to False.
         delete_intermediates (bool, optional): If True, deletes intermediate files after
-            processing, overriding ``keep_intermediates``. Defaults to True.
-        keep_intermediates (bool, optional): If True, keeps intermediate files for later
-            use unless ``delete_intermediates`` is True. Defaults to False.
+            processing. Defaults to True.
         bed_file (Path, optional): Path to a BED file specifying regions for MUC1 analysis.
         needs_advntr (bool, optional): Whether adVNTR will read ``<name>_sliced.bam``.
             Its index has exactly one consumer -- ``run_advntr`` and
@@ -541,7 +539,11 @@ def downsample_bam_if_needed(
     try:
         subprocess.run(cmd_sort, check=True)
         downsampled_bam.unlink()
-        cmd_index = [samtools_path, "index", str(sorted_down_bam)]
+        cmd_index = build_threaded_samtools_index_argv(
+            samtools_path=samtools_path,
+            bam_file=sorted_down_bam,
+            threads=threads,
+        )
         subprocess.run(cmd_index, check=True)
     except subprocess.CalledProcessError as err:
         logger.error(f"Sorting/indexing failed after downsampling: {err}")

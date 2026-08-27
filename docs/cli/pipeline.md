@@ -56,8 +56,8 @@ the VNTR, however, so changing that boundary can change the genotype result.
 |--------|------|---------|-------------|
 | `--threads` | int | `4` | Number of threads to use |
 | `--fast-mode` | flag | off | Enable fast mode (skips filtering for unmapped and partially mapped reads) |
-| `--keep-intermediates` | flag | off | Keep intermediate files (e.g., BAM slices, temporary files) |
-| `--delete-intermediates` | flag | off | Delete intermediate files after processing. Overrides `--keep-intermediates` |
+| `--keep-intermediates` | flag | off | Compatibility flag: intermediate files (BAM slices, temporary files) are already kept by default, so this flag changes nothing. Use `--delete-intermediates` to remove them. |
+| `--delete-intermediates` | flag | off | Delete intermediate files after processing (wins when `--keep-intermediates` is also given). |
 
 ## Optional Modules
 
