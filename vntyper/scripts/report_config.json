@@ -90,6 +90,9 @@
       "default": "negative"
     }
   },
+  "cross_match": {
+    "not_assessable_message": "The cross-match comparison's result file is missing or could not be read; agreement between Kestrel and adVNTR was not assessed."
+  },
   "screening_summary_rules": [
     {
       "conditions": {

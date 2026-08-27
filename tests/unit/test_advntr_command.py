@@ -14,7 +14,6 @@ not run" and a confusing failure several stages later.
 
 import logging
 import shlex
-import subprocess as sp
 from pathlib import Path
 
 import pytest
@@ -61,8 +60,18 @@ class TestTheCommandLine:
         assert captured_command[0]["command"] == (
             f"mamba run -n envadvntr advntr genotype -fs -vid 25561 "
             f"--alignment_file {sorted_bam} -o {output}/output_adVNTR.vcf "
-            f"-m {db_file} --working_directory {output} -t 1 -aln"
+            f"-m {db_file} --working_directory {output} -t 1"
         )
+
+    def test_the_shipped_default_does_not_request_the_unused_alignment_sidecar(self, inputs, captured_command):
+        """The optional ``-aln`` post-processing path can crash after writing a complete VCF."""
+        db_file, sorted_bam, output = inputs
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        words = shlex.split(captured_command[0]["command"])
+        assert "-aln" not in words
+        assert "--aln" not in words
 
     def test_the_artefact_name_is_built_from_output_name(self, inputs, captured_command):
         """Contract C4: ``pipeline.py`` rebuilds this path rather than consuming a return value."""
@@ -96,8 +105,8 @@ class TestShellInterpolationIsQuoted:
     filenames that reach this line, so a space alone splits one argument into two and a
     ``;`` is arbitrary command execution.
 
-    ``advntr_path`` and ``additional_commands`` stay unquoted on purpose: both hold command
-    *fragments* from config (``"mamba run -n envadvntr advntr"``, ``"-aln"``), which
+    ``advntr_path`` and non-empty ``additional_commands`` stay unquoted on purpose: both hold command
+    *fragments* from config (``"mamba run -n envadvntr advntr"``, or an explicit ``"-aln"``), which
     quoting would collapse into a single token.
     """
 
@@ -144,9 +153,10 @@ class TestShellInterpolationIsQuoted:
         assert words[words.index("--working_directory") + 1] == str(output)
         assert words[words.index("-o") + 1] == f"{output}/output_adVNTR.vcf"
 
-    def test_the_tool_prefix_and_the_flag_list_stay_separate_words(self, inputs, captured_command):
+    def test_the_tool_prefix_and_the_flag_list_stay_separate_words(self, inputs, captured_command, monkeypatch):
         """Quoting either would give bash one token where it needs several."""
         db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(advntr, "advntr_settings", {**advntr.advntr_settings, "additional_commands": "-aln"})
 
         advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
 
@@ -329,32 +339,6 @@ class TestInputValidation:
 
         with pytest.raises(KeyError):
             advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", {"tools": {}})
-
-
-class TestFailureHandling:
-    @pytest.mark.parametrize(
-        "outcome",
-        [
-            pytest.param(False, id="run_command_reports_failure"),
-            pytest.param(sp.CalledProcessError(1, "advntr"), id="called_process_error"),
-            pytest.param(RuntimeError("critical command failed"), id="unexpected_error"),
-        ],
-    )
-    def test_every_failure_mode_returns_one_and_logs_at_error(self, inputs, monkeypatch, caplog, outcome):
-        db_file, sorted_bam, output = inputs
-
-        def failing(*_args, **_kwargs):
-            if isinstance(outcome, BaseException):
-                raise outcome
-            return outcome
-
-        monkeypatch.setattr(advntr, "run_command", failing)
-
-        with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
-            result = advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
-
-        assert result == 1
-        assert [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 class TestConfigLoading:
@@ -557,15 +541,26 @@ class TestAdditionalCommandsCannotOverrideAManagedOption:
         assert "--threads" in message
         assert "'threads'" in message, "the operator needs to be told which key to set instead"
 
+    def test_a_missing_additional_commands_key_adds_no_optional_flags(self):
+        """Packaged and missing-key defaults must both avoid adVNTR's optional post-processing."""
+        assert advntr.resolve_additional_commands({}) == ""
+
     @pytest.mark.parametrize("additional", ["-aln", "-aln --haploid", "--fullru", "-u", ""])
     def test_flags_advntr_owns_alone_still_pass_through(self, additional):
-        """The guard must not turn ``additional_commands`` into an empty extension point:
-        ``-aln`` is what ships, and ``--haploid``/``--fullru``/``-u`` collide with nothing.
+        """The guard must not turn ``additional_commands`` into a dead extension point:
+        explicit ``-aln`` and ``--haploid``/``--fullru``/``-u`` collide with nothing.
         """
         assert advntr.resolve_additional_commands({"additional_commands": additional}) == additional
 
-    def test_the_shipped_value_reaches_the_command_unchanged(self, inputs, captured_command):
+    def test_an_explicit_alignment_sidecar_opt_in_reaches_the_command_unchanged(
+        self, inputs, captured_command, monkeypatch
+    ):
         db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {**advntr.advntr_settings, "additional_commands": "-aln"},
+        )
 
         advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
 

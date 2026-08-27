@@ -370,6 +370,7 @@ def run_pipeline(
                 from vntyper.modules.shark.shark_filtering import (
                     load_shark_config,
                     run_shark_filter,
+                    write_shark_step_summary,
                 )
 
                 shark_config = load_shark_config()
@@ -386,13 +387,18 @@ def run_pipeline(
                     reference_assembly=reference_assembly,
                     threads=threads,
                 )
+                shark_step_file = os.path.join(dirs["fastq_bam_processing"], f"{run_sample_name}_shark_step.json")
+                write_shark_step_summary(fastq1, fastq2, shark_step_file)
+                # Counting and sidecar creation are part of this stage. Capture its end
+                # only after both succeed, so a recorded duration cannot exclude work
+                # required to make the step readable.
                 shark_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,
                     "SHARK Filtering",
-                    os.path.join(dirs["fastq_bam_processing"], "filtered_R1.fastq.gz"),
-                    "fastq",
-                    "run_shark_filter(...)",
+                    shark_step_file,
+                    "json",
+                    "run_shark_filter(...), write_shark_step_summary(...)",
                     shark_start,
                     shark_end,
                     write_summary_path=summary_file_path,
@@ -553,6 +559,7 @@ def run_pipeline(
                     process_advntr_output,
                     run_advntr,
                 )
+                from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
                 from vntyper.modules.advntr.model_provenance import (
                     describe_model,
                     detect_advntr_version,
@@ -562,8 +569,15 @@ def run_pipeline(
                 logger.error(f"adVNTR module import failed: {exc}")
                 sys.exit(1)
 
+            invalidate_advntr_artifact(Path(dirs["advntr"]) / "output_adVNTR_result.tsv")
             advntr_config = load_advntr_config()
             advntr_settings = advntr_config.get("advntr_settings", {})
+            # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
+            # this run's parser, while invalidating both supported producer names so a
+            # cross-format rerun cannot retain patient output from the previous format.
+            output_ext = advntr_output_extension(advntr_settings)
+            for raw_extension in (".tsv", ".vcf"):
+                invalidate_advntr_artifact(Path(dirs["advntr"]) / f"output_adVNTR{raw_extension}")
             advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
 
             if not advntr_reference:
@@ -615,7 +629,7 @@ def run_pipeline(
                         coverage_prefix="advntr_precheck",
                     )
                 advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                run_advntr(
+                advntr_status = run_advntr(
                     advntr_reference,
                     sorted_bam,
                     dirs["advntr"],
@@ -624,10 +638,12 @@ def run_pipeline(
                     cwd=project_root,
                     pipeline_threads=threads,
                 )
-                # Shared with run_advntr, which built the path adVNTR actually wrote. This
-                # used to repeat `.get("output_format", "tsv")` here, so the producer and the
-                # consumer of that path each carried their own fallback (#247).
-                output_ext = advntr_output_extension(advntr_settings)
+                if advntr_status != 0:
+                    msg = (
+                        f"adVNTR genotyping returned non-zero status {advntr_status}; result parsing was not attempted."
+                    )
+                    logger.error(msg)
+                    raise RuntimeError(msg)
                 output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
                 process_advntr_output(output_path, dirs["advntr"], "output", config=config)
                 # Tier A needs two independent callers agreeing, which no single

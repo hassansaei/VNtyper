@@ -19,7 +19,7 @@ adVNTR targets MUC1 VNTR using **VNTR ID 25561**, which corresponds to the MUC1 
 |-----------|---------|-------------|
 | `vid` | 25561 | VNTR database ID for MUC1 |
 | `threads` | 1 | Parallel threads |
-| `additional_commands` | `-aln` | Extra flags (alignment mode) |
+| `additional_commands` | empty | Optional adVNTR-owned flags; set `-aln` explicitly to request its unused alignment sidecar |
 | `output_format` | `vcf` | Output format (tsv or vcf) |
 | `max_frameshift` | 100 | Maximum frameshift multiplier for filtering |
 | `frameshift_multiplier` | 3 | Base multiplier for valid frame patterns |
@@ -33,10 +33,15 @@ adVNTR targets MUC1 VNTR using **VNTR ID 25561**, which corresponds to the MUC1 
 
 adVNTR output is processed through frameshift filtering analogous to Kestrel's:
 
+VNtyper does not consume adVNTR's optional `.aln` sidecar, so the shipped default does not
+request it. Operators can still opt in with `additional_commands: "-aln"`; a failure in that
+optional adVNTR post-processing remains a subprocess failure and is not accepted based on a VCF
+that may already have been written.
+
 - **Deletion frameshifts**: frame values matching `3n + 2` (e.g., 2, 5, 8, 11, ...)
 - **Insertion frameshifts**: frame values matching `3n + 1` (e.g., 1, 4, 7, 10, ...)
 
-Variants are annotated with repeat unit (RU) identity, position, REF, and ALT using the MUC1 RU FASTA reference. adVNTR-specific flagging rules can be configured independently.
+Variants are annotated with repeat unit (RU) identity and position from adVNTR's state string. REF and ALT are looked up in the MUC1 RU FASTA reference. When that FASTA does not resolve, RU and POS remain available while only REF and ALT fall back to `Not applicable`. adVNTR-specific flagging rules can be configured independently.
 
 ### Cross-Matching
 

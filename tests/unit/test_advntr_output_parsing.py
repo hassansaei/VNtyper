@@ -17,9 +17,9 @@ These pin two things the rest of the pipeline silently depends on:
    row is therefore the only thing standing between "adVNTR found nothing" and a crash
    in the report layer -- it must always be written, with exactly these values.
 
-They also cover the three paths on which :func:`process_advntr_output` returns *without*
-writing a file. A caller that gets no file does not see the real cause at that point; it
-sees a misleading downstream failure much later, so which paths reach it is pinned.
+They also cover the failure paths on which :func:`process_advntr_output` writes no file.
+Those paths must raise at the point of failure so the pipeline cannot continue with a
+missing or stale result artifact.
 """
 
 import logging
@@ -29,6 +29,7 @@ import pandas as pd
 import pytest
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
+from vntyper.modules.advntr.advntr_variant_annotations import derive_ru_and_pos
 
 pytestmark = pytest.mark.unit
 
@@ -188,22 +189,30 @@ class TestCanonicalParsing:
         assert row["REF"] != "Not applicable"
         assert row["ALT"].startswith(row["REF"])
 
-    def test_without_an_ru_fasta_the_annotation_columns_fall_back_to_not_applicable(self, tmp_path):
+    def test_without_an_ru_fasta_ru_and_pos_are_still_derived_and_only_ref_alt_fall_back(self, tmp_path):
+        """RU and POS come from the state string and must not depend on the FASTA."""
         source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
 
         advntr.process_advntr_output(str(source), str(tmp_path), "output", config=None)
 
         row = read_result(tmp_path).iloc[0]
-        for column in ("RU", "POS", "REF", "ALT"):
+        assert row["RU"] == "2"
+        assert row["POS"] == "22"
+        for column in ("REF", "ALT"):
             assert row[column] == "Not applicable"
 
-    def test_a_configured_but_absent_ru_fasta_is_tolerated(self, tmp_path):
+    def test_a_configured_but_absent_ru_fasta_still_yields_ru_and_pos(self, tmp_path):
+        """A missing configured FASTA affects only the annotations that read bases."""
         source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
         config = {"reference_data": {"code_adVNTR_RUs": str(tmp_path / "does_not_exist.fa")}}
 
         advntr.process_advntr_output(str(source), str(tmp_path), "output", config=config)
 
-        assert read_result(tmp_path).iloc[0]["RU"] == "Not applicable"
+        row = read_result(tmp_path).iloc[0]
+        assert row["RU"] == "2"
+        assert row["POS"] == "22"
+        assert row["REF"] == "Not applicable"
+        assert row["ALT"] == "Not applicable"
 
 
 # ---------------------------------------------------------------------------
@@ -241,37 +250,90 @@ class TestNegativePlaceholder:
 
 
 # ---------------------------------------------------------------------------
-# The three returns that write nothing at all
+# Fail-closed paths that write nothing at all
 # ---------------------------------------------------------------------------
 
 
 class TestPathsThatWriteNoFile:
     """
-    Characterisation of the three ``return``-without-writing branches.
+    Characterisation of the fail-closed branches that publish no result.
 
-    Every one of these leaves ``pipeline.py`` pointing at a file that does not exist.
-    The stage does not fail; the report simply loses its adVNTR half much later.
+    These are ``process_advntr_output`` failures reached after ``run_advntr`` reports
+    success. They raise immediately so a full pipeline cannot mistake a prior result for
+    this run's output. A non-zero ``run_advntr`` status is separate: the caller rejects
+    it before this processor runs.
     """
 
-    def test_a_missing_input_file_writes_nothing_and_logs_at_error(self, tmp_path, caplog):
-        missing = tmp_path / "never_written.vcf"
+    def test_a_processing_failure_invalidates_a_stale_result_and_raises(self, tmp_path, caplog):
+        """A malformed current run must never leave a prior run's call publishable."""
+        source = write_advntr_output(
+            tmp_path,
+            "VID\tWrong\n25561\tcurrent-run-is-malformed\n",
+        )
+        result_path = tmp_path / f"output{RESULT_SUFFIX}"
+        result_path.write_text("VID\tVariant\n25561\tSTALE_PRIOR_CALL\n", encoding="utf-8")
+        expected = "Error during processing of deletions and insertions: 'Variant'"
 
-        with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
+        with (
+            caplog.at_level(logging.ERROR, logger=advntr.logger.name),
+            pytest.raises(RuntimeError) as raised,
+        ):
+            advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+        assert str(raised.value) == expected
+        assert expected in caplog.messages
+        assert not result_path.exists(), "the current failure must invalidate the prior run's derived call"
+
+    def test_a_stale_result_invalidation_failure_logs_and_raises(self, tmp_path, monkeypatch, caplog):
+        """The parser must stop if it cannot prove an old result was invalidated."""
+        source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
+        result_path = tmp_path / f"output{RESULT_SUFFIX}"
+        result_path.write_text("VID\tVariant\n25561\tSTALE_PRIOR_CALL\n", encoding="utf-8")
+        original_unlink = Path.unlink
+
+        def refuse_result_unlink(path: Path, missing_ok: bool = False) -> None:
+            if path == result_path:
+                raise OSError("result is locked")
+            original_unlink(path, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", refuse_result_unlink)
+        expected = f"Could not invalidate stale adVNTR artifact {result_path}: result is locked"
+
+        with (
+            caplog.at_level(logging.ERROR, logger=advntr.logger.name),
+            pytest.raises(RuntimeError) as raised,
+        ):
+            advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+        assert str(raised.value) == expected
+        assert expected in caplog.messages
+        assert "STALE_PRIOR_CALL" in result_path.read_text(encoding="utf-8")
+
+    def test_a_missing_input_file_writes_nothing_and_raises(self, tmp_path, caplog):
+        missing = tmp_path / "never_written.vcf"
+        expected = f"adVNTR output file {missing} not found!"
+
+        with (
+            caplog.at_level(logging.ERROR, logger=advntr.logger.name),
+            pytest.raises(RuntimeError) as raised,
+        ):
             advntr.process_advntr_output(str(missing), str(tmp_path), "output")
 
+        assert str(raised.value) == expected
         assert not (tmp_path / f"output{RESULT_SUFFIX}").exists()
-        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
-        assert errors, "a missing adVNTR output must be reported at ERROR"
-        assert "not found" in errors[0].getMessage()
+        assert expected in caplog.messages
 
-    def test_a_zero_byte_input_file_writes_nothing_and_logs_at_error(self, tmp_path, caplog):
+    def test_a_zero_byte_input_file_writes_nothing_and_raises(self, tmp_path, caplog):
         source = write_advntr_output(tmp_path, "")
 
-        with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
+        with (
+            caplog.at_level(logging.ERROR, logger=advntr.logger.name),
+            pytest.raises(RuntimeError) as raised,
+        ):
             advntr.process_advntr_output(str(source), str(tmp_path), "output")
 
         assert not (tmp_path / f"output{RESULT_SUFFIX}").exists()
-        assert [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert str(raised.value) in caplog.messages
 
     @pytest.mark.parametrize(
         ("label", "blob"),
@@ -280,22 +342,25 @@ class TestPathsThatWriteNoFile:
             ("not_a_table", "this is not a table at all\njust prose\n"),
         ],
     )
-    def test_a_malformed_input_file_writes_nothing_and_logs_at_error(self, tmp_path, caplog, label, blob):
+    def test_a_malformed_input_file_writes_nothing_and_raises(self, tmp_path, caplog, label, blob):
         source = write_advntr_output(tmp_path, blob)
 
-        with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
+        with (
+            caplog.at_level(logging.ERROR, logger=advntr.logger.name),
+            pytest.raises(RuntimeError) as raised,
+        ):
             advntr.process_advntr_output(str(source), str(tmp_path), "output")
 
         assert not (tmp_path / f"output{RESULT_SUFFIX}").exists(), label
-        assert [r for r in caplog.records if r.levelno >= logging.ERROR], label
+        assert str(raised.value) in caplog.messages, label
 
 
-def test_header_rewrite_oserror_logs_and_returns_none(
+def test_header_rewrite_oserror_logs_and_raises(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A failed header rewrite remains observable without claiming a result."""
+    """A failed header rewrite raises without claiming a result."""
     source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
     result_path = tmp_path / f"output{RESULT_SUFFIX}"
     real_open = open
@@ -307,10 +372,13 @@ def test_header_rewrite_oserror_logs_and_returns_none(
 
     monkeypatch.setattr("builtins.open", fail_header_rewrite)
 
-    with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
-        result = advntr.process_advntr_output(str(source), str(tmp_path), "output")
+    with (
+        caplog.at_level(logging.ERROR, logger=advntr.logger.name),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        advntr.process_advntr_output(str(source), str(tmp_path), "output")
 
-    assert result is None
+    assert str(raised.value) == "Error reading adVNTR output: header rewrite blocked"
     assert not result_path.exists()
     errors = [
         (record.levelno, record.getMessage())
@@ -327,14 +395,14 @@ def test_header_rewrite_oserror_logs_and_returns_none(
         ("variant_processing", "Error during processing of deletions and insertions: unreadable result"),
     ],
 )
-def test_unreadable_advntr_output_logs_and_returns_none(
+def test_unreadable_advntr_output_logs_and_raises(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     failure_stage: str,
     expected_message: str,
 ) -> None:
-    """Each broad parsing catch returns None without claiming a result artifact."""
+    """Each broad parsing catch raises without claiming a result artifact."""
     source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
 
     def unreadable(*_args, **_kwargs):
@@ -352,9 +420,13 @@ def test_unreadable_advntr_output_logs_and_returns_none(
         lambda output, output_name: cleanup_calls.append((output, output_name)),
     )
 
-    with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
-        assert advntr.process_advntr_output(str(source), str(tmp_path), "output") is None
+    with (
+        caplog.at_level(logging.ERROR, logger=advntr.logger.name),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        advntr.process_advntr_output(str(source), str(tmp_path), "output")
 
+    assert str(raised.value) == expected_message
     assert not (tmp_path / f"output{RESULT_SUFFIX}").exists()
     assert cleanup_calls == []
     errors = [
@@ -750,3 +822,29 @@ class TestRepeatUnitAnnotation:
         ru, pos, ref, alt = advntr.annotate_advntr_variants(pd.Series(["D3_99"]), str(path))
 
         assert (ru, pos, ref, alt) == (["99"], ["3"], ["."], ["."])
+
+    @pytest.mark.parametrize(
+        "variant",
+        ["I3_2_T_LEN2", "D3_2", "D3_99", "NOT_A_VARIANT", "D58_2&D59_2", "I26_7_A_LEN25"],
+    )
+    def test_the_fasta_annotator_shares_the_pure_ru_pos_derivation(self, tmp_path, variant):
+        """The FASTA and no-FASTA call sites cannot drift in RU/POS parsing."""
+        path = tmp_path / "ru.fa"
+        path.write_text(">RU2\nACGTACGTAC\n>RU7\nACGTACGTAC\n")
+
+        ru, pos, _ref, _alt = advntr.annotate_advntr_variants(pd.Series([variant]), str(path))
+
+        assert (ru, pos) == derive_ru_and_pos([variant])
+
+    @pytest.mark.parametrize("variant", [25561, None, pd.NA])
+    def test_the_fasta_annotator_maps_non_string_variants_to_dots(self, tmp_path, variant):
+        """Malformed cells are safe in both the pure and FASTA-backed paths."""
+        path = tmp_path / "ru.fa"
+        path.write_text(">RU2\nACGTACGTAC\n")
+
+        assert advntr.annotate_advntr_variants(pd.Series([variant]), str(path)) == (
+            ["."],
+            ["."],
+            ["."],
+            ["."],
+        )

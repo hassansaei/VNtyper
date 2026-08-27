@@ -5,7 +5,7 @@
       "vid": 25561,
       "output_format": "vcf",
       "threads": null,
-      "additional_commands": "-aln"
+      "additional_commands": ""
     },
     "flagging_rules": {
          "Low_Coverage": "NumberOfSupportingReads < 10",

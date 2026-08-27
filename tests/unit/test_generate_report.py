@@ -1475,14 +1475,34 @@ def test_the_cross_match_state_is_computed_from_the_rows(rows, expected) -> None
     """One row matching is a hit; the sentence is a consequence of the state, not its source."""
     summary = {"steps": [tabular_step(summary_steps.STEP_CROSS_MATCH, rows)]}
 
-    _message, is_positive = generate_report.build_cross_match_summary(summary)
+    _message, is_positive, is_assessable = generate_report.build_cross_match_summary(
+        summary, generate_report.load_report_config()
+    )
 
     assert is_positive is expected
+    assert is_assessable is True
 
 
 def test_a_missing_cross_match_step_is_neither_positive_nor_worded() -> None:
     """No step, no section - and the flag must not default to the emphasised state."""
-    assert generate_report.build_cross_match_summary({"steps": []}) == ("", False)
+    assert generate_report.build_cross_match_summary({"steps": []}, generate_report.load_report_config()) == (
+        "",
+        False,
+        False,
+    )
+
+
+def test_an_unreadable_cross_match_chip_reads_not_assessable(tmp_path: Path) -> None:
+    """A comparison whose result was unreadable cannot render the verdict No match."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
+        unreadable_step(summary_steps.STEP_CROSS_MATCH, tmp_path / "kestrel" / "kestrel_vs_advntr.tsv"),
+    )
+
+    assert chip_value(render(tmp_path), "Concordance") == "Not assessable"
 
 
 def test_no_cross_match_step_means_no_cross_match_section(positive_summary) -> None:
@@ -1912,7 +1932,10 @@ SAFE_BY_DESIGN = {
     # render, which exempted the whole sentence from escaping to get a line break. The
     # message is now rendered as the ordered parts it was authored in, each one an
     # autoescaped element of its own.
-    "cross_match_message": "one of two fixed sentences built in generate_report",
+    "cross_match_message": (
+        "one of two fixed sentences built in cross_match_presentation, or the operator-configured "
+        "cross_match.not_assessable_message; deprecated and unused by the shipped template"
+    ),
     # The columns the results table folds away, printed under it because a
     # nineteen-column table does not fit A4. `folded_record_html` builds the whole
     # fragment and puts every heading *and* every cell through `escape_html` on the way

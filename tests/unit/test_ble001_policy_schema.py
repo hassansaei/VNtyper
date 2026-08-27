@@ -651,15 +651,15 @@ def test_live_ble001_diagnostics_match_reviewed_handler_counts() -> None:
     all_handlers = measure_ble001(REPO_ROOT, scope, ignore_noqa=True)
     policy = load_policy(REPO_ROOT / "scripts/ble001_policy.json")
 
-    assert policy.expected_normal == 102
-    assert policy.expected_all == 108
+    assert policy.expected_normal == 99
+    assert policy.expected_all == 105
     assert policy.expected_all - policy.expected_normal == 6
-    assert policy.expected_identities == 78
-    assert policy.expected_categories == (29, 16, 33)
-    assert len(policy.handlers) == 78
-    assert Counter(row.category for row in policy.handlers) == Counter({"A": 29, "B": 16, "C": 33})
-    assert sum(row.normal_count for row in policy.handlers) == 102
-    assert sum(row.all_count for row in policy.handlers) == 108
+    assert policy.expected_identities == 77
+    assert policy.expected_categories == (29, 16, 32)
+    assert len(policy.handlers) == 77
+    assert Counter(row.category for row in policy.handlers) == Counter({"A": 29, "B": 16, "C": 32})
+    assert sum(row.normal_count for row in policy.handlers) == 99
+    assert sum(row.all_count for row in policy.handlers) == 105
     assert len(normal.diagnostics) == policy.expected_normal
     assert len(all_handlers.diagnostics) == policy.expected_all
     expected_normal = {(row.path, row.symbol): row.normal_count for row in policy.handlers}
@@ -690,7 +690,7 @@ def test_live_policy_cli_reports_success_after_every_behavior_node_resolves() ->
     )
     assert result.returncode == 0
     assert "unresolved behavior-test node" not in result.stdout
-    assert "categories A/B/C: 56/16/36" in result.stdout
+    assert "categories A/B/C: 55/16/34" in result.stdout
 
 
 def test_ble001_and_g004_remain_deliberately_unselected() -> None:

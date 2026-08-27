@@ -38,6 +38,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from vntyper.scripts import report_assets
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
+from vntyper.scripts.cross_match_presentation import build_cross_match_summary
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
@@ -105,11 +106,9 @@ from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
     STEP_BAM_HEADER,
     STEP_COVERAGE,
-    STEP_CROSS_MATCH,
     STEP_KESTREL,
     STEP_READ,
     STEP_UNREADABLE,
-    get_step,
     get_step_comments,
     get_step_data,
     get_step_result,
@@ -296,32 +295,6 @@ def build_advntr_frame(advntr_data):
     frame = pd.DataFrame(advntr_data)
     logger.debug("adVNTR data extracted from summary and formatted.")
     return frame[[col for col in ADVNTR_DISPLAY_COLUMNS if col in frame.columns]]
-
-
-def build_cross_match_summary(pipeline_summary):
-    """Summarise the cross-match step as a sentence *and* the state that sentence describes.
-
-    The boolean is returned alongside the text rather than derived from it. The template
-    used to decide emphasis by asking whether the message contained ``"match"``, and both
-    fixed sentences do - so "No matches were found" rendered in the positive style. This
-    is the same rule that governs ``summary_is_positive`` (AGENTS.md trap 11): emphasis
-    comes from the computed state, never from searching the wording.
-
-    Args:
-        pipeline_summary (dict): The parsed ``pipeline_summary.json``.
-
-    Returns:
-        tuple[str, bool]: The sentence and whether it reports a match. ``("", False)``
-            when the cross-match step did not run - no section is rendered, and the flag
-            must not default to the emphasised state.
-    """
-    if get_step(pipeline_summary, STEP_CROSS_MATCH) is None:
-        return "", False
-    data = get_step_data(pipeline_summary, STEP_CROSS_MATCH)
-    is_positive = any(item.get("Match") == "Yes" for item in data)
-    if is_positive:
-        return "At least one match was found between Kestrel and adVNTR results.", True
-    return "No matches were found between Kestrel and adVNTR results.", False
 
 
 #: The release in which coverage statistics became region-wide (#171). A summary written
@@ -759,7 +732,9 @@ def generate_summary_report(
         advntr_folded_record = folded_record_html(advntr_display, ADVNTR_ESSENTIAL_COLUMNS, noun=ADVNTR_ROW_NOUN)
         logger.debug("adVNTR results converted to HTML.")
 
-    cross_match_message, cross_match_is_positive = build_cross_match_summary(pipeline_summary)
+    cross_match_message, cross_match_is_positive, cross_match_is_assessable = build_cross_match_summary(
+        pipeline_summary, report_config
+    )
 
     # Autoescaping is on: everything reaching the report from a sample - file
     # names, BAM header fields, motif sequences, log lines - is attacker-influenced
@@ -1002,7 +977,7 @@ def generate_summary_report(
         "state_chips": state_chips(
             screening,
             report_config,
-            cross_match_available=bool(cross_match_message),
+            cross_match_available=cross_match_is_assessable and bool(cross_match_message),
             cross_match_is_positive=cross_match_is_positive,
         ),
         # The full computed screening state, not just `is_positive` - so a report

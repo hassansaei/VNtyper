@@ -1,13 +1,13 @@
 {
-  "reviewed_ruff_version": "ruff 0.14.3",
+  "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 102,
-    "ignore_noqa": 108,
-    "identities": 78,
+    "normal": 99,
+    "ignore_noqa": 105,
+    "identities": 77,
     "categories": {
       "A": 29,
       "B": 16,
-      "C": 33
+      "C": 32
     }
   },
   "handlers": [
@@ -261,17 +261,9 @@
     },
     {
       "path": "vntyper/modules/advntr/advntr_genotyping.py",
-      "symbol": "process_advntr_output",
-      "normal_count": 2,
-      "all_count": 2,
-      "category": "C",
-      "rationale": "vntyper/modules/advntr/advntr_genotyping.py::process_advntr_output: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_advntr_output_parsing.py::test_unreadable_advntr_output_logs_and_returns_none and failure remains observable via ERROR log and absent result artifact"
-    },
-    {
-      "path": "vntyper/modules/advntr/advntr_genotyping.py",
       "symbol": "run_advntr",
-      "normal_count": 2,
-      "all_count": 2,
+      "normal_count": 1,
+      "all_count": 1,
       "category": "A",
       "rationale": "vntyper/modules/advntr/advntr_genotyping.py::run_advntr: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
@@ -672,15 +664,6 @@
       "rationale": "Golden-cohort discovery reports an unavailable candidate, or a marker whose module will not import, without executing a broken import and without aborting before the launch line is printed.",
       "behavior_test": "tests/unit/test_golden_cohort_launcher.py::test_resolve_returns_structured_import_failure",
       "observable_via": "structured error result"
-    },
-    {
-      "path": "vntyper/modules/advntr/advntr_genotyping.py",
-      "symbol": "process_advntr_output",
-      "disposition": "preserved-contract",
-      "outcome": "Returns None, logs the unreadable result, and writes no parsed result artifact.",
-      "rationale": "A failed optional adVNTR parse must remain distinguishable from a successfully written result.",
-      "behavior_test": "tests/unit/test_advntr_output_parsing.py::test_unreadable_advntr_output_logs_and_returns_none",
-      "observable_via": "ERROR log and absent result artifact"
     },
     {
       "path": "vntyper/scripts/cohort_exports.py",

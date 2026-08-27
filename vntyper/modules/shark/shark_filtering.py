@@ -1,10 +1,12 @@
 # vntyper/modules/shark/shark_filtering.py
 
+import json
 import logging
 import os
 from pathlib import Path
 
 from vntyper.scripts.command_builders import quote_path
+from vntyper.scripts.pipeline_read_routing import count_fastq_records
 from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
@@ -147,3 +149,47 @@ def run_shark_filter(
         raise RuntimeError("SHARK filtering failed.")
 
     return filtered_fastq_1, filtered_fastq_2
+
+
+def write_shark_step_summary(
+    filtered_fastq_1: str | Path,
+    filtered_fastq_2: str | Path,
+    output_path: str | Path,
+) -> dict[str, str]:
+    """Write readable metadata for the FASTQs produced by SHARK.
+
+    The pipeline previously recorded a nonexistent ``filtered_R1.fastq.gz`` with an
+    unsupported ``fastq`` summary type. This JSON sidecar instead names the two real,
+    uncompressed SHARK outputs and records how many complete reads each contains.
+
+    Args:
+        filtered_fastq_1: SHARK's filtered R1 FASTQ.
+        filtered_fastq_2: SHARK's filtered R2 FASTQ.
+        output_path: Destination for the JSON sidecar.
+
+    Returns:
+        The string-valued payload written to ``output_path``.
+
+    Raises:
+        ValueError: If either FASTQ cannot be counted or has an incomplete record.
+        OSError: If the summary cannot be written.
+    """
+    # The configured FASTQ shape is validated elsewhere as exactly four lines per
+    # record, so this literal cannot represent a second configurable policy.
+    kept_reads_r1 = count_fastq_records(filtered_fastq_1, lines_per_record=4)
+    kept_reads_r2 = count_fastq_records(filtered_fastq_2, lines_per_record=4)
+    payload = {
+        "filtered_fastq_1": str(filtered_fastq_1),
+        "filtered_fastq_2": str(filtered_fastq_2),
+        "kept_reads_r1": str(kept_reads_r1),
+        "kept_reads_r2": str(kept_reads_r2),
+    }
+    with open(output_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=4)
+    logger.info(
+        "SHARK kept %s R1 / %s R2 reads; recorded in %s",
+        kept_reads_r1,
+        kept_reads_r2,
+        output_path,
+    )
+    return payload

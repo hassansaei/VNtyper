@@ -86,6 +86,10 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   - `cohort_rules.py`, `cohort_categories.py`, `cohort_tables.py`, `cohort_inputs.py`,
     `cohort_exports.py` — the rule table, per-row categorisation, display tables, sample
     discovery and export writers, split out of `cohort_summary.py`.
+  - `cross_match_presentation.py` — structural cross-match assessability and fixed
+    verdict presentation, split out of `generate_report.py`.
+  - `advntr_variant_annotations.py` — filesystem-free parsing of repeat-unit identity and
+    position from adVNTR state strings, split out of `advntr_genotyping.py`.
   - `cohort_pseudonyms.py` — the pseudonym digest and the validation of the algorithm and
     width it is configured with, split out of `cohort_inputs.py`. Discovery keeps
     `DiscoveredSample`, `discover_sample_directories` and `duplicate_identity`: an
@@ -105,7 +109,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   - `alignment_preflight_logs.py` — pure planning of every command-log destination
     reachable by a format, candidate count and fast/normal preflight mode.
   `reference_resolution_environment.py` separately owns CRAM-only process-environment
-  pin/restore I/O. All ten pure modules are fully annotated and at or near 100% branch
+  pin/restore I/O. All twelve pure modules are fully annotated and at or near 100% branch
   coverage. Put new pure logic there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
@@ -123,7 +127,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
-  The reviewed BLE001 policy is 102 normal/108 including suppressions; its executable
+  The reviewed BLE001 policy is 99 normal/105 including suppressions; its executable
   inventory is `scripts/ble001_policy.json` and the policy tests. Not every broad
   handler is a process boundary, so do not globally select or mechanically narrow it.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
