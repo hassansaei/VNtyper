@@ -40,10 +40,28 @@ def test_build_fastp_cutoffs_pairs_each_numeric_decision_with_its_label() -> Non
     assert cutoffs.passed_filter_rate.label == "77.65%"
 
 
+@pytest.mark.parametrize(("value", "label"), [(0.0, "0%"), (1.0, "100%")])
+def test_build_fastp_cutoffs_accepts_inclusive_boundaries_with_exact_labels(value: float, label: str) -> None:
+    """Catch either inclusive endpoint becoming invalid or rendering imprecisely."""
+    module = _module()
+    cutoffs = module.build_fastp_cutoffs(
+        {
+            "duplication_rate": value,
+            "q20_rate": 0.8,
+            "q30_rate": 0.7,
+            "passed_filter_reads_rate": 0.8,
+        }
+    )
+
+    assert cutoffs.duplication_rate.value == value
+    assert cutoffs.duplication_rate.label == label
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     [
         ("duplication_rate", None),
+        ("duplication_rate", -0.01),
         ("q20_rate", "0.8"),
         ("q30_rate", True),
         ("passed_filter_reads_rate", float("nan")),

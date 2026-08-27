@@ -88,6 +88,9 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     discovery and export writers, split out of `cohort_summary.py`.
   - `coverage_presentation.py` — config-driven presentation decisions for coverage QC,
     split out of `screening_summary.py` and `generate_report.py`.
+  - `fastp_cutoffs.py` — validation of configured fastp fractions, their paired numeric
+    decision values and exact percentage labels, and report-display rounding before icon
+    comparison, split out of `report_formatting.py` and `generate_report.py` (#290).
   - `cross_match_presentation.py` — structural cross-match assessability and fixed
     verdict presentation, split out of `generate_report.py`.
   - `advntr_variant_annotations.py` — filesystem-free parsing of repeat-unit identity and
@@ -579,8 +582,10 @@ summary | release-summary | none | always records success, failure, skipped jobs
     four newly-shipped genomes add roughly 2.57 GiB uncompressed.
 11. **The report's presentation logic lives outside `generate_report.py`.**
     `screening_summary.py` owns the screening state and the `report_config.json` rule
-    table; `report_formatting.py` owns the icons, the column projections and the IGV
-    fragment splicing. Put new pure logic there, not back in `generate_report.py`.
+    table; `fastp_cutoffs.py` owns validated fastp decision values, their paired labels
+    and report-display rounding; `report_formatting.py` owns the icons, the column
+    projections and the IGV fragment splicing. Put new pure logic in the focused owner,
+    not back in `generate_report.py`.
     Two rules that are easy to break: emphasis in the report comes from the computed
     state (`screening_state.emphasis`, and `cross_match_is_positive` for the
     cross-match box), never from searching the message text, and the
