@@ -17,17 +17,33 @@ be traced to the model that produced it.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
+import shlex
 import sqlite3
+import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
-from vntyper.scripts.utils import get_tool_version
+logger = logging.getLogger(__name__)
 
 #: adVNTR releases before this ignore a model's recorded genomic end.
 SPAN_AWARE_ADVNTR = (2, 0, 4)
 
 _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+# Measured under concurrent ``mamba run`` launches: mamba can exit zero while
+# surrounding the tool's real output with these lock-contention diagnostics. That is
+# a launcher failure, not malformed adVNTR output. Keep the classification narrower
+# than either word on its own so an ordinary status-zero parse failure is never retried.
+_MAMBA_LOCK_MARKERS = (
+    "Could not set lock (Resource temporarily unavailable)",
+    "Cannot lock '",
+)
+_VERSION_PROBE_ATTEMPTS = 3
+_VERSION_PROBE_RETRY_SECONDS = 0.1
 
 #: Every statement this module runs, keyed by the two table names it accepts. No SQL is
 #: assembled from a variable, so there is no identifier for anything to be injected into.
@@ -57,6 +73,91 @@ class AdvntrModelError(RuntimeError):
     """The resolved adVNTR model cannot be used with the available adVNTR."""
 
 
+class AdvntrVersionProbe:
+    """Concurrency-safe successful-version cache scoped to one pipeline run.
+
+    A pipeline creates one instance and discards it when the run ends. Parsed versions
+    are cached by the configured command, including known-but-incompatible versions;
+    launch failures and malformed output are never cached.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._versions: dict[str, tuple[int, int, int]] = {}
+
+    def detect(self, command: str) -> tuple[int, int, int] | None:
+        """Return the configured command's parsed version, retrying measured lock contention.
+
+        Args:
+            command: Configured adVNTR command, possibly a multi-token ``mamba run`` command.
+
+        Returns:
+            The parsed three-part version, or None for a permanent launch failure or
+            successful but unparseable output.
+
+        Raises:
+            RuntimeError: If all attempts encounter the measured transient mamba lock failure.
+        """
+        with self._lock:
+            cached = self._versions.get(command)
+            if cached is not None:
+                return cached
+
+            argv = shlex.split(command) + shlex.split("--version")
+            attempt = 1
+            while True:
+                try:
+                    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+                except FileNotFoundError:
+                    logger.error(f"Command not found: {command}")
+                    return None
+                except PermissionError:
+                    logger.error(f"Permission denied: {command}")
+                    return None
+                except OSError as exc:
+                    logger.error(f"Failed to get adVNTR version for {command}: {exc}")
+                    return None
+
+                combined_output = f"{result.stdout}\n{result.stderr}"
+                output = result.stdout.strip() or result.stderr.strip()
+                version = parse_advntr_version(output) if result.returncode == 0 else None
+                if version is not None:
+                    self._versions[command] = version
+                    return version
+
+                if _is_transient_mamba_lock_failure(argv, combined_output):
+                    if attempt == _VERSION_PROBE_ATTEMPTS:
+                        msg = (
+                            f"adVNTR version detection exhausted {_VERSION_PROBE_ATTEMPTS} attempts "
+                            "after a transient mamba launch failure."
+                        )
+                        logger.error(msg)
+                        raise RuntimeError(msg)
+                    logger.warning(
+                        f"Transient mamba launch failure while detecting the adVNTR version; "
+                        f"retrying ({attempt}/{_VERSION_PROBE_ATTEMPTS})."
+                    )
+                    attempt += 1
+                    time.sleep(_VERSION_PROBE_RETRY_SECONDS)
+                    continue
+
+                if result.returncode != 0:
+                    logger.error(f"adVNTR version command exited with status {result.returncode}.")
+                    return None
+                return None
+
+
+def _is_transient_mamba_lock_failure(argv: list[str], output: str) -> bool:
+    """Return whether output is the measured mamba process-lock contention failure."""
+    return (
+        len(argv) >= 2
+        and Path(argv[0]).name == "mamba"
+        and argv[1] == "run"
+        and "libmamba" in output
+        and any(marker in output for marker in _MAMBA_LOCK_MARKERS)
+    )
+
+
 def parse_advntr_version(text: str | None) -> tuple[int, int, int] | None:
     """Extract a version tuple from `advntr --version` output.
 
@@ -72,21 +173,28 @@ def parse_advntr_version(text: str | None) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
-def detect_advntr_version(config: dict[str, Any]) -> tuple[int, int, int] | None:
+def detect_advntr_version(
+    config: dict[str, Any], *, probe: AdvntrVersionProbe | None = None
+) -> tuple[int, int, int] | None:
     """Ask the configured adVNTR which version it is.
 
-    Returns None when the question cannot be answered -- an absent binary, a failure, or
-    a release with no `--version` flag, which is exactly what 2.0.3 is. Callers treat
-    None as "too old" rather than "probably fine".
+    Args:
+        config: Complete pipeline configuration containing ``tools.advntr``.
+        probe: Run-scoped probe to share a successful answer. A standalone call gets
+            an isolated probe and therefore no process-global cache.
+
+    Returns:
+        The parsed version, or None when a non-transient failure or malformed answer
+        prevents detection. Callers treat None as "too old" rather than "probably fine".
+
+    Raises:
+        RuntimeError: If the measured transient mamba launch failure exhausts its retries.
     """
     command = config.get("tools", {}).get("advntr")
     if not command:
         return None
-    # Reuse the pipeline's own tool probe rather than adding a second way to run a
-    # configured command. It already splits the multi-token form
-    # ("mamba run -n envadvntr advntr") without a shell, and already knows how to read
-    # adVNTR's answer. It returns "unknown" when it cannot, which parses to None.
-    return parse_advntr_version(get_tool_version(command, "--version"))
+    active_probe = probe if probe is not None else AdvntrVersionProbe()
+    return active_probe.detect(command)
 
 
 def describe_model(db_path: str | Path) -> dict[str, Any]:

@@ -90,6 +90,16 @@ def test_requesting_advntr_declares_advntr(tmp_path: Path) -> None:
     assert "advntr" in _tools_in_use(harness)
 
 
+def test_requesting_advntr_shares_the_verified_version_with_startup_logging(tmp_path: Path) -> None:
+    """Dropping the override would make startup logging launch a redundant mamba probe."""
+    config = deepcopy(MINIMAL_CONFIG)
+    config["tools"]["advntr"] = advntr_stub("2.0.4")
+
+    harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"])
+
+    assert harness.kwargs("get_tool_versions")["version_overrides"] == {"advntr": "2.0.4"}
+
+
 def test_a_module_the_config_does_not_declare_as_a_tool_is_not_named(tmp_path: Path) -> None:
     """``--extra-modules`` names modules; ``config["tools"]`` names tools.
 

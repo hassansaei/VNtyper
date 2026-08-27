@@ -437,6 +437,20 @@ def test_get_tool_versions_maps_each_named_tool_to_its_parsed_version():
     mocked.assert_any_call("/usr/bin/java", "--version")
 
 
+def test_get_tool_versions_uses_a_run_scoped_override_without_probing_again():
+    """Ignoring an override would launch adVNTR twice in one pipeline run."""
+    config = {"tools": {"advntr": "mamba run -n envadvntr advntr", "samtools": "samtools"}}
+    with patch("vntyper.scripts.utils.get_tool_version", return_value="1.19") as get_version:
+        versions = get_tool_versions(
+            config,
+            tools_in_use={"advntr", "samtools"},
+            version_overrides={"advntr": "2.0.4"},
+        )
+
+    assert versions == {"advntr": "2.0.4", "samtools": "1.19"}
+    get_version.assert_called_once_with("samtools", "")
+
+
 def test_get_tool_versions_with_no_tools_configured_returns_an_empty_dict():
     """config.get("tools", {}) with nothing configured, whatever the caller declares."""
     assert get_tool_versions({}, tools_in_use={"samtools", "kestrel"}) == {}

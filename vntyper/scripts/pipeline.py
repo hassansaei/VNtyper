@@ -270,11 +270,26 @@ def run_pipeline(
         # dependencies on module state it has no business knowing.
         needs_advntr = "advntr" in extra_modules
 
+        advntr_version_probe = None
+        advntr_version_overrides = {}
+        if needs_advntr:
+            from vntyper.modules.advntr.model_provenance import AdvntrVersionProbe, detect_advntr_version
+
+            advntr_version_probe = AdvntrVersionProbe()
+            detected_advntr_version = detect_advntr_version(config, probe=advntr_version_probe)
+            advntr_version_overrides["advntr"] = (
+                ".".join(str(part) for part in detected_advntr_version) if detected_advntr_version else "unknown"
+            )
+
         tools_in_use = {"samtools", "kestrel", "java_path"}
         if input_type == "FASTQ":
             tools_in_use |= {"fastp", "bwa"}
         tools_in_use |= {module for module in extra_modules if module in config.get("tools", {})}
-        tool_versions = get_tool_versions(config, tools_in_use=tools_in_use)
+        tool_versions = get_tool_versions(
+            config,
+            tools_in_use=tools_in_use,
+            version_overrides=advntr_version_overrides,
+        )
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
         # What the run actually used, not what BWA was configured with (MAJOR 5,
@@ -559,7 +574,6 @@ def run_pipeline(
                 from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
                 from vntyper.modules.advntr.model_provenance import (
                     describe_model,
-                    detect_advntr_version,
                     require_compatible_advntr,
                 )
             except ImportError as exc:
@@ -599,7 +613,11 @@ def run_pipeline(
             # because the failure mode is a confident result over a truncated locus
             # rather than an error (#268).
             advntr_model = describe_model(advntr_reference)
-            require_compatible_advntr(advntr_model, detect_advntr_version(config))
+            assert advntr_version_probe is not None
+            require_compatible_advntr(
+                advntr_model,
+                detect_advntr_version(config, probe=advntr_version_probe),
+            )
             # Top-level, not inside record_step: this is run state, and a step record is
             # not where state belongs.
             summary["advntr_model"] = advntr_model
