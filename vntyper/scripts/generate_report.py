@@ -56,10 +56,12 @@ from vntyper.scripts.report_formatting import (
     confidence_html,
     drop_empty_result_rows,
     escaped_table_html,
+    fastp_cutoff_value,
     fastp_threshold_rate,
     flag_html,
     flagged_row_count,
     folded_record_html,
+    format_fastp_cutoff,
     format_number_columns,
     js_json_literal,
     nomenclature_legend,
@@ -410,12 +412,28 @@ def generate_summary_report(
         logger.debug("Flanking region set to %s based on config.", flanking)
 
     thresholds = config.get("thresholds", {})
+    if not isinstance(thresholds, dict):
+        message = "Config thresholds must be a dictionary."
+        logger.error(message)
+        raise ValueError(message)
     mean_vntr_cov_threshold = thresholds.get("mean_vntr_coverage", 100)
     percent_vntr_uncovered_threshold = thresholds.get("percent_vntr_uncovered", 50.0)
-    dup_rate_cutoff = thresholds.get("duplication_rate", 0.1)
-    q20_rate_cutoff = thresholds.get("q20_rate", 0.8)
-    q30_rate_cutoff = thresholds.get("q30_rate", 0.7)
-    passed_filter_rate_cutoff = thresholds.get("passed_filter_reads_rate", 0.8)
+    fastp_cutoffs: dict[str, float] = {}
+    for key in ("duplication_rate", "q20_rate", "q30_rate", "passed_filter_reads_rate"):
+        try:
+            fastp_cutoffs[key] = fastp_cutoff_value(thresholds[key])
+        except KeyError as exc:
+            message = f"Config thresholds is missing required fastp cutoff {key!r}."
+            logger.error(message)
+            raise ValueError(message) from exc
+        except ValueError as exc:
+            message = f"Config thresholds has invalid fastp cutoff {key!r}: {exc}"
+            logger.error(message)
+            raise ValueError(message) from exc
+    dup_rate_cutoff = fastp_cutoffs["duplication_rate"]
+    q20_rate_cutoff = fastp_cutoffs["q20_rate"]
+    q30_rate_cutoff = fastp_cutoffs["q30_rate"]
+    passed_filter_rate_cutoff = fastp_cutoffs["passed_filter_reads_rate"]
 
     # Load the pipeline summary JSON.
     summary_file_path = Path(output_dir) / "pipeline_summary.json"
@@ -964,15 +982,19 @@ def generate_summary_report(
         "mean_vntr_coverage_color": coverage_color,
         "fastp_available": fastp.available,
         "duplication_rate": fastp.duplication_rate,
+        "duplication_rate_cutoff": format_fastp_cutoff(dup_rate_cutoff),
         "duplication_rate_icon": dup_icon,
         "duplication_rate_color": dup_color,
         "q20_rate": fastp.q20_rate,
+        "q20_rate_cutoff": format_fastp_cutoff(q20_rate_cutoff),
         "q20_icon": q20_icon,
         "q20_color": q20_color,
         "q30_rate": fastp.q30_rate,
+        "q30_rate_cutoff": format_fastp_cutoff(q30_rate_cutoff),
         "q30_icon": q30_icon,
         "q30_color": q30_color,
         "passed_filter_rate": fastp.passed_filter_rate,
+        "passed_filter_rate_cutoff": format_fastp_cutoff(passed_filter_rate_cutoff),
         "passed_filter_icon": pf_icon,
         "passed_filter_color": pf_color,
         "sequencing_str": fastp.sequencing,

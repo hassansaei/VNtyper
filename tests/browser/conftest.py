@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Iterator
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -273,6 +274,65 @@ def rendered_report(tmp_path: Path) -> Path:
         report_file="summary_report.html",
         log_file=None,
         config=load_config(None),
+    )
+    return tmp_path / "summary_report.html"
+
+
+@pytest.fixture
+def rendered_report_with_custom_fastp_cutoffs(tmp_path: Path) -> Path:
+    """Render a report whose fastp values sit exactly on custom cutoffs.
+
+    The values are intentionally unlike the shipped defaults. A correct report
+    must show these labels and judge every value as passing, so the test using
+    this fixture detects a label and icon decision taking their cutoffs from
+    different places.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory.
+
+    Returns:
+        Path: The rendered ``summary_report.html``.
+    """
+    payload = {
+        "version": "9.9.9",
+        "input_files": {"bam": "sample.bam"},
+        "steps": [
+            _tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            _tabular_step(summary_steps.STEP_KESTREL, list(KESTREL_ROWS)),
+        ],
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 10000},
+                    "after_filtering": {"q20_rate": 0.7555, "q30_rate": 0.6543},
+                },
+                "duplication": {"rate": 0.1234},
+                "filtering_result": {"passed_filter_reads": 8765},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = deepcopy(load_config(None))
+    config["thresholds"].update(
+        {
+            "duplication_rate": 0.1234,
+            "q20_rate": 0.7555,
+            "q30_rate": 0.6543,
+            "passed_filter_reads_rate": 0.8765,
+        }
+    )
+
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(TEMPLATE_DIR),
+        report_file="summary_report.html",
+        log_file=None,
+        config=config,
     )
     return tmp_path / "summary_report.html"
 

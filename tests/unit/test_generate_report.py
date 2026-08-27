@@ -224,6 +224,71 @@ def _fastp_metric_cells(html: str, label: str) -> tuple[str, str]:
     return value, match.group(2).strip()
 
 
+def test_fastp_cutoff_labels_and_status_icons_share_the_configured_thresholds(tmp_path) -> None:
+    """Catch static labels that disagree with fastp's configured decision cutoffs."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 10000},
+                    "after_filtering": {"q20_rate": 0.7555, "q30_rate": 0.6543},
+                },
+                "duplication": {"rate": 0.1234},
+                "filtering_result": {"passed_filter_reads": 8765},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = copy.deepcopy(load_config(None))
+    config["thresholds"].update(
+        {
+            "duplication_rate": 0.1234,
+            "q20_rate": 0.7555,
+            "q30_rate": 0.6543,
+            "passed_filter_reads_rate": 0.8765,
+        }
+    )
+
+    html = render(tmp_path, config=config)
+
+    for label, cutoff in (
+        ("Duplication Rate", "12.34%"),
+        ("Q20 Rate", "75.55%"),
+        ("Q30 Rate", "65.43%"),
+        ("Passed Filter Rate", "87.65%"),
+    ):
+        assert f"{label} (Cutoff: {cutoff})" in html
+    assert html.count(report_formatting.OK_ICON) == 4
+    assert report_formatting.WARNING_ICON not in html
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("duplication_rate", None, "duplication_rate"),
+        ("q20_rate", "not-a-number", "q20_rate"),
+        ("q30_rate", True, "q30_rate"),
+        ("passed_filter_reads_rate", 1.01, "passed_filter_reads_rate"),
+    ],
+)
+def test_fastp_cutoff_configuration_rejects_missing_or_malformed_values(
+    tmp_path, key: str, value: object, message: str
+) -> None:
+    """Catch silent fallback or invalid threshold values in report configuration."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    config = copy.deepcopy(load_config(None))
+    if value is None:
+        del config["thresholds"][key]
+    else:
+        config["thresholds"][key] = value
+
+    with pytest.raises(ValueError, match=message):
+        render(tmp_path, config=config)
+
+
 def test_missing_fastp_rates_render_na_without_a_percent_sign(tmp_path) -> None:
     """Catch any missing optional rate becoming blank or carrying a percent sign."""
     write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
@@ -319,6 +384,14 @@ def test_fastp_icons_judge_the_percentage_each_cell_displays(tmp_path) -> None:
         assert value == expected_value
         assert report_formatting.OK_ICON in status
         assert report_formatting.WARNING_ICON not in status
+
+    for default_label in (
+        "Duplication Rate (Cutoff: 10%)",
+        "Q20 Rate (Cutoff: 80%)",
+        "Q30 Rate (Cutoff: 70%)",
+        "Passed Filter Rate (Cutoff: 80%)",
+    ):
+        assert default_label in html
 
 
 def _coverage_not_measured_note() -> str:

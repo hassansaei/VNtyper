@@ -193,6 +193,22 @@ def test_fastp_threshold_rate_preserves_missing_and_zero() -> None:
     assert rf.fastp_threshold_rate(0.0) == 0.0
 
 
+@pytest.mark.parametrize(
+    ("cutoff", "expected"),
+    [(0.0, "0%"), (0.1, "10%"), (0.1234, "12.34%"), (0.7555, "75.55%"), (1.0, "100%")],
+)
+def test_format_fastp_cutoff_preserves_the_configured_percentage(cutoff: float, expected: str) -> None:
+    """Catch cutoff labels that round or retain insignificant zeroes."""
+    assert rf.format_fastp_cutoff(cutoff) == expected
+
+
+@pytest.mark.parametrize("cutoff", [None, True, "0.8", float("nan"), -0.01, 1.01])
+def test_format_fastp_cutoff_rejects_missing_or_malformed_values(cutoff: object) -> None:
+    """Catch a report label silently accepting an invalid configured cutoff."""
+    with pytest.raises(ValueError, match="Fastp cutoff"):
+        rf.format_fastp_cutoff(cutoff)
+
+
 # ---------------------------------------------------------------------------
 # Column projection
 # ---------------------------------------------------------------------------

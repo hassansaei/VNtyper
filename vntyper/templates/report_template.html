@@ -1415,7 +1415,7 @@
                 </thead>
                 <tbody>
                     <tr>
-                        <td>Duplication Rate (Cutoff: 10%)</td>
+                        <td>Duplication Rate (Cutoff: {{ duplication_rate_cutoff }})</td>
                         <td>
                             {% if duplication_rate is not none %}
                                 {{ (duplication_rate * 100)|round(2) }}%
@@ -1426,7 +1426,7 @@
                         <td>{{ duplication_rate_icon|safe }}</td>
                     </tr>
                     <tr>
-                        <td>Q20 Rate (Cutoff: 80%)</td>
+                        <td>Q20 Rate (Cutoff: {{ q20_rate_cutoff }})</td>
                         <td>
                             {% if q20_rate is not none %}
                                 {{ (q20_rate * 100)|round(2) }}%
@@ -1437,7 +1437,7 @@
                         <td>{{ q20_icon|safe }}</td>
                     </tr>
                     <tr>
-                        <td>Q30 Rate (Cutoff: 70%)</td>
+                        <td>Q30 Rate (Cutoff: {{ q30_rate_cutoff }})</td>
                         <td>
                             {% if q30_rate is not none %}
                                 {{ (q30_rate * 100)|round(2) }}%
@@ -1448,7 +1448,7 @@
                         <td>{{ q30_icon|safe }}</td>
                     </tr>
                     <tr>
-                        <td>Passed Filter Rate (Cutoff: 80%)</td>
+                        <td>Passed Filter Rate (Cutoff: {{ passed_filter_rate_cutoff }})</td>
                         <td>
                             {% if passed_filter_rate is not none %}
                                 {{ (passed_filter_rate * 100)|round(2) }}%
