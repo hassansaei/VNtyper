@@ -317,7 +317,11 @@ def test_workspace_binding_failure_attempts_all_closes_and_preserves_the_primary
             if path.exists():
                 path.rmdir()
 
-    assert close_attempts == opened
+    # ``os`` is a process-wide module, so this monkeypatch also observes any
+    # descriptor closes performed inside shutil.rmtree. Python 3.10 performs
+    # more of those than newer interpreters. The contract here is that both
+    # owned workspace descriptors are attempted before reclamation begins.
+    assert close_attempts[: len(opened)] == opened
     assert not input_dir.exists()
     assert not output_dir.exists()
 
