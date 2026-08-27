@@ -92,6 +92,42 @@ class AdvntrVersionOutcome:
     version: tuple[int, int, int] | None = None
     message: str = ""
 
+    def __post_init__(self) -> None:
+        """Reject every state that contradicts the outcome discriminant.
+
+        Raises:
+            ValueError: If the status, version, and message do not form one valid outcome.
+        """
+        error: str | None = None
+        if not isinstance(self.status, AdvntrProbeStatus):
+            error = "Invalid adVNTR version outcome: status must be an AdvntrProbeStatus."
+        elif self.status is AdvntrProbeStatus.VERIFIED:
+            version = self.version
+            if not (
+                type(version) is tuple
+                and len(version) == 3
+                and all(type(part) is int and part >= 0 for part in version)
+            ):
+                error = "Invalid verified adVNTR version outcome: version must be exactly three non-negative integers."
+            elif self.message != "":
+                error = "Invalid verified adVNTR version outcome: failure message must be empty."
+        elif self.version is not None:
+            error = f"Invalid {self.status.value} adVNTR version outcome: version must be None."
+        else:
+            message_prefix = {
+                AdvntrProbeStatus.LAUNCH_FAILURE: "adVNTR version launch failed",
+                AdvntrProbeStatus.UNPARSEABLE_SUCCESS: "adVNTR version command succeeded",
+                AdvntrProbeStatus.TRANSIENT_EXHAUSTED: "adVNTR version detection exhausted",
+            }[self.status]
+            if not isinstance(self.message, str) or not self.message.startswith(message_prefix):
+                error = (
+                    f"Invalid {self.status.value} adVNTR version outcome: message must start with '{message_prefix}'."
+                )
+
+        if error is not None:
+            logger.error(error)
+            raise ValueError(error)
+
 
 class AdvntrVersionProbe:
     """Concurrency-safe successful-version cache scoped to one pipeline run.
@@ -240,13 +276,19 @@ def require_verified_advntr_version(outcome: AdvntrVersionOutcome) -> tuple[int,
         The verified three-part adVNTR version.
 
     Raises:
+        ValueError: If the outcome itself violates its discriminant invariant.
         RuntimeError: If the command did not produce a verified version.
     """
-    if outcome.status is AdvntrProbeStatus.VERIFIED:
-        assert outcome.version is not None
-        return outcome.version
-    logger.error(outcome.message)
-    raise RuntimeError(outcome.message)
+    validated = AdvntrVersionOutcome(outcome.status, version=outcome.version, message=outcome.message)
+    if validated.status is AdvntrProbeStatus.VERIFIED:
+        version = validated.version
+        if version is None:
+            msg = "Invalid verified adVNTR version outcome: version must not be None."
+            logger.error(msg)
+            raise ValueError(msg)
+        return version
+    logger.error(validated.message)
+    raise RuntimeError(validated.message)
 
 
 def describe_model(db_path: str | Path) -> dict[str, Any]:

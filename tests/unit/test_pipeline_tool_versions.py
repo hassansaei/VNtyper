@@ -23,6 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, advntr_stub, run_pipeline_under_harness
+from vntyper.modules.advntr.model_provenance import AdvntrProbeStatus, AdvntrVersionOutcome
 
 pytestmark = pytest.mark.unit
 
@@ -351,3 +352,33 @@ def test_a_verified_version_launches_once_and_reaches_kestrel(tmp_path: Path) ->
     assert harness.error is None
     assert runner.call_count == 1
     harness.stages["run_kestrel"].assert_called_once()
+
+
+def test_a_forged_invalid_verified_outcome_stops_before_compatibility_and_kestrel(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Defense in depth rejects a producer invariant breach at the pipeline boundary."""
+    invalid = object.__new__(AdvntrVersionOutcome)
+    object.__setattr__(invalid, "status", AdvntrProbeStatus.VERIFIED)
+    object.__setattr__(invalid, "version", (99,))
+    object.__setattr__(invalid, "message", "")
+    caplog.set_level("ERROR")
+
+    with (
+        patch(
+            "vntyper.modules.advntr.model_provenance.detect_advntr_version",
+            return_value=invalid,
+        ),
+        patch("vntyper.modules.advntr.model_provenance.require_compatible_advntr") as compatibility,
+    ):
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    compatibility.assert_not_called()
+    harness.stages["run_kestrel"].assert_not_called()
+    assert "version must be exactly three non-negative integers" in caplog.text
