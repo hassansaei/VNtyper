@@ -29,18 +29,18 @@ What the fingerprint pins
 -------------------------
 * The three rendered tables, byte for byte - column selection, column order, cell values,
   the pandas scaffolding, and the per-column escaping exemptions.
-* Both donut charts' data: the three segment values, their labels, and the total in the
+* Both donut charts' data: the four segment values, their labels, and the total in the
   centre. That is where the sample-level categorisation (Positive / Positive_Flagged /
-  Negative) becomes observable.
+  Negative / Unestablished) becomes observable.
 * The page skeleton the Jinja2 template produces around them, so a fragment routed into
   the wrong context slot shows up.
 
 What it deliberately excludes, and why
 --------------------------------------
-* The embedded plotly.js bundle (4.8 MB of it, twice) and the base64 PNG payloads. Both
-  are byte-stable for a given matplotlib/plotly build but change on a dependency bump,
-  and a hash that turns red on `pip install -U plotly` stops being read. The chart *data*
-  is extracted separately and is pinned exactly, so a miscounted cohort still fails.
+* The one embedded plotly.js bundle (4.8 MB) and Plotly's base64 image scaffolding. They
+  are byte-stable for a given Plotly build but change on a dependency bump, and a hash
+  that turns red on `pip install -U plotly` stops being read. The chart *data* is
+  extracted separately and is pinned exactly, so a miscounted cohort still fails.
 * **How many** such images there are, for the same reason and learned the hard way: the
   payloads were excluded but their *count* was pinned, and plotly 6.9.0 emits four of its
   114-character scaffolding images where 7.0.0 emits two. The digest went red on
@@ -127,8 +127,44 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved six times, and each reason is recorded here because a changed
+#: It has moved eight times, and each reason is recorded here because a changed
 #: fingerprint with no explanation should be read as the worst case.
+#:
+#: Move 8 (#278 - one Plotly library, no orphan PNGs, and a zoned timestamp)
+#: --------------------------------------------------------------------------
+#: * **Previously recorded**: ``01d594294c997f2f1b4476eac2607ef610d38c0804f98f20c24d374f708919d3``
+#: * **Corrected pre-change instrument**: ``41cccbb8864adfda120b99968841f983cec382788e078202a17c36aa7e0f80f3``
+#: * **New**: ``70dd1cb258c001fb92f5ef7f36c33b2905eb9a0be6dde26f40e20469ce4dc882``
+#:
+#: **Cause: two donut fragments now share one Plotly library.** Each figure omits
+#: Plotly's embedded bundle and setup tag; one VNtyper-authored library tag and its
+#: comment appear in the head. The unreachable static-image branch and its two orphan
+#: PNG files are gone, but they never appeared in rendered HTML and therefore create no
+#: oracle hunk. The timestamp gains ``%Z`` and still renders as ``<TIMESTAMP>`` because
+#: the normalizer selects the whole report-date field structurally instead of guessing
+#: platform-specific zone syntax.
+#:
+#: The instrument correction is recorded separately because it changes no report:
+#: Plotly source contains ``<table`` string literals, and the old generic regex let a
+#: dependency script swallow page markup into ``[TABLES]``. ``_TABLE`` now selects only
+#: VNtyper's authored ``sortable`` tables. The exact old source and template from
+#: ``87bc59b`` were rendered through that corrected instrument before this constant
+#: moved. Its canonical document was then diffed against the new one: three hunks, all
+#: in ``[SKELETON]`` and exactly the shared head tag plus the two per-figure tag
+#: removals. The complete pre-skeleton data prefix -- ``[TABLES]``,
+#: ``[CHART-VALUES]``, ``[CHART-LABELS]`` and ``[CHART-TOTALS]`` -- is byte-identical
+#: before and after (SHA-256 ``e06c279ab2bd7f350856cf02ada0c51a54359669fbc9ac39c78f06354f564d29``).
+#:
+#: Move 7 (#278 - unestablished samples remain in the cohort denominator)
+#: -----------------------------------------------------------------------
+#: * **Old**: ``cd5c9a08ba03060bbd944a2a51b297d109ffbaff16f5cd636e646b5e3486dd2b``
+#: * **New**: ``01d594294c997f2f1b4476eac2607ef610d38c0804f98f20c24d374f708919d3``
+#:
+#: **Cause: the donut schema gained its fourth, Unestablished segment.** Both fixture
+#: donuts now read ``[1,1,0,0]`` and name that fourth segment; no table cell, row,
+#: column or total moved. The two skeleton hunks are the whitespace left by the two
+#: absent missing-sample blocks. These values and labels are VNtyper's chart data, not
+#: dependency scaffolding, so pinning them does not reintroduce AGENTS.md trap 18.
 #:
 #: Move 6 (#242 - the CDN tags leave, and the cohort's table behaviour is rewritten)
 #: --------------------------------------------------------------------------------
@@ -343,13 +379,19 @@ pytestmark = pytest.mark.unit
 #: Re-recorded 2026-08-26 when the ``[IMAGES]`` section was dropped from the document.
 #: Verified identical under pandas 2.2.2 / plotly 6.9.0 and pandas 2.2.3 / plotly 7.0.0,
 #: which is the point of dropping it.
-EXPECTED_FINGERPRINT = "cd5c9a08ba03060bbd944a2a51b297d109ffbaff16f5cd636e646b5e3486dd2b"
+EXPECTED_FINGERPRINT = "70dd1cb258c001fb92f5ef7f36c33b2905eb9a0be6dde26f40e20469ce4dc882"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+#: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid
+#: values include ``UTC``, ``+14``, ``GMT+01`` and longer local names, so guessing its
+#: spelling would make the fingerprint move with the machine that runs it.
+_REPORT_DATE_FIELD = re.compile(r"(?<=<strong>Report Date:</strong> )[^<]+")
 _SCRIPT_BODY = re.compile(r"(<script\b[^>]*>).*?(</script>)", re.DOTALL)
 _BASE64_PNG = re.compile(r"data:image/png;base64,[A-Za-z0-9+/=]*")
-_TABLE = re.compile(r"<table\b.*?</table>", re.DOTALL)
+#: Only the three pandas tables VNtyper authored. Plotly's JavaScript contains
+#: ``<table`` string literals; a generic HTML regex therefore let dependency source
+#: swallow the report head into this data section when the shared bundle moved.
+_TABLE = re.compile(r'<table\b[^>]*class="[^"]*\bsortable\b[^"]*"[^>]*>.*?</table>', re.DOTALL)
 _CHART_VALUES = re.compile(r'"values":\s*\[[^\]]*\]')
 _CHART_LABELS = re.compile(r'"labels":\s*\[[^\]]*\]')
 #: Plotly serialises the centre annotation with its angle brackets JSON-escaped.
@@ -369,7 +411,7 @@ def _skeleton(html: str) -> str:
     html = _SCRIPT_BODY.sub(r"\1<SCRIPT-BODY>\2", html)
     html = _BASE64_PNG.sub("data:image/png;base64,<PNG>", html)
     html = _UUID.sub("<UUID>", html)
-    return _TIMESTAMP.sub("<TIMESTAMP>", html)
+    return _REPORT_DATE_FIELD.sub("<TIMESTAMP>", html)
 
 
 def _fingerprint(html: str) -> tuple[str, str]:
@@ -390,7 +432,7 @@ def _fingerprint(html: str) -> tuple[str, str]:
     # two runs and this oracle was flaky at a rate nobody had cause to notice while the
     # recorded value was stale anyway. Three consecutive runs produced three digests.
     # Doing the substitutions here makes every section measure the same document.
-    html = _UUID.sub("<UUID>", _TIMESTAMP.sub("<TIMESTAMP>", html))
+    html = _UUID.sub("<UUID>", _REPORT_DATE_FIELD.sub("<TIMESTAMP>", html))
 
     parts = [
         "[TABLES]",
@@ -704,17 +746,58 @@ def test_the_donut_charts_carry_the_sample_level_counts(tmp_path) -> None:
     """
     html = _render(tmp_path)
 
-    assert _CHART_VALUES.findall(html) == ['"values":[1,1,0]', '"values":[1,1,0]']
+    assert _CHART_VALUES.findall(html) == ['"values":[1,1,0,0]', '"values":[1,1,0,0]']
     assert _CHART_TOTAL.findall(html) == ["2", "2"]
 
 
 def test_the_report_is_written_under_the_output_directory(tmp_path) -> None:
-    """`--summary-file` is a name, and the plots land beside it."""
+    """`--summary-file` is a name; orphan static plots are not report outputs."""
     _render(tmp_path)
 
     assert (tmp_path / "cohort_summary.html").is_file()
-    assert (tmp_path / "plots" / "kestrel_summary_plot.png").is_file()
-    assert (tmp_path / "plots" / "advntr_summary_plot.png").is_file()
+    assert not (tmp_path / "plots").exists()
+
+
+def test_the_plotly_library_is_embedded_exactly_once(tmp_path) -> None:
+    """Two non-empty donuts share the installed Plotly library instead of duplicating it."""
+    from plotly.offline import get_plotlyjs
+
+    html = _render(tmp_path)
+
+    assert html.count(get_plotlyjs()[:400]) == 1
+
+
+def test_an_empty_cohort_embeds_no_plotly_library(tmp_path) -> None:
+    """A report with no chart fragments carries no unused multi-megabyte library."""
+    from plotly.offline import get_plotlyjs
+
+    cohort_summary.generate_cohort_summary_report(
+        output_dir=str(tmp_path),
+        kestrel_df=pd.DataFrame(),
+        advntr_df=pd.DataFrame(),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+    )
+    html = (tmp_path / "cohort_summary.html").read_text(encoding="utf-8")
+
+    assert html.count(get_plotlyjs()[:400]) == 0
+
+
+def test_the_cohort_report_date_carries_a_zone(tmp_path) -> None:
+    """The cohort timestamp identifies its zone, matching the per-sample report."""
+    html = _render(tmp_path)
+    match = re.search(r"<strong>Report Date:</strong> ([^<]+)", html)
+
+    assert match is not None
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+", match.group(1).strip())
+
+
+@pytest.mark.parametrize("zone", ["UTC", "+14", "GMT+01", "Central European Summer Time"])
+def test_the_fingerprint_normalizes_the_whole_report_date_field(zone: str) -> None:
+    """Platform-specific ``%Z`` spellings never enter the recorded digest."""
+    html = f"<p><strong>Report Date:</strong> 2026-08-27 05:00:00 {zone}</p>"
+
+    assert _skeleton(html) == "<p><strong>Report Date:</strong> <TIMESTAMP></p>"
 
 
 def test_the_renderer_leaves_the_frames_it_was_handed_untouched(tmp_path) -> None:
@@ -741,10 +824,95 @@ def test_the_renderer_leaves_the_frames_it_was_handed_untouched(tmp_path) -> Non
         advntr_df=advntr,
         summary_file="cohort_summary.html",
         config=load_config(None),
+        sample_names=["sample_one", "sample_two", "missing_sample"],
     )
 
     pd.testing.assert_frame_equal(kestrel, _kestrel_frame())
     pd.testing.assert_frame_equal(advntr, _advntr_frame())
+
+
+def test_named_samples_without_algorithm_rows_are_counted_and_disclosed(tmp_path) -> None:
+    """The known roster, not result-row survival, defines both donut denominators."""
+    cohort_summary.generate_cohort_summary_report(
+        output_dir=str(tmp_path),
+        kestrel_df=pd.DataFrame([{"Sample": "has_kestrel", "Confidence": "High_Precision", "Flag": "Not flagged"}]),
+        advntr_df=pd.DataFrame(),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        sample_names=["has_kestrel", "no_rows<&"],
+    )
+
+    html = (tmp_path / "cohort_summary.html").read_text(encoding="utf-8")
+
+    assert _CHART_VALUES.findall(html) == ['"values":[1,0,0,1]', '"values":[0,0,0,2]']
+    assert _CHART_TOTAL.findall(html) == ["2", "2"]
+    assert "1 sample(s) contributed no Kestrel result" in html
+    assert "2 sample(s) contributed no adVNTR result" in html
+    assert "no_rows&lt;&amp;" in html
+    assert "no_rows<&" not in html
+
+
+def test_direct_caller_derives_one_roster_from_both_algorithm_frames(tmp_path) -> None:
+    """Without an explicit roster, either algorithm's rows still name cohort samples."""
+    cohort_summary.generate_cohort_summary_report(
+        output_dir=str(tmp_path),
+        kestrel_df=pd.DataFrame([{"Sample": "kestrel_only", "Confidence": "High_Precision", "Flag": "Not flagged"}]),
+        advntr_df=pd.DataFrame([{"Sample": "advntr_only", "VID": "25561", "Flag": "Not flagged"}]),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+    )
+
+    html = (tmp_path / "cohort_summary.html").read_text(encoding="utf-8")
+
+    assert _CHART_VALUES.findall(html) == ['"values":[1,0,0,1]', '"values":[1,0,0,1]']
+    assert _CHART_TOTAL.findall(html) == ["2", "2"]
+    assert "kestrel_only" in html
+    assert "advntr_only" in html
+
+
+def test_a_numeric_sample_identifier_is_counted_once_by_a_direct_render(tmp_path) -> None:
+    """Roster normalisation must not add a string duplicate of a numeric frame value."""
+    kestrel = pd.DataFrame([{"Sample": 7, "Confidence": "High_Precision", "Flag": "Not flagged"}])
+    before = kestrel.copy(deep=True)
+
+    cohort_summary.generate_cohort_summary_report(
+        output_dir=str(tmp_path),
+        kestrel_df=kestrel,
+        advntr_df=pd.DataFrame(),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+    )
+
+    html = (tmp_path / "cohort_summary.html").read_text(encoding="utf-8")
+
+    assert _CHART_VALUES.findall(html) == ['"values":[1,0,0,0]', '"values":[0,0,0,1]']
+    assert _CHART_TOTAL.findall(html) == ["1", "1"]
+    pd.testing.assert_frame_equal(kestrel, before)
+
+
+def test_both_algorithms_use_the_four_labels_and_matching_colors(tmp_path, monkeypatch) -> None:
+    calls: list[tuple[str, list[str], list[str]]] = []
+
+    def _capture_chart(values, labels, total, title, colors):
+        calls.append((title, list(labels), list(colors)))
+        return ""
+
+    monkeypatch.setattr(cohort_summary, "generate_donut_chart", _capture_chart)
+
+    cohort_summary.generate_cohort_summary_report(
+        output_dir=str(tmp_path),
+        kestrel_df=pd.DataFrame([{"Sample": "s1", "Confidence": "High_Precision", "Flag": "Not flagged"}]),
+        advntr_df=pd.DataFrame([{"Sample": "s1", "VID": "25561", "Flag": "Not flagged"}]),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+    )
+
+    labels = ["Positive", "Positive (Flagged)", "Negative", "Unestablished"]
+    colors = ["#FF0000", "#FFA500", "#404040", "#B0B0B0"]
+    assert calls == [
+        ("Kestrel Results", labels, colors),
+        ("adVNTR Results", labels, colors),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -870,7 +1038,6 @@ def test_a_cohort_run_writes_the_report_and_every_requested_export(tmp_path) -> 
 
     assert written == {
         "cohort_summary.html",
-        "plots",
         "cohort_kestrel.csv",
         "cohort_kestrel.tsv",
         "cohort_kestrel.json",
@@ -881,6 +1048,32 @@ def test_a_cohort_run_writes_the_report_and_every_requested_export(tmp_path) -> 
         "cohort_stats.tsv",
         "cohort_stats.json",
     }
+
+
+def test_an_unreadable_discovered_sample_remains_in_both_denominators(tmp_path) -> None:
+    """Discovery, not successful parsing, defines the cohort roster.
+
+    The loader deliberately turns one unreadable summary into empty algorithm rows so
+    the rest of the cohort can still render.  That sample must therefore appear as
+    Unestablished in both donuts, rather than disappearing from both denominators.
+    """
+    cohort_root = _cohort_on_disk(tmp_path / "cohort")
+    (cohort_root / "sample_two" / "pipeline_summary.json").write_text("not-json", encoding="utf-8")
+    output_dir = tmp_path / "out"
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(cohort_root)],
+        output_dir=str(output_dir),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+    )
+
+    html = (output_dir / "cohort_summary.html").read_text(encoding="utf-8")
+    assert _CHART_VALUES.findall(html) == ['"values":[1,0,0,1]', '"values":[1,0,0,1]']
+    assert _CHART_TOTAL.findall(html) == ["2", "2"]
+    assert "sample_two" in html
+    assert "1 sample(s) contributed no Kestrel result" in html
+    assert "1 sample(s) contributed no adVNTR result" in html
 
 
 def test_the_cohort_run_exports_the_statistics_frame(tmp_path, monkeypatch) -> None:
@@ -1014,7 +1207,33 @@ def test_both_samples_reach_the_report_in_sorted_order(tmp_path) -> None:
     html = (output_dir / "cohort_summary.html").read_text(encoding="utf-8")
 
     assert html.index(">sample_one</td>") < html.index(">sample_two</td>")
-    assert '"values":[1,1,0]' in html
+    assert '"values":[1,1,0,0]' in html
+
+
+def test_missing_algorithm_rows_stay_in_aggregate_cohort_denominators(tmp_path) -> None:
+    """A loaded sample remains in an algorithm's denominator when that step has no rows."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    cohort = _cohort_on_disk(tmp_path / "cohort")
+    (cohort / "sample_three").mkdir()
+    (cohort / "sample_three" / "pipeline_summary.json").write_text(
+        json.dumps({"version": "2.0.6", "steps": []}), encoding="utf-8"
+    )
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(cohort)],
+        output_dir=str(output_dir),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+    )
+
+    html = (output_dir / "cohort_summary.html").read_text(encoding="utf-8")
+
+    assert _CHART_VALUES.findall(html) == ['"values":[1,1,0,1]', '"values":[1,0,0,2]']
+    assert _CHART_TOTAL.findall(html) == ["3", "3"]
+    assert "1 sample(s) contributed no Kestrel result" in html
+    assert "2 sample(s) contributed no adVNTR result" in html
+    assert "sample_three" in html
 
 
 def test_an_algorithm_no_sample_ran_produces_no_export_for_it(tmp_path, caplog) -> None:
@@ -1124,40 +1343,6 @@ def test_an_export_written_after_the_report_carries_no_internal_columns(tmp_path
 
     assert kestrel_header == "Motif,Confidence,Flag,Sample"
     assert advntr_header == "VID,Flag,Sample"
-
-
-def test_image_encoding_failure_returns_empty_string(caplog, monkeypatch) -> None:
-    """An unreadable optional image becomes the report's empty image fragment."""
-    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_summary")
-
-    def _blocked_open(*args, **kwargs):
-        raise OSError("blocked")
-
-    monkeypatch.setattr(cohort_summary, "open", _blocked_open, raising=False)
-
-    assert cohort_summary.encode_image_to_base64("missing.png") == ""
-    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_summary"]
-    assert len(records) == 1
-    assert records[0].levelno == logging.ERROR
-    assert "Failed to encode image missing.png: blocked" in caplog.text
-
-
-def test_donut_failure_returns_empty_string(tmp_path, caplog, monkeypatch) -> None:
-    """A plotting failure neither emits an image nor claims a chart fragment."""
-    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_summary")
-    plot_path = tmp_path / "failed-chart.png"
-
-    def _blocked_pie(*args, **kwargs):
-        raise ValueError("blocked")
-
-    monkeypatch.setattr(cohort_summary.plt.Axes, "pie", _blocked_pie)
-
-    assert cohort_summary.generate_donut_chart([1], ["Positive"], 1, "Cohort", ["green"], plot_path=plot_path) == ""
-    assert not plot_path.exists()
-    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_summary"]
-    assert len(records) == 1
-    assert records[0].levelno == logging.ERROR
-    assert "Error generating donut chart: blocked" in caplog.text
 
 
 def test_report_config_failure_returns_empty_mapping(caplog, monkeypatch) -> None:

@@ -21,10 +21,11 @@ The rules, in the order ``motif_correction_and_annotation`` applies them:
 
 1. ``split_left_right`` - split each motif ID on its dash and divide the rows
    into the two halves of the repeat unit by position.
-2. ``has_gg_alternate`` - gate the legacy right-motif branch on the presence of
-   the GG alternate anywhere in the right half.
+2. ``has_gg_alternate`` - decide, on the frame before any exclusion, whether
+   the dedupe and GG allowlist may run.
 3. ``apply_right_motif_exclusions`` - drop conserved motifs, where a call is
-   more likely an artifact than a variant.
+   more likely an artifact than a variant. This is unconditional: it must not
+   depend on an unrelated GG row.
 4. ``apply_gg_alt_rule`` - narrow to the motifs on the GG allowlist, but only
    if at least one row is on it.
 5. ``apply_combined_exclusions`` - the final blocklists over ALT and motif,
@@ -53,12 +54,18 @@ def split_left_right(df: pd.DataFrame, position_threshold: int) -> tuple[pd.Data
     Split motif IDs on their dash and divide rows into left and right motifs.
 
     A MUC1 motif ID is two half-motif names joined by a dash, e.g. ``'X-3'``.
-    Which half a variant belongs to depends on where in the repeat unit it sits:
-    a variant at or above ``position_threshold`` is in the *right* half of the
-    unit, so its motif is the name **before** the dash; below the threshold the
-    motif is the name **after** it. ``motif_correction_and_annotation`` performs
-    that rename, which is why this function returns both halves under both
-    names.
+    Which half an indel belongs to follows its VCF anchor and affected start:
+    the affected span starts at ``POS + 1``. With the shipped threshold of 60,
+    an indel anchored at POS 59 starts at record bp 60 and uses the name after
+    the dash, even when a deletion spans the junction. An indel anchored at
+    POS 60 starts at bp 61 and uses the name before the dash. Raising the
+    threshold to 61 moved six measured carrier Motif cells, so 60 is
+    deliberate. Whether a substitution at POS 60 needs a shape-specific rule
+    if substitutions ever become reportable remains unresolved; it is not a
+    reason to change the global threshold.
+
+    ``motif_correction_and_annotation`` performs the half-name assignment,
+    which is why this function returns both halves under both names.
 
     ``POS`` is coerced to int here because Kestrel VCF positions arrive as
     strings. A value that will not parse becomes ``-1``, which sorts below any
@@ -89,10 +96,11 @@ def has_gg_alternate(motif_right: pd.DataFrame, alt_for_motif_right_gg: str) -> 
     """
     Report whether any right-motif row carries the GG alternate.
 
-    This gates the whole legacy right-motif branch: the exclusions and the
-    allowlist narrowing below only run when a GG alternate is present somewhere
-    in the frame. The match is word-bounded, so a longer allele that merely
-    contains 'GG' (``'CGGCG'``) does not open the branch.
+    This gates only the dedupe and allowlist narrowing. Conserved-motif
+    exclusions run unconditionally; callers compute this gate before applying
+    them because the allowlist is defined against the pre-exclusion frame. The
+    match is word-bounded, so a longer allele that merely contains 'GG'
+    (``'CGGCG'``) does not open the branch.
 
     Args:
         motif_right (pd.DataFrame): Right-motif rows, carrying 'ALT'.

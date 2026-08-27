@@ -1,6 +1,6 @@
 """Import the subcommand-only stacks on first call, not at CLI import time.
 
-``cohort_summary`` pulls matplotlib, plotly and seaborn; ``online_mode`` pulls requests;
+``cohort_summary`` pulls Plotly; ``online_mode`` pulls requests;
 ``install_references`` pulls its own downloader stack. ``vntyper pipeline`` paid for all
 three and used none of them -- measured startup 0.35-0.39 s and 115.5-116.2 MB peak RSS
 against 0.19-0.20 s and 82.2-82.7 MB without.
@@ -27,7 +27,7 @@ from typing import Any
 
 
 def _load_aggregate_cohort():
-    """Import the cohort aggregator, which pulls matplotlib, plotly and seaborn.
+    """Import the cohort aggregator, which pulls Plotly.
 
     Returns:
         Callable: :func:`vntyper.scripts.cohort_summary.aggregate_cohort`.

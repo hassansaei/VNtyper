@@ -24,6 +24,12 @@
        What is left below is what only this report has. -->
   {% include "_report_base.html" %}
 
+  {% if plotly_library %}
+  <!-- Plotly is embedded once. Each chart fragment is rendered with
+       include_plotlyjs=False and executes against this shared copy. -->
+  <script>{{ plotly_library | safe }}</script>
+  {% endif %}
+
   <style>
     body { margin: 20px; }
     h1, h2, h3 { text-align: center; margin-top: 20px; }
@@ -124,12 +130,12 @@
 
     <h2>Kestrel Summary Plot</h2>
     <div class="plot">
-      {% if interactive %}
-        {{ kestrel_plot_interactive | safe }}
-      {% else %}
-        <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="plot">
-      {% endif %}
+      {{ kestrel_plot_interactive | safe }}
     </div>
+    {% if kestrel_missing %}
+      <p class="table-status">{{ kestrel_missing | length }} sample(s) contributed no Kestrel result
+        rows and are counted as Unestablished: {{ kestrel_missing | join(", ") }}.</p>
+    {% endif %}
 
     <h2>adVNTR Results</h2>
     <div class="table-container">
@@ -138,12 +144,12 @@
 
     <h2>adVNTR Summary Plot</h2>
     <div class="plot">
-      {% if interactive %}
-        {{ advntr_plot_interactive | safe }}
-      {% else %}
-        <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="plot">
-      {% endif %}
+      {{ advntr_plot_interactive | safe }}
     </div>
+    {% if advntr_missing %}
+      <p class="table-status">{{ advntr_missing | length }} sample(s) contributed no adVNTR result
+        rows and are counted as Unestablished: {{ advntr_missing | join(", ") }}.</p>
+    {% endif %}
 
     {% if additional_stats %}
     <h2>Additional Statistics</h2>
@@ -184,20 +190,26 @@
          separately below when the mark is given its accessible name. */
       var CLEAN_FLAGS = ["", "Not flagged", "Not applicable"];
 
-      function lastHeading(table) {
+      /* The column *named* `Flag`, wherever it sits. Production tables can end in
+         nomenclature columns, so position is not a stable part of this contract. */
+      function flagColumnIndex(table) {
         var headings = table.querySelectorAll("thead th");
-        return headings.length ? headings[headings.length - 1].textContent.trim() : "";
+        for (var i = 0; i < headings.length; i += 1) {
+          if (headings[i].textContent.trim() === "Flag") {
+            return i;
+          }
+        }
+        return -1;
       }
 
       /* The flag cell's server-written text, remembered before the mark replaces it.
          Everything that filters, searches or names a row reads this rather than the
          cell, so the reason survives being drawn as a glyph. */
-      function originalFlag(row) {
-        var cells = row.querySelectorAll("td");
-        if (!cells.length) {
+      function originalFlag(row, index) {
+        var cell = row.children[index];
+        if (!cell) {
           return "";
         }
-        var cell = cells[cells.length - 1];
         var stored = cell.getAttribute("data-original");
         if (stored === null) {
           stored = cell.textContent.trim();
@@ -220,16 +232,16 @@
          the glyph at runtime with a literal `red` at 4.00:1, in the one place a
          stylesheet guard cannot see. */
       function markFlagColumn(table) {
-        if (lastHeading(table) !== "Flag") {
+        var index = flagColumnIndex(table);
+        if (index === -1) {
           return;
         }
         table.querySelectorAll("tbody tr").forEach(function (row) {
-          var cells = row.querySelectorAll("td");
-          if (!cells.length) {
+          var cell = row.children[index];
+          if (!cell) {
             return;
           }
-          var cell = cells[cells.length - 1];
-          var reason = originalFlag(row);
+          var reason = originalFlag(row, index);
           var isClean = CLEAN_FLAGS.indexOf(reason) !== -1;
           var mark = document.createElement("span");
           mark.setAttribute("role", "img");
@@ -302,6 +314,7 @@
           return null;
         }
         var container = table.closest(".table-container") || table.parentNode;
+        var flagIndex = flagColumnIndex(table);
         var state = { query: "", page: 0, pageSize: DEFAULT_PAGE_SIZE, showFlagged: false };
 
         var toolbar = document.createElement("div");
@@ -373,15 +386,16 @@
         container.parentNode.insertBefore(pager, container.nextSibling);
 
         function matches(row) {
-          if (!state.showFlagged && lastHeading(table) === "Flag") {
-            if (CLEAN_FLAGS.indexOf(originalFlag(row)) === -1) {
+          if (!state.showFlagged && flagIndex !== -1) {
+            if (CLEAN_FLAGS.indexOf(originalFlag(row, flagIndex)) === -1) {
               return false;
             }
           }
           if (!state.query) {
             return true;
           }
-          var text = (row.textContent + " " + originalFlag(row)).toLowerCase();
+          var reason = flagIndex === -1 ? "" : originalFlag(row, flagIndex);
+          var text = (row.textContent + " " + reason).toLowerCase();
           return text.indexOf(state.query) !== -1;
         }
 

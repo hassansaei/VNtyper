@@ -32,6 +32,22 @@ from vntyper.scripts.reference_registry import list_assemblies
 
 pytestmark = pytest.mark.unit
 
+
+def test_keep_intermediates_remains_an_accepted_compatibility_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    """The append-only CLI contract survives after its inert Python plumbing is removed."""
+    parser = build_parser()
+    args = parser.parse_args(["pipeline", "--keep-intermediates", "--delete-intermediates"])
+
+    assert args.keep_intermediates is True
+    assert args.delete_intermediates is True
+    with pytest.raises(SystemExit) as help_exit:
+        parser.parse_args(["pipeline", "--help"])
+    assert help_exit.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "Compatibility flag: intermediate files" in help_text
+    assert "wins when --keep-intermediates is also given" in help_text
+
+
 #: One row per option: ``dest -> (option strings, action class, type name, default,
 #: required, choices, nargs)``. ``type name`` is ``None`` for options argparse stores
 #: verbatim. This is the contract; the parser is compared against it wholesale.
@@ -94,7 +110,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "report_igv": (("--report-igv",), "_StoreAction", "str", "embedded", False, REPORT_IGV_CHOICES, None),
         "sample_name": (("-s", "--sample-name"), "_StoreAction", "str", None, False, None, None),
         "summary_formats": (("--summary-formats",), "_StoreAction", "str", "", False, None, None),
-        "threads": (("--threads",), "_StoreAction", "int", None, False, None, None),
+        "threads": (("--threads",), "_StoreAction", "positive_int", None, False, None, None),
     },
     "report": {
         "bam_file": (("--bam-file",), "_StoreAction", "Path", None, False, None, None),
@@ -128,7 +144,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "references": (("--references",), "_StoreAction", None, None, False, None, "+"),
         "release_spec": (("--release-spec",), "_StoreAction", "Path", None, False, None, None),
         "skip_indexing": (("--skip-indexing",), "_StoreTrueAction", None, False, False, None, 0),
-        "threads": (("-t", "--threads"), "_StoreAction", "int", 4, False, None, None),
+        "threads": (("-t", "--threads"), "_StoreAction", "positive_int", 4, False, None, None),
     },
     "online": {
         "bam": (("--bam",), "_StoreAction", "str", None, True, None, None),
@@ -146,7 +162,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
             None,
         ),
         "resume": (("--resume",), "_StoreTrueAction", None, False, False, None, 0),
-        "threads": (("--threads",), "_StoreAction", "int", None, False, None, None),
+        "threads": (("--threads",), "_StoreAction", "positive_int", None, False, None, None),
     },
 }
 

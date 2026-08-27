@@ -146,27 +146,44 @@ def resolve_summary_reference_provenance(
 
 
 def format_regions_as_bed(regions: str) -> str:
-    """Convert comma-separated ``chrom:start-end`` regions to BED rows.
+    """Convert comma-separated 1-based ``chrom:start-end`` regions to BED rows.
+
+    A region string is 1-based and fully closed, as samtools reads it; BED is 0-based and
+    half-open. The BED start is therefore ``start - 1`` and the BED end is ``end`` unchanged.
+    Copying the 1-based start verbatim shifted every generated window one base right, dropping
+    exactly the raw-overlap reads whose last aligned base is the region's start coordinate
+    (2026-08-26 code screen, D1). In the measured paired cohort, production ``samtools view
+    -P`` already fetches all 113 boundary reads through their overlapping mates, so final BAM
+    and FASTQ record sets remain identical. The default windows keep the VNTR array 3,000 bp
+    (GRCh37 family) / 4,530 bp (GRCh38 family) inside the target.
 
     Args:
-        regions: Comma-separated target regions.
+        regions: Comma-separated 1-based inclusive target regions.
 
     Returns:
-        BED-formatted text with one target per line.
+        BED-formatted text with one 0-based half-open target per line.
 
     Raises:
-        ValueError: If any region does not have the expected shape.
+        ValueError: If any region does not have the expected shape, or its coordinates are
+            not ``1 <= start <= end``.
     """
     rows: list[str] = []
     for region in regions.split(","):
         try:
             chrom, positions = region.strip().split(":")
-            start, end = positions.strip().split("-")
+            start_text, end_text = positions.strip().split("-")
+            if not (start_text.isascii() and start_text.isdigit() and end_text.isascii() and end_text.isdigit()):
+                raise ValueError("coordinates must be unsigned integers")
         except ValueError as error:
             message = f"Invalid region format: {region}. Expected format 'chr:start-end'."
             logger.error(message)
             raise ValueError(message) from error
-        rows.append(f"{chrom}\t{start}\t{end}\n")
+        start, end = int(start_text), int(end_text)
+        if start < 1 or end < start:
+            message = f"Invalid region coordinates: {region}. Expected 1 <= start <= end."
+            logger.error(message)
+            raise ValueError(message)
+        rows.append(f"{chrom}\t{start - 1}\t{end}\n")
     return "".join(rows)
 
 

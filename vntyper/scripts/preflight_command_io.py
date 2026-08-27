@@ -9,9 +9,18 @@ import subprocess
 import tempfile
 from collections.abc import Iterable
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CaptureMetadata:
+    """Structured facts established by the command runner, never parsed from output."""
+
+    timed_out: bool = False
+    timeout_seconds: float | None = None
 
 
 def _same_file(left: str | Path, right: str | Path) -> bool:
@@ -65,6 +74,7 @@ def capture_command(
     *,
     protected_paths: Iterable[str | Path] = (),
     timeout_seconds: float | None = None,
+    metadata: CaptureMetadata | None = None,
 ) -> tuple[bool, str]:
     """Run a shell command while retaining its combined output for parsing.
 
@@ -75,11 +85,15 @@ def capture_command(
         protected_paths: Paths whose inodes the final log must not alias.
         timeout_seconds: Optional wall-clock deadline. A timeout kills and reaps
             the complete shell process group before this function returns.
+        metadata: Optional mutable result receiving runner-authenticated facts.
 
     Returns:
         A success flag and complete output or safe diagnostic. Non-zero exits and
         OS failures are returned so preflight can try another candidate.
     """
+    if metadata is not None:
+        metadata.timed_out = False
+        metadata.timeout_seconds = None
     logger.debug(f"Running captured command: {command}")
     final_log = Path(log_file)
     try:
@@ -131,6 +145,9 @@ def capture_command(
                         output = output or ""
                         return_code = process.returncode
                     except subprocess.TimeoutExpired as error:
+                        if metadata is not None:
+                            metadata.timed_out = True
+                            metadata.timeout_seconds = timeout_seconds
                         try:
                             os.killpg(process.pid, signal.SIGKILL)
                         except OSError:
@@ -150,6 +167,9 @@ def capture_command(
         os.replace(temporary_path, final_log)
         temporary_path = None
     except OSError as error:
+        if metadata is not None:
+            metadata.timed_out = False
+            metadata.timeout_seconds = None
         diagnostic = f"Unable to write command log safely: {error}"
         logger.error(diagnostic)
         return False, diagnostic

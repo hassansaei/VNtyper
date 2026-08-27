@@ -1,13 +1,13 @@
-"""Rolling row-level verdicts up into the three categories the donut charts count.
+"""Rolling row-level verdicts up into the four categories the donut charts count.
 
 `cohort_rules.compute_algorithm_result` answers a question about one *row*. A cohort
 report answers a question about one *sample*, and a sample can have several rows. This
 module is the reduction in between: map each row's verdict onto Positive /
-Positive_Flagged / Negative, then take the highest category any of the sample's rows
-reached.
+Positive_Flagged / Unestablished / Negative, then take the highest category any of the
+sample's rows reached.
 
-It is the step where a diagnosis is made, so it is also the step where a refactor can
-change one without changing a line of report markup. Everything here is
+It is the step where a sample category is chosen, so it is also the step where a
+refactor can change one without changing a line of report markup. Everything here is
 **characterisation** - it records the reduction as it stands - with the single exception
 of `test_the_reduction_leaves_the_caller_s_frame_untouched`, which is a specification:
 it states the contract that closed the internal-column leak, and it is named as such in
@@ -20,9 +20,12 @@ import pandas as pd
 import pytest
 
 from vntyper.scripts.cohort_categories import (
+    UNESTABLISHED_CATEGORY,
     aggregate_sample_category,
     category_counts,
+    complete_sample_categories,
     sample_categories,
+    samples_without_rows,
     unify_advntr_result,
     unify_kestrel_result,
 )
@@ -38,6 +41,10 @@ _KESTREL_LOGIC = {
     ],
     "default": "negative",
 }
+
+
+def test_the_unestablished_category_has_the_report_interface_value() -> None:
+    assert UNESTABLISHED_CATEGORY == "Unestablished"
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +77,11 @@ def test_a_starred_confidence_label_is_not_a_kestrel_verdict() -> None:
     than rejected.
     """
     assert unify_kestrel_result("High_Precision*") == "Negative"
+
+
+def test_an_unestablished_row_result_maps_to_its_own_category_not_negative() -> None:
+    assert unify_kestrel_result("unestablished") == UNESTABLISHED_CATEGORY
+    assert unify_advntr_result("unestablished") == UNESTABLISHED_CATEGORY
 
 
 @pytest.mark.parametrize(
@@ -110,8 +122,18 @@ def test_a_sample_takes_the_highest_category_any_of_its_rows_reached(results: li
 
 
 def test_a_sample_with_no_rows_at_all_is_negative() -> None:
-    """A sample whose every row was filtered out counts as Negative, not as absent."""
+    """The row reducer's empty-input fallback stays Negative.
+
+    Actually absent samples never call this reducer; roster completion assigns those
+    samples Unestablished.
+    """
     assert aggregate_sample_category([]) == "Negative"
+
+
+def test_unestablished_outranks_negative_and_loses_to_any_positive() -> None:
+    assert aggregate_sample_category(["Negative", UNESTABLISHED_CATEGORY]) == UNESTABLISHED_CATEGORY
+    assert aggregate_sample_category([UNESTABLISHED_CATEGORY, "Positive"]) == "Positive"
+    assert aggregate_sample_category([UNESTABLISHED_CATEGORY, "Positive_Flagged"]) == "Positive_Flagged"
 
 
 # ---------------------------------------------------------------------------
@@ -182,26 +204,49 @@ def test_the_reduction_leaves_the_caller_s_frame_untouched() -> None:
     assert result.to_dict() == {"s1": "Positive"}
 
 
+def test_a_named_sample_with_no_rows_is_completed_as_unestablished() -> None:
+    categories = pd.Series({"s1": "Positive"})
+    before = categories.copy(deep=True)
+
+    completed = complete_sample_categories(categories, ["s1", "s2"])
+
+    assert completed.to_dict() == {"s1": "Positive", "s2": UNESTABLISHED_CATEGORY}
+    pd.testing.assert_series_equal(categories, before)
+
+
+def test_completion_of_an_empty_series_covers_the_whole_roster() -> None:
+    completed = complete_sample_categories(pd.Series(dtype=str), ["s1", "s2"])
+
+    assert completed.to_dict() == {"s1": UNESTABLISHED_CATEGORY, "s2": UNESTABLISHED_CATEGORY}
+
+
+def test_samples_without_rows_names_exactly_the_dropped_samples_in_roster_order() -> None:
+    frame = pd.DataFrame([{"Sample": "s2", "Confidence": "High_Precision"}])
+
+    assert samples_without_rows(frame, ["s1", "s2", "s3"]) == ["s1", "s3"]
+    assert samples_without_rows(pd.DataFrame(), ["s1"]) == ["s1"]
+
+
 # ---------------------------------------------------------------------------
-# Categories -> the three donut segments
+# Categories -> the four donut segments
 # ---------------------------------------------------------------------------
 
 
-def test_an_empty_series_counts_as_three_zeroes_and_a_zero_total() -> None:
-    assert category_counts(pd.Series(dtype=str)) == (0, 0, 0, 0)
+def test_an_empty_series_counts_as_four_zeroes_and_a_zero_total() -> None:
+    assert category_counts(pd.Series(dtype=str)) == (0, 0, 0, 0, 0)
 
 
-def test_the_counts_come_back_in_segment_order_with_their_total() -> None:
-    """Positive, Positive_Flagged, Negative, total - the order the donut expects."""
-    series = pd.Series(["Positive", "Negative", "Positive_Flagged", "Positive", "Negative"])
+def test_category_counts_returns_the_four_segments_and_their_total() -> None:
+    """Positive, flagged, negative, unestablished, total - the donut order."""
+    series = pd.Series(["Positive", "Negative", "Positive_Flagged", "Positive", "Negative", UNESTABLISHED_CATEGORY])
 
-    assert category_counts(series) == (2, 1, 2, 5)
+    assert category_counts(series) == (2, 1, 2, 1, 6)
 
 
 def test_a_category_the_reduction_never_produces_is_not_counted() -> None:
-    """The total is the sum of the three known categories, not the length of the
+    """The total is the sum of the four known categories, not the length of the
     series, so an unexpected label is dropped from the donut rather than mis-attributed
-    to one of the three segments."""
+    to one of the four segments."""
     series = pd.Series(["Positive", "Unexpected"])
 
-    assert category_counts(series) == (1, 0, 0, 1)
+    assert category_counts(series) == (1, 0, 0, 0, 1)

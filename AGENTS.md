@@ -83,9 +83,15 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   the decisions; the file they came from keeps the I/O:
   - `motif_decisions.py` — the motif half/exclusion/GG-allowlist rules, split out of
     `motif_processing.py` (#195).
-  - `cohort_rules.py`, `cohort_categories.py`, `cohort_tables.py`, `cohort_inputs.py`,
+  - `algorithm_rules.py`, `cohort_categories.py`, `cohort_tables.py`, `cohort_inputs.py`,
     `cohort_exports.py` — the rule table, per-row categorisation, display tables, sample
     discovery and export writers, split out of `cohort_summary.py`.
+  - `coverage_presentation.py` — config-driven presentation decisions for coverage QC,
+    split out of `screening_summary.py` and `generate_report.py`.
+  - `cross_match_presentation.py` — structural cross-match assessability and fixed
+    verdict presentation, split out of `generate_report.py`.
+  - `advntr_variant_annotations.py` — filesystem-free parsing of repeat-unit identity and
+    position from adVNTR state strings, split out of `advntr_genotyping.py`.
   - `cohort_pseudonyms.py` — the pseudonym digest and the validation of the algorithm and
     width it is configured with, split out of `cohort_inputs.py`. Discovery keeps
     `DiscoveredSample`, `discover_sample_directories` and `duplicate_identity`: an
@@ -105,7 +111,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   - `alignment_preflight_logs.py` — pure planning of every command-log destination
     reachable by a format, candidate count and fast/normal preflight mode.
   `reference_resolution_environment.py` separately owns CRAM-only process-environment
-  pin/restore I/O. All ten pure modules are fully annotated and at or near 100% branch
+  pin/restore I/O. All fourteen pure modules are fully annotated and at or near 100% branch
   coverage. Put new pure logic there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
@@ -123,7 +129,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
-  The reviewed BLE001 policy is 102 normal/108 including suppressions; its executable
+  The reviewed BLE001 policy is 98 normal/105 including suppressions; its executable
   inventory is `scripts/ble001_policy.json` and the policy tests. Not every broad
   handler is a process boundary, so do not globally select or mechanically narrow it.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
@@ -278,7 +284,7 @@ its logic cannot be reached without a network and a filesystem, and it sits at 2
 that reason rather than for its length. `docker/app/tasks.py` is 531 lines of Celery task
 at 98.5%; `cohort_summary.py` was 911 lines at 38% and is 456 at 84.2% — not because 456
 is under some threshold, but because the split moved the decisions into
-`cohort_rules`/`cohort_categories`/`cohort_tables`/`cohort_inputs`/`cohort_exports`, all
+`algorithm_rules`/`cohort_categories`/`cohort_tables`/`cohort_inputs`/`cohort_exports`, all
 at 100%, and left the matplotlib and Jinja2 calls behind.
 
 So keep the ~650 line guideline, but keep it for the right reason: **a file grows past
@@ -547,6 +553,14 @@ summary | release-summary | none | always records success, failure, skipped jobs
     `install_references_config.json` — which *is* still a base input, so that pin change
     is what triggers the rebuild instead.
 
+    `reference_download.py` owns bounded, atomic reference transport and is imported by
+    `install_references.py`; the refs-stage COPY list, all base-image hash expressions,
+    the Docker push-path filter and `BASE_INPUTS` must include it together.
+    `reference_integrity.py` separately owns the digest-gated reuse decision: only a
+    checksum mismatch on a pre-existing file is re-downloaded, exactly once. Missing or
+    contradictory digest configuration and a mismatch on fresh bytes fail immediately.
+    It is another refs-stage dependency, so the same COPY/hash/input mirrors include it.
+
     The `refs` stage installs **all six** physical BWA references (`hg19`, `hg38`,
     `GRCh37`, `GRCh38`, `hg19_ensembl`, `hg38_ensembl`), not just the two UCSC ones a bare
     `install-references` run defaults to, and its `config.json` is the repo's file
@@ -640,8 +654,9 @@ summary | release-summary | none | always records success, failure, skipped jobs
     `make test-scripts-cov` to 7,869 of 8,392 measured units, or 93.77%, over 6,299
     passing unit tests. **A new file under `scripts/` must update this sentence** -
     `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
-    counts `scripts/**/*.py` and fails until it does, which is the tripwire working, not
-    a flaky test.
+    counts root `scripts/**/*.py` and fails until it does, which is the tripwire working,
+    not a flaky test. Package modules under `vntyper/scripts/` do not change that root-only
+    count; adding `vntyper/scripts/reference_download.py` therefore leaves it at 41.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:

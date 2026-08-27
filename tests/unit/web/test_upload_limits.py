@@ -379,7 +379,7 @@ def test_upload_under_the_cap_still_succeeds_end_to_end(capped_app, client, tmp_
     )
 
     assert response.status_code == 200
-    job_input_dir = tmp_path / "input" / response.json()["job_id"]
+    job_input_dir = tmp_path / "handoff" / response.json()["job_id"]
     assert (job_input_dir / "sample.bam").read_bytes() == bam_payload
     assert (job_input_dir / "sample.bam.bai").read_bytes() == bai_payload
     capped_app.run_vntyper_job.delay.assert_called_once()
@@ -409,7 +409,7 @@ def test_upload_of_exactly_the_cap_is_accepted(capped_app, client, tmp_path: Pat
     )
 
     assert response.status_code == 200, response.text
-    job_input_dir = tmp_path / "input" / response.json()["job_id"]
+    job_input_dir = tmp_path / "handoff" / response.json()["job_id"]
     assert (job_input_dir / "sample.bam").read_bytes() == payload
     capped_app.run_vntyper_job.delay.assert_called_once()
 
@@ -450,5 +450,5 @@ def test_upload_just_under_the_cap_is_accepted(capped_app, client, tmp_path: Pat
     )
 
     assert response.status_code == 200
-    job_input_dir = tmp_path / "input" / response.json()["job_id"]
+    job_input_dir = tmp_path / "handoff" / response.json()["job_id"]
     assert (job_input_dir / "sample.bam").read_bytes() == payload

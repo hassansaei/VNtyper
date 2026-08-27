@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, mock_open, patch
 import pandas as pd
 import pytest
 
+from vntyper.scripts import utils
 from vntyper.scripts.utils import (
     create_output_directories,
     get_tool_version,
@@ -85,6 +86,70 @@ def test_run_command_failure(mock_popen, tmp_path):
     assert "Simulated error" in log_file.read_text()
 
 
+def test_run_command_survives_non_utf8_tool_output(tmp_path):
+    """Corrupt tool bytes are visibly replaced instead of aborting the stage."""
+    log_file = tmp_path / "cmd.log"
+
+    assert run_command(r"printf '\xff\n'", str(log_file)) is True
+    assert "�" in log_file.read_text(encoding="utf-8")
+
+
+def test_run_command_still_reports_failure_after_non_utf8_output(tmp_path):
+    """Corrupt output does not mask the child's non-critical failure status."""
+    log_file = tmp_path / "cmd.log"
+
+    assert run_command(r"printf '\xff\n'; exit 3", str(log_file)) is False
+
+
+def test_run_command_reaps_child_when_stdout_iteration_fails(tmp_path):
+    """A broken stdout iterator still closes the pipe and reaps the child."""
+    process = MagicMock()
+    process.stdout.__iter__.side_effect = OSError("pipe failure")
+    with (
+        patch.object(utils.subprocess, "Popen", return_value=process),
+        pytest.raises(OSError, match="pipe failure"),
+    ):
+        run_command("true", str(tmp_path / "cmd.log"))
+
+    process.stdout.close.assert_called_once()
+    process.wait.assert_called_once()
+
+
+def test_run_command_reaps_child_when_log_writing_fails(tmp_path):
+    """A full command log does not leave its child running or zombified."""
+    process = MagicMock()
+    process.stdout = MagicMock()
+    process.stdout.__iter__.return_value = iter([b"tool output\n"])
+    log_file = MagicMock()
+    log_file.write.side_effect = OSError("disk full")
+    open_file = MagicMock()
+    open_file.__enter__.return_value = log_file
+
+    with (
+        patch.object(utils.subprocess, "Popen", return_value=process),
+        patch("builtins.open", return_value=open_file),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        run_command("true", str(tmp_path / "cmd.log"))
+
+    process.stdout.close.assert_called_once()
+    process.wait.assert_called_once()
+
+
+def test_run_command_waits_when_stdout_close_fails(tmp_path):
+    """A pipe-close error cannot prevent reaping the completed child."""
+    process = MagicMock()
+    process.stdout.__iter__.return_value = iter([])
+    process.stdout.close.side_effect = OSError("close failure")
+    with (
+        patch.object(utils.subprocess, "Popen", return_value=process),
+        pytest.raises(OSError, match="close failure"),
+    ):
+        run_command("true", str(tmp_path / "cmd.log"))
+
+    process.wait.assert_called_once()
+
+
 def test_validate_bam_file_success(tmp_path, test_config):
     """
     Test validation of a valid BAM file.
@@ -96,6 +161,31 @@ def test_validate_bam_file_success(tmp_path, test_config):
     # Mock out run_command to simulate a passing samtools quickcheck.
     with patch("vntyper.scripts.utils.run_command", return_value=True):
         validate_bam_file(str(bam_file))  # Should not raise ValueError.
+
+
+def test_validate_bam_file_passes_the_configured_samtools_to_quickcheck(tmp_path):
+    """F1: quickcheck honors the configured samtools executable."""
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("x", encoding="utf-8")
+
+    with patch.object(utils, "run_command", return_value=True) as run:
+        validate_bam_file(str(bam_file), samtools_path="/opt/tools/samtools")
+
+    assert run.call_args.args[0] == f"/opt/tools/samtools quickcheck -v {bam_file}"
+
+
+def test_validate_bam_file_uses_configured_samtools_when_quickcheck_fails(tmp_path):
+    """F1: configured samtools reaches quickcheck before its failure is reported."""
+    bam_file = tmp_path / "broken.bam"
+    bam_file.write_text("x", encoding="utf-8")
+
+    with (
+        patch.object(utils, "run_command", return_value=False) as run,
+        pytest.raises(ValueError, match="failed quickcheck"),
+    ):
+        validate_bam_file(str(bam_file), samtools_path="/opt/tools/samtools")
+
+    assert run.call_args.args[0] == f"/opt/tools/samtools quickcheck -v {bam_file}"
 
 
 def test_validate_bam_file_nonexistent():

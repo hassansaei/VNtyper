@@ -84,6 +84,7 @@ def rendered_cohort_report(tmp_path: Path) -> Path:
             "Motif": str(index),
             "Confidence": "High_Precision",
             "Flag": "Not flagged",
+            "Nomenclature_Note": f"note_{index:03d}",
         }
         for index in range(CLEAN_SAMPLES)
     ] + [
@@ -92,6 +93,7 @@ def rendered_cohort_report(tmp_path: Path) -> Path:
             "Motif": str(index),
             "Confidence": "Low_Precision",
             "Flag": "Low_Coverage",
+            "Nomenclature_Note": f"note_{index:03d}",
         }
         for index in range(FLAGGED_SAMPLES)
     ]

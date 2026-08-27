@@ -94,8 +94,8 @@ Generates `pipeline_summary.csv` and/or `pipeline_summary.tsv` alongside the def
 
 | Option | Effect |
 |--------|--------|
-| `--keep-intermediates` | Retain BAM slices, temporary FASTQ files, etc. |
-| `--delete-intermediates` | Delete intermediate files after processing (overrides `--keep-intermediates`) |
+| `--keep-intermediates` | Compatibility flag: intermediate files are already kept by default, so this flag changes nothing. Use `--delete-intermediates` to remove them. |
+| `--delete-intermediates` | Delete intermediate files after processing (wins when `--keep-intermediates` is also given). |
 
 ## Custom Configuration
 

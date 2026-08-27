@@ -51,6 +51,16 @@ def _no_real_sockets() -> Iterator[None]:
     mp.undo()
 
 
+@pytest.fixture(autouse=True)
+def _ordinary_worker_storage_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point worker storage contracts at each test's isolated directories."""
+    from app import tasks
+
+    monkeypatch.setattr(tasks.settings, "DEFAULT_HANDOFF_SPOOL_DIR", str(tmp_path / "input"))
+    monkeypatch.setattr(tasks.settings, "DEFAULT_INPUT_DIR", str(tmp_path / "input"))
+    monkeypatch.setattr(tasks.settings, "DEFAULT_OUTPUT_DIR", str(tmp_path / "output"))
+
+
 @pytest.fixture
 def fake_redis():
     """Provide an in-process Redis stand-in.
@@ -92,9 +102,11 @@ def web_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_redis) -> Iter
     for attr in ("redis_client", "redis_cohort_client", "redis_usage_client"):
         monkeypatch.setattr(app_main, attr, fake_redis)
 
-    (tmp_path / "input").mkdir()
-    (tmp_path / "output").mkdir()
+    (tmp_path / "input").mkdir(exist_ok=True)
+    (tmp_path / "handoff").mkdir(exist_ok=True)
+    (tmp_path / "output").mkdir(exist_ok=True)
     monkeypatch.setattr(app_main, "DEFAULT_INPUT_DIR", str(tmp_path / "input"))
+    monkeypatch.setattr(app_main, "DEFAULT_HANDOFF_SPOOL_DIR", str(tmp_path / "handoff"), raising=False)
     monkeypatch.setattr(app_main, "DEFAULT_OUTPUT_DIR", str(tmp_path / "output"))
 
     for attr in ("run_vntyper_job", "run_cohort_analysis_job"):

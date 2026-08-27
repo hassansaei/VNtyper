@@ -13,6 +13,7 @@ Nothing here executes a subcommand, loads configuration or configures logging.
 Logging setup stays in ``cli.py``, which remains the sole place it happens.
 
 Functions:
+    positive_int: Parse a positive integer command-line token.
     build_parser: Build the full VNtyper argument parser, subcommands included.
 """
 
@@ -25,6 +26,29 @@ from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV, REPORT_IGV_MODES
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
+
+
+def positive_int(value: str) -> int:
+    """Parse a positive integer command-line token.
+
+    Args:
+        value: Raw command-line token.
+
+    Returns:
+        int: The parsed value, guaranteed to be at least one.
+
+    Raises:
+        argparse.ArgumentTypeError: If the token is not an integer or is less
+            than one. argparse reports this as a usage error with exit code 2.
+    """
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}") from error
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"expected a thread count of at least 1, got {number}")
+    return number
+
 
 #: ``--report-igv``'s choices and default, taken from the module that implements them
 #: rather than restated here. Two spellings of the same list is how a mode ends up
@@ -111,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_pipeline.add_argument("--reference-fasta", type=Path, help="Path to the reference FASTA for CRAM decoding.")
     parser_pipeline.add_argument(
         "--threads",
-        type=int,
+        type=positive_int,
         default=None,
         help="Number of threads to use. Applies to alignment, samtools, fastp and adVNTR. "
         "adVNTR honours it from 2.0.0 onward, where -t parallelises read decoding; "
@@ -133,12 +157,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser_pipeline.add_argument(
         "--keep-intermediates",
         action="store_true",
-        help="Keep intermediate files (e.g., BAM slices, temporary files).",
+        help="Compatibility flag: intermediate files (BAM slices, temporary files) are already kept by default, "
+        "so this flag changes nothing. Use --delete-intermediates to remove them.",
     )
     parser_pipeline.add_argument(
         "--delete-intermediates",
         action="store_true",
-        help="Delete intermediate files after processing (overrides --keep-intermediates).",
+        help="Delete intermediate files after processing (wins when --keep-intermediates is also given).",
     )
     parser_pipeline.add_argument(
         "--archive-results",
@@ -350,7 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_install.add_argument(
         "-t",
         "--threads",
-        type=int,
+        type=positive_int,
         default=4,
         help="Number of threads to use for indexing (default: 4).",
     )
@@ -428,7 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_online.add_argument(
         "--threads",
-        type=int,
+        type=positive_int,
         default=None,
         help="Number of threads to use. Applies to alignment, samtools, fastp and adVNTR. "
         "adVNTR honours it from 2.0.0 onward, where -t parallelises read decoding; "

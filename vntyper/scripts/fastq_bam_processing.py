@@ -10,17 +10,21 @@ from pathlib import Path
 
 from vntyper.scripts.alignment_consumer_commands import build_plan_slice_command, build_plan_unmapped_command
 from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.alignment_fastq_conversion import (
+    plan_alignment_fastq_conversion,
+    run_alignment_fastq_conversion,
+)
 from vntyper.scripts.alignment_target_io import (
     remove_validated_slice_indexes,
     validate_alignment_conversion_destinations,
     validate_fastq_processing_destinations,
 )
 from vntyper.scripts.command_builders import (
-    build_bam_to_fastq_command,
     build_fastp_command,
     build_samtools_depth_command,
     build_samtools_index_command,
     build_samtools_merge_command,
+    build_threaded_samtools_index_argv,
 )
 from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 from vntyper.scripts.coverage_stats import (
@@ -90,7 +94,6 @@ def process_bam_to_fastq(
     reference_assembly="hg19",
     fast_mode=False,
     delete_intermediates=True,
-    keep_intermediates=False,
     bed_file=None,
     needs_advntr: bool = False,
 ):
@@ -108,9 +111,7 @@ def process_bam_to_fastq(
         fast_mode (bool, optional): If True, skips filtering of unmapped and partially
             mapped reads. Defaults to False.
         delete_intermediates (bool, optional): If True, deletes intermediate files after
-            processing, overriding ``keep_intermediates``. Defaults to True.
-        keep_intermediates (bool, optional): If True, keeps intermediate files for later
-            use unless ``delete_intermediates`` is True. Defaults to False.
+            processing. Defaults to True.
         bed_file (Path, optional): Path to a BED file specifying regions for MUC1 analysis.
         needs_advntr (bool, optional): Whether adVNTR will read ``<name>_sliced.bam``.
             Its index has exactly one consumer -- ``run_advntr`` and
@@ -234,29 +235,14 @@ def process_bam_to_fastq(
                 logger.error("Re-indexing BAM file failed.")
                 raise RuntimeError("Re-indexing BAM file failed.")
 
-    # Convert final BAM to FASTQ
-    final_fastq_1 = Path(output) / f"{output_name}_R1.fastq.gz"
-    final_fastq_2 = Path(output) / f"{output_name}_R2.fastq.gz"
-    final_fastq_other = Path(output) / f"{output_name}_other.fastq.gz"
-    final_fastq_single = Path(output) / f"{output_name}_single.fastq.gz"
-
-    command_sort_fastq = build_bam_to_fastq_command(
+    paths = plan_alignment_fastq_conversion(output=output, output_name=output_name)
+    conversion_result = run_alignment_fastq_conversion(
+        paths=paths,
+        final_bam=final_bam,
         samtools_path=samtools_path,
-        in_bam=final_bam,
         threads=threads,
-        fastq_r1=final_fastq_1,
-        fastq_r2=final_fastq_2,
-        fastq_other=final_fastq_other,
-        fastq_single=final_fastq_single,
+        command_runner=run_command,
     )
-    log_file_sort_fastq = Path(output) / f"{output_name}_sort_fastq.log"
-    logger.info(f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}")
-
-    success = run_command(str(command_sort_fastq), str(log_file_sort_fastq), critical=True)
-    if not success:
-        logger.error("BAM to FASTQ conversion failed.")
-        raise RuntimeError("BAM to FASTQ conversion failed.")
-    logger.info("BAM to FASTQ conversion completed.")
 
     # Clean up intermediates if requested
     if delete_intermediates:
@@ -270,12 +256,7 @@ def process_bam_to_fastq(
                 logger.debug(f"Removed intermediate file: {file}")
         logger.info("Intermediate BAM files removed.")
 
-    return (
-        str(final_fastq_1),
-        str(final_fastq_2),
-        str(final_fastq_other),
-        str(final_fastq_single),
-    )
+    return conversion_result
 
 
 def _region_is_window(region: str, window: tuple[int, int]) -> bool:
@@ -558,7 +539,11 @@ def downsample_bam_if_needed(
     try:
         subprocess.run(cmd_sort, check=True)
         downsampled_bam.unlink()
-        cmd_index = [samtools_path, "index", str(sorted_down_bam)]
+        cmd_index = build_threaded_samtools_index_argv(
+            samtools_path=samtools_path,
+            bam_file=sorted_down_bam,
+            threads=threads,
+        )
         subprocess.run(cmd_index, check=True)
     except subprocess.CalledProcessError as err:
         logger.error(f"Sorting/indexing failed after downsampling: {err}")

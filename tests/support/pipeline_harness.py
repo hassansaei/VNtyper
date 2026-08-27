@@ -372,6 +372,7 @@ def run_pipeline_under_harness(
             stages["read_alignment_header"].return_value = header
         stages["calculate_vntr_coverage"].return_value = {"mean": 100.0}
         stages["load_advntr_config"].return_value = {"advntr_settings": {"output_format": "tsv"}}
+        stages["run_advntr"].return_value = 0
         stages["extract_results_from_pipeline_summary"].return_value = ([{"a": 1}], [{"b": 2}])
         stages["cross_match_variants"].return_value = {"matches": [], "overall_match": True}
 

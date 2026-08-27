@@ -45,7 +45,7 @@ This is the primary output file. Each row represents a genotyped variant.
 | `POS` | Position within the MUC1 reference sequence |
 | `REF` | Reference allele |
 | `ALT` | Alternate allele |
-| `Motif_sequence` | Nucleotide sequence of the motif |
+| `Motif_sequence` | 60 bp sequence of the repeat-unit half named in `Motif` (one half of the 120 bp reference pair record) |
 | `Estimated_Depth_AlternateVariant` | Read depth supporting the alternate allele |
 | `Estimated_Depth_Variant_ActiveRegion` | Total read depth in the variant active region |
 | `Depth_Score` | Ratio of alternate depth to active region depth |
@@ -114,15 +114,17 @@ these are the columns whose text differs.
 after the confidence, flag and nomenclature fields. It used to be sixth, between `ALT`
 and `Estimated_Depth_AlternateVariant`.
 
-The real motif sequence is 121 bp. Sixth, it pushed `Confidence` and `Flag` off the right
-edge of a 1280px screen, so the two columns a reader opens the report for were the ones
-that scrolled out of sight while the widest and least-scanned column sat in the middle.
-Last, it is the column that scrolls -- which is the correct one to lose.
+Before the field was corrected to the selected 60 bp half, it held the 120 bp pair record.
+In its old sixth position, that long unbroken value pushed `Confidence` and `Flag` off the
+right edge of a 1280px screen, so the two columns a reader opens the report for were the
+ones that scrolled out of sight while the widest and least-scanned column sat in the
+middle. Last, it is the column that scrolls -- which is the correct one to lose.
 
-**This is a display order only.** `kestrel_result.tsv` is unchanged, and so is every
-other output; if you parse anything, parse those. If you scrape the HTML report by column
-*position*, this is a breaking change and you should key on the heading text instead. The
-`cohort_summary.html` Kestrel table declares its own column order and is **not** affected.
+**The column-order migration is display-only.** Separately, the value correction above
+changes `Motif_sequence` from the pair record to its named half in result TSVs and reports;
+no other field changes. If you scrape the HTML report by column *position*, key on the
+heading text instead. The `cohort_summary.html` Kestrel table declares its own column
+order and is **not** affected by the display-order migration.
 
 Further display changes in the same release:
 

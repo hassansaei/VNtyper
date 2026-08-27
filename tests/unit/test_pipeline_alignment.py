@@ -20,6 +20,7 @@ from vntyper.scripts.pipeline_alignment import (
 )
 from vntyper.scripts.preflight_error_io import PreflightErrorContext
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
+from vntyper.scripts.utils import load_config
 
 pytestmark = pytest.mark.unit
 
@@ -32,13 +33,70 @@ def _tree_digest(root: Path) -> dict[str, str]:
     }
 
 
-def test_format_regions_as_bed_preserves_the_slice_shape() -> None:
-    assert format_regions_as_bed("chr1:10-20, chr2:30-40") == "chr1\t10\t20\nchr2\t30\t40\n"
+def test_format_regions_as_bed_converts_one_based_starts_to_zero_based() -> None:
+    """A 1-based inclusive region start must become a 0-based half-open BED start."""
+    assert format_regions_as_bed("chr1:10-20, chr2:30-40") == "chr1\t9\t20\nchr2\t29\t40\n"
 
 
 def test_format_regions_as_bed_rejects_a_malformed_region() -> None:
     with pytest.raises(ValueError, match="Invalid region format: chr1-10-20"):
         format_regions_as_bed("chr1-10-20")
+
+
+def test_format_regions_as_bed_keeps_the_end_and_handles_a_single_base_region() -> None:
+    assert format_regions_as_bed("chr1:1-1") == "chr1\t0\t1\n"
+
+
+def test_format_regions_as_bed_rejects_non_integer_coordinates() -> None:
+    with pytest.raises(ValueError, match="Invalid region format: chr1:abc-20"):
+        format_regions_as_bed("chr1:abc-20")
+
+
+def test_format_regions_as_bed_rejects_unicode_digits_through_the_logged_format_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    message = "Invalid region format: chr1:²-20. Expected format 'chr:start-end'."
+    with (
+        caplog.at_level("ERROR", logger="vntyper.scripts.pipeline_alignment"),
+        pytest.raises(ValueError, match="Invalid region format: chr1:²-20"),
+    ):
+        format_regions_as_bed("chr1:²-20")
+
+    assert message in caplog.messages
+
+
+def test_format_regions_as_bed_rejects_a_zero_start_because_regions_are_one_based() -> None:
+    with pytest.raises(ValueError, match="Invalid region coordinates: chr1:0-20"):
+        format_regions_as_bed("chr1:0-20")
+
+
+def test_format_regions_as_bed_rejects_a_reversed_region() -> None:
+    with pytest.raises(ValueError, match="Invalid region coordinates: chr1:30-20"):
+        format_regions_as_bed("chr1:30-20")
+
+
+def test_the_default_windows_still_cover_the_vntr_array_after_conversion() -> None:
+    """Every shipped window's converted BED keeps the whole VNTR array with its full margin.
+
+    The margins are pinned (3,000 bp for the GRCh37 family, 4,530 bp for GRCh38): a read whose
+    last aligned base is the window start -- the one class D1 recovers -- cannot reach the array.
+    """
+    processing = load_config()["bam_processing"]
+    family_of = {"hg19": "GRCh37", "hg38": "GRCh38", "GRCh37": "GRCh37", "GRCh38": "GRCh38"}
+    expected_margin = {"GRCh37": 3000, "GRCh38": 4530}
+    region_keys = sorted(key for key in processing if key.startswith("bam_region_"))
+    assert len(region_keys) == 8
+    for key in region_keys:
+        family = family_of[key.removeprefix("bam_region_").split("_")[0]]
+        array_coords = processing["assemblies"][family]["vntr_array_coords"]
+        array_start, array_end = (int(coordinate) for coordinate in array_coords.split("-"))
+        row = format_regions_as_bed(processing[key]).rstrip("\n")
+        _, bed_start_text, bed_end_text = row.split("\t")
+        bed_start, bed_end = int(bed_start_text), int(bed_end_text)
+        window_start = int(processing[key].rpartition(":")[2].split("-")[0])
+        assert bed_start == window_start - 1
+        assert (array_start - 1) - bed_start == expected_margin[family]
+        assert bed_end >= array_end
 
 
 # =============================================================================
@@ -268,7 +326,7 @@ def test_prepare_alignment_target_resolves_alignment_region_before_writing(tmp_p
         )
 
     assert result == output / "predefined_regions_hg38.bed"
-    assert result.read_text(encoding="utf-8") == "chr1\t101\t202\n"
+    assert result.read_text(encoding="utf-8") == "chr1\t100\t202\n"
     get_region.assert_called_once_with(
         bam_file="/input/sample.cram",
         reference_assembly="hg38",
@@ -472,7 +530,7 @@ def test_generated_bed_regular_rerun_is_an_atomic_replacement(tmp_path: Path) ->
     )
 
     assert result == destination
-    assert destination.read_text(encoding="utf-8") == "chr2\t30\t40\n"
+    assert destination.read_text(encoding="utf-8") == "chr2\t29\t40\n"
     assert destination.stat().st_ino != old_inode
 
 
@@ -663,7 +721,7 @@ def test_input_alignment_binding_precedes_validation_and_survives_source_replace
     try:
         assert source.read_bytes() == b"alignment-B"
         assert Path(prepared.plan.view_path).read_bytes() == b"alignment-A"
-        assert prepared.bed_file.read_bytes() == b"chr1\t10\t20\n"
+        assert prepared.bed_file.read_bytes() == b"chr1\t9\t20\n"
     finally:
         prepared.plan.close()
 

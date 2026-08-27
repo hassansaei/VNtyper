@@ -8,9 +8,9 @@ imply. Three of those were defects, and none of them is visible to a test that
 reads the stylesheet:
 
 * ``.table td`` clamps to ``max-width: 150px`` with ``overflow: hidden`` and
-  reveals the rest on ``:hover``. **The motif sequence is 121 bp in real data**
-  and paper has no hover, so the archived record carried an ellipsis where the
-  evidence was. The 13-character fixture in ``tests/unit/test_generate_report.py``
+  reveals the rest on ``:hover``. The deliberately oversized synthetic motif sequence
+  demonstrates that paper has no hover: the archived record carried an ellipsis where
+  the evidence was. The 13-character fixture in ``tests/unit/test_generate_report.py``
   fits inside the clamp and proves nothing about this;
 * a collapsed ``<details>`` printed as its summary and nothing else;
 * nothing after page 1 said whose report it was, and no page was numbered.
@@ -70,10 +70,10 @@ from vntyper.scripts.report_identity import ASSAY_NAME, RESEARCH_USE_STATEMENT
 
 pytestmark = pytest.mark.browser
 
-#: How long the ``Motif_sequence`` cell is in real data: **121 bp**, against the
-#: 13-character stub the unit fixtures use. The length is the whole point - anything
-#: that fits inside the 150px screen clamp cannot exhibit the defect this file exists
-#: for - so the bases are the fixtures' own motif repeated to that length rather than
+#: A deliberately oversized synthetic ``Motif_sequence`` stress value. The length is
+#: the whole point: anything that fits inside the 150px screen clamp cannot exhibit
+#: the defect this file exists for. The bases are the fixtures' own motif repeated
+#: to that length rather than
 #: a sequence invented to look real.
 MOTIF_SEQUENCE_LENGTH = 121
 MOTIF_SEQUENCE = ("GGCCACCACCCTG" * 10)[:MOTIF_SEQUENCE_LENGTH]
@@ -251,7 +251,7 @@ def _printed_pages(
 
     # `-raw` keeps each drawn run together instead of sorting the page by physical
     # position. That matters for exactly one assertion and it is the important one:
-    # a wrapped 121 bp cell is drawn as a dozen short lines, and in the default mode
+    # the wrapped synthetic 121-character cell is drawn as a dozen short lines, and in the default mode
     # poppler interleaves the neighbouring columns' single lines between them by
     # y-coordinate - so the sequence is on the page and is still not a substring of
     # the extraction. Measured both ways before choosing this one.
@@ -268,7 +268,7 @@ def _squashed(text: str) -> str:
     """Return text with every whitespace character removed.
 
     A cell wrapped across two printed lines arrives with a newline inside it, so a
-    121-character sequence is never one substring of the extraction. Removing the
+    synthetic 121-character sequence is never one substring of the extraction. Removing the
     whitespace is what makes "the whole sequence is on the page" answerable.
 
     Args:
@@ -303,7 +303,7 @@ def test_the_printed_pdf_is_a_complete_record(printable_report: Path, browser: B
     squashed = _squashed(text)
 
     assert SAMPLE_NAME in squashed, "the printed record does not say whose report it is"
-    assert MOTIF_SEQUENCE in squashed, "the 121 bp motif sequence is still truncated in print"
+    assert MOTIF_SEQUENCE in squashed, "the synthetic stress motif sequence is still truncated in print"
     for marker in ROW_MARKERS:
         assert squashed.count(marker) == 1, f"the variant row identified by {marker} did not print exactly once"
     assert "Researchuseonly" in squashed, "the printed record makes no statement about its use"

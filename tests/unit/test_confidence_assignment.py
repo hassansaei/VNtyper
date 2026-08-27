@@ -139,6 +139,74 @@ def test_low_region_depth_with_insufficient_depth_score(kestrel_config):
     assert not out.loc[0, "depth_confidence_pass"]
 
 
+def test_both_depths_unparseable_stays_negative_with_a_nan_score(kestrel_config):
+    """Unparseable depths coerce to 0, so 0/0 is NaN and the row is Negative.
+
+    Changing the coercion default from ``fillna(0)`` to ``fillna(1)`` instead
+    manufactures a 1.0 score and a false scored call.
+    """
+    df = pd.DataFrame(
+        [
+            {
+                "Estimated_Depth_AlternateVariant": "not_a_number",
+                "Estimated_Depth_Variant_ActiveRegion": "also_unparseable",
+            }
+        ]
+    )
+
+    row = calculate_depth_score_and_assign_confidence(df, kestrel_config).iloc[0]
+
+    assert row["Estimated_Depth_AlternateVariant"] == 0.0
+    assert row["Estimated_Depth_Variant_ActiveRegion"] == 0.0
+    assert pd.isna(row["Depth_Score"]), "0/0 must stay NaN, never a manufactured score"
+    assert row["Confidence"] == NEGATIVE_LABEL
+    assert not row["depth_confidence_pass"]
+
+
+def test_an_unparseable_alt_depth_scores_zero_and_stays_negative(kestrel_config):
+    """An unparseable alternate depth yields a zero score, not a scored call."""
+    df = pd.DataFrame(
+        [
+            {
+                "Estimated_Depth_AlternateVariant": "corrupt",
+                "Estimated_Depth_Variant_ActiveRegion": _REGION_DEPTH,
+            }
+        ]
+    )
+
+    row = calculate_depth_score_and_assign_confidence(df, kestrel_config).iloc[0]
+
+    assert row["Estimated_Depth_AlternateVariant"] == 0.0
+    assert row["Estimated_Depth_Variant_ActiveRegion"] == _REGION_DEPTH
+    assert row["Depth_Score"] == 0.0
+    assert row["Confidence"] == NEGATIVE_LABEL
+    assert not row["depth_confidence_pass"]
+
+
+def test_an_unparseable_region_depth_keeps_a_parseable_alt_negative(kestrel_config):
+    """A malformed region depth must not turn a parseable 120 alt depth into a call.
+
+    At HEAD, 120/0 becomes a NaN score and remains Negative. The ``fillna(1)``
+    mutant turns it into 120/1, a score of 120 and a false High_Precision*.
+    """
+    df = pd.DataFrame(
+        [
+            {
+                "Estimated_Depth_AlternateVariant": 120,
+                "Estimated_Depth_Variant_ActiveRegion": "corrupt",
+            }
+        ]
+    )
+
+    row = calculate_depth_score_and_assign_confidence(df, kestrel_config).iloc[0]
+
+    assert row["Estimated_Depth_AlternateVariant"] == 120.0
+    assert row["Estimated_Depth_Variant_ActiveRegion"] == 0.0
+    assert pd.isna(row["Depth_Score"]), "120/0 must stay NaN, never become 120"
+    assert row["Confidence"] == NEGATIVE_LABEL
+    assert not row["depth_confidence_pass"]
+
+
 # ---------------------------------------------------------------------------
 # The calibration constants are required, not defaulted.
 # ---------------------------------------------------------------------------

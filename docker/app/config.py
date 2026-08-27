@@ -3,9 +3,41 @@ import os
 from urllib.parse import quote
 
 
+def minimum_free_disk_bytes(max_upload_bytes: int) -> int:
+    """Resolve the disk floor while preserving its upload-relative default.
+
+    Args:
+        max_upload_bytes: Effective per-submission upload ceiling.
+
+    Returns:
+        int: Explicit environment value, or twice the upload ceiling when the
+        variable is absent or Compose passes its optional empty value.
+    """
+    configured = os.getenv("MIN_FREE_DISK_BYTES")
+    return int(configured) if configured else 2 * max_upload_bytes
+
+
+def pipeline_reservation_bytes(max_upload_bytes: int) -> int:
+    """Resolve pipeline admission headroom from an explicit or derived value.
+
+    The three-upload default is a conservative operational heuristic: one
+    uploaded alignment plus two upload-sized allowances for pipeline output,
+    intermediates and the optional result archive. It is not a runtime quota.
+
+    Args:
+        max_upload_bytes: Effective per-submission upload ceiling.
+
+    Returns:
+        int: Byte estimate used only by admission control.
+    """
+    configured = os.getenv("PIPELINE_RESERVATION_BYTES")
+    return int(configured) if configured else 3 * max_upload_bytes
+
+
 class Settings:
     PROJECT_NAME: str = "VNtyper API"
-    DEBUG: bool = True
+    # Off by default: debug behavior is opt-in per deployment, never shipped.
+    DEBUG: bool = False
 
     # Logging configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -13,6 +45,7 @@ class Settings:
 
     # Directory configurations
     DEFAULT_INPUT_DIR: str = os.getenv("DEFAULT_INPUT_DIR", "/opt/vntyper/input")
+    DEFAULT_HANDOFF_SPOOL_DIR: str = os.getenv("DEFAULT_HANDOFF_SPOOL_DIR", "/opt/vntyper/handoff")
     DEFAULT_OUTPUT_DIR: str = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
 
     # Upload size ceiling, in bytes. Caps the total an individual job submission
@@ -23,6 +56,24 @@ class Settings:
     # bounding what a single request can consume. Deployments with a different
     # volume budget override it with MAX_UPLOAD_BYTES.
     MAX_UPLOAD_BYTES: int = int(os.getenv("MAX_UPLOAD_BYTES", 1024 * 1024 * 1024))
+
+    # Shared admission limits for pipeline and cohort-analysis submissions.
+    # The reservation registry makes the queue count and aggregate byte budget
+    # atomic across API processes; the worker releases its entry on completion.
+    MAX_QUEUED_JOBS: int = int(os.getenv("MAX_QUEUED_JOBS", 100))
+    MIN_FREE_DISK_BYTES: int = minimum_free_disk_bytes(MAX_UPLOAD_BYTES)
+    PIPELINE_RESERVATION_BYTES: int = pipeline_reservation_bytes(MAX_UPLOAD_BYTES)
+    COHORT_RESERVATION_BASE_BYTES: int = int(os.getenv("COHORT_RESERVATION_BASE_BYTES") or MAX_UPLOAD_BYTES)
+    COHORT_MEMBER_RESERVATION_FACTOR: int = int(os.getenv("COHORT_MEMBER_RESERVATION_FACTOR", 2))
+
+    # Queued reservations need a generous grace because broker wait time has no
+    # knowable production maximum. Seven days is a conservative shipped
+    # assumption, not a task timeout; deployments whose intended backlog can
+    # exceed it must raise this value. Once a worker starts, its shorter lease
+    # is kept alive by periodic heartbeats and can recover after a killed worker.
+    ADMISSION_QUEUED_GRACE_SECONDS: int = int(os.getenv("ADMISSION_QUEUED_GRACE_SECONDS", 7 * 86400))
+    ADMISSION_ACTIVE_LEASE_SECONDS: int = int(os.getenv("ADMISSION_ACTIVE_LEASE_SECONDS", 24 * 60 * 60))
+    ADMISSION_HEARTBEAT_SECONDS: int = int(os.getenv("ADMISSION_HEARTBEAT_SECONDS", 5 * 60))
 
     # Rate limiting configurations
     RATE_LIMIT_SIMPLE_TIMES: int = int(os.getenv("RATE_LIMIT_SIMPLE_TIMES", 100))

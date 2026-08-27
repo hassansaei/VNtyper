@@ -77,9 +77,7 @@ logger = logging.getLogger(__name__)
 #: the fastp table read as empty to a screen reader while looking complete on
 #: screen. ``role="img"`` is what makes the browser use ``aria-label`` as the
 #: element's name instead of its text. The names are deliberately about the mark
-#: rather than about the direction of the comparison: ``OK_ICON`` is also what a
-#: metric that was never measured renders as (:data:`MISSING_AS_OK`), so a name
-#: like "within the cutoff" would be false there.
+#: rather than about the direction of the comparison.
 #:
 #: Both colours are tokens from ``templates/_report_base.html`` rather than the CSS
 #: keywords they used to be. ``red`` measured 4.00:1 against the page, under the 4.5:1
@@ -94,11 +92,7 @@ WARNING_ICON = (
 #: Green tick, shown when a metric passes its threshold.
 OK_ICON = '<span style="color:var(--state-ok);font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>'
 
-#: What a metric with no value at all renders as. The coverage rows show a tick
-#: (the report has always treated "not calculated" as "not a problem"); the fastp
-#: rows show nothing, because the whole fastp section is hidden when fastp did not
-#: run and a lone glyph in an otherwise empty row reads as a result.
-MISSING_AS_OK: tuple[str, str] = (OK_ICON, "green")
+#: What a metric with no value at all renders as. Absence is not a passing result.
 MISSING_AS_BLANK: tuple[str, str] = ("", "")
 
 #: Kestrel result column -> report heading, in display order. Columns absent from
@@ -115,12 +109,10 @@ MISSING_AS_BLANK: tuple[str, str] = ("", "")
 #: annotated onto, which is what ``cohort_summary.py`` shows and what the heading
 #: has always claimed to be.
 #: ``Motif_sequence`` is **last**, and that is an observable output-format change
-#: recorded in ``docs/user-guide/output-files.md``. It used to be sixth. The real motif
-#: sequence is 121 bp - the 13-character value in the unit fixtures is not
-#: representative - so at 1280px it pushed ``Confidence`` and ``Flag`` off the right
-#: edge of the table: the two columns a reader opens the report for became the ones
-#: that scrolled, while the widest and least-scanned column sat in the middle. Last, it
-#: is the column that scrolls, which is the correct one to lose.
+#: recorded in ``docs/user-guide/output-files.md``. It used to be sixth. Before its
+#: value was corrected to the selected 60 bp half, the column held the 120 bp pair
+#: record, whose long unbroken text pushed ``Confidence`` and ``Flag`` off the right
+#: edge of the table at 1280px. Last, it is the column that scrolls.
 KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
     "Motif": "Motif",
     "Variant": "Variant",
@@ -144,7 +136,7 @@ KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
     "Ambiguity_Interval": "Ambiguity",
     "Repeat_Form": "Repeat Form",
     "Nomenclature_Note": "Naming Note",
-    # Keep the 121 bp motif last even as later output fields are added: the two
+    # Keep the long unbroken motif sequence last even as later output fields are added: the two
     # confidence/flag columns must not be displaced by the widest value (#242).
     "Motif_sequence": "Motif Sequence",
 }
@@ -439,7 +431,7 @@ COLUMN_HELP: dict[str, str] = {
     "Repeat_Form": "The affected tract before and after the edit, written as a repeat count.",
     "Naming Note": "What the name is, and how far it has been checked.",
     "Nomenclature_Note": "What the name is, and how far it has been checked.",
-    "Motif Sequence": "The full 121 bp motif sequence the call sits in.",
+    "Motif Sequence": "The 60 bp repeat-unit half named by the Motif column.",
     "VID": "adVNTR's own variant identifier.",
     "NumberOfSupportingReads": "Reads adVNTR counted in support of this call.",
     "MeanCoverage": "Mean read depth adVNTR measured over the locus.",
@@ -481,7 +473,7 @@ MONO_COLUMNS: frozenset[str] = frozenset(
 #: here is either already stated in the masthead's allele panel for a run that named one
 #: allele (the ambiguity interval, the repeat form, both callers' own names, the naming
 #: note) or is a figure the column beside it derives (``Depth (Region)``, which
-#: ``Depth Score`` is the ratio over) or the 121 bp sequence, which is the widest value
+#: ``Depth Score`` is the ratio over) or the 60 bp sequence, which is the widest value
 #: in the document and the least scanned. Nineteen columns measured 1,946px inside a
 #: 1,130px frame; twelve fit.
 KESTREL_ESSENTIAL_COLUMNS: frozenset[str] = frozenset(
@@ -1154,7 +1146,7 @@ def annotate_table_columns(
             classes.append("num")
         if heading in MONO_COLUMNS:
             classes.append("mono-cell")
-        # The one value with genuinely nowhere to break: 121 unbroken bases. It is the
+        # The one value with genuinely nowhere to break: the unbroken 60 bp motif half. It is the
         # only cell the print block lets break mid-token, because every other value that
         # did so was a number split mid-digit.
         if heading in SEQUENCE_COLUMNS:
@@ -1185,7 +1177,7 @@ def folded_record_html(df: pd.DataFrame, essential: frozenset[str], *, noun: str
 
     **The printed table cannot hold nineteen columns and never could.** Measured in
     Chromium at A4 portrait, the Kestrel table lays out at 1,442px on a 718px sheet:
-    757px - ten of nineteen columns, the 121 bp motif sequence among them - fell off the
+    757px - ten of nineteen columns, the motif sequence among them - fell off the
     paper, and nothing on the sheet said so. Restoring every column for print was the
     wrong fix twice over: it is what produced the overflow, and it makes the archived
     PDF, the artefact that outlives the HTML, the *least* complete rendering of the run.
@@ -1553,6 +1545,25 @@ def summarise_fastp(fastp_data: dict[str, Any]) -> FastpMetrics:
         passed_filter_rate=passed_filter_rate,
         sequencing=summary.get("sequencing", ""),
     )
+
+
+def fastp_threshold_rate(rate: float | None) -> float | None:
+    """Return a fastp fraction rounded exactly as its report cell displays it.
+
+    The shipped template multiplies a fractional rate by 100 and then rounds the
+    percentage to two decimal places. Converting that displayed percentage back
+    to a fraction lets the icon use the configured fractional cutoff without
+    changing the raw value exposed to templates.
+
+    Args:
+        rate: A raw fractional fastp rate, or None when it was not measured.
+
+    Returns:
+        float | None: The displayed percentage as a fraction, preserving None.
+    """
+    if rate is None:
+        return None
+    return round(rate * 100, 2) / 100
 
 
 def extract_line_after(content: str, marker: str) -> str:

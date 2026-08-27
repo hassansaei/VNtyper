@@ -98,6 +98,24 @@ def test_sam_to_bam_quotes_both_operands_and_the_redirect(tmp_path) -> None:
     assert shlex.split(index) == ["samtools", "index", bam]
 
 
+def test_sam_to_bam_uses_configured_samtools_and_threads_in_both_commands(tmp_path) -> None:
+    """Both converter commands use the configured executable and non-default threads."""
+    sam = str(tmp_path / "output.sam")
+    Path(sam).write_text("@HD\tVN:1.6\n", encoding="utf-8")
+
+    with patch.object(kestrel_genotyping, "run_command", return_value=True) as run:
+        kestrel_genotyping.convert_sam_to_bam_and_index(
+            sam,
+            str(tmp_path),
+            samtools_path="/opt/vntyper/bin/samtools",
+            threads=7,
+        )
+
+    bam = str(tmp_path / "output.bam")
+    assert run.call_args_list[0].args[0] == f"/opt/vntyper/bin/samtools view -Sb -@ 7 {sam} > {bam}"
+    assert run.call_args_list[1].args[0] == f"/opt/vntyper/bin/samtools index -@ 7 {bam}"
+
+
 def test_bcftools_sort_quotes_the_vcf_paths(tmp_path) -> None:
     """`-o` takes a single operand; an unquoted space makes bcftools see a stray argument."""
     vcf = _make(tmp_path, "out.vcf")

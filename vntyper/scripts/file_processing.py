@@ -3,8 +3,12 @@
 import importlib.resources as pkg_resources
 import json
 import logging
+import math
+import re
 
 logger = logging.getLogger(__name__)
+
+_SCALAR_DEPTH_PATTERN = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 
 
 def _assert_kestrel_allele_contract(ref, alt, snv_length, source_path):
@@ -78,6 +82,84 @@ def _assert_empty_allele_contract(ref, alt, source_path):
     raise ValueError(msg)
 
 
+def _assert_kestrel_format_contract(
+    format_field: str,
+    sample_field: str,
+    expected_format: str,
+    source_path: str,
+) -> None:
+    """Reject a Kestrel sample field that the positional scorer cannot consume safely.
+
+    Scoring splits the sample value into exactly three positional columns and does not
+    retain or inspect ``FORMAT``. The configured contract may change the genotype label,
+    but GDP and DP must remain the second and third fields respectively. Both depths must
+    be finite, non-negative scalar numeric values so malformed data cannot silently alter
+    confidence assignment.
+
+    Args:
+        format_field: The record's FORMAT column.
+        sample_field: The record's single sample column.
+        expected_format: Required configured FORMAT expectation.
+        source_path: VCF path included in diagnostics.
+
+    Raises:
+        ValueError: If the configured layout is incompatible with positional scoring, the
+            record's FORMAT or width differs, or GDP/DP is not finite, non-negative scalar
+            numeric data.
+    """
+    expected_fields = expected_format.split(":")
+    if len(expected_fields) != 3 or expected_fields[1:] != ["GDP", "DP"]:
+        msg = (
+            f"Off-contract Kestrel FORMAT configuration for {source_path}: "
+            f"file_processing.kestrel_format is {expected_format!r}, but the positional scorer "
+            "requires exactly three fields with GDP and DP in positions 2 and 3. Re-verify and "
+            "update the scorer before configuring another depth layout."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if format_field != expected_format:
+        msg = (
+            f"Off-contract VCF record in {source_path}: FORMAT is {format_field!r}, but "
+            f"config.json file_processing.kestrel_format requires {expected_format!r}. A changed "
+            "FORMAT can alter the positional depth mapping, so the run stops rather than mis-scoring."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    sample_fields = sample_field.split(":")
+    if len(sample_fields) != len(expected_fields):
+        msg = (
+            f"Off-contract VCF record in {source_path}: sample field {sample_field!r} has "
+            f"{len(sample_fields)} colon-separated values, but FORMAT {expected_format!r} declares "
+            f"{len(expected_fields)}. The positional depth mapping cannot be trusted."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    for field_name, value in zip(expected_fields[1:], sample_fields[1:], strict=True):
+        try:
+            numeric_value = float(value)
+        except ValueError:
+            numeric_value = math.nan
+        if _SCALAR_DEPTH_PATTERN.fullmatch(value) is None or not math.isfinite(numeric_value):
+            msg = (
+                f"Off-contract VCF record in {source_path}: {field_name}={value!r} in sample field "
+                f"{sample_field!r} is not a finite scalar numeric depth. Malformed depths can coerce "
+                "to zero during scoring, so the run stops rather than reporting a silent Negative."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+        if numeric_value < 0:
+            msg = (
+                f"Off-contract VCF record in {source_path}: {field_name}={value!r} in sample field "
+                f"{sample_field!r} cannot be negative because depths are read counts. Negative depths "
+                "can alter confidence assignment, so the run stops rather than reporting a silent genotype."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+
 def filter_vcf(input_path, output_path):
     """
     Filter a VCF file to extract indels (insertions and deletions) and write them to a new file.
@@ -89,29 +171,43 @@ def filter_vcf(input_path, output_path):
 
     This function is the trust boundary for Kestrel's output: it is the sole consumer of the
     raw VCF Kestrel writes (see ``kestrel_genotyping.process_kestrel_output``). Every record is
-    checked against the pinned build's allele-shape contract before it is classified; see
-    :func:`_assert_kestrel_allele_contract`.
+    checked against the pinned build's allele-shape and FORMAT/sample contracts before it
+    is classified; see :func:`_assert_kestrel_allele_contract` and
+    :func:`_assert_kestrel_format_contract`.
 
     Args:
         input_path (str): Path to the input VCF file.
         output_path (str): Path to the output VCF file containing only indels.
 
     Raises:
-        ValueError: If a data line has fewer than five tab-separated fields, or if a record
-            carries two multi-base alleles and so breaks the pinned Kestrel output contract.
+        ValueError: If a record does not have exactly ten tab-separated fields, carries an
+            empty allele or two multi-base alleles, or violates the configured FORMAT/sample
+            depth contract.
     """
     with pkg_resources.open_text("vntyper", "config.json") as f:
         config_data = json.load(f)
     snv_length = config_data.get("file_processing", {}).get("snv_length", 1)
+    kestrel_format = config_data["file_processing"]["kestrel_format"]
 
     with open(input_path) as vcf_file, open(output_path, "w") as indel_file:
         for line in vcf_file:
             if line.startswith(("##", "#CHROM")):
                 indel_file.write(line)
             else:
-                _, _, _, ref, alt, *_ = line.split("\t")
+                fields = line.rstrip("\r\n").split("\t")
+                if len(fields) != 10:
+                    msg = (
+                        f"Off-contract VCF record in {input_path}: found {len(fields)} tab-separated "
+                        "fields, but the pinned Kestrel output has exactly 10 (eight mandatory VCF "
+                        "columns, FORMAT, and one sample column). The run stops rather than ignoring "
+                        "or mis-scoring sample data."
+                    )
+                    logger.error(msg)
+                    raise ValueError(msg)
+                ref, alt = fields[3], fields[4]
                 _assert_empty_allele_contract(ref, alt, input_path)
                 _assert_kestrel_allele_contract(ref, alt, snv_length, input_path)
+                _assert_kestrel_format_contract(fields[8], fields[9], kestrel_format, input_path)
                 if len(ref) != len(alt):
                     indel_file.write(line)
 

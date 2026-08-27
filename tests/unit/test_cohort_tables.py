@@ -254,6 +254,72 @@ def test_the_kestrel_table_carries_the_shared_css_classes() -> None:
     assert f'class="dataframe {TABLE_CLASSES}"' in kestrel_table_html(frame)
 
 
+def test_only_the_negative_empty_result_placeholder_is_suppressed() -> None:
+    """The cohort-added sample name must not make a placeholder look like a call.
+
+    A sparse negative row that does name a variant remains a real record. This pins the
+    second half of the empty-result predicate so suppressing placeholders cannot turn
+    into suppressing every row labelled ``Negative``.
+    """
+    frame = pd.DataFrame(
+        [
+            {
+                "Sample": "placeholder",
+                "Motif": "None",
+                "Variant": "None",
+                "POS": "None",
+                "REF": "None",
+                "ALT": "None",
+                "Motif_sequence": "None",
+                "Estimated_Depth_AlternateVariant": "None",
+                "Estimated_Depth_Variant_ActiveRegion": "None",
+                "Depth_Score": "None",
+                "Confidence": "Negative",
+                "Flag": pd.NA,
+            },
+            {"Sample": "real-negative", "Variant": "insC", "Confidence": "Negative"},
+        ]
+    )
+
+    html = kestrel_table_html(frame)
+
+    assert ">placeholder<" not in html
+    assert ">real-negative<" in html
+
+
+def test_kestrel_missing_cells_render_empty_without_coercing_real_values() -> None:
+    """Missing scalars are presentation blanks, not the text ``nan``/``None``/``<NA>``."""
+    frame = pd.DataFrame(
+        [
+            {
+                "Sample": "kestrel",
+                "Motif": float("nan"),
+                "Variant": None,
+                "POS": pd.NA,
+                "REF": "",
+                "ALT": 0,
+                "Depth_Score": False,
+                "Flag": "banana and None <remain text>",
+            }
+        ]
+    )
+    original = frame.copy(deep=True)
+
+    cells = _cells(kestrel_table_html(frame))
+
+    assert cells == [
+        "kestrel",
+        "",
+        "",
+        "",
+        "",
+        "0",
+        "False",
+        "banana and None &lt;remain text&gt;",
+    ]
+    pd.testing.assert_frame_equal(frame, original)
+
+
 # ---------------------------------------------------------------------------
 # The adVNTR table
 # ---------------------------------------------------------------------------
@@ -312,6 +378,38 @@ def test_an_empty_advntr_frame_renders_as_nothing_at_all() -> None:
     assert advntr_table_html(pd.DataFrame()) == ""
 
 
+def test_advntr_missing_cells_render_empty_without_coercing_real_values() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "Sample": "advntr",
+                "VID": float("nan"),
+                "Variant": None,
+                "MeanCoverage": pd.NA,
+                "Pvalue": "",
+                "RU": 0,
+                "POS": False,
+                "Flag": "None and nan <remain text>",
+            }
+        ]
+    )
+    original = frame.copy(deep=True)
+
+    cells = _cells(advntr_table_html(frame))
+
+    assert cells == [
+        "advntr",
+        "",
+        "",
+        "",
+        "",
+        "0",
+        "False",
+        "None and nan &lt;remain text&gt;",
+    ]
+    pd.testing.assert_frame_equal(frame, original)
+
+
 # ---------------------------------------------------------------------------
 # The per-sample statistics table
 # ---------------------------------------------------------------------------
@@ -357,6 +455,41 @@ def test_the_statistics_table_escapes_every_column() -> None:
 
 def test_an_empty_statistics_table_renders_as_nothing_at_all() -> None:
     assert stats_table_html(pd.DataFrame()) == ""
+
+
+def test_statistics_missing_cells_render_empty_without_coercing_real_values() -> None:
+    """The naturally sparse coverage union receives the same display-only treatment."""
+    union = additional_stats_frame(
+        [
+            {"Sample": "measured", "coverage": {"mean": "31.2"}},
+            {
+                "Sample": "stats",
+                "coverage": {},
+                "cov_median": None,
+                "cov_stdev": pd.NA,
+                "pipeline": "",
+                "reads": 0,
+                "enabled": False,
+                "note": "banana None nan <remain text>",
+            },
+        ]
+    )
+    frame = union.loc[union["Sample"] == "stats"]
+    original = frame.copy(deep=True)
+
+    cells = _cells(stats_table_html(frame))
+
+    assert cells == [
+        "stats",
+        "",
+        "",
+        "",
+        "0.0",
+        "False",
+        "banana None nan &lt;remain text&gt;",
+        "",
+    ]
+    pd.testing.assert_frame_equal(frame, original)
 
 
 def test_the_statistics_frame_puts_sample_first() -> None:
@@ -410,3 +543,17 @@ def _headings(html: str) -> list[str]:
     import re
 
     return re.findall(r"<th>(.*?)</th>", html)
+
+
+def _cells(html: str) -> list[str]:
+    """Pull table-cell contents from rendered markup in document order.
+
+    Args:
+        html: A rendered table.
+
+    Returns:
+        list[str]: Raw cell contents, after VNtyper's escaping.
+    """
+    import re
+
+    return re.findall(r"<td>(.*?)</td>", html, flags=re.DOTALL)

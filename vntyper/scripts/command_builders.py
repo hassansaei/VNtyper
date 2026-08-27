@@ -3,14 +3,12 @@ command_builders.py
 
 Shell command construction for the external tools the BAM/CRAM/FASTQ path drives.
 
-Every command in this module is handed to :func:`vntyper.scripts.utils.run_command`,
-which runs it as a **single string** under ``/bin/bash`` with ``shell=True``. That
-is deliberate and load-bearing (trap 9): every command here is shell syntax - pipes,
-``&&``, output redirection - which no ``shell=False`` argv list can express, and the
-``set -o pipefail`` prefix below is a non-POSIX ``set`` option, so pinning
-``/bin/bash`` is what makes it available regardless of which shell the host installs
-as ``/bin/sh``. The consequence is that quoting can only happen here, at construction
-time.
+Shell commands in this module are handed to :func:`vntyper.scripts.utils.run_command`,
+which runs them as **single strings** under ``/bin/bash`` with ``shell=True``. That is
+deliberate and load-bearing (trap 9): pipes, ``&&`` and output redirection cannot be
+expressed by a ``shell=False`` argv list, and the ``set -o pipefail`` prefix below is a
+non-POSIX ``set`` option. The one argv builder is explicitly named as such and is used
+by a direct ``subprocess.run`` caller.
 
 Trap 9 used to be justified by bash **process substitution** specifically, in the CRAM
 unmapped-read branch. That substitution is gone - see
@@ -30,7 +28,7 @@ Two rules follow, and they pull in opposite directions:
   operator-controlled configuration, not user input.
 
 The strings produced here are byte-identical to the ones the pipeline produced
-before this module existed, apart from six deliberate fixes:
+before this module existed, apart from the deliberate fixes listed here:
 
 1. ``shlex.quote`` around interpolated paths (a no-op for paths that need no
    quoting, which is every path in the test suite and most real ones).
@@ -48,11 +46,17 @@ before this module existed, apart from six deliberate fixes:
 6. Dedup-enabled fastp commands use one worker because fastp 0.23.4's shared
    atomic duplicate table retains whichever representative wins a scheduling race.
    Dedup-disabled commands retain the caller's requested concurrency.
+7. Kestrel's SAM conversion uses configured samtools and the run's thread budget.
+8. The adVNTR downsample index uses the same thread budget as its view and sort.
+9. BAM-to-FASTQ name sorting carries an explicit ``-T`` prefix inside the run
+   output tree, so spill files do not land in the process launch directory.
 
 Functions:
     build_fastp_command: FASTQ quality control
+    build_sam_to_bam_command: Kestrel SAM-to-BAM conversion
     build_samtools_slice_command: region or BED slicing, plus indexing
     build_samtools_index_command: BAM indexing
+    build_threaded_samtools_index_argv: BAM indexing through ``subprocess.run``
     build_cram_unmapped_filter_command: CRAM unmapped-read extraction
     build_samtools_merge_command: merge sliced and unmapped BAMs
     build_bam_to_fastq_command: name-sort then convert to paired FASTQ
@@ -251,6 +255,37 @@ def build_samtools_index_command(
     if output_bai is None:
         return f"{samtools_path} index {_thread_flag(threads)}{quote_path(bam_file)}"
     return f"{samtools_path} index {_thread_flag(threads)}-o {quote_path(output_bai)} {quote_path(bam_file)}"
+
+
+def build_sam_to_bam_command(
+    *, samtools_path: str, sam_file: str | Path, bam_file: str | Path, threads: int = 1
+) -> str:
+    """Build Kestrel's shell-based SAM-to-BAM conversion command.
+
+    Args:
+        samtools_path: Configured samtools invocation.
+        sam_file: Kestrel SAM input.
+        bam_file: BAM destination written through shell redirection.
+        threads: Samtools thread count. One preserves the historical command.
+
+    Returns:
+        The complete ``samtools view`` command.
+    """
+    return f"{samtools_path} view -Sb {_thread_flag(threads)}{quote_path(sam_file)} > {quote_path(bam_file)}"
+
+
+def build_threaded_samtools_index_argv(*, samtools_path: str, bam_file: str | Path, threads: int) -> list[str]:
+    """Build the explicit-thread index argv used by the downsample path.
+
+    Args:
+        samtools_path: Configured samtools executable.
+        bam_file: BAM to index.
+        threads: Samtools thread count.
+
+    Returns:
+        The argv list for ``subprocess.run``.
+    """
+    return [samtools_path, "index", "-@", str(threads), str(bam_file)]
 
 
 def build_cram_unmapped_filter_command(
@@ -486,6 +521,7 @@ def build_bam_to_fastq_command(
     fastq_r2: str | Path,
     fastq_other: str | Path,
     fastq_single: str | Path,
+    sort_tmp_prefix: str | Path,
 ) -> str:
     """
     Build the name-sort-then-convert pipeline that turns a BAM back into FASTQ.
@@ -498,6 +534,8 @@ def build_bam_to_fastq_command(
         fastq_r2 (str | Path): Output R2.
         fastq_other (str | Path): Output for reads that are neither R1 nor R2.
         fastq_single (str | Path): Output for singleton reads.
+        sort_tmp_prefix (str | Path): Temp-file prefix for the name sort's spill
+            (``samtools sort -T``). The caller places it inside the run output tree.
 
     Returns:
         str: The complete pipeline, prefixed with ``set -o pipefail``.
@@ -507,11 +545,13 @@ def build_bam_to_fastq_command(
         exits 0 on a short input stream, so before it a ``samtools sort`` that ran
         out of disk or hit a truncated BAM produced a **partial FASTQ that the
         pipeline then genotyped without a warning**. With ``pipefail`` the stage
-        fails loudly instead.
+        fails loudly instead. The explicit ``-T`` keeps name-sort spill files out
+        of the process launch directory.
     """
     return (
         f"{PIPEFAIL_PREFIX}"
-        f"{samtools_path} sort -n -@ {quote_path(threads)} {quote_path(in_bam)} | "
+        f"{samtools_path} sort -n -@ {quote_path(threads)} -T {quote_path(sort_tmp_prefix)} "
+        f"{quote_path(in_bam)} | "
         f"{samtools_path} fastq -@ {quote_path(threads)} - -1 {quote_path(fastq_r1)} "
         f"-2 {quote_path(fastq_r2)} -0 {quote_path(fastq_other)} "
         f"-s {quote_path(fastq_single)}"

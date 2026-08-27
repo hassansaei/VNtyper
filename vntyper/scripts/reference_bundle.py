@@ -12,11 +12,13 @@ import hashlib
 import inspect
 import logging
 import shutil
+import stat
 import tarfile
 import tempfile
+import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -74,7 +76,17 @@ def verify_sha256(path: Path, expected: str) -> None:
     logger.info(f"  ✓ verified {path.name}")
 
 
-def safe_extract(archive: Path, destination: Path) -> None:
+def _resolved_destination_root(archive: Path, destination: Path) -> Path:
+    """Create and resolve an extraction root without following a root symlink."""
+    if destination.is_symlink():
+        message = f"{archive.name}: destination {destination} is a symlink"
+        logger.error(message)
+        raise ValueError(message)
+    destination.mkdir(parents=True, exist_ok=True)
+    return destination.resolve()
+
+
+def safe_extract(archive: Path, destination: Path) -> list[str]:
     """Extract a tar archive, rejecting any member that could write outside the root.
 
     **Links are rejected outright rather than resolved**, and that is the whole defence
@@ -116,17 +128,21 @@ def safe_extract(archive: Path, destination: Path) -> None:
         archive: `.tar.gz` to unpack.
         destination: Directory to unpack into; created if absent.
 
+    Returns:
+        list[str]: The extracted regular-file member names, for provenance recording.
+
     Raises:
-        ValueError: On an absolute path, a `..` component, a symbolic or hard link, a
-            device or FIFO member, a member whose destination resolves outside
-            `destination` through a symlink already present there, or anything
-            `tarfile`'s own `data` filter refuses. Per AGENTS.md the convention is
-            `logger.error(message)` then `raise`, with no custom exception class.
+        ValueError: If `destination` is a symlink, on an absolute path, a `..`
+            component, a symbolic or hard link, a device or FIFO member, a member whose
+            destination resolves outside `destination` through a symlink already present
+            there, or anything `tarfile`'s own `data` filter refuses. Per AGENTS.md the
+            convention is `logger.error(message)` then `raise`, with no custom exception
+            class.
     """
-    destination.mkdir(parents=True, exist_ok=True)
-    destination_root = destination.resolve()
+    destination_root = _resolved_destination_root(archive, destination)
     with tarfile.open(archive, "r:gz") as tar:
-        for member in tar.getmembers():
+        members = tar.getmembers()
+        for member in members:
             name = Path(member.name)
             if name.is_absolute():
                 message = f"{archive.name}: absolute path in member '{member.name}'"
@@ -163,6 +179,62 @@ def safe_extract(archive: Path, destination: Path) -> None:
             message = f"{archive.name}: tarfile's 'data' extraction filter refused the archive: {refused}"
             logger.error(message)
             raise ValueError(message) from refused
+        return [member.name for member in members if member.isfile()]
+
+
+def safe_extract_zip(archive: Path, destination: Path) -> list[str]:
+    """Extract a ZIP archive without allowing a member to leave its root.
+
+    The standard library sanitises absolute and parent components during ZIP
+    extraction, but it follows directory symlinks that already exist in the destination.
+    Staged reference installs copy such links from the prior tree, so every resolved
+    member target is checked before extraction and hostile names are rejected rather than
+    silently rewritten. Link entries are also refused because reference archives ship
+    regular files and directories only.
+
+    Args:
+        archive: `.zip` to unpack.
+        destination: Directory to unpack into; created if absent.
+
+    Returns:
+        list[str]: The extracted regular-file member names, for provenance recording.
+
+    Raises:
+        ValueError: If `destination` is a symlink, or a member is absolute, contains a
+            parent component, declares a link, or resolves outside `destination` through
+            a pre-existing symlink.
+    """
+    destination_root = _resolved_destination_root(archive, destination)
+    with zipfile.ZipFile(archive, "r") as bundle:
+        members = bundle.infolist()
+        for member in members:
+            name = PurePosixPath(member.filename)
+            if name.is_absolute():
+                message = f"{archive.name}: absolute path in member '{member.filename}'"
+                logger.error(message)
+                raise ValueError(message)
+            if ".." in name.parts:
+                message = f"{archive.name}: member '{member.filename}' escapes the archive root"
+                logger.error(message)
+                raise ValueError(message)
+            if stat.S_ISLNK(member.external_attr >> 16):
+                message = (
+                    f"{archive.name}: member '{member.filename}' is a link, and a reference archive "
+                    "ships regular files only"
+                )
+                logger.error(message)
+                raise ValueError(message)
+            resolved_target = (destination / member.filename).resolve()
+            if not resolved_target.is_relative_to(destination_root):
+                message = (
+                    f"{archive.name}: member '{member.filename}' resolves to {resolved_target}, outside "
+                    f"destination root {destination_root} - a symlink already present in the destination "
+                    "redirected it there"
+                )
+                logger.error(message)
+                raise ValueError(message)
+        bundle.extractall(path=destination)
+        return [member.filename for member in members if not member.is_dir()]
 
 
 @contextmanager

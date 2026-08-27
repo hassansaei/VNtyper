@@ -317,7 +317,7 @@ patch-coverage:
 		--fail-under=$(PATCH_COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Patch coverage >= $(PATCH_COVERAGE_TARGET)%$(RESET)"
 
-# Advisory mutation score over the five pure-decision modules.
+# Advisory mutation score over the modules listed in scripts/mutation_test.py TARGETS.
 #
 # ADVISORY. Nothing gates on it and nothing should: equivalent mutants have not been
 # hand-classified, so the printed score understates the truth by an unknown margin.
@@ -549,7 +549,10 @@ ci-local: lint-actions format-check lint type-check-all test-unit-cov patch-cove
 BASE_INPUTS := conda docker/Dockerfile.base docker/requirements-web.txt \
 	vntyper/__init__.py vntyper/scripts/__init__.py \
 	vntyper/scripts/install_references.py vntyper/scripts/install_references_config.json \
-	vntyper/scripts/reference_bundle.py vntyper/scripts/reference_provenance.py \
+	vntyper/scripts/install_references_logging.py \
+	vntyper/scripts/reference_bundle.py vntyper/scripts/reference_download.py \
+	vntyper/scripts/reference_integrity.py \
+	vntyper/scripts/reference_provenance.py \
 	vntyper/dependencies/advntr .dockerignore
 
 # Mirrors docker-build.yml. Needs a Docker daemon.

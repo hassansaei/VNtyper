@@ -798,8 +798,11 @@ class TestInstallFromSource:
 
     def _download(self, payload: bytes, urls: list[str]):
         def _fake(url, dest_path):
+            if dest_path.exists():
+                return False
             urls.append(url)
             _gz(dest_path, payload)
+            return True
 
         return _fake
 
@@ -1095,11 +1098,14 @@ class TestInstallFromSource:
         merged_digest = hashlib.sha256(b">A-A\nAAAAAA\n").hexdigest()
 
         def _download(url, dest_path):
+            if dest_path.exists():
+                return False
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             if dest_path.suffix == ".gz":
                 _gz(dest_path, self.GENOME)
             else:
                 dest_path.write_bytes(seed_payload)
+            return True
 
         monkeypatch.setattr(install_references, "download_file", _download)
         monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
@@ -1170,7 +1176,9 @@ class TestInstallFromSource:
             install_references.install_from_source(self._config("f" * 64), tmp_path, ["hg19"], {}, index_threads=1)
 
         assert not archive.exists(), "the rejected archive is sticky; the next run would skip its download"
-        assert "removed chr1.hg19.fa.gz" in str(excinfo.value)
+        assert "removed mismatched chr1.hg19.fa.gz" in str(excinfo.value)
+        assert "freshly downloaded bytes do not match" in str(excinfo.value)
+        assert "retry" not in str(excinfo.value).lower()
         assert "checksum mismatch" in str(excinfo.value), "the original digests must survive in the message"
 
         # The retry actually re-downloads rather than short-circuiting on a leftover file.
@@ -1182,6 +1190,24 @@ class TestInstallFromSource:
             "https://hgdownload.example/hg19/chr1.fa.gz",
             "https://hgdownload.example/hg19/chr1.fa.gz",
         ]
+
+    def test_a_stale_seeded_genome_archive_is_redownloaded_within_the_run(self, tmp_path, monkeypatch):
+        """A staging retry otherwise inherits and rejects the same live corrupt archive forever."""
+        urls: list[str] = []
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        archive = tmp_path / "alignment" / "chr1.hg19.fa.gz"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"stale archive copied from the live reference tree")
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, urls))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+
+        installed = install_references.install_from_source(
+            self._config(digest), tmp_path, ["hg19"], {}, index_threads=1
+        )
+
+        assert urls == ["https://hgdownload.example/hg19/chr1.fa.gz"]
+        assert installed == {"hg19": tmp_path / "alignment" / "chr1.hg19.fa"}
+        assert (tmp_path / "alignment" / "chr1.hg19.fa").read_bytes() == self.GENOME
 
     def test_the_mismatch_message_names_the_file_and_both_digests(self, tmp_path, monkeypatch):
         digest = self._gz_digest(tmp_path, self.GENOME)
@@ -1228,8 +1254,11 @@ class TestInstallFromSource:
         digest = hashlib.sha256(payload).hexdigest()
 
         def _fake(url, dest_path):
+            if dest_path.exists():
+                return False
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             dest_path.write_bytes(payload)
+            return True
 
         monkeypatch.setattr(install_references, "download_file", _fake)
         monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
@@ -1244,18 +1273,44 @@ class TestInstallFromSource:
         assert installed == {"hg19": tmp_path / "alignment" / "chr1.fa"}
 
     def test_a_failed_download_raises_instead_of_ending_the_process(self, tmp_path, monkeypatch):
-        """`download_file` calls `sys.exit`; a bundle build needs an exception it can unwind."""
+        """`download_file` raises RuntimeError; the source build re-wraps it with the ref id."""
 
         def _fail(url, dest_path):
-            raise SystemExit(1)
+            raise RuntimeError(f"Failed to download {url}: boom")
 
         monkeypatch.setattr(install_references, "download_file", _fail)
 
         with pytest.raises(RuntimeError) as excinfo:
             install_references.install_from_source(self._config("a" * 64), tmp_path, ["hg19"], {}, index_threads=1)
 
-        assert "hg19" in str(excinfo.value)
-        assert "https://hgdownload.example/hg19/chr1.fa.gz" in str(excinfo.value)
+        assert str(excinfo.value) == "failed to download hg19 from https://hgdownload.example/hg19/chr1.fa.gz"
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+    def test_a_failed_genome_repair_leaves_nothing_to_decompress_or_index(self, tmp_path, monkeypatch):
+        archive = tmp_path / "alignment" / "chr1.hg19.fa.gz"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"stale")
+        attempts = 0
+        commands: list[str] = []
+
+        def _download(url, dest_path):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return False
+            dest_path.write_bytes(b"partial replacement")
+            raise RuntimeError("connection reset")
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, commands))
+
+        with pytest.raises(RuntimeError, match="failed to download hg19"):
+            install_references.install_from_source(self._config("a" * 64), tmp_path, ["hg19"], {}, index_threads=1)
+
+        assert attempts == 2
+        assert not archive.exists()
+        assert not archive.with_suffix("").exists()
+        assert commands == []
 
     def test_an_entry_without_a_target_path_is_refused(self, tmp_path, monkeypatch):
         monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, []))
@@ -1354,7 +1409,10 @@ class TestProcessOwnRepositoryReferencesVerifiesSeeds:
         calls: list[str] = []
 
         def _download(url, dest_path):
+            if dest_path.exists():
+                return False
             dest_path.write_bytes(payload)
+            return True
 
         monkeypatch.setattr(install_references, "download_file", _download)
         monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, calls))
@@ -1376,7 +1434,10 @@ class TestProcessOwnRepositoryReferencesVerifiesSeeds:
 
     def test_a_freshly_downloaded_seed_failing_its_digest_is_rejected_before_indexing(self, tmp_path, monkeypatch):
         def _download(url, dest_path):
+            if dest_path.exists():
+                return False
             dest_path.write_bytes(b"wrong bytes entirely")
+            return True
 
         monkeypatch.setattr(install_references, "download_file", _download)
         calls: list[str] = []
@@ -1398,42 +1459,56 @@ class TestProcessOwnRepositoryReferencesVerifiesSeeds:
         assert calls == [], "a rejected seed must never be indexed"
         assert not (tmp_path / "code-adVNTR_RUs.fa").exists()
 
-    def test_a_stale_preexisting_seed_is_rejected_not_silently_extracted_and_indexed(self, tmp_path, monkeypatch):
+    def test_a_stale_preexisting_seed_is_redownloaded_before_indexing(self, tmp_path, monkeypatch):
         """The literal MAJOR 3 scenario: `download_file` skips a destination that
         already exists, so a stale or corrupted `code-adVNTR_RUs.fa` sitting in the
         output tree from an earlier partial run must not be indexed and activated
-        without complaint. `download_file` is deliberately left un-mocked here: since
-        the target already exists, its real `if dest_path.exists(): return` guard is
-        what makes this scenario possible in production, and the fix must hold even
-        when nothing else intercepts the call.
+        without complaint. Removing only the staged copy cannot heal the live seed, so
+        this run must fetch and verify the pinned bytes before indexing.
         """
+        payload = b"the real seed bytes"
         target = tmp_path / "code-adVNTR_RUs.fa"
         target.write_bytes(b"stale, corrupted from an earlier partial run")
+        urls: list[str] = []
+
+        def _download(url, dest_path):
+            if dest_path.exists():
+                return False
+            urls.append(url)
+            dest_path.write_bytes(payload)
+            return True
+
+        monkeypatch.setattr(install_references, "download_file", _download)
         calls: list[str] = []
         monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, calls))
         config = {
             "raw_files": [
                 {
-                    # A URL that would fail loudly if ever actually requested - proving
-                    # the rejection comes from the digest check, not from the network.
                     "url": "https://seed.invalid/code-adVNTR_RUs.fa",
                     "target_path": "code-adVNTR_RUs.fa",
-                    "source_sha256": hashlib.sha256(b"the real seed bytes").hexdigest(),
+                    "source_sha256": hashlib.sha256(payload).hexdigest(),
                     "index_command": "samtools faidx {path}",
                 }
             ]
         }
 
-        with pytest.raises(ValueError, match="checksum mismatch"):
-            install_references.process_own_repository_references(config, tmp_path, False, {})
+        install_references.process_own_repository_references(config, tmp_path, False, {})
 
-        assert calls == [], "a stale seed must never reach indexing"
-        assert not target.exists(), "the stale seed must be removed, not left for a retry to reuse silently"
+        assert urls == ["https://seed.invalid/code-adVNTR_RUs.fa"]
+        assert target.read_bytes() == payload
+        assert len(calls) == 1, "only verified replacement bytes may reach indexing"
 
     def test_a_release_spec_seed_digest_is_honoured_when_it_agrees(self, tmp_path, monkeypatch):
         payload = b"the real seed bytes"
         digest = hashlib.sha256(payload).hexdigest()
-        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+
+        def _download(url, dest_path):
+            if dest_path.exists():
+                return False
+            dest_path.write_bytes(payload)
+            return True
+
+        monkeypatch.setattr(install_references, "download_file", _download)
         config = {
             "raw_files": [{"url": "https://x/f.fa", "target_path": "code-adVNTR_RUs.fa", "source_sha256": digest}]
         }
@@ -1447,7 +1522,17 @@ class TestProcessOwnRepositoryReferencesVerifiesSeeds:
     def test_a_release_spec_seed_digest_that_disagrees_is_refused(self, tmp_path, monkeypatch):
         payload = b"the real seed bytes"
         digest = hashlib.sha256(payload).hexdigest()
-        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+        attempts = 0
+
+        def _download(url, dest_path):
+            nonlocal attempts
+            attempts += 1
+            if dest_path.exists():
+                return False
+            dest_path.write_bytes(payload)
+            return True
+
+        monkeypatch.setattr(install_references, "download_file", _download)
         config = {
             "raw_files": [{"url": "https://x/f.fa", "target_path": "code-adVNTR_RUs.fa", "source_sha256": digest}]
         }
@@ -1456,6 +1541,58 @@ class TestProcessOwnRepositoryReferencesVerifiesSeeds:
             install_references.process_own_repository_references(
                 config, tmp_path, True, {}, release_spec={"seeds": {"code-adVNTR_RUs.fa": {"sha256": "f" * 64}}}
             )
+
+        assert attempts == 0, "a digest configuration error is not a byte mismatch and must not trigger transport"
+
+    def test_a_missing_seed_digest_stops_before_download(self, tmp_path, monkeypatch):
+        attempts = 0
+
+        def _download(url, dest_path):
+            nonlocal attempts
+            attempts += 1
+            return True
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        config = {"raw_files": [{"url": "https://x/f.fa", "target_path": "code-adVNTR_RUs.fa"}]}
+
+        with pytest.raises(ValueError, match="no source_sha256"):
+            install_references.process_own_repository_references(config, tmp_path, True, {})
+
+        assert attempts == 0
+
+    def test_a_failed_seed_repair_leaves_nothing_to_index(self, tmp_path, monkeypatch):
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"stale")
+        attempts = 0
+        commands: list[str] = []
+
+        def _download(url, dest_path):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return False
+            dest_path.write_bytes(b"partial replacement")
+            raise RuntimeError("connection reset")
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, commands))
+        config = {
+            "raw_files": [
+                {
+                    "url": "https://x/f.fa",
+                    "target_path": target.name,
+                    "source_sha256": hashlib.sha256(b"good").hexdigest(),
+                    "index_command": "samtools faidx {path}",
+                }
+            ]
+        }
+
+        with pytest.raises(RuntimeError, match="connection reset"):
+            install_references.process_own_repository_references(config, tmp_path, False, {})
+
+        assert attempts == 2
+        assert not target.exists()
+        assert commands == []
 
 
 class TestProcessVntyperReferencesVerifiesSeeds:
@@ -1469,7 +1606,14 @@ class TestProcessVntyperReferencesVerifiesSeeds:
     def test_a_freshly_downloaded_database_matching_its_digest_is_extracted(self, tmp_path, monkeypatch):
         payload = self._zip_bytes()
         digest = hashlib.sha256(payload).hexdigest()
-        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+
+        def _download(url, dest_path):
+            if dest_path.exists():
+                return False
+            dest_path.write_bytes(payload)
+            return True
+
+        monkeypatch.setattr(install_references, "download_file", _download)
         config = {
             "vntr_db_advntr": {
                 "url": "https://x/db.zip",
@@ -1483,25 +1627,118 @@ class TestProcessVntyperReferencesVerifiesSeeds:
 
         assert (tmp_path / "vntr_db_advntr_v2" / "hg19_muc1.db").exists()
 
-    def test_a_stale_preexisting_database_is_rejected_not_silently_extracted(self, tmp_path, monkeypatch):
+    def test_a_stale_preexisting_database_is_redownloaded_before_extraction(self, tmp_path, monkeypatch):
         """MAJOR 3 names `vntr_db_advntr.zip` explicitly: a stale or corrupted copy
         already in the output tree must not be extracted and activated unchecked."""
         target = tmp_path / "vntr_db_advntr.zip"
         target.write_bytes(b"stale, corrupted from an earlier partial run")
+        payload = self._zip_bytes()
+        urls: list[str] = []
+
+        def _download(url, dest_path):
+            if dest_path.exists():
+                return False
+            urls.append(url)
+            dest_path.write_bytes(payload)
+            return True
+
+        monkeypatch.setattr(install_references, "download_file", _download)
         config = {
             "vntr_db_advntr": {
                 "url": "https://seed.invalid/db.zip",
                 "target_path": "vntr_db_advntr.zip",
-                "source_sha256": hashlib.sha256(self._zip_bytes()).hexdigest(),
+                "source_sha256": hashlib.sha256(payload).hexdigest(),
                 "extract_to": ".",
             }
         }
 
-        with pytest.raises(ValueError, match="checksum mismatch"):
+        install_references.process_vntyper_references(config, tmp_path, "bwa", True, {})
+
+        assert urls == ["https://seed.invalid/db.zip"]
+        assert target.read_bytes() == payload
+        assert (tmp_path / "vntr_db_advntr_v2" / "hg19_muc1.db").exists()
+
+    def test_a_contradictory_database_digest_stops_before_download(self, tmp_path, monkeypatch):
+        attempts = 0
+
+        def _download(url, dest_path):
+            nonlocal attempts
+            attempts += 1
+            return True
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        config = {
+            "vntr_db_advntr": {
+                "url": "https://x/db.zip",
+                "target_path": "vntr_db_advntr.zip",
+                "source_sha256": "a" * 64,
+                "extract_to": ".",
+            }
+        }
+
+        with pytest.raises(ValueError, match="trust anchor"):
+            install_references.process_vntyper_references(
+                config,
+                tmp_path,
+                "bwa",
+                True,
+                {},
+                release_spec={"seeds": {"vntr_db_advntr.zip": {"sha256": "b" * 64}}},
+            )
+
+        assert attempts == 0
+
+    def test_a_missing_database_digest_stops_before_download(self, tmp_path, monkeypatch):
+        attempts = 0
+
+        def _download(url, dest_path):
+            nonlocal attempts
+            attempts += 1
+            return True
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        config = {
+            "vntr_db_advntr": {
+                "url": "https://x/db.zip",
+                "target_path": "vntr_db_advntr.zip",
+                "extract_to": ".",
+            }
+        }
+
+        with pytest.raises(ValueError, match="no source_sha256"):
             install_references.process_vntyper_references(config, tmp_path, "bwa", True, {})
 
+        assert attempts == 0
+
+    def test_a_failed_database_repair_leaves_nothing_to_extract(self, tmp_path, monkeypatch):
+        target = tmp_path / "vntr_db_advntr.zip"
+        target.write_bytes(b"stale")
+        attempts = 0
+
+        def _download(url, dest_path):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return False
+            dest_path.write_bytes(b"partial replacement")
+            raise RuntimeError("connection reset")
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        config = {
+            "vntr_db_advntr": {
+                "url": "https://x/db.zip",
+                "target_path": target.name,
+                "source_sha256": hashlib.sha256(self._zip_bytes()).hexdigest(),
+                "extract_to": "extracted",
+            }
+        }
+
+        with pytest.raises(RuntimeError, match="connection reset"):
+            install_references.process_vntyper_references(config, tmp_path, "bwa", True, {})
+
+        assert attempts == 2
         assert not target.exists()
-        assert not (tmp_path / "vntr_db_advntr").exists(), "a rejected archive must never be extracted"
+        assert not (tmp_path / "extracted").exists()
 
 
 class TestInstallSourceSeedsThreadsTheReleaseSpec:
@@ -1594,7 +1831,7 @@ class TestPartialSelectionAgainstTheShippedConfig:
             # build depends on that: it stages the seeds first so they are used instead of
             # being fetched. A fake that overwrote them would test the wrong thing.
             if dest_path.exists():
-                return
+                return False
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             if dest_path.suffix == ".gz":
                 _gz(dest_path, genome)
@@ -1602,6 +1839,7 @@ class TestPartialSelectionAgainstTheShippedConfig:
                 dest_path.write_bytes(advntr_zip)
             else:
                 dest_path.write_text(">seed\nACGT\n", encoding="utf-8")
+            return True
 
         monkeypatch.setattr(install_references, "download_file", _download)
         monkeypatch.setattr(
@@ -1716,10 +1954,15 @@ class TestPartialSelectionAgainstTheShippedConfig:
 
 
 class TestMainRouting:
+    def test_the_dead_ucsc_reference_path_is_gone(self) -> None:
+        """F6: process_ucsc_references had zero call sites and extracted archives onto
+        their own file path; it must not come back."""
+        assert not hasattr(install_references, "process_ucsc_references")
+
     def test_from_source_takes_the_source_path_and_not_the_legacy_one(self, tmp_path, monkeypatch):
         seen: dict = {}
         monkeypatch.setattr(install_references, "install_from_source", _record_into(seen))
-        for legacy in ("process_ucsc_references", "process_vntyper_references", "process_own_repository_references"):
+        for legacy in ("process_vntyper_references", "process_own_repository_references"):
             monkeypatch.setattr(install_references, legacy, _forbidden(legacy))
         monkeypatch.setattr(install_references, "install_from_bundle", _forbidden("install_from_bundle"))
 
@@ -1810,7 +2053,7 @@ class TestMainRouting:
         monkeypatch.setattr(
             install_references, "install_from_source", _forbidden("install_from_source", exception=AssertionError)
         )
-        for legacy in ("process_ucsc_references", "process_vntyper_references", "process_own_repository_references"):
+        for legacy in ("process_vntyper_references", "process_own_repository_references"):
             monkeypatch.setattr(install_references, legacy, _forbidden(legacy))
 
         install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"])

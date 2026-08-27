@@ -13,20 +13,19 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.request import urlretrieve
 
-# `docker/Dockerfile.base` copies this module and `reference_bundle.py` alone into a
+# `docker/Dockerfile.base` copies this module and its module-scope siblings into a
 # build stage and runs them without installing the package, and every module imported
-# here joins the base-image content hash. `reference_bundle` is therefore the only
-# `vntyper` import allowed at module scope; anything else is inlined below or imported
+# here joins the base-image content hash. Anything not provisioned there is imported
 # inside the function that needs it.
-from vntyper.scripts.reference_bundle import safe_extract, sha256_of, staged_install, verify_sha256
+from vntyper.scripts.install_references_logging import InstallLogHandler, attach_install_log, finish_install_log
+from vntyper.scripts.reference_bundle import safe_extract, safe_extract_zip, sha256_of, staged_install, verify_sha256
+from vntyper.scripts.reference_download import download_file
+from vntyper.scripts.reference_integrity import fetch_verified_asset, verify_existing_asset
 
 logger = logging.getLogger(__name__)
 
@@ -61,31 +60,6 @@ def load_install_config(config_path: Path) -> dict[str, Any]:
         sys.exit(1)
     except Exception as e:
         logger.error(f"Unexpected error reading config: {e}")
-        sys.exit(1)
-
-
-def download_file(url: str, dest_path: Path):
-    """
-    Download a file from a URL to the specified destination path.
-
-    Args:
-        url (str): URL to download the file from.
-        dest_path (Path): Local path to save the downloaded file.
-
-    Raises:
-        SystemExit: If the download fails.
-    """
-    if dest_path.exists():
-        logger.info(f"File already exists at {dest_path}. Skipping download.")
-        return
-
-    logger.info(f"Downloading from {url} to {dest_path}...")
-    try:
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        urlretrieve(url, dest_path)
-        logger.info(f"Successfully downloaded {dest_path.name}")
-    except Exception as e:
-        logger.error(f"Failed to download {url}: {e}")
         sys.exit(1)
 
 
@@ -494,87 +468,6 @@ def update_config(config_path: Path, references: dict[str, Path]):
         sys.exit(1)
 
 
-def process_ucsc_references(
-    ucsc_refs: dict[str, dict[str, str]],
-    output_dir: Path,
-    bwa_path: str,
-    skip_indexing: bool,
-    md5_dict: dict[str, str],
-    aligners: dict[str, dict[str, Any]] | None = None,
-    index_threads: int = 4,
-):
-    """
-    Process UCSC references by downloading and indexing.
-
-    Args:
-        ucsc_refs (dict): Dictionary of UCSC references.
-        output_dir (Path): Base output directory.
-        bwa_path (str): Path to the bwa executable (legacy, kept for compatibility).
-        skip_indexing (bool): Whether to skip the indexing step.
-        md5_dict (dict): Dictionary to store MD5 checksums.
-        aligners (dict, optional): Dictionary of aligner configurations for multi-aligner indexing.
-        index_threads (int): Number of threads to use for indexing.
-    """
-    for ref_name, ref_info in ucsc_refs.items():
-        url = ref_info.get("url")
-        target_path_str = ref_info.get("target_path")
-        index_command = ref_info.get("index_command", None)
-
-        if not url or not target_path_str:
-            logger.warning(f"Missing URL or target_path for UCSC reference {ref_name}. Skipping.")
-            continue
-
-        target_path = output_dir / target_path_str
-
-        download_file(url, target_path)
-
-        md5_checksum = calculate_md5(target_path)
-        md5_dict[str(target_path)] = md5_checksum
-        logger.info(f"MD5 checksum for {target_path.name}: {md5_checksum}")
-
-        if target_path.suffix == ".zip":
-            try:
-                with zipfile.ZipFile(target_path, "r") as zip_ref:
-                    zip_ref.extractall(path=target_path)
-                logger.info(f"Successfully extracted {target_path.name}")
-            except Exception as e:
-                logger.error(f"Failed to extract {target_path}: {e}")
-                sys.exit(1)
-        elif target_path.suffix == ".gz":
-            try:
-                output_path = target_path.with_suffix("")
-                with gzip.open(target_path, "rb") as f_in, open(output_path, "wb") as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-                logger.info(f"Successfully extracted {target_path.name} to {output_path.name}")
-            except Exception as e:
-                logger.error(f"Failed to extract {target_path}: {e}")
-                sys.exit(1)
-        elif target_path.suffixes[-2:] == [".tar", ".gz"] or target_path.suffix == ".tgz":
-            try:
-                with tarfile.open(target_path, "r:gz") as tar:
-                    tar.extractall(path=target_path)
-                logger.info(f"Successfully extracted {target_path.name}")
-            except Exception as e:
-                logger.error(f"Failed to extract {target_path}: {e}")
-                sys.exit(1)
-        else:
-            logger.warning(f"Unsupported archive format for {target_path}. Skipping extraction.")
-
-        # Multi-aligner indexing
-        if not skip_indexing:
-            output_path = target_path.with_suffix("")
-
-            if aligners:
-                # Use multi-aligner indexing
-                index_reference_with_aligners(output_path, aligners, threads=index_threads, force_reindex=False)
-            elif index_command:
-                # Fall back to legacy single indexing command
-                logger.warning(f"No aligners configured, using legacy index_command for {output_path.name}")
-                execute_index_command(index_command, output_path)
-        elif skip_indexing:
-            logger.info(f"Skipping indexing for {target_path.with_suffix('')}")
-
-
 def process_vntyper_references(
     vntyper_refs: dict[str, dict[str, str]],
     output_dir: Path,
@@ -601,6 +494,7 @@ def process_vntyper_references(
         ValueError: If a seed - ``vntr_db_advntr.zip`` is the one this function
             downloads - has no committed or spec-pinned digest, or if the downloaded or
             already-present bytes do not match it (MAJOR 3, milestone-5 PR-2 review).
+        RuntimeError: If a verified archive cannot be extracted safely.
     """
     for ref_name, ref_info in vntyper_refs.items():
         url = ref_info.get("url")
@@ -614,12 +508,8 @@ def process_vntyper_references(
 
         target_path = output_dir / target_path_str
 
-        download_file(url, target_path)
-        # Verified whether this call just downloaded the file or found it already
-        # present: `download_file` skips an existing destination, so a stale or
-        # corrupted `vntr_db_advntr.zip` from an earlier partial run must not be
-        # extracted and activated unchecked.
-        expected = verify_seed(target_path_str, target_path, ref_info, release_spec)
+        expected = resolve_seed_digest(target_path_str, ref_info, release_spec)
+        expected = fetch_verified_asset(target_path_str, url, target_path, expected, download_file)
         _record_source_provenance(output_dir, target_path, expected, url)
 
         md5_checksum = calculate_md5(target_path)
@@ -637,22 +527,20 @@ def process_vntyper_references(
             extracted_members: list[str] = []
             if target_path.suffix == ".zip":
                 try:
-                    with zipfile.ZipFile(target_path, "r") as zip_ref:
-                        zip_ref.extractall(path=extract_dir)
-                        extracted_members = [name for name in zip_ref.namelist() if not name.endswith("/")]
+                    extracted_members = safe_extract_zip(target_path, extract_dir)
                     logger.info(f"Successfully extracted {target_path.name}")
                 except Exception as e:
-                    logger.error(f"Failed to extract {target_path}: {e}")
-                    sys.exit(1)
+                    message = f"Failed to extract {target_path}: {e}"
+                    logger.error(message)
+                    raise RuntimeError(message) from e
             elif target_path.suffixes[-2:] == [".tar", ".gz"] or target_path.suffix == ".tgz":
                 try:
-                    with tarfile.open(target_path, "r:gz") as tar:
-                        tar.extractall(path=extract_dir)
-                        extracted_members = [member.name for member in tar.getmembers() if member.isfile()]
+                    extracted_members = safe_extract(target_path, extract_dir)
                     logger.info(f"Successfully extracted {target_path.name}")
                 except Exception as e:
-                    logger.error(f"Failed to extract {target_path}: {e}")
-                    sys.exit(1)
+                    message = f"Failed to extract {target_path}: {e}"
+                    logger.error(message)
+                    raise RuntimeError(message) from e
             else:
                 logger.warning(f"Unsupported archive format for {target_path}. Skipping extraction.")
 
@@ -705,12 +593,8 @@ def process_own_repository_references(
 
         target_path = output_dir / target_path_str
 
-        download_file(url, target_path)
-        # Verified whether this call just downloaded the file or found it already
-        # present: `download_file` skips an existing destination, so a stale or
-        # corrupted seed from an earlier partial run must not be indexed and activated
-        # unchecked.
-        expected = verify_seed(target_path_str, target_path, file_info, release_spec)
+        expected = resolve_seed_digest(target_path_str, file_info, release_spec)
+        expected = fetch_verified_asset(target_path_str, url, target_path, expected, download_file)
         _record_source_provenance(output_dir, target_path, expected, url)
 
         md5_checksum = calculate_md5(target_path)
@@ -1153,8 +1037,8 @@ def resolve_seed_digest(name: str, entry: dict[str, Any], release_spec: dict[str
     ``vntr_db_advntr.zip``, ``filter_config.json``, i.e. ``bundle_release.REQUIRED_SEEDS``):
     the digest committed in install_references_config.json is the trust anchor, and a
     ``--release-spec``'s ``seeds`` block - read directly here rather than via
-    ``bundle_release.spec_seed_digests``, since this module may import nothing from the
-    package but ``reference_bundle`` - may only corroborate it, never override it.
+    ``bundle_release.spec_seed_digests``, since this module may import only siblings
+    provisioned by the Docker refs stage - may only corroborate it, never override it.
 
     Args:
         name: Seed file name, keyed the same way in the install config's
@@ -1217,18 +1101,12 @@ def verify_seed(name: str, target_path: Path, entry: dict[str, Any], release_spe
 
     Raises:
         ValueError: If no digest is configured, or if the file's bytes do not match it.
-            On a mismatch the file is removed so a retry re-downloads it, matching
-            :func:`install_from_source`'s genome verification.
+            On a mismatch the file is removed. The download call sites use
+            :func:`reference_integrity.fetch_verified_asset` when a stale pre-existing
+            file should be replaced within the same run.
     """
     expected = resolve_seed_digest(name, entry, release_spec)
-    try:
-        verify_sha256(target_path, expected)
-    except ValueError as mismatch:
-        target_path.unlink(missing_ok=True)
-        message = f"{mismatch}; removed {target_path.name} so a retry downloads it again"
-        logger.error(message)
-        raise ValueError(message) from mismatch
-    return expected
+    return verify_existing_asset(name, target_path, expected)
 
 
 def _record_source_provenance(output_dir: Path, path: Path, sha256: str, source_url: str | None = None) -> None:
@@ -1353,27 +1231,13 @@ def install_from_source(
 
             logger.info(f"Building {ref_id} from source")
             try:
-                download_file(url, archive)
-            except SystemExit as exit_signal:
-                # `download_file` ends the process, which is right for the legacy CLI path
-                # but wrong here: this function is called by the bundle build and by
-                # `staged_install`, both of which have cleanup to do first.
+                fetch_verified_asset(archive.name, url, archive, expected, download_file)
+            except RuntimeError as failure:
+                # `download_file` raises rather than exiting; this re-wrap only adds the
+                # reference id for the operator.
                 message = f"failed to download {ref_id} from {url}"
                 logger.error(message)
-                raise RuntimeError(message) from exit_signal
-            # Before decompression and before any indexing: unverified bytes are never
-            # expanded, never indexed and never derived from. A mismatch also takes the
-            # archive with it - `download_file` skips a destination that already exists, so
-            # leaving truncated or tampered bytes on disk would make every later run skip
-            # the download, re-hash the same bad file and fail identically forever.
-            try:
-                verify_sha256(archive, expected)
-            except ValueError as mismatch:
-                archive.unlink(missing_ok=True)
-                message = f"{mismatch}; removed {archive.name} so a retry downloads it again"
-                logger.error(message)
-                raise ValueError(message) from mismatch
-
+                raise RuntimeError(message) from failure
             fasta = decompress_source(archive)
             index_fasta_with_samtools(fasta, samtools)
             if aligners:
@@ -1929,10 +1793,10 @@ def _install_bundle_asset(
     logger.info(f"Fetching {asset.name} from {repository}@{release_tag}")
     try:
         download_file(url, archive)
-    except SystemExit as exit_signal:
+    except RuntimeError as failure:
         message = f"failed to download {asset.name} from repository {repository}, release {release_tag} ({url})"
         logger.error(message)
-        raise RuntimeError(message) from exit_signal
+        raise RuntimeError(message) from failure
 
     # Carry-forward from the Task 3 review: the digest is checked before a single byte
     # of the archive is written into the tree.
@@ -2022,9 +1886,12 @@ def install_from_bundle(install_config: dict[str, Any], output_dir: Path, refere
             _install_bundle_asset(bundle["repository"], bundle["release_tag"], asset, Path(download_dir), staging)
 
 
-def setup_logging(output_dir: Path, log_file: Path | None = None):
-    """
-    Setup logging to output to both stdout and a log file.
+def setup_logging(output_dir: Path, log_file: Path | None = None) -> InstallLogHandler:
+    """Attach the install run's log file without rebuilding root logging.
+
+    The CLI is the sole owner of root logging configuration.  If it has already run,
+    its handlers and level remain untouched.  Direct module execution has no handlers,
+    so :func:`attach_install_log` supplies the standalone INFO console in that case.
 
     Args:
         output_dir (Path): Directory where logs will be stored, when `log_file` is not
@@ -2034,29 +1901,13 @@ def setup_logging(output_dir: Path, log_file: Path | None = None):
             `output_dir` (see `_staging_safe_log_path`) and moves the finished file into
             place itself once `output_dir` is no longer subject to being replaced by a
             `staged_install` activation.
+    Returns:
+        InstallLogHandler: Installer-owned handler for `main` to detach and close.
     """
     log_file = log_file or (output_dir / "install_references.log")
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-
-    c_handler = logging.StreamHandler(sys.stdout)
-    f_handler = logging.FileHandler(log_file)
-
-    c_handler.setLevel(logging.INFO)
-    f_handler.setLevel(logging.INFO)
-
-    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    c_handler.setFormatter(formatter)
-    f_handler.setFormatter(formatter)
-
-    root_logger.addHandler(c_handler)
-    root_logger.addHandler(f_handler)
-
+    file_handler = attach_install_log(output_dir, log_file)
     logger.info(f"Logging initialized. Logs will be saved to {log_file}")
+    return file_handler
 
 
 def _staging_safe_log_path(output_dir: Path) -> Path:
@@ -2103,10 +1954,9 @@ def _finalize_install_log(log_file: Path, output_dir: Path) -> None:
     succeeded, raised, or hit an early `sys.exit` - the log is worth keeping either way,
     and a failed run is exactly when an operator most wants to read it.
 
-    A rename rather than a copy-then-delete: the log's `FileHandler` keeps writing
-    through the same open file descriptor no matter what path is used to reach it (POSIX
-    rename does not invalidate open file descriptors), so this is both cheaper than a
-    copy and leaves no window where the handler points at nothing.
+    The installer-owned handler is detached and closed before this function runs.  A
+    rename is therefore both cheaper than copy-then-delete and cannot leave that handler
+    writing through a path which has moved.
 
     Args:
         log_file: Where `setup_logging` was pointed - `_staging_safe_log_path`'s return
@@ -2198,7 +2048,7 @@ def main(
     # written directly into `output_dir` would lose most of its own content to the
     # `staged_install` rename dance both branches below go through.
     log_file = _staging_safe_log_path(output_dir)
-    setup_logging(output_dir, log_file=log_file)
+    install_log_handler = setup_logging(output_dir, log_file=log_file)
 
     try:
         # Filter references (after logging is set up)
@@ -2237,7 +2087,16 @@ def main(
             aligner_config,
         )
     finally:
-        _finalize_install_log(log_file, output_dir)
+        primary_failure = sys.exc_info()[0] is not None
+        try:
+            finish_install_log(
+                install_log_handler,
+                lambda: _finalize_install_log(log_file, output_dir),
+            )
+        except Exception as error:
+            logger.error(f"Failed to finish install logging: {error}")
+            if not primary_failure:
+                raise
 
 
 def _install_references(

@@ -50,7 +50,7 @@ This is the one flag the shipped configuration declares as an **artifact** (see 
 
 Flags variants occurring in conserved repeat unit motifs (numbered motifs 1--9) when the depth score is below 0.4. These motifs are highly conserved across MUC1 VNTR alleles, making true pathogenic variants in these positions unlikely unless strongly supported by sequencing depth.
 
-This flag is **advisory**. A low-depth call in a conserved motif is still a call: it is reported, and the flag only lowers its priority if another candidate competes with it. Excluding these rows would delete real low-depth calls.
+This flag is **advisory**: by itself it does not exclude a row, and it only lowers the row's priority if another candidate competes with it. The separate position-based motif gate still excludes right-half calls in the motifs configured by `motif_filtering.exclude_motifs_right`; see [Kestrel Step 6](kestrel.md#step-6-motif-correction-and-annotation).
 
 ## Artifact Flags
 

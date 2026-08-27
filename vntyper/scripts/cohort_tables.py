@@ -29,7 +29,7 @@ from typing import Any
 
 import pandas as pd
 
-from vntyper.scripts.report_formatting import confidence_html, escaped_table_html
+from vntyper.scripts.report_formatting import confidence_html, escaped_table_html, is_empty_result_row
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +131,49 @@ def confidence_span(value: Any) -> Any:
     return confidence_html(value)
 
 
+def _display_cell(value: Any) -> Any:
+    """Replace a missing scalar with the blank used by cohort HTML tables.
+
+    Args:
+        value: One cell from a cohort presentation frame.
+
+    Returns:
+        The empty string for pandas missing scalars; every real value unchanged.
+    """
+    if pd.api.types.is_scalar(value) and bool(pd.isna(value)):
+        return ""
+    return value
+
+
+def _normalize_display_cells(df: pd.DataFrame) -> pd.DataFrame:
+    """Build a presentation copy in which missing cells are blank.
+
+    Args:
+        df: A cohort table frame. Not modified.
+
+    Returns:
+        A copy suitable for HTML rendering. Real strings, numbers and booleans retain
+        their values and types.
+    """
+    normalized = df.copy()
+    for column in normalized.columns:
+        normalized[column] = normalized[column].map(_display_cell)
+    return normalized
+
+
+def _is_placeholder_row(row: pd.Series) -> bool:
+    """Recognise Kestrel's empty-result row after the cohort adds ``Sample``.
+
+    Args:
+        row: One row from the aggregated Kestrel frame.
+
+    Returns:
+        True only for the negative empty-result placeholder.
+    """
+    result = {key: _display_cell(value) for key, value in row.items() if key != "Sample"}
+    return is_empty_result_row(result)
+
+
 def kestrel_table_html(kestrel_df: pd.DataFrame) -> str:
     """Render the cohort's Kestrel results table.
 
@@ -152,12 +195,21 @@ def kestrel_table_html(kestrel_df: pd.DataFrame) -> str:
     """
     # Create a separate copy for HTML formatting so that machine-readable outputs remain plain.
     kestrel_df_html = kestrel_df.copy()
+    if not kestrel_df_html.empty and "Confidence" in kestrel_df_html.columns:
+        placeholder = kestrel_df_html.apply(_is_placeholder_row, axis=1)
+        if bool(placeholder.any()):
+            logger.info(
+                "Suppressed %d Kestrel empty-result placeholder row(s) from the cohort table.",
+                int(placeholder.sum()),
+            )
+            kestrel_df_html = kestrel_df_html.loc[~placeholder]
     if "Confidence" in kestrel_df_html.columns:
         kestrel_df_html["Confidence"] = kestrel_df_html["Confidence"].apply(confidence_span)
 
     # Reorder Kestrel DataFrame columns: place Sample first then the remaining columns.
     kestrel_columns = [col for col in KESTREL_DISPLAY_COLUMNS if col in kestrel_df_html.columns]
-    return escaped_table_html(kestrel_df_html[kestrel_columns], TABLE_CLASSES, html_columns=KESTREL_HTML_COLUMNS)
+    display_df = _normalize_display_cells(kestrel_df_html[kestrel_columns])
+    return escaped_table_html(display_df, TABLE_CLASSES, html_columns=KESTREL_HTML_COLUMNS)
 
 
 def advntr_table_html(advntr_df: pd.DataFrame) -> str:
@@ -173,7 +225,8 @@ def advntr_table_html(advntr_df: pd.DataFrame) -> str:
     """
     # Reorder advntr DataFrame columns: ensure Sample is first.
     advntr_columns = [col for col in ADVNTR_DISPLAY_COLUMNS if col in advntr_df.columns]
-    return escaped_table_html(advntr_df[advntr_columns], TABLE_CLASSES)
+    display_df = _normalize_display_cells(advntr_df[advntr_columns])
+    return escaped_table_html(display_df, TABLE_CLASSES)
 
 
 def stats_table_html(additional_stats_df: pd.DataFrame) -> str:
@@ -191,7 +244,7 @@ def stats_table_html(additional_stats_df: pd.DataFrame) -> str:
     Returns:
         str: The table markup, or "" when there are no statistics to show.
     """
-    return escaped_table_html(additional_stats_df, TABLE_CLASSES)
+    return escaped_table_html(_normalize_display_cells(additional_stats_df), TABLE_CLASSES)
 
 
 def additional_stats_frame(additional_stats_list: list[dict[str, Any]]) -> pd.DataFrame:

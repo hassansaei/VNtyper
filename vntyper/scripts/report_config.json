@@ -56,7 +56,7 @@
         }
       ],
       "default": "negative",
-      "non_finding_results": ["negative_subthreshold"]
+      "non_finding_results": ["negative_subthreshold", "unestablished"]
     },
     "advntr": {
       "rules": [
@@ -87,10 +87,34 @@
           "result": "positive flagged"
         }
       ],
-      "default": "negative"
+      "default": "negative",
+      "non_finding_results": ["unestablished"]
     }
   },
+  "cross_match": {
+    "not_assessable_message": "The cross-match comparison's result file is missing or could not be read; agreement between Kestrel and adVNTR was not assessed."
+  },
   "screening_summary_rules": [
+    {
+      "conditions": {
+        "kestrel_result": "unestablished"
+      },
+      "message": "The Kestrel screening state was not established: a value the Kestrel screening rules evaluate was absent or empty in the Kestrel result.<br>Note: this describes what could be evaluated, not the sample; no screening result is asserted.",
+      "segments": [
+        "The Kestrel screening state was not established: a value the Kestrel screening rules evaluate was absent or empty in the Kestrel result.",
+        "Note: this describes what could be evaluated, not the sample; no screening result is asserted."
+      ]
+    },
+    {
+      "conditions": {
+        "advntr_result": "unestablished"
+      },
+      "message": "The adVNTR screening state was not established: a value the adVNTR screening rules evaluate was absent or empty in the adVNTR result.<br>Note: this describes what could be evaluated, not the sample; no screening result is asserted.",
+      "segments": [
+        "The adVNTR screening state was not established: a value the adVNTR screening rules evaluate was absent or empty in the adVNTR result.",
+        "Note: this describes what could be evaluated, not the sample; no screening result is asserted."
+      ]
+    },
     {
       "conditions": {
         "kestrel_result": "High_Precision",
@@ -686,5 +710,6 @@
       ]
     }
   ],
-  "screening_summary_default": "The screening was negative (no valid Kestrel or adVNTR data)."
+  "screening_summary_default": "The screening was negative (no valid Kestrel or adVNTR data).",
+  "coverage_not_measured_note": "Note: VNTR coverage was not measured for this run, so the coverage quality gate was not evaluated."
 }

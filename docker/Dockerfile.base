@@ -10,8 +10,10 @@
 #   docker/Dockerfile.base                      (this file)
 #   vntyper/__init__.py                         (package init, imported by python -m)
 #   vntyper/scripts/__init__.py                 (package init, imported by python -m)
-#   vntyper/scripts/install_references*.{py,json}  (fetches + verifies the reference bundle)
+#   vntyper/scripts/install_references*.{py,json}  (orchestrates reference installation)
 #   vntyper/scripts/reference_bundle.py         (digest verification + safe extraction)
+#   vntyper/scripts/reference_download.py       (bounded, atomic asset transport)
+#   vntyper/scripts/reference_integrity.py      (digest gate + stale-asset repair)
 #   vntyper/scripts/reference_provenance.py     (per-file install ledger; see below)
 #   vntyper/dependencies/advntr/**              (adVNTR build)
 #   .dockerignore                               (decides which context files reach the build)
@@ -96,10 +98,9 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
 # conda env or adVNTR change does not force a bundle re-fetch.
 FROM envs AS refs
 
-# Three Python files are needed, not two. install_references.py imports nothing from
-# vntyper at module scope except reference_bundle, by design (see the file header
-# comment above); tests/unit/test_docker_installer_imports.py fails the build guard if
-# either module ever grows a module-scope import this stage does not COPY for. The two
+# Six Python files are needed. tests/unit/test_docker_installer_imports.py fails the
+# build guard if an installer module grows a module-scope import this stage does not
+# COPY. The two
 # package __init__.py files are required because `python -m` walks the package chain to
 # reach the module. reference_registry is deliberately NOT copied here:
 # canonical_reference_keys imports it function-locally, and this stage passes no
@@ -111,7 +112,10 @@ COPY vntyper/__init__.py                            /opt/ir/vntyper/__init__.py
 COPY vntyper/scripts/__init__.py                    /opt/ir/vntyper/scripts/__init__.py
 COPY vntyper/scripts/install_references.py          /opt/ir/vntyper/scripts/
 COPY vntyper/scripts/install_references_config.json /opt/ir/vntyper/scripts/
+COPY vntyper/scripts/install_references_logging.py  /opt/ir/vntyper/scripts/
 COPY vntyper/scripts/reference_bundle.py            /opt/ir/vntyper/scripts/
+COPY vntyper/scripts/reference_download.py          /opt/ir/vntyper/scripts/
+COPY vntyper/scripts/reference_integrity.py         /opt/ir/vntyper/scripts/
 COPY vntyper/scripts/reference_provenance.py        /opt/ir/vntyper/scripts/
 ENV PYTHONPATH=/opt/ir
 
@@ -151,6 +155,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CONDA_AUTO_UPDATE_CONDA=FALSE \
     PATH=/opt/conda/envs/vntyper/bin:$PATH \
     DEFAULT_INPUT_DIR=/opt/vntyper/input \
+    DEFAULT_HANDOFF_SPOOL_DIR=/opt/vntyper/handoff \
     DEFAULT_OUTPUT_DIR=/opt/vntyper/output \
     REFERENCE_DIR=/opt/vntyper/reference
 
@@ -165,13 +170,14 @@ ARG USERNAME=appuser
 ARG USER_UID=1001
 ARG USER_GID=1001
 
-# `install -d -o` creates the two writable directories already owned by appuser.
+# `install -d -o` creates the writable directories already owned by appuser.
 # The old Dockerfile ran `chown -R appuser /opt/vntyper` over 1.66 GB of references and
 # source; under overlayfs that copies up every touched file into a new layer, adding
 # ~1.66 GB to the image for nothing. References and code are read-only at runtime.
 RUN groupadd --gid $USER_GID $USERNAME && \
     useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash --create-home $USERNAME && \
-    install -d -o $USERNAME -g $USERNAME $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR
+    install -d -o $USERNAME -g $USERNAME \
+        $DEFAULT_INPUT_DIR $DEFAULT_HANDOFF_SPOOL_DIR $DEFAULT_OUTPUT_DIR
 
 COPY --from=envs /opt/conda/envs /opt/conda/envs
 COPY --from=refs /opt/refs       /opt/vntyper/reference

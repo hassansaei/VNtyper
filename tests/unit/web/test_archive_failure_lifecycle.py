@@ -1,5 +1,6 @@
 """Failed archive publication and quarantine lifecycle coverage."""
 
+import hashlib
 import logging
 import zipfile
 from pathlib import Path
@@ -42,9 +43,14 @@ def no_email_task(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 def _job_kwargs(tmp_path: Path, bam_path: Path, **overrides) -> dict:
     """Build the complete argument set for an individual worker run."""
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    input_metadata = bam_path.parent.stat()
+    output_metadata = output_dir.stat()
+    alignment_metadata = bam_path.stat()
     kwargs = {
         "bam_path": str(bam_path),
-        "output_dir": str(tmp_path / "output" / "job-1"),
+        "output_dir": str(output_dir),
         "thread": 1,
         "reference_assembly": "hg38",
         "fast_mode": False,
@@ -56,6 +62,14 @@ def _job_kwargs(tmp_path: Path, bam_path: Path, **overrides) -> dict:
         "user_agent": "pytest",
         "advntr_mode": False,
         "index_path": None,
+        "workspace_identity": {
+            "input_dir": [input_metadata.st_dev, input_metadata.st_ino],
+            "output_dir": [output_metadata.st_dev, output_metadata.st_ino],
+            "alignment": [alignment_metadata.st_dev, alignment_metadata.st_ino],
+            "alignment_sha256": hashlib.sha256(bam_path.read_bytes()).hexdigest(),
+            "index": None,
+            "index_sha256": None,
+        },
     }
     kwargs.update(overrides)
     return kwargs
@@ -96,8 +110,9 @@ def _stub_pipeline(monkeypatch: pytest.MonkeyPatch, tasks) -> None:
 def _write_cohort_result(monkeypatch: pytest.MonkeyPatch, tasks, output_dir: Path) -> None:
     """Replace the cohort subprocess with one complete scientific result."""
 
-    def write_cohort_result(*args, **kwargs):
-        (output_dir / "cohort_result.tsv").write_bytes(b"complete cohort result")
+    def write_cohort_result(command, *args, **kwargs):
+        child_output = Path(command[command.index("-o") + 1])
+        (child_output / "cohort_result.tsv").write_bytes(b"complete cohort result")
 
     monkeypatch.setattr(tasks.subprocess, "run", write_cohort_result)
 
@@ -119,8 +134,7 @@ def test_first_quarantine_failure_retries_without_leaving_a_regular_public_archi
     (output_dir / "result.txt").write_bytes(b"result data")
     cleanup_failure = OSError("result directory busy")
 
-    def partially_remove_then_fail(path: str) -> None:
-        assert Path(path) == output_dir
+    def partially_remove_then_fail(_workspace) -> None:
         (output_dir / "result.txt").unlink()
         raise cleanup_failure
 
@@ -134,7 +148,7 @@ def test_first_quarantine_failure_retries_without_leaving_a_regular_public_archi
             raise OSError("first quarantine denied")
         return real_quarantine(*args, **kwargs)
 
-    monkeypatch.setattr(tasks.shutil, "rmtree", partially_remove_then_fail)
+    monkeypatch.setattr(tasks.PipelineJobWorkspace, "remove_output", partially_remove_then_fail)
     monkeypatch.setattr(tasks, "quarantine_archive", fail_first_quarantine)
     caplog.set_level(logging.ERROR, logger="app.tasks")
 

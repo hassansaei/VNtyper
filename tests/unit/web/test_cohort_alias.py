@@ -20,6 +20,7 @@ about the alias key. `docker` is put on `sys.path` by
 `tests/unit/web/conftest.py`, which pytest imports before this module.
 """
 
+import hashlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -276,19 +277,38 @@ def test_a_finished_job_extends_its_cohorts_alias(fake_redis, monkeypatch: pytes
 
     bam_path = tmp_path / "sample.bam"
     bam_path.write_bytes(b"alignment")
-    (tmp_path / "sample.bam.bai").write_bytes(b"index")
+    index_path = tmp_path / "sample.bam.bai"
+    index_path.write_bytes(b"index")
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_metadata = tmp_path.stat()
+    output_metadata = output_dir.stat()
+    alignment_metadata = bam_path.stat()
+    index_metadata = index_path.stat()
 
     tasks.run_vntyper_job.push_request(id="task-1")
     try:
+        monkeypatch.setattr(tasks.settings, "DEFAULT_HANDOFF_SPOOL_DIR", str(tmp_path))
+        monkeypatch.setattr(tasks.settings, "DEFAULT_INPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(tasks.settings, "DEFAULT_OUTPUT_DIR", str(tmp_path))
         tasks.run_vntyper_job.run(
             bam_path=str(bam_path),
-            output_dir=str(tmp_path / "out"),
+            output_dir=str(output_dir),
             thread=1,
             reference_assembly="hg38",
             fast_mode=False,
             keep_intermediates=False,
             archive_results=False,
             cohort_key=key,
+            index_path=str(index_path),
+            workspace_identity={
+                "input_dir": [input_metadata.st_dev, input_metadata.st_ino],
+                "output_dir": [output_metadata.st_dev, output_metadata.st_ino],
+                "alignment": [alignment_metadata.st_dev, alignment_metadata.st_ino],
+                "alignment_sha256": hashlib.sha256(bam_path.read_bytes()).hexdigest(),
+                "index": [index_metadata.st_dev, index_metadata.st_ino],
+                "index_sha256": hashlib.sha256(index_path.read_bytes()).hexdigest(),
+            },
         )
     finally:
         tasks.run_vntyper_job.pop_request()

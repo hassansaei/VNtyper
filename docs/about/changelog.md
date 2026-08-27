@@ -4,7 +4,27 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### ⚠️ Required before deploying the web service
+
+- **Use a stopped, data-aware migration; this is not a rolling deployment.** The
+  ordinary-job handoff protocol now carries protected-spool identities and SHA-256 digests.
+  Old and new API/worker processes are not rolling-compatible. Follow this sequence:
+  1. Pause new submissions. Drain both the regular and long queues and all active jobs to
+     completion; verify both queues and the active job count are zero. Never purge queued
+     messages: purging can strand their protected-spool uploads.
+  2. Stop the API, workers, and beat, then provision the named `result_store`.
+  3. While services remain stopped and detached from the legacy host bind, either
+     (recommended) copy existing unexpired output into `result_store` and retain a backup,
+     noting that legacy bytes cannot be retroactively integrity-attested; or explicitly
+     accept retirement and unavailability of those results and archive or remove the legacy store.
+  4. Deploy the API, all workers, and beat; verify retained result access; then resume submissions.
+
+  Shipped Compose also moves outputs from its old host bind into the persistent,
+  service-private result store mounted only into the API and worker. Together these changes
+  protect against an actor with shared legacy input mount access. An operator override that
+  exposes `/opt/vntyper/output` through a host/shared bind weakens this security boundary.
+  Arbitrary same-UID code in either the API or worker service namespace is out of scope
+  because it can access the private volumes or worker descriptors directly.
 
 ## 2.0.23 (Current)
 
@@ -105,7 +125,7 @@ the document; the BAM-header warning did not, because an alignment the pipeline 
 vouch for changes how every number below it reads.
 
 **The printed record is complete for the first time.** A nineteen-column table lays out
-at 1442px on a 718px sheet, so 757px of it — the 121 bp motif sequence included — fell
+at 1442px on a 718px sheet, so 757px of it — the then-120 bp motif pair included — fell
 off every printed page with nothing saying so. The table now prints the columns that
 fit and every folded value prints beneath it, labelled, one block per row.
 
@@ -120,7 +140,9 @@ label. Sorting is no longer offered on a single-row table, which took the docume
 
 ### Output-format changes
 
-Display only; every TSV is unchanged.
+The presentation changes below are display only. Separately, the corrected
+`Motif_sequence` field in `kestrel_result.tsv` now contains the selected 60 bp repeat-unit
+half instead of the 120 bp pair record; no calling decision reads this annotation field.
 
 - The adVNTR table's headings are English, matching the Kestrel table above it:
   `NumberOfSupportingReads` is `Supporting Reads`, `Pvalue` is `P-value`, `RU` is

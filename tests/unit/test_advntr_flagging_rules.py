@@ -127,6 +127,17 @@ class TestEveryRuleNameResolves:
                 "A missing name evaluates to False, so this rule is silently disabled."
             )
 
+    def test_every_name_a_rule_reads_resolves_without_an_ru_fasta(
+        self, flagging_rules, produced_columns_without_ru_fasta
+    ):
+        """No missing column may silently disable a rule on the no-FASTA branch."""
+        for name, expression in flagging_rules.items():
+            unresolved = free_names(expression) - EVALUATOR_BUILTINS - produced_columns_without_ru_fasta
+            assert not unresolved, (
+                f"flagging rule {name!r} reads {sorted(unresolved)}, which the adVNTR parser "
+                "does not produce when no RU FASTA resolves"
+            )
+
 
 @pytest.fixture
 def produced_columns(tmp_path, ru_config) -> set[str]:
@@ -154,6 +165,28 @@ def produced_columns(tmp_path, ru_config) -> set[str]:
         advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
     finally:
         flagging_module.add_flags = real_add_flags
+
+    assert "columns" in captured, "the parser never reached the flagging step"
+    return captured["columns"]
+
+
+@pytest.fixture
+def produced_columns_without_ru_fasta(tmp_path, monkeypatch) -> set[str]:
+    """Capture the columns flagging receives when no RU FASTA resolves."""
+    captured: dict[str, set[str]] = {}
+
+    import vntyper.scripts.flagging as flagging_module
+
+    real_add_flags = flagging_module.add_flags
+
+    def spy(df, flag_rules, duplicates_config=None):
+        captured["columns"] = set(df.columns)
+        return real_add_flags(df, flag_rules, duplicates_config)
+
+    monkeypatch.setattr(flagging_module, "add_flags", spy)
+    source = tmp_path / "output_adVNTR.vcf"
+    source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t11\t153.98\t0.0001\n")
+    advntr.process_advntr_output(str(source), str(tmp_path), "output", config=None)
 
     assert "columns" in captured, "the parser never reached the flagging step"
     return captured["columns"]
@@ -276,6 +309,33 @@ class TestRepeatUnitSeven:
         result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
         assert result.iloc[0]["RU"] == "7"
         assert "Repeat_Unit_7" in result.iloc[0]["Flag"]
+
+    def test_a_repeat_unit_seven_call_is_flagged_without_an_ru_fasta(self, tmp_path):
+        """Repeat-unit flagging depends on the state string, not a reference file."""
+        source = tmp_path / "output_adVNTR.vcf"
+        source.write_text(ADVNTR_HEADER + "25561\tI26_7_A_LEN1\t42\t153.98\t0.0001\n")
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output", config=None)
+
+        result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
+        row = result.iloc[0]
+        assert row["RU"] == "7"
+        assert row["POS"] == "26"
+        assert row["REF"] == "Not applicable"
+        assert row["ALT"] == "Not applicable"
+        assert "Repeat_Unit_7" in row["Flag"]
+
+    def test_a_compound_repeat_unit_seven_call_stays_unflagged_without_an_ru_fasta(self, tmp_path):
+        """A compound RU annotation remains ``7,2`` and does not become an RU-7 flag."""
+        source = tmp_path / "output_adVNTR.vcf"
+        source.write_text(ADVNTR_HEADER + "25561\tI3_7_A_LEN1&I9_2_A_LEN3\t42\t153.98\t0.0001\n")
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output", config=None)
+
+        row = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str).iloc[0]
+        assert row["RU"] == "7,2"
+        assert row["POS"] == "3,9"
+        assert row["Flag"] == "Not flagged"
 
 
 # ---------------------------------------------------------------------------

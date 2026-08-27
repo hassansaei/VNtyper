@@ -1,13 +1,13 @@
 {
-  "reviewed_ruff_version": "ruff 0.14.3",
+  "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 102,
-    "ignore_noqa": 108,
-    "identities": 78,
+    "normal": 98,
+    "ignore_noqa": 105,
+    "identities": 76,
     "categories": {
-      "A": 29,
+      "A": 28,
       "B": 16,
-      "C": 33
+      "C": 32
     }
   },
   "handlers": [
@@ -36,12 +36,28 @@
       "rationale": "docker/app/archive_delivery.py::snapshot_owned_archives: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
     {
+      "path": "docker/app/cohort_workspace.py",
+      "symbol": "CohortWorkspace.close",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "A",
+      "rationale": "docker/app/cohort_workspace.py::CohortWorkspace.close: cleanup boundary that records the first failure, attempts every independent cleanup, then re-raises so the task cannot report successful completion"
+    },
+    {
       "path": "docker/app/cohorts.py",
       "symbol": "_discard_partial_cohort",
       "normal_count": 0,
       "all_count": 2,
       "category": "A",
       "rationale": "docker/app/cohorts.py::_discard_partial_cohort: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "docker/app/failure_reporting.py",
+      "symbol": "report_pipeline_failure",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "C",
+      "rationale": "docker/app/failure_reporting.py::report_pipeline_failure: fallback/continuation boundary; failed-status, preflight-metadata, and email-reporting failures are isolated so the worker re-raises the exact pipeline exception, as pinned by tests/unit/web/test_failure_notification_resilience.py::test_failed_status_write_preserves_each_pipeline_exception and the sibling preflight/email resilience tests, with each secondary failure observable via ERROR log"
     },
     {
       "path": "docker/app/tasks.py",
@@ -62,16 +78,16 @@
     {
       "path": "docker/app/tasks.py",
       "symbol": "run_cohort_analysis_job",
-      "normal_count": 7,
-      "all_count": 7,
+      "normal_count": 6,
+      "all_count": 6,
       "category": "A",
       "rationale": "docker/app/tasks.py::run_cohort_analysis_job: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
     {
       "path": "docker/app/tasks.py",
       "symbol": "run_vntyper_job",
-      "normal_count": 7,
-      "all_count": 7,
+      "normal_count": 8,
+      "all_count": 8,
       "category": "A",
       "rationale": "docker/app/tasks.py::run_vntyper_job: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
@@ -261,17 +277,9 @@
     },
     {
       "path": "vntyper/modules/advntr/advntr_genotyping.py",
-      "symbol": "process_advntr_output",
-      "normal_count": 2,
-      "all_count": 2,
-      "category": "C",
-      "rationale": "vntyper/modules/advntr/advntr_genotyping.py::process_advntr_output: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_advntr_output_parsing.py::test_unreadable_advntr_output_logs_and_returns_none and failure remains observable via ERROR log and absent result artifact"
-    },
-    {
-      "path": "vntyper/modules/advntr/advntr_genotyping.py",
       "symbol": "run_advntr",
-      "normal_count": 2,
-      "all_count": 2,
+      "normal_count": 1,
+      "all_count": 1,
       "category": "A",
       "rationale": "vntyper/modules/advntr/advntr_genotyping.py::run_advntr: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
@@ -346,22 +354,6 @@
       "all_count": 1,
       "category": "C",
       "rationale": "vntyper/scripts/cohort_inputs.py::load_pipeline_summary_for_sample: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_summary_read_failure_returns_three_empty_results and failure remains observable via ERROR log and structured empty result"
-    },
-    {
-      "path": "vntyper/scripts/cohort_summary.py",
-      "symbol": "encode_image_to_base64",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "C",
-      "rationale": "vntyper/scripts/cohort_summary.py::encode_image_to_base64: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_summary_oracle.py::test_image_encoding_failure_returns_empty_string and failure remains observable via ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/cohort_summary.py",
-      "symbol": "generate_donut_chart",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "C",
-      "rationale": "vntyper/scripts/cohort_summary.py::generate_donut_chart: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_summary_oracle.py::test_donut_failure_returns_empty_string and failure remains observable via ERROR log and absent output"
     },
     {
       "path": "vntyper/scripts/cohort_summary.py",
@@ -444,12 +436,12 @@
       "rationale": "vntyper/scripts/install_references.py::check_executable_available: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_install_references.py::test_executable_probe_error_returns_false and failure remains observable via diagnostic log"
     },
     {
-      "path": "vntyper/scripts/install_references.py",
+      "path": "vntyper/scripts/reference_download.py",
       "symbol": "download_file",
       "normal_count": 1,
       "all_count": 1,
       "category": "A",
-      "rationale": "vntyper/scripts/install_references.py::download_file: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+      "rationale": "vntyper/scripts/reference_download.py::download_file: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
     {
       "path": "vntyper/scripts/install_references.py",
@@ -469,27 +461,19 @@
     },
     {
       "path": "vntyper/scripts/install_references.py",
-      "symbol": "process_ucsc_references",
-      "normal_count": 3,
-      "all_count": 3,
-      "category": "A",
-      "rationale": "vntyper/scripts/install_references.py::process_ucsc_references: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
-    },
-    {
-      "path": "vntyper/scripts/install_references.py",
-      "symbol": "process_vntyper_references",
-      "normal_count": 2,
-      "all_count": 2,
-      "category": "A",
-      "rationale": "vntyper/scripts/install_references.py::process_vntyper_references: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
-    },
-    {
-      "path": "vntyper/scripts/install_references.py",
       "symbol": "update_config",
       "normal_count": 2,
       "all_count": 2,
       "category": "A",
       "rationale": "vntyper/scripts/install_references.py::update_config: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/online_mode.py",
+      "symbol": "_close_response",
+      "normal_count": 0,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/online_mode.py::_close_response: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_online_mode.py::test_download_close_failure_cannot_mask_stream_failure_or_skip_cleanup and failure remains observable via WARNING log while the primary request or download outcome is preserved"
     },
     {
       "path": "vntyper/scripts/pipeline_guards.py",
@@ -638,6 +622,15 @@
   ],
   "fail_open": [
     {
+      "path": "docker/app/failure_reporting.py",
+      "symbol": "report_pipeline_failure",
+      "disposition": "preserved-contract",
+      "outcome": "Logs failed-status, preflight-metadata, or failure-email reporting errors, continues independent reporting channels, and returns so the worker re-raises the exact pipeline subprocess exception.",
+      "rationale": "Failure reporting is deliberately best-effort: a Redis, metadata, renderer, or broker failure must not replace the pipeline failure that determines the task outcome.",
+      "behavior_test": "tests/unit/web/test_failure_notification_resilience.py::test_failed_status_write_preserves_each_pipeline_exception",
+      "observable_via": "ERROR log and exact primary CalledProcessError or TimeoutExpired identity"
+    },
+    {
       "path": "docker/app/tasks.py",
       "symbol": "delete_old_results",
       "disposition": "preserved-contract",
@@ -672,15 +665,6 @@
       "rationale": "Golden-cohort discovery reports an unavailable candidate, or a marker whose module will not import, without executing a broken import and without aborting before the launch line is printed.",
       "behavior_test": "tests/unit/test_golden_cohort_launcher.py::test_resolve_returns_structured_import_failure",
       "observable_via": "structured error result"
-    },
-    {
-      "path": "vntyper/modules/advntr/advntr_genotyping.py",
-      "symbol": "process_advntr_output",
-      "disposition": "preserved-contract",
-      "outcome": "Returns None, logs the unreadable result, and writes no parsed result artifact.",
-      "rationale": "A failed optional adVNTR parse must remain distinguishable from a successfully written result.",
-      "behavior_test": "tests/unit/test_advntr_output_parsing.py::test_unreadable_advntr_output_logs_and_returns_none",
-      "observable_via": "ERROR log and absent result artifact"
     },
     {
       "path": "vntyper/scripts/cohort_exports.py",
@@ -726,24 +710,6 @@
       "rationale": "Cohort rendering preserves the sample while marking all unavailable summary evidence empty.",
       "behavior_test": "tests/unit/test_cohort_inputs.py::test_summary_read_failure_returns_three_empty_results",
       "observable_via": "ERROR log and structured empty result"
-    },
-    {
-      "path": "vntyper/scripts/cohort_summary.py",
-      "symbol": "encode_image_to_base64",
-      "disposition": "preserved-contract",
-      "outcome": "Returns the literal empty string when an image cannot be read or encoded.",
-      "rationale": "A missing optional image must not abort the cohort report and is represented by the established empty fragment.",
-      "behavior_test": "tests/unit/test_cohort_summary_oracle.py::test_image_encoding_failure_returns_empty_string",
-      "observable_via": "ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/cohort_summary.py",
-      "symbol": "generate_donut_chart",
-      "disposition": "preserved-contract",
-      "outcome": "Returns the literal empty string and does not claim a chart output.",
-      "rationale": "A charting failure degrades only the optional visualization while remaining visible.",
-      "behavior_test": "tests/unit/test_cohort_summary_oracle.py::test_donut_failure_returns_empty_string",
-      "observable_via": "ERROR log and absent output"
     },
     {
       "path": "vntyper/scripts/cohort_summary.py",
@@ -825,6 +791,15 @@
       "rationale": "An executable whose availability cannot be proven is treated as unavailable during reference installation.",
       "behavior_test": "tests/unit/test_install_references.py::test_executable_probe_error_returns_false",
       "observable_via": "diagnostic log"
+    },
+    {
+      "path": "vntyper/scripts/online_mode.py",
+      "symbol": "_close_response",
+      "disposition": "preserved-contract",
+      "outcome": "Logs the response-close failure and preserves the primary request or download outcome without raising the cleanup error.",
+      "rationale": "Best-effort connection release must not mask a transport failure, skip temporary-file cleanup, or prevent a bounded retry of an idempotent GET.",
+      "behavior_test": "tests/unit/test_online_mode.py::test_download_close_failure_cannot_mask_stream_failure_or_skip_cleanup",
+      "observable_via": "WARNING log and preserved primary exception and temporary-file cleanup"
     },
     {
       "path": "vntyper/scripts/pipeline_guards.py",

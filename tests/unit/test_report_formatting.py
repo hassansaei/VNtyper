@@ -55,12 +55,6 @@ def test_a_missing_metric_defaults_to_blank() -> None:
     assert rf.threshold_icon(None, 0.8) == rf.MISSING_AS_BLANK == ("", "")
 
 
-def test_a_missing_metric_can_be_shown_as_passing() -> None:
-    """The coverage rows have always shown a tick for "not calculated"; pinned
-    here because the two callers used to be two hand-rolled copies."""
-    assert rf.threshold_icon(None, 100, on_missing=rf.MISSING_AS_OK) == (rf.OK_ICON, "green")
-
-
 def test_the_two_icons_are_different() -> None:
     """Guard the guard: identical icons would make every assertion above vacuous."""
     assert rf.WARNING_ICON != rf.OK_ICON
@@ -167,6 +161,36 @@ def test_summarise_fastp_does_not_divide_by_zero() -> None:
     )
     assert metrics.available is True
     assert metrics.passed_filter_rate is None
+
+
+@pytest.mark.parametrize(
+    ("raw_rate", "cutoff", "higher_better", "expected_displayed_rate", "expected_colour"),
+    [
+        (0.10004, 0.1, False, 0.1, "green"),
+        (0.10006, 0.1, False, 0.1001, "red"),
+        (0.79996, 0.8, True, 0.8, "green"),
+        (0.79994, 0.8, True, 0.7999, "red"),
+        (0.00065, 0.0007, True, 0.0007, "green"),
+    ],
+)
+def test_fastp_threshold_rate_matches_the_displayed_percentage_on_both_sides(
+    raw_rate: float,
+    cutoff: float,
+    higher_better: bool,
+    expected_displayed_rate: float,
+    expected_colour: str,
+) -> None:
+    """Catch icons judging the raw fraction or a double-rounded fraction."""
+    displayed_rate = rf.fastp_threshold_rate(raw_rate)
+
+    assert displayed_rate == pytest.approx(expected_displayed_rate)
+    assert rf.threshold_icon(displayed_rate, cutoff, higher_better=higher_better)[1] == expected_colour
+
+
+def test_fastp_threshold_rate_preserves_missing_and_zero() -> None:
+    """Catch an absent rate becoming zero, or a measured zero becoming absent."""
+    assert rf.fastp_threshold_rate(None) is None
+    assert rf.fastp_threshold_rate(0.0) == 0.0
 
 
 # ---------------------------------------------------------------------------

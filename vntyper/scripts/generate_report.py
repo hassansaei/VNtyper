@@ -38,6 +38,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from vntyper.scripts import report_assets
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
+from vntyper.scripts.cross_match_presentation import build_cross_match_summary
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
@@ -51,11 +52,11 @@ from vntyper.scripts.report_formatting import (
     KESTREL_DISPLAY_CELL_FORMATS,
     KESTREL_DISPLAY_COLUMNS,
     KESTREL_ESSENTIAL_COLUMNS,
-    MISSING_AS_OK,
     annotate_table_columns,
     confidence_html,
     drop_empty_result_rows,
     escaped_table_html,
+    fastp_threshold_rate,
     flag_html,
     flagged_row_count,
     folded_record_html,
@@ -90,6 +91,8 @@ from vntyper.scripts.report_identity import (
 from vntyper.scripts.screening_summary import (
     algorithm_state_text,
     build_screening_summary,
+    coverage_not_measured_note,
+    coverage_qc_word,
     execution_state,
     load_report_config,
     state_chips,
@@ -105,11 +108,9 @@ from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
     STEP_BAM_HEADER,
     STEP_COVERAGE,
-    STEP_CROSS_MATCH,
     STEP_KESTREL,
     STEP_READ,
     STEP_UNREADABLE,
-    get_step,
     get_step_comments,
     get_step_data,
     get_step_result,
@@ -298,32 +299,6 @@ def build_advntr_frame(advntr_data):
     return frame[[col for col in ADVNTR_DISPLAY_COLUMNS if col in frame.columns]]
 
 
-def build_cross_match_summary(pipeline_summary):
-    """Summarise the cross-match step as a sentence *and* the state that sentence describes.
-
-    The boolean is returned alongside the text rather than derived from it. The template
-    used to decide emphasis by asking whether the message contained ``"match"``, and both
-    fixed sentences do - so "No matches were found" rendered in the positive style. This
-    is the same rule that governs ``summary_is_positive`` (AGENTS.md trap 11): emphasis
-    comes from the computed state, never from searching the wording.
-
-    Args:
-        pipeline_summary (dict): The parsed ``pipeline_summary.json``.
-
-    Returns:
-        tuple[str, bool]: The sentence and whether it reports a match. ``("", False)``
-            when the cross-match step did not run - no section is rendered, and the flag
-            must not default to the emphasised state.
-    """
-    if get_step(pipeline_summary, STEP_CROSS_MATCH) is None:
-        return "", False
-    data = get_step_data(pipeline_summary, STEP_CROSS_MATCH)
-    is_positive = any(item.get("Match") == "Yes" for item in data)
-    if is_positive:
-        return "At least one match was found between Kestrel and adVNTR results.", True
-    return "No matches were found between Kestrel and adVNTR results.", False
-
-
 #: The release in which coverage statistics became region-wide (#171). A summary written
 #: by an older version carries a ``mean`` over *covered* positions, which is not comparable
 #: with the thresholds applied to it today.
@@ -377,7 +352,8 @@ def generate_summary_report(
 
     Args:
         output_dir (str): Output directory for the report.
-        template_dir (str): Directory containing the report template.
+        template_dir (str | Path | None): Operator directory containing the report
+            entry template, or None to use the installed package templates.
         report_file (str): Name of the report file.
         log_file (str): Path to the pipeline log file.
         bed_file (str, optional): Path to the BED file for IGV reports.
@@ -401,8 +377,9 @@ def generate_summary_report(
             ``--report-igv`` on both ``vntyper pipeline`` and ``vntyper report``.
 
     Raises:
-        ValueError: If config is not provided, or ``report_igv`` is not a recognised
-            mode, or the vendored asset fails its digest check.
+        ValueError: If config is not provided, an operator template directory lacks
+            the report entry template, ``report_igv`` is not a recognised mode, or
+            the vendored asset fails its digest check.
     """
     logger.debug("---- DEBUG: Entered generate_summary_report ----")
     logger.debug(
@@ -682,16 +659,16 @@ def generate_summary_report(
 
     fastp = summarise_fastp(load_fastp_output(Path(output_dir) / "fastq_bam_processing/output.json"))
 
-    coverage_icon, coverage_color = threshold_icon(
-        mean_vntr_coverage, mean_vntr_cov_threshold, higher_better=True, on_missing=MISSING_AS_OK
-    )
+    coverage_icon, coverage_color = threshold_icon(mean_vntr_coverage, mean_vntr_cov_threshold, higher_better=True)
     uncovered_icon, uncovered_color = threshold_icon(
-        percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False, on_missing=MISSING_AS_OK
+        percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False
     )
-    dup_icon, dup_color = threshold_icon(fastp.duplication_rate, dup_rate_cutoff, higher_better=False)
-    q20_icon, q20_color = threshold_icon(fastp.q20_rate, q20_rate_cutoff)
-    q30_icon, q30_color = threshold_icon(fastp.q30_rate, q30_rate_cutoff)
-    pf_icon, pf_color = threshold_icon(fastp.passed_filter_rate, passed_filter_rate_cutoff)
+    dup_icon, dup_color = threshold_icon(
+        fastp_threshold_rate(fastp.duplication_rate), dup_rate_cutoff, higher_better=False
+    )
+    q20_icon, q20_color = threshold_icon(fastp_threshold_rate(fastp.q20_rate), q20_rate_cutoff)
+    q30_icon, q30_color = threshold_icon(fastp_threshold_rate(fastp.q30_rate), q30_rate_cutoff)
+    pf_icon, pf_color = threshold_icon(fastp_threshold_rate(fastp.passed_filter_rate), passed_filter_rate_cutoff)
 
     # "" for an empty frame, which is what the template's authored empty states hang
     # on. This used to call `to_html` directly, bypassing the helper written for
@@ -759,14 +736,21 @@ def generate_summary_report(
         advntr_folded_record = folded_record_html(advntr_display, ADVNTR_ESSENTIAL_COLUMNS, noun=ADVNTR_ROW_NOUN)
         logger.debug("adVNTR results converted to HTML.")
 
-    cross_match_message, cross_match_is_positive = build_cross_match_summary(pipeline_summary)
+    cross_match_message, cross_match_is_positive, cross_match_is_assessable = build_cross_match_summary(
+        pipeline_summary, report_config
+    )
 
     # Autoescaping is on: everything reaching the report from a sample - file
     # names, BAM header fields, motif sequences, log lines - is attacker-influenced
     # and the report is a file people forward. The fragments we build ourselves are
     # marked `|safe` at their interpolation points in the template, and the two
     # results tables and the Confidence spans are escaped before they get there.
-    env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["html"]))
+    env = Environment(
+        loader=FileSystemLoader(
+            report_assets.template_search_paths(template_dir, entry_template="report_template.html")
+        ),
+        autoescape=select_autoescape(["html"]),
+    )
     try:
         template = env.get_template("report_template.html")
         logger.debug("Jinja2 template 'report_template.html' loaded successfully.")
@@ -849,7 +833,7 @@ def generate_summary_report(
         "kestrel_row_summary": kestrel_row_summary,
         "kestrel_subthreshold_note": kestrel_subthreshold_note,
         # The folded columns, printed under each table because a nineteen-column table
-        # does not fit A4 and silently lost ten of them - the 121 bp motif sequence
+        # does not fit A4 and silently lost ten of them - the then-120 bp motif pair
         # among them - off the right edge of every sheet.
         "kestrel_folded_record": folded_record_html(kestrel_df, KESTREL_ESSENTIAL_COLUMNS, noun=KESTREL_ROW_NOUN),
         "advntr_folded_record": advntr_folded_record,
@@ -963,6 +947,9 @@ def generate_summary_report(
         "depth_sum_reference_length": shown(coverage["depth_sum_reference_length"]),
         "depth_counting_policy": shown(coverage["depth_counting_policy"]),
         "coverage_qc": coverage_qc.status,
+        "coverage_qc_text": coverage_qc_word(coverage_qc.status),
+        # Let templates test measuredness without restating this presentation phrase.
+        "not_calculated": NOT_CALCULATED,
         # Whether there was anything to judge. `quality_metrics_pass` stays True for a run
         # with no coverage step at all - the screening axis is unchanged by #172's
         # honesty fix - so the chip would otherwise be painted "passing" beside a status
@@ -996,13 +983,16 @@ def generate_summary_report(
         # `report_config.json` now carries the split beside the verbatim message, and
         # `screening_summary.render_segments` is what pins that the two still agree.
         "screening_segments": screening.rendered_segments,
+        # Additive and config-driven. Empty for a measured gate and for a config written
+        # before the key existed; configured screening messages are never reworded.
+        "coverage_not_measured_note": coverage_not_measured_note(report_config, coverage_qc),
         # The state as words, computed in the pure module: a chip is the most compressed
         # thing the report says about a stage, so it is the one most easily misread as a
         # verdict, and none of these words may be one the run did not reach.
         "state_chips": state_chips(
             screening,
             report_config,
-            cross_match_available=bool(cross_match_message),
+            cross_match_available=cross_match_is_assessable and bool(cross_match_message),
             cross_match_is_positive=cross_match_is_positive,
         ),
         # The full computed screening state, not just `is_positive` - so a report

@@ -19,6 +19,7 @@ Two things are pinned here:
   precedence over the shipped ``shark_config.json`` (:class:`TestTheInstalledTreeWins`).
 """
 
+import json
 import logging
 import shlex
 from pathlib import Path
@@ -183,6 +184,98 @@ class TestFailureHandling:
 
         with pytest.raises(RuntimeError):
             filter_with(tmp_path)
+
+
+class TestStepSummaryArtifact:
+    """The SHARK summary names and counts the FASTQs the filter actually wrote."""
+
+    @staticmethod
+    def write_fastq(path: Path, records: int) -> None:
+        """Write ``records`` complete four-line FASTQ records."""
+        path.write_text("".join(f"@r{i}\nACGT\n+\nFFFF\n" for i in range(records)), encoding="utf-8")
+
+    def test_it_records_exact_paths_and_string_counts(self, tmp_path):
+        """Summary JSON uses strings because pipeline JSON metadata is a string-valued contract."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        self.write_fastq(r1, 3)
+        self.write_fastq(r2, 3)
+        out = tmp_path / "sample_shark_step.json"
+
+        payload = shark.write_shark_step_summary(r1, r2, out)
+
+        assert payload == {
+            "filtered_fastq_1": str(r1),
+            "filtered_fastq_2": str(r2),
+            "kept_reads_r1": "3",
+            "kept_reads_r2": "3",
+        }
+        assert json.loads(out.read_text(encoding="utf-8")) == payload
+
+    def test_a_filter_that_kept_nothing_records_string_zero(self, tmp_path):
+        """An empty but valid FASTQ is a zero count, not a failed stage."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        r1.touch()
+        r2.touch()
+        out = tmp_path / "sample_shark_step.json"
+
+        payload = shark.write_shark_step_summary(r1, r2, out)
+
+        assert payload["kept_reads_r1"] == "0"
+        assert payload["kept_reads_r2"] == "0"
+
+    def test_a_truncated_fastq_raises_without_leaving_a_summary(self, tmp_path):
+        """A refused count cannot become a plausible-looking summary."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        r1.write_text("@r0\nACGT\n+\n", encoding="utf-8")
+        self.write_fastq(r2, 1)
+        out = tmp_path / "sample_shark_step.json"
+
+        with pytest.raises(ValueError, match="not divisible"):
+            shark.write_shark_step_summary(r1, r2, out)
+
+        assert not out.exists()
+
+    def test_an_unreadable_fastq_propagates_the_count_failure(self, tmp_path):
+        """Missing input must not be flattened into zero kept reads."""
+        r1 = tmp_path / "missing_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        self.write_fastq(r2, 1)
+
+        with pytest.raises(ValueError, match="Could not count FASTQ records"):
+            shark.write_shark_step_summary(r1, r2, tmp_path / "out.json")
+
+    def test_a_json_create_failure_propagates(self, tmp_path, monkeypatch):
+        """The pipeline must fail rather than record a sidecar that was never created."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        self.write_fastq(r1, 1)
+        self.write_fastq(r2, 1)
+
+        def refuse_write(*_args, **_kwargs):
+            raise OSError("read-only output")
+
+        monkeypatch.setattr(shark, "open", refuse_write, raising=False)
+
+        with pytest.raises(OSError, match="read-only output"):
+            shark.write_shark_step_summary(r1, r2, tmp_path / "out.json")
+
+    def test_a_json_write_failure_propagates(self, tmp_path, monkeypatch):
+        """A file opened successfully but not serialized is not a readable step result."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        self.write_fastq(r1, 1)
+        self.write_fastq(r2, 1)
+
+        def refuse_dump(*_args, **_kwargs):
+            raise OSError("write failed")
+
+        monkeypatch.setattr(shark.json, "dump", refuse_dump)
+
+        with pytest.raises(OSError, match="write failed"):
+            shark.write_shark_step_summary(r1, r2, tmp_path / "out.json")
 
 
 class TestReferenceAssemblySelectsTheRegion:

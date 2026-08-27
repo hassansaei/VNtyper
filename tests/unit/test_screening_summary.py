@@ -34,6 +34,7 @@ import pytest
 
 from vntyper.scripts import screening_summary as ss
 from vntyper.scripts import summary_steps
+from vntyper.scripts.algorithm_rules import UNESTABLISHED_RESULT
 from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 
 pytestmark = pytest.mark.unit
@@ -97,9 +98,9 @@ def test_report_config_failure_returns_empty_mapping(monkeypatch, caplog, failur
 
 
 def test_the_kestrel_block_declares_the_expected_states(report_config) -> None:
-    """Six since #266. ``negative_subthreshold`` is declared under
-    ``non_finding_results`` rather than produced by a rule, because it is a promotion of
-    the default and not a verdict any row can carry."""
+    """Seven since the unestablished-state opt-in. ``negative_subthreshold`` and
+    ``unestablished`` are declared under ``non_finding_results`` rather than produced by
+    a configured rule."""
     assert set(declared_results(kestrel_logic(report_config))) == {
         "High_Precision",
         "High_Precision_flagged",
@@ -107,6 +108,7 @@ def test_the_kestrel_block_declares_the_expected_states(report_config) -> None:
         "Low_Precision_flagged",
         "negative",
         ss.SUBTHRESHOLD_RESULT,
+        UNESTABLISHED_RESULT,
     }
 
 
@@ -115,6 +117,7 @@ def test_the_advntr_block_declares_the_expected_states(report_config) -> None:
         "positive",
         "positive flagged",
         "negative",
+        UNESTABLISHED_RESULT,
     }
 
 
@@ -180,10 +183,62 @@ def test_the_advntr_state_comes_from_vid_and_flag(vid, flag, expected, report_co
     assert compute_advntr(frame, report_config) == expected
 
 
-def test_a_missing_column_fails_the_rule_rather_than_raising(report_config) -> None:
-    """A frame with no `Flag` column reaches every Kestrel rule and matches none."""
+def test_a_missing_flag_column_is_unestablished_not_negative(report_config) -> None:
+    """Spec §2.1 half (a): a High_Precision row with no Flag column used to render
+    "No variant detected." — an absent condition column is an unestablished state."""
     frame = pd.DataFrame([{"Confidence": "High_Precision"}])
+    assert compute_kestrel(frame, report_config) == UNESTABLISHED_RESULT
+
+
+def test_a_nan_flag_cell_is_unestablished_not_a_flagged_positive(report_config) -> None:
+    """Spec §2.1 half (b): the mixed-cohort union frame's Flag = NaN false positive."""
+    frame = pd.DataFrame([{"Confidence": "High_Precision", "Flag": float("nan")}])
+    assert compute_kestrel(frame, report_config) == UNESTABLISHED_RESULT
+
+
+def test_the_negative_placeholder_row_is_still_negative(report_config) -> None:
+    """Every condition of a rule is evaluated, so the placeholder's definitively-false
+    Confidence FAILS each rule and the absent Flag column cannot make it UNEVALUABLE."""
+    frame = pd.DataFrame(
+        [
+            {
+                "Motif": "None",
+                "Variant": "None",
+                "POS": "None",
+                "REF": "None",
+                "ALT": "None",
+                "Motif_sequence": "None",
+                "Estimated_Depth_AlternateVariant": "None",
+                "Estimated_Depth_Variant_ActiveRegion": "None",
+                "Depth_Score": "None",
+                "Confidence": "Negative",
+            }
+        ]
+    )
     assert compute_kestrel(frame, report_config) == "negative"
+
+
+def test_an_unestablished_kestrel_state_selects_the_first_configured_entry(report_config) -> None:
+    """The two new entries are single-condition and placed first; `rule_matches`
+    constrains only the axes a rule names, so one entry covers every combination."""
+    for advntr in ("negative", "positive", "none", UNESTABLISHED_RESULT):
+        for qc in (True, False):
+            state = {"kestrel_result": UNESTABLISHED_RESULT, "advntr_result": advntr, "quality_metrics_pass": qc}
+            assert ss.find_screening_rule(report_config, state) is report_config["screening_summary_rules"][0]
+
+
+def test_an_unestablished_advntr_state_selects_the_second_configured_entry(report_config) -> None:
+    for kestrel in ("negative", "High_Precision", "Low_Precision_flagged"):
+        for qc in (True, False):
+            state = {"kestrel_result": kestrel, "advntr_result": UNESTABLISHED_RESULT, "quality_metrics_pass": qc}
+            assert ss.find_screening_rule(report_config, state) is report_config["screening_summary_rules"][1]
+
+
+def test_unestablished_is_not_a_finding_under_the_shipped_config(report_config) -> None:
+    kestrel = kestrel_logic(report_config)
+    advntr = advntr_logic(report_config)
+    assert not ss.is_finding(UNESTABLISHED_RESULT, kestrel["default"], kestrel["non_finding_results"])
+    assert not ss.is_finding(UNESTABLISHED_RESULT, advntr["default"], advntr["non_finding_results"])
 
 
 def test_an_unsupported_operator_fails_the_rule() -> None:
@@ -263,7 +318,7 @@ def reachable_states(report_config) -> list[dict]:
 def test_the_state_matrix_is_not_empty(report_config) -> None:
     """Guard the guard: an empty matrix passes the coverage test vacuously."""
     states = reachable_states(report_config)
-    assert len(states) == 6 * 4 * 2 == 48
+    assert len(states) == 7 * 5 * 2 == 70
 
 
 def state_is_positive(state, report_config) -> bool:
@@ -553,7 +608,7 @@ def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
     """An internal screening dependency failure yields the explicit unavailable state.
 
     This is also the only path through `build_screening_summary` that leaves
-    `matched_rule` False in practice: all 40 reachable (kestrel_result, advntr_result,
+    `matched_rule` False in practice: all 70 reachable (kestrel_result, advntr_result,
     quality_metrics_pass) combinations resolve to a configured rule (see
     `test_every_reachable_state_has_its_own_message`), so `emphasis == "indeterminate"`
     is genuinely exceptional and cannot mislabel an ordinary all-negative report.
@@ -763,10 +818,16 @@ def test_the_provenance_word_says_the_execution_state_before_the_result(executio
 
 
 def rule_id(rule: dict) -> str:
-    """Name one screening rule by the state it covers."""
+    """Name one screening rule by the state it covers. The two `unestablished`
+    entries name a single axis, so the unnamed axes read `any`."""
     conditions = rule["conditions"]
-    qc = "qc-pass" if conditions["quality_metrics_pass"] else "qc-fail"
-    return f"{conditions['kestrel_result']}-{conditions['advntr_result'].replace(' ', '-')}-{qc}"
+    kestrel = str(conditions.get("kestrel_result", "any"))
+    advntr = str(conditions.get("advntr_result", "any")).replace(" ", "-")
+    if "quality_metrics_pass" in conditions:
+        qc = "qc-pass" if conditions["quality_metrics_pass"] else "qc-fail"
+    else:
+        qc = "qc-any"
+    return f"{kestrel}-{advntr}-{qc}"
 
 
 ALL_RULES = ss.load_report_config()["screening_summary_rules"]
@@ -776,9 +837,10 @@ def test_the_shipped_rule_table_is_loaded() -> None:
     """Guard the guard: an empty table makes every parametrised assertion below vacuous.
 
     40 until #266 added ``negative_subthreshold``, a sixth Kestrel state, and with it the
-    8 rules the cartesian product requires.
+    8 rules the cartesian product requires. 50 since the two single-condition
+    ``unestablished`` entries (2026-08-27 code screen).
     """
-    assert len(ALL_RULES) == 48
+    assert len(ALL_RULES) == 50
 
 
 def test_twelve_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
@@ -788,7 +850,7 @@ def test_twelve_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
     """
     assert ss.NOT_PERFORMED == "none"
 
-    not_performed_rules = [rule for rule in ALL_RULES if rule["conditions"]["advntr_result"] == "none"]
+    not_performed_rules = [rule for rule in ALL_RULES if rule["conditions"].get("advntr_result") == "none"]
 
     assert len(not_performed_rules) == 12
 
@@ -810,6 +872,81 @@ def test_no_segment_carries_the_separator_it_was_split_on(rule) -> None:
     else, so a ``<br>`` surviving inside one would reach the reader as literal text."""
     for segment in ss.message_segments(rule):
         assert ss.SEGMENT_SEPARATOR not in segment
+
+
+@pytest.mark.parametrize(
+    ("index", "conditions", "message", "segments"),
+    [
+        (
+            0,
+            {"kestrel_result": UNESTABLISHED_RESULT},
+            "The Kestrel screening state was not established: a value the Kestrel screening rules evaluate was "
+            "absent or empty in the Kestrel result.<br>Note: this describes what could be evaluated, not the sample; "
+            "no screening result is asserted.",
+            (
+                "The Kestrel screening state was not established: a value the Kestrel screening rules evaluate was "
+                "absent or empty in the Kestrel result.",
+                "Note: this describes what could be evaluated, not the sample; no screening result is asserted.",
+            ),
+        ),
+        (
+            1,
+            {"advntr_result": UNESTABLISHED_RESULT},
+            "The adVNTR screening state was not established: a value the adVNTR screening rules evaluate was absent "
+            "or empty in the adVNTR result.<br>Note: this describes what could be evaluated, not the sample; no "
+            "screening result is asserted.",
+            (
+                "The adVNTR screening state was not established: a value the adVNTR screening rules evaluate was "
+                "absent or empty in the adVNTR result.",
+                "Note: this describes what could be evaluated, not the sample; no screening result is asserted.",
+            ),
+        ),
+    ],
+)
+def test_unestablished_entries_survive_json_loading_and_segment_rendering(
+    index: int, conditions: dict, message: str, segments: tuple[str, ...], report_config
+) -> None:
+    """The reviewed configured text round-trips through JSON and report rendering."""
+    rule = report_config["screening_summary_rules"][index]
+
+    assert rule["conditions"] == conditions
+    assert ss.message_segments(rule) == segments
+    assert rule["message"] == message
+    assert ss.render_segments(rule) == message
+
+
+def test_an_unestablished_kestrel_summary_has_no_finding_emphasis(report_config) -> None:
+    """A matched unestablished message describes evaluation, not a sample finding."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame([{"Confidence": "High_Precision"}]),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+    )
+
+    assert summary.kestrel_result == UNESTABLISHED_RESULT
+    assert summary.text == report_config["screening_summary_rules"][0]["message"]
+    assert summary.matched_rule is True
+    assert summary.is_positive is False
+    assert summary.emphasis == "no-finding"
+
+
+def test_an_unestablished_advntr_summary_has_no_finding_emphasis(report_config) -> None:
+    """The adVNTR declaration makes its unestablished result neutral too."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(),
+        pd.DataFrame([{"VID": "25561"}]),
+        True,
+        _passing(),
+        report_config,
+    )
+
+    assert summary.advntr_result == UNESTABLISHED_RESULT
+    assert summary.text == report_config["screening_summary_rules"][1]["message"]
+    assert summary.matched_rule is True
+    assert summary.is_positive is False
+    assert summary.emphasis == "no-finding"
 
 
 def test_a_rule_with_only_a_message_still_renders() -> None:

@@ -8,10 +8,13 @@ half-populated reference tree that the next run treated as complete.
 
 import io
 import logging
+import stat
 import tarfile
+import zipfile
 
 import pytest
 
+from vntyper.scripts import reference_bundle
 from vntyper.scripts.reference_bundle import safe_extract, staged_install, verify_sha256
 
 pytestmark = pytest.mark.unit
@@ -52,7 +55,8 @@ class TestSafeExtract:
     def test_an_ordinary_archive_extracts(self, tmp_path):
         archive = _tar_with(tmp_path, [("alignment/chr1.hg38.fa", b">chr1\nACGT\n")])
         destination = tmp_path / "out"
-        safe_extract(archive, destination)
+        members = safe_extract(archive, destination)
+        assert members == ["alignment/chr1.hg38.fa"]
         assert (destination / "alignment/chr1.hg38.fa").read_bytes() == b">chr1\nACGT\n"
 
     @pytest.mark.parametrize("arcname", ["../escaped.fa", "/etc/passwd", "a/../../escaped.fa"])
@@ -200,6 +204,18 @@ class TestSafeExtract:
         assert not (outside / "chr1.hg19.fa").exists(), "a member was written outside the destination"
         assert (destination / "alignment").is_symlink(), "the pre-existing symlink itself must be left alone"
 
+    def test_the_destination_itself_cannot_be_a_symlink(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        destination = tmp_path / "out"
+        destination.symlink_to(outside, target_is_directory=True)
+        archive = _tar_with(tmp_path, [("chr1.fa", b">chr1\nACGT\n")])
+
+        with pytest.raises(ValueError, match="destination .* is a symlink"):
+            safe_extract(archive, destination)
+
+        assert not (outside / "chr1.fa").exists()
+
     def test_a_device_member_is_rejected(self, tmp_path):
         """Neither a regular file nor a directory, so it belongs in no reference bundle."""
         archive = tmp_path / "device.tar.gz"
@@ -233,6 +249,78 @@ class TestSafeExtract:
         monkeypatch.setattr(tarfile.TarFile, "extractall", refuse)
         with pytest.raises(ValueError, match="extraction filter refused"):
             safe_extract(archive, tmp_path / "out")
+
+
+class TestSafeExtractZip:
+    """ZIP extraction must enforce the same archive-root boundary as tar."""
+
+    @staticmethod
+    def _zip_with(tmp_path, name, payload=b"x"):
+        archive = tmp_path / "seed.zip"
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr(name, payload)
+        return archive
+
+    def test_a_member_with_a_parent_component_is_refused(self, tmp_path):
+        archive = self._zip_with(tmp_path, "../escape.txt")
+
+        with pytest.raises(ValueError, match="escapes the archive root"):
+            reference_bundle.safe_extract_zip(archive, tmp_path / "dest")
+
+        assert not (tmp_path / "escape.txt").exists()
+
+    def test_an_absolute_member_is_refused(self, tmp_path):
+        archive = self._zip_with(tmp_path, "/etc/owned")
+
+        with pytest.raises(ValueError, match="absolute path"):
+            reference_bundle.safe_extract_zip(archive, tmp_path / "dest")
+
+    def test_a_link_member_is_refused(self, tmp_path):
+        archive = tmp_path / "seed.zip"
+        info = zipfile.ZipInfo("evil-link")
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr(info, "/etc")
+
+        with pytest.raises(ValueError, match="is a link"):
+            reference_bundle.safe_extract_zip(archive, tmp_path / "dest")
+
+    def test_a_preexisting_destination_symlink_cannot_redirect_a_member(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        destination = tmp_path / "dest"
+        destination.mkdir()
+        (destination / "data").symlink_to(outside, target_is_directory=True)
+        archive = self._zip_with(tmp_path, "data/file.txt")
+
+        with pytest.raises(ValueError, match="outside"):
+            reference_bundle.safe_extract_zip(archive, destination)
+
+        assert not (outside / "file.txt").exists()
+
+    def test_the_destination_itself_cannot_be_a_symlink(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        destination = tmp_path / "dest"
+        destination.symlink_to(outside, target_is_directory=True)
+        archive = self._zip_with(tmp_path, "file.txt")
+
+        with pytest.raises(ValueError, match="destination .* is a symlink"):
+            reference_bundle.safe_extract_zip(archive, destination)
+
+        assert not (outside / "file.txt").exists()
+
+    def test_a_clean_archive_extracts_and_returns_its_file_members(self, tmp_path):
+        archive = tmp_path / "seed.zip"
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("a.txt", "a")
+            bundle.writestr("sub/", b"")
+            bundle.writestr("sub/b.txt", "b")
+
+        members = reference_bundle.safe_extract_zip(archive, tmp_path / "dest")
+
+        assert members == ["a.txt", "sub/b.txt"]
+        assert (tmp_path / "dest" / "sub" / "b.txt").read_text(encoding="utf-8") == "b"
 
 
 class TestStagedInstall:

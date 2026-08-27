@@ -37,6 +37,7 @@ pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 CONDA_ENV = REPO_ROOT / "conda" / "environment_vntyper.yml"
+CONDA_BOOTSTRAP = REPO_ROOT / "conda" / "conda.txt"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-tests.yml"
 SMOKE_TEST = REPO_ROOT / "tests" / "docker" / "test_image_structure.py"
 WEB_REQUIREMENTS = REPO_ROOT / "docker" / "requirements-web.txt"
@@ -289,6 +290,21 @@ def test_conda_versions_satisfy_pyproject_specifiers() -> None:
         "the conda environment installs versions the package forbids, so pip would "
         "replace them inside the image:\n  " + "\n  ".join(conflicts)
     )
+
+
+def test_removed_core_plotting_stacks_are_not_declared() -> None:
+    """The Plotly-only cohort report must not retain unused core dependencies.
+
+    The benchmark helper and Python-2 adVNTR environment still use matplotlib;
+    this contract covers only the VNtyper package and its two core environment
+    declarations.
+    """
+    removed = {"matplotlib", "seaborn"}
+    assert removed.isdisjoint(pyproject_dependencies())
+    assert removed.isdisjoint(conda_dependencies())
+
+    vntyper_bootstrap = _read(CONDA_BOOTSTRAP).split("# Create 'envadvntr' environment", maxsplit=1)[0]
+    assert not any(re.search(rf"\b{name}=", vntyper_bootstrap) for name in removed)
 
 
 def test_image_required_binaries_are_in_the_conda_environment() -> None:

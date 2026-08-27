@@ -4,11 +4,17 @@ import logging
 import os
 import re
 import shlex
-import subprocess as sp
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact, publish_advntr_result
+from vntyper.modules.advntr.advntr_variant_annotations import (
+    DELETION_PATTERN,
+    INSERTION_PATTERN,
+    derive_ru_and_pos,
+)
 from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.nomenclature_annotate import NOMENCLATURE_COLUMNS, annotate_advntr_frame
 from vntyper.scripts.utils import load_config, run_command
@@ -285,9 +291,11 @@ def resolve_additional_commands(settings):
     rather than by enumeration. It over-rejects only spellings argparse itself would
     accept for a permitted option (``-c30``); those fail loudly and are re-spelled.
 
-    Unlike ``threads`` and ``output_format``, a missing key is not an error here. Those two
-    are authoritative because their old fallbacks *contradicted* the shipped file (#247);
-    this default is ``-aln``, which is what advntr_config.json ships.
+    Unlike ``threads`` and ``output_format``, a missing key is not an error here. The default
+    is an empty extension. Operators can explicitly opt into adVNTR-owned flags such as
+    ``-aln``, but VNtyper does not consume its alignment sidecar. adVNTR 2.0.4 can finish the
+    genotype VCF and then crash in that optional post-processing path, so enabling it by
+    default turns a completed genotype into a correctly propagated subprocess failure.
 
     Args:
         settings (dict): An ``advntr_settings`` mapping.
@@ -302,7 +310,7 @@ def resolve_additional_commands(settings):
         ValueError: If the fragment does not parse as shell words, if any word is an option
             :func:`run_advntr` sets itself, or if any word is not an option adVNTR declares.
     """
-    additional = settings.get("additional_commands", "-aln")
+    additional = settings.get("additional_commands", "")
 
     try:
         tokens = shlex.split(additional)
@@ -351,15 +359,16 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
             ``advntr_settings['threads']`` is ``null``, which means "inherit".
 
     Returns:
-        int: Return code indicating success (0) or failure (non-zero).
+        int: 0 on success, or 1 for the pre-command input-validation failures.
 
     Raises:
+        RuntimeError: When the critical adVNTR command exits non-zero or reports
+            failure. This propagates so no partial output can reach result parsing.
         ValueError: From :func:`resolve_advntr_threads` or
             :func:`resolve_additional_commands`, for a configured value this module refuses.
-            Deliberately not turned into a return code: ``pipeline.py`` ignores this
-            function's return value, so a ``1`` here would let the run proceed to
-            ``process_advntr_output`` on a file nothing wrote, while ``cli.py`` catches
-            ``ValueError`` and exits 1 with the message.
+            Deliberately not turned into a return code so every caller must handle the
+            configuration failure explicitly; ``cli.py`` catches ``ValueError`` and exits
+            1 with the message.
         KeyError: From :func:`resolve_advntr_threads` or :func:`advntr_output_extension`,
             for a *missing* configuration key. ``cli.py`` does not catch this, so a partial
             mapping surfaces as a traceback rather than a clean exit -- the same shape
@@ -398,9 +407,12 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
     # that with a separate `advntr_case_threads` knob, which remains the control.
     threads = resolve_advntr_threads(advntr_settings, pipeline_threads)
 
-    # Extra flags for adVNTR, refusing any option this function already sets. See
-    # `resolve_additional_commands`: argparse lets the last occurrence win, so an
-    # unchecked fragment overrides the thread count validated one line above.
+    # Optional operator-supplied flags for adVNTR, refusing any option this function
+    # already sets. The shipped and missing-key defaults are empty: VNtyper does not read
+    # adVNTR's `-aln` sidecar, and adVNTR 2.0.4 can crash while generating it after the VCF
+    # is complete. Explicit opt-in remains supported through this extension point. See
+    # `resolve_additional_commands`: argparse lets the last occurrence win, so an unchecked
+    # fragment overrides the thread count validated one line above.
     additional_commands = resolve_additional_commands(advntr_settings)
 
     # Determine the output extension. Shared with pipeline.py, which reconstructs this path.
@@ -428,17 +440,18 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
 
     # `run_command` runs this as one string under bash (trap 9), so quoting can only
     # happen here. Paths, the sample-derived output name and the thread count are
-    # quoted; `advntr_path` and `additional_commands` are not, because both hold
+    # quoted; `advntr_path` and non-empty `additional_commands` are not, because both hold
     # *command fragments* from config.json - `advntr` is "mamba run -n envadvntr advntr"
-    # (trap 6) and `additional_commands` is a flag list such as "-aln". Quoting either
-    # would collapse it into a single token bash then looks for as one binary or one
-    # argument. They are operator-controlled configuration, not user input.
+    # (trap 6) and `additional_commands` can be an explicit flag list such as "-aln".
+    # Quoting either would collapse it into a single token bash then looks for as one
+    # binary or one argument. They are operator-controlled configuration, not user input.
+    additional_fragment = f" {additional_commands}" if additional_commands else ""
     advntr_command = (
         f"{advntr_path} genotype -fs -vid {quote_path(vid)} "
         f"--alignment_file {quote_path(sorted_bam)} "
         f"-o {quote_path(f'{output}/{output_name}_adVNTR{output_ext}')} "
         f"-m {quote_path(db_file)} --working_directory {quote_path(output)} "
-        f"-t {quote_path(threads)} {additional_commands}"
+        f"-t {quote_path(threads)}{additional_fragment}"
     )
 
     # Define log file for adVNTR output
@@ -448,16 +461,14 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
     logger.debug(f"Command: {advntr_command}")
 
     try:
-        # Run the adVNTR command and log output to the specified log file
-        if not run_command(advntr_command, log_file, critical=True, cwd=cwd):
-            logger.error("adVNTR genotyping failed. Check the log for details.")
-            return 1
-    except sp.CalledProcessError as cpe:
-        logger.error(f"adVNTR genotyping CalledProcessError: {cpe}")
-        return 1
-    except Exception as e:
-        logger.error(f"adVNTR genotyping encountered an unexpected error: {e}")
-        return 1
+        succeeded = run_command(advntr_command, log_file, critical=True, cwd=cwd)
+    except RuntimeError:
+        logger.error(f"adVNTR genotyping failed; adVNTR output is in {log_file}.")
+        raise
+    if not succeeded:
+        msg = "adVNTR genotyping failed. Check the log for details."
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     logger.info("adVNTR genotyping of MUC1-VNTR completed successfully.")
     return 0
@@ -692,8 +703,10 @@ def load_ru_sequences(ru_fasta_path):
 
 
 def annotate_advntr_variants(variant_series, ru_fasta_path):
-    """
-    Annotate adVNTR variants with RU, POS, REF, and ALT using the RU FASTA file.
+    """Annotate adVNTR variants with RU, POS, REF, and ALT.
+
+    RU and POS are derived from the variant state string. Only REF and ALT require the
+    repeat-unit FASTA.
 
     Args:
         variant_series (pd.Series): Series of variant strings (possibly with multiple parts separated by '&').
@@ -702,25 +715,20 @@ def annotate_advntr_variants(variant_series, ru_fasta_path):
     Returns:
         tuple: Four lists corresponding to RU, POS, REF, and ALT annotations.
     """
+    variant_values = list(variant_series)
     ru_dict = load_ru_sequences(ru_fasta_path)
-    ru_annotations = []
-    pos_annotations = []
+    ru_annotations, pos_annotations = derive_ru_and_pos(variant_values)
     ref_annotations = []
     alt_annotations = []
 
-    ins_pattern = re.compile(r"^I(\d+)_([0-9]+)_([ACGT])_LEN(\d+)$")
-    del_pattern = re.compile(r"^D(\d+)_([0-9]+)$")
-
-    for variant in variant_series:
-        parts = variant.split("&")
-        ru_parts = []
-        pos_parts = []
+    for variant in variant_values:
         ref_parts = []
         alt_parts = []
+        parts = variant.split("&") if isinstance(variant, str) else [""]
         for part in parts:
             part = part.strip()
-            ins_match = ins_pattern.match(part)
-            del_match = del_pattern.match(part)
+            ins_match = INSERTION_PATTERN.match(part)
+            del_match = DELETION_PATTERN.match(part)
             if ins_match:
                 pos_val = int(ins_match.group(1))
                 ru_val = ins_match.group(2)
@@ -729,8 +737,6 @@ def annotate_advntr_variants(variant_series, ru_fasta_path):
                 ru_seq = ru_dict.get(ru_val, "")
                 ref_base = ru_seq[pos_val - 1] if ru_seq and pos_val - 1 < len(ru_seq) else "."
                 alt_val = ref_base + inserted_base * ins_len
-                ru_parts.append(ru_val)
-                pos_parts.append(str(pos_val))
                 ref_parts.append(ref_base)
                 alt_parts.append(alt_val)
             elif del_match:
@@ -745,17 +751,11 @@ def annotate_advntr_variants(variant_series, ru_fasta_path):
                 else:
                     ref_allele = "."
                     alt_allele = "."
-                ru_parts.append(ru_val)
-                pos_parts.append(str(pos_val))
                 ref_parts.append(ref_allele)
                 alt_parts.append(alt_allele)
             else:
-                ru_parts.append(".")
-                pos_parts.append(".")
                 ref_parts.append(".")
                 alt_parts.append(".")
-        ru_annotations.append(",".join(ru_parts))
-        pos_annotations.append(",".join(pos_parts))
         ref_annotations.append(",".join(ref_parts))
         alt_annotations.append(",".join(alt_parts))
 
@@ -766,9 +766,9 @@ def process_advntr_output(output_path, output, output_name, config=None):
     """
     Process the adVNTR output to extract relevant information and generate final results.
 
-    Optionally, if a configuration is provided and it includes a valid
-    'reference_data.code_adVNTR_RUs' FASTA file, the function will annotate each
-    variant with the affected repeat unit (RU), position (POS), REF and ALT values.
+    Repeat unit (RU) and position (POS) are always derived from each variant's state
+    string. When configuration includes a valid 'reference_data.code_adVNTR_RUs' FASTA,
+    the function also annotates REF and ALT values.
 
     The final output always contains the columns:
       "VID, Variant, NumberOfSupportingReads, MeanCoverage, Pvalue, RU, POS, REF, ALT, Flag".
@@ -781,10 +781,18 @@ def process_advntr_output(output_path, output, output_name, config=None):
         output (str): Directory where the final results will be saved.
         output_name (str): Base name for the output files.
         config (dict, optional): Main configuration dictionary.
+
+    Raises:
+        RuntimeError: If the source is absent or unreadable, processing fails, or the
+            complete result cannot be published atomically.
     """
+    output_result_path = Path(output) / f"{output_name}_adVNTR_result.tsv"
+    invalidate_advntr_artifact(output_result_path)
+
     if not os.path.exists(output_path):
-        logger.error(f"adVNTR output file {output_path} not found!")
-        return
+        message = f"adVNTR output file {output_path} not found!"
+        logger.error(message)
+        raise RuntimeError(message)
 
     logger.info("Processing adVNTR result...")
 
@@ -797,8 +805,9 @@ def process_advntr_output(output_path, output, output_name, config=None):
         with open(output_path, "w") as file:
             file.writelines(content)
     except OSError as e:
-        logger.error(f"Error reading adVNTR output: {e}")
-        return
+        message = f"Error reading adVNTR output: {e}"
+        logger.error(message)
+        raise RuntimeError(message) from e
 
     try:
         logger.info("Loading data into DataFrame...")
@@ -806,8 +815,9 @@ def process_advntr_output(output_path, output, output_name, config=None):
         logger.info(f"Data loaded successfully with shape: {df.shape}")
         logger.debug(f"First few rows of the DataFrame:\n{df.head()}")
     except Exception as e:
-        logger.error(f"Error loading data into DataFrame: {e}")
-        return
+        message = f"Error loading data into DataFrame: {e}"
+        logger.error(message)
+        raise RuntimeError(message) from e
 
     # Immediately check if the loaded DataFrame is empty
     final_columns = [
@@ -844,9 +854,8 @@ def process_advntr_output(output_path, output, output_name, config=None):
                 }
             ]
         )
-        output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
         advntr_concat = advntr_concat[final_columns]
-        advntr_concat.to_csv(output_result_path, sep="\t", index=False)
+        publish_advntr_result(advntr_concat, output_result_path)
         logger.info(f"Processed adVNTR results saved to {output_result_path}")
         cleanup_files(output, output_name)
         return
@@ -894,16 +903,18 @@ def process_advntr_output(output_path, output, output_name, config=None):
             logger.info("Removing duplicates...")
             advntr_concat.drop_duplicates(subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True)
 
-            # Perform RU-level annotation if possible
+            # RU and POS come from the state string and must exist before flagging. Only
+            # REF and ALT require the repeat-unit FASTA.
+            ru_ann, pos_ann = derive_ru_and_pos(advntr_concat["Variant"])
+            advntr_concat["RU"] = ru_ann
+            advntr_concat["POS"] = pos_ann
             if config:
                 ru_fasta_path = config.get("reference_data", {}).get("code_adVNTR_RUs")
                 if ru_fasta_path and os.path.exists(ru_fasta_path):
-                    logger.info("Annotating variants with RU-level information.")
-                    ru_ann, pos_ann, ref_ann, alt_ann = annotate_advntr_variants(
+                    logger.info("Annotating variants with RU-level REF and ALT bases.")
+                    _ru_ann, _pos_ann, ref_ann, alt_ann = annotate_advntr_variants(
                         advntr_concat["Variant"], ru_fasta_path
                     )
-                    advntr_concat["RU"] = ru_ann
-                    advntr_concat["POS"] = pos_ann
                     advntr_concat["REF"] = ref_ann
                     advntr_concat["ALT"] = alt_ann
 
@@ -925,12 +936,13 @@ def process_advntr_output(output_path, output, output_name, config=None):
                     advntr_concat[col] = "" if col in NOMENCLATURE_COLUMNS else "Not applicable"
 
         advntr_concat = advntr_concat[final_columns]
-        output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
-        advntr_concat.to_csv(output_result_path, sep="\t", index=False)
-        logger.info(f"Processed adVNTR results saved to {output_result_path}")
     except Exception as e:
-        logger.error(f"Error during processing of deletions and insertions: {e}")
-        return
+        message = f"Error during processing of deletions and insertions: {e}"
+        logger.error(message)
+        raise RuntimeError(message) from e
+
+    publish_advntr_result(advntr_concat, output_result_path)
+    logger.info(f"Processed adVNTR results saved to {output_result_path}")
 
     cleanup_files(output, output_name)
 

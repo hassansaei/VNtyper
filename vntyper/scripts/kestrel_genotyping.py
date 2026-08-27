@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from vntyper.scripts.command_builders import quote_path
+from vntyper.scripts.command_builders import build_sam_to_bam_command, build_samtools_index_command, quote_path
 from vntyper.scripts.confidence_assignment import (
     calculate_depth_score_and_assign_confidence,
 )
@@ -130,7 +130,7 @@ def generate_header(reference_vntr, version=VERSION):
     return header
 
 
-def convert_sam_to_bam_and_index(sam_file, output_dir):
+def convert_sam_to_bam_and_index(sam_file, output_dir, samtools_path="samtools", threads=1):
     """
     Converts the Kestrel-generated SAM to a BAM, indexes it for
     potential downstream usage, then deletes the original SAM.
@@ -138,6 +138,10 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     Args:
         sam_file (str): Path to the "output.sam" created by Kestrel.
         output_dir (str): Directory for the resulting BAM.
+        samtools_path (str): Configured samtools invocation. Defaults to the
+            historical bare executable.
+        threads (int): Samtools thread count. One preserves the historical
+            command strings byte-for-byte.
 
     Returns:
         str: Path to the indexed BAM file.
@@ -152,7 +156,12 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     # file nobody reads. This BAM is what the report's IGV track shows (#255).
     logger.info(f"Converting SAM to BAM: {sam_file} -> {bam_file}")
     if not run_command(
-        f"samtools view -Sb {quote_path(sam_file)} > {quote_path(bam_file)}",
+        build_sam_to_bam_command(
+            samtools_path=samtools_path,
+            sam_file=sam_file,
+            bam_file=bam_file,
+            threads=threads,
+        ),
         log_file=os.path.join(output_dir, "samtools_view.log"),
     ):
         msg = f"Converting Kestrel's SAM to BAM failed: {sam_file} -> {bam_file}."
@@ -161,7 +170,7 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
 
     logger.info(f"Indexing BAM file: {bam_file}")
     if not run_command(
-        f"samtools index {quote_path(bam_file)}",
+        build_samtools_index_command(samtools_path=samtools_path, bam_file=bam_file, threads=threads),
         log_file=os.path.join(output_dir, "samtools_index.log"),
     ):
         msg = f"Indexing Kestrel's BAM failed: {bam_file}."
@@ -346,7 +355,12 @@ def run_kestrel(
             if problem is None:
                 # Convert the intermediate SAM→BAM (for debugging or IGV)
                 sam_file = os.path.join(output_dir, "output.sam")
-                convert_sam_to_bam_and_index(sam_file, output_dir)
+                convert_sam_to_bam_and_index(
+                    sam_file,
+                    output_dir,
+                    samtools_path=config["tools"]["samtools"],
+                    threads=threads,
+                )
 
                 # Postprocess final output
                 process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)

@@ -239,23 +239,38 @@ def write_owned_zip_member(archive: zipfile.ZipFile, path: str | Path, arcname: 
         os.close(descriptor)
 
 
-def snapshot_owned_archives(paths: list[str], snapshot_dir: str | Path) -> OwnedArchiveSnapshots:
+def snapshot_owned_archives(
+    paths: list[str],
+    snapshot_dir: str | Path,
+    *,
+    parent_descriptor: int | None = None,
+) -> OwnedArchiveSnapshots:
     """Copy member archives and return the owner of their anchored lifetime.
 
     Args:
         paths: Member archive paths supplied to the cohort task.
         snapshot_dir: Newly created private directory for the copies.
+        parent_descriptor: Optional already-bound parent for descriptor-relative
+            creation. The returned owner holds its own duplicate.
 
     Returns:
         Owner exposing descriptor-bound paths in input order.
     """
     directory = Path(snapshot_dir)
-    directory.mkdir(mode=0o700)
-    parent_descriptor = os.open(directory.parent, _DIRECTORY_FLAGS)
+    if parent_descriptor is None:
+        directory.mkdir(mode=0o700)
+        owned_parent_descriptor = os.open(directory.parent, _DIRECTORY_FLAGS)
+    else:
+        owned_parent_descriptor = os.dup(parent_descriptor)
+        try:
+            os.mkdir(directory.name, mode=0o700, dir_fd=owned_parent_descriptor)
+        except BaseException:
+            os.close(owned_parent_descriptor)
+            raise
     directory_descriptor = -1
     names: list[str] = []
     try:
-        directory_descriptor = os.open(directory.name, _DIRECTORY_FLAGS, dir_fd=parent_descriptor)
+        directory_descriptor = os.open(directory.name, _DIRECTORY_FLAGS, dir_fd=owned_parent_descriptor)
         directory_metadata = os.fstat(directory_descriptor)
         for path in paths:
             source_descriptor, _ = open_owned_regular(path)
@@ -285,7 +300,7 @@ def snapshot_owned_archives(paths: list[str], snapshot_dir: str | Path) -> Owned
             try:
                 _close_snapshot_directory(
                     directory,
-                    parent_descriptor,
+                    owned_parent_descriptor,
                     directory_descriptor,
                     os.fstat(directory_descriptor),
                     tuple(names),
@@ -293,11 +308,11 @@ def snapshot_owned_archives(paths: list[str], snapshot_dir: str | Path) -> Owned
             except BaseException as cleanup_error:
                 logger.error(f"Snapshot creation failed and cleanup also failed: {cleanup_error}")
         else:
-            os.close(parent_descriptor)
+            os.close(owned_parent_descriptor)
         raise
     return OwnedArchiveSnapshots(
         directory,
-        parent_descriptor,
+        owned_parent_descriptor,
         directory_descriptor,
         directory_metadata,
         tuple(names),
