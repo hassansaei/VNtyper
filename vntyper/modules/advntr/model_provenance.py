@@ -32,16 +32,16 @@ logger = logging.getLogger(__name__)
 #: adVNTR releases before this ignore a model's recorded genomic end.
 SPAN_AWARE_ADVNTR = (2, 0, 4)
 
-_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+_BARE_VERSION_LINE = re.compile(r"^\s*(\d+)\.(\d+)\.(\d+)\s*$")
+_LEGACY_VERSION_LINE = re.compile(r"^\s*adVNTR\s+(\d+)\.(\d+)\.(\d+):[^\r\n]*$")
 
 # Measured under concurrent ``mamba run`` launches: mamba can exit zero while
 # surrounding the tool's real output with these lock-contention diagnostics. That is
 # a launcher failure, not malformed adVNTR output. Keep the classification narrower
 # than either word on its own so an ordinary status-zero parse failure is never retried.
-_MAMBA_LOCK_MARKERS = (
-    "Could not set lock (Resource temporarily unavailable)",
-    "Cannot lock '",
-)
+_MAMBA_RESOURCE_LOCK_MARKER = "Could not set lock (Resource temporarily unavailable)"
+_MAMBA_PROCESS_LOCK = re.compile(r"Cannot lock '[^'\r\n]*/\.cache/mamba/proc'")
+_MAMBA_PROCESS_WAIT_MARKER = "Waiting for other mamba process to finish"
 _VERSION_PROBE_ATTEMPTS = 3
 _VERSION_PROBE_RETRY_SECONDS = 0.1
 
@@ -119,8 +119,7 @@ class AdvntrVersionProbe:
                     return None
 
                 combined_output = f"{result.stdout}\n{result.stderr}"
-                output = result.stdout.strip() or result.stderr.strip()
-                version = parse_advntr_version(output) if result.returncode == 0 else None
+                version = _parse_probe_output(result.stdout, result.stderr) if result.returncode == 0 else None
                 if version is not None:
                     self._versions[command] = version
                     return version
@@ -149,28 +148,39 @@ class AdvntrVersionProbe:
 
 def _is_transient_mamba_lock_failure(argv: list[str], output: str) -> bool:
     """Return whether output is the measured mamba process-lock contention failure."""
+    measured_process_lock = bool(_MAMBA_PROCESS_LOCK.search(output)) and _MAMBA_PROCESS_WAIT_MARKER in output
     return (
         len(argv) >= 2
         and Path(argv[0]).name == "mamba"
         and argv[1] == "run"
         and "libmamba" in output
-        and any(marker in output for marker in _MAMBA_LOCK_MARKERS)
+        and (_MAMBA_RESOURCE_LOCK_MARKER in output or measured_process_lock)
     )
 
 
+def _parse_probe_output(stdout: str, stderr: str) -> tuple[int, int, int] | None:
+    """Return one unambiguous version from strict adVNTR answer lines on either stream."""
+    candidates: set[tuple[int, int, int]] = set()
+    for stream in (stdout, stderr):
+        for line in stream.splitlines():
+            match = _BARE_VERSION_LINE.fullmatch(line) or _LEGACY_VERSION_LINE.fullmatch(line)
+            if match is not None:
+                candidates.add((int(match.group(1)), int(match.group(2)), int(match.group(3))))
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates))
+
+
 def parse_advntr_version(text: str | None) -> tuple[int, int, int] | None:
-    """Extract a version tuple from `advntr --version` output.
+    """Extract one unambiguous version from strict adVNTR answer lines.
 
     Returns None when no version can be read. adVNTR 2.0.3 has no `--version` flag, so
     an unreadable answer is the ordinary signal for "too old", not an anomaly -- and it
-    is never guessed at.
+    is never guessed from a diagnostic's unrelated version token.
     """
     if not text:
         return None
-    match = _VERSION.search(text)
-    if match is None:
-        return None
-    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+    return _parse_probe_output(text, "")
 
 
 def detect_advntr_version(

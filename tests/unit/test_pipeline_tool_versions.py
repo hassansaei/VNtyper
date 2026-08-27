@@ -15,8 +15,10 @@ BAM or CRAM input, which no module list can express.
 from __future__ import annotations
 
 import json
+import subprocess
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -189,3 +191,35 @@ def test_a_model_advntr_cannot_read_stops_the_run(tmp_path: Path, caplog: pytest
 
     assert isinstance(harness.error, SystemExit)
     assert "Install adVNTR >= 2.0.4" in caplog.text
+
+
+def test_a_malformed_startup_version_stops_before_kestrel_without_reprobing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The classified startup outcome reaches the early guard exactly once."""
+    config = deepcopy(MINIMAL_CONFIG)
+    argv = [config["tools"]["advntr"], "--version"]
+    malformed = subprocess.CompletedProcess(
+        argv,
+        0,
+        stdout="usage: advntr [options]\n",
+        stderr="Python 3.12.1 required\n",
+    )
+
+    caplog.set_level("ERROR")
+    with patch(
+        "vntyper.modules.advntr.model_provenance.subprocess.run",
+        return_value=malformed,
+    ) as runner:
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            config=config,
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert runner.call_count == 1
+    harness.stages["run_kestrel"].assert_not_called()
+    assert "adVNTR unknown" in caplog.text

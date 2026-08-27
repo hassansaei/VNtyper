@@ -211,6 +211,47 @@ def run_pipeline(
             archive_results,
             archive_format,
         )
+
+        # Refuse an unknown/incompatible adVNTR before alignment preparation,
+        # conversion, coverage, or Kestrel. Keep the classified startup answer in this
+        # run rather than probing again after those expensive stages: failed answers
+        # deliberately remain absent from the probe's reusable success cache.
+        needs_advntr = "advntr" in extra_modules
+        advntr_model = None
+        advntr_reference = None
+        advntr_version_overrides = {}
+        if needs_advntr:
+            from vntyper.modules.advntr.model_provenance import (
+                AdvntrVersionProbe,
+                describe_model,
+                detect_advntr_version,
+                require_compatible_advntr,
+            )
+
+            detected_advntr_version = detect_advntr_version(config, probe=AdvntrVersionProbe())
+            advntr_version_overrides["advntr"] = (
+                ".".join(str(part) for part in detected_advntr_version) if detected_advntr_version else "unknown"
+            )
+
+            advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
+            if not advntr_reference:
+                advntr_reference = select_advntr_reference(config, reference_assembly)
+            elif advntr_reference == "hg19":
+                advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
+            elif advntr_reference == "hg38":
+                advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
+            else:
+                logger.error(f"Invalid advntr_reference: {advntr_reference}")
+                raise ValueError(f"Invalid advntr_reference: {advntr_reference}")
+
+            if not advntr_reference:
+                logger.error("adVNTR reference path not found in configuration.")
+                raise ValueError("adVNTR reference path not found in configuration.")
+
+            logger.debug(f"adVNTR reference set to: {advntr_reference}")
+            advntr_model = describe_model(advntr_reference)
+            require_compatible_advntr(advntr_model, detected_advntr_version)
+
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "FASTQ":
             validate_fastq_file(fastq1)
@@ -268,18 +309,6 @@ def run_pipeline(
         # Whether anything will read `<name>_sliced.bam.bai`. The conversion stage is
         # given the answer rather than `extra_modules`, so it cannot grow further
         # dependencies on module state it has no business knowing.
-        needs_advntr = "advntr" in extra_modules
-
-        advntr_version_probe = None
-        advntr_version_overrides = {}
-        if needs_advntr:
-            from vntyper.modules.advntr.model_provenance import AdvntrVersionProbe, detect_advntr_version
-
-            advntr_version_probe = AdvntrVersionProbe()
-            detected_advntr_version = detect_advntr_version(config, probe=advntr_version_probe)
-            advntr_version_overrides["advntr"] = (
-                ".".join(str(part) for part in detected_advntr_version) if detected_advntr_version else "unknown"
-            )
 
         tools_in_use = {"samtools", "kestrel", "java_path"}
         if input_type == "FASTQ":
@@ -572,10 +601,6 @@ def run_pipeline(
                     run_advntr,
                 )
                 from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
-                from vntyper.modules.advntr.model_provenance import (
-                    describe_model,
-                    require_compatible_advntr,
-                )
             except ImportError as exc:
                 logger.error(f"adVNTR module import failed: {exc}")
                 sys.exit(1)
@@ -589,35 +614,12 @@ def run_pipeline(
             output_ext = advntr_output_extension(advntr_settings)
             for raw_extension in (".tsv", ".vcf"):
                 invalidate_advntr_artifact(Path(dirs["advntr"]) / f"output_adVNTR{raw_extension}")
-            advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
-
-            if not advntr_reference:
-                advntr_reference = select_advntr_reference(config, reference_assembly)
-            else:
-                if advntr_reference == "hg19":
-                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
-                elif advntr_reference == "hg38":
-                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
-                else:
-                    logger.error(f"Invalid advntr_reference: {advntr_reference}")
-                    raise ValueError(f"Invalid advntr_reference: {advntr_reference}")
-
-            if not advntr_reference:
-                logger.error("adVNTR reference path not found in configuration.")
-                raise ValueError("adVNTR reference path not found in configuration.")
-
-            logger.debug(f"adVNTR reference set to: {advntr_reference}")
-
             # Which model a run resolved decides which reads adVNTR can ever see: the
             # fetch window comes from the model's own content. Validate before running,
             # because the failure mode is a confident result over a truncated locus
             # rather than an error (#268).
-            advntr_model = describe_model(advntr_reference)
-            assert advntr_version_probe is not None
-            require_compatible_advntr(
-                advntr_model,
-                detect_advntr_version(config, probe=advntr_version_probe),
-            )
+            assert advntr_model is not None
+            assert advntr_reference is not None
             # Top-level, not inside record_step: this is run state, and a step record is
             # not where state belongs.
             summary["advntr_model"] = advntr_model
