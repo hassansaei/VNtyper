@@ -163,52 +163,6 @@ def test_summarise_fastp_does_not_divide_by_zero() -> None:
     assert metrics.passed_filter_rate is None
 
 
-@pytest.mark.parametrize(
-    ("raw_rate", "cutoff", "higher_better", "expected_displayed_rate", "expected_colour"),
-    [
-        (0.10004, 0.1, False, 0.1, "green"),
-        (0.10006, 0.1, False, 0.1001, "red"),
-        (0.79996, 0.8, True, 0.8, "green"),
-        (0.79994, 0.8, True, 0.7999, "red"),
-        (0.00065, 0.0007, True, 0.0007, "green"),
-    ],
-)
-def test_fastp_threshold_rate_matches_the_displayed_percentage_on_both_sides(
-    raw_rate: float,
-    cutoff: float,
-    higher_better: bool,
-    expected_displayed_rate: float,
-    expected_colour: str,
-) -> None:
-    """Catch icons judging the raw fraction or a double-rounded fraction."""
-    displayed_rate = rf.fastp_threshold_rate(raw_rate)
-
-    assert displayed_rate == pytest.approx(expected_displayed_rate)
-    assert rf.threshold_icon(displayed_rate, cutoff, higher_better=higher_better)[1] == expected_colour
-
-
-def test_fastp_threshold_rate_preserves_missing_and_zero() -> None:
-    """Catch an absent rate becoming zero, or a measured zero becoming absent."""
-    assert rf.fastp_threshold_rate(None) is None
-    assert rf.fastp_threshold_rate(0.0) == 0.0
-
-
-@pytest.mark.parametrize(
-    ("cutoff", "expected"),
-    [(0.0, "0%"), (0.1, "10%"), (0.1234, "12.34%"), (0.7555, "75.55%"), (1.0, "100%")],
-)
-def test_format_fastp_cutoff_preserves_the_configured_percentage(cutoff: float, expected: str) -> None:
-    """Catch cutoff labels that round or retain insignificant zeroes."""
-    assert rf.format_fastp_cutoff(cutoff) == expected
-
-
-@pytest.mark.parametrize("cutoff", [None, True, "0.8", float("nan"), -0.01, 1.01])
-def test_format_fastp_cutoff_rejects_missing_or_malformed_values(cutoff: object) -> None:
-    """Catch a report label silently accepting an invalid configured cutoff."""
-    with pytest.raises(ValueError, match="Fastp cutoff"):
-        rf.format_fastp_cutoff(cutoff)
-
-
 # ---------------------------------------------------------------------------
 # Column projection
 # ---------------------------------------------------------------------------

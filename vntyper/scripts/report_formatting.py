@@ -50,12 +50,10 @@ from __future__ import annotations
 import html
 import json
 import logging
-import math
 import numbers
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -1547,71 +1545,6 @@ def summarise_fastp(fastp_data: dict[str, Any]) -> FastpMetrics:
         passed_filter_rate=passed_filter_rate,
         sequencing=summary.get("sequencing", ""),
     )
-
-
-def fastp_threshold_rate(rate: float | None) -> float | None:
-    """Return a fastp fraction rounded exactly as its report cell displays it.
-
-    The shipped template multiplies a fractional rate by 100 and then rounds the
-    percentage to two decimal places. Converting that displayed percentage back
-    to a fraction lets the icon use the configured fractional cutoff without
-    changing the raw value exposed to templates.
-
-    Args:
-        rate: A raw fractional fastp rate, or None when it was not measured.
-
-    Returns:
-        float | None: The displayed percentage as a fraction, preserving None.
-    """
-    if rate is None:
-        return None
-    return round(rate * 100, 2) / 100
-
-
-def fastp_cutoff_value(cutoff: object) -> float:
-    """Validate one configured fastp fraction and return its numeric value.
-
-    Args:
-        cutoff: A configured fraction between zero and one, inclusive.
-
-    Returns:
-        The validated fractional cutoff.
-
-    Raises:
-        ValueError: If ``cutoff`` is absent, not numeric, non-finite, or outside
-            the inclusive fractional range.
-    """
-    if isinstance(cutoff, bool) or not isinstance(cutoff, numbers.Real):
-        message = f"Fastp cutoff must be a numeric fraction from 0 to 1, got {cutoff!r}."
-        logger.error(message)
-        raise ValueError(message)
-    value = float(cutoff)
-    if not math.isfinite(value) or not 0 <= value <= 1:
-        message = f"Fastp cutoff must be a finite fraction from 0 to 1, got {cutoff!r}."
-        logger.error(message)
-        raise ValueError(message)
-    return value
-
-
-def format_fastp_cutoff(cutoff: object) -> str:
-    """Render a configured fastp fraction as an exact percentage label.
-
-    The presentation contract multiplies the configured fraction by 100 without
-    rounding, then removes only insignificant trailing zeroes. The raw fastp
-    metric remains unchanged for the report's public value column.
-
-    Args:
-        cutoff: A configured fraction between zero and one, inclusive.
-
-    Returns:
-        The percentage label, including ``%``.
-
-    Raises:
-        ValueError: If ``cutoff`` is not a valid configured fastp fraction.
-    """
-    value = fastp_cutoff_value(cutoff)
-    percentage = Decimal(str(value)) * Decimal(100)
-    return f"{format(percentage.normalize(), 'f')}%"
 
 
 def extract_line_after(content: str, marker: str) -> str:
