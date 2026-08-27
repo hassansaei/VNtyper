@@ -215,7 +215,7 @@ def test_fastp_labels_and_statuses_share_configured_cutoffs_in_a_browser(
         ("Duplication Rate", "12.34%"),
         ("Q20 Rate", "75.55%"),
         ("Q30 Rate", "65.43%"),
-        ("Passed Filter Rate", "87.65%"),
+        ("Passed Filter Rate", "77.65%"),
     ):
         row = page.locator("tr").filter(has_text=f"{label} (Cutoff: {cutoff})")
         assert row.count() == 1, f"the report has no {label!r} row with its configured {cutoff} cutoff"

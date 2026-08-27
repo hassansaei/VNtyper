@@ -237,7 +237,7 @@ def test_fastp_cutoff_labels_and_status_icons_share_the_configured_thresholds(tm
                     "after_filtering": {"q20_rate": 0.7555, "q30_rate": 0.6543},
                 },
                 "duplication": {"rate": 0.1234},
-                "filtering_result": {"passed_filter_reads": 8765},
+                "filtering_result": {"passed_filter_reads": 7765},
             }
         ),
         encoding="utf-8",
@@ -248,7 +248,7 @@ def test_fastp_cutoff_labels_and_status_icons_share_the_configured_thresholds(tm
             "duplication_rate": 0.1234,
             "q20_rate": 0.7555,
             "q30_rate": 0.6543,
-            "passed_filter_reads_rate": 0.8765,
+            "passed_filter_reads_rate": 0.7765,
         }
     )
 
@@ -258,7 +258,7 @@ def test_fastp_cutoff_labels_and_status_icons_share_the_configured_thresholds(tm
         ("Duplication Rate", "12.34%"),
         ("Q20 Rate", "75.55%"),
         ("Q30 Rate", "65.43%"),
-        ("Passed Filter Rate", "87.65%"),
+        ("Passed Filter Rate", "77.65%"),
     ):
         assert f"{label} (Cutoff: {cutoff})" in html
     assert html.count(report_formatting.OK_ICON) == 4

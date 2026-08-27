@@ -312,7 +312,7 @@ def rendered_report_with_custom_fastp_cutoffs(tmp_path: Path) -> Path:
                     "after_filtering": {"q20_rate": 0.7555, "q30_rate": 0.6543},
                 },
                 "duplication": {"rate": 0.1234},
-                "filtering_result": {"passed_filter_reads": 8765},
+                "filtering_result": {"passed_filter_reads": 7765},
             }
         ),
         encoding="utf-8",
@@ -323,7 +323,7 @@ def rendered_report_with_custom_fastp_cutoffs(tmp_path: Path) -> Path:
             "duplication_rate": 0.1234,
             "q20_rate": 0.7555,
             "q30_rate": 0.6543,
-            "passed_filter_reads_rate": 0.8765,
+            "passed_filter_reads_rate": 0.7765,
         }
     )
 
