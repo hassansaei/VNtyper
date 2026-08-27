@@ -47,8 +47,10 @@ When using FASTQ input, both `--fastq1` and `--fastq2` are required.
 | `--bed-file` | path | — | Path to a BED file specifying regions with standard 0-based, half-open coordinates; VNtyper copies its rows verbatim |
 
 `--custom-regions` and `--bed-file` are mutually exclusive.
-The shipped default windows place their starts well before the VNTR array. A custom inline boundary can intersect
-the VNTR, however, so changing that boundary can change the genotype result.
+For compatibility with established read-routing results, configured default extraction windows retain their
+historical literal BED starts, including defaults supplied through `--config-path`. User-supplied inline regions
+use the documented 1-based conversion. A custom boundary can intersect the VNTR, so changing it can change the
+genotype result.
 
 ## Processing Options
 

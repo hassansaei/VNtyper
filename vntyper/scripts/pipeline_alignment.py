@@ -145,35 +145,37 @@ def resolve_summary_reference_provenance(
     return SummaryReferenceProvenance(None, alignment_plan.reference_path, alignment_plan.reference_source)
 
 
-def format_regions_as_bed(regions: str) -> str:
-    """Convert comma-separated 1-based ``chrom:start-end`` regions to BED rows.
+def format_regions_as_bed(regions: str, *, convert_from_one_based: bool) -> str:
+    """Validate comma-separated regions and format them as BED rows.
 
-    A region string is 1-based and fully closed, as samtools reads it; BED is 0-based and
-    half-open. The BED start is therefore ``start - 1`` and the BED end is ``end`` unchanged.
-    Copying the 1-based start verbatim shifted every generated window one base right, dropping
-    exactly the raw-overlap reads whose last aligned base is the region's start coordinate
-    (2026-08-26 code screen, D1). In the measured paired cohort, production ``samtools view
-    -P`` already fetches all 113 boundary reads through their overlapping mates, so final BAM
-    and FASTQ record sets remain identical. The default windows keep the VNTR array 3,000 bp
-    (GRCh37 family) / 4,530 bp (GRCh38 family) inside the target.
+    User-supplied inline regions are 1-based and fully closed, so their starts are
+    decremented for BED. Shipped default windows retain their literal starts because
+    established real-data routing contracts include that historical interpretation.
 
     Args:
-        regions: Comma-separated 1-based inclusive target regions.
+        regions: Comma-separated target regions.
+        convert_from_one_based: Whether to decrement each validated start for BED.
 
     Returns:
-        BED-formatted text with one 0-based half-open target per line.
+        BED-formatted text with one target per line.
 
     Raises:
-        ValueError: If any region does not have the expected shape, or its coordinates are
-            not ``1 <= start <= end``.
+        ValueError: If a region has an invalid chromosome or coordinates.
     """
     rows: list[str] = []
     for region in regions.split(","):
         try:
             chrom, positions = region.strip().split(":")
             start_text, end_text = positions.strip().split("-")
-            if not (start_text.isascii() and start_text.isdigit() and end_text.isascii() and end_text.isdigit()):
-                raise ValueError("coordinates must be unsigned integers")
+            if (
+                not chrom
+                or any(character.isspace() for character in chrom)
+                or not start_text.isascii()
+                or not start_text.isdigit()
+                or not end_text.isascii()
+                or not end_text.isdigit()
+            ):
+                raise ValueError("region fields must be safe ASCII tokens")
         except ValueError as error:
             message = f"Invalid region format: {region}. Expected format 'chr:start-end'."
             logger.error(message)
@@ -183,7 +185,8 @@ def format_regions_as_bed(regions: str) -> str:
             message = f"Invalid region coordinates: {region}. Expected 1 <= start <= end."
             logger.error(message)
             raise ValueError(message)
-        rows.append(f"{chrom}\t{start - 1}\t{end}\n")
+        bed_start = start - 1 if convert_from_one_based else start
+        rows.append(f"{chrom}\t{bed_start}\t{end}\n")
     return "".join(rows)
 
 
@@ -269,6 +272,7 @@ def prepare_alignment_target(
         bed_file_path = Path(output_dir) / "custom_regions.bed"
         regions = custom_regions
         description = "Custom regions"
+        convert_from_one_based = True
     else:
         if input_type in {"BAM", "CRAM"}:
             input_file = bam if input_type == "BAM" else cram
@@ -291,10 +295,11 @@ def prepare_alignment_target(
                 raise ValueError(message)
         bed_file_path = Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
         description = "Predefined regions"
+        convert_from_one_based = False
 
     install_generated_bed(
         bed_file_path,
-        format_regions_as_bed(regions),
+        format_regions_as_bed(regions, convert_from_one_based=convert_from_one_based),
         input_path=input_path,
         file_format=file_format,
     )

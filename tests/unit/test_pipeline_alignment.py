@@ -33,23 +33,32 @@ def _tree_digest(root: Path) -> dict[str, str]:
     }
 
 
-def test_format_regions_as_bed_converts_one_based_starts_to_zero_based() -> None:
-    """A 1-based inclusive region start must become a 0-based half-open BED start."""
-    assert format_regions_as_bed("chr1:10-20, chr2:30-40") == "chr1\t9\t20\nchr2\t29\t40\n"
+def test_format_regions_as_bed_converts_custom_one_based_starts() -> None:
+    """A user-supplied 1-based inclusive start becomes a 0-based BED start."""
+    assert format_regions_as_bed("chr1:10-20, chr2:30-40", convert_from_one_based=True) == (
+        "chr1\t9\t20\nchr2\t29\t40\n"
+    )
+
+
+def test_format_regions_as_bed_preserves_legacy_default_starts() -> None:
+    """Configured default starts stay literal to preserve established read routing."""
+    assert format_regions_as_bed("chr1:10-20, chr2:30-40", convert_from_one_based=False) == (
+        "chr1\t10\t20\nchr2\t30\t40\n"
+    )
 
 
 def test_format_regions_as_bed_rejects_a_malformed_region() -> None:
     with pytest.raises(ValueError, match="Invalid region format: chr1-10-20"):
-        format_regions_as_bed("chr1-10-20")
+        format_regions_as_bed("chr1-10-20", convert_from_one_based=True)
 
 
 def test_format_regions_as_bed_keeps_the_end_and_handles_a_single_base_region() -> None:
-    assert format_regions_as_bed("chr1:1-1") == "chr1\t0\t1\n"
+    assert format_regions_as_bed("chr1:1-1", convert_from_one_based=True) == "chr1\t0\t1\n"
 
 
 def test_format_regions_as_bed_rejects_non_integer_coordinates() -> None:
     with pytest.raises(ValueError, match="Invalid region format: chr1:abc-20"):
-        format_regions_as_bed("chr1:abc-20")
+        format_regions_as_bed("chr1:abc-20", convert_from_one_based=True)
 
 
 def test_format_regions_as_bed_rejects_unicode_digits_through_the_logged_format_error(
@@ -60,41 +69,43 @@ def test_format_regions_as_bed_rejects_unicode_digits_through_the_logged_format_
         caplog.at_level("ERROR", logger="vntyper.scripts.pipeline_alignment"),
         pytest.raises(ValueError, match="Invalid region format: chr1:²-20"),
     ):
-        format_regions_as_bed("chr1:²-20")
+        format_regions_as_bed("chr1:²-20", convert_from_one_based=True)
 
     assert message in caplog.messages
 
 
 def test_format_regions_as_bed_rejects_a_zero_start_because_regions_are_one_based() -> None:
     with pytest.raises(ValueError, match="Invalid region coordinates: chr1:0-20"):
-        format_regions_as_bed("chr1:0-20")
+        format_regions_as_bed("chr1:0-20", convert_from_one_based=True)
 
 
 def test_format_regions_as_bed_rejects_a_reversed_region() -> None:
     with pytest.raises(ValueError, match="Invalid region coordinates: chr1:30-20"):
-        format_regions_as_bed("chr1:30-20")
+        format_regions_as_bed("chr1:30-20", convert_from_one_based=True)
 
 
-def test_the_default_windows_still_cover_the_vntr_array_after_conversion() -> None:
-    """Every shipped window's converted BED keeps the whole VNTR array with its full margin.
+def test_format_regions_as_bed_rejects_a_chromosome_with_whitespace() -> None:
+    region = "chr1\nchr2:1-2"
+    with pytest.raises(ValueError, match="Invalid region format"):
+        format_regions_as_bed(region, convert_from_one_based=True)
 
-    The margins are pinned (3,000 bp for the GRCh37 family, 4,530 bp for GRCh38): a read whose
-    last aligned base is the window start -- the one class D1 recovers -- cannot reach the array.
-    """
+
+def test_the_default_windows_preserve_legacy_starts_and_still_cover_the_vntr_array() -> None:
+    """Every shipped window keeps its established start and still covers the array."""
     processing = load_config()["bam_processing"]
     family_of = {"hg19": "GRCh37", "hg38": "GRCh38", "GRCh37": "GRCh37", "GRCh38": "GRCh38"}
-    expected_margin = {"GRCh37": 3000, "GRCh38": 4530}
+    expected_margin = {"GRCh37": 2999, "GRCh38": 4529}
     region_keys = sorted(key for key in processing if key.startswith("bam_region_"))
     assert len(region_keys) == 8
     for key in region_keys:
         family = family_of[key.removeprefix("bam_region_").split("_")[0]]
         array_coords = processing["assemblies"][family]["vntr_array_coords"]
         array_start, array_end = (int(coordinate) for coordinate in array_coords.split("-"))
-        row = format_regions_as_bed(processing[key]).rstrip("\n")
+        row = format_regions_as_bed(processing[key], convert_from_one_based=False).rstrip("\n")
         _, bed_start_text, bed_end_text = row.split("\t")
         bed_start, bed_end = int(bed_start_text), int(bed_end_text)
         window_start = int(processing[key].rpartition(":")[2].split("-")[0])
-        assert bed_start == window_start - 1
+        assert bed_start == window_start
         assert (array_start - 1) - bed_start == expected_margin[family]
         assert bed_end >= array_end
 
@@ -326,7 +337,7 @@ def test_prepare_alignment_target_resolves_alignment_region_before_writing(tmp_p
         )
 
     assert result == output / "predefined_regions_hg38.bed"
-    assert result.read_text(encoding="utf-8") == "chr1\t100\t202\n"
+    assert result.read_text(encoding="utf-8") == "chr1\t101\t202\n"
     get_region.assert_called_once_with(
         bam_file="/input/sample.cram",
         reference_assembly="hg38",
