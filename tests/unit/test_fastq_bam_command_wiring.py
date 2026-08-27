@@ -196,7 +196,7 @@ def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
 
     assert commands == [
         f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} -o {tmp_path}/output_sliced.bam",
-        f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
+        f"set -o pipefail; samtools sort -n -@ 4 -T {tmp_path}/output_sort_tmp {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
         f"-s {tmp_path}/output_single.fastq.gz",
@@ -221,7 +221,7 @@ def test_the_bam_normal_path_extracts_merges_and_converts(tmp_path):
         f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
-        f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
+        f"set -o pipefail; samtools sort -n -@ 4 -T {tmp_path}/output_sort_tmp {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
         f"-s {tmp_path}/output_single.fastq.gz",
@@ -239,7 +239,7 @@ def test_the_bam_normal_path_indexes_the_merge_for_advntr(tmp_path):
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
         f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
-        f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
+        f"set -o pipefail; samtools sort -n -@ 4 -T {tmp_path}/output_sort_tmp {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
         f"-s {tmp_path}/output_single.fastq.gz",
@@ -514,7 +514,12 @@ def test_a_no_ref_cram_plan_emits_no_reference_flag_in_any_conversion_command(tm
     )
 
     assert commands
-    assert all(" -T " not in command for command in commands)
+    view_commands = [command for command in commands if command.startswith("samtools view")]
+    assert view_commands
+    assert all(" -T " not in command for command in view_commands)
+    (sort_command,) = [command for command in commands if "samtools sort -n" in command]
+    tokens = shlex.split(sort_command.replace("set -o pipefail; ", ""))
+    assert tokens[tokens.index("-T") + 1] == f"{tmp_path}/output_sort_tmp"
 
 
 def test_the_cram_unmapped_command_has_no_process_substitution(tmp_path):

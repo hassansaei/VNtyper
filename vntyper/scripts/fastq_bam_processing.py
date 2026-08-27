@@ -10,13 +10,16 @@ from pathlib import Path
 
 from vntyper.scripts.alignment_consumer_commands import build_plan_slice_command, build_plan_unmapped_command
 from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.alignment_fastq_conversion import (
+    plan_alignment_fastq_conversion,
+    run_alignment_fastq_conversion,
+)
 from vntyper.scripts.alignment_target_io import (
     remove_validated_slice_indexes,
     validate_alignment_conversion_destinations,
     validate_fastq_processing_destinations,
 )
 from vntyper.scripts.command_builders import (
-    build_bam_to_fastq_command,
     build_fastp_command,
     build_samtools_depth_command,
     build_samtools_index_command,
@@ -234,29 +237,14 @@ def process_bam_to_fastq(
                 logger.error("Re-indexing BAM file failed.")
                 raise RuntimeError("Re-indexing BAM file failed.")
 
-    # Convert final BAM to FASTQ
-    final_fastq_1 = Path(output) / f"{output_name}_R1.fastq.gz"
-    final_fastq_2 = Path(output) / f"{output_name}_R2.fastq.gz"
-    final_fastq_other = Path(output) / f"{output_name}_other.fastq.gz"
-    final_fastq_single = Path(output) / f"{output_name}_single.fastq.gz"
-
-    command_sort_fastq = build_bam_to_fastq_command(
+    paths = plan_alignment_fastq_conversion(output=output, output_name=output_name)
+    conversion_result = run_alignment_fastq_conversion(
+        paths=paths,
+        final_bam=final_bam,
         samtools_path=samtools_path,
-        in_bam=final_bam,
         threads=threads,
-        fastq_r1=final_fastq_1,
-        fastq_r2=final_fastq_2,
-        fastq_other=final_fastq_other,
-        fastq_single=final_fastq_single,
+        command_runner=run_command,
     )
-    log_file_sort_fastq = Path(output) / f"{output_name}_sort_fastq.log"
-    logger.info(f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}")
-
-    success = run_command(str(command_sort_fastq), str(log_file_sort_fastq), critical=True)
-    if not success:
-        logger.error("BAM to FASTQ conversion failed.")
-        raise RuntimeError("BAM to FASTQ conversion failed.")
-    logger.info("BAM to FASTQ conversion completed.")
 
     # Clean up intermediates if requested
     if delete_intermediates:
@@ -270,12 +258,7 @@ def process_bam_to_fastq(
                 logger.debug(f"Removed intermediate file: {file}")
         logger.info("Intermediate BAM files removed.")
 
-    return (
-        str(final_fastq_1),
-        str(final_fastq_2),
-        str(final_fastq_other),
-        str(final_fastq_single),
-    )
+    return conversion_result
 
 
 def _region_is_window(region: str, window: tuple[int, int]) -> bool:

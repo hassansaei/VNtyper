@@ -43,10 +43,12 @@ When using FASTQ input, both `--fastq1` and `--fastq2` are required.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--reference-assembly` | choice | `hg19` | Reference assembly for BAM/CRAM alignment. Options: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl`. For BAM/CRAM input this is **checked against the alignment header** and a disagreement stops the run — see [Reference Assemblies](../user-guide/reference-assemblies.md#the-declared-assembly-check) |
-| `--custom-regions` | string | — | Custom regions for MUC1 analysis as comma-separated values (e.g., `chr1:1000-2000,chr2:3000-4000`) |
-| `--bed-file` | path | — | Path to a BED file specifying regions for MUC1 analysis |
+| `--custom-regions` | string | — | Custom regions for MUC1 analysis as comma-separated, 1-based inclusive values (e.g., `chr1:1000-2000,chr2:3000-4000`); VNtyper converts them to BED internally |
+| `--bed-file` | path | — | Path to a BED file specifying regions with standard 0-based, half-open coordinates; VNtyper copies its rows verbatim |
 
 `--custom-regions` and `--bed-file` are mutually exclusive.
+The shipped default windows place their starts well before the VNTR array. A custom inline boundary can intersect
+the VNTR, however, so changing that boundary can change the genotype result.
 
 ## Processing Options
 

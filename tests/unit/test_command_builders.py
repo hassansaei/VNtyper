@@ -719,14 +719,33 @@ def test_the_bam_to_fastq_command_is_pinned_with_pipefail():
         fastq_r2="/out/output_R2.fastq.gz",
         fastq_other="/out/output_other.fastq.gz",
         fastq_single="/out/output_single.fastq.gz",
+        sort_tmp_prefix="/out/output_sort_tmp",
     )
 
     assert command == (
-        "set -o pipefail; samtools sort -n -@ 4 /out/output_sliced.bam | "
+        "set -o pipefail; samtools sort -n -@ 4 -T /out/output_sort_tmp /out/output_sliced.bam | "
         "samtools fastq -@ 4 - -1 /out/output_R1.fastq.gz "
         "-2 /out/output_R2.fastq.gz -0 /out/output_other.fastq.gz "
         "-s /out/output_single.fastq.gz"
     )
+
+
+def test_the_sort_stage_takes_an_explicit_tmp_prefix_operand():
+    """D2: the name sort must spill beside its output, not in the launch CWD."""
+    command = build_bam_to_fastq_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/out/output_sliced.bam",
+        threads=4,
+        fastq_r1="/out/output_R1.fastq.gz",
+        fastq_r2="/out/output_R2.fastq.gz",
+        fastq_other="/out/output_other.fastq.gz",
+        fastq_single="/out/output_single.fastq.gz",
+        sort_tmp_prefix="/out/output_sort_tmp",
+    )
+
+    sort_stage = command.removeprefix(PIPEFAIL_PREFIX).split("|")[0]
+    tokens = shlex.split(sort_stage)
+    assert tokens[tokens.index("-T") + 1] == "/out/output_sort_tmp"
 
 
 def test_the_bwa_align_sort_command_is_pinned_with_pipefail():
@@ -780,6 +799,7 @@ def test_the_bwa_align_sort_command_accepts_one_fastq_without_a_none_operand():
                 fastq_r2="/2.gz",
                 fastq_other="/0.gz",
                 fastq_single="/s.gz",
+                sort_tmp_prefix="/s_tmp",
             ),
         ),
         (
@@ -879,6 +899,7 @@ def _hostile_commands() -> dict[str, tuple[str, list[str]]]:
     r2 = f"{HOSTILE_DIR}/{HOSTILE_NAME}_R2.fastq.gz"
     other = f"{HOSTILE_DIR}/{HOSTILE_NAME}_other.fastq.gz"
     single = f"{HOSTILE_DIR}/{HOSTILE_NAME}_single.fastq.gz"
+    sort_tmp = f"{HOSTILE_DIR}/{HOSTILE_NAME}_sort_tmp"
     in_bam = f"{HOSTILE_DIR}/{HOSTILE_NAME}.bam"
     in_cram = f"{HOSTILE_DIR}/{HOSTILE_NAME}.cram"
     sliced = f"{HOSTILE_DIR}/{HOSTILE_NAME}_sliced.bam"
@@ -947,8 +968,9 @@ def _hostile_commands() -> dict[str, tuple[str, list[str]]]:
                 fastq_r2=r2,
                 fastq_other=other,
                 fastq_single=single,
+                sort_tmp_prefix=sort_tmp,
             ),
-            [sliced, r1, r2, other, single],
+            [sliced, r1, r2, other, single, sort_tmp],
         ),
         "depth": (
             build_samtools_depth_command(
@@ -1050,6 +1072,7 @@ def test_a_hostile_path_cannot_inject_a_second_command(builder):
             fastq_r2=injected,
             fastq_other=injected,
             fastq_single=injected,
+            sort_tmp_prefix=injected,
         ),
         "depth": lambda: build_samtools_depth_command(
             samtools_path=SAMTOOLS, threads=1, region="chr1:1-2", bam_file=injected, coverage_output=injected

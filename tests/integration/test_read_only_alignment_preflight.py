@@ -129,7 +129,11 @@ def test_real_pipeline_preserves_a_read_only_alignment_tree(
         reference_args = ["--reference-fasta", str(reference)]
         target_args = ["--custom-regions", "chr1:1-10000"]
         config_payload = json.loads((repository / "vntyper/config.json").read_text(encoding="utf-8"))
-        config_payload["bam_processing"]["assemblies"]["GRCh37"]["vntr_region_coords"] = "1-10000"
+        fixture_assembly = config_payload["bam_processing"]["assemblies"]["GRCh37"]
+        fixture_assembly["vntr_region_coords"] = "1-10000"
+        # This purpose-built 10 kb contig has no biological VNTR-array coordinates. Keeping
+        # the shipped hg19 interval at 155 Mb makes the synthetic coverage geometry invalid.
+        fixture_assembly.pop("vntr_array_coords")
         config_path = tmp_path / "cram-config.json"
         config_path.write_text(json.dumps(config_payload), encoding="utf-8")
     shutil.copyfile(source, alignment)

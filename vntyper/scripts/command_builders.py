@@ -48,6 +48,8 @@ before this module existed, apart from six deliberate fixes:
 6. Dedup-enabled fastp commands use one worker because fastp 0.23.4's shared
    atomic duplicate table retains whichever representative wins a scheduling race.
    Dedup-disabled commands retain the caller's requested concurrency.
+7. BAM-to-FASTQ name sorting carries an explicit ``-T`` prefix inside the run
+   output tree, so spill files do not land in the process launch directory.
 
 Functions:
     build_fastp_command: FASTQ quality control
@@ -486,6 +488,7 @@ def build_bam_to_fastq_command(
     fastq_r2: str | Path,
     fastq_other: str | Path,
     fastq_single: str | Path,
+    sort_tmp_prefix: str | Path,
 ) -> str:
     """
     Build the name-sort-then-convert pipeline that turns a BAM back into FASTQ.
@@ -498,6 +501,8 @@ def build_bam_to_fastq_command(
         fastq_r2 (str | Path): Output R2.
         fastq_other (str | Path): Output for reads that are neither R1 nor R2.
         fastq_single (str | Path): Output for singleton reads.
+        sort_tmp_prefix (str | Path): Temp-file prefix for the name sort's spill
+            (``samtools sort -T``). The caller places it inside the run output tree.
 
     Returns:
         str: The complete pipeline, prefixed with ``set -o pipefail``.
@@ -507,11 +512,13 @@ def build_bam_to_fastq_command(
         exits 0 on a short input stream, so before it a ``samtools sort`` that ran
         out of disk or hit a truncated BAM produced a **partial FASTQ that the
         pipeline then genotyped without a warning**. With ``pipefail`` the stage
-        fails loudly instead.
+        fails loudly instead. The explicit ``-T`` keeps name-sort spill files out
+        of the process launch directory.
     """
     return (
         f"{PIPEFAIL_PREFIX}"
-        f"{samtools_path} sort -n -@ {quote_path(threads)} {quote_path(in_bam)} | "
+        f"{samtools_path} sort -n -@ {quote_path(threads)} -T {quote_path(sort_tmp_prefix)} "
+        f"{quote_path(in_bam)} | "
         f"{samtools_path} fastq -@ {quote_path(threads)} - -1 {quote_path(fastq_r1)} "
         f"-2 {quote_path(fastq_r2)} -0 {quote_path(fastq_other)} "
         f"-s {quote_path(fastq_single)}"
