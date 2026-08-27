@@ -1,6 +1,6 @@
 """The cohort report's flag mark must say, in words, what its glyph and colour say.
 
-``updateFlagColumn`` replaces every ``Flag`` cell of the cohort report with a green
+``markFlagColumn`` replaces every ``Flag`` cell of the cohort report with a green
 ``✓`` or a red ``✖``. That is two visual channels and no textual one: to a screen
 reader the cell announced as a bare character, and in greyscale the two glyph shapes
 were the only difference left. The mark now carries ``role="img"`` and an
@@ -55,13 +55,32 @@ CLEAN_FLAG = "Not flagged"
 FLAGGED_REASON = "Low_Coverage"
 UNRECORDED_FLAG = ""
 
-#: A two-column cohort is enough: ``updateFlagColumn`` keys off the *last* column
-#: being headed ``Flag`` and does nothing else with the frame's shape.
+#: The mark keys on the column *named* ``Flag``, wherever it sits. Kestrel has a
+#: trailing nomenclature column while adVNTR keeps ``Flag`` last, so one report
+#: exercises both positions.
 KESTREL_ROWS = pd.DataFrame(
     [
-        {"Sample": "sample_one", "Motif": "5", "Confidence": "High_Precision", "Flag": CLEAN_FLAG},
-        {"Sample": "sample_two", "Motif": "6", "Confidence": "Low_Precision", "Flag": FLAGGED_REASON},
-        {"Sample": "sample_three", "Motif": "7", "Confidence": "High_Precision", "Flag": UNRECORDED_FLAG},
+        {
+            "Sample": "sample_one",
+            "Motif": "5",
+            "Confidence": "High_Precision",
+            "Flag": CLEAN_FLAG,
+            "Nomenclature_Note": "note one",
+        },
+        {
+            "Sample": "sample_two",
+            "Motif": "6",
+            "Confidence": "Low_Precision",
+            "Flag": FLAGGED_REASON,
+            "Nomenclature_Note": "note two",
+        },
+        {
+            "Sample": "sample_three",
+            "Motif": "7",
+            "Confidence": "High_Precision",
+            "Flag": UNRECORDED_FLAG,
+            "Nomenclature_Note": "",
+        },
     ]
 )
 
@@ -69,16 +88,9 @@ KESTREL_ROWS = pd.DataFrame(
 #: specific to the Kestrel table.
 ADVNTR_ROWS = pd.DataFrame([{"Sample": "sample_one", "VID": "25561", "Flag": CLEAN_FLAG}])
 
-#: Every rebuilt flag cell holds exactly one ``<span>``, and the selector below
-#: identifies it by **position** rather than by any of the attributes under test.
-#: That is deliberate: selecting on ``[role='img']`` would make a mark that lost its
-#: role invisible to the query, and the resulting "no marks were built" would blame
-#: DataTables for a defect in the mark. Restricting to the last cell keeps the
-#: colour-coded ``Confidence`` span out of the result.
-MARK_SELECTOR = "table tbody td:last-child span"
-
 #: Read every flag mark the reader can actually see, with the row it sits in for the
-#: failure message.
+#: failure message. Each table's own heading locates the cell, never the role or aria
+#: attributes under test.
 #:
 #: **Visible, not merely present.** DataTables took a filtered row out of the DOM, so
 #: counting elements and counting what a reader sees were the same number; the vanilla
@@ -86,19 +98,31 @@ MARK_SELECTOR = "table tbody td:last-child span"
 #: implementation and a worse thing to count. The ``offsetParent`` check is what keeps
 #: this measuring the reader's experience rather than the DOM's contents.
 _MARKS = """
-els => els.filter(e => e.offsetParent !== null).map(e => ({
-    row: e.closest('tr').textContent.replace(/\\s+/g, ' ').trim(),
-    role: e.getAttribute('role') || '',
-    label: e.getAttribute('aria-label'),
-    glyph: e.textContent.trim(),
-}))
+() => Array.from(document.querySelectorAll("table")).flatMap(table => {
+    const headings = Array.from(table.querySelectorAll("thead th")).map(th => th.textContent.trim());
+    const index = headings.indexOf("Flag");
+    if (index === -1) { return []; }
+    return Array.from(table.querySelectorAll("tbody tr"))
+        .map(row => row.children[index] ? row.children[index].querySelector("span") : null)
+        .filter(mark => mark !== null && mark.offsetParent !== null)
+        .map(mark => ({
+            row: mark.closest('tr').textContent.replace(/\\s+/g, ' ').trim(),
+            role: mark.getAttribute('role') || '',
+            label: mark.getAttribute('aria-label'),
+            glyph: mark.textContent.trim(),
+        }));
+})
 """
 
-#: The ``Flag`` cell as the server wrote it, before any script touched it.
-_LAST_CELL_TEXT = """
-els => els.map(e => {
-    const cells = e.querySelectorAll('td');
-    return cells.length ? cells[cells.length - 1].textContent.trim() : '';
+#: The ``Flag`` cell as the server wrote it, before any script touched it, located
+#: by heading because that column is not necessarily last.
+_FLAG_CELL_TEXT = """
+() => Array.from(document.querySelectorAll("table")).flatMap(table => {
+    const headings = Array.from(table.querySelectorAll("thead th")).map(th => th.textContent.trim());
+    const index = headings.indexOf("Flag");
+    if (index === -1) { return []; }
+    return Array.from(table.querySelectorAll("tbody tr"))
+        .map(row => row.children[index] ? row.children[index].textContent.trim() : '');
 })
 """
 
@@ -133,7 +157,7 @@ def _marks(page: Page) -> list[dict[str, str]]:
         list[dict[str, str]]: One mapping per mark, with its row text, its
         ``aria-label`` and its glyph.
     """
-    marks: list[dict[str, str]] = page.eval_on_selector_all(MARK_SELECTOR, _MARKS)
+    marks: list[dict[str, str]] = page.evaluate(_MARKS)
     return marks
 
 
@@ -231,7 +255,7 @@ def test_the_reason_is_still_readable_when_no_script_ran(
 
         assert _marks(page) == [], "a mark was built with scripting off, so this is not the no-script case"
 
-        cells: list[str] = page.eval_on_selector_all("table tbody tr", _LAST_CELL_TEXT)
+        cells: list[str] = page.evaluate(_FLAG_CELL_TEXT)
         assert CLEAN_FLAG in cells, f"the clean reason is not readable without a script: {cells}"
         assert FLAGGED_REASON in cells, f"the flag reason is not readable without a script: {cells}"
     finally:

@@ -1,6 +1,7 @@
 """The config-driven rule engine that turns one result row into an algorithm verdict.
 
-`report_config.json` states, as data, what makes a Kestrel or adVNTR row positive:
+The interpreter now lives in `algorithm_rules.py`. `report_config.json` states, as data,
+what makes a Kestrel or adVNTR row positive:
 a list of rules, each a set of column conditions and the result to return when they all
 hold. `compute_algorithm_result` is the interpreter for that little language, and it was
 the single largest uncovered region of `cohort_summary.py` - 130 lines carrying four
@@ -18,7 +19,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from vntyper.scripts.cohort_rules import compute_algorithm_result
+from vntyper.scripts.algorithm_rules import compute_algorithm_result
 
 pytestmark = pytest.mark.unit
 

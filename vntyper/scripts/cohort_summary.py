@@ -9,19 +9,17 @@ or in subfolders) to construct the cohort tables, donut plots, and additional st
 Note: This module no longer defines its own CLI parser as these are now defined in the main CLI script.
 """
 
-import base64
 import json
 import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-import matplotlib
-import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from plotly.offline import get_plotlyjs
 
 # The pipeline-summary step names this cohort consumes moved to cohort_inputs with the
 # code that matches them. They are compared by exact string against what pipeline.py
@@ -29,7 +27,9 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 # named from summary_steps there, never spelled out.
 from vntyper.scripts.cohort_categories import (
     category_counts,
+    complete_sample_categories,
     sample_categories,
+    samples_without_rows,
     unify_advntr_result,
     unify_kestrel_result,
 )
@@ -55,116 +55,50 @@ from vntyper.scripts.cohort_tables import (
     stats_table_html,
 )
 from vntyper.scripts.output_paths import contained_output_path
+from vntyper.scripts.report_assets import template_search_paths
 
 logger = logging.getLogger(__name__)
 
-matplotlib.use("Agg")
 
+def generate_donut_chart(values, labels, total, title, colors):
+    """Generate one interactive Plotly donut as an HTML fragment.
 
-def encode_image_to_base64(image_path):
-    """
-    Encode an image file to a base64 string.
+    The fragment omits Plotly's library. The template embeds that library once for all
+    rendered charts, removing one duplicate bundle (about 4.85 MB for a two-donut
+    report). The former static PNG path was unreachable in the report and wrote two
+    files that no rendered page referenced.
 
-    Parameters
-    ----------
-    image_path : str or Path
-        Path to the image file.
+    Args:
+        values: Values for each donut segment.
+        labels: Labels corresponding to ``values``.
+        total: Total displayed in the donut centre.
+        title: Chart title.
+        colors: Colors corresponding to ``values``.
 
-    Returns
-    -------
-    str
-        Base64-encoded string of the image.
-    """
-    try:
-        with open(image_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-        return f"data:image/png;base64,{encoded_string}"
-    except Exception as e:
-        logger.error(f"Failed to encode image {image_path}: {e}")
-        return ""
-
-
-def generate_donut_chart(values, labels, total, title, colors, plot_path=None, interactive=False):
-    """
-    Generate and save a donut chart (static or interactive).
-
-    For static plots, matplotlib is used. For interactive plots, Plotly is used.
-    This chart visualizes categories as parts of a donut, with the total in the center.
-
-    Parameters
-    ----------
-    values : list
-        Values for each segment of the donut chart.
-    labels : list
-        Labels for each segment.
-    total : int
-        Total value displayed in the center of the donut.
-    title : str
-        Title of the chart.
-    colors : list
-        Colors for each segment of the donut.
-    plot_path : str or Path, optional
-        Path to save the static plot image.
-    interactive : bool
-        Whether to generate an interactive Plotly chart.
-
-    Returns
-    -------
-    str
-        Base64-encoded image string for static charts or HTML string for interactive charts.
+    Returns:
+        The Plotly HTML fragment, or an empty string when every value is zero.
     """
     if sum(values) == 0:
         logger.warning(f"No data to plot for donut chart '{title}'.")
         return ""
-    if interactive:
-        fig = go.Figure(
-            go.Pie(
-                labels=labels,
-                values=values,
-                hole=0.6,
-                marker={"colors": colors, "line": {"color": "black", "width": 2}},
-                textinfo="none",
-            )
+    fig = go.Figure(
+        go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.6,
+            marker={"colors": colors, "line": {"color": "black", "width": 2}},
+            textinfo="none",
         )
-        fig.update_layout(
-            title={
-                "text": title,
-                "y": 0.95,
-                "x": 0.5,
-                "xanchor": "center",
-                "yanchor": "top",
-            },
-            annotations=[{"text": f"<b>{total}</b>", "x": 0.5, "y": 0.5, "font_size": 40, "showarrow": False}],
-            showlegend=False,
-            margin={"t": 50, "b": 50, "l": 50, "r": 50},
-            height=500,
-            width=500,
-        )
-        return pio.to_html(fig, full_html=False)
-    else:
-        fig, ax = plt.subplots(figsize=(6, 6))
-        wedgeprops = {"width": 0.3, "edgecolor": "black", "linewidth": 2}
-        try:
-            ax.pie(
-                values,
-                wedgeprops=wedgeprops,
-                startangle=90,
-                colors=colors,
-                labels=labels,
-            )
-            ax.text(0, 0, f"{total}", ha="center", va="center", fontsize=24)
-            ax.set_title(title)
-            if plot_path:
-                plt.savefig(plot_path)
-            else:
-                logger.warning("No plot_path provided for static donut chart, chart not saved.")
-        except Exception as e:
-            logger.error(f"Error generating donut chart: {e}")
-        plt.close()
-        if plot_path and os.path.exists(plot_path):
-            return encode_image_to_base64(plot_path)
-        else:
-            return ""
+    )
+    fig.update_layout(
+        title={"text": title, "y": 0.95, "x": 0.5, "xanchor": "center", "yanchor": "top"},
+        annotations=[{"text": f"<b>{total}</b>", "x": 0.5, "y": 0.5, "font_size": 40, "showarrow": False}],
+        showlegend=False,
+        margin={"t": 50, "b": 50, "l": 50, "r": 50},
+        height=500,
+        width=500,
+    )
+    return pio.to_html(fig, full_html=False, include_plotlyjs=False)
 
 
 def load_report_config():
@@ -187,7 +121,15 @@ def load_report_config():
         return {}
 
 
-def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file, config, additional_stats_html=""):
+def generate_cohort_summary_report(
+    output_dir,
+    kestrel_df,
+    advntr_df,
+    summary_file,
+    config,
+    additional_stats_html="",
+    sample_names=None,
+):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results along with
     additional statistics (runtimes, coverage, version, assembly, and pipeline).
@@ -209,19 +151,28 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         Configuration dictionary containing paths and settings.
     additional_stats_html : str, optional
         HTML table string containing additional statistics.
+    sample_names : sequence of str, optional
+        Every sample the report knows about. Direct callers default to the sorted union
+        of sample names present in the two result frames.
 
     Returns
     -------
     None
         Writes the HTML report to the specified summary file.
     """
-    plots_dir = Path(output_dir) / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Load report-specific config to get algorithm logic
     report_cfg = load_report_config()
     kestrel_logic = report_cfg.get("algorithm_logic", {}).get("kestrel", {})
     advntr_logic = report_cfg.get("algorithm_logic", {}).get("advntr", {})
+
+    if sample_names is None:
+        named: set[str] = set()
+        for frame in (kestrel_df, advntr_df):
+            if "Sample" in frame.columns:
+                named.update(frame["Sample"].astype(str))
+        sample_names = sorted(named)
 
     # -----------------------------
     # Compute sample-level results
@@ -229,60 +180,40 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     # Neither frame is modified: the reduction annotates its own copy, which is what
     # keeps its two working columns out of the exports aggregate_cohort writes from
     # these same frames afterwards. See cohort_categories.sample_categories.
-    kestrel_sample_results = sample_categories(kestrel_df, kestrel_logic, unify_kestrel_result)
-    advntr_sample_results = sample_categories(advntr_df, advntr_logic, unify_advntr_result)
+    kestrel_sample_results = complete_sample_categories(
+        sample_categories(kestrel_df, kestrel_logic, unify_kestrel_result), sample_names
+    )
+    advntr_sample_results = complete_sample_categories(
+        sample_categories(advntr_df, advntr_logic, unify_advntr_result), sample_names
+    )
 
     # -------------------------
     # Count final sample-level
     # -------------------------
-    k_pos, k_pos_flag, k_neg, total_kestrel = category_counts(kestrel_sample_results)
-    a_pos, a_pos_flag, a_neg, total_advntr = category_counts(advntr_sample_results)
+    k_pos, k_pos_flag, k_neg, k_unest, total_kestrel = category_counts(kestrel_sample_results)
+    a_pos, a_pos_flag, a_neg, a_unest, total_advntr = category_counts(advntr_sample_results)
 
     # --------------------------------------------------------------------
-    # Updated color assignments: Positive=Blue, Flagged=Orange, Negative=Dark Grey
+    # Colors: Positive=Red, Flagged=Orange, Negative=Dark Grey, Unestablished=Light Grey
     # --------------------------------------------------------------------
-    color_list = ["#FF0000", "#FFA500", "#404040"]  # Exactly 3 colors
+    color_list = ["#FF0000", "#FFA500", "#404040", "#B0B0B0"]  # Exactly 4 colors
 
-    # Generate Kestrel donut chart with 3 categories
-    kestrel_plot_path = plots_dir / "kestrel_summary_plot.png"
-    kestrel_plot_base64 = generate_donut_chart(
-        values=[k_pos, k_pos_flag, k_neg],
-        labels=["Positive", "Positive (Flagged)", "Negative"],
-        total=total_kestrel,
-        title="Kestrel Results",
-        colors=color_list,
-        plot_path=kestrel_plot_path,
-        interactive=False,
-    )
+    # Generate one interactive Kestrel donut fragment with 4 categories.
     kestrel_plot_html = generate_donut_chart(
-        values=[k_pos, k_pos_flag, k_neg],
-        labels=["Positive", "Positive (Flagged)", "Negative"],
+        values=[k_pos, k_pos_flag, k_neg, k_unest],
+        labels=["Positive", "Positive (Flagged)", "Negative", "Unestablished"],
         total=total_kestrel,
         title="Kestrel Results",
         colors=color_list,
-        plot_path=None,
-        interactive=True,
     )
 
-    # Generate adVNTR donut chart with 3 categories
-    advntr_plot_path = plots_dir / "advntr_summary_plot.png"
-    advntr_plot_base64 = generate_donut_chart(
-        values=[a_pos, a_pos_flag, a_neg],
-        labels=["Positive", "Positive (Flagged)", "Negative"],
-        total=total_advntr,
-        title="adVNTR Results",
-        colors=color_list,
-        plot_path=advntr_plot_path,
-        interactive=False,
-    )
+    # Generate one interactive adVNTR donut fragment with 4 categories.
     advntr_plot_html = generate_donut_chart(
-        values=[a_pos, a_pos_flag, a_neg],
-        labels=["Positive", "Positive (Flagged)", "Negative"],
+        values=[a_pos, a_pos_flag, a_neg, a_unest],
+        labels=["Positive", "Positive (Flagged)", "Negative", "Unestablished"],
         total=total_advntr,
         title="adVNTR Results",
         colors=color_list,
-        plot_path=None,
-        interactive=True,
     )
 
     # `Confidence` is the only cell in either table that holds markup this module built
@@ -292,12 +223,15 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     kestrel_html = kestrel_table_html(kestrel_df)
     advntr_html = advntr_table_html(advntr_df)
 
-    template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
+    template_dir = config.get("paths", {}).get("template_dir")
     # Autoescaping, to parity with the per-sample report (AGENTS.md trap 11): anything
     # marked `|safe` in the template must be a fragment VNtyper built, never a value read
-    # from a sample. The four `|safe` uses are the two escaped tables above, the stats
-    # table, and Plotly's own figure HTML.
-    env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["html", "xml"]))
+    # from a sample. The six `|safe` uses are the two escaped tables above, the stats
+    # table, Plotly's two figure fragments, and Plotly's library below.
+    env = Environment(
+        loader=FileSystemLoader(template_search_paths(template_dir, entry_template="cohort_summary_template.html")),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
     try:
         template = env.get_template("cohort_summary_template.html")
     except Exception as e:
@@ -305,15 +239,15 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         raise
 
     context = {
-        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
         "kestrel_positive": kestrel_html,
         "advntr_positive": advntr_html,
-        "kestrel_plot_base64": kestrel_plot_base64,
-        "advntr_plot_base64": advntr_plot_base64,
         "kestrel_plot_interactive": kestrel_plot_html,
         "advntr_plot_interactive": advntr_plot_html,
+        "plotly_library": get_plotlyjs() if (kestrel_plot_html or advntr_plot_html) else "",
+        "kestrel_missing": samples_without_rows(kestrel_df, sample_names),
+        "advntr_missing": samples_without_rows(advntr_df, sample_names),
         "additional_stats": additional_stats_html,
-        "interactive": True,
     }
 
     try:
@@ -401,6 +335,7 @@ def aggregate_cohort(
 
     kestrel_list = []
     advntr_list = []
+    cohort_samples: list[str] = []
     # The `try` opens here, immediately after discovery, and not at the sample loop: every
     # zip input has already been extracted into a `tempfile.mkdtemp` directory by this
     # point, so anything raising between the two leaks one directory per archive. That was
@@ -484,6 +419,11 @@ def aggregate_cohort(
 
             logger.info(f"Processing sample directory: {sample_dir} as {pseudonym}")
             k_data, a_data, add_stats = load_pipeline_summary_for_sample(sample_dir)
+            # Discovery found a pipeline summary for this sample.  A summary that is
+            # unreadable deliberately yields empty algorithm rows so the rest of the
+            # cohort can render; it must still remain in both report denominators as
+            # Unestablished rather than disappearing from the cohort entirely.
+            cohort_samples.append(pseudonym)
             if k_data:
                 for entry in k_data:
                     entry["Sample"] = pseudonym
@@ -528,6 +468,7 @@ def aggregate_cohort(
             summary_file=summary_file,
             config=config,
             additional_stats_html=additional_stats_html,
+            sample_names=cohort_samples,
         )
     finally:
         # In a `finally` because everything above - the config read, the two identity

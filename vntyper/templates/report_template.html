@@ -940,6 +940,9 @@
                     {% for segment in screening_segments[1:] %}
                         <p class="detail">{{ segment }}</p>
                     {% endfor %}
+                    {% if coverage_not_measured_note %}
+                        <p class="detail coverage-note">{{ coverage_not_measured_note }}</p>
+                    {% endif %}
 
                 {#
                   WHAT THE RUN NAMED. The second question anybody opens this report with,
@@ -1057,7 +1060,7 @@
                         {%- elif coverage_qc_measured %}ok
                         {%- else %}none{% endif %}">
                         <span class="chip-label">Coverage QC</span>
-                        <span class="chip-value">{{ coverage_qc }}</span>
+                        <span class="chip-value">{{ coverage_qc_text }}</span>
                     </li>
                     {% if not screening_state.matched_rule %}
                         <li class="chip" data-tone="caution">
@@ -1313,11 +1316,13 @@
         <div id="basicCoverageView" class="metrics">
             <p class="metric"><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }}
                 {{ mean_vntr_coverage_icon|safe }}
-                <br><small>Over {{ vntr_region_length }} bp, as this assembly represents the
+                <br><small>Over {{ vntr_region_length }}
+                {%- if vntr_region_length != not_calculated %} bp{% endif %}, as this assembly represents the
                 region. <strong>Not comparable with another assembly's mean</strong> &mdash; the
                 builds contain different amounts of the repeat array.</small></p>
             <p class="metric"><strong>Flank depth:</strong> {{ vntr_flank_mean_depth }}
-                <br><small>Mean depth over {{ vntr_flank_bases }} bp of unique sequence either side
+                <br><small>Mean depth over {{ vntr_flank_bases }}
+                {%- if vntr_flank_bases != not_calculated %} bp{% endif %} of unique sequence either side
                 of the repeat array. This is the figure to compare between assemblies, because
                 unique sequence measures the sample rather than the reference.</small></p>
         </div>
@@ -1354,29 +1359,37 @@
                     </tr>
                     <tr>
                         <td>VNTR Region Length</td>
-                        <td>{{ vntr_region_length }} bp</td>
+                        <td>{{ vntr_region_length }}{% if vntr_region_length != not_calculated %} bp{% endif %}</td>
                     </tr>
                     <tr>
                         <td>Uncovered Bases</td>
-                        <td>{{ vntr_uncovered_bases }} bp</td>
+                        <td>{{ vntr_uncovered_bases }}{% if vntr_uncovered_bases != not_calculated %} bp{% endif %}</td>
                     </tr>
                     <tr>
                         <td>Percentage Uncovered</td>
-                        <td>{{ percent_vntr_uncovered }}% {{ percent_vntr_uncovered_icon|safe }}</td>
+                        <td>{{ percent_vntr_uncovered }}
+                            {%- if percent_vntr_uncovered != not_calculated
+                            %}% {{ percent_vntr_uncovered_icon|safe }}{% endif %}</td>
                     </tr>
                     <tr>
                         <td>Flank depth (comparable between assemblies)</td>
-                        <td>{{ vntr_flank_mean_depth }} &mdash; mean over {{ vntr_flank_bases }} bp
+                        <td>{{ vntr_flank_mean_depth }} &mdash; mean over {{ vntr_flank_bases }}
+                            {%- if vntr_flank_bases != not_calculated %} bp{% endif %}
                             of unique sequence either side of the repeat array, under counting
                             policy {{ depth_counting_policy }}</td>
                     </tr>
                     <tr>
                         <td>VNTR array depth sum</td>
-                        <td>{{ vntr_array_depth_sum }} over {{ vntr_array_length }} bp of array
+                        <td>{{ vntr_array_depth_sum }} over {{ vntr_array_length }}
+                            {%- if vntr_array_length != not_calculated %} bp{% endif %} of array
                             as this assembly represents it</td>
                     </tr>
                     <tr>
-                        <td>VNTR array depth per {{ depth_sum_reference_length }} bp</td>
+                        <td>{% if depth_sum_reference_length != not_calculated -%}
+                            VNTR array depth per {{ depth_sum_reference_length }} bp
+                            {%- else -%}
+                            VNTR array depth per reference length
+                            {%- endif %}</td>
                         <td>{{ vntr_array_depth_sum_per_unit_length }} &mdash; comparable between
                             assemblies only under counting policy {{ depth_counting_policy }}</td>
                     </tr>
@@ -1414,17 +1427,35 @@
                     </tr>
                     <tr>
                         <td>Q20 Rate (Cutoff: 80%)</td>
-                        <td>{{ (q20_rate * 100)|round(2) if q20_rate is not none else 'N/A' }}%</td>
+                        <td>
+                            {% if q20_rate is not none %}
+                                {{ (q20_rate * 100)|round(2) }}%
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
                         <td>{{ q20_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Q30 Rate (Cutoff: 70%)</td>
-                        <td>{{ (q30_rate * 100)|round(2) if q30_rate is not none else 'N/A' }}%</td>
+                        <td>
+                            {% if q30_rate is not none %}
+                                {{ (q30_rate * 100)|round(2) }}%
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
                         <td>{{ q30_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Passed Filter Rate (Cutoff: 80%)</td>
-                        <td>{{ (passed_filter_rate * 100)|round(2) if passed_filter_rate is not none else 'N/A' }}%</td>
+                        <td>
+                            {% if passed_filter_rate is not none %}
+                                {{ (passed_filter_rate * 100)|round(2) }}%
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
                         <td>{{ passed_filter_icon|safe }}</td>
                     </tr>
                 </tbody>

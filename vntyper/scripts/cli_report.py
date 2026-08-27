@@ -243,7 +243,7 @@ def handle_report(
     # `handle_report()` call whose namespace predates `--sample-name`.
     generate_summary_report(
         output_dir=Path(args.output_dir),
-        template_dir=config.get("paths", {}).get("template_dir", "vntyper/templates"),
+        template_dir=config.get("paths", {}).get("template_dir"),
         report_file=args.report_file,
         log_file=log_file,
         bed_file=args.bed_file,

@@ -712,7 +712,7 @@ def run_pipeline(
         # --- Generate Summary Report and Archiving ---
         logger.info("Generating summary report.")
         report_file = "summary_report.html"
-        template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
+        template_dir = config.get("paths", {}).get("template_dir")
 
         # Select best available VCF file (compressed preferred, uncompressed fallback)
         vcf_file = select_best_vcf_file(dirs["kestrel"])

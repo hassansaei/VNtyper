@@ -52,11 +52,11 @@ from vntyper.scripts.report_formatting import (
     KESTREL_DISPLAY_CELL_FORMATS,
     KESTREL_DISPLAY_COLUMNS,
     KESTREL_ESSENTIAL_COLUMNS,
-    MISSING_AS_OK,
     annotate_table_columns,
     confidence_html,
     drop_empty_result_rows,
     escaped_table_html,
+    fastp_threshold_rate,
     flag_html,
     flagged_row_count,
     folded_record_html,
@@ -91,6 +91,8 @@ from vntyper.scripts.report_identity import (
 from vntyper.scripts.screening_summary import (
     algorithm_state_text,
     build_screening_summary,
+    coverage_not_measured_note,
+    coverage_qc_word,
     execution_state,
     load_report_config,
     state_chips,
@@ -350,7 +352,8 @@ def generate_summary_report(
 
     Args:
         output_dir (str): Output directory for the report.
-        template_dir (str): Directory containing the report template.
+        template_dir (str | Path | None): Operator directory containing the report
+            entry template, or None to use the installed package templates.
         report_file (str): Name of the report file.
         log_file (str): Path to the pipeline log file.
         bed_file (str, optional): Path to the BED file for IGV reports.
@@ -374,8 +377,9 @@ def generate_summary_report(
             ``--report-igv`` on both ``vntyper pipeline`` and ``vntyper report``.
 
     Raises:
-        ValueError: If config is not provided, or ``report_igv`` is not a recognised
-            mode, or the vendored asset fails its digest check.
+        ValueError: If config is not provided, an operator template directory lacks
+            the report entry template, ``report_igv`` is not a recognised mode, or
+            the vendored asset fails its digest check.
     """
     logger.debug("---- DEBUG: Entered generate_summary_report ----")
     logger.debug(
@@ -655,16 +659,16 @@ def generate_summary_report(
 
     fastp = summarise_fastp(load_fastp_output(Path(output_dir) / "fastq_bam_processing/output.json"))
 
-    coverage_icon, coverage_color = threshold_icon(
-        mean_vntr_coverage, mean_vntr_cov_threshold, higher_better=True, on_missing=MISSING_AS_OK
-    )
+    coverage_icon, coverage_color = threshold_icon(mean_vntr_coverage, mean_vntr_cov_threshold, higher_better=True)
     uncovered_icon, uncovered_color = threshold_icon(
-        percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False, on_missing=MISSING_AS_OK
+        percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False
     )
-    dup_icon, dup_color = threshold_icon(fastp.duplication_rate, dup_rate_cutoff, higher_better=False)
-    q20_icon, q20_color = threshold_icon(fastp.q20_rate, q20_rate_cutoff)
-    q30_icon, q30_color = threshold_icon(fastp.q30_rate, q30_rate_cutoff)
-    pf_icon, pf_color = threshold_icon(fastp.passed_filter_rate, passed_filter_rate_cutoff)
+    dup_icon, dup_color = threshold_icon(
+        fastp_threshold_rate(fastp.duplication_rate), dup_rate_cutoff, higher_better=False
+    )
+    q20_icon, q20_color = threshold_icon(fastp_threshold_rate(fastp.q20_rate), q20_rate_cutoff)
+    q30_icon, q30_color = threshold_icon(fastp_threshold_rate(fastp.q30_rate), q30_rate_cutoff)
+    pf_icon, pf_color = threshold_icon(fastp_threshold_rate(fastp.passed_filter_rate), passed_filter_rate_cutoff)
 
     # "" for an empty frame, which is what the template's authored empty states hang
     # on. This used to call `to_html` directly, bypassing the helper written for
@@ -741,7 +745,12 @@ def generate_summary_report(
     # and the report is a file people forward. The fragments we build ourselves are
     # marked `|safe` at their interpolation points in the template, and the two
     # results tables and the Confidence spans are escaped before they get there.
-    env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["html"]))
+    env = Environment(
+        loader=FileSystemLoader(
+            report_assets.template_search_paths(template_dir, entry_template="report_template.html")
+        ),
+        autoescape=select_autoescape(["html"]),
+    )
     try:
         template = env.get_template("report_template.html")
         logger.debug("Jinja2 template 'report_template.html' loaded successfully.")
@@ -938,6 +947,9 @@ def generate_summary_report(
         "depth_sum_reference_length": shown(coverage["depth_sum_reference_length"]),
         "depth_counting_policy": shown(coverage["depth_counting_policy"]),
         "coverage_qc": coverage_qc.status,
+        "coverage_qc_text": coverage_qc_word(coverage_qc.status),
+        # Let templates test measuredness without restating this presentation phrase.
+        "not_calculated": NOT_CALCULATED,
         # Whether there was anything to judge. `quality_metrics_pass` stays True for a run
         # with no coverage step at all - the screening axis is unchanged by #172's
         # honesty fix - so the chip would otherwise be painted "passing" beside a status
@@ -971,6 +983,9 @@ def generate_summary_report(
         # `report_config.json` now carries the split beside the verbatim message, and
         # `screening_summary.render_segments` is what pins that the two still agree.
         "screening_segments": screening.rendered_segments,
+        # Additive and config-driven. Empty for a measured gate and for a config written
+        # before the key existed; configured screening messages are never reworded.
+        "coverage_not_measured_note": coverage_not_measured_note(report_config, coverage_qc),
         # The state as words, computed in the pure module: a chip is the most compressed
         # thing the report says about a stage, so it is the one most easily misread as a
         # verdict, and none of these words may be one the run did not reach.

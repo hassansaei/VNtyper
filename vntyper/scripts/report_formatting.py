@@ -77,9 +77,7 @@ logger = logging.getLogger(__name__)
 #: the fastp table read as empty to a screen reader while looking complete on
 #: screen. ``role="img"`` is what makes the browser use ``aria-label`` as the
 #: element's name instead of its text. The names are deliberately about the mark
-#: rather than about the direction of the comparison: ``OK_ICON`` is also what a
-#: metric that was never measured renders as (:data:`MISSING_AS_OK`), so a name
-#: like "within the cutoff" would be false there.
+#: rather than about the direction of the comparison.
 #:
 #: Both colours are tokens from ``templates/_report_base.html`` rather than the CSS
 #: keywords they used to be. ``red`` measured 4.00:1 against the page, under the 4.5:1
@@ -94,11 +92,7 @@ WARNING_ICON = (
 #: Green tick, shown when a metric passes its threshold.
 OK_ICON = '<span style="color:var(--state-ok);font-weight:bold;" role="img" aria-label="No warning">&#10004;</span>'
 
-#: What a metric with no value at all renders as. The coverage rows show a tick
-#: (the report has always treated "not calculated" as "not a problem"); the fastp
-#: rows show nothing, because the whole fastp section is hidden when fastp did not
-#: run and a lone glyph in an otherwise empty row reads as a result.
-MISSING_AS_OK: tuple[str, str] = (OK_ICON, "green")
+#: What a metric with no value at all renders as. Absence is not a passing result.
 MISSING_AS_BLANK: tuple[str, str] = ("", "")
 
 #: Kestrel result column -> report heading, in display order. Columns absent from
@@ -1553,6 +1547,25 @@ def summarise_fastp(fastp_data: dict[str, Any]) -> FastpMetrics:
         passed_filter_rate=passed_filter_rate,
         sequencing=summary.get("sequencing", ""),
     )
+
+
+def fastp_threshold_rate(rate: float | None) -> float | None:
+    """Return a fastp fraction rounded exactly as its report cell displays it.
+
+    The shipped template multiplies a fractional rate by 100 and then rounds the
+    percentage to two decimal places. Converting that displayed percentage back
+    to a fraction lets the icon use the configured fractional cutoff without
+    changing the raw value exposed to templates.
+
+    Args:
+        rate: A raw fractional fastp rate, or None when it was not measured.
+
+    Returns:
+        float | None: The displayed percentage as a fraction, preserving None.
+    """
+    if rate is None:
+        return None
+    return round(rate * 100, 2) / 100
 
 
 def extract_line_after(content: str, marker: str) -> str:

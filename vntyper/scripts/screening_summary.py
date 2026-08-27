@@ -49,6 +49,7 @@ selected may be presented at all -- see :attr:`ScreeningSummary.state_is_establi
 Functions:
     load_report_config: Read the packaged ``report_config.json``
     compute_algorithm_result: One results frame + one rule block to a state value
+        (re-exported from algorithm_rules, the one interpreter)
     execution_state: One pipeline-summary step state to one execution state
     algorithm_state_text: One algorithm's state as the provenance line prints it
     message_segments: One configured message as the parts the report renders
@@ -69,10 +70,22 @@ from typing import Any, Final, Literal
 
 import pandas as pd
 
+from vntyper.scripts.algorithm_rules import FALLBACK_ALGORITHM_RESULT, compute_algorithm_result
+from vntyper.scripts.coverage_presentation import (
+    COVERAGE_NOT_MEASURED_NOTE_KEY as _COVERAGE_NOT_MEASURED_NOTE_KEY,
+)
+from vntyper.scripts.coverage_presentation import coverage_not_measured_note as _coverage_not_measured_note
+from vntyper.scripts.coverage_presentation import coverage_qc_word as _coverage_qc_word
 from vntyper.scripts.coverage_qc import CoverageQC
 from vntyper.scripts.summary_steps import STEP_ABSENT, STEP_READ, STEP_UNREADABLE
 
 logger = logging.getLogger(__name__)
+
+# Public compatibility aliases: the report plan introduced these interfaces on
+# ``screening_summary`` while their implementation lives in the extracted pure module.
+COVERAGE_NOT_MEASURED_NOTE_KEY: Final[str] = _COVERAGE_NOT_MEASURED_NOTE_KEY
+coverage_not_measured_note = _coverage_not_measured_note
+coverage_qc_word = _coverage_qc_word
 
 #: The ``advntr_result`` value recorded when the adVNTR stage did not run at all.
 #: Distinct from that block's ``default`` ("negative"), which means adVNTR ran and
@@ -107,9 +120,6 @@ _EXECUTION_BY_STEP_STATE = {
     STEP_ABSENT: EXECUTION_NOT_PERFORMED,
     STEP_UNREADABLE: EXECUTION_FAILED,
 }
-
-#: Used when ``report_config.json`` declares no default for an algorithm block.
-FALLBACK_ALGORITHM_RESULT = "none"
 
 #: Used when ``report_config.json`` declares no ``screening_summary_default``.
 FALLBACK_SUMMARY_MESSAGE = "The screening was negative (no valid Kestrel or adVNTR data)."
@@ -250,7 +260,7 @@ class ScreeningSummary:
 
         The two algorithms are treated differently, and the asymmetry is read off the
         configuration rather than chosen. ``advntr_result`` has a value for a stage that
-        never ran -- :data:`NOT_PERFORMED` -- and twelve of the forty-eight configured rules
+        never ran -- :data:`NOT_PERFORMED` -- and twelve of the fifty configured rules
         are keyed on it, so an absent adVNTR stage is a state the table covers *in words*.
         ``kestrel_result`` has no such value: a Kestrel stage that produced nothing hands
         :func:`compute_algorithm_result` an empty frame, which returns the block's
@@ -282,7 +292,7 @@ class ScreeningSummary:
         contradicting both the rule table and ``is_positive``.
 
         In practice ``matched_rule`` is False only through the ``except Exception``
-        path in :func:`build_screening_summary`: every one of the 48 reachable
+        path in :func:`build_screening_summary`: every one of the 70 reachable
         ``(kestrel_result, advntr_result, quality_metrics_pass)`` combinations
         resolves to a configured rule (``tests/unit/test_screening_summary.py::
         test_every_reachable_state_has_its_own_message``). So a ``"indeterminate"``
@@ -482,79 +492,6 @@ def load_report_config() -> dict[str, Any]:
     except Exception as e:
         logger.error("Failed to load report config: %s", e)
         return {}
-
-
-def _condition_holds(actual: str, expected: Any) -> bool:
-    """Evaluate one configured condition against one cell value.
-
-    Two spellings are supported. A mapping is an explicit
-    ``{"operator": ..., "value": ...}`` with operators ``==``, ``!=``, ``in`` and
-    ``not in``; anything else is an implicit equality, or membership when it is a
-    list.
-
-    Args:
-        actual: The cell value, already stringified and stripped.
-        expected: The configured expectation.
-
-    Returns:
-        bool: Whether the condition holds. An unsupported operator is False.
-    """
-    if isinstance(expected, dict):
-        op = expected.get("operator")
-        exp_val = expected.get("value")
-        if op == "==":
-            return actual == str(exp_val).strip()
-        if op == "!=":
-            return actual != str(exp_val).strip()
-        if op in ("in", "not in"):
-            options = exp_val if isinstance(exp_val, list) else [exp_val]
-            return (actual in options) if op == "in" else (actual not in options)
-        logger.debug("Unsupported operator %r; condition fails.", op)
-        return False
-    if isinstance(expected, list):
-        return actual in expected
-    return actual == str(expected)
-
-
-def compute_algorithm_result(df: pd.DataFrame, logic_config: dict[str, Any]) -> str:
-    """Reduce one algorithm's results frame to a single state value.
-
-    Only the first row is examined: the frame is sorted so the most confident
-    call leads, and the screening summary describes the sample, not each variant.
-
-    Args:
-        df: The results frame. An empty frame yields the configured default.
-        logic_config: One block of ``report_config.json``'s ``algorithm_logic``.
-
-    Returns:
-        str: The ``result`` of the first matching rule, else the block's
-        ``default``.
-    """
-    default = logic_config.get("default", FALLBACK_ALGORITHM_RESULT)
-    if df.empty:
-        logger.debug("DataFrame is empty; returning default result %r.", default)
-        return default
-
-    row = df.iloc[0]
-    logger.debug("Data row for evaluation: %s", row.to_dict())
-
-    for idx, rule in enumerate(logic_config.get("rules", [])):
-        conditions = rule.get("conditions", {})
-        for col, expected in conditions.items():
-            if col not in row:
-                logger.debug("Rule %s: column %r not found; rule fails.", idx, col)
-                break
-            actual = str(row.get(col, "")).strip()
-            if not _condition_holds(actual, expected):
-                logger.debug("Rule %s: condition on %r not met (actual=%r).", idx, col, actual)
-                break
-        else:
-            result = rule.get("result")
-            logger.debug("Rule %s PASSED; returning result: %s", idx, result)
-            return result
-
-    logger.debug("No rule matched; returning default result %r.", default)
-    return default
 
 
 def supports_subthreshold(report_config: dict[str, Any]) -> bool:

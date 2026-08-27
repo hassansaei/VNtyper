@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 
 from tests.browser.conftest import external_requests, removed_libraries
 from vntyper.cli import load_config
@@ -111,6 +111,35 @@ def test_no_unapproved_request_leaves_the_cohort_page(
     external = external_requests(page)
 
     assert external == [], f"the cohort report fetched {len(external)} resource(s) off-machine: {external}"
+
+
+def test_the_shared_plotly_bundle_renders_both_cohort_charts_without_page_errors(
+    rendered_cohort_report: Path,
+    open_report: Callable[..., Page],
+    page_errors: dict[Page, list[str]],
+) -> None:
+    """Both chart fragments execute against the one embedded Plotly library."""
+    page = open_report(rendered_cohort_report, offline=True)
+    graphs = page.locator(".plotly-graph-div")
+
+    expect(graphs).to_have_count(2)
+    for index in range(2):
+        expect(graphs.nth(index).locator("svg.main-svg").first).to_be_visible()
+    assert page_errors[page] == []
+
+
+def test_the_page_error_recorder_sees_an_exception(
+    tmp_path: Path,
+    open_report: Callable[..., Page],
+    page_errors: dict[Page, list[str]],
+) -> None:
+    """The chart assertion cannot pass vacuously because page errors were unobserved."""
+    control = tmp_path / "page-error.html"
+    control.write_text("<script>throw new Error('page-error-control')</script>", encoding="utf-8")
+
+    page = open_report(control, offline=True)
+
+    assert any("page-error-control" in error for error in page_errors[page])
 
 
 @pytest.mark.parametrize("mode", ["embedded", "sidecar", "off"])

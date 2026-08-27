@@ -183,6 +183,199 @@ def test_coverage_that_was_never_calculated_says_so(tmp_path) -> None:
     assert "Not calculated" in render(tmp_path)
 
 
+def test_unmeasured_values_carry_no_unit_no_percent_and_no_tick(tmp_path) -> None:
+    """Catch missing coverage being decorated as if it were a measured value."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    html = render(tmp_path)
+
+    assert "Not calculated%" not in html
+    assert "Not calculated bp" not in html
+    assert "per Not calculated" not in html
+    assert report_formatting.OK_ICON not in html
+
+
+def test_partial_coverage_keeps_units_only_on_measured_values(positive_summary) -> None:
+    """Catch old summaries attaching units to absent build-comparable fields."""
+    html = render(positive_summary)
+
+    assert "Over 1000 bp" in html
+    assert "5 bp" in html
+    assert "0.5%" in html
+    assert "Not calculated bp" not in html
+    assert "per Not calculated" not in html
+    assert "VNTR array depth per reference length" in html
+
+
+def test_measured_coverage_values_keep_their_threshold_icons(positive_summary) -> None:
+    """Catch the missing-value correction blanking icons for real measurements."""
+    html = render(positive_summary)
+
+    assert html.count(report_formatting.OK_ICON) == 3
+    assert report_formatting.WARNING_ICON not in html
+
+
+def _fastp_metric_cells(html: str, label: str) -> tuple[str, str]:
+    """Return one fastp row's normalized value and status cells."""
+    pattern = rf"<tr>\s*<td>{re.escape(label)} \(Cutoff: \d+%\)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>"
+    match = re.search(pattern, html, re.DOTALL)
+    assert match, f"the report has no {label!r} fastp row"
+    value = " ".join(html_module.unescape(match.group(1)).split())
+    return value, match.group(2).strip()
+
+
+def test_missing_fastp_rates_render_na_without_a_percent_sign(tmp_path) -> None:
+    """Catch any missing optional rate becoming blank or carrying a percent sign."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps({"summary": {"before_filtering": {"total_reads": 0}}, "duplication": {}}),
+        encoding="utf-8",
+    )
+
+    html = render(tmp_path)
+
+    assert [_fastp_metric_cells(html, label)[0] for label in ("Q20 Rate", "Q30 Rate", "Passed Filter Rate")] == [
+        "N/A",
+        "N/A",
+        "N/A",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("missing_label", "before_reads", "after_filtering", "passed_reads", "measured_values"),
+    [
+        ("Q20 Rate", 100, {"q30_rate": 0.8}, 90, {"Q30 Rate": "80.0%", "Passed Filter Rate": "90.0%"}),
+        ("Q30 Rate", 100, {"q20_rate": 0.9}, 90, {"Q20 Rate": "90.0%", "Passed Filter Rate": "90.0%"}),
+        ("Passed Filter Rate", 0, {"q20_rate": 0.9, "q30_rate": 0.8}, 0, {"Q20 Rate": "90.0%", "Q30 Rate": "80.0%"}),
+    ],
+)
+def test_partial_fastp_metrics_keep_na_only_on_the_missing_value(
+    tmp_path,
+    missing_label: str,
+    before_reads: int,
+    after_filtering: dict[str, float],
+    passed_reads: int,
+    measured_values: dict[str, str],
+) -> None:
+    """Catch one absent rate disappearing when its neighboring rates were measured."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": before_reads},
+                    "after_filtering": after_filtering,
+                },
+                "duplication": {},
+                "filtering_result": {"passed_filter_reads": passed_reads},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    html = render(tmp_path)
+    missing_value, missing_status = _fastp_metric_cells(html, missing_label)
+
+    assert missing_value == "N/A"
+    assert missing_status == ""
+    for label, expected in measured_values.items():
+        measured_value, measured_status = _fastp_metric_cells(html, label)
+        assert measured_value == expected
+        assert report_formatting.OK_ICON in measured_status
+
+
+def test_fastp_icons_judge_the_percentage_each_cell_displays(tmp_path) -> None:
+    """Catch raw rates failing cutoffs after their displayed percentages round onto them."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 100000},
+                    "after_filtering": {"q20_rate": 0.79996, "q30_rate": 0.69996},
+                },
+                "duplication": {"rate": 0.10004},
+                "filtering_result": {"passed_filter_reads": 79996},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    html = render(tmp_path)
+
+    for label, expected_value in {
+        "Duplication Rate": "10.0%",
+        "Q20 Rate": "80.0%",
+        "Q30 Rate": "70.0%",
+        "Passed Filter Rate": "80.0%",
+    }.items():
+        value, status = _fastp_metric_cells(html, label)
+        assert value == expected_value
+        assert report_formatting.OK_ICON in status
+        assert report_formatting.WARNING_ICON not in status
+
+
+def _coverage_not_measured_note() -> str:
+    """The exact config-driven note shipped with this report."""
+    return generate_report.load_report_config()["coverage_not_measured_note"]
+
+
+def test_the_report_says_when_the_coverage_gate_was_not_evaluated(tmp_path) -> None:
+    """Catch a run with no coverage step silently reading as quality-passing."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    html = render(tmp_path)
+
+    assert f'<p class="detail coverage-note">{_coverage_not_measured_note()}</p>' in html
+    assert _coverage_qc_cell(html) == "NOT_EVALUATED"
+
+
+@pytest.mark.parametrize(
+    ("coverage_row", "expected_status"),
+    [
+        ({**COVERAGE_ROW}, "PASS"),
+        ({**COVERAGE_ROW, "mean": 10.0}, "FAIL"),
+    ],
+)
+def test_a_measured_gate_renders_no_not_measured_note(
+    tmp_path,
+    coverage_row,
+    expected_status: str,
+) -> None:
+    """Catch presenting an evaluated pass or fail as unevaluated."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [coverage_row]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+
+    html = render(tmp_path)
+
+    assert _coverage_not_measured_note() not in html
+    assert _coverage_qc_cell(html) == expected_status
+
+
+def test_the_coverage_not_measured_note_is_autoescaped(tmp_path, monkeypatch) -> None:
+    """Catch trusting operator-configured note text as an HTML fragment."""
+    config = generate_report.load_report_config()
+    injected = '<strong data-source="operator">not measured</strong>'
+    monkeypatch.setattr(
+        generate_report, "load_report_config", lambda: {**config, "coverage_not_measured_note": injected}
+    )
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+
+    html = render(tmp_path)
+
+    assert injected not in html
+    assert injected in html_module.unescape(html)
+
+
 # ---------------------------------------------------------------------------
 # The coverage QC verdict - #172
 # ---------------------------------------------------------------------------
@@ -1009,7 +1202,7 @@ def test_the_state_reaches_the_chip_row(positive_summary) -> None:
         "Flank depth",
     ]
     assert chip_value(html, "Kestrel") == "High precision"
-    assert chip_value(html, "Coverage QC") == "PASS"
+    assert chip_value(html, "Coverage QC") == "Pass"
 
 
 def test_an_unperformed_stage_does_not_render_as_negative(positive_summary) -> None:
@@ -1045,7 +1238,7 @@ def test_the_coverage_gate_is_chipped_as_unevaluated_rather_than_passing(tmp_pat
 
     html = render(tmp_path)
 
-    assert chip_value(html, "Coverage QC") == "NOT_EVALUATED"
+    assert chip_value(html, "Coverage QC") == "Not evaluated"
     assert chip_tone(html, "Coverage QC") == "none"
 
 
@@ -1058,8 +1251,50 @@ def test_a_failing_coverage_gate_is_chipped_as_a_caution(tmp_path) -> None:
 
     html = render(tmp_path)
 
-    assert chip_value(html, "Coverage QC") == "FAIL"
+    assert chip_value(html, "Coverage QC") == "Fail"
     assert re.search(r'<li class="chip" data-tone="\s*caution">\s*<span class="chip-label">Coverage QC', html)
+
+
+def test_coverage_qc_context_keeps_record_and_presentation_vocabulary_separate(tmp_path) -> None:
+    """Catch custom-template consumers losing the raw status or the display word."""
+    template_dir = tmp_path / "template"
+    template_dir.mkdir()
+    (template_dir / "report_template.html").write_text(
+        "{{ coverage_qc }}|{{ coverage_qc_text }}|{{ not_calculated }}",
+        encoding="utf-8",
+    )
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(template_dir),
+        report_file="custom.html",
+        log_file=None,
+        config=load_config(None),
+    )
+    html = (tmp_path / "custom.html").read_text(encoding="utf-8")
+
+    assert html == "PASS|Pass|Not calculated"
+
+
+def test_coverage_qc_chip_text_is_autoescaped(tmp_path, monkeypatch) -> None:
+    """Catch a future status word becoming an HTML injection path in the chip."""
+    injected = '<strong data-source="status">Pass</strong>'
+    monkeypatch.setattr(generate_report, "coverage_qc_word", lambda _status: injected)
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+
+    html = render(tmp_path)
+
+    assert injected not in html
+    assert injected in html_module.unescape(html)
 
 
 def test_a_state_with_no_configured_rule_says_so_in_the_chip_row(tmp_path, monkeypatch) -> None:
@@ -3009,6 +3244,10 @@ def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_
                 "{{ screening_state.kestrel_result }}",
                 "{{ screening_state.advntr_result }}",
                 "{{ igv_content|safe }}",
+                "{{ duplication_rate }}",
+                "{{ q20_rate }}",
+                "{{ q30_rate }}",
+                "{{ passed_filter_rate }}",
             )
         ),
         encoding="utf-8",
@@ -3025,10 +3264,10 @@ def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_
             {
                 "summary": {
                     "before_filtering": {"total_reads": 100},
-                    "after_filtering": {"q20_rate": 0.9, "q30_rate": 0.6},
+                    "after_filtering": {"q20_rate": 0.90004, "q30_rate": 0.60004},
                 },
-                "duplication": {"rate": 0.2},
-                "filtering_result": {"passed_filter_reads": 90},
+                "duplication": {"rate": 0.20004},
+                "filtering_result": {"passed_filter_reads": 91},
             }
         ),
         encoding="utf-8",
@@ -3058,6 +3297,7 @@ def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_
     rendered = (tmp_path / "legacy.html").read_text(encoding="utf-8")
     assert rendered.startswith("green|green|red|green|red|green|High_Precision|none|")
     assert '<p id="legacy-igv">legacy alignment view</p>' in rendered
+    assert rendered.endswith("|0.20004|0.90004|0.60004|0.91")
 
 
 # ---------------------------------------------------------------------------

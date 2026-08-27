@@ -86,6 +86,17 @@ ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
 #: library into the generated sidecar after igv-reports has populated its data.
 IGV_REPORT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "igv_report_template.html"
 
+#: The packaged report templates, resolved from the installed module instead of
+#: the process CWD. Package-data and sdist coverage are enforced by
+#: ``test_packaging_consistency.py``.
+PACKAGE_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+#: The historical ``config.json`` spelling for the packaged directory. It is not
+#: an operator override: following it relative to the CWD made installed report
+#: generation fail and allowed an unrelated writable directory to replace the
+#: report entry template.
+LEGACY_TEMPLATE_DIR_LITERAL = "vntyper/templates"
+
 #: The one literal replaced in a generated sidecar. Keeping it distinctive makes a
 #: changed or partial template fail closed instead of emitting a browser with no library.
 IGV_REPORT_LIBRARY_MARKER = "@VNTYPER_IGV_LIBRARY@"
@@ -112,6 +123,45 @@ REPORT_IGV_MODES = (REPORT_IGV_EMBEDDED, REPORT_IGV_SIDECAR, REPORT_IGV_OFF)
 #: because a self-contained archive is the point of #242; the other two modes exist
 #: for operators who have measured that they want something else.
 DEFAULT_REPORT_IGV = REPORT_IGV_EMBEDDED
+
+
+def template_search_paths(
+    template_dir: str | Path | None,
+    *,
+    entry_template: str | None = None,
+) -> list[str]:
+    """Resolve report-template search paths without depending on the process CWD.
+
+    The absent setting, an empty setting, and the shipped historical literal all
+    select the installed package directory. An explicit operator directory is
+    searched first, with packaged partials available as fallback. When a renderer
+    names its entry template, that file must exist in the operator directory so a
+    typo cannot silently substitute the packaged top-level report.
+
+    Args:
+        template_dir: Configured ``paths.template_dir`` value, or None.
+        entry_template: Required top-level template name for an explicit override.
+
+    Returns:
+        list[str]: Jinja2 search paths in priority order.
+
+    Raises:
+        ValueError: If an explicit override lacks ``entry_template``.
+    """
+    configured = "" if template_dir is None else str(template_dir)
+    packaged = str(PACKAGE_TEMPLATE_DIR)
+    if configured in ("", LEGACY_TEMPLATE_DIR_LITERAL, packaged):
+        return [packaged]
+
+    if entry_template is not None and not (Path(configured) / entry_template).is_file():
+        msg = (
+            f"operator template directory '{template_dir}' does not contain required entry template '{entry_template}'."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    logger.info(f"Using operator template directory '{template_dir}' with packaged templates as fallback.")
+    return [configured, packaged]
 
 
 def _verify_bytes(payload: bytes, expected_sha256: str, description: str) -> None:

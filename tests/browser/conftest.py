@@ -391,10 +391,17 @@ def error_responses() -> dict[Page, list[str]]:
 
 
 @pytest.fixture
+def page_errors() -> dict[Page, list[str]]:
+    """Per-page JavaScript exceptions raised while the document executes."""
+    return {}
+
+
+@pytest.fixture
 def open_report(
     browser: Browser,
     failed_requests: dict[Page, list[str]],
     error_responses: dict[Page, list[str]],
+    page_errors: dict[Page, list[str]],
 ) -> Iterator[Callable[..., Page]]:
     """Return a callable that opens a report in a browser, online or offline.
 
@@ -407,6 +414,7 @@ def open_report(
         browser: Playwright browser, supplied by ``pytest-playwright``.
         failed_requests: Registry to record each page's transport failures in.
         error_responses: Registry to record each page's error statuses in.
+        page_errors: Registry to record JavaScript exceptions in each page.
 
     Yields:
         Callable: ``open_report(path, *, offline=False) -> Page``.
@@ -422,6 +430,7 @@ def open_report(
         requested: list[str] = []
         failed_requests[page] = failures
         error_responses[page] = errors
+        page_errors[page] = []
         _REQUEST_LOG[page] = requested
         # Registered before `goto`, and before the route handler: `request` fires for
         # every attempt, aborted or not, which is what makes the log evidence about the
@@ -429,6 +438,7 @@ def open_report(
         page.on("request", lambda request: requested.append(request.url))
         page.on("requestfailed", lambda request: failures.append(_describe_failure(request)))
         page.on("response", lambda response: _record_error_response(response, errors))
+        page.on("pageerror", lambda error: page_errors[page].append(str(error)))
         if offline:
             page.route("**/*", _block_everything_but_local_files)
         if before_load is not None:

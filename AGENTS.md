@@ -83,9 +83,11 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   the decisions; the file they came from keeps the I/O:
   - `motif_decisions.py` — the motif half/exclusion/GG-allowlist rules, split out of
     `motif_processing.py` (#195).
-  - `cohort_rules.py`, `cohort_categories.py`, `cohort_tables.py`, `cohort_inputs.py`,
+  - `algorithm_rules.py`, `cohort_categories.py`, `cohort_tables.py`, `cohort_inputs.py`,
     `cohort_exports.py` — the rule table, per-row categorisation, display tables, sample
     discovery and export writers, split out of `cohort_summary.py`.
+  - `coverage_presentation.py` — config-driven presentation decisions for coverage QC,
+    split out of `screening_summary.py` and `generate_report.py`.
   - `cross_match_presentation.py` — structural cross-match assessability and fixed
     verdict presentation, split out of `generate_report.py`.
   - `advntr_variant_annotations.py` — filesystem-free parsing of repeat-unit identity and
@@ -109,7 +111,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   - `alignment_preflight_logs.py` — pure planning of every command-log destination
     reachable by a format, candidate count and fast/normal preflight mode.
   `reference_resolution_environment.py` separately owns CRAM-only process-environment
-  pin/restore I/O. All twelve pure modules are fully annotated and at or near 100% branch
+  pin/restore I/O. All thirteen pure modules are fully annotated and at or near 100% branch
   coverage. Put new pure logic there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
@@ -282,7 +284,7 @@ its logic cannot be reached without a network and a filesystem, and it sits at 2
 that reason rather than for its length. `docker/app/tasks.py` is 531 lines of Celery task
 at 98.5%; `cohort_summary.py` was 911 lines at 38% and is 456 at 84.2% — not because 456
 is under some threshold, but because the split moved the decisions into
-`cohort_rules`/`cohort_categories`/`cohort_tables`/`cohort_inputs`/`cohort_exports`, all
+`algorithm_rules`/`cohort_categories`/`cohort_tables`/`cohort_inputs`/`cohort_exports`, all
 at 100%, and left the matplotlib and Jinja2 calls behind.
 
 So keep the ~650 line guideline, but keep it for the right reason: **a file grows past

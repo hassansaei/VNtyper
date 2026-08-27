@@ -30,7 +30,7 @@ import pandas as pd
 import pytest
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
-from vntyper.scripts.cohort_rules import compute_algorithm_result
+from vntyper.scripts.algorithm_rules import compute_algorithm_result
 from vntyper.scripts.cohort_summary import load_report_config
 
 pytestmark = pytest.mark.unit

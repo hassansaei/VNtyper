@@ -1,6 +1,6 @@
 """What ``vntyper pipeline`` pays to import before it does any work (#262).
 
-``cli_handlers`` imported ``cohort_summary`` (matplotlib, plotly, seaborn),
+``cli_handlers`` imported ``cohort_summary`` (plotly),
 ``online_mode`` (requests) and ``install_references`` at module scope. A ``pipeline``
 run pays for all three and uses none of them; measured startup was 317-348 ms against
 205-239 ms without them.
@@ -16,7 +16,7 @@ production. Thin module-level wrappers keep a real attribute for the patches, sa
 the global lookup, and defer the import to call time.
 
 Every subprocess here runs a fresh interpreter, because ``sys.modules`` is process-wide
-and any earlier test that imported matplotlib would make an in-process assertion pass
+and any earlier test that imported plotly would make an in-process assertion pass
 for the wrong reason.
 """
 
@@ -32,7 +32,7 @@ from vntyper.scripts import cli_handlers, cli_lazy_imports
 pytestmark = pytest.mark.unit
 
 #: Imported by the cohort, online and install-references subcommands, by nobody else.
-HEAVY_MODULES = ("matplotlib", "plotly", "seaborn", "requests")
+HEAVY_MODULES = ("plotly", "requests")
 
 
 def _in_fresh_interpreter(script: str) -> str:
@@ -70,7 +70,7 @@ def test_importing_cli_handlers_does_not_pull_them_either() -> None:
 @pytest.mark.parametrize(
     ("wrapper", "module"),
     [
-        ("aggregate_cohort", "matplotlib"),
+        ("aggregate_cohort", "plotly"),
         ("run_online_mode", "requests"),
         ("install_references_main", "vntyper.scripts.install_references"),
     ],
