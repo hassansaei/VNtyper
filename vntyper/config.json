@@ -140,7 +140,8 @@
     }
   },
   "file_processing": {
-    "snv_length": 1
+    "snv_length": 1,
+    "kestrel_format": "GT:GDP:DP"
   },
   "install_references": {
     "md5_chunk_size": 4096,

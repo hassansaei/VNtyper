@@ -827,7 +827,7 @@ def test_no_confidence_value_is_distinguished_by_colour(renderer: str, value: st
 
 
 def test_the_motif_sequence_is_the_last_kestrel_column() -> None:
-    """The real motif is 121 bp; the 13-character unit fixture is not representative.
+    """The unbroken motif value belongs after the columns a reader scans first.
 
     Sixth, it pushed ``Confidence`` and ``Flag`` off a 1280px screen - the two columns
     a reader opens the report for became the ones that scrolled, while the widest and
@@ -965,7 +965,7 @@ def test_the_rules_both_reports_need_are_declared_once() -> None:
         assert owners == [SHARED_PARTIAL.name], f"{name!r} is declared in {owners}, not only in the token layer"
 
     # The clamp itself is gone rather than moved. `max-width: 150px` with
-    # `text-overflow: ellipsis` put the 121 bp motif sequence behind a `:hover`, and
+    # `text-overflow: ellipsis` put the long motif sequence behind a `:hover`, and
     # the exception that let the `Flag` reason escape it was `td:last-child` - which
     # moving `Motif_sequence` last would have handed to the motif and taken off the
     # flag. Cells wrap instead, so no column needs an exception.
@@ -987,7 +987,7 @@ def test_print_unsets_every_screen_width_constraint_on_a_cell() -> None:
     """Nothing the screen does to make a cell fit may reach paper.
 
     The clamp this originally guarded - ``max-width: 150px`` with ``overflow: hidden``
-    and a ``:hover`` reveal - is **gone**, not moved: it put the 121 bp motif sequence
+    and a ``:hover`` reveal - is **gone**, not moved: it put the long motif sequence
     behind a pointer and out of the archived PDF entirely, and its ``td:last-child``
     exception would have swapped from the ``Flag`` reason to the motif when
     ``Motif_sequence`` moved last. What remains on screen is a soft wrap boundary
@@ -1008,7 +1008,7 @@ def test_print_unsets_every_screen_width_constraint_on_a_cell() -> None:
 def test_print_gives_an_unbroken_sequence_somewhere_to_break() -> None:
     """Unsetting the clamp is not enough on its own.
 
-    A 121-character motif sequence contains no space, so with the clamp gone it still
+    The synthetic 121-character stress sequence contains no space, so with the clamp gone it still
     overflows its cell and is clipped by the table's own width. Measured in Chromium:
     ``max-width: none`` plus ``white-space: normal`` printed 100 of the 121 bases;
     adding a break opportunity printed all 121.

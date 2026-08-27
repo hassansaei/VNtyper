@@ -219,8 +219,8 @@ class TestTheScoredEmptyBranch:
     """
 
     META = "##fileformat=VCFv4.2\n"
-    HEADER = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
-    RECORD = "chr1\t100\t.\tC\tCC\t.\t.\tDP=10\n"
+    HEADER = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tsample\n"
+    RECORD = "chr1\t100\t.\tC\tCC\t.\t.\tDP=10\tGT:GDP:DP\t1:50:5000\n"
 
     def raw_vcf(self, tmp_path: Path, body: str = "") -> Path:
         path = tmp_path / "output.vcf"

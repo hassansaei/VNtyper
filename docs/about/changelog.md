@@ -105,7 +105,7 @@ the document; the BAM-header warning did not, because an alignment the pipeline 
 vouch for changes how every number below it reads.
 
 **The printed record is complete for the first time.** A nineteen-column table lays out
-at 1442px on a 718px sheet, so 757px of it — the 121 bp motif sequence included — fell
+at 1442px on a 718px sheet, so 757px of it — the then-120 bp motif pair included — fell
 off every printed page with nothing saying so. The table now prints the columns that
 fit and every folded value prints beneath it, labelled, one block per row.
 
@@ -120,7 +120,9 @@ label. Sorting is no longer offered on a single-row table, which took the docume
 
 ### Output-format changes
 
-Display only; every TSV is unchanged.
+The presentation changes below are display only. Separately, the corrected
+`Motif_sequence` field in `kestrel_result.tsv` now contains the selected 60 bp repeat-unit
+half instead of the 120 bp pair record; no calling decision reads this annotation field.
 
 - The adVNTR table's headings are English, matching the Kestrel table above it:
   `NumberOfSupportingReads` is `Supporting Reads`, `Pvalue` is `P-value`, `RU` is

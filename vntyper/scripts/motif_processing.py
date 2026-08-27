@@ -475,10 +475,14 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 # Re-apply frameshift prioritization after uniform filtering (DRY: uses shared helper)
                 motif_right = _prioritize_frameshift_and_dedupe(motif_right)
             else:
-                # IMPROVED LEGACY: Hassan's refactored GG logic (PR #140)
-                # Better than old logic but still has limitations vs uniform filtering
-                if has_gg_alternate(motif_right, alt_for_motif_right_gg):
-                    motif_right = apply_right_motif_exclusions(motif_right, exclude_motifs_right)
+                # The conserved-motif exclusion is independent of whether another row
+                # carries the GG alternate. Compute the legacy gate first because the
+                # dedupe and allowlist are defined against the pre-exclusion frame.
+                gg_present = has_gg_alternate(motif_right, alt_for_motif_right_gg)
+                motif_right = apply_right_motif_exclusions(motif_right, exclude_motifs_right)
+                if gg_present:
+                    # Hoisting this dedupe is measured to change three reported calls;
+                    # it and the GG allowlist deliberately remain inside the gate.
                     # Apply frameshift-aware sorting and deduplication (DRY: uses shared helper)
                     motif_right = _prioritize_frameshift_and_dedupe(motif_right)
                     motif_right = apply_gg_alt_rule(motif_right, motifs_for_alt_gg)
@@ -523,7 +527,10 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     if "Motif" not in original_df.columns:
         original_df["Motif"] = pd.NA
 
-    # For rows that "passed", copy over the final POS_fasta, Motif_fasta, and Motif
+    # Preserve the established annotation copy-back for every row that survives the
+    # annotation exclusions. Only the new Motif_sequence copy-back is gated on the final
+    # pass mask: a later independent gate must not replace its input 120 bp pair.
+    passing_indices = set(original_df.index[pass_mask])
     combined_df = combined_df.set_index("original_index", drop=False)
     for idx in combined_df.index:
         if idx in original_df.index:
@@ -534,6 +541,10 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             # Also copy 'Motif'
             if "Motif" in combined_df.columns:
                 original_df.at[idx, "Motif"] = combined_df.at[idx, "Motif"]
+            # The working frames re-merge the 60 bp half named by Motif. Without
+            # this copy-back, the emitted cell retains the 120 bp pair sequence.
+            if idx in passing_indices and "Motif_sequence" in combined_df.columns:
+                original_df.at[idx, "Motif_sequence"] = combined_df.at[idx, "Motif_sequence"]
 
     # Drop the temporary original_index column
     original_df.drop(columns=["original_index"], inplace=True, errors="ignore")

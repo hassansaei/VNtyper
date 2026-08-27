@@ -488,3 +488,146 @@ class TestMalformedMotifIdsAreContainedToTheirOwnRow:
 
         assert "X-5-6" in caplog.text
         assert "1" in caplog.text, "the count of rows dropped"
+
+
+# ---------------------------------------------------------------------------
+# C1: conserved-motif exclusion is independent of an unrelated GG sibling
+# ---------------------------------------------------------------------------
+
+
+def _right_motif_row(**overrides):
+    """Build one passing right-half row; overrides create sibling shapes."""
+    row = {
+        "Motifs": "X-3",
+        "Variant": "Insertion",
+        "POS": 67,
+        "REF": "G",
+        "ALT": "GC",
+        "Estimated_Depth_AlternateVariant": 51,
+        "Estimated_Depth_Variant_ActiveRegion": 5000,
+        "Depth_Score": 0.011,
+        "Confidence": "High_Precision",
+    }
+    row.update(overrides)
+    return row
+
+
+def _gg_sibling():
+    """Build the word-bounded GG row that opens the legacy gate."""
+    return _right_motif_row(Motifs="Y-5", REF="G", ALT="GG", Depth_Score=0.013)
+
+
+class TestTheConservedMotifExclusionDoesNotDependOnAGgSibling:
+    """Hoist only the exclusion; the dedupe and GG allowlist remain gated."""
+
+    def test_a_conserved_right_motif_row_is_excluded_without_a_gg_sibling(self):
+        """The measured 8-7/POS70/C>CGGCA artifact must fail this stage alone."""
+        artifact = _right_motif_row(Motifs="8-7", POS=70, REF="C", ALT="CGGCA", Depth_Score=0.00056)
+
+        out = motif_correction_and_annotation(pd.DataFrame([artifact]), _merged_motifs(), _shipped_config())
+
+        assert out["motif_filter_pass"].tolist() == [False]
+        assert pd.isna(out["Motif"].iloc[0]), "an excluded row is failed, not annotated"
+
+    def test_an_unrelated_gg_row_does_not_change_an_unrelated_rows_verdict(self):
+        plain = _right_motif_row()
+
+        alone = motif_correction_and_annotation(pd.DataFrame([plain]), _merged_motifs(), _shipped_config())
+        paired = motif_correction_and_annotation(
+            pd.DataFrame([plain, _gg_sibling()]), _merged_motifs(), _shipped_config()
+        )
+
+        assert alone["motif_filter_pass"].tolist() == [True]
+        assert paired["motif_filter_pass"].tolist() == [True, True]
+
+    def test_the_dedupe_still_runs_only_when_a_gg_alternate_is_present(self):
+        """Hoisting this dedupe is measured to change three reported calls."""
+        duplicate_high = _right_motif_row(Depth_Score=0.020)
+        duplicate_low = _right_motif_row(Depth_Score=0.010)
+
+        no_gg = motif_correction_and_annotation(
+            pd.DataFrame([duplicate_high, duplicate_low]), _merged_motifs(), _shipped_config()
+        )
+        with_gg = motif_correction_and_annotation(
+            pd.DataFrame([duplicate_high, duplicate_low, _gg_sibling()]), _merged_motifs(), _shipped_config()
+        )
+
+        assert no_gg["motif_filter_pass"].tolist() == [True, True]
+        assert with_gg["motif_filter_pass"].tolist() == [True, False, True]
+
+    def test_the_gg_allowlist_still_runs_only_when_a_gg_alternate_is_present(self):
+        config = _shipped_config()
+        config["motif_filtering"]["motifs_for_alt_gg"] = ["X"]
+        on_list = _right_motif_row()
+        off_list = _right_motif_row(Motifs="Y-5", POS=68, REF="C", ALT="CA", Depth_Score=0.008)
+
+        no_gg = motif_correction_and_annotation(pd.DataFrame([on_list, off_list]), _merged_motifs(), config)
+        with_gg = motif_correction_and_annotation(
+            pd.DataFrame([on_list, off_list, _gg_sibling()]), _merged_motifs(), config
+        )
+
+        assert no_gg["motif_filter_pass"].tolist() == [True, True]
+        assert with_gg["motif_filter_pass"].tolist() == [True, False, False]
+
+
+# ---------------------------------------------------------------------------
+# C2: position 60 is the anchor/start boundary; do not change it to 61
+# ---------------------------------------------------------------------------
+
+
+class TestThePos60AnchorAndAffectedStartPolicy:
+    """Pin the boundary using real reference bases and junction-spanning shapes."""
+
+    @staticmethod
+    def _frame(pos, ref, alt, variant):
+        return pd.DataFrame(
+            {
+                "Motifs": ["5-A"],
+                "Variant": [variant],
+                "POS": [pos],
+                "REF": [ref],
+                "ALT": [alt],
+                "Estimated_Depth_AlternateVariant": [80],
+                "Estimated_Depth_Variant_ActiveRegion": [16000],
+                "Depth_Score": [0.005],
+                "Confidence": ["High_Precision"],
+            }
+        )
+
+    @staticmethod
+    def _merged():
+        return pd.DataFrame({"Motif": ["5", "A"], "Motif_sequence": ["SEQ_5", "SEQ_A"]})
+
+    def test_pos60_left_anchored_insertion_takes_the_l_named_motif(self):
+        """5-A bp60=C and bp61=T, so C>CT inserts into the L-named 5 half."""
+        out = motif_correction_and_annotation(
+            self._frame(60, "C", "CT", "Insertion"), self._merged(), _shipped_config()
+        )
+
+        assert out["motif_filter_pass"].tolist() == [True]
+        assert out["Motif"].tolist() == ["5"]
+
+    @pytest.mark.parametrize(
+        ("pos", "ref", "alt", "expected_motif"),
+        [
+            (58, "GGCTTGG", "G", "A"),
+            (59, "GCTTGG", "G", "A"),
+            (60, "CTTGGG", "C", "5"),
+        ],
+    )
+    def test_deletions_follow_their_anchor_derived_start_even_when_the_span_crosses_the_junction(
+        self, pos, ref, alt, expected_motif
+    ):
+        """The measured POS59 GCTTGG>G deletion starts at bp60 and spans the junction."""
+        out = motif_correction_and_annotation(self._frame(pos, ref, alt, "Deletion"), self._merged(), _shipped_config())
+
+        assert out["motif_filter_pass"].tolist() == [True]
+        assert out["Motif"].tolist() == [expected_motif]
+
+    def test_a_threshold_of_61_demonstrates_the_wrong_pos60_insertion_assignment(self):
+        config = _shipped_config()
+        config["motif_filtering"]["position_threshold"] = 61
+
+        out = motif_correction_and_annotation(self._frame(60, "C", "CT", "Insertion"), self._merged(), config)
+
+        assert out["Motif"].tolist() == ["A"]

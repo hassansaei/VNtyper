@@ -833,7 +833,7 @@ def generate_summary_report(
         "kestrel_row_summary": kestrel_row_summary,
         "kestrel_subthreshold_note": kestrel_subthreshold_note,
         # The folded columns, printed under each table because a nineteen-column table
-        # does not fit A4 and silently lost ten of them - the 121 bp motif sequence
+        # does not fit A4 and silently lost ten of them - the then-120 bp motif pair
         # among them - off the right edge of every sheet.
         "kestrel_folded_record": folded_record_html(kestrel_df, KESTREL_ESSENTIAL_COLUMNS, noun=KESTREL_ROW_NOUN),
         "advntr_folded_record": advntr_folded_record,

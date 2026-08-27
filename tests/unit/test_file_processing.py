@@ -5,15 +5,22 @@ which side of the insertion/deletion split it lands on. Both were untested.
 A row dropped here never reaches motif processing, scoring or the report.
 """
 
+import io
+import json
 import logging
 
+import pandas as pd
 import pytest
 
+from tests.builders import kestrel_config
+from vntyper.scripts import file_processing
+from vntyper.scripts.confidence_assignment import calculate_depth_score_and_assign_confidence
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
+from vntyper.scripts.scoring import split_depth_and_calculate_frame_score
 
 pytestmark = pytest.mark.unit
 
-HEADER = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+HEADER = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tsample\n"
 
 # The classification specification, enumerated exhaustively rather than spot-checked.
 #
@@ -49,7 +56,10 @@ CLASSIFICATION = [
 
 def _vcf(tmp_path, name, *rows):
     path = tmp_path / name
-    path.write_text(HEADER + "".join(f"X-5\t{i}\t.\t{ref}\t{alt}\t.\tPASS\t.\n" for i, (ref, alt) in enumerate(rows)))
+    path.write_text(
+        HEADER
+        + "".join(f"X-5\t{i}\t.\t{ref}\t{alt}\t.\tPASS\t.\tGT:GDP:DP\t1:50:5000\n" for i, (ref, alt) in enumerate(rows))
+    )
     return path
 
 
@@ -164,7 +174,7 @@ def test_a_record_with_two_multi_base_alleles_is_rejected_as_off_contract(tmp_pa
 
 
 def test_a_line_with_too_few_columns_raises(tmp_path):
-    """filter_vcf unpacks six fields from a data line; a short line is not tolerated."""
+    """filter_vcf requires the pinned build's full 10-column record; a short line is not tolerated."""
     path = tmp_path / "short.vcf"
     path.write_text(HEADER + "X-5\t1\t.\tC\n")
     with pytest.raises(ValueError):
@@ -237,9 +247,226 @@ def test_a_record_with_empty_alleles_is_refused_not_silently_dropped(tmp_path):
     """
     src = tmp_path / "output.vcf"
     src.write_text(
-        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t1\t.\t\t\t.\t.\tDP=1\n",
+        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tsample\n"
+        "chr1\t1\t.\t\t\t.\t.\tDP=1\tGT:GDP:DP\t1:1:1\n",
         encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="must carry both alleles"):
         filter_vcf(str(src), str(tmp_path / "out_indel.vcf"))
+
+
+# --------------------------------------------------------------------------------------
+# C4 (2026-08-26 screen): the FORMAT / sample-field contract
+# --------------------------------------------------------------------------------------
+#
+# scoring.split_depth_and_calculate_frame_score assigns the colon-split Sample column
+# positionally and never reads FORMAT, which is dropped before scoring. The boundary
+# therefore proves the exact configured shape and the numeric depth values before any
+# row -- including a substitution -- can be discarded. All 2,418,255 measured raw VCF
+# rows carry GT:GDP:DP with one sample column and finite scalar depths, so the expected
+# output delta is zero.
+
+
+def _vcf_line(fmt, sample, ref="C", alt="CC"):
+    return HEADER + f"X-5\t60\t.\t{ref}\t{alt}\t.\tPASS\t.\t{fmt}\t{sample}\n"
+
+
+def _replace_file_processing_config(monkeypatch, config):
+    monkeypatch.setattr(
+        file_processing.pkg_resources,
+        "open_text",
+        lambda *_args, **_kwargs: io.StringIO(json.dumps(config)),
+    )
+
+
+def test_a_format_other_than_the_configured_one_is_rejected(tmp_path, caplog):
+    """A reordered FORMAT must stop the run, not swap the two depths in silence."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.file_processing")
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:DP:GDP", "1:5000:50"))
+
+    with pytest.raises(ValueError, match="GT:GDP:DP") as excinfo:
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+    assert str(excinfo.value) in caplog.text
+
+
+def test_the_format_expectation_is_required_config_not_a_hardcoded_fallback(tmp_path, monkeypatch):
+    """Deleting the required contract must fail rather than silently restore a default."""
+    _replace_file_processing_config(monkeypatch, {"file_processing": {"snv_length": 1}})
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", "1:50:5000"))
+
+    with pytest.raises(KeyError, match="kestrel_format"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+def test_a_changed_configured_format_controls_the_contract(tmp_path, monkeypatch):
+    """The configured expectation is read, while the two depth positions remain GDP then DP."""
+    config = {"file_processing": {"snv_length": 1, "kestrel_format": "DEL:GDP:DP"}}
+    _replace_file_processing_config(monkeypatch, config)
+    old_path = tmp_path / "old.vcf"
+    old_path.write_text(_vcf_line("GT:GDP:DP", "1:50:5000"))
+
+    with pytest.raises(ValueError, match="DEL:GDP:DP"):
+        filter_vcf(str(old_path), str(tmp_path / "old-out.vcf"))
+
+    changed_path = tmp_path / "changed.vcf"
+    changed_path.write_text(_vcf_line("DEL:GDP:DP", "1:50:5000"))
+    changed_out = tmp_path / "changed-out.vcf"
+    filter_vcf(str(changed_path), str(changed_out))
+    assert len(_rows(changed_out)) == 1
+
+
+@pytest.mark.parametrize("configured_format", ["GT:DP:GDP", "GT:GDP:DP:EXTRA"])
+def test_the_configured_format_must_preserve_the_positional_depth_layout(tmp_path, monkeypatch, configured_format):
+    """Configuration cannot bless a layout the unchanged positional scorer would misread."""
+    config = {"file_processing": {"snv_length": 1, "kestrel_format": configured_format}}
+    _replace_file_processing_config(monkeypatch, config)
+    path = tmp_path / "in.vcf"
+    sample = "1:5000:50" if configured_format == "GT:DP:GDP" else "1:50:5000:unused"
+    path.write_text(_vcf_line(configured_format, sample))
+
+    with pytest.raises(ValueError, match="GDP and DP in positions 2 and 3"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "1:.:5000",
+        "1:text:5000",
+        "1::5000",
+        "1:50:.",
+        "1:50:text",
+        "1:50:",
+        "1:1_0:5000",
+        "1:50:5_000",
+        "1:١٠:5000",
+    ],
+)
+def test_a_nonnumeric_depth_is_rejected(tmp_path, sample):
+    """GDP and DP must both be numeric before scoring can consume them."""
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", sample))
+
+    with pytest.raises(ValueError, match="finite scalar numeric"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "1:nan:5000",
+        "1:inf:5000",
+        "1:-inf:5000",
+        "1:50:nan",
+        "1:50:inf",
+        "1:50:-inf",
+    ],
+)
+def test_a_nonfinite_depth_is_rejected(tmp_path, sample):
+    """NaN and infinities are numeric syntax but cannot represent read depths."""
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", sample))
+
+    with pytest.raises(ValueError, match="finite scalar numeric"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+@pytest.mark.parametrize(
+    ("sample", "invalid_depth"),
+    [
+        ("1:-1:5000", "GDP='-1'"),
+        ("1:50:-5000", "DP='-5000'"),
+        ("1:-50:-5000", "GDP='-50'"),
+    ],
+)
+def test_a_negative_depth_is_rejected(tmp_path, caplog, sample, invalid_depth):
+    """Negative GDP/DP values are impossible read counts and must not reach confidence scoring."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.file_processing")
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", sample))
+
+    with pytest.raises(ValueError, match="cannot be negative") as excinfo:
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+    assert invalid_depth in str(excinfo.value)
+    assert str(excinfo.value) in caplog.text
+
+
+@pytest.mark.parametrize("sample", ["1:0:5000", "1:50:0", "1:0:0"])
+def test_a_zero_depth_remains_valid_at_the_nonnegative_boundary(tmp_path, sample):
+    """Zero is a possible read count and must not be rejected with negative depths."""
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", sample))
+    out = tmp_path / "out.vcf"
+
+    filter_vcf(str(path), str(out))
+
+    assert _rows(out)[0].endswith(f"\t{sample}")
+
+
+@pytest.mark.parametrize("sample", ["1:3420,120:5000", "1:3420:5000,120"])
+def test_a_multi_value_depth_is_rejected_not_scored_as_zero(tmp_path, sample):
+    """A comma-joined GDP or DP is not one scalar depth and must fail closed."""
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", sample))
+
+    with pytest.raises(ValueError, match="finite scalar numeric"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+def test_a_sample_with_the_wrong_subfield_count_is_rejected(tmp_path):
+    """A sample wider than FORMAT must not reach pandas as an opaque length mismatch."""
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", "1:50:5000:7"))
+
+    with pytest.raises(ValueError, match="colon-separated"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+def test_an_extra_sample_column_is_rejected(tmp_path):
+    """The pinned producer has one sample; a second sample would otherwise be ignored."""
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", "1:50:5000").rstrip("\n") + "\t1:25:5000\n")
+
+    with pytest.raises(ValueError, match="exactly 10"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+def test_a_data_line_without_format_and_sample_columns_is_rejected(tmp_path):
+    """Without FORMAT and the sample field, depths cannot be checked."""
+    path = tmp_path / "in.vcf"
+    path.write_text(HEADER + "X-5\t60\t.\tC\tCC\t.\tPASS\t.\n")
+
+    with pytest.raises(ValueError, match="exactly 10"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+def test_a_substitution_row_with_bad_depths_is_still_rejected(tmp_path):
+    """The contract applies before equal-length alleles are discarded."""
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", "1:.:5000", ref="C", alt="G"))
+
+    with pytest.raises(ValueError, match="finite scalar numeric"):
+        filter_vcf(str(path), str(tmp_path / "out.vcf"))
+
+
+def test_a_conforming_raw_row_reaches_scoring_with_the_pinned_depth_values(tmp_path):
+    """The accepted GDP/DP positions become the expected depth score and confidence."""
+    path = tmp_path / "in.vcf"
+    path.write_text(_vcf_line("GT:GDP:DP", "1:3420:5000"))
+    out = tmp_path / "out.vcf"
+
+    filter_vcf(str(path), str(out))
+    fields = _rows(out)[0].split("\t")
+    frame = pd.DataFrame({"REF": [fields[3]], "ALT": [fields[4]], "Sample": [fields[9]]})
+    scored = split_depth_and_calculate_frame_score(frame)
+    result = calculate_depth_score_and_assign_confidence(scored, kestrel_config()).iloc[0]
+
+    assert result["Estimated_Depth_AlternateVariant"] == 3420
+    assert result["Estimated_Depth_Variant_ActiveRegion"] == 5000
+    assert result["Depth_Score"] == pytest.approx(0.684)
+    assert result["Confidence"] == "High_Precision*"
