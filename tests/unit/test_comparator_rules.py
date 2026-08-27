@@ -41,7 +41,6 @@ def rule(left: Mapping[str, object], operator: str, right: Mapping[str, object])
         (rule(column("Kind"), "casefold_eq", literal("insertion")), {"Kind": "Insertion"}, True),
         (rule(literal("INSERTION"), "casefold_eq", column("Kind")), {"Kind": "deletion"}, False),
         (rule(literal("2"), "in", literal(["1", "2"])), {}, True),
-        (rule(column("Boolean"), "in", literal([True, False])), {"Boolean": True}, True),
         (rule(literal(True), "eq", literal(True)), {}, True),
         (rule(literal(1), "eq", literal(1.0)), {}, True),
         (rule(literal(None), "eq", literal("x")), {}, False),
@@ -256,6 +255,133 @@ def test_null_row_values_are_false_on_the_right_side(null_value: object) -> None
     compiled = validate_rule(rule(literal("x"), "eq", column("Value")), allowed_columns=["Value"], context="test.rule")
 
     assert evaluate_rule(compiled, {"Value": null_value}, context="test.rule") is False
+
+
+@pytest.mark.parametrize(
+    ("configured", "row", "expected_message"),
+    [
+        (
+            rule(column("A"), "eq", column("B")),
+            {"A": None, "B": []},
+            "test.rule.all[0] requires JSON-scalar row values",
+        ),
+        (
+            rule(column("A"), "lt", column("B")),
+            {"A": None, "B": "9"},
+            "test.rule.all[0] requires real numbers other than booleans for operator 'lt'",
+        ),
+        (
+            rule(column("A"), "casefold_eq", column("B")),
+            {"A": None, "B": 9},
+            "test.rule.all[0] requires strings for operator 'casefold_eq'",
+        ),
+        (
+            rule(column("A"), "in", literal([None])),
+            {"A": []},
+            "test.rule.all[0] requires JSON-scalar row values",
+        ),
+    ],
+)
+def test_null_does_not_mask_an_incompatible_non_null_operand(
+    configured: object,
+    row: dict[str, object],
+    expected_message: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.comparator_rules")
+    compiled = validate_rule(configured, allowed_columns=row, context="test.rule")
+
+    with pytest.raises(ValueError) as raised:
+        evaluate_rule(compiled, row, context="test.rule")
+
+    assert str(raised.value) == expected_message
+    assert caplog.messages[-1] == expected_message
+
+
+def test_arbitrary_precision_json_integers_are_not_coerced_during_null_normalization() -> None:
+    huge = 10**400
+    compiled = validate_rule(rule(column("Value"), "lt", literal(huge)), allowed_columns=["Value"], context="test.rule")
+
+    assert evaluate_rule(compiled, {"Value": huge - 1}, context="test.rule") is True
+
+
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+def test_python_and_numpy_booleans_share_the_equality_operand_family(value: object) -> None:
+    compiled = validate_rule(rule(column("Value"), "eq", literal(True)), allowed_columns=["Value"], context="test.rule")
+
+    assert evaluate_rule(compiled, {"Value": value}, context="test.rule") is True
+
+
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+def test_boolean_and_numeric_equality_operands_are_incompatible(
+    value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.comparator_rules")
+    compiled = validate_rule(rule(column("Value"), "eq", literal(1)), allowed_columns=["Value"], context="test.rule")
+    expected_message = "test.rule.all[0] requires compatible families"
+
+    with pytest.raises(ValueError) as raised:
+        evaluate_rule(compiled, {"Value": value}, context="test.rule")
+
+    assert str(raised.value) == expected_message
+    assert caplog.messages[-1] == expected_message
+
+
+@pytest.mark.parametrize(
+    ("value", "operator", "right", "expected_message"),
+    [
+        (True, "lt", literal(1), "test.rule.all[0] requires real numbers other than booleans for operator 'lt'"),
+        (
+            np.bool_(True),
+            "lt",
+            literal(1),
+            "test.rule.all[0] requires real numbers other than booleans for operator 'lt'",
+        ),
+        (True, "in", literal([1, 2]), "test.rule.all[0] does not support boolean operands for operator 'in'"),
+        (
+            np.bool_(True),
+            "in",
+            literal([1, 2]),
+            "test.rule.all[0] does not support boolean operands for operator 'in'",
+        ),
+        (True, "casefold_eq", literal("true"), "test.rule.all[0] requires strings for operator 'casefold_eq'"),
+        (
+            np.bool_(True),
+            "casefold_eq",
+            literal("true"),
+            "test.rule.all[0] requires strings for operator 'casefold_eq'",
+        ),
+    ],
+)
+def test_boolean_row_values_are_rejected_by_non_equality_operators(
+    value: object,
+    operator: str,
+    right: dict[str, object],
+    expected_message: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.comparator_rules")
+    compiled = validate_rule(rule(column("Value"), operator, right), allowed_columns=["Value"], context="test.rule")
+
+    with pytest.raises(ValueError) as raised:
+        evaluate_rule(compiled, {"Value": value}, context="test.rule")
+
+    assert str(raised.value) == expected_message
+    assert caplog.messages[-1] == expected_message
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected_path"),
+    [
+        (rule(column("Value"), "in", literal([True, False])), "test.rule.all[0].right.literal"),
+        (rule(literal(True), "in", literal([1, 2])), "test.rule.all[0].left.literal"),
+    ],
+)
+def test_boolean_literals_are_rejected_for_membership(configured: object, expected_path: str) -> None:
+    with pytest.raises(ValueError) as raised:
+        validate_rule(configured, allowed_columns=["Value"], context="test.rule")
+
+    assert str(raised.value) == f"{expected_path} does not support boolean values for operator 'in'"
 
 
 @pytest.mark.parametrize(

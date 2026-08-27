@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from numbers import Real
 from typing import Literal, NoReturn, TypeAlias, cast
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -121,8 +122,12 @@ def _validate_predicate_compatibility(predicate: Predicate, *, path: str) -> Non
     if predicate.operator == "in":
         if not isinstance(predicate.right, LiteralOperand) or not isinstance(predicate.right.value, tuple):
             _invalid(f"{path}.right must be a non-empty literal list for operator 'in'")
+        if isinstance(predicate.right.value[0], bool):
+            _invalid(f"{path}.right.literal does not support boolean values for operator 'in'")
         _reject_collection(predicate.left, path=f"{path}.left")
         if isinstance(predicate.left, LiteralOperand) and predicate.left.value is not None:
+            if isinstance(predicate.left.value, bool):
+                _invalid(f"{path}.left.literal does not support boolean values for operator 'in'")
             right_family = _scalar_family(predicate.right.value[0])
             if _scalar_family(cast(JsonScalar, predicate.left.value)) != right_family:
                 _invalid(f"{path} has incompatible literal operand families")
@@ -199,13 +204,13 @@ def _operand_value(operand: Operand, row: Mapping[str, object], *, context: str)
 def _normalize_null(value: object) -> object:
     if value is None or value is pd.NA:
         return _NULL
-    if isinstance(value, Real) and not isinstance(value, bool) and math.isnan(value):
+    if isinstance(value, float) and math.isnan(value):
         return _NULL
     return value
 
 
 def _runtime_family(value: object, *, context: str) -> str:
-    if isinstance(value, bool):
+    if isinstance(value, (bool, np.bool_)):
         return "boolean"
     if isinstance(value, str):
         return "string"
@@ -227,26 +232,42 @@ def _evaluate_predicate(predicate: Predicate, row: Mapping[str, object], *, cont
     right = _operand_value(predicate.right, row, context=context)
     if not isinstance(right, tuple):
         right = _normalize_null(right)
-    if left is _NULL or right is _NULL:
-        return False
     if predicate.operator == "eq":
+        if left is not _NULL:
+            _runtime_family(left, context=context)
+        if right is not _NULL:
+            _runtime_family(right, context=context)
+        if left is _NULL or right is _NULL:
+            return False
         _require_same_family(left, right, context=context)
         return bool(left == right)
     if predicate.operator == "lt":
-        if _runtime_family(left, context=context) != "number" or _runtime_family(right, context=context) != "number":
+        if (left is not _NULL and _runtime_family(left, context=context) != "number") or (
+            right is not _NULL and _runtime_family(right, context=context) != "number"
+        ):
             _invalid(f"{context} requires real numbers other than booleans for operator 'lt'")
+        if left is _NULL or right is _NULL:
+            return False
         return bool(left < right)  # type: ignore[operator]
     if predicate.operator == "in":
         if not isinstance(right, tuple):  # pragma: no cover - prevented by validation and immutable types
             _invalid(f"{context} requires a literal list on the right for operator 'in'")
+        if left is not _NULL:
+            left_family = _runtime_family(left, context=context)
+            if left_family == "boolean":
+                _invalid(f"{context} does not support boolean operands for operator 'in'")
         normalized_members = tuple(_normalize_null(member) for member in right)
-        if any(member is _NULL for member in normalized_members):
+        if left is _NULL or any(member is _NULL for member in normalized_members):
             return False
         for member in normalized_members:
             _require_same_family(left, member, context=context)
         return bool(left in right)  # type: ignore[operator]
-    if _runtime_family(left, context=context) != "string" or _runtime_family(right, context=context) != "string":
+    if (left is not _NULL and _runtime_family(left, context=context) != "string") or (
+        right is not _NULL and _runtime_family(right, context=context) != "string"
+    ):
         _invalid(f"{context} requires strings for operator 'casefold_eq'")
+    if left is _NULL or right is _NULL:
+        return False
     return cast(str, left).casefold() == cast(str, right).casefold()
 
 
