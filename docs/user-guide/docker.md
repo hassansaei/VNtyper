@@ -129,6 +129,27 @@ $EDITOR docker/.env          # set REDIS_PASSWORD
 docker compose -f docker/docker-compose.yml up -d
 ```
 
+Shipped Compose keeps ordinary-job outputs in the persistent, service-private
+`result_store`, mounted only into the API and worker. The protected handoff spool uses the
+same service boundary. Replacing `/opt/vntyper/output` with a host/shared bind-mount override
+may be useful for a custom deployment, but it gives that mount's actors access to the result
+namespace and weakens the shipped security boundary.
+
+For an existing web deployment, use this migration sequence:
+
+1. Pause new submissions. Drain both the regular and long queues and all active jobs to
+   completion; verify both queues and the active job count are zero. Never purge queued
+   messages, because doing so can strand their protected-spool uploads.
+2. Stop the API, workers, and beat, then provision the named `result_store`.
+3. While services remain stopped and detached from the legacy host bind, either
+   (recommended) copy existing unexpired output into `result_store` and retain a backup,
+   noting that legacy bytes cannot be retroactively integrity-attested; or explicitly accept
+   retirement and unavailability of those results and archive or remove the legacy store.
+4. Deploy the API, all workers, and beat; verify retained result access; then resume submissions.
+
+Arbitrary same-UID code in either the API or worker service namespace is out of scope: such
+code can access the private volumes or worker descriptors directly.
+
 `docker/.env.example` documents the remaining settings. To run the API container on
 its own against an existing Redis:
 
@@ -137,7 +158,8 @@ docker run -d -p 8000:8000 \
     -e REDIS_HOST=my-redis-host \
     -e REDIS_PASSWORD="$REDIS_PASSWORD" \
     -v /path/to/input:/opt/vntyper/input \
-    -v /path/to/output:/opt/vntyper/output \
+    -v vntyper_handoff_spool:/opt/vntyper/handoff \
+    -v vntyper_result_store:/opt/vntyper/output \
     ghcr.io/hassansaei/vntyper:latest
 ```
 

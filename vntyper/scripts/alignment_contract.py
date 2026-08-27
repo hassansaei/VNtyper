@@ -28,6 +28,22 @@ INDEX_SUFFIXES: dict[str, tuple[str, ...]] = {
 ReferenceAttempt = tuple[str, str | None, str]
 
 
+class TimedOutProbeReason(str):
+    """Private probe output carrying runner-authenticated timeout metadata."""
+
+    timeout_seconds: float
+
+    def __new__(cls, value: str, timeout_seconds: float) -> TimedOutProbeReason:
+        """Attach the configured deadline to otherwise ordinary diagnostic text."""
+        instance = super().__new__(cls, value)
+        instance.timeout_seconds = timeout_seconds
+        return instance
+
+    def strip(self, chars: str | None = None) -> TimedOutProbeReason:
+        """Preserve authenticated metadata while candidate code trims output."""
+        return TimedOutProbeReason(super().strip(chars), self.timeout_seconds)
+
+
 class ReferenceLifetime(Protocol):
     """Cleanup contract shared by explicit references and private M5 caches."""
 

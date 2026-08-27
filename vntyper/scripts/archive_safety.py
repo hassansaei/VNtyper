@@ -445,6 +445,7 @@ def create_safe_archive(
     root_dir: str | Path,
     *,
     protected_paths: Iterable[str | Path] = (),
+    root_descriptor: int | None = None,
 ) -> str:
     """Atomically archive exclusively owned files through anchored descriptors.
 
@@ -460,6 +461,8 @@ def create_safe_archive(
         archive_format: ``zip`` or ``gztar``.
         root_dir: Result directory whose contents should be archived.
         protected_paths: Operator-owned inputs which the destination may not alias.
+        root_descriptor: Optional already-bound result directory. When supplied,
+            its inode is archived even if ``root_dir`` is renamed meanwhile.
 
     Returns:
         The installed archive path.
@@ -470,9 +473,12 @@ def create_safe_archive(
     """
     archive_path = _archive_path(base_name, archive_format)
     root = Path(root_dir)
-    root_metadata = os.lstat(root)
-    if stat.S_ISLNK(root_metadata.st_mode):
-        _reject("Refusing to archive unsafe symbolic link used as result root.")
+    if root_descriptor is None:
+        root_metadata = os.lstat(root)
+        if stat.S_ISLNK(root_metadata.st_mode):
+            _reject("Refusing to archive unsafe symbolic link used as result root.")
+    else:
+        root_metadata = os.fstat(root_descriptor)
     if not stat.S_ISDIR(root_metadata.st_mode):
         _reject(f"Archive root is not a directory: {root}")
     parent_descriptor = -1
@@ -507,16 +513,18 @@ def create_safe_archive(
             raise OSError(f"Unable to allocate temporary archive beside {archive_path}")
 
         with os.fdopen(temporary_descriptor, "w+b") as temporary_archive:
-            root_descriptor = os.open(root, _DIRECTORY_FLAGS)
+            archive_root_descriptor = (
+                os.open(root, _DIRECTORY_FLAGS) if root_descriptor is None else os.dup(root_descriptor)
+            )
             write_failure: BaseException | None = None
             try:
-                opened_root = os.fstat(root_descriptor)
+                opened_root = os.fstat(archive_root_descriptor)
                 if not stat.S_ISDIR(opened_root.st_mode) or not _same_identity(root_metadata, opened_root):
                     _reject(f"Archive root is not a directory: {root}")
                 if archive_format == "zip":
-                    _write_zip(temporary_archive, root_descriptor)
+                    _write_zip(temporary_archive, archive_root_descriptor)
                 else:
-                    _write_tar(temporary_archive, root_descriptor)
+                    _write_tar(temporary_archive, archive_root_descriptor)
                 temporary_archive.flush()
                 os.fsync(temporary_archive.fileno())
                 completed_metadata = os.fstat(temporary_archive.fileno())
@@ -525,7 +533,7 @@ def create_safe_archive(
                 raise
             finally:
                 try:
-                    os.close(root_descriptor)
+                    os.close(archive_root_descriptor)
                 except Exception as cleanup_error:
                     if write_failure is None:
                         raise

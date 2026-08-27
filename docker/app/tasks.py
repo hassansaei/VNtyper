@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
 
@@ -16,11 +15,19 @@ from vntyper.scripts.archive_safety import (
     revoke_public_archive,
 )
 
+from . import admission
 from .archive_delivery import snapshot_owned_archives
 from .celery_app import celery_app
+from .cohort_workspace import cohort_workspace
 from .cohorts import cohort_key, extend_cohort_retention
 from .config import get_redis_password, settings
-from .job_failures import clear_preflight_failure, read_preflight_failure
+from .failure_reporting import report_pipeline_failure
+from .job_failures import clear_preflight_failure
+from .pipeline_job_workspace import (
+    PipelineJobWorkspace,
+    open_pipeline_job_workspace,
+    reclaim_unopened_spool_inputs,
+)
 from .utils import send_email
 
 logger = get_task_logger(__name__)
@@ -168,6 +175,7 @@ def build_vntyper_command(
     keep_intermediates: bool = False,
     archive_results: bool = False,
     advntr_mode: bool = False,
+    alignment_is_cram: bool | None = None,
 ) -> list[str]:
     """Assemble the vntyper CLI invocation for one job.
 
@@ -204,7 +212,7 @@ def build_vntyper_command(
         "vntyper",
         "vntyper",
         "pipeline",
-        "--cram" if is_cram(alignment_path) else "--bam",
+        "--cram" if (is_cram(alignment_path) if alignment_is_cram is None else alignment_is_cram) else "--bam",
         alignment_path,
         "-o",
         output_dir,
@@ -256,6 +264,8 @@ def run_vntyper_job(
     user_agent: str | None = None,
     advntr_mode: bool = False,
     index_path: str | None = None,
+    capacity_reserved: bool = False,
+    workspace_identity: dict[str, object] | None = None,
 ):
     """
     Celery task to run VNtyper pipeline with parameters.
@@ -268,16 +278,35 @@ def run_vntyper_job(
     """
     job_id = os.path.basename(output_dir)
     archive_published = False
-    # Bound before the try block: the cleanup below runs whether or not the task
-    # got as far as its first Redis call, and must remove exactly the index this
-    # job used -- uploaded or generated -- rather than raise a NameError of its
-    # own on the way.
-    index_path = resolve_index_path(bam_path, index_path)
+    heartbeat: admission.ReservationHeartbeat | None = None
+    workspace: PipelineJobWorkspace | None = None
+    input_is_cram = is_cram(bam_path)
     try:
+        workspace = open_pipeline_job_workspace(
+            bam_path,
+            index_path,
+            output_dir,
+            workspace_identity,
+            spool_root=settings.DEFAULT_HANDOFF_SPOOL_DIR,
+            shared_roots=(
+                settings.DEFAULT_INPUT_DIR,
+                settings.DEFAULT_OUTPUT_DIR,
+                settings.DEFAULT_HANDOFF_SPOOL_DIR,
+            ),
+        )
+        if capacity_reserved:
+            heartbeat = admission.ReservationHeartbeat(
+                redis_client,
+                job_id,
+                active_lease_seconds=settings.ADMISSION_ACTIVE_LEASE_SECONDS,
+                heartbeat_seconds=settings.ADMISSION_HEARTBEAT_SECONDS,
+            )
+            heartbeat.start()
+        index_path = resolve_index_path(bam_path, index_path)
         job_key = f"usage:{job_id}"
         redis_usage_client.hdel(job_key, "code", "message")
-        clear_preflight_failure(output_dir)
-        logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
+        clear_preflight_failure(workspace.bound_output_path)
+        logger.info(f"Starting VNtyper job for BAM file: {workspace.bound_alignment_path}")
 
         # Generate a unique hash for the user
         user_data = f"{client_ip}-{user_agent}"
@@ -300,57 +329,50 @@ def run_vntyper_job(
 
         # Build the base command for VNtyper
         command = build_vntyper_command(
-            alignment_path=bam_path,
-            output_dir=output_dir,
+            alignment_path=workspace.bound_alignment_path,
+            output_dir=workspace.bound_output_path,
             thread=thread,
             reference_assembly=reference_assembly,
             fast_mode=fast_mode,
             keep_intermediates=keep_intermediates,
             archive_results=False,
             advntr_mode=advntr_mode,
+            alignment_is_cram=input_is_cram,
         )
 
         # Run the VNtyper pipeline
         try:
             subprocess.run(command, check=True)
-            logger.info(f"VNtyper job completed for {bam_path}")
-        except subprocess.CalledProcessError as e:
+            workspace.require_current_output()
+            workspace.remove_views()
+            logger.info(f"VNtyper job completed for {workspace.bound_alignment_path}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             logger.error(f"Error running VNtyper: {e}")
-            # Update usage data on failure
-            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
-            preflight_failure = read_preflight_failure(output_dir)
-            if preflight_failure is not None:
-                redis_usage_client.hset(f"usage:{job_id}", mapping=preflight_failure)
-            # Send failure email if provided
-            if email:
-                subject = "VNtyper Job Failed"
-                if cohort_key:
-                    cohort_id = cohort_key.split(":", 1)[1]
-                    content = f"""
-                    <p>Your VNtyper job with Job ID <strong>{job_id}</strong> has failed.</p>
-                    <p>Cohort ID: <strong>{cohort_id}</strong></p>
-                    <p>Error Details:</p>
-                    <pre>{str(e)}</pre>
-                    """
-                else:
-                    content = f"""
-                    <p>Your VNtyper job with Job ID <strong>{job_id}</strong> has failed.</p>
-                    <p>Error Details:</p>
-                    <pre>{str(e)}</pre>
-                    """
-                send_email_task.delay(to_email=email, subject=subject, content=content)
+            report_pipeline_failure(
+                redis_usage_client=redis_usage_client,
+                job_id=job_id,
+                output_dir=workspace.bound_output_path,
+                email=email,
+                cohort_key=cohort_key,
+                error=e,
+                send_email_task=send_email_task,
+                logger=logger,
+            )
             raise
 
         if archive_results:
             create_safe_archive(
                 output_dir,
                 "zip",
-                output_dir,
-                protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+                workspace.bound_output_path,
+                protected_paths=(workspace.bound_alignment_path,)
+                if workspace.bound_index_path is None
+                else (workspace.bound_alignment_path, workspace.bound_index_path),
+                root_descriptor=workspace.output_descriptor,
             )
             archive_published = True
             try:
-                shutil.rmtree(output_dir)
+                workspace.remove_output()
                 logger.info(f"Archived results to {output_dir}.zip and removed original directory")
             except Exception as e:
                 archive_published = False
@@ -368,6 +390,8 @@ def run_vntyper_job(
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
+        if not archive_published:
+            workspace.require_current_output("completion bookkeeping")
 
         if cohort_key:
             redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
@@ -421,6 +445,9 @@ def run_vntyper_job(
             send_email_task.delay(to_email=email, subject=subject, content=content)
             logger.info(f"Triggered email sending to {email} with download link")
 
+        if not archive_published:
+            workspace.require_current_output("completion bookkeeping")
+
     except Exception as e:
         logger.error(f"Error in VNtyper job: {e}")
         if archive_published:
@@ -450,22 +477,30 @@ def run_vntyper_job(
             logger.error(f"Error recording failed status for {job_id}: {status_error}")
         raise
     finally:
-        # Patient-derived inputs come off the shared volume before bookkeeping.
-        remove_job_input_files(bam_path, index_path)
-
-        # The per-job input directory holds nothing but this submission's own
-        # files, so it goes with them. Removing it only when it is empty means
-        # anything unexpected left in there is reported rather than deleted.
-        job_input_dir = os.path.dirname(bam_path)
-        try:
-            if os.path.isdir(job_input_dir):
-                if os.listdir(job_input_dir):
-                    logger.warning(f"Input directory {job_input_dir} still holds files and was left in place")
-                else:
-                    os.rmdir(job_input_dir)
-                    logger.info(f"Deleted empty input directory: {job_input_dir}")
-        except Exception as e:
-            logger.error(f"Error deleting input directory {job_input_dir}: {e}")
+        if heartbeat is not None:
+            heartbeat.stop()
+        # Research inputs leave the protected handoff spool before bookkeeping.
+        if workspace is not None:
+            for cleanup_name, cleanup in (
+                ("private input views", workspace.remove_views),
+                ("uploaded inputs", workspace.remove_inputs),
+                ("detached output", workspace.discard_detached_output),
+                ("workspace descriptors", workspace.close),
+            ):
+                try:
+                    cleanup()
+                except Exception as cleanup_error:
+                    logger.error(f"Error cleaning {cleanup_name} for {job_id}: {cleanup_error}")
+        else:
+            try:
+                reclaim_unopened_spool_inputs(
+                    bam_path,
+                    index_path,
+                    output_dir,
+                    settings.DEFAULT_HANDOFF_SPOOL_DIR,
+                )
+            except Exception as cleanup_error:
+                logger.error(f"Error cleaning unopened uploaded inputs for {job_id}: {cleanup_error}")
 
         # Bookkeeping last, and best-effort. Neither call owns anything on
         # disk: `lrem` maintains the queue-position display, and the retention
@@ -474,12 +509,11 @@ def run_vntyper_job(
         # exception, and failing a job whose pipeline completed and whose
         # results are already written reports a success as a failure.
         try:
-            # Remove the task ID from the Redis list
-            redis_client.lrem("vntyper_job_queue", 0, self.request.id)
-            logger.info(f"Removed task ID {self.request.id} from vntyper_job_queue")
+            admission.release_worker_bookkeeping(
+                redis_client, self.request.id, job_id, f"task ID {self.request.id}", logger
+            )
         except Exception as e:
-            logger.error(f"Error removing task ID {self.request.id} from vntyper_job_queue: {e}")
-
+            logger.error(f"Error releasing worker bookkeeping for {job_id}: {e}")
         # Extend cohort TTL if necessary
         if cohort_key:
             try:
@@ -552,6 +586,7 @@ def run_cohort_analysis_job(
     output_dir: str,
     user_ip: str | None = None,
     user_agent: str | None = None,
+    capacity_reserved: bool = False,
 ):
     """
     Celery task to run a joint cohort analysis using 'vntyper cohort'.
@@ -570,62 +605,95 @@ def run_cohort_analysis_job(
     # failure with a NameError of its own.
     input_file = None
     archive_published = False
-    logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
-
-    # Generate a unique hash for the user
-    user_data = f"{user_ip}-{user_agent}"
-    user_hash = hashlib.sha256(user_data.encode("utf-8")).hexdigest()
-
-    # Store initial usage data
-    usage_data = {
-        "user_hash": user_hash,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "job_id": job_id,
-        "status": "started",
-        "analysis_type": "cohort_analysis",
-        "cohort_id": cohort_id,
-    }
-    redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
-    redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
-
+    heartbeat: admission.ReservationHeartbeat | None = None
     try:
-        clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
-        # 1) Create directory, input file listing all .zip files
-        os.makedirs(output_dir, exist_ok=True)
-        snapshot_dir = os.path.join(output_dir, ".cohort-members")
-        with snapshot_owned_archives(zip_paths, snapshot_dir) as snapshots:
-            cohort_input_file = os.path.join(output_dir, "cohort_input.txt")
-            input_file = cohort_input_file
-            with open(cohort_input_file, "w") as f:
-                f.writelines(f"{zpath}\n" for zpath in snapshots.paths)
+        if capacity_reserved:
+            heartbeat = admission.ReservationHeartbeat(
+                redis_client,
+                job_id,
+                active_lease_seconds=settings.ADMISSION_ACTIVE_LEASE_SECONDS,
+                heartbeat_seconds=settings.ADMISSION_HEARTBEAT_SECONDS,
+            )
+            heartbeat.start()
+        logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
 
-            # 2) Run the "vntyper cohort" command
-            command = [
-                "conda",
-                "run",
-                # Same reason as build_vntyper_command: without this, conda buffers the child
-                # until it exits, so a cohort analysis logs nothing while it runs (#213).
-                "--no-capture-output",
-                "-n",
-                "vntyper",
-                "vntyper",
-                "cohort",
-                "--input-file",
-                cohort_input_file,
-                "-o",
-                output_dir,
-            ]
-            logger.info(f"Running command: {' '.join(command)}")
-            subprocess.run(command, check=True)
-            logger.info("Joint cohort analysis completed.")
+        user_data = f"{user_ip}-{user_agent}"
+        usage_data = {
+            "user_hash": hashlib.sha256(user_data.encode("utf-8")).hexdigest(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "job_id": job_id,
+            "status": "started",
+            "analysis_type": "cohort_analysis",
+            "cohort_id": cohort_id,
+        }
+        redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
+        redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
-        os.remove(cohort_input_file)
-        input_file = None
+        # 1) Exclusively reserve this task's public output name before removing
+        # an earlier archive. Every task write then stays in private staging,
+        # anchored through its open descriptor.
+        with cohort_workspace(output_dir) as workspace:
+            clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
+            try:
+                snapshot_dir = os.path.join(workspace.staging_path, ".cohort-members")
+                with snapshot_owned_archives(
+                    zip_paths,
+                    snapshot_dir,
+                    parent_descriptor=workspace.descriptor,
+                ) as snapshots:
+                    cohort_input_file = workspace.child_path("cohort_input.txt")
+                    input_file = cohort_input_file
+                    input_descriptor = os.open(
+                        "cohort_input.txt",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                        0o600,
+                        dir_fd=workspace.descriptor,
+                    )
+                    with os.fdopen(input_descriptor, "w") as f:
+                        f.writelines(f"{zpath}\n" for zpath in snapshots.paths)
 
-        # 3) Zip the results
-        create_safe_archive(output_dir, "zip", output_dir, protected_paths=zip_paths)
-        archive_published = True
-        logger.info(f"Zipped results to {output_dir}.zip")
+                    # 2) Run the "vntyper cohort" command while the descriptors
+                    # anchoring every member snapshot remain open.
+                    command = [
+                        "conda",
+                        "run",
+                        # Same reason as build_vntyper_command: without this, conda buffers the child
+                        # until it exits, so a cohort analysis logs nothing while it runs (#213).
+                        "--no-capture-output",
+                        "-n",
+                        "vntyper",
+                        "vntyper",
+                        "cohort",
+                        "--input-file",
+                        cohort_input_file,
+                        "-o",
+                        workspace.bound_path,
+                    ]
+                    logger.info(f"Running command: {' '.join(command)}")
+                    subprocess.run(command, check=True)
+                    logger.info("Joint cohort analysis completed.")
+
+                workspace.unlink("cohort_input.txt")
+                input_file = None
+
+                # 3) Zip the results from the descriptor-bound directory, not from
+                # whatever may now occupy its original public name.
+                create_safe_archive(
+                    output_dir,
+                    "zip",
+                    workspace.staging_path,
+                    protected_paths=zip_paths,
+                    root_descriptor=workspace.descriptor,
+                )
+                archive_published = True
+                logger.info(f"Zipped results to {output_dir}.zip")
+            finally:
+                if input_file is not None:
+                    try:
+                        workspace.unlink("cohort_input.txt")
+                        logger.info(f"Deleted cohort input file: {input_file}")
+                    except Exception as cleanup_error:
+                        logger.error(f"Error deleting cohort input file {input_file}: {cleanup_error}")
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
@@ -651,12 +719,14 @@ def run_cohort_analysis_job(
             logger.error(f"Error recording failed status for cohort analysis {job_id}: {status_error}")
         raise
     finally:
-        # Remove the task ID from the Redis list
+        if heartbeat is not None:
+            heartbeat.stop()
         try:
-            redis_client.lrem("vntyper_job_queue", 0, task_id)
-            logger.info(f"Removed cohort analysis task ID {task_id} from queue")
+            admission.release_worker_bookkeeping(
+                redis_client, task_id, job_id, f"cohort analysis task ID {task_id}", logger
+            )
         except Exception as e:
-            logger.error(f"Error removing cohort analysis task ID {task_id} from queue: {e}")
+            logger.error(f"Error releasing worker bookkeeping for {job_id}: {e}")
 
         # Extend cohort TTL if necessary
         if cohort_id:
@@ -668,23 +738,3 @@ def run_cohort_analysis_job(
                 )
             except Exception as e:
                 logger.error(f"Error extending retention for cohort {cohort_id}: {e}")
-
-        # Delete the listing file this task wrote for itself. That file is the
-        # only thing here the task owns; the .zip paths it names are the
-        # members' own results, which /download/{job_id}/ serves and which a
-        # later analysis reads again, so they are left alone. Result archives
-        # are aged out centrally by delete_old_results().
-        try:
-            if input_file and os.path.exists(input_file):
-                os.remove(input_file)
-                logger.info(f"Deleted cohort input file: {input_file}")
-        except Exception as e:
-            logger.error(f"Error deleting cohort input file {input_file}: {e}")
-
-        # Optionally, delete the output directory if it's empty
-        try:
-            if os.path.exists(output_dir) and not os.listdir(output_dir):
-                os.rmdir(output_dir)
-                logger.info(f"Deleted empty output directory: {output_dir}")
-        except Exception as e:
-            logger.error(f"Error deleting directory {output_dir}: {e}")

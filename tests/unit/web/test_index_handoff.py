@@ -32,6 +32,7 @@ pinned below as an absence.
 imports before this module.
 """
 
+import hashlib
 import logging
 import subprocess
 from pathlib import Path
@@ -79,7 +80,7 @@ def test_the_worker_is_told_where_the_uploaded_index_was_stored(
     )
 
     assert response.status_code == 200, response.text
-    job_input_dir = tmp_path / "input" / response.json()["job_id"]
+    job_input_dir = tmp_path / "handoff" / response.json()["job_id"]
     handed_over = web_app.run_vntyper_job.delay.call_args.kwargs
     assert handed_over["index_path"] == str(job_input_dir / index_name)
     assert (job_input_dir / index_name).read_bytes() == INDEX_BYTES
@@ -116,7 +117,7 @@ def test_the_long_queue_submission_hands_over_the_index_too(client, web_app, tmp
     )
 
     assert response.status_code == 200, response.text
-    job_input_dir = tmp_path / "input" / response.json()["job_id"]
+    job_input_dir = tmp_path / "handoff" / response.json()["job_id"]
     handed_over = web_app.run_vntyper_job.apply_async.call_args.kwargs["kwargs"]
     assert handed_over["index_path"] == str(job_input_dir / "sample.bai")
 
@@ -206,9 +207,15 @@ def _run(invoke, alignment: Path, tmp_path: Path, index: Path | None, *, cohort_
         index: The stored index path, or None.
         cohort_key: The cohort the job belongs to, or None for a lone job.
     """
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    input_metadata = alignment.parent.stat()
+    output_metadata = output_dir.stat()
+    alignment_metadata = alignment.stat()
+    index_metadata = None if index is None else index.stat()
     invoke(
         bam_path=str(alignment),
-        output_dir=str(tmp_path / "output" / "job-1"),
+        output_dir=str(output_dir),
         thread=1,
         reference_assembly="hg38",
         fast_mode=False,
@@ -216,6 +223,14 @@ def _run(invoke, alignment: Path, tmp_path: Path, index: Path | None, *, cohort_
         archive_results=False,
         cohort_key=cohort_key,
         index_path=None if index is None else str(index),
+        workspace_identity={
+            "input_dir": [input_metadata.st_dev, input_metadata.st_ino],
+            "output_dir": [output_metadata.st_dev, output_metadata.st_ino],
+            "alignment": [alignment_metadata.st_dev, alignment_metadata.st_ino],
+            "alignment_sha256": hashlib.sha256(alignment.read_bytes()).hexdigest(),
+            "index": None if index_metadata is None else [index_metadata.st_dev, index_metadata.st_ino],
+            "index_sha256": None if index is None else hashlib.sha256(index.read_bytes()).hexdigest(),
+        },
     )
 
 
@@ -362,8 +377,8 @@ def test_every_derived_index_name_stays_inside_the_jobs_own_directory(alignment:
     assert [str(Path(path).parent) for path in derived_index_paths(alignment)] == [job_input_dir] * 4
 
 
-def test_a_legacy_index_under_an_unreported_name_is_still_removed(vntyper_task, tmp_path: Path) -> None:
-    """Cleanup still removes conventional residue left by an older worker.
+def test_an_unreported_conventional_index_is_preserved(vntyper_task, tmp_path: Path) -> None:
+    """Cleanup has no authority over an index absent from the handoff token.
 
     Args:
         vntyper_task: The task fixture above.
@@ -377,8 +392,8 @@ def test_a_legacy_index_under_an_unreported_name_is_still_removed(vntyper_task, 
     _run(invoke, alignment, tmp_path, None)
 
     assert not any(command[:2] == ["samtools", "index"] for command in commands)
-    assert not legacy_index.exists()
-    assert not (tmp_path / "input" / "job-1").exists()
+    assert legacy_index.read_bytes() == b"legacy-index"
+    assert (tmp_path / "input" / "job-1").is_dir()
 
 
 def test_cleanup_leaves_a_file_that_is_not_a_derived_index_name(
@@ -401,7 +416,7 @@ def test_cleanup_leaves_a_file_that_is_not_a_derived_index_name(
     alignment, index = _job_input(tmp_path, "sample.bam", "sample.bai")
     bystander = alignment.parent / "unrelated.bai.txt"
     bystander.write_bytes(b"not this job's to delete")
-    caplog.set_level(logging.WARNING, logger="app.tasks")
+    caplog.set_level(logging.WARNING, logger="app.pipeline_job_workspace")
 
     _run(invoke, alignment, tmp_path, index)
 

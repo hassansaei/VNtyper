@@ -238,6 +238,35 @@ def test_invalid_reference_candidate_policies_fail_before_creating_the_view(
     capture.assert_not_called()
 
 
+def test_invalid_stream_probe_timeout_fails_in_reference_policy_before_creating_the_view(tmp_path: Path) -> None:
+    """The stream deadline is policy, so invalid values fail before output I/O."""
+    alignment = tmp_path / "sample.cram"
+    alignment.write_bytes(b"CRAM\x02")
+    (tmp_path / "sample.cram.crai").write_bytes(b"CRAI")
+    output = tmp_path / "output"
+    config = {"cram": {"stream_probe_timeout_seconds": 0}}
+    failure_context = PreflightErrorContext(output)
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command") as capture,
+        pytest.raises(ValueError, match="stream_probe_timeout_seconds"),
+    ):
+        run_preflight(
+            str(alignment),
+            str(output),
+            "sample",
+            "cram",
+            config,
+            1,
+            region="chr1:1-2",
+            failure_context=failure_context,
+        )
+
+    assert not output.exists()
+    capture.assert_not_called()
+    assert failure_context.phase is alignment_preflight.error_io.REFERENCE_POLICY_FAILURE
+
+
 def test_explicit_candidates_are_probed_in_order_before_one_no_reference_probe(tmp_path: Path) -> None:
     """The policy produces explicit ``-T`` probes followed by exactly one ambient probe."""
     references = tuple(_reference(tmp_path / f"candidate-{position}.fa") for position in range(3))
@@ -585,3 +614,87 @@ def test_reference_probe_timeout_defaults_to_120_and_accepts_a_smaller_deadline(
         alignment_preflight._reference_probe_timeout_seconds({"cram": {"reference_probe_timeout_seconds": 0.25}})
         == 0.25
     )
+
+
+@pytest.mark.parametrize("configured", [0, -1, 86400.1, "30", True, float("inf"), float("nan")])
+def test_stream_probe_timeout_rejects_values_outside_the_bounded_numeric_contract(configured: object) -> None:
+    """A replacement config cannot disable or exceed the 24-hour stream ceiling."""
+    with pytest.raises(ValueError, match="stream_probe_timeout_seconds"):
+        alignment_preflight._stream_probe_timeout_seconds({"cram": {"stream_probe_timeout_seconds": configured}})
+
+
+def test_stream_probe_timeout_defaults_to_1800_independently_of_the_targeted_cap() -> None:
+    """The whole-file proof is sized separately from the 120-second targeted probes."""
+    assert alignment_preflight._stream_probe_timeout_seconds({}) == 1800.0
+    assert alignment_preflight._stream_probe_timeout_seconds({"cram": {"stream_probe_timeout_seconds": 7200}}) == 7200.0
+    assert alignment_preflight._reference_probe_timeout_seconds({}) == 120.0
+
+
+def test_stream_proof_uses_its_own_deadline_while_targeted_probes_keep_theirs(tmp_path: Path) -> None:
+    """The whole-file proof uses its own deadline in the same candidate attempt."""
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nAAAA\n", encoding="utf-8")
+    deadlines: list[tuple[bool, float | None]] = []
+
+    def record(command, log_file, cwd=None, **kwargs):
+        del log_file, cwd
+        deadlines.append((" -P " in f" {command} ", kwargs.get("timeout_seconds")))
+        return True, "decoded"
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=record):
+        _, source, _, binding = resolve_reference(
+            "/run/view.cram",
+            (("cli", str(reference)),),
+            "chr1:1-2",
+            None,
+            {"cram": {"reference_probe_timeout_seconds": 45, "stream_probe_timeout_seconds": 7200}},
+            1,
+            str(tmp_path),
+            "sample",
+            ("chr1",),
+            "abc",
+            coverage_region="chr1:1-2",
+            unmapped_scan="stream",
+        )
+
+    assert source == "cli"
+    assert deadlines == [(True, 45.0), (False, 45.0), (False, 7200.0)]
+    assert binding is not None
+    binding.close()
+
+
+def test_runner_authenticated_timeout_reaches_public_reference_payload_without_probe_output(tmp_path: Path) -> None:
+    """Structured timeout metadata crosses candidate handling without exposing stderr."""
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nAAAA\n", encoding="utf-8")
+    failure_context = PreflightErrorContext(tmp_path)
+
+    def time_out(command, log_file, cwd=None, **kwargs):
+        del command, log_file, cwd
+        metadata = kwargs["metadata"]
+        metadata.timed_out = True
+        metadata.timeout_seconds = kwargs["timeout_seconds"]
+        return False, "/private/worker/input.cram\nCommand timed out after 45 seconds."
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=time_out),
+        pytest.raises(ValueError),
+    ):
+        resolve_reference(
+            "/run/view.cram",
+            (("cli", str(reference)),),
+            "chr1:1-2",
+            None,
+            {"cram": {"reference_probe_timeout_seconds": 45}},
+            1,
+            str(tmp_path),
+            "sample",
+            ("chr1",),
+            "abc",
+            failure_context=failure_context,
+        )
+
+    assert failure_context.payload is not None
+    serialized = str(failure_context.payload)
+    assert "probe timed out after 45 seconds" in serialized
+    assert "/private/worker" not in serialized

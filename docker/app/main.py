@@ -3,7 +3,6 @@ import os
 import subprocess
 import tempfile
 import zipfile
-from collections import Counter
 from enum import Enum
 from pathlib import Path
 from typing import cast
@@ -31,6 +30,8 @@ from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field
 
+from . import admission
+from .admission_http import reserve_or_refuse, total_file_bytes_or_refuse
 from .archive_delivery import OwnedFileResponse, write_owned_zip_member
 from .cohorts import (
     ALIAS_DESCRIPTION,
@@ -48,7 +49,8 @@ from .job_failures import stored_preflight_message
 from .job_workspace import job_workspace
 from .request_limits import RequestSizeLimitMiddleware
 from .tasks import run_cohort_analysis_job, run_vntyper_job
-from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
+from .uploads import INDEX_EXTENSIONS, UploadReceipt, safe_upload_path, save_upload_bounded
+from .usage_statistics import aggregate_usage_statistics
 from .utils import MAX_PASSPHRASE_BYTES, client_host
 from .version import API_VERSION
 
@@ -69,6 +71,7 @@ class ReferenceAssembly(str, Enum):
 
 # Environment variables for default directories
 DEFAULT_INPUT_DIR = settings.DEFAULT_INPUT_DIR
+DEFAULT_HANDOFF_SPOOL_DIR = settings.DEFAULT_HANDOFF_SPOOL_DIR
 DEFAULT_OUTPUT_DIR = settings.DEFAULT_OUTPUT_DIR
 
 # Total bytes a single job submission may write into the input directory above.
@@ -356,14 +359,19 @@ class RunJobResponse(BaseModel):
     ),
     response_model=RunJobResponse,
 )
-async def run_vntyper(
+# A plain `def`, deliberately: the body is synchronous end to end (bounded
+# 1 GiB copy, blocking Redis, bcrypt, live DNS in validate_email) and contains
+# no await, so as a coroutine it ran on the event loop and froze every
+# concurrent request for its full duration. FastAPI dispatches a `def` handler
+# through run_in_threadpool.
+def run_vntyper(
     request: Request,
     bam_file: UploadFile = File(..., description="BAM file to process"),
     # `UploadFile | None`, not `UploadFile`: the part is optional, so the framework
     # hands this over as None whenever a submission omits it, which the body below
     # has always had to handle.
     bai_file: UploadFile | None = File(None, description="Optional BAI index file"),
-    thread: int = Form(4),
+    thread: int = Form(4, ge=1, le=64),
     reference_assembly: ReferenceAssembly = Form(ReferenceAssembly.HG38),
     fast_mode: bool = Form(False),
     keep_intermediates: bool = Form(False),
@@ -384,7 +392,7 @@ async def run_vntyper(
 
     **Parameters:**    - **bam_file**: The BAM file to be processed.
     - **bai_file**: Optional BAI index file corresponding to the BAM file.
-    - **thread**: Number of threads to use for processing.
+    - **thread**: Number of threads to use for processing (1-64).
     - **reference_assembly**: Reference genome assembly to use ('hg19', 'hg38', 'GRCh37', 'GRCh38', 'hg19_ncbi', 'hg38_ncbi', 'hg19_ensembl', 'hg38_ensembl').
     - **fast_mode**: Boolean flag to enable fast mode processing.
     - **keep_intermediates**: Boolean flag to keep intermediate files.
@@ -415,7 +423,7 @@ async def run_vntyper(
     # created yet: everything that can refuse this submission is decided first,
     # below, so a refusal costs the shared volume nothing at all.
     job_id = str(uuid4())
-    job_input_dir = os.path.join(DEFAULT_INPUT_DIR, job_id)
+    job_input_dir = os.path.join(DEFAULT_HANDOFF_SPOOL_DIR, job_id)
     job_output_dir = os.path.join(DEFAULT_OUTPUT_DIR, job_id)
 
     # 1. The client-supplied filenames must be acceptable. This resolves paths
@@ -453,6 +461,16 @@ async def run_vntyper(
     client_ip = client_host(request)
     user_agent = request.headers.get("User-Agent", "unknown")
 
+    reserve_or_refuse(
+        redis_client,
+        reservation_id=job_id,
+        requested_bytes=settings.PIPELINE_RESERVATION_BYTES,
+        paths=(DEFAULT_HANDOFF_SPOOL_DIR, DEFAULT_OUTPUT_DIR),
+        max_jobs=settings.MAX_QUEUED_JOBS,
+        minimum_free_bytes=settings.MIN_FREE_DISK_BYTES,
+        queued_grace_seconds=settings.ADMISSION_QUEUED_GRACE_SECONDS,
+    )
+
     # Only now is anything written. `job_workspace` owns the two directories
     # this submission needs and removes them again if the block below does not
     # complete, so a submission that fails after its upload has landed leaves
@@ -462,19 +480,45 @@ async def run_vntyper(
     # That holds up to `workspace.commit()` below and not past it: once the
     # broker has accepted the task the worker owns these directories, and a
     # later failure here must not delete what it is reading.
-    with job_workspace(DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR, job_id) as workspace:
+    with (
+        admission.CapacityLease(redis_client, job_id) as capacity_lease,
+        job_workspace(DEFAULT_HANDOFF_SPOOL_DIR, DEFAULT_OUTPUT_DIR, job_id) as workspace,
+    ):
         # Save the uploaded files, counting the bytes as they are written. One
         # budget covers the whole submission, so the two parts together stay
         # within the same ceiling.
         try:
-            remaining = MAX_UPLOAD_BYTES - save_upload_bounded(bam_file.file, bam_path, MAX_UPLOAD_BYTES)
+            bam_receipt = save_upload_bounded(
+                bam_file.file,
+                bam_path,
+                MAX_UPLOAD_BYTES,
+                directory_descriptor=workspace.input_descriptor,
+                capture_identity=True,
+            )
+            assert isinstance(bam_receipt, UploadReceipt)
+            remaining = MAX_UPLOAD_BYTES - bam_receipt.bytes_written
             logger.info(f"Saved uploaded BAM file to {bam_path}")
 
             # `bai_path` is only ever set from `bai_file` above, so the second test cannot
             # change the outcome; it is what lets the checker see the same thing.
             if bai_path is not None and bai_file is not None:
-                save_upload_bounded(bai_file.file, bai_path, remaining)
+                index_receipt = save_upload_bounded(
+                    bai_file.file,
+                    bai_path,
+                    remaining,
+                    directory_descriptor=workspace.input_descriptor,
+                    capture_identity=True,
+                )
+                assert isinstance(index_receipt, UploadReceipt)
                 logger.info(f"Saved uploaded BAI file to {bai_path}")
+            else:
+                index_receipt = None
+            workspace_identity = workspace.handoff(
+                bam_receipt.identity,
+                None if index_receipt is None else index_receipt.identity,
+                bam_receipt.sha256,
+                None if index_receipt is None else index_receipt.sha256,
+            )
         except ValueError as exc:
             msg = f"Upload exceeds the maximum accepted size of {MAX_UPLOAD_BYTES} bytes"
             raise HTTPException(status_code=413, detail=msg) from exc
@@ -508,6 +552,8 @@ async def run_vntyper(
                         "client_ip": client_ip,
                         "user_agent": user_agent,
                         "advntr_mode": True,
+                        "capacity_reserved": True,
+                        "workspace_identity": workspace_identity,
                     },
                     queue="vntyper_long_queue",
                 )
@@ -527,6 +573,8 @@ async def run_vntyper(
                     client_ip=client_ip,
                     user_agent=user_agent,
                     advntr_mode=False,
+                    capacity_reserved=True,
+                    workspace_identity=workspace_identity,
                 )
                 logger.info(f"Enqueued job {job_id} with task ID {task.id}")
         except BaseException:
@@ -534,6 +582,8 @@ async def run_vntyper(
                 redis_cohort_client.srem(f"{cohort_key}:jobs", job_id)
                 logger.info(f"Job {job_id} was not enqueued; removed it from cohort {cohort_id} again")
             raise
+
+        capacity_lease.commit()
 
         # The commit point: the task exists, so a worker owns the job's input
         # directory from here on and the reclaim above no longer applies. The
@@ -884,22 +934,12 @@ def get_usage_statistics():
     - **unique_users**: Number of unique users who have submitted jobs.
     - **job_statuses**: A dictionary with job statuses as keys and counts as values.
     """
-    # Retrieve all usage data
-    usage_keys = redis_usage_client.keys("usage:*")
-    total_jobs = len(usage_keys)
-    unique_users = set()
-    job_statuses = Counter()
-
-    for key in usage_keys:
-        data = redis_usage_client.hgetall(key)
-        unique_users.add(data.get("user_hash"))
-        status = data.get("status", "unknown")
-        job_statuses[status] += 1
+    statistics = aggregate_usage_statistics(redis_usage_client)
 
     return UsageStatisticsResponse(
-        total_jobs=total_jobs,
-        unique_users=len(unique_users),
-        job_statuses=dict(job_statuses),
+        total_jobs=statistics["total_jobs"],
+        unique_users=statistics["unique_users"],
+        job_statuses=statistics["job_statuses"],
     )
 
 
@@ -1060,13 +1100,31 @@ def run_cohort_analysis(
     # 4) Enqueue the new Celery task
     client_ip = client_host(request)
     user_agent = request.headers.get("User-Agent", "unknown")
-    task = run_cohort_analysis_job.delay(
-        cohort_id=cid,
-        zip_paths=zip_paths,
-        output_dir=analysis_output_dir,
-        user_ip=client_ip,
-        user_agent=user_agent,
+    member_bytes = total_file_bytes_or_refuse(tuple(zip_paths))
+    requested_bytes = admission.cohort_reservation_bytes(
+        member_bytes,
+        settings.COHORT_RESERVATION_BASE_BYTES,
+        settings.COHORT_MEMBER_RESERVATION_FACTOR,
     )
+    reserve_or_refuse(
+        redis_client,
+        reservation_id=analysis_job_id,
+        requested_bytes=requested_bytes,
+        paths=(DEFAULT_OUTPUT_DIR,),
+        max_jobs=settings.MAX_QUEUED_JOBS,
+        minimum_free_bytes=settings.MIN_FREE_DISK_BYTES,
+        queued_grace_seconds=settings.ADMISSION_QUEUED_GRACE_SECONDS,
+    )
+    with admission.CapacityLease(redis_client, analysis_job_id) as capacity_lease:
+        task = run_cohort_analysis_job.delay(
+            cohort_id=cid,
+            zip_paths=zip_paths,
+            output_dir=analysis_output_dir,
+            user_ip=client_ip,
+            user_agent=user_agent,
+            capacity_reserved=True,
+        )
+        capacity_lease.commit()
     logger.info(f"Enqueued cohort analysis job: analysis_job_id={analysis_job_id}, task_id={task.id}")
 
     # Store the mapping for job status checking
@@ -1094,11 +1152,13 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": "Rate limit exceeded. Please try again later."},
+            headers=exc.headers,
         )
     # Handle other HTTP exceptions
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
+        headers=exc.headers,
     )
 
 

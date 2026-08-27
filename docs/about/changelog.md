@@ -4,7 +4,27 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### ⚠️ Required before deploying the web service
+
+- **Use a stopped, data-aware migration; this is not a rolling deployment.** The
+  ordinary-job handoff protocol now carries protected-spool identities and SHA-256 digests.
+  Old and new API/worker processes are not rolling-compatible. Follow this sequence:
+  1. Pause new submissions. Drain both the regular and long queues and all active jobs to
+     completion; verify both queues and the active job count are zero. Never purge queued
+     messages: purging can strand their protected-spool uploads.
+  2. Stop the API, workers, and beat, then provision the named `result_store`.
+  3. While services remain stopped and detached from the legacy host bind, either
+     (recommended) copy existing unexpired output into `result_store` and retain a backup,
+     noting that legacy bytes cannot be retroactively integrity-attested; or explicitly
+     accept retirement and unavailability of those results and archive or remove the legacy store.
+  4. Deploy the API, all workers, and beat; verify retained result access; then resume submissions.
+
+  Shipped Compose also moves outputs from its old host bind into the persistent,
+  service-private result store mounted only into the API and worker. Together these changes
+  protect against an actor with shared legacy input mount access. An operator override that
+  exposes `/opt/vntyper/output` through a host/shared bind weakens this security boundary.
+  Arbitrary same-UID code in either the API or worker service namespace is out of scope
+  because it can access the private volumes or worker descriptors directly.
 
 ## 2.0.23 (Current)
 

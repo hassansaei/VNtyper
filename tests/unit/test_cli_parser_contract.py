@@ -94,7 +94,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "report_igv": (("--report-igv",), "_StoreAction", "str", "embedded", False, REPORT_IGV_CHOICES, None),
         "sample_name": (("-s", "--sample-name"), "_StoreAction", "str", None, False, None, None),
         "summary_formats": (("--summary-formats",), "_StoreAction", "str", "", False, None, None),
-        "threads": (("--threads",), "_StoreAction", "int", None, False, None, None),
+        "threads": (("--threads",), "_StoreAction", "positive_int", None, False, None, None),
     },
     "report": {
         "bam_file": (("--bam-file",), "_StoreAction", "Path", None, False, None, None),
@@ -128,7 +128,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "references": (("--references",), "_StoreAction", None, None, False, None, "+"),
         "release_spec": (("--release-spec",), "_StoreAction", "Path", None, False, None, None),
         "skip_indexing": (("--skip-indexing",), "_StoreTrueAction", None, False, False, None, 0),
-        "threads": (("-t", "--threads"), "_StoreAction", "int", 4, False, None, None),
+        "threads": (("-t", "--threads"), "_StoreAction", "positive_int", 4, False, None, None),
     },
     "online": {
         "bam": (("--bam",), "_StoreAction", "str", None, True, None, None),
@@ -146,7 +146,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
             None,
         ),
         "resume": (("--resume",), "_StoreTrueAction", None, False, False, None, 0),
-        "threads": (("--threads",), "_StoreAction", "int", None, False, None, None),
+        "threads": (("--threads",), "_StoreAction", "positive_int", None, False, None, None),
     },
 }
 

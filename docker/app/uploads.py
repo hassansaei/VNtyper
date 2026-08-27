@@ -15,7 +15,10 @@ Two rules apply, and both must hold:
 2. The resulting path must resolve to a direct child of the job directory.
 
 Rule 2 is unreachable past rule 1 today; it is kept as an independent check so
-that widening the allowlist later cannot silently widen where files land.
+that widening the allowlist later cannot silently widen where files land. The
+realpath comparison alone cannot see a symlinked job directory (both sides
+resolve to the link's target), so `save_upload_bounded` additionally opens the
+parent as a real directory and creates the file relative to that descriptor.
 
 The allowlist stays ASCII-only. A non-ASCII name raises normalisation and
 encoding questions -- which of several byte sequences is "the" name, and which
@@ -33,11 +36,13 @@ the limit holds on what actually arrives rather than on what the client said was
 coming. A refused copy removes what it had already written.
 """
 
+import hashlib
 import logging
 import os
 import re
 from collections.abc import Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from functools import cache
 from typing import Protocol
 
@@ -61,6 +66,12 @@ MAX_FILENAME_LENGTH = 255
 # grow with the size of the file it carries, and so the running total can be
 # checked between pieces rather than only after everything has been written.
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+# The service and its Docker image run on Linux, where these flags are
+# available. Using the attributes directly is deliberate: an unsupported host
+# must fail closed at import rather than silently dropping the symlink checks.
+_PARENT_DIRECTORY_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_DIRECTORY
+_UPLOAD_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
 
 # A leading alphanumeric rules out dotfiles, `.`, `..` and leading-dash names.
 # The body excludes every path separator and every character with a meaning to a
@@ -100,6 +111,15 @@ class ByteSource(Protocol):
             bytes: Up to `size` bytes, empty once the stream is exhausted.
         """
         ...  # pragma: no cover - structural declaration, never executed
+
+
+@dataclass(frozen=True)
+class UploadReceipt:
+    """Bytes written and the identity of the created regular file."""
+
+    bytes_written: int
+    identity: tuple[int, int]
+    sha256: str
 
 
 @cache
@@ -185,7 +205,10 @@ def save_upload_bounded(
     destination: str,
     max_bytes: int,
     chunk_size: int = UPLOAD_CHUNK_SIZE,
-) -> int:
+    *,
+    directory_descriptor: int | None = None,
+    capture_identity: bool = False,
+) -> int | UploadReceipt:
     """Copy an upload to disk, writing no more than `max_bytes` of it.
 
     The size a client declares for its request is advisory, so the ceiling is
@@ -193,38 +216,123 @@ def save_upload_bounded(
     running total passes `max_bytes`, and the partly written file is removed
     before the error propagates, so a refused upload costs the volume nothing.
 
+    The destination is opened relative to a descriptor of its parent directory,
+    with `O_NOFOLLOW` on both opens and `O_EXCL` on the file itself: the parent
+    must be a real directory (not a symlink swapped in after the job directory
+    was created), and the destination must be a new file this call creates.
+    Only the final parent component is constrained, so a mounted or symlinked
+    root above the per-job directory remains supported.
+
     Args:
         source: The upload's byte stream, read `chunk_size` bytes at a time.
-        destination: Path to write to. Overwritten if it already exists.
+        destination: Path to write to. Must not already exist.
         max_bytes: The largest number of bytes accepted. A source of exactly
             this size is written in full; one byte more is refused.
         chunk_size: Bytes requested per read. Bounds the memory used.
+        directory_descriptor: Optional already-bound destination directory.
+            The copy duplicates it, so the caller retains ownership.
+        capture_identity: Return the created file's device and inode with the
+            byte count for an identity-bound worker handoff.
 
     Returns:
-        int: The number of bytes written.
+        The number of bytes written, or an upload receipt when identity capture
+        was requested.
 
     Raises:
+        RuntimeError: If the parent is not a usable real directory, or the
+            destination cannot be created as a fresh file.
         ValueError: If the source holds more than `max_bytes` bytes.
-        OSError: If the destination cannot be written.
+        OSError: If wrapping, writing or closing the created file fails.
     """
-    written = 0
-    try:
-        with open(destination, "wb") as handle:
-            while True:
-                chunk = source.read(chunk_size)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > max_bytes:
-                    msg = f"Upload exceeds the maximum accepted size of {max_bytes} bytes"
-                    logger.error(msg)
-                    raise ValueError(msg)
-                handle.write(chunk)
-    except Exception:
-        # Includes the refusal above: whatever reached the volume is reclaimed
-        # before the caller ever sees the error.
-        with suppress(OSError):
-            os.remove(destination)
-        raise
+    parent = os.path.dirname(destination) or "."
+    name = os.path.basename(destination)
+    if directory_descriptor is None:
+        try:
+            owned_directory_descriptor = os.open(parent, _PARENT_DIRECTORY_FLAGS)
+        except OSError as error:
+            msg = f"Upload refused: its job directory is not a usable real directory: {error}"
+            logger.error(msg)
+            raise RuntimeError(msg) from error
+    else:
+        owned_directory_descriptor = os.dup(directory_descriptor)
 
+    written = 0
+    digest = hashlib.sha256()
+    destination_created = False
+    copy_completed = False
+    identity: tuple[int, int] | None = None
+    try:
+        try:
+            try:
+                descriptor = os.open(name, _UPLOAD_FILE_FLAGS, 0o644, dir_fd=owned_directory_descriptor)
+                destination_created = True
+                metadata = os.fstat(descriptor)
+                identity = (metadata.st_dev, metadata.st_ino)
+            except OSError as error:
+                msg = f"Upload refused: its destination could not be created as a new file: {error}"
+                logger.error(msg)
+                raise RuntimeError(msg) from error
+
+            try:
+                handle = os.fdopen(descriptor, "wb")
+            except BaseException:
+                # `fdopen` takes ownership only when it succeeds. If wrapping
+                # fails, preserve that error even if closing the raw descriptor
+                # reports a second failure.
+                try:
+                    os.close(descriptor)
+                except OSError as close_error:
+                    logger.warning(f"Closing an unwrapped upload descriptor also failed: {close_error}")
+                raise
+
+            try:
+                while True:
+                    chunk = source.read(chunk_size)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        msg = f"Upload exceeds the maximum accepted size of {max_bytes} bytes"
+                        logger.error(msg)
+                        raise ValueError(msg)
+                    handle.write(chunk)
+                    digest.update(chunk)
+            except BaseException:
+                # A flush/close error is secondary once reading, writing or the
+                # size guard has already failed. Report it without replacing
+                # the exception that explains why this upload was refused.
+                try:
+                    handle.close()
+                except OSError as close_error:
+                    logger.warning(f"Closing a failed upload also failed: {close_error}")
+                raise
+            else:
+                # With no active copy error, a flush/close failure is itself
+                # the operation failure and must reach the caller.
+                handle.close()
+
+            copy_completed = True
+        finally:
+            if destination_created and not copy_completed:
+                # Includes size, read, write, fdopen and close failures.
+                # Reclaim through the descriptor that received the bytes, so a
+                # path swap cannot redirect cleanup to another location.
+                with suppress(OSError):
+                    os.unlink(name, dir_fd=owned_directory_descriptor)
+    except BaseException:
+        # As with the file descriptor, a parent-close failure is secondary to
+        # an active refusal or copy error and must not replace it.
+        try:
+            os.close(owned_directory_descriptor)
+        except OSError as close_error:
+            logger.warning(f"Closing the failed upload's parent directory also failed: {close_error}")
+        raise
+    else:
+        # When the copy itself succeeded, a parent-close failure is the only
+        # failure and remains visible to the caller.
+        os.close(owned_directory_descriptor)
+
+    if capture_identity:
+        assert identity is not None
+        return UploadReceipt(written, identity, digest.hexdigest())
     return written

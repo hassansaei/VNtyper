@@ -13,6 +13,7 @@ from vntyper.scripts.alignment_contract import (
     FORMAT_CRAM,
     INDEX_SUFFIXES,
     AlignmentPlan,
+    TimedOutProbeReason,
     index_candidate_names,
     missing_index_message,
     missing_reference_contig,
@@ -22,6 +23,17 @@ from vntyper.scripts.alignment_contract import (
 from vntyper.scripts.reference_binding import ReferenceBinding
 
 pytestmark = pytest.mark.unit
+
+
+def test_timed_out_probe_reason_preserves_runner_metadata_when_trimmed() -> None:
+    """Candidate normalization cannot discard authenticated timeout status."""
+    reason = TimedOutProbeReason("  private output\nCommand timed out after 45 seconds.\n", 45)
+
+    stripped = reason.strip()
+
+    assert isinstance(stripped, TimedOutProbeReason)
+    assert stripped.timeout_seconds == 45
+    assert stripped == "private output\nCommand timed out after 45 seconds."
 
 
 def _plan(*, reference_path: str | None = "/r/genome.fa") -> AlignmentPlan:

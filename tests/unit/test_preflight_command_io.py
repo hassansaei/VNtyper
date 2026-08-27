@@ -27,12 +27,15 @@ def test_capture_command_timeout_kills_and_reaps_the_shell_process_group(tmp_pat
         ("partial output", None),
     ]
     log = tmp_path / "probe.log"
+    metadata = preflight_command_io.CaptureMetadata()
 
     with (
         patch("vntyper.scripts.preflight_command_io.subprocess.Popen", return_value=process) as popen,
         patch("vntyper.scripts.preflight_command_io.os.killpg") as killpg,
     ):
-        success, output = preflight_command_io.capture_command("probe", str(log), timeout_seconds=0.5)
+        success, output = preflight_command_io.capture_command(
+            "probe", str(log), timeout_seconds=0.5, metadata=metadata
+        )
 
     assert success is False
     assert "timed out after 0.5 seconds" in output
@@ -40,6 +43,26 @@ def test_capture_command_timeout_kills_and_reaps_the_shell_process_group(tmp_pat
     assert popen.call_args.kwargs["start_new_session"] is True
     killpg.assert_called_once_with(4321, signal.SIGKILL)
     assert process.communicate.call_count == 2
+    assert metadata.timed_out is True
+    assert metadata.timeout_seconds == 0.5
+
+
+def test_capture_command_does_not_authenticate_tool_output_as_a_timeout(tmp_path: Path) -> None:
+    """A tool can print the timeout sentence; only the runner's exception sets metadata."""
+    completed = subprocess.CompletedProcess(
+        args="probe",
+        returncode=1,
+        stdout="Command timed out after 999999 seconds.",
+    )
+    metadata = preflight_command_io.CaptureMetadata()
+
+    with patch("vntyper.scripts.preflight_command_io.subprocess.run", return_value=completed):
+        success, output = preflight_command_io.capture_command("probe", str(tmp_path / "probe.log"), metadata=metadata)
+
+    assert success is False
+    assert output == completed.stdout
+    assert metadata.timed_out is False
+    assert metadata.timeout_seconds is None
 
 
 def test_capture_command_timeout_reaps_when_process_group_kill_reports_an_os_error(tmp_path: Path) -> None:

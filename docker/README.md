@@ -166,9 +166,30 @@ Start the FastAPI server by running the container:
 ```bash
 docker run -d -p 8000:8000 \
     -v /local/input/folder/:/opt/vntyper/input \
-    -v /local/output/folder/:/opt/vntyper/output \
+    -v vntyper_handoff_spool:/opt/vntyper/handoff \
+    -v vntyper_result_store:/opt/vntyper/output \
     ghcr.io/hassansaei/vntyper:latest
 ```
+
+The API and its worker must mount the same named handoff and result volumes. The
+service-private result volume is part of the shipped security boundary. Replacing it with a
+host/shared bind-mount override weakens the shipped security boundary by exposing the result
+namespace to actors on that mount.
+
+For an existing deployment:
+
+1. Pause new submissions. Drain both the regular and long queues and all active jobs to
+   completion; verify both queues and the active job count are zero. Never purge queued
+   messages, because doing so can strand their protected-spool uploads.
+2. Stop the API, workers, and beat, then provision the named `result_store`.
+3. While services remain stopped and detached from the legacy host bind, either
+   (recommended) copy existing unexpired output into `result_store` and retain a backup,
+   noting that legacy bytes cannot be retroactively integrity-attested; or explicitly accept
+   retirement and unavailability of those results and archive or remove the legacy store.
+4. Deploy the API, all workers, and beat; verify retained result access; then resume submissions.
+
+Arbitrary same-UID code in either the API or worker service namespace is out of scope: such
+code can access the private volumes or worker descriptors directly.
 
 #### **2. Submit a Job via API**
 
@@ -204,7 +225,7 @@ curl -O "http://localhost:8000/download/filename.zip"
 ## **Notes**
 
 - **Volume Mounts:**
-  - Ensure that the local directories `/local/input/folder/` and `/local/output/folder//` exist and have appropriate read/write permissions.
+  - Ensure that `/local/input/folder/` exists and is readable. Docker creates the two named service volumes.
   
 - **API Parameters:**
   - `thread`: Number of threads to use (e.g., `4`).

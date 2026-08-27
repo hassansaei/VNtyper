@@ -42,6 +42,7 @@
     "allow_ambient_reference_resolution": false,
     "local_ref_path": "%2s/%2s/%s",
     "reference_probe_timeout_seconds": 120,
+    "stream_probe_timeout_seconds": 1800,
     "unmapped_scan": "auto",
     "reference_candidate_order": [
       "cli",

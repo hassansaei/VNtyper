@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 REFERENCE_SIDECAR_SUFFIXES = (".fai", ".gzi")
 MAX_REFERENCE_PROBE_TIMEOUT_SECONDS = 120.0
+DEFAULT_STREAM_PROBE_TIMEOUT_SECONDS = 1800.0
+MAX_STREAM_PROBE_TIMEOUT_SECONDS = 86400.0
 
 
 def reference_probe_timeout_seconds(config: dict) -> float:
@@ -44,6 +46,35 @@ def reference_probe_timeout_seconds(config: dict) -> float:
         or configured > MAX_REFERENCE_PROBE_TIMEOUT_SECONDS
     ):
         message = "cram.reference_probe_timeout_seconds must be a finite number greater than 0 and at most 120"
+        logger.error(message)
+        raise ValueError(message)
+    return float(configured)
+
+
+def stream_probe_timeout_seconds(config: dict) -> float:
+    """Return a validated whole-file stream-proof deadline of at most 24 hours.
+
+    The untargeted stream proof decodes the complete CRAM, so it is sized
+    separately from the fixed-window reference and depth probes.
+
+    Args:
+        config: Pipeline configuration containing optional CRAM probe policy.
+
+    Returns:
+        The validated timeout in seconds.
+
+    Raises:
+        ValueError: If the configured timeout is not finite and within bounds.
+    """
+    configured = config.get("cram", {}).get("stream_probe_timeout_seconds", DEFAULT_STREAM_PROBE_TIMEOUT_SECONDS)
+    if (
+        isinstance(configured, bool)
+        or not isinstance(configured, (int, float))
+        or not math.isfinite(configured)
+        or configured <= 0
+        or configured > MAX_STREAM_PROBE_TIMEOUT_SECONDS
+    ):
+        message = "cram.stream_probe_timeout_seconds must be a finite number greater than 0 and at most 86400"
         logger.error(message)
         raise ValueError(message)
     return float(configured)

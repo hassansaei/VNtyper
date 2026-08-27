@@ -334,7 +334,7 @@ def test_valid_upload_still_succeeds_and_lands_in_the_job_directory(client, web_
 
     assert response.status_code == 200
     job_id = response.json()["job_id"]
-    job_input_dir = tmp_path / "input" / job_id
+    job_input_dir = tmp_path / "handoff" / job_id
     assert (job_input_dir / "sample.bam").read_bytes() == b"bamdata"
     assert (job_input_dir / "sample.bam.bai").read_bytes() == b"baidata"
     web_app.run_vntyper_job.delay.assert_called_once()
@@ -397,7 +397,7 @@ def test_empty_bai_part_does_not_500(client, tmp_path: Path) -> None:
     )
 
     assert response.status_code == 200
-    assert [path.name for path in _job_files(tmp_path / "input")] == ["ok.bam"]
+    assert [path.name for path in _job_files(tmp_path / "handoff")] == ["ok.bam"]
 
 
 def test_absent_bai_part_still_submits_the_job(client, tmp_path: Path) -> None:
@@ -414,4 +414,4 @@ def test_absent_bai_part_still_submits_the_job(client, tmp_path: Path) -> None:
     )
 
     assert response.status_code == 200
-    assert [path.name for path in _job_files(tmp_path / "input")] == ["ok.bam"]
+    assert [path.name for path in _job_files(tmp_path / "handoff")] == ["ok.bam"]

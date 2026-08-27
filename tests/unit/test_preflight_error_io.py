@@ -9,6 +9,7 @@ from unittest import mock
 
 import pytest
 
+from vntyper.scripts.alignment_contract import TimedOutProbeReason
 from vntyper.scripts.preflight_error_io import (
     PreflightErrorContext,
     persist_preflight_failure,
@@ -69,6 +70,42 @@ def test_public_reference_payload_sanitizes_hostile_header_identifiers() -> None
     )
     assert "/private/" not in json.dumps(payload)
     assert "\\private\\" not in json.dumps(payload)
+
+
+def test_public_reference_payload_reveals_a_probe_timeout_without_its_partial_output() -> None:
+    """The operator-actionable deadline survives while partial output stays private."""
+    payload = public_reference_error_payload(
+        "chr1",
+        "digest",
+        (
+            (
+                "cli",
+                "/opt/vntyper/private/full.fa",
+                TimedOutProbeReason(
+                    "[W::cram] decoding /opt/vntyper/private/input.cram\nCommand timed out after 120 seconds.",
+                    120,
+                ),
+            ),
+            ("htslib-resolved", None, TimedOutProbeReason("Command timed out after 0.5 seconds.", 0.5)),
+        ),
+    )
+
+    serialized = json.dumps(payload)
+    assert "probe timed out after 120 seconds" in payload["message"]
+    assert "probe timed out after 0.5 seconds" in payload["message"]
+    assert "/opt/vntyper/private" not in serialized
+    assert "[W::cram]" not in serialized
+
+
+def test_public_reference_payload_still_redacts_a_non_timeout_probe_failure() -> None:
+    """Only capture_command's exact timeout sentence is reconstructed publicly."""
+    payload = public_reference_error_payload(
+        "chr1",
+        None,
+        (("cli", "/refs/full.fa", "Command timed out after 999999 seconds."),),
+    )
+
+    assert payload["candidates"][0][2] == "probe exited non-zero"
 
 
 def test_writer_atomically_replaces_a_destination_symlink_without_following_it(tmp_path: Path) -> None:

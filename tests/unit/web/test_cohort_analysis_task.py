@@ -137,7 +137,7 @@ def test_cohort_analysis_surfaces_a_setup_failure(cohort_analysis_task, monkeypa
         """Fail at the first filesystem call the task makes."""
         raise OSError("no space left on device")
 
-    monkeypatch.setattr(tasks.os, "makedirs", _refuse)
+    monkeypatch.setattr(tasks, "cohort_workspace", _refuse)
 
     with pytest.raises(OSError, match="no space left on device"):
         cohort_analysis_task(

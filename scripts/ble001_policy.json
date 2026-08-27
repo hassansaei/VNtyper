@@ -1,8 +1,8 @@
 {
   "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 99,
-    "ignore_noqa": 105,
+    "normal": 102,
+    "ignore_noqa": 108,
     "identities": 77,
     "categories": {
       "A": 29,
@@ -36,6 +36,22 @@
       "rationale": "docker/app/archive_delivery.py::snapshot_owned_archives: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
     {
+      "path": "docker/app/cohort_workspace.py",
+      "symbol": "CohortWorkspace.close",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "C",
+      "rationale": "docker/app/cohort_workspace.py::CohortWorkspace.close: fallback/continuation boundary; cleanup failures remain observable through ERROR logs while independent descriptor and reservation cleanup continues"
+    },
+    {
+      "path": "docker/app/failure_reporting.py",
+      "symbol": "report_pipeline_failure",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "C",
+      "rationale": "docker/app/failure_reporting.py::report_pipeline_failure: fallback/continuation boundary; failed-status, preflight-metadata, and email-reporting failures are isolated so the worker re-raises the exact pipeline exception, as pinned by tests/unit/web/test_failure_notification_resilience.py::test_failed_status_write_preserves_each_pipeline_exception and the sibling preflight/email resilience tests, with each secondary failure observable via ERROR log"
+    },
+    {
       "path": "docker/app/cohorts.py",
       "symbol": "_discard_partial_cohort",
       "normal_count": 0,
@@ -62,8 +78,8 @@
     {
       "path": "docker/app/tasks.py",
       "symbol": "run_cohort_analysis_job",
-      "normal_count": 7,
-      "all_count": 7,
+      "normal_count": 6,
+      "all_count": 6,
       "category": "A",
       "rationale": "docker/app/tasks.py::run_cohort_analysis_job: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
@@ -341,22 +357,6 @@
     },
     {
       "path": "vntyper/scripts/cohort_summary.py",
-      "symbol": "encode_image_to_base64",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "C",
-      "rationale": "vntyper/scripts/cohort_summary.py::encode_image_to_base64: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_summary_oracle.py::test_image_encoding_failure_returns_empty_string and failure remains observable via ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/cohort_summary.py",
-      "symbol": "generate_donut_chart",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "C",
-      "rationale": "vntyper/scripts/cohort_summary.py::generate_donut_chart: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_summary_oracle.py::test_donut_failure_returns_empty_string and failure remains observable via ERROR log and absent output"
-    },
-    {
-      "path": "vntyper/scripts/cohort_summary.py",
       "symbol": "load_report_config",
       "normal_count": 1,
       "all_count": 1,
@@ -630,6 +630,24 @@
   ],
   "fail_open": [
     {
+      "path": "docker/app/cohort_workspace.py",
+      "symbol": "CohortWorkspace.close",
+      "disposition": "preserved-contract",
+      "outcome": "Logs a staging or public-reservation cleanup failure, continues independent cleanup, and does not turn an otherwise complete cohort archive into a failed task.",
+      "rationale": "Best-effort scratch cleanup must not replace the completed cohort result, while descriptor-close failures still propagate after every close is attempted.",
+      "behavior_test": "tests/unit/web/test_tasks.py::test_cohort_analysis_logs_but_does_not_raise_when_removing_the_output_reservation_fails",
+      "observable_via": "ERROR log and successful cohort task outcome"
+    },
+    {
+      "path": "docker/app/failure_reporting.py",
+      "symbol": "report_pipeline_failure",
+      "disposition": "preserved-contract",
+      "outcome": "Logs failed-status, preflight-metadata, or failure-email reporting errors, continues independent reporting channels, and returns so the worker re-raises the exact pipeline subprocess exception.",
+      "rationale": "Failure reporting is deliberately best-effort: a Redis, metadata, renderer, or broker failure must not replace the pipeline failure that determines the task outcome.",
+      "behavior_test": "tests/unit/web/test_failure_notification_resilience.py::test_failed_status_write_preserves_each_pipeline_exception",
+      "observable_via": "ERROR log and exact primary CalledProcessError or TimeoutExpired identity"
+    },
+    {
       "path": "docker/app/tasks.py",
       "symbol": "delete_old_results",
       "disposition": "preserved-contract",
@@ -709,24 +727,6 @@
       "rationale": "Cohort rendering preserves the sample while marking all unavailable summary evidence empty.",
       "behavior_test": "tests/unit/test_cohort_inputs.py::test_summary_read_failure_returns_three_empty_results",
       "observable_via": "ERROR log and structured empty result"
-    },
-    {
-      "path": "vntyper/scripts/cohort_summary.py",
-      "symbol": "encode_image_to_base64",
-      "disposition": "preserved-contract",
-      "outcome": "Returns the literal empty string when an image cannot be read or encoded.",
-      "rationale": "A missing optional image must not abort the cohort report and is represented by the established empty fragment.",
-      "behavior_test": "tests/unit/test_cohort_summary_oracle.py::test_image_encoding_failure_returns_empty_string",
-      "observable_via": "ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/cohort_summary.py",
-      "symbol": "generate_donut_chart",
-      "disposition": "preserved-contract",
-      "outcome": "Returns the literal empty string and does not claim a chart output.",
-      "rationale": "A charting failure degrades only the optional visualization while remaining visible.",
-      "behavior_test": "tests/unit/test_cohort_summary_oracle.py::test_donut_failure_returns_empty_string",
-      "observable_via": "ERROR log and absent output"
     },
     {
       "path": "vntyper/scripts/cohort_summary.py",

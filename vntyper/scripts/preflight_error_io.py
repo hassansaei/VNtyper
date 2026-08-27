@@ -12,7 +12,12 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from vntyper.scripts.alignment_contract import ReferenceAttempt, preflight_error_payload, unresolvable_reference_message
+from vntyper.scripts.alignment_contract import (
+    ReferenceAttempt,
+    TimedOutProbeReason,
+    preflight_error_payload,
+    unresolvable_reference_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +92,13 @@ def _public_attempt(attempt: ReferenceAttempt) -> ReferenceAttempt:
     elif reason.startswith("reference FASTA unreadable"):
         public_reason = "reference FASTA unreadable"
     else:
-        public_reason = "probe exited non-zero"
+        # Only the command runner can construct this subtype. The tool's own
+        # output may imitate the timeout sentence, so parsing text is unsafe.
+        public_reason = (
+            f"probe timed out after {reason.timeout_seconds:g} seconds"
+            if isinstance(reason, TimedOutProbeReason)
+            else "probe exited non-zero"
+        )
     return source, public_path, public_reason
 
 
@@ -194,7 +205,11 @@ def write_preflight_error(output_dir: str | Path, payload: dict) -> Path:
     directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     directory_flags |= getattr(os, "O_DIRECTORY", 0)
     try:
-        directory_descriptor = os.open(output, directory_flags)
+        # Preserve a descriptor-bound spelling such as
+        # ``/proc/<pid>/fd/<descriptor>/.``. Converting it to ``Path`` first
+        # removes the trailing ``/.`` and turns the final component back into
+        # a procfs symlink, which O_NOFOLLOW correctly refuses.
+        directory_descriptor = os.open(output_dir, directory_flags)
     except OSError as error:
         message = "preflight error output must be an existing real directory"
         logger.error(message)

@@ -150,7 +150,7 @@ def test_job_journey_from_submission_to_download(
 
     # The upload landed in the job's own input directory, under the name that was
     # sent and with the bytes that were sent.
-    stored_bam = tmp_path / "input" / job_id / BAM_NAME
+    stored_bam = tmp_path / "handoff" / job_id / BAM_NAME
     assert stored_bam.read_bytes() == BAM_BYTES
 
     # ... and the worker was handed that path, plus the output directory it is
@@ -224,7 +224,7 @@ def test_job_journey_stores_an_uploaded_index_beside_its_alignment(client, web_a
     assert response.status_code == 200, response.text
     job_id = response.json()["job_id"]
 
-    job_input_dir = tmp_path / "input" / job_id
+    job_input_dir = tmp_path / "handoff" / job_id
     assert sorted(path.name for path in job_input_dir.iterdir()) == [BAM_NAME, BAI_NAME]
     assert (job_input_dir / BAM_NAME).read_bytes() == BAM_BYTES
     assert (job_input_dir / BAI_NAME).read_bytes() == BAI_BYTES
@@ -252,7 +252,7 @@ def test_job_journey_routes_an_advntr_submission_to_the_long_queue(client, web_a
     call = web_app.run_vntyper_job.apply_async.call_args
     assert call.kwargs["queue"] == "vntyper_long_queue"
     assert call.kwargs["kwargs"]["advntr_mode"] is True
-    assert call.kwargs["kwargs"]["bam_path"] == str(tmp_path / "input" / job_id / BAM_NAME)
+    assert call.kwargs["kwargs"]["bam_path"] == str(tmp_path / "handoff" / job_id / BAM_NAME)
 
 
 # ---------------------------------------------------------------------------

@@ -26,17 +26,21 @@ rather than requiring the state to be read back out of a store.
 imports before this module, so `app.tasks` is importable here.
 """
 
+import hashlib
 import inspect
 import json
 import logging
+import os
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from vntyper.scripts.utils import validate_bam_file
 
@@ -71,6 +75,9 @@ def redis_mocks(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         cohort=MagicMock(name="redis_cohort_client"),
         usage=MagicMock(name="redis_usage_client"),
     )
+    reservation_pipeline = mocks.queue.pipeline.return_value.__enter__.return_value
+    reservation_pipeline.hexists.return_value = True
+    reservation_pipeline.zscore.return_value = float("inf")
     monkeypatch.setattr(tasks, "redis_client", mocks.queue)
     monkeypatch.setattr(tasks, "redis_cohort_client", mocks.cohort)
     monkeypatch.setattr(tasks, "redis_usage_client", mocks.usage)
@@ -110,9 +117,17 @@ def _job_kwargs(tmp_path: Path, bam_path: Path, job_id: str = "job-1", **overrid
     Returns:
         dict: Keyword arguments ready to hand to `run_vntyper_job.run(...)`.
     """
+    output_dir = tmp_path / "output" / job_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    supplied_index = overrides.get("index_path")
+    identity_index = Path(supplied_index) if supplied_index else None
+    input_metadata = bam_path.parent.stat()
+    output_metadata = output_dir.stat()
+    alignment_metadata = bam_path.stat()
+    index_metadata = identity_index.stat() if identity_index is not None and identity_index.exists() else None
     kwargs = {
         "bam_path": str(bam_path),
-        "output_dir": str(tmp_path / "output" / job_id),
+        "output_dir": str(output_dir),
         "thread": 1,
         "reference_assembly": "hg38",
         "fast_mode": False,
@@ -124,6 +139,19 @@ def _job_kwargs(tmp_path: Path, bam_path: Path, job_id: str = "job-1", **overrid
         "user_agent": "pytest",
         "advntr_mode": False,
         "index_path": None,
+        "capacity_reserved": True,
+        "workspace_identity": {
+            "input_dir": [input_metadata.st_dev, input_metadata.st_ino],
+            "output_dir": [output_metadata.st_dev, output_metadata.st_ino],
+            "alignment": [alignment_metadata.st_dev, alignment_metadata.st_ino],
+            "alignment_sha256": hashlib.sha256(bam_path.read_bytes()).hexdigest(),
+            "index": None if index_metadata is None else [index_metadata.st_dev, index_metadata.st_ino],
+            "index_sha256": (
+                None
+                if index_metadata is None or identity_index is None
+                else hashlib.sha256(identity_index.read_bytes()).hexdigest()
+            ),
+        },
     }
     kwargs.update(overrides)
     return kwargs
@@ -484,6 +512,99 @@ def test_pipeline_failure_email_names_the_cohort_when_one_is_set(
     assert "Cohort ID: <strong>my-cohort</strong>" in email_kwargs["content"]
 
 
+def test_pipeline_failure_email_escapes_values_without_exposing_argv_or_worker_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The HTML notification carries only escaped, recipient-actionable facts."""
+    from app import tasks
+
+    job_id = 'job-<b>&"1'
+    cohort_id = 'cohort-<img src=x onerror="alert(1)">&'
+    bam_path, _ = _make_job_input(tmp_path, job_id=job_id)
+    private_command = [
+        "conda-secret",
+        "--token",
+        "/opt/vntyper/input/private/sample.bam",
+        "-o",
+        "/opt/vntyper/output/private",
+    ]
+
+    class HostileReturnCode(int):
+        def __str__(self) -> str:
+            return '<status&"9>'
+
+        def __format__(self, format_spec: str) -> str:
+            del format_spec
+            return str(self)
+
+    pipeline_error = subprocess.CalledProcessError(HostileReturnCode(9), private_command)
+    _subprocess_stub(monkeypatch, tasks, pipeline_error=pipeline_error)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(subprocess.CalledProcessError) as raised:
+        _invoke_vntyper_job(
+            tasks,
+            **_job_kwargs(
+                tmp_path,
+                bam_path,
+                job_id=job_id,
+                email="user@example.com",
+                cohort_key=f"cohort:{cohort_id}",
+            ),
+        )
+
+    assert raised.value is pipeline_error
+    content = no_email_task.delay.call_args.kwargs["content"]
+    assert "job-&lt;b&gt;&amp;&quot;1" in content
+    assert "cohort-&lt;img src=x onerror=&quot;alert(1)&quot;&gt;&amp;" in content
+    assert "exited with status &lt;status&amp;&quot;9&gt;" in content
+    assert "<pre>" not in content
+    assert "conda-secret" not in content
+    assert "--token" not in content
+    assert str(bam_path) not in content
+    assert str(tmp_path) not in content
+    assert "/opt/vntyper/input" not in content
+    assert "/opt/vntyper/output" not in content
+    assert "conda-secret" in caplog.text
+    assert "/opt/vntyper/input/private/sample.bam" in caplog.text
+
+
+def test_pipeline_timeout_email_uses_the_actual_deadline_without_adding_a_timeout(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """A runner timeout is reported without this task inventing a pipeline deadline."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    timeout_error = subprocess.TimeoutExpired(
+        cmd=["vntyper", "pipeline", "--bam", "/opt/vntyper/input/private/sample.bam"],
+        timeout=3723.5,
+        output="partial output from /opt/vntyper/output/private",
+        stderr="failed while reading /opt/vntyper/input/private/sample.bam",
+    )
+    runner = MagicMock(name="subprocess.run", side_effect=timeout_error)
+    monkeypatch.setattr(tasks.subprocess, "run", runner)
+
+    with pytest.raises(subprocess.TimeoutExpired) as raised:
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, email="user@example.com"))
+
+    assert raised.value is timeout_error
+    assert runner.call_args.kwargs == {"check": True}
+    assert ("usage:job-1", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
+    assert not bam_path.exists()
+    content = no_email_task.delay.call_args.kwargs["content"]
+    assert "did not finish within 3723.5 seconds" in content
+    assert "['vntyper', 'pipeline'" not in content
+    assert "/opt/vntyper/input" not in content
+    assert "/opt/vntyper/output" not in content
+    assert "partial output" not in content
+    assert str(bam_path) not in content
+    assert "Cohort ID" not in content
+
+
 def test_pipeline_failure_without_an_email_sends_no_notification(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
@@ -552,18 +673,14 @@ def test_result_directory_cleanup_failure_removes_public_alias_without_following
     (output_dir / "result.txt").write_bytes(b"result data")
     patient = tmp_path / "external-patient.bam"
     patient.write_bytes(PATIENT_BYTES)
-    original_rmtree = tasks.shutil.rmtree
 
-    def replace_archive_and_fail(path: str) -> None:
-        if Path(path) != output_dir:
-            original_rmtree(path)
-            return
-        archive = Path(f"{path}.zip")
+    def replace_archive_and_fail(_workspace) -> None:
+        archive = Path(f"{output_dir}.zip")
         archive.unlink()
         archive.symlink_to(patient)
         raise OSError("result directory busy")
 
-    monkeypatch.setattr(tasks.shutil, "rmtree", replace_archive_and_fail)
+    monkeypatch.setattr(tasks.PipelineJobWorkspace, "remove_output", replace_archive_and_fail)
 
     with pytest.raises(OSError, match="result directory busy"):
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
@@ -589,12 +706,11 @@ def test_partial_result_cleanup_quarantines_one_complete_archive(
     output_dir.mkdir(parents=True)
     (output_dir / "result.txt").write_bytes(b"complete result")
 
-    def partially_remove_then_fail(path: str) -> None:
-        assert Path(path) == output_dir
+    def partially_remove_then_fail(_workspace) -> None:
         (output_dir / "result.txt").unlink()
         raise OSError("partial result cleanup")
 
-    monkeypatch.setattr(tasks.shutil, "rmtree", partially_remove_then_fail)
+    monkeypatch.setattr(tasks.PipelineJobWorkspace, "remove_output", partially_remove_then_fail)
 
     with pytest.raises(OSError, match="partial result cleanup"):
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
@@ -701,7 +817,7 @@ def test_a_clean_job_removes_its_input_directory_and_fires_no_leftover_warning(
 
     bam_path, _ = _make_job_input(tmp_path)
     _subprocess_stub_that_runs_the_pipelines_own_startup(monkeypatch, tasks)
-    caplog.set_level(logging.WARNING, logger="app.tasks")
+    caplog.set_level(logging.WARNING, logger="app.pipeline_job_workspace")
 
     _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
 
@@ -743,7 +859,7 @@ def test_the_leftover_warning_still_fires_for_something_the_job_did_not_create(
     bystander = bam_path.parent / "someone_elses.txt"
     bystander.write_bytes(b"not this job's to delete")
     _subprocess_stub_that_runs_the_pipelines_own_startup(monkeypatch, tasks)
-    caplog.set_level(logging.WARNING, logger="app.tasks")
+    caplog.set_level(logging.WARNING, logger="app.pipeline_job_workspace")
 
     _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
 
@@ -866,9 +982,9 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
         "vntyper",
         "pipeline",
         "--bam",
-        str(bam_path),
+        pipeline_command[8],
         "-o",
-        str(output_dir),
+        pipeline_command[10],
         "--threads",
         "1",
         "--reference-assembly",
@@ -880,6 +996,10 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
         "--advntr-max-coverage",
         "300",
     ]
+    assert Path(pipeline_command[8]).parent.parent == Path("/tmp")
+    assert not Path(pipeline_command[8]).is_symlink()
+    assert Path(pipeline_command[8]).name == bam_path.name
+    assert pipeline_command[10].startswith(f"/proc/{os.getpid()}/fd/")
     assert not output_dir.exists(), "a successful archive removes the original results directory"
     assert Path(f"{output_dir}.zip").exists(), "a successful archive leaves the zip behind"
 
@@ -912,10 +1032,10 @@ def test_failed_retry_removes_stale_public_archive_without_following_its_target(
 # ---------------------------------------------------------------------------
 
 
-def test_index_path_none_falls_back_to_the_conventional_bai_name_and_skips_rebuilding(
+def test_index_path_none_does_not_adopt_an_unreported_conventional_bai(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
-    """With `index_path=None`, an index already at `f"{bam_path}.bai"` is used as-is.
+    """With `index_path=None`, a conventional neighbour is outside worker authority.
 
     Args:
         monkeypatch: Standard pytest fixture.
@@ -935,7 +1055,7 @@ def test_index_path_none_falls_back_to_the_conventional_bai_name_and_skips_rebui
     assert not any(c[:2] == ["samtools", "index"] for c in commands), (
         "an index already present at the fallback path must not be rebuilt"
     )
-    assert not conventional_index.exists(), "cleanup must still remove the index it fell back to"
+    assert conventional_index.read_bytes() == INDEX_BYTES
 
 
 def test_index_path_none_defers_a_missing_index_to_pipeline_preflight(
@@ -965,11 +1085,10 @@ def test_index_path_none_defers_a_missing_index_to_pipeline_preflight(
 # ---------------------------------------------------------------------------
 
 
-def test_cleanup_tolerates_input_paths_and_a_directory_that_were_never_created(
+def test_worker_rejects_a_task_without_the_api_workspace_identity(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
-    """Cleanup does not raise when the alignment, its index, and the input
-    directory itself never existed on disk.
+    """A path-only task cannot bypass the API-to-worker identity boundary.
 
     Args:
         monkeypatch: Standard pytest fixture.
@@ -986,9 +1105,19 @@ def test_cleanup_tolerates_input_paths_and_a_directory_that_were_never_created(
 
     monkeypatch.setattr(tasks.subprocess, "run", _run)
 
-    _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+    with pytest.raises(RuntimeError, match="missing workspace identity token"):
+        _invoke_vntyper_job(
+            tasks,
+            bam_path=str(bam_path),
+            output_dir=str(tmp_path / "output" / "job-1"),
+            thread=1,
+            reference_assembly="hg38",
+            fast_mode=False,
+            keep_intermediates=False,
+            archive_results=False,
+        )
 
-    redis_mocks.usage.hset.assert_any_call("usage:job-1", "status", "completed")
+    redis_mocks.usage.hset.assert_any_call("usage:job-1", "status", "failed")
 
 
 def test_cleanup_leaves_a_nonempty_input_directory_and_warns_instead_of_deleting_it(
@@ -1014,7 +1143,7 @@ def test_cleanup_leaves_a_nonempty_input_directory_and_warns_instead_of_deleting
     unexpected_file = bam_path.parent / "unexpected.txt"
     unexpected_file.write_bytes(b"not this job's to delete")
     _subprocess_stub(monkeypatch, tasks)
-    caplog.set_level(logging.WARNING, logger="app.tasks")
+    caplog.set_level(logging.WARNING, logger="app.pipeline_job_workspace")
 
     _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
 
@@ -1044,15 +1173,21 @@ def test_cleanup_logs_but_does_not_raise_when_removing_the_alignment_fails(
 
     bam_path, _ = _make_job_input(tmp_path)
     _subprocess_stub(monkeypatch, tasks)
-    real_remove = tasks.os.remove
+    from app import pipeline_job_workspace
 
-    def _flaky_remove(path, *args, **kwargs):
-        if path == str(bam_path):
-            raise OSError("permission denied")
-        return real_remove(path, *args, **kwargs)
+    real_unlink = pipeline_job_workspace.os.unlink
+    input_identity = (bam_path.parent.stat().st_dev, bam_path.parent.stat().st_ino)
 
-    monkeypatch.setattr(tasks.os, "remove", _flaky_remove)
-    caplog.set_level(logging.ERROR, logger="app.tasks")
+    def _flaky_unlink(path, *args, **kwargs):
+        dir_fd = kwargs.get("dir_fd")
+        if path == bam_path.name and dir_fd is not None:
+            metadata = os.fstat(dir_fd)
+            if (metadata.st_dev, metadata.st_ino) == input_identity:
+                raise OSError("permission denied")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline_job_workspace.os, "unlink", _flaky_unlink)
+    caplog.set_level(logging.ERROR, logger="app.pipeline_job_workspace")
 
     _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))  # must not raise
 
@@ -1231,6 +1366,218 @@ def test_cohort_analysis_archive_failure_is_marked_failed_and_reraised(
     assert ("usage:analysis", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
 
 
+def test_cohort_analysis_refuses_a_pre_existing_output_symlink(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """A planted cohort destination cannot redirect child output into another directory."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"member archive")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_bytes(PATIENT_BYTES)
+    output_dir = tmp_path / "analysis"
+    output_dir.symlink_to(victim, target_is_directory=True)
+
+    def write_child_result(command, *args, **kwargs):
+        child_output = Path(command[command.index("-o") + 1])
+        (child_output / "cohort_result.tsv").write_bytes(b"redirected child output")
+
+    monkeypatch.setattr(tasks.subprocess, "run", write_child_result)
+
+    with pytest.raises(RuntimeError, match="freshly created"):
+        _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(member)], output_dir=str(output_dir))
+
+    assert (victim / "keep.txt").read_bytes() == PATIENT_BYTES
+    assert not (victim / "cohort_result.tsv").exists()
+    assert output_dir.is_symlink()
+    assert not Path(f"{output_dir}.zip").exists()
+
+
+def test_cohort_analysis_refuses_a_planted_input_symlink_in_an_existing_output_directory(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """An occupied output directory is rejected before a planted child link is opened."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"member archive")
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(PATIENT_BYTES)
+    output_dir = tmp_path / "analysis"
+    output_dir.mkdir()
+    planted_input = output_dir / "cohort_input.txt"
+    planted_input.symlink_to(victim)
+    child = MagicMock(name="cohort subprocess")
+    monkeypatch.setattr(tasks.subprocess, "run", child)
+
+    with pytest.raises(RuntimeError, match="freshly created"):
+        _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(member)], output_dir=str(output_dir))
+
+    assert victim.read_bytes() == PATIENT_BYTES
+    assert planted_input.is_symlink()
+    assert planted_input.resolve() == victim
+    child.assert_not_called()
+    assert not Path(f"{output_dir}.zip").exists()
+
+
+def test_cohort_workspace_never_adopts_a_replacement_in_the_creation_window(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """Replacing a just-created public entry cannot redirect cohort task writes."""
+    from app import cohort_workspace as cohort_workspace_module
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"member archive")
+    output_dir = tmp_path / "analysis"
+    displaced_entry = tmp_path / "analysis-created-by-task"
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / "keep.txt").write_bytes(PATIENT_BYTES)
+    real_open = cohort_workspace_module.os.open
+    swapped = False
+
+    def swap_public_entry_during_first_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        is_public_entry = path == output_dir.name and kwargs.get("dir_fd") is not None
+        is_atomic_reservation = bool(flags & cohort_workspace_module.os.O_CREAT)
+        if is_public_entry and is_atomic_reservation:
+            descriptor = real_open(path, flags, *args, **kwargs)
+        elif is_public_entry:
+            descriptor = None
+        else:
+            return real_open(path, flags, *args, **kwargs)
+        if not swapped:
+            swapped = True
+            parent_descriptor = kwargs["dir_fd"]
+            cohort_workspace_module.os.rename(
+                output_dir.name,
+                displaced_entry.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            cohort_workspace_module.os.rename(
+                replacement.name,
+                output_dir.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+        if descriptor is not None:
+            return descriptor
+        return real_open(path, flags, *args, **kwargs)
+
+    def write_child_result(command, *args, **kwargs):
+        child_output = Path(command[command.index("-o") + 1])
+        (child_output / "cohort_result.tsv").write_bytes(b"task-owned result")
+
+    monkeypatch.setattr(cohort_workspace_module.os, "open", swap_public_entry_during_first_open)
+    monkeypatch.setattr(tasks.subprocess, "run", write_child_result)
+
+    _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(member)], output_dir=str(output_dir))
+
+    assert displaced_entry.is_file(), "the atomically opened reservation remains bound after its name is moved"
+    assert output_dir.is_dir(), "the replacement stays under the name chosen by the concurrent actor"
+    assert (output_dir / "keep.txt").read_bytes() == PATIENT_BYTES
+    assert not (output_dir / "cohort_result.tsv").exists()
+    with zipfile.ZipFile(f"{output_dir}.zip") as archive:
+        assert archive.read("cohort_result.tsv") == b"task-owned result"
+
+
+def test_fresh_workspace_refusal_preserves_an_existing_public_archive(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """A redelivered task cannot erase its prior archive before ownership is established."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"member archive")
+    output_dir = tmp_path / "analysis"
+    output_dir.mkdir()
+    (output_dir / "prior-result.tsv").write_bytes(b"prior result directory")
+    archive = Path(f"{output_dir}.zip")
+    prior_archive = b"complete prior public archive"
+    archive.write_bytes(prior_archive)
+    child = MagicMock(name="cohort subprocess")
+    monkeypatch.setattr(tasks.subprocess, "run", child)
+
+    with pytest.raises(RuntimeError, match="freshly created"):
+        _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(member)], output_dir=str(output_dir))
+
+    assert archive.read_bytes() == prior_archive
+    assert (output_dir / "prior-result.tsv").read_bytes() == b"prior result directory"
+    child.assert_not_called()
+
+
+def test_cohort_analysis_keeps_child_writes_bound_when_output_directory_is_swapped(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """Replacing the public directory name cannot redirect writes or archive reads."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"member archive")
+    output_dir = tmp_path / "analysis"
+    displaced_output = tmp_path / "analysis-displaced"
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_bytes(PATIENT_BYTES)
+
+    def swap_output_before_child_writes(command, *args, **kwargs):
+        output_dir.rename(displaced_output)
+        output_dir.symlink_to(victim, target_is_directory=True)
+        child_output = Path(command[command.index("-o") + 1])
+        (child_output / "cohort_result.tsv").write_bytes(b"bound child output")
+
+    monkeypatch.setattr(tasks.subprocess, "run", swap_output_before_child_writes)
+
+    _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(member)], output_dir=str(output_dir))
+
+    assert (victim / "keep.txt").read_bytes() == PATIENT_BYTES
+    assert not (victim / "cohort_result.tsv").exists()
+    assert displaced_output.is_file(), "the moved public reservation is never used as task output"
+    with zipfile.ZipFile(f"{output_dir}.zip") as archive:
+        assert archive.read("cohort_result.tsv") == b"bound child output"
+
+
+def test_cohort_workspace_cleanup_uses_the_bound_staging_directory_after_its_name_is_swapped(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """Cleanup empties task staging through its fd and never traverses a replacement."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"member archive")
+    output_dir = tmp_path / "analysis"
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / "keep.txt").write_bytes(PATIENT_BYTES)
+    displaced_paths: list[Path] = []
+    replacement_paths: list[Path] = []
+
+    def swap_staging_before_child_writes(command, *args, **kwargs):
+        child_output = Path(command[command.index("-o") + 1])
+        staging_path = Path(child_output.readlink())
+        displaced = staging_path.with_name(f"{staging_path.name}-displaced")
+        staging_path.rename(displaced)
+        replacement.rename(staging_path)
+        displaced_paths.append(displaced)
+        replacement_paths.append(staging_path)
+        (child_output / "cohort_result.tsv").write_bytes(b"bound child output")
+
+    monkeypatch.setattr(tasks.subprocess, "run", swap_staging_before_child_writes)
+
+    _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(member)], output_dir=str(output_dir))
+
+    assert (replacement_paths[0] / "keep.txt").read_bytes() == PATIENT_BYTES
+    assert not (replacement_paths[0] / "cohort_result.tsv").exists()
+    assert displaced_paths[0].is_dir()
+    assert list(displaced_paths[0].iterdir()) == []
+    with zipfile.ZipFile(f"{output_dir}.zip") as archive:
+        assert archive.read("cohort_result.tsv") == b"bound child output"
+
+
 def test_cohort_analysis_consumes_a_bound_snapshot_when_member_path_is_replaced(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
 ) -> None:
@@ -1271,16 +1618,21 @@ def test_cohort_analysis_consumes_the_copied_bytes_when_snapshot_directory_name_
     member = tmp_path / "job-a.zip"
     member.write_bytes(b"original member archive")
     output_dir = tmp_path / "analysis"
-    snapshot_dir = output_dir / ".cohort-members"
-    displaced_snapshot_dir = output_dir / ".cohort-members-displaced"
+    snapshot_dirs: list[Path] = []
+    displaced_snapshot_dirs: list[Path] = []
     consumed = tmp_path / "consumed.bin"
     real_subprocess_run = subprocess.run
 
     def replace_snapshot_directory_before_child_opens_input(command, *args, **kwargs):
+        input_file = Path(command[command.index("--input-file") + 1])
+        listed = Path(input_file.read_text().strip())
+        snapshot_dir = Path(listed.parent.readlink())
+        displaced_snapshot_dir = snapshot_dir.with_name(f"{snapshot_dir.name}-displaced")
+        snapshot_dirs.append(snapshot_dir)
+        displaced_snapshot_dirs.append(displaced_snapshot_dir)
         snapshot_dir.rename(displaced_snapshot_dir)
         snapshot_dir.mkdir()
         (snapshot_dir / member.name).write_bytes(PATIENT_BYTES)
-        input_file = Path(command[command.index("--input-file") + 1])
         reader = (
             "from pathlib import Path; import sys; "
             "listed = Path(sys.argv[1]).read_text().strip(); "
@@ -1299,8 +1651,8 @@ def test_cohort_analysis_consumes_the_copied_bytes_when_snapshot_directory_name_
         )
 
     assert consumed.read_bytes() == b"original member archive"
-    assert not (displaced_snapshot_dir / member.name).exists()
-    assert (snapshot_dir / member.name).read_bytes() == PATIENT_BYTES
+    assert not (displaced_snapshot_dirs[0] / member.name).exists()
+    assert not snapshot_dirs[0].exists()
     assert not Path(f"{output_dir}.zip").exists()
 
 
@@ -1313,11 +1665,17 @@ def test_cohort_snapshot_cleanup_never_masks_the_subprocess_failure_after_direct
     member = tmp_path / "job-a.zip"
     member.write_bytes(b"original member archive")
     output_dir = tmp_path / "analysis"
-    snapshot_dir = output_dir / ".cohort-members"
-    displaced_snapshot_dir = output_dir / ".cohort-members-displaced"
+    snapshot_dirs: list[Path] = []
+    displaced_snapshot_dirs: list[Path] = []
     primary_failure = subprocess.CalledProcessError(9, ["vntyper", "cohort"])
 
     def replace_snapshot_directory_then_fail(command, *args, **kwargs):
+        input_file = Path(command[command.index("--input-file") + 1])
+        listed = Path(input_file.read_text().strip())
+        snapshot_dir = Path(listed.parent.readlink())
+        displaced_snapshot_dir = snapshot_dir.with_name(f"{snapshot_dir.name}-displaced")
+        snapshot_dirs.append(snapshot_dir)
+        displaced_snapshot_dirs.append(displaced_snapshot_dir)
         snapshot_dir.rename(displaced_snapshot_dir)
         snapshot_dir.mkdir()
         (snapshot_dir / member.name).write_bytes(PATIENT_BYTES)
@@ -1335,8 +1693,8 @@ def test_cohort_snapshot_cleanup_never_masks_the_subprocess_failure_after_direct
         )
 
     assert raised.value is primary_failure
-    assert not (displaced_snapshot_dir / member.name).exists()
-    assert (snapshot_dir / member.name).read_bytes() == PATIENT_BYTES
+    assert not (displaced_snapshot_dirs[0] / member.name).exists()
+    assert not snapshot_dirs[0].exists()
     assert "snapshot directory changed" in caplog.text
 
 
@@ -1402,11 +1760,12 @@ def test_cohort_analysis_fails_before_archiving_when_deleting_its_scratch_file_f
         caplog: Captures the task's log record.
     """
     from app import tasks
+    from app.cohort_workspace import CohortWorkspace
 
     zip_path = tmp_path / "job-a.zip"
     zip_path.write_bytes(b"result data")
     monkeypatch.setattr(tasks.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(tasks.os, "remove", MagicMock(side_effect=OSError("permission denied")))
+    monkeypatch.setattr(CohortWorkspace, "unlink", MagicMock(side_effect=OSError("permission denied")))
     caplog.set_level(logging.ERROR, logger="app.tasks")
 
     with pytest.raises(OSError, match="permission denied"):
@@ -1414,23 +1773,20 @@ def test_cohort_analysis_fails_before_archiving_when_deleting_its_scratch_file_f
             tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(tmp_path / "analysis")
         )
 
-    input_file = tmp_path / "analysis" / "cohort_input.txt"
-    assert input_file.exists(), "the removal genuinely failed; the scratch file is still there"
+    assert not (tmp_path / "analysis").exists()
     assert not (tmp_path / "analysis.zip").exists()
     assert "permission denied" in caplog.text
 
 
-def test_cohort_analysis_logs_but_does_not_raise_when_removing_the_empty_output_dir_fails(
+@pytest.mark.parametrize("cleanup_target", ["staging", "reservation"])
+def test_cohort_analysis_cleanup_failure_marks_failed_preserves_archive_and_allows_retry(
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    cleanup_target: str,
 ) -> None:
-    """A filesystem error removing the now-empty output directory is logged,
-    not raised.
-
-    The output directory becomes empty once the task deletes its own scratch
-    file, because the members' `.zip` archives it read are outside `output_dir`.
+    """A transient workspace-cleanup error fails safely and leaves the next attempt runnable.
 
     Args:
         monkeypatch: Standard pytest fixture.
@@ -1442,19 +1798,347 @@ def test_cohort_analysis_logs_but_does_not_raise_when_removing_the_empty_output_
 
     zip_path = tmp_path / "job-a.zip"
     zip_path.write_bytes(b"result data")
-    monkeypatch.setattr(tasks.subprocess, "run", lambda *a, **k: None)
+
+    def write_cohort_result(command, *args, **kwargs):
+        child_output = Path(command[command.index("-o") + 1])
+        (child_output / "cohort_result.tsv").write_bytes(b"complete cohort result")
+
+    monkeypatch.setattr(tasks.subprocess, "run", write_cohort_result)
     output_dir = tmp_path / "analysis"
-    real_rmdir = tasks.os.rmdir
+    from app import cohort_workspace as cohort_workspace_module
 
-    def _flaky_rmdir(path, *args, **kwargs):
-        if path == str(output_dir):
-            raise OSError("directory busy")
-        return real_rmdir(path, *args, **kwargs)
+    cleanup_failure = OSError(f"transient {cleanup_target} cleanup failure")
+    if cleanup_target == "staging":
+        real_clear_directory = cohort_workspace_module._clear_directory
+        cleanup_calls = 0
 
-    monkeypatch.setattr(tasks.os, "rmdir", _flaky_rmdir)
-    caplog.set_level(logging.ERROR, logger="app.tasks")
+        def _flaky_clear_directory(descriptor):
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+            if cleanup_calls == 1:
+                raise cleanup_failure
+            return real_clear_directory(descriptor)
+
+        monkeypatch.setattr(cohort_workspace_module, "_clear_directory", _flaky_clear_directory)
+    else:
+        real_unlink = cohort_workspace_module.os.unlink
+        cleanup_calls = 0
+
+        def _flaky_unlink(path, *args, **kwargs):
+            nonlocal cleanup_calls
+            if path == output_dir.name and kwargs.get("dir_fd") is not None:
+                cleanup_calls += 1
+                if cleanup_calls == 1:
+                    raise cleanup_failure
+            return real_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(cohort_workspace_module.os, "unlink", _flaky_unlink)
+    caplog.set_level(logging.ERROR, logger="app.cohort_workspace")
+
+    with pytest.raises(OSError) as raised:
+        _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(output_dir))
+
+    assert raised.value is cleanup_failure
+    assert ("usage:analysis", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
+    assert not output_dir.exists(), "the transient cleanup must converge before descriptors are released"
+    assert not Path(f"{output_dir}.zip").exists(), "a failed task must not leave a public downloadable archive"
+    quarantines = list(tmp_path.glob(".analysis.zip.failed-*"))
+    assert len(quarantines) == 1
+    with zipfile.ZipFile(quarantines[0]) as archive:
+        assert archive.read("cohort_result.tsv") == b"complete cohort result"
+    assert "transient" in caplog.text
 
     _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(output_dir))
 
-    assert output_dir.exists(), "the removal genuinely failed; the directory is still there"
-    assert f"Error deleting directory {output_dir}: directory busy" in caplog.text
+    assert Path(f"{output_dir}.zip").is_file()
+    assert not output_dir.exists()
+
+
+def test_cohort_workspace_cleanup_never_masks_an_active_subprocess_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The task error remains authoritative when descriptor cleanup also fails transiently."""
+    from app import cohort_workspace as cohort_workspace_module
+    from app import tasks
+
+    zip_path = tmp_path / "job-a.zip"
+    zip_path.write_bytes(b"result data")
+    output_dir = tmp_path / "analysis"
+    primary_failure = subprocess.CalledProcessError(17, ["vntyper", "cohort"])
+    cleanup_failure = OSError("transient staging cleanup failure")
+    real_clear_directory = cohort_workspace_module._clear_directory
+    cleanup_calls = 0
+
+    def fail_subprocess(*args, **kwargs):
+        raise primary_failure
+
+    def _flaky_clear_directory(descriptor):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 1:
+            raise cleanup_failure
+        return real_clear_directory(descriptor)
+
+    monkeypatch.setattr(tasks.subprocess, "run", fail_subprocess)
+    monkeypatch.setattr(cohort_workspace_module, "_clear_directory", _flaky_clear_directory)
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(output_dir))
+
+    assert raised.value is primary_failure
+    assert ("usage:analysis", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(".analysis.cohort-*"))
+    assert "workspace cleanup also failed" in caplog.text
+
+
+def test_pipeline_worker_releases_its_capacity_reservation(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, fake_redis, tmp_path: Path
+) -> None:
+    """Every completed pipeline task returns its shared queue and byte capacity."""
+    from app import admission, tasks
+
+    monkeypatch.setattr(tasks, "redis_client", fake_redis)
+    _subprocess_stub(monkeypatch, tasks)
+    bam_path, _ = _make_job_input(tmp_path)
+    fake_redis.hset(admission.ADMISSION_RESERVATIONS, "job-1", 100)
+    fake_redis.zadd(admission.ADMISSION_DEADLINES, {"job-1": time.time() + 60})
+
+    _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+
+    assert fake_redis.hgetall(admission.ADMISSION_RESERVATIONS) == {}
+
+
+def test_cohort_worker_releases_its_capacity_reservation(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, fake_redis, tmp_path: Path
+) -> None:
+    """Cohort tasks release through the same idempotent worker-cleanup path."""
+    from app import admission, tasks
+
+    monkeypatch.setattr(tasks, "redis_client", fake_redis)
+    monkeypatch.setattr(tasks.subprocess, "run", lambda *args, **kwargs: None)
+    zip_path = tmp_path / "job-a.zip"
+    zip_path.write_bytes(b"result data")
+    fake_redis.hset(admission.ADMISSION_RESERVATIONS, "analysis", 100)
+
+    _invoke_cohort_job(
+        tasks,
+        cohort_id="cohort-1",
+        zip_paths=[str(zip_path)],
+        output_dir=str(tmp_path / "analysis"),
+    )
+
+    assert fake_redis.hgetall(admission.ADMISSION_RESERVATIONS) == {}
+
+
+@pytest.mark.parametrize("failing_call", ["hset", "expire"])
+def test_pipeline_worker_startup_failure_releases_capacity_without_masking_primary(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    fake_redis,
+    tmp_path: Path,
+    failing_call: str,
+) -> None:
+    """Either initial usage write remains inside pipeline cleanup ownership."""
+    from app import admission, tasks
+
+    monkeypatch.setattr(tasks, "redis_client", fake_redis)
+    bam_path, _ = _make_job_input(tmp_path)
+    fake_redis.hset(admission.ADMISSION_RESERVATIONS, "job-1", 100)
+    fake_redis.zadd(admission.ADMISSION_DEADLINES, {"job-1": time.time() + 60})
+    primary = RuntimeError(f"initial {failing_call} failed")
+    if failing_call == "hset":
+        redis_mocks.usage.hset.side_effect = [primary, None]
+    else:
+        redis_mocks.usage.expire.side_effect = primary
+
+    with pytest.raises(RuntimeError, match=f"initial {failing_call} failed"):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+
+    assert fake_redis.hgetall(admission.ADMISSION_RESERVATIONS) == {}
+
+
+@pytest.mark.parametrize("failing_call", ["hset", "expire"])
+def test_cohort_worker_startup_failure_releases_capacity_without_masking_primary(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    fake_redis,
+    tmp_path: Path,
+    failing_call: str,
+) -> None:
+    """Cohort initial usage writes are covered by the task's finally block."""
+    from app import admission, tasks
+
+    monkeypatch.setattr(tasks, "redis_client", fake_redis)
+    archive = tmp_path / "member.zip"
+    archive.write_bytes(b"member")
+    fake_redis.hset(admission.ADMISSION_RESERVATIONS, "analysis", 100)
+    fake_redis.zadd(admission.ADMISSION_DEADLINES, {"analysis": time.time() + 60})
+    primary = RuntimeError(f"initial {failing_call} failed")
+    if failing_call == "hset":
+        redis_mocks.usage.hset.side_effect = [primary, None]
+    else:
+        redis_mocks.usage.expire.side_effect = primary
+
+    with pytest.raises(RuntimeError, match=f"initial {failing_call} failed"):
+        _invoke_cohort_job(
+            tasks,
+            cohort_id="cohort-1",
+            zip_paths=[str(archive)],
+            output_dir=str(tmp_path / "analysis"),
+            capacity_reserved=True,
+        )
+
+    assert fake_redis.hgetall(admission.ADMISSION_RESERVATIONS) == {}
+
+
+@pytest.mark.parametrize("job_type", ["pipeline", "cohort"])
+def test_worker_execution_failure_stops_heartbeat_and_releases_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    fake_redis,
+    tmp_path: Path,
+    job_type: str,
+) -> None:
+    """Both task bodies own heartbeat and admission release on execution errors."""
+    from app import admission, tasks
+
+    events: list[str] = []
+
+    class FakeHeartbeat:
+        def __init__(self, *_args, **_kwargs):
+            events.append("created")
+
+        def start(self):
+            events.append("started")
+
+        def stop(self):
+            events.append("stopped")
+
+    monkeypatch.setattr(admission, "ReservationHeartbeat", FakeHeartbeat)
+    monkeypatch.setattr(tasks, "redis_client", fake_redis)
+    failure = subprocess.CalledProcessError(1, ["vntyper", job_type])
+    monkeypatch.setattr(tasks.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(failure))
+    reservation_id = "job-1" if job_type == "pipeline" else "analysis"
+    fake_redis.hset(admission.ADMISSION_RESERVATIONS, reservation_id, 100)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        if job_type == "pipeline":
+            bam_path, _ = _make_job_input(tmp_path)
+            _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+        else:
+            archive = tmp_path / "member.zip"
+            archive.write_bytes(b"member")
+            _invoke_cohort_job(
+                tasks,
+                cohort_id="cohort-1",
+                zip_paths=[str(archive)],
+                output_dir=str(tmp_path / "analysis"),
+                capacity_reserved=True,
+            )
+
+    assert events == ["created", "started", "stopped"]
+    assert fake_redis.hgetall(admission.ADMISSION_RESERVATIONS) == {}
+
+
+@pytest.mark.parametrize("job_type", ["pipeline", "cohort"])
+def test_heartbeat_thread_start_failure_preserves_error_and_releases_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    fake_redis,
+    tmp_path: Path,
+    job_type: str,
+) -> None:
+    """A failed heartbeat bootstrap cannot mask itself or skip either task's release."""
+    from app import admission, tasks
+
+    class FailingThread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("heartbeat thread failed to start")
+
+        def join(self, timeout=None):
+            pytest.fail("an unstarted heartbeat thread must not be joined")
+
+    monkeypatch.setattr(admission, "Thread", FailingThread)
+    monkeypatch.setattr(tasks, "redis_client", fake_redis)
+    reservation_id = "job-1" if job_type == "pipeline" else "analysis"
+    now = time.time()
+    fake_redis.hset(admission.ADMISSION_RESERVATIONS, reservation_id, 100)
+    fake_redis.zadd(admission.ADMISSION_DEADLINES, {reservation_id: now + 60})
+
+    with pytest.raises(RuntimeError, match="heartbeat thread failed to start"):
+        if job_type == "pipeline":
+            bam_path, _ = _make_job_input(tmp_path)
+            _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+        else:
+            archive = tmp_path / "member.zip"
+            archive.write_bytes(b"member")
+            _invoke_cohort_job(
+                tasks,
+                cohort_id="cohort-1",
+                zip_paths=[str(archive)],
+                output_dir=str(tmp_path / "analysis"),
+                capacity_reserved=True,
+            )
+
+    assert fake_redis.hgetall(admission.ADMISSION_RESERVATIONS) == {}
+    assert fake_redis.zscore(admission.ADMISSION_DEADLINES, reservation_id) is None
+
+
+def test_pipeline_worker_logs_a_capacity_release_failure_without_failing_the_result(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A Redis outage during release cannot turn completed work into a failure."""
+    from app import admission, tasks
+
+    _subprocess_stub(monkeypatch, tasks)
+    bam_path, _ = _make_job_input(tmp_path)
+
+    def fail_release(*_args, **_kwargs):
+        raise RedisConnectionError("redis unavailable")
+
+    monkeypatch.setattr(admission, "release_capacity", fail_release)
+    caplog.set_level(logging.ERROR, logger="app.tasks")
+
+    _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+
+    assert "Error releasing capacity reservation for job-1: redis unavailable" in caplog.text
+
+
+def test_cohort_worker_logs_a_capacity_release_failure_without_failing_the_result(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The cohort cleanup path treats admission release as best-effort too."""
+    from app import admission, tasks
+
+    monkeypatch.setattr(tasks.subprocess, "run", lambda *args, **kwargs: None)
+    zip_path = tmp_path / "job-a.zip"
+    zip_path.write_bytes(b"result data")
+
+    def fail_release(*_args, **_kwargs):
+        raise RedisConnectionError("redis unavailable")
+
+    monkeypatch.setattr(admission, "release_capacity", fail_release)
+    caplog.set_level(logging.ERROR, logger="app.tasks")
+
+    _invoke_cohort_job(
+        tasks,
+        cohort_id="cohort-1",
+        zip_paths=[str(zip_path)],
+        output_dir=str(tmp_path / "analysis"),
+    )
+
+    assert "Error releasing capacity reservation for analysis: redis unavailable" in caplog.text

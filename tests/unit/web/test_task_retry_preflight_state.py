@@ -30,6 +30,9 @@ def redis_mocks(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         cohort=MagicMock(name="redis_cohort_client"),
         usage=MagicMock(name="redis_usage_client"),
     )
+    reservation_pipeline = mocks.queue.pipeline.return_value.__enter__.return_value
+    reservation_pipeline.hexists.return_value = True
+    reservation_pipeline.zscore.return_value = float("inf")
     monkeypatch.setattr(tasks, "redis_client", mocks.queue)
     monkeypatch.setattr(tasks, "redis_cohort_client", mocks.cohort)
     monkeypatch.setattr(tasks, "redis_usage_client", mocks.usage)

@@ -712,7 +712,7 @@ def test_a_streamed_submission_under_the_ceiling_is_delivered_whole(capped_reque
     response = asyncio.run(_post_streamed(capped_request_app.app, body()))
 
     assert response.status_code == 200
-    job_input_dir = tmp_path / "input" / response.json()["job_id"]
+    job_input_dir = tmp_path / "handoff" / response.json()["job_id"]
     assert (job_input_dir / "sample.bam").read_bytes() == payload
 
 
@@ -752,7 +752,7 @@ def test_a_submission_under_the_ceiling_still_completes(capped_request_app, clie
     )
 
     assert response.status_code == 200
-    job_input_dir = tmp_path / "input" / response.json()["job_id"]
+    job_input_dir = tmp_path / "handoff" / response.json()["job_id"]
     assert (job_input_dir / "sample.bam").read_bytes() == payload
     capped_request_app.run_vntyper_job.delay.assert_called_once()
 

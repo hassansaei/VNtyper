@@ -20,6 +20,7 @@ from vntyper.scripts.alignment_contract import (
     AlignmentPlan,
     ReferenceAttempt,
     ReferenceLifetime,
+    TimedOutProbeReason,
     index_candidate_names,
     missing_index_message,
     unresolvable_reference_details,
@@ -39,6 +40,7 @@ from vntyper.scripts.command_builders import (
     build_samtools_index_command,
 )
 from vntyper.scripts.preflight_command_io import (
+    CaptureMetadata,
     capture_command,
 )
 from vntyper.scripts.preflight_command_io import (
@@ -58,6 +60,7 @@ logger = logging.getLogger(__name__)
 
 ReferenceBinding = reference_io.ReferenceBinding
 _reference_probe_timeout_seconds = reference_io.reference_probe_timeout_seconds
+_stream_probe_timeout_seconds = reference_io.stream_probe_timeout_seconds
 _reference_unavailable_reason = reference_io.reference_unavailable_reason
 
 HTSLIB_REFERENCE_SOURCE = "htslib-resolved (header UR: or REF_PATH)"
@@ -299,6 +302,7 @@ def resolve_reference(
     """
     samtools_path = config.get("tools", {}).get("samtools", "samtools")
     timeout_seconds = reference_io.reference_probe_timeout_seconds(config)
+    stream_timeout_seconds = reference_io.stream_probe_timeout_seconds(config)
     max_text_bytes = configured_preflight_text_limit(config)
     attempts: list[ReferenceAttempt] = []
     explicit_candidates = list(candidates)
@@ -317,11 +321,15 @@ def resolve_reference(
             threads=threads,
         )
         target_log = str(Path(output_dir) / f"{output_name}_reference_probe_{position}.log")
+        target_metadata = CaptureMetadata()
         exit_ok, probe_output = capture_command(
             target_command,
             target_log,
             timeout_seconds=timeout_seconds,
+            metadata=target_metadata,
         )
+        if not exit_ok and target_metadata.timed_out and target_metadata.timeout_seconds is not None:
+            probe_output = TimedOutProbeReason(probe_output, target_metadata.timeout_seconds)
         if reference_binding is not None:
             reference_binding.bind_generated_sidecars()
         if not exit_ok:
@@ -336,11 +344,15 @@ def resolve_reference(
                 reference_path=reference_path,
             )
             coverage_log = str(Path(output_dir) / f"{output_name}_reference_coverage_probe_{position}.log")
+            coverage_metadata = CaptureMetadata()
             exit_ok, probe_output = capture_command(
                 coverage_command,
                 coverage_log,
                 timeout_seconds=timeout_seconds,
+                metadata=coverage_metadata,
             )
+            if not exit_ok and coverage_metadata.timed_out and coverage_metadata.timeout_seconds is not None:
+                probe_output = TimedOutProbeReason(probe_output, coverage_metadata.timeout_seconds)
         if not exit_ok or unmapped_scan != "stream":
             return exit_ok, probe_output
         stream_command = build_cram_stream_reference_probe_command(
@@ -350,11 +362,16 @@ def resolve_reference(
             threads=threads,
         )
         stream_log = str(Path(output_dir) / f"{output_name}_reference_stream_probe_{position}.log")
-        return capture_command(
+        stream_metadata = CaptureMetadata()
+        exit_ok, probe_output = capture_command(
             stream_command,
             stream_log,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=stream_timeout_seconds,
+            metadata=stream_metadata,
         )
+        if not exit_ok and stream_metadata.timed_out and stream_metadata.timeout_seconds is not None:
+            probe_output = TimedOutProbeReason(probe_output, stream_metadata.timeout_seconds)
+        return exit_ok, probe_output
 
     for position, (source, reference_path) in enumerate(explicit_candidates, start=1):
         if reference_path is None:
@@ -550,6 +567,7 @@ def run_preflight(
             )
         if file_format == FORMAT_CRAM:
             reference_io.reference_probe_timeout_seconds(config)
+            reference_io.stream_probe_timeout_seconds(config)
         failure_context.phase = error_io.OUTPUT_SAFETY_FAILURE
         _validate_preflight_logs(
             in_path,

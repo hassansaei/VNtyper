@@ -55,9 +55,19 @@ services:
       # nothing. The defaults are the shipped values, so behaviour is unchanged.
       - MAX_RESULT_AGE_DAYS=${MAX_RESULT_AGE_DAYS:-3}
       - COHORT_RETENTION_DAYS=${COHORT_RETENTION_DAYS:-3}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-1073741824}
+      - MAX_QUEUED_JOBS=${MAX_QUEUED_JOBS:-100}
+      - MIN_FREE_DISK_BYTES=${MIN_FREE_DISK_BYTES:-}
+      - PIPELINE_RESERVATION_BYTES=${PIPELINE_RESERVATION_BYTES:-}
+      - COHORT_RESERVATION_BASE_BYTES=${COHORT_RESERVATION_BASE_BYTES:-}
+      - COHORT_MEMBER_RESERVATION_FACTOR=${COHORT_MEMBER_RESERVATION_FACTOR:-2}
+      - ADMISSION_QUEUED_GRACE_SECONDS=${ADMISSION_QUEUED_GRACE_SECONDS:-604800}
+      - ADMISSION_ACTIVE_LEASE_SECONDS=${ADMISSION_ACTIVE_LEASE_SECONDS:-86400}
+      - ADMISSION_HEARTBEAT_SECONDS=${ADMISSION_HEARTBEAT_SECONDS:-300}
     volumes:
       - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
-      - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
+      - handoff_spool:/opt/vntyper/handoff
+      - result_store:/opt/vntyper/output
     depends_on:
       redis:
         condition: service_healthy
@@ -89,9 +99,19 @@ services:
       # nothing. The defaults are the shipped values, so behaviour is unchanged.
       - MAX_RESULT_AGE_DAYS=${MAX_RESULT_AGE_DAYS:-3}
       - COHORT_RETENTION_DAYS=${COHORT_RETENTION_DAYS:-3}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-1073741824}
+      - MAX_QUEUED_JOBS=${MAX_QUEUED_JOBS:-100}
+      - MIN_FREE_DISK_BYTES=${MIN_FREE_DISK_BYTES:-}
+      - PIPELINE_RESERVATION_BYTES=${PIPELINE_RESERVATION_BYTES:-}
+      - COHORT_RESERVATION_BASE_BYTES=${COHORT_RESERVATION_BASE_BYTES:-}
+      - COHORT_MEMBER_RESERVATION_FACTOR=${COHORT_MEMBER_RESERVATION_FACTOR:-2}
+      - ADMISSION_QUEUED_GRACE_SECONDS=${ADMISSION_QUEUED_GRACE_SECONDS:-604800}
+      - ADMISSION_ACTIVE_LEASE_SECONDS=${ADMISSION_ACTIVE_LEASE_SECONDS:-86400}
+      - ADMISSION_HEARTBEAT_SECONDS=${ADMISSION_HEARTBEAT_SECONDS:-300}
     volumes:
       - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
-      - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
+      - handoff_spool:/opt/vntyper/handoff
+      - result_store:/opt/vntyper/output
     depends_on:
       redis:
         condition: service_healthy
@@ -119,7 +139,6 @@ services:
       - COHORT_RETENTION_DAYS=${COHORT_RETENTION_DAYS:-3}
     volumes:
       - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
-      - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
     depends_on:
       redis:
         condition: service_healthy
@@ -132,3 +151,7 @@ services:
 networks:
   vntyper_network:
     driver: bridge
+
+volumes:
+  handoff_spool:
+  result_store:

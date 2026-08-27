@@ -136,6 +136,7 @@ def test_shipped_config_exposes_the_actual_safe_preflight_policy() -> None:
         "allow_ambient_reference_resolution": False,
         "local_ref_path": "%2s/%2s/%s",
         "reference_probe_timeout_seconds": 120,
+        "stream_probe_timeout_seconds": 1800,
         "unmapped_scan": "auto",
         "reference_candidate_order": [
             "cli",

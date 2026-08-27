@@ -24,6 +24,8 @@ status code cannot distinguish "refused" from "refused and cleaned up".
 imports before this module, so `app.job_workspace` is importable here.
 """
 
+import hashlib
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -116,6 +118,70 @@ def test_workspace_removes_everything_it_created_when_the_body_raises(tmp_path: 
     assert _tree(tmp_path / "output") == []
 
 
+def test_workspace_reclaims_nested_contents_through_its_bound_descriptors(tmp_path: Path) -> None:
+    """Refusal cleanup recursively clears captured directories without path traversal."""
+    with pytest.raises(RuntimeError, match="refused"):  # noqa: SIM117
+        with job_workspace(str(tmp_path / "input"), str(tmp_path / "output"), "job-1") as workspace:
+            nested_input = Path(workspace.input_dir) / "nested"
+            nested_output = Path(workspace.output_dir) / "stage" / "deeper"
+            nested_input.mkdir()
+            nested_output.mkdir(parents=True)
+            (nested_input / BAM_NAME).write_bytes(BAM_BYTES)
+            (nested_output / "partial.txt").write_text("partial", encoding="utf-8")
+            raise RuntimeError("the submission was refused")
+
+    assert _tree(tmp_path / "input") == []
+    assert _tree(tmp_path / "output") == []
+
+
+def test_job_workspace_recursive_cleanup_preserves_primary_while_closing_ancestors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Nested descriptor closes cannot replace the recursive cleanup error."""
+    from app import job_workspace as workspace_module
+
+    root = tmp_path / "root"
+    trigger = root / "nested" / "deeper" / "trigger"
+    trigger.parent.mkdir(parents=True)
+    trigger.write_bytes(b"data")
+    real_open = workspace_module.os.open
+    real_stat = workspace_module.os.stat
+    real_close = workspace_module.os.close
+    root_descriptor = real_open(root, workspace_module.os.O_RDONLY | workspace_module.os.O_DIRECTORY)
+    opened: list[int] = []
+    closed: list[int] = []
+
+    def recording_open(*args, **kwargs) -> int:
+        descriptor = real_open(*args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+
+    def failing_stat(path, *args, **kwargs):
+        if path == "trigger":
+            raise OSError("primary recursive cleanup failure")
+        return real_stat(path, *args, **kwargs)
+
+    def failing_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+        raise OSError(f"secondary close failure {descriptor}")
+
+    monkeypatch.setattr(workspace_module.os, "open", recording_open)
+    monkeypatch.setattr(workspace_module.os, "stat", failing_stat)
+    monkeypatch.setattr(workspace_module.os, "close", failing_close)
+    try:
+        with pytest.raises(OSError, match="primary recursive cleanup failure"):
+            workspace_module._clear_directory(root_descriptor)
+    finally:
+        real_close(root_descriptor)
+        for descriptor in opened:
+            with suppress(OSError):
+                real_close(descriptor)
+
+    assert closed == list(reversed(opened))
+
+
 def test_workspace_keeps_its_directories_when_the_body_raises_after_the_commit(tmp_path: Path) -> None:
     """Once the task is accepted the directories belong to the worker, not to the request.
 
@@ -143,6 +209,169 @@ def test_workspace_still_unpacks_as_the_pair_of_directories(tmp_path: Path) -> N
         job_input, job_output = workspace
         assert job_input == workspace.input_dir == str(tmp_path / "input" / "job-1")
         assert job_output == workspace.output_dir == str(tmp_path / "output" / "job-1")
+
+
+def test_handoff_refuses_replaced_names_and_reclaims_only_the_bound_inodes(tmp_path: Path) -> None:
+    """A pre-handoff swap leaves replacements alone and no uploaded bytes behind."""
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    displaced_input = input_root / "job-1-displaced"
+    displaced_output = output_root / "job-1-displaced"
+
+    with pytest.raises(RuntimeError, match="input directory identity changed before handoff"):  # noqa: SIM117
+        with job_workspace(str(input_root), str(output_root), "job-1") as workspace:
+            alignment = Path(workspace.input_dir) / BAM_NAME
+            alignment.write_bytes(BAM_BYTES)
+            alignment_metadata = alignment.stat()
+            Path(workspace.input_dir).rename(displaced_input)
+            Path(workspace.output_dir).rename(displaced_output)
+            Path(workspace.input_dir).mkdir()
+            Path(workspace.output_dir).mkdir()
+            (Path(workspace.input_dir) / "replacement.txt").write_text("input replacement", encoding="utf-8")
+            (Path(workspace.output_dir) / "replacement.txt").write_text("output replacement", encoding="utf-8")
+            workspace.handoff(
+                (alignment_metadata.st_dev, alignment_metadata.st_ino),
+                None,
+                hashlib.sha256(BAM_BYTES).hexdigest(),
+                None,
+            )
+
+    assert (Path(input_root) / "job-1" / "replacement.txt").read_text(encoding="utf-8") == "input replacement"
+    assert (Path(output_root) / "job-1" / "replacement.txt").read_text(encoding="utf-8") == "output replacement"
+    assert list(displaced_input.iterdir()) == []
+    assert list(displaced_output.iterdir()) == []
+
+
+def test_workspace_close_attempts_both_descriptors_without_masking_the_body_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The body error stays primary when one workspace descriptor close fails."""
+    from app import job_workspace as workspace_module
+
+    real_close = workspace_module.os.close
+    closed: list[int] = []
+    output_descriptor: int | None = None
+    input_descriptor: int | None = None
+
+    def close_with_one_failure(descriptor: int) -> None:
+        closed.append(descriptor)
+        if descriptor == output_descriptor:
+            real_close(descriptor)
+            raise OSError("output close failed")
+        real_close(descriptor)
+
+    with pytest.raises(RuntimeError, match="body failed"):  # noqa: SIM117
+        with job_workspace(str(tmp_path / "input"), str(tmp_path / "output"), "job-1") as workspace:
+            output_descriptor = workspace.output_descriptor
+            input_descriptor = workspace.input_descriptor
+            monkeypatch.setattr(workspace_module.os, "close", close_with_one_failure)
+            raise RuntimeError("body failed")
+
+    assert closed == [output_descriptor, input_descriptor]
+
+
+def test_workspace_binding_failure_attempts_all_closes_and_preserves_the_primary_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Setup cleanup neither leaks a bound directory nor masks its bind failure."""
+    from app import job_workspace as workspace_module
+
+    real_open = workspace_module.os.open
+    real_fstat = workspace_module.os.fstat
+    real_close = workspace_module.os.close
+    opened: list[int] = []
+    close_attempts: list[int] = []
+
+    def recording_open(path, *args, **kwargs):
+        descriptor = real_open(path, *args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+
+    def fail_output_binding(descriptor: int):
+        if len(opened) == 2 and descriptor == opened[1]:
+            raise OSError("primary bind failure")
+        return real_fstat(descriptor)
+
+    def close_with_secondary_error(descriptor: int) -> None:
+        close_attempts.append(descriptor)
+        real_close(descriptor)
+        if opened and descriptor == opened[0]:
+            raise OSError("secondary close failure")
+
+    monkeypatch.setattr(workspace_module.os, "open", recording_open)
+    monkeypatch.setattr(workspace_module.os, "fstat", fail_output_binding)
+    monkeypatch.setattr(workspace_module.os, "close", close_with_secondary_error)
+    input_dir = tmp_path / "input" / "job-1"
+    output_dir = tmp_path / "output" / "job-1"
+    try:
+        with pytest.raises(RuntimeError, match="primary bind failure"):  # noqa: SIM117
+            with job_workspace(str(tmp_path / "input"), str(tmp_path / "output"), "job-1"):
+                raise AssertionError("binding failure must prevent the context from yielding")
+    finally:
+        for descriptor in opened:
+            with suppress(OSError):
+                real_close(descriptor)
+        for path in (input_dir, output_dir):
+            if path.exists():
+                path.rmdir()
+
+    assert close_attempts == opened
+    assert not input_dir.exists()
+    assert not output_dir.exists()
+
+
+def test_workspace_construction_fstat_failure_closes_and_reclaims_every_bound_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The constructor's second identity read remains inside setup cleanup."""
+    from app import job_workspace as workspace_module
+
+    real_fstat = workspace_module.os.fstat
+    real_close = workspace_module.os.close
+    fstat_calls = 0
+    opened: list[int] = []
+    closed: list[int] = []
+    real_open = workspace_module.os.open
+
+    def recording_open(*args, **kwargs) -> int:
+        descriptor = real_open(*args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+
+    def fail_constructor_fstat(descriptor: int):
+        nonlocal fstat_calls
+        fstat_calls += 1
+        if fstat_calls == 3:
+            raise OSError("constructor fstat failure")
+        return real_fstat(descriptor)
+
+    def recording_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(workspace_module.os, "open", recording_open)
+    monkeypatch.setattr(workspace_module.os, "fstat", fail_constructor_fstat)
+    monkeypatch.setattr(workspace_module.os, "close", recording_close)
+
+    with pytest.raises(RuntimeError, match="constructor fstat failure"):  # noqa: SIM117
+        with job_workspace(str(tmp_path / "input"), str(tmp_path / "output"), "job-1"):
+            raise AssertionError("construction failure must prevent the context from yielding")
+
+    assert closed == opened
+    assert _tree(tmp_path / "input") == []
+    assert _tree(tmp_path / "output") == []
+
+
+def test_workspace_documentation_distinguishes_the_spool_from_the_output_volume() -> None:
+    """The helper documentation names the two different trust surfaces."""
+    from app import job_workspace as workspace_module
+
+    assert workspace_module.__doc__ is not None
+    assert "protected handoff spool" in workspace_module.__doc__
+    assert "service-private result store" in workspace_module.__doc__
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +566,6 @@ def test_an_accepted_submission_still_keeps_its_directories(client, web_app, tmp
 
     assert response.status_code == 200, response.text
     job_id = response.json()["job_id"]
-    assert (tmp_path / "input" / job_id / BAM_NAME).read_bytes() == BAM_BYTES
+    assert (tmp_path / "handoff" / job_id / BAM_NAME).read_bytes() == BAM_BYTES
     assert (tmp_path / "output" / job_id).is_dir()
     web_app.run_vntyper_job.delay.assert_called_once()

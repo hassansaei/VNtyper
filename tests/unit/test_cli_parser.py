@@ -119,6 +119,42 @@ def test_the_cohort_subcommand_still_requires_an_input_source():
     assert excinfo.value.code == 2
 
 
+THREAD_SUBCOMMAND_ARGV = [
+    ["pipeline"],
+    ["install-references", "--output-dir", "references"],
+    ["online", "--bam", "sample.bam"],
+]
+
+
+@pytest.mark.parametrize("prefix", THREAD_SUBCOMMAND_ARGV)
+@pytest.mark.parametrize("value", ["0", "-1", "not-a-number"])
+def test_every_threads_option_refuses_invalid_values(prefix: list[str], value: str) -> None:
+    """Each thread-bearing subcommand reports malformed values as usage errors.
+
+    Args:
+        prefix: Minimal valid invocation for the subcommand under test.
+        value: Non-positive or non-integer token under test.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args([*prefix, "--threads", value])
+
+    assert excinfo.value.code == 2
+
+
+@pytest.mark.parametrize("prefix", THREAD_SUBCOMMAND_ARGV)
+@pytest.mark.parametrize("value", [1, 64, 999999])
+def test_every_threads_option_preserves_positive_values(prefix: list[str], value: int) -> None:
+    """Every previously accepted positive thread count remains unchanged.
+
+    Args:
+        prefix: Minimal valid invocation for the subcommand under test.
+        value: Positive value under test, including one above the web bound.
+    """
+    args = build_parser().parse_args([*prefix, "--threads", str(value)])
+
+    assert args.threads == value
+
+
 def test_main_with_an_empty_argv_prints_help_and_exits_zero(capsys):
     """No subcommand is not an error: print the help and exit 0."""
     with pytest.raises(SystemExit) as excinfo:

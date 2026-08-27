@@ -151,6 +151,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CONDA_AUTO_UPDATE_CONDA=FALSE \
     PATH=/opt/conda/envs/vntyper/bin:$PATH \
     DEFAULT_INPUT_DIR=/opt/vntyper/input \
+    DEFAULT_HANDOFF_SPOOL_DIR=/opt/vntyper/handoff \
     DEFAULT_OUTPUT_DIR=/opt/vntyper/output \
     REFERENCE_DIR=/opt/vntyper/reference
 
@@ -165,13 +166,14 @@ ARG USERNAME=appuser
 ARG USER_UID=1001
 ARG USER_GID=1001
 
-# `install -d -o` creates the two writable directories already owned by appuser.
+# `install -d -o` creates the writable directories already owned by appuser.
 # The old Dockerfile ran `chown -R appuser /opt/vntyper` over 1.66 GB of references and
 # source; under overlayfs that copies up every touched file into a new layer, adding
 # ~1.66 GB to the image for nothing. References and code are read-only at runtime.
 RUN groupadd --gid $USER_GID $USERNAME && \
     useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash --create-home $USERNAME && \
-    install -d -o $USERNAME -g $USERNAME $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR
+    install -d -o $USERNAME -g $USERNAME \
+        $DEFAULT_INPUT_DIR $DEFAULT_HANDOFF_SPOOL_DIR $DEFAULT_OUTPUT_DIR
 
 COPY --from=envs /opt/conda/envs /opt/conda/envs
 COPY --from=refs /opt/refs       /opt/vntyper/reference
