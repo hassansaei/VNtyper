@@ -112,8 +112,10 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     reachable by a format, candidate count and fast/normal preflight mode.
   - `pipeline_advntr_preflight.py` — pure, typed planning of optional adVNTR enablement
     and model-reference resolution before the pipeline performs model or alignment I/O.
+  - `comparator_rules.py` — validation and evaluation of the deliberately small,
+    non-executable comparator DSL shared by flagging and cross-match rules.
   `reference_resolution_environment.py` separately owns CRAM-only process-environment
-  pin/restore I/O. All fifteen pure modules are fully annotated and at or near 100% branch
+  pin/restore I/O. All sixteen pure modules are fully annotated and at or near 100% branch
   coverage. Put new pure logic there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
@@ -474,23 +476,23 @@ summary | release-summary | none | always records success, failure, skipped jobs
    argument. `--config-path` cannot override them; tests must patch the module global.
 2. **`--config-path` replaces the whole config, it does not merge.** Missing keys raise
    `KeyError` deep in the pipeline (`config["tools"]["java_path"]`, no `.get`).
-3. **The two configuration-driven rule consumers currently have different security
-   boundaries.** Grep the JSON configs before renaming any column.
-   - `flagging.py` validates Kestrel and adVNTR flag rules through the structured
-     comparator DSL before copying or iterating a DataFrame. The only operators are
-     `eq`, `lt`, `in`, and `casefold_eq`; null is false, types are not coerced, and
-     booleans are accepted only by same-family `eq`. Missing columns, malformed rules,
-     unsafe flag names, and incompatible non-null row values raise `ValueError` instead
-     of silently disabling a flag. A flag-name-scoped migration map accepts only each of
-     the five byte-exact expressions shipped immediately before #286; modified, custom,
-     or another flag's expression is rejected. Packaged configs still load at their
-     existing import-time locations, and validation occurs when the consuming flagging
-     stage begins rather than at module import.
-   - `cross_match.py` (`match_variants`) evaluates `config["cross_match"]["match_logic"]`
-     from `config.json`. It **no longer fails open** — commit `5ee1e4a` made it
-     `logger.error(msg)` then `raise ValueError(msg)`, on `NameError`/`SyntaxError` and on
-     every other exception alike, because "no match" and "could not be evaluated" are
-     indistinguishable in the report. A bad rule there now stops the run.
+3. **Both configuration-driven rule consumers share one deliberately small comparator
+   security boundary.** `flagging.py` and `cross_match.py` validate structured rules
+   through `comparator_rules.py` before processing any row. Grep the JSON configs before
+   renaming any column.
+   - The only operators are `eq`, `lt`, `in`, and `casefold_eq`; rules are non-empty
+     conjunctions only. Null is false, types are not coerced, booleans are accepted only
+     by same-family `eq`, and configured or non-null runtime numbers must be finite.
+     Missing columns, malformed rules, unsafe flag names, and incompatible row values
+     log and raise `ValueError` instead of silently producing "not flagged" or "no match".
+   - Migration is intentionally finite. Flagging accepts only the five flag-name-scoped,
+     byte-exact expressions shipped immediately before #286; cross-match accepts only its
+     one byte-exact historical expression. Modified whitespace, custom expressions, and
+     an expression assigned to the wrong flag are rejected. There is no general-purpose
+     expression parser and no `eval`/`exec` path.
+   - Packaged configs still load at their existing import-time locations. Validation
+     occurs when the consuming flagging or cross-match stage begins, before copying or
+     iterating a DataFrame, rather than at module import.
 4. **Stages mark, they do not filter.** Kestrel stages append **six** boolean columns
    (`is_frameshift`, `is_valid_frameshift`, `depth_confidence_pass`, `alt_filter_pass`,
    `motif_filter_pass`, `flag_filter_pass`); `filter_final_dataframe()` ANDs them at the
