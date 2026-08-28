@@ -122,6 +122,36 @@ def calculate_passed_filter_rate(passed_filter_reads: object, total_reads: objec
     return float(passed_count / total_count)
 
 
+def calculate_passed_filter_rate_from_sources(
+    before_filtering: Mapping[str, object], filtering_result: Mapping[str, object]
+) -> float | None:
+    """Extract required fastp counts and calculate the passed-filter rate.
+
+    Args:
+        before_filtering: The fastp ``summary.before_filtering`` mapping.
+        filtering_result: The fastp ``filtering_result`` mapping.
+
+    Returns:
+        The valid raw float fraction, or ``None`` when both counts are zero.
+
+    Raises:
+        ValueError: If either required source key is missing or either count is invalid.
+    """
+    sources = (
+        (before_filtering, "total_reads", "summary.before_filtering.total_reads"),
+        (filtering_result, "passed_filter_reads", "filtering_result.passed_filter_reads"),
+    )
+    values: dict[str, object] = {}
+    for source, key, path in sources:
+        try:
+            values[key] = source[key]
+        except KeyError as error:
+            message = f"Fastp output is missing required passed_filter_rate source key {path!r}."
+            logger.error(message)
+            raise ValueError(message) from error
+    return calculate_passed_filter_rate(values["passed_filter_reads"], values["total_reads"])
+
+
 def _cutoff(value: object, key: str) -> FastpCutoff:
     """Build one validated fastp decision/display pair."""
     fraction = _validated_fraction(value, key)
@@ -132,24 +162,13 @@ def _cutoff(value: object, key: str) -> FastpCutoff:
 def _displayed_fraction(fraction: Decimal) -> Decimal:
     """Round a fraction into the report's two-decimal percentage domain."""
     percentage = fraction * Decimal(100)
-    return percentage.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) / Decimal(100)
+    displayed_fraction = percentage.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) / Decimal(100)
+    return Decimal(0) if displayed_fraction.is_zero() else displayed_fraction
 
 
 def _cutoff_label(fraction: Decimal) -> str:
     """Format a displayed fastp fraction as its concise cutoff label."""
     return f"{format((fraction * Decimal(100)).normalize(), 'f')}%"
-
-
-def fastp_display_rate(rate: object) -> str | None:
-    """Format one raw fastp metric with the icon's exact decision rounding.
-
-    Args:
-        rate: Raw fastp fraction, or ``None`` when the metric was not measured.
-
-    Returns:
-        The visible percentage string, preserving a missing value.
-    """
-    return build_fastp_measurement(rate, "fastp rate").display
 
 
 def build_fastp_cutoffs(thresholds: Mapping[str, object]) -> FastpCutoffs:
@@ -179,18 +198,6 @@ def build_fastp_cutoffs(thresholds: Mapping[str, object]) -> FastpCutoffs:
         q30_rate=values["q30_rate"],
         passed_filter_rate=values["passed_filter_reads_rate"],
     )
-
-
-def fastp_threshold_rate(rate: object) -> Decimal | None:
-    """Return a fastp fraction rounded to the two-decimal percentage readers see.
-
-    Args:
-        rate: Raw fastp fraction, or ``None`` when the metric was not measured.
-
-    Returns:
-        The displayed rate as a fraction, preserving a missing value.
-    """
-    return build_fastp_measurement(rate, "fastp rate").value
 
 
 def build_fastp_measurement(rate: object, key: str) -> FastpMeasurement:

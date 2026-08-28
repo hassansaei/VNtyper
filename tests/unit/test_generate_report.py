@@ -341,6 +341,46 @@ def test_report_rejects_each_invalid_passed_filter_source_count(
     assert component in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("missing_path", "before_filtering", "filtering_result"),
+    (
+        ("summary.before_filtering.total_reads", {}, {"passed_filter_reads": 80}),
+        ("filtering_result.passed_filter_reads", {"total_reads": 100}, {}),
+    ),
+)
+def test_report_rejects_each_missing_passed_filter_source_key_before_writing_html(
+    tmp_path: Path,
+    missing_path: str,
+    before_filtering: dict[str, object],
+    filtering_result: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An incomplete output.json fails with its source path before report output."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": before_filtering,
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": filtering_result,
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=missing_path.replace(".", r"\.")):
+        render(tmp_path)
+
+    assert missing_path in caplog.text
+    assert not (tmp_path / "summary_report.html").exists()
+
+
 def test_report_rejects_a_passed_filter_count_above_the_total(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """The real render path refuses a passed-filter rate above one before it writes HTML."""
     write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
@@ -476,6 +516,25 @@ def test_fastp_half_tie_values_share_their_visible_cutoffs_and_icons(tmp_path) -
         assert f"{label} (Cutoff: {displayed})" in html
         assert report_formatting.OK_ICON in status
         assert report_formatting.WARNING_ICON not in status
+
+
+def test_fastp_signed_zero_renders_without_a_negative_sign(tmp_path: Path) -> None:
+    """Configured and measured signed zero share the canonical nonnegative display."""
+    rates = {
+        "duplication_rate": -0.0,
+        "q20_rate": 0.8,
+        "q30_rate": 0.7,
+        "passed_filter_reads_rate": 0.8,
+    }
+    thresholds = dict(rates)
+
+    html = _render_fastp_rates(tmp_path, rates, thresholds)
+    value, status = _fastp_metric_cells(html, "Duplication Rate")
+
+    assert value == "0.0%"
+    assert "Duplication Rate (Cutoff: 0%)" in html
+    assert "-0" not in value
+    assert report_formatting.OK_ICON in status
 
 
 @pytest.mark.parametrize(
@@ -651,7 +710,13 @@ def test_missing_fastp_rates_render_na_without_a_percent_sign(tmp_path) -> None:
     fastp_dir = tmp_path / "fastq_bam_processing"
     fastp_dir.mkdir()
     (fastp_dir / "output.json").write_text(
-        json.dumps({"summary": {"before_filtering": {"total_reads": 0}}, "duplication": {}}),
+        json.dumps(
+            {
+                "summary": {"before_filtering": {"total_reads": 0}},
+                "duplication": {},
+                "filtering_result": {"passed_filter_reads": 0},
+            }
+        ),
         encoding="utf-8",
     )
 

@@ -14,6 +14,13 @@ from vntyper.scripts.report_formatting import threshold_icon
 pytestmark = pytest.mark.unit
 
 
+class _UnstringifiableFloat(float):
+    """A real number whose decimal conversion fails after type validation."""
+
+    def __str__(self) -> str:
+        raise ValueError("cannot stringify test value")
+
+
 def _module() -> Any:
     """Import the extracted fastp cutoff module so its initial RED is collectable."""
     return importlib.import_module("vntyper.scripts.fastp_cutoffs")
@@ -125,6 +132,32 @@ def test_build_fastp_cutoffs_normalizes_an_oversized_json_integer(
     assert "duplication_rate" in caplog.text
 
 
+def test_build_fastp_cutoffs_logs_and_keys_a_decimal_conversion_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The conversion handler, not only its preceding type guard, is executable."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+    expected = "Config thresholds has invalid fastp cutoff 'duplication_rate': expected a finite fraction from 0 to 1."
+
+    with pytest.raises(ValueError, match="duplication_rate") as exc_info:
+        module.build_fastp_cutoffs(
+            {
+                "duplication_rate": _UnstringifiableFloat(0.1),
+                "q20_rate": 0.8,
+                "q30_rate": 0.7,
+                "passed_filter_reads_rate": 0.8,
+            }
+        )
+
+    assert str(exc_info.value) == expected
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "cannot stringify test value"
+    assert [record.getMessage() for record in caplog.records if record.name == "vntyper.scripts.fastp_cutoffs"] == [
+        expected
+    ]
+
+
 @pytest.mark.parametrize(
     ("component", "value"),
     (
@@ -157,6 +190,78 @@ def test_calculate_passed_filter_rate_rejects_each_invalid_source_count(
         module.calculate_passed_filter_rate(**counts)
 
     assert component in caplog.text
+
+
+def test_calculate_passed_filter_rate_returns_the_valid_ratio() -> None:
+    """A complete valid pair still produces its raw ratio before display rounding."""
+    module = _module()
+
+    assert module.calculate_passed_filter_rate(passed_filter_reads=80, total_reads=100) == pytest.approx(0.8)
+
+
+def test_calculate_passed_filter_rate_logs_and_keys_a_decimal_conversion_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A source count that fails Decimal conversion follows the keyed error contract."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+    expected = (
+        "Fastp output has invalid passed_filter_rate source count 'passed_filter_reads': "
+        "expected a finite non-negative numeric count."
+    )
+
+    with pytest.raises(ValueError, match="passed_filter_reads") as exc_info:
+        module.calculate_passed_filter_rate(
+            passed_filter_reads=_UnstringifiableFloat(80),
+            total_reads=100,
+        )
+
+    assert str(exc_info.value) == expected
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "cannot stringify test value"
+    assert [record.getMessage() for record in caplog.records if record.name == "vntyper.scripts.fastp_cutoffs"] == [
+        expected
+    ]
+
+
+@pytest.mark.parametrize(
+    ("missing_path", "before_filtering", "filtering_result"),
+    (
+        ("summary.before_filtering.total_reads", {}, {"passed_filter_reads": 80}),
+        ("filtering_result.passed_filter_reads", {"total_reads": 100}, {}),
+    ),
+)
+def test_calculate_passed_filter_rate_from_sources_rejects_each_missing_key(
+    missing_path: str,
+    before_filtering: dict[str, object],
+    filtering_result: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Incomplete output cannot inherit plausible source-count defaults."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+    expected = f"Fastp output is missing required passed_filter_rate source key {missing_path!r}."
+
+    with pytest.raises(ValueError, match=missing_path.replace(".", r"\.")) as exc_info:
+        module.calculate_passed_filter_rate_from_sources(before_filtering, filtering_result)
+
+    assert str(exc_info.value) == expected
+    assert isinstance(exc_info.value.__cause__, KeyError)
+    assert [record.getMessage() for record in caplog.records if record.name == "vntyper.scripts.fastp_cutoffs"] == [
+        expected
+    ]
+
+
+def test_calculate_passed_filter_rate_from_sources_extracts_both_required_keys() -> None:
+    """The source helper reads the exact two paths used by shipped fastp output."""
+    module = _module()
+
+    rate = module.calculate_passed_filter_rate_from_sources(
+        {"total_reads": 100},
+        {"passed_filter_reads": 80},
+    )
+
+    assert rate == pytest.approx(0.8)
 
 
 def test_calculate_passed_filter_rate_rejects_a_count_above_the_total(
@@ -222,6 +327,54 @@ def test_build_fastp_measurement_rejects_nonfinite_values_json_loads_accepts(tok
         module.build_fastp_measurement(raw_rate, "q20_rate")
 
 
+def test_build_fastp_measurement_logs_and_keys_a_decimal_conversion_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A measured rate conversion error is wrapped and logged with its metric key."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+    expected = "Fastp output has invalid measured rate 'q20_rate': expected a finite numeric fraction from 0 to 1."
+
+    with pytest.raises(ValueError, match="q20_rate") as exc_info:
+        module.build_fastp_measurement(_UnstringifiableFloat(0.8), "q20_rate")
+
+    assert str(exc_info.value) == expected
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "cannot stringify test value"
+    assert [record.getMessage() for record in caplog.records if record.name == "vntyper.scripts.fastp_cutoffs"] == [
+        expected
+    ]
+
+
+def test_build_fastp_cutoffs_normalizes_signed_zero() -> None:
+    """A valid negative-zero cutoff cannot leak its sign into the visible label."""
+    module = _module()
+
+    cutoff = module.build_fastp_cutoffs(
+        {
+            "duplication_rate": -0.0,
+            "q20_rate": 0.8,
+            "q30_rate": 0.7,
+            "passed_filter_reads_rate": 0.8,
+        }
+    ).duplication_rate
+
+    assert cutoff.value == Decimal(0)
+    assert cutoff.value.as_tuple().sign == 0
+    assert cutoff.label == "0%"
+
+
+def test_build_fastp_measurement_normalizes_signed_zero() -> None:
+    """A valid negative-zero measurement cannot render a negative percentage."""
+    module = _module()
+
+    measurement = module.build_fastp_measurement(-0.0, "duplication_rate")
+
+    assert measurement.value == Decimal(0)
+    assert measurement.value.as_tuple().sign == 0
+    assert measurement.display == "0.0%"
+
+
 @pytest.mark.parametrize(
     ("metric_key", "raw_rate", "cutoff", "higher_better", "expected_fraction", "expected_display", "expected_colour"),
     (
@@ -280,16 +433,14 @@ def test_build_fastp_measurement_preserves_none_as_missing(metric_key: str) -> N
         (0.77655, Decimal("0.7766")),
     ],
 )
-def test_fastp_threshold_rate_matches_the_value_rendered_in_the_report(
+def test_build_fastp_measurement_value_matches_the_value_rendered_in_the_report(
     raw_rate: float | None, expected: Decimal | None
 ) -> None:
     """Icon decisions use the same two-decimal percentage precision readers see."""
     module = _module()
+    measurement = module.build_fastp_measurement(raw_rate, "q20_rate")
 
-    if expected is None:
-        assert module.fastp_threshold_rate(raw_rate) is None
-    else:
-        assert module.fastp_threshold_rate(raw_rate) == expected
+    assert measurement.value == expected
 
 
 @pytest.mark.parametrize(
@@ -302,13 +453,13 @@ def test_fastp_threshold_rate_matches_the_value_rendered_in_the_report(
         (0.80045, "80.05%"),
     ],
 )
-def test_fastp_display_rate_uses_the_icon_decision_rounding(raw_rate: float | None, expected: str | None) -> None:
+def test_build_fastp_measurement_display_uses_the_icon_decision_rounding(
+    raw_rate: float | None, expected: str | None
+) -> None:
     """Visible metric text is formatted from the same decimal decision rate."""
     module = _module()
-    formatter = getattr(module, "fastp_display_rate", None)
 
-    assert callable(formatter)
-    assert formatter(raw_rate) == expected
+    assert module.build_fastp_measurement(raw_rate, "q20_rate").display == expected
 
 
 @pytest.mark.parametrize(
@@ -321,7 +472,7 @@ def test_fastp_display_rate_uses_the_icon_decision_rounding(raw_rate: float | No
         (0.00065, 0.0007, True, 0.0007, "green"),
     ],
 )
-def test_fastp_threshold_rate_is_the_icon_decision_value(
+def test_build_fastp_measurement_is_the_icon_decision_value(
     raw_rate: float,
     cutoff: float,
     higher_better: bool,
@@ -330,7 +481,15 @@ def test_fastp_threshold_rate_is_the_icon_decision_value(
 ) -> None:
     """Icon decisions compare the report's displayed precision to the paired cutoff."""
     module = _module()
-    displayed_rate = module.fastp_threshold_rate(raw_rate)
+    displayed_rate = module.build_fastp_measurement(raw_rate, "q20_rate").value
 
     assert displayed_rate == Decimal(str(expected_displayed_rate))
     assert threshold_icon(displayed_rate, Decimal(str(cutoff)), higher_better=higher_better)[1] == expected_colour
+
+
+def test_fastp_cutoffs_does_not_expose_dead_split_value_or_display_wrappers() -> None:
+    """Callers use the combined measurement so its visible value and decision cannot drift."""
+    module = _module()
+
+    assert not hasattr(module, "fastp_display_rate")
+    assert not hasattr(module, "fastp_threshold_rate")

@@ -116,8 +116,9 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   - `pipeline_advntr_preflight.py` — pure, typed planning of optional adVNTR enablement
     and model-reference resolution before the pipeline performs model or alignment I/O.
   `reference_resolution_environment.py` separately owns CRAM-only process-environment
-  pin/restore I/O. All fifteen pure modules are fully annotated and at or near 100% branch
-  coverage. Put new pure logic there rather than back in the file it came from.
+  pin/restore I/O. These focused modules keep pure decisions independently testable;
+  measure their current branch coverage rather than assuming a fixed percentage. Put new
+  pure logic there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
   package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs

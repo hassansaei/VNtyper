@@ -205,6 +205,33 @@ def test_summarise_fastp_rejects_each_invalid_passed_filter_source_count(
     assert component in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("missing_path", "before_filtering", "filtering_result"),
+    (
+        ("summary.before_filtering.total_reads", {}, {"passed_filter_reads": 80}),
+        ("filtering_result.passed_filter_reads", {"total_reads": 100}, {}),
+    ),
+)
+def test_summarise_fastp_rejects_each_missing_passed_filter_source_key(
+    missing_path: str,
+    before_filtering: dict[str, object],
+    filtering_result: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The extraction boundary refuses incomplete source counts instead of defaulting them."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=missing_path.replace(".", r"\.")):
+        rf.summarise_fastp(
+            {
+                "summary": {"before_filtering": before_filtering, "after_filtering": {}},
+                "filtering_result": filtering_result,
+            }
+        )
+
+    assert missing_path in caplog.text
+
+
 def test_summarise_fastp_rejects_a_passed_filter_count_above_the_total(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
