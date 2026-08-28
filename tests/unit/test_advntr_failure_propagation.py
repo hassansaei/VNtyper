@@ -280,7 +280,6 @@ def test_selected_advntr_model_at_cleanup_destination_is_preserved_before_any_wo
     config = deepcopy(MINIMAL_CONFIG)
     config["reference_data"]["advntr_reference_vntr_hg19"] = str(model_path)
 
-    input_kwargs: dict[str, str] = {}
     if input_mode == "fastq":
         input_root = tmp_path / "inputs"
         input_root.mkdir()
@@ -288,16 +287,24 @@ def test_selected_advntr_model_at_cleanup_destination_is_preserved_before_any_wo
         bwa_reference = input_root / "reference.fa"
         fastq.write_bytes(b"reads")
         bwa_reference.write_bytes(b"reference")
-        input_kwargs = {"fastq1": str(fastq), "bwa_reference": str(bwa_reference)}
 
     with patch("vntyper.modules.advntr.model_provenance.subprocess.run") as runner:
-        harness = run_pipeline_under_harness(
-            output_dir,
-            config=config,
-            extra_modules=["advntr"],
-            expect_failure=True,
-            **input_kwargs,
-        )
+        if input_mode == "fastq":
+            harness = run_pipeline_under_harness(
+                output_dir,
+                config=config,
+                extra_modules=["advntr"],
+                expect_failure=True,
+                fastq1=str(fastq),
+                bwa_reference=str(bwa_reference),
+            )
+        else:
+            harness = run_pipeline_under_harness(
+                output_dir,
+                config=config,
+                extra_modules=["advntr"],
+                expect_failure=True,
+            )
 
     assert isinstance(harness.error, SystemExit)
     assert harness.error.code == 1
