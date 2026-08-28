@@ -12,6 +12,7 @@ from unittest.mock import call, patch
 
 import pytest
 
+from vntyper.modules.advntr import model_provenance
 from vntyper.modules.advntr.model_provenance import (
     AdvntrModelError,
     AdvntrProbeStatus,
@@ -35,6 +36,25 @@ PROCESS_LOCK_OUTPUT = (
 TRANSIENT_LOCK_OUTPUT = RESOURCE_LOCK_OUTPUT + PROCESS_LOCK_OUTPUT
 MEASURED_LOCK_WITH_VERSION = f"{TRANSIENT_LOCK_OUTPUT}2.0.4\n{TRANSIENT_LOCK_OUTPUT}"
 V2_MODEL = {"schema_version": "v2", "path": "model.db", "window_bp": 3525}
+REAL_ADVNTR_203_ARGPARSE_STDERR = (
+    "usage: \n"
+    "=======================================================\n"
+    "adVNTR 2.0.3: Genopyting tool for VNTRs\n"
+    "=======================================================\n"
+    "Source code: https://github.com/mehrdadbakhtiari/adVNTR\n"
+    "Instructions: http://advntr.readthedocs.io\n"
+    "-------------------------------------------------------\n"
+    "\n"
+    "usage: advntr <command> [options]\n"
+    "\n"
+    "\n"
+    "Command: genotype\tfind RU counts and mutations in VNTRs\n"
+    "         viewmodel\tview existing models in database\n"
+    "         addmodel\tadd custom VNTR to the database\n"
+    "         delmodel\tremove a model from database\n"
+    "\n"
+    "advntr: error: too few arguments\n"
+)
 
 
 def _result(*, status: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
@@ -60,6 +80,18 @@ def _assert_verified(outcome: AdvntrVersionOutcome, version: tuple[int, int, int
         (AdvntrProbeStatus.VERIFIED, (2, -1, 4), "", "version must be exactly three non-negative integers"),
         (AdvntrProbeStatus.VERIFIED, (2, "0", 4), "", "version must be exactly three non-negative integers"),
         (AdvntrProbeStatus.VERIFIED, (2, 0, 4), "launch failed", "failure message must be empty"),
+        (
+            AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE,
+            None,
+            "adVNTR version launch failed: command exited with status 2.",
+            "version must be exactly three non-negative integers",
+        ),
+        (
+            AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE,
+            (2, 0, 3),
+            "",
+            "message must start with 'adVNTR version launch failed'",
+        ),
         (AdvntrProbeStatus.LAUNCH_FAILURE, (2, 0, 4), "adVNTR version launch failed", "version must be None"),
         (AdvntrProbeStatus.UNPARSEABLE_SUCCESS, (2, 0, 4), "response was ambiguous", "version must be None"),
         (AdvntrProbeStatus.TRANSIENT_EXHAUSTED, (2, 0, 4), "retries exhausted", "version must be None"),
@@ -333,6 +365,91 @@ def test_a_parsed_incompatible_version_is_not_retried_or_accepted() -> None:
     sleep.assert_not_called()
     with pytest.raises(AdvntrModelError, match="adVNTR 2.0.3"):
         require_compatible_advntr(V2_MODEL, version)
+
+
+def test_real_203_argparse_failure_reaches_the_incompatible_version_refusal() -> None:
+    """A failed 2.0.3 CLI remains a launch failure while retaining its actionable version."""
+    probe = AdvntrVersionProbe()
+    with (
+        patch(
+            "vntyper.modules.advntr.model_provenance.subprocess.run",
+            return_value=_result(status=2, stderr=REAL_ADVNTR_203_ARGPARSE_STDERR),
+        ) as runner,
+        patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
+    ):
+        outcome = detect_advntr_version(CONFIG, probe=probe)
+        repeated = detect_advntr_version(CONFIG, probe=probe)
+
+    assert outcome.status is AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE
+    assert repeated == outcome
+    assert outcome.version == (2, 0, 3)
+    assert outcome.message == "adVNTR version launch failed: command exited with status 2."
+    assert runner.call_count == 2
+    sleep.assert_not_called()
+    with pytest.raises(AdvntrModelError, match=r"Install adVNTR >= 2\.0\.4"):
+        model_provenance.require_compatible_advntr_outcome(V2_MODEL, outcome)
+
+
+def test_nonzero_compatible_banner_never_authorizes_the_run() -> None:
+    """Even a tagged compatible version cannot turn a nonzero subprocess into success."""
+    with patch(
+        "vntyper.modules.advntr.model_provenance.subprocess.run",
+        return_value=_result(status=2, stderr="adVNTR 2.0.4: Genopyting tool for VNTRs\n"),
+    ):
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+
+    assert outcome.status is AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE
+    with pytest.raises(RuntimeError, match="command exited with status 2"):
+        model_provenance.require_compatible_advntr_outcome(V2_MODEL, outcome)
+
+
+def test_verified_compatible_outcome_is_the_only_compatibility_path_that_returns() -> None:
+    """Changing the status comparison cannot authorize a failed or malformed probe."""
+    outcome = AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4))
+
+    assert model_provenance.require_compatible_advntr_outcome(V2_MODEL, outcome) == (2, 0, 4)
+
+
+def test_unversioned_launch_failure_never_reaches_model_compatibility() -> None:
+    """A missing version cannot be presented as a genuinely incompatible release."""
+    outcome = AdvntrVersionOutcome(
+        AdvntrProbeStatus.LAUNCH_FAILURE,
+        message="adVNTR version launch failed: command exited with status 127.",
+    )
+
+    with pytest.raises(RuntimeError, match="command exited with status 127"):
+        model_provenance.require_compatible_advntr_outcome(V2_MODEL, outcome)
+
+
+def test_conflicting_tagged_versions_on_nonzero_exit_remain_a_launch_failure() -> None:
+    """Ambiguous failed-process banners cannot select which diagnosis to present."""
+    with patch(
+        "vntyper.modules.advntr.model_provenance.subprocess.run",
+        return_value=_result(
+            status=2,
+            stdout="adVNTR 2.0.3: legacy help\n",
+            stderr="adVNTR 2.0.4: conflicting launcher output\n",
+        ),
+    ):
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+
+    assert outcome == AdvntrVersionOutcome(
+        AdvntrProbeStatus.LAUNCH_FAILURE,
+        message="adVNTR version launch failed: command exited with status 2.",
+    )
+
+
+def test_malformed_command_is_a_typed_tools_advntr_launch_failure() -> None:
+    """Malformed configured quoting must not escape the typed detector contract."""
+    config = {"tools": {"advntr": "mamba run -n envadvntr 'advntr"}}
+
+    with patch("vntyper.modules.advntr.model_provenance.subprocess.run") as runner:
+        outcome = detect_advntr_version(config, probe=AdvntrVersionProbe())
+
+    runner.assert_not_called()
+    assert outcome.status is AdvntrProbeStatus.LAUNCH_FAILURE
+    assert outcome.version is None
+    assert outcome.message.startswith("adVNTR version launch failed: invalid tools.advntr command:")
 
 
 def test_concurrent_callers_share_one_successful_probe() -> None:

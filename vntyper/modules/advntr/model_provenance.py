@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ class AdvntrProbeStatus(Enum):
     """Terminal classification of one bounded adVNTR version probe."""
 
     VERIFIED = "verified"
+    VERSIONED_LAUNCH_FAILURE = "versioned_launch_failure"
     LAUNCH_FAILURE = "launch_failure"
     UNPARSEABLE_SUCCESS = "unparseable_success"
     TRANSIENT_EXHAUSTED = "transient_exhausted"
@@ -101,16 +102,23 @@ class AdvntrVersionOutcome:
         error: str | None = None
         if not isinstance(self.status, AdvntrProbeStatus):
             error = "Invalid adVNTR version outcome: status must be an AdvntrProbeStatus."
-        elif self.status is AdvntrProbeStatus.VERIFIED:
+        elif self.status in {AdvntrProbeStatus.VERIFIED, AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE}:
             version = self.version
             if not (
                 type(version) is tuple
                 and len(version) == 3
                 and all(type(part) is int and part >= 0 for part in version)
             ):
-                error = "Invalid verified adVNTR version outcome: version must be exactly three non-negative integers."
-            elif self.message != "":
+                error = f"Invalid {self.status.value} adVNTR version outcome: version must be exactly three non-negative integers."
+            elif self.status is AdvntrProbeStatus.VERIFIED and self.message != "":
                 error = "Invalid verified adVNTR version outcome: failure message must be empty."
+            elif self.status is AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE and (
+                not isinstance(self.message, str) or not self.message.startswith("adVNTR version launch failed")
+            ):
+                error = (
+                    "Invalid versioned_launch_failure adVNTR version outcome: message must start with "
+                    "'adVNTR version launch failed'."
+                )
         elif self.version is not None:
             error = f"Invalid {self.status.value} adVNTR version outcome: version must be None."
         else:
@@ -155,7 +163,13 @@ class AdvntrVersionProbe:
             if cached is not None:
                 return AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=cached)
 
-            argv = shlex.split(command) + shlex.split("--version")
+            try:
+                argv = shlex.split(command) + ["--version"]
+            except ValueError as exc:
+                return AdvntrVersionOutcome(
+                    AdvntrProbeStatus.LAUNCH_FAILURE,
+                    message=f"adVNTR version launch failed: invalid tools.advntr command: {exc}.",
+                )
             attempt = 1
             while True:
                 try:
@@ -177,8 +191,12 @@ class AdvntrVersionProbe:
                     )
 
                 combined_output = f"{result.stdout}\n{result.stderr}"
-                version = _parse_probe_output(result.stdout, result.stderr) if result.returncode == 0 else None
-                if version is not None:
+                version = (
+                    _parse_probe_output(result.stdout, result.stderr)
+                    if result.returncode == 0
+                    else _parse_failed_probe_output(result.stdout, result.stderr)
+                )
+                if result.returncode == 0 and version is not None:
                     self._versions[command] = version
                     return AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=version)
 
@@ -198,6 +216,12 @@ class AdvntrVersionProbe:
                     continue
 
                 if result.returncode != 0:
+                    if version is not None:
+                        return AdvntrVersionOutcome(
+                            AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE,
+                            version=version,
+                            message=f"adVNTR version launch failed: command exited with status {result.returncode}.",
+                        )
                     return AdvntrVersionOutcome(
                         AdvntrProbeStatus.LAUNCH_FAILURE,
                         message=f"adVNTR version launch failed: command exited with status {result.returncode}.",
@@ -226,6 +250,19 @@ def _parse_probe_output(stdout: str, stderr: str) -> tuple[int, int, int] | None
     for stream in (stdout, stderr):
         for line in stream.splitlines():
             match = _BARE_VERSION_LINE.fullmatch(line) or _LEGACY_VERSION_LINE.fullmatch(line)
+            if match is not None:
+                candidates.add((int(match.group(1)), int(match.group(2)), int(match.group(3))))
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates))
+
+
+def _parse_failed_probe_output(stdout: str, stderr: str) -> tuple[int, int, int] | None:
+    """Return one tagged legacy banner version from a failed subprocess."""
+    candidates: set[tuple[int, int, int]] = set()
+    for stream in (stdout, stderr):
+        for line in stream.splitlines():
+            match = _LEGACY_VERSION_LINE.fullmatch(line)
             if match is not None:
                 candidates.add((int(match.group(1)), int(match.group(2)), int(match.group(3))))
     if len(candidates) != 1:
@@ -281,12 +318,7 @@ def require_verified_advntr_version(outcome: AdvntrVersionOutcome) -> tuple[int,
     """
     validated = AdvntrVersionOutcome(outcome.status, version=outcome.version, message=outcome.message)
     if validated.status is AdvntrProbeStatus.VERIFIED:
-        version = validated.version
-        if version is None:
-            msg = "Invalid verified adVNTR version outcome: version must not be None."
-            logger.error(msg)
-            raise ValueError(msg)
-        return version
+        return cast(tuple[int, int, int], validated.version)
     logger.error(validated.message)
     raise RuntimeError(validated.message)
 
@@ -384,3 +416,35 @@ def require_compatible_advntr(model: dict[str, Any], advntr_version: tuple[int, 
             f"{model['path']}; it would fetch a truncated window and report "
             f"confident but incomplete results. Install adVNTR >= {wanted}."
         )
+
+
+def require_compatible_advntr_outcome(model: dict[str, Any], outcome: AdvntrVersionOutcome) -> tuple[int, int, int]:
+    """Return a verified compatible version, preserving a failed launch's diagnosis.
+
+    A pre-2.0.4 adVNTR has no ``--version`` option: argparse exits nonzero but includes
+    one tagged version banner. That remains a launch failure. Its version may only be
+    used to produce the more actionable incompatibility refusal; a compatible banner
+    on a failed subprocess never authorizes a run.
+
+    Args:
+        model: Parsed adVNTR model provenance.
+        outcome: Typed version-probe outcome.
+
+    Returns:
+        The verified compatible version from a successful subprocess.
+
+    Raises:
+        AdvntrModelError: If the detected version and model are incompatible.
+        RuntimeError: If the subprocess did not complete successfully.
+        ValueError: If the outcome violates its typed invariant.
+    """
+    validated = AdvntrVersionOutcome(outcome.status, version=outcome.version, message=outcome.message)
+    if validated.status is AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE:
+        version = cast(tuple[int, int, int], validated.version)
+        require_compatible_advntr(model, version)
+        logger.error(validated.message)
+        raise RuntimeError(validated.message)
+
+    version = require_verified_advntr_version(validated)
+    require_compatible_advntr(model, version)
+    return version

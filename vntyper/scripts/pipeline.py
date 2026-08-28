@@ -28,6 +28,8 @@ from vntyper.scripts.kestrel_genotyping import run_kestrel
 
 # Import cross-match functions from cross_match.py
 from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
+from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight
+from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
 from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
     prepare_alignment_target,
@@ -39,7 +41,6 @@ from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
-from vntyper.scripts.reference_resolution import resolve_from_mapping
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
@@ -75,20 +76,6 @@ from vntyper.scripts.utils import (
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
-
-
-def select_advntr_reference(config: dict, reference_assembly: str) -> str | None:
-    """The adVNTR database for an assembly, by coordinate system.
-
-    Args:
-        config: Pipeline configuration.
-        reference_assembly: Supported assembly label.
-
-    Returns:
-        str | None: Database path, or None when no key is configured.
-    """
-    resolved = resolve_from_mapping("advntr", reference_assembly, config.get("reference_data", {}))
-    return resolved.value if resolved is not None else None
 
 
 def run_pipeline(
@@ -222,35 +209,27 @@ def run_pipeline(
         advntr_version_overrides = {}
         if needs_advntr:
             from vntyper.modules.advntr.model_provenance import (
+                AdvntrProbeStatus,
                 AdvntrVersionProbe,
                 describe_model,
                 detect_advntr_version,
-                require_compatible_advntr,
+                require_compatible_advntr_outcome,
                 require_verified_advntr_version,
             )
 
             advntr_version_outcome = detect_advntr_version(config, probe=AdvntrVersionProbe())
-            detected_advntr_version = require_verified_advntr_version(advntr_version_outcome)
-            advntr_version_overrides["advntr"] = ".".join(str(part) for part in detected_advntr_version)
+            if advntr_version_outcome.status not in {
+                AdvntrProbeStatus.VERIFIED,
+                AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE,
+            }:
+                require_verified_advntr_version(advntr_version_outcome)
 
-            advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
-            if not advntr_reference:
-                advntr_reference = select_advntr_reference(config, reference_assembly)
-            elif advntr_reference == "hg19":
-                advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
-            elif advntr_reference == "hg38":
-                advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
-            else:
-                logger.error(f"Invalid advntr_reference: {advntr_reference}")
-                raise ValueError(f"Invalid advntr_reference: {advntr_reference}")
-
-            if not advntr_reference:
-                logger.error("adVNTR reference path not found in configuration.")
-                raise ValueError("adVNTR reference path not found in configuration.")
-
+            advntr_preflight = plan_advntr_preflight(config, extra_modules, module_args, reference_assembly)
+            advntr_reference = advntr_preflight.reference
             logger.debug(f"adVNTR reference set to: {advntr_reference}")
             advntr_model = describe_model(advntr_reference)
-            require_compatible_advntr(advntr_model, detected_advntr_version)
+            detected_advntr_version = require_compatible_advntr_outcome(advntr_model, advntr_version_outcome)
+            advntr_version_overrides["advntr"] = ".".join(str(part) for part in detected_advntr_version)
 
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "FASTQ":
@@ -618,8 +597,6 @@ def run_pipeline(
             # fetch window comes from the model's own content. Validate before running,
             # because the failure mode is a confident result over a truncated locus
             # rather than an error (#268).
-            assert advntr_model is not None
-            assert advntr_reference is not None
             # Top-level, not inside record_step: this is run state, and a step record is
             # not where state belongs.
             summary["advntr_model"] = advntr_model
