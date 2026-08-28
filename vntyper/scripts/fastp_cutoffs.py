@@ -52,14 +52,36 @@ def _cutoff(value: object, key: str) -> FastpCutoff:
     """Build one validated fastp decision/display pair."""
     fraction = _validated_fraction(value, key)
     displayed_fraction = _displayed_fraction(fraction)
-    percentage = displayed_fraction * Decimal(100)
-    return FastpCutoff(value=displayed_fraction, label=f"{format(percentage.normalize(), 'f')}%")
+    return FastpCutoff(value=displayed_fraction, label=_cutoff_label(displayed_fraction))
 
 
 def _displayed_fraction(fraction: Decimal) -> Decimal:
     """Round a fraction into the report's two-decimal percentage domain."""
     percentage = fraction * Decimal(100)
     return percentage.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) / Decimal(100)
+
+
+def _cutoff_label(fraction: Decimal) -> str:
+    """Format a displayed fastp fraction as its concise cutoff label."""
+    return f"{format((fraction * Decimal(100)).normalize(), 'f')}%"
+
+
+def fastp_display_rate(rate: float | None) -> str | None:
+    """Format one raw fastp metric with the icon's exact decision rounding.
+
+    Args:
+        rate: Raw fastp fraction, or ``None`` when the metric was not measured.
+
+    Returns:
+        The visible percentage string, preserving a missing value.
+    """
+    displayed_fraction = fastp_threshold_rate(rate)
+    if displayed_fraction is None:
+        return None
+    percentage = format((displayed_fraction * Decimal(100)).normalize(), "f")
+    if "." not in percentage:
+        percentage = f"{percentage}.0"
+    return f"{percentage}%"
 
 
 def build_fastp_cutoffs(thresholds: Mapping[str, object]) -> FastpCutoffs:

@@ -233,11 +233,11 @@ def _render_fastp_rates(output_dir: Path, rates: dict[str, float], thresholds: d
         json.dumps(
             {
                 "summary": {
-                    "before_filtering": {"total_reads": 10000},
+                    "before_filtering": {"total_reads": 100000},
                     "after_filtering": {"q20_rate": rates["q20_rate"], "q30_rate": rates["q30_rate"]},
                 },
                 "duplication": {"rate": rates["duplication_rate"]},
-                "filtering_result": {"passed_filter_reads": int(rates["passed_filter_reads_rate"] * 10000)},
+                "filtering_result": {"passed_filter_reads": int(rates["passed_filter_reads_rate"] * 100000)},
             }
         ),
         encoding="utf-8",
@@ -275,6 +275,68 @@ def test_fastp_exact_decimal_thresholds_render_as_passing(
     assert f"{label} (Cutoff: {displayed})" in html
     assert report_formatting.OK_ICON in status
     assert report_formatting.WARNING_ICON not in status
+
+
+def test_fastp_half_tie_values_share_their_visible_cutoffs_and_icons(tmp_path) -> None:
+    """All four half ties render in the exact decision domain used by their icons."""
+    rates = {
+        "duplication_rate": 0.05045,
+        "q20_rate": 0.77645,
+        "q30_rate": 0.70045,
+        "passed_filter_reads_rate": 0.80045,
+    }
+
+    html = _render_fastp_rates(tmp_path, rates, dict(rates))
+
+    for label, displayed in (
+        ("Duplication Rate", "5.05%"),
+        ("Q20 Rate", "77.65%"),
+        ("Q30 Rate", "70.05%"),
+        ("Passed Filter Rate", "80.05%"),
+    ):
+        value, status = _fastp_metric_cells(html, label)
+        assert value == displayed
+        assert f"{label} (Cutoff: {displayed})" in html
+        assert report_formatting.OK_ICON in status
+        assert report_formatting.WARNING_ICON not in status
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "label", "rate", "cutoff", "displayed_rate", "displayed_cutoff", "icon"),
+    [
+        ("duplication_rate", "Duplication Rate", 0.05044, 0.05045, "5.04%", "5.05%", report_formatting.OK_ICON),
+        ("duplication_rate", "Duplication Rate", 0.05055, 0.05045, "5.06%", "5.05%", report_formatting.WARNING_ICON),
+        ("q20_rate", "Q20 Rate", 0.77644, 0.77645, "77.64%", "77.65%", report_formatting.WARNING_ICON),
+        ("q20_rate", "Q20 Rate", 0.77646, 0.77645, "77.65%", "77.65%", report_formatting.OK_ICON),
+    ],
+)
+def test_fastp_adjacent_displayed_rates_keep_their_comparison_direction(
+    tmp_path,
+    metric_key: str,
+    label: str,
+    rate: float,
+    cutoff: float,
+    displayed_rate: str,
+    displayed_cutoff: str,
+    icon: str,
+) -> None:
+    """The displayed cells preserve higher- and lower-is-better directions."""
+    rates = {
+        "duplication_rate": 0.05045,
+        "q20_rate": 0.77645,
+        "q30_rate": 0.70045,
+        "passed_filter_reads_rate": 0.80045,
+    }
+    thresholds = dict(rates)
+    rates[metric_key] = rate
+    thresholds[metric_key] = cutoff
+
+    html = _render_fastp_rates(tmp_path, rates, thresholds)
+    value, status = _fastp_metric_cells(html, label)
+
+    assert value == displayed_rate
+    assert f"{label} (Cutoff: {displayed_cutoff})" in html
+    assert icon in status
 
 
 @pytest.mark.parametrize(
@@ -418,7 +480,11 @@ def test_missing_fastp_rates_render_na_without_a_percent_sign(tmp_path) -> None:
 
     html = render(tmp_path)
 
-    assert [_fastp_metric_cells(html, label)[0] for label in ("Q20 Rate", "Q30 Rate", "Passed Filter Rate")] == [
+    assert [
+        _fastp_metric_cells(html, label)[0]
+        for label in ("Duplication Rate", "Q20 Rate", "Q30 Rate", "Passed Filter Rate")
+    ] == [
+        "N/A",
         "N/A",
         "N/A",
         "N/A",

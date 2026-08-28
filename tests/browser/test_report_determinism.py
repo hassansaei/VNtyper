@@ -222,3 +222,22 @@ def test_fastp_labels_and_statuses_share_configured_cutoffs_in_a_browser(
         assert row.locator('[aria-label="No warning"]').count() == 1, (
             f"the {label!r} status does not pass at its configured {cutoff} cutoff"
         )
+
+
+def test_fastp_half_tie_values_and_icons_agree_in_a_browser(
+    rendered_report_with_fastp_half_ties: Path,
+    open_report: Callable[..., Page],
+) -> None:
+    """The visible half-tie text, cutoff, and decision remain one browser contract."""
+    page = open_report(rendered_report_with_fastp_half_ties, offline=True)
+
+    for label, displayed in (
+        ("Duplication Rate", "5.05%"),
+        ("Q20 Rate", "77.65%"),
+        ("Q30 Rate", "70.05%"),
+        ("Passed Filter Rate", "80.05%"),
+    ):
+        row = page.locator("tr").filter(has_text=f"{label} (Cutoff: {displayed})")
+        assert row.count() == 1, f"the report has no {label!r} half-tie row at {displayed}"
+        assert row.locator("td").nth(1).inner_text().strip() == displayed
+        assert row.locator('[aria-label="No warning"]').count() == 1

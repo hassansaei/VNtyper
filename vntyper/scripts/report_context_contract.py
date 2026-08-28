@@ -25,6 +25,12 @@ DEPRECATED_KEYS = frozenset(
         "q20_color",
         "q30_color",
         "passed_filter_color",
+        # Shipped HTML now reads Decimal-derived display strings, but configured
+        # custom templates may still read these original raw fastp fractions.
+        "duplication_rate",
+        "q20_rate",
+        "q30_rate",
+        "passed_filter_rate",
         "igv_content",
         "screening_state.kestrel_result",
         "screening_state.advntr_result",

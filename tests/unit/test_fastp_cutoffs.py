@@ -148,6 +148,25 @@ def test_fastp_threshold_rate_matches_the_value_rendered_in_the_report(
 
 
 @pytest.mark.parametrize(
+    ("raw_rate", "expected"),
+    [
+        (None, None),
+        (0.1, "10.0%"),
+        (0.05045, "5.05%"),
+        (0.77645, "77.65%"),
+        (0.80045, "80.05%"),
+    ],
+)
+def test_fastp_display_rate_uses_the_icon_decision_rounding(raw_rate: float | None, expected: str | None) -> None:
+    """Visible metric text is formatted from the same decimal decision rate."""
+    module = _module()
+    formatter = getattr(module, "fastp_display_rate", None)
+
+    assert callable(formatter)
+    assert formatter(raw_rate) == expected
+
+
+@pytest.mark.parametrize(
     ("raw_rate", "cutoff", "higher_better", "expected_displayed_rate", "expected_colour"),
     [
         (0.10004, 0.1, False, 0.1, "green"),

@@ -337,6 +337,60 @@ def rendered_report_with_custom_fastp_cutoffs(tmp_path: Path) -> Path:
     return tmp_path / "summary_report.html"
 
 
+@pytest.fixture
+def rendered_report_with_fastp_half_ties(tmp_path: Path) -> Path:
+    """Render every fastp metric at a Decimal half-tie configured cutoff.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory.
+
+    Returns:
+        Path: The rendered ``summary_report.html``.
+    """
+    payload = {
+        "version": "9.9.9",
+        "input_files": {"bam": "sample.bam"},
+        "steps": [
+            _tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            _tabular_step(summary_steps.STEP_KESTREL, list(KESTREL_ROWS)),
+        ],
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 100000},
+                    "after_filtering": {"q20_rate": 0.77645, "q30_rate": 0.70045},
+                },
+                "duplication": {"rate": 0.05045},
+                "filtering_result": {"passed_filter_reads": 80045},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = deepcopy(load_config(None))
+    config["thresholds"].update(
+        {
+            "duplication_rate": 0.05045,
+            "q20_rate": 0.77645,
+            "q30_rate": 0.70045,
+            "passed_filter_reads_rate": 0.80045,
+        }
+    )
+
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(TEMPLATE_DIR),
+        report_file="summary_report.html",
+        log_file=None,
+        config=config,
+    )
+    return tmp_path / "summary_report.html"
+
+
 #: Every URL each page asked for, keyed by page. Module-level rather than a fixture so
 #: :func:`external_requests` can be called as a plain function from a test that already
 #: has the page - the same shape ``removed_libraries`` has, and one less fixture to

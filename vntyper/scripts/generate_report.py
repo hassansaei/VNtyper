@@ -39,7 +39,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from vntyper.scripts import report_assets
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
-from vntyper.scripts.fastp_cutoffs import build_fastp_cutoffs, fastp_threshold_rate
+from vntyper.scripts.fastp_cutoffs import build_fastp_cutoffs, fastp_display_rate, fastp_threshold_rate
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
@@ -672,6 +672,10 @@ def generate_summary_report(
     pf_icon, pf_color = threshold_icon(
         fastp_threshold_rate(fastp.passed_filter_rate), fastp_cutoffs.passed_filter_rate.value
     )
+    duplication_rate_display = fastp_display_rate(fastp.duplication_rate)
+    q20_rate_display = fastp_display_rate(fastp.q20_rate)
+    q30_rate_display = fastp_display_rate(fastp.q30_rate)
+    passed_filter_rate_display = fastp_display_rate(fastp.passed_filter_rate)
 
     # "" for an empty frame, which is what the template's authored empty states hang
     # on. This used to call `to_html` directly, bypassing the helper written for
@@ -966,19 +970,25 @@ def generate_summary_report(
         "mean_vntr_coverage_icon": coverage_icon,
         "mean_vntr_coverage_color": coverage_color,
         "fastp_available": fastp.available,
+        # Preserve raw values for custom templates; shipped HTML renders these
+        # Decimal-derived presentation fields so the reader sees icon operands.
         "duplication_rate": fastp.duplication_rate,
+        "duplication_rate_display": duplication_rate_display,
         "duplication_rate_cutoff": fastp_cutoffs.duplication_rate.label,
         "duplication_rate_icon": dup_icon,
         "duplication_rate_color": dup_color,
         "q20_rate": fastp.q20_rate,
+        "q20_rate_display": q20_rate_display,
         "q20_rate_cutoff": fastp_cutoffs.q20_rate.label,
         "q20_icon": q20_icon,
         "q20_color": q20_color,
         "q30_rate": fastp.q30_rate,
+        "q30_rate_display": q30_rate_display,
         "q30_rate_cutoff": fastp_cutoffs.q30_rate.label,
         "q30_icon": q30_icon,
         "q30_color": q30_color,
         "passed_filter_rate": fastp.passed_filter_rate,
+        "passed_filter_rate_display": passed_filter_rate_display,
         "passed_filter_rate_cutoff": fastp_cutoffs.passed_filter_rate.label,
         "passed_filter_icon": pf_icon,
         "passed_filter_color": pf_color,
