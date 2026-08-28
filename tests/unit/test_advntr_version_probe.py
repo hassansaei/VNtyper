@@ -198,7 +198,7 @@ def test_a_transient_mamba_lock_failure_is_retried_then_cached() -> None:
     with (
         patch(
             "vntyper.modules.advntr.model_provenance.subprocess.run",
-            side_effect=[_result(stderr=RESOURCE_LOCK_OUTPUT), _result(stderr="2.0.4\n")],
+            side_effect=[_result(status=1, stderr=RESOURCE_LOCK_OUTPUT), _result(stderr="2.0.4\n")],
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
@@ -217,7 +217,7 @@ def test_the_measured_process_lock_failure_is_independently_retried() -> None:
     with (
         patch(
             "vntyper.modules.advntr.model_provenance.subprocess.run",
-            side_effect=[_result(stderr=PROCESS_LOCK_OUTPUT), _result(stderr="2.0.4\n")],
+            side_effect=[_result(status=1, stderr=PROCESS_LOCK_OUTPUT), _result(stderr="2.0.4\n")],
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
@@ -247,7 +247,7 @@ def test_a_valid_version_surrounded_by_mamba_lock_noise_is_accepted_without_retr
 def test_transient_mamba_lock_failure_exhaustion_aborts_and_is_not_cached() -> None:
     """Reducing exhaustion to None would misreport launcher contention as incompatibility."""
     probe = AdvntrVersionProbe()
-    responses = [_result(stderr=TRANSIENT_LOCK_OUTPUT) for _ in range(3)] + [_result(stderr="2.0.4\n")]
+    responses = [_result(status=1, stderr=TRANSIENT_LOCK_OUTPUT) for _ in range(3)] + [_result(stderr="2.0.4\n")]
     with (
         patch("vntyper.modules.advntr.model_provenance.subprocess.run", side_effect=responses) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
@@ -283,6 +283,25 @@ def test_status_zero_malformed_output_is_not_retried_cached_or_accepted() -> Non
     assert second.status is AdvntrProbeStatus.UNPARSEABLE_SUCCESS
     with pytest.raises(RuntimeError, match="unparseable or ambiguous"):
         require_verified_advntr_version(first)
+
+
+def test_status_zero_malformed_output_with_measured_lock_markers_is_not_retried() -> None:
+    """Launcher diagnostics cannot turn a completed successful process into a retry."""
+    with (
+        patch(
+            "vntyper.modules.advntr.model_provenance.subprocess.run",
+            return_value=_result(stderr=TRANSIENT_LOCK_OUTPUT + "usage: advntr [options]\n"),
+        ) as runner,
+        patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
+    ):
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+
+    assert (outcome.status, runner.call_count, sleep.call_args_list) == (
+        AdvntrProbeStatus.UNPARSEABLE_SUCCESS,
+        1,
+        [],
+    )
+    assert outcome.message == "adVNTR version command succeeded but its response was unparseable or ambiguous."
 
 
 def test_a_diagnostic_semver_before_the_answer_cannot_authorize_the_run() -> None:

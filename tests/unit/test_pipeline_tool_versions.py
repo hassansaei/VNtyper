@@ -260,21 +260,30 @@ def test_a_203_nonzero_tagged_banner_reaches_the_upgrade_refusal(
 def test_a_malformed_startup_version_stops_before_kestrel_without_reprobing(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The classified startup outcome reaches the early guard exactly once."""
+    """A successful malformed probe with lock noise reaches the early guard once."""
     config = deepcopy(MINIMAL_CONFIG)
-    argv = [config["tools"]["advntr"], "--version"]
+    config["tools"]["advntr"] = "mamba run -n envadvntr advntr"
+    argv = ["mamba", "run", "-n", "envadvntr", "advntr", "--version"]
     malformed = subprocess.CompletedProcess(
         argv,
         0,
         stdout="usage: advntr [options]\n",
-        stderr="Python 3.12.1 required\n",
+        stderr=(
+            "error    libmamba Could not set lock (Resource temporarily unavailable)\n"
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n"
+            "Python 3.12.1 required\n"
+        ),
     )
 
     caplog.set_level("ERROR")
-    with patch(
-        "vntyper.modules.advntr.model_provenance.subprocess.run",
-        return_value=malformed,
-    ) as runner:
+    with (
+        patch(
+            "vntyper.modules.advntr.model_provenance.subprocess.run",
+            return_value=malformed,
+        ) as runner,
+        patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
+    ):
         harness = run_pipeline_under_harness(
             tmp_path / "out",
             config=config,
@@ -285,6 +294,7 @@ def test_a_malformed_startup_version_stops_before_kestrel_without_reprobing(
     assert isinstance(harness.error, SystemExit)
     assert harness.error.code == 1
     assert runner.call_count == 1
+    sleep.assert_not_called()
     harness.stages["run_kestrel"].assert_not_called()
     expected = "adVNTR version command succeeded but its response was unparseable or ambiguous."
     assert any(record.getMessage() == expected for record in caplog.records)
