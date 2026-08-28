@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from jinja2 import DictLoader, Environment, TemplateNotFound
 
@@ -157,3 +159,22 @@ def test_every_deprecated_context_path_has_an_explicit_major_release() -> None:
         == contract.DEPRECATED_KEYS
     )
     assert contract.DEPRECATED_KEYS_REMOVAL_RELEASE == "3.0.0"
+
+
+def test_published_compatibility_documentation_maps_fastp_raw_values_to_display_values() -> None:
+    """Custom templates can migrate before the raw fastp values leave the 2.x API."""
+    reports_documentation = (Path(__file__).parents[2] / "docs" / "pipeline" / "reports.md").read_text(encoding="utf-8")
+    compatibility_section = reports_documentation.split("### Custom template context compatibility", 1)[1].split(
+        "\n## ", 1
+    )[0]
+    normalized_section = " ".join(compatibility_section.split())
+
+    assert "VNtyper 2.x" in normalized_section
+    assert "VNtyper 3.0.0" in normalized_section
+    for raw_key, display_key in {
+        "duplication_rate": "duplication_rate_display",
+        "q20_rate": "q20_rate_display",
+        "q30_rate": "q30_rate_display",
+        "passed_filter_rate": "passed_filter_rate_display",
+    }.items():
+        assert f"| `{raw_key}` | `{display_key}` |" in compatibility_section

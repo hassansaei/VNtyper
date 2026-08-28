@@ -111,10 +111,20 @@ The pipeline log is the deliberate exception. It prints as a one-line pointer ba
 `paths.template_dir` may point at a custom Jinja template directory, so the values
 VNtyper passes to `report_template.html` are a public compatibility interface. VNtyper
 2.x continues to provide the deprecated keys below even though the shipped template no
-longer reads them. They are scheduled for removal in **VNtyper 3.0.0**, not before:
+longer reads them. They remain available throughout 2.x and may be removed in
+**VNtyper 3.0.0**, not before:
 
 - `percent_vntr_uncovered_color`, `mean_vntr_coverage_color`,
   `duplication_rate_color`, `q20_color`, `q30_color`, and `passed_filter_color`;
+- raw fastp fractions and the display values new templates should use instead:
+
+  | Deprecated raw key (available through 2.x) | Display replacement |
+  | --- | --- |
+  | `duplication_rate` | `duplication_rate_display` |
+  | `q20_rate` | `q20_rate_display` |
+  | `q30_rate` | `q30_rate_display` |
+  | `passed_filter_rate` | `passed_filter_rate_display` |
+
 - `igv_content`;
 - `screening_state.kestrel_result` and `screening_state.advntr_result`.
 
