@@ -704,6 +704,45 @@ def test_report_configuration_rejects_nondictionary_thresholds_at_render_time(
     assert "Config thresholds must be a dictionary." in caplog.text
 
 
+@pytest.mark.parametrize("malformed", (None, [], "not-an-object"))
+@pytest.mark.parametrize(
+    "path",
+    ("root", "summary", "summary.before_filtering", "summary.after_filtering", "filtering_result", "duplication"),
+)
+def test_malformed_fastp_objects_fail_before_report_output(
+    tmp_path, path: str, malformed: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Valid JSON with the wrong object shape fails loudly instead of hiding fastp QC."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_data: object
+    if path == "root":
+        fastp_data = malformed
+    elif path == "summary":
+        fastp_data = {"summary": malformed}
+    elif path == "summary.before_filtering":
+        fastp_data = {"summary": {"before_filtering": malformed}}
+    elif path == "summary.after_filtering":
+        fastp_data = {"summary": {"before_filtering": {"total_reads": 0}, "after_filtering": malformed}}
+    elif path == "filtering_result":
+        fastp_data = {"summary": {"before_filtering": {"total_reads": 0}}, "filtering_result": malformed}
+    else:
+        fastp_data = {
+            "summary": {"before_filtering": {"total_reads": 0}},
+            "filtering_result": {"passed_filter_reads": 0},
+            "duplication": malformed,
+        }
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(json.dumps(fastp_data), encoding="utf-8")
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=re.escape(path)):
+        render(tmp_path)
+
+    assert path in caplog.text
+    assert not (tmp_path / "summary_report.html").exists()
+
+
 def test_missing_fastp_rates_render_na_without_a_percent_sign(tmp_path) -> None:
     """Catch any missing optional rate becoming blank or carrying a percent sign."""
     write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))

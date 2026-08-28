@@ -68,7 +68,7 @@ from vntyper.scripts import nomenclature
 # produces them. Re-typing the strings here is how the report silently loses
 # coverage when a column is renamed - `.get(name, 0)` raises nothing.
 from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS, COVERAGE_COLUMNS, COVERAGE_NULL_TOKEN
-from vntyper.scripts.fastp_cutoffs import calculate_passed_filter_rate_from_sources
+from vntyper.scripts.fastp_cutoffs import calculate_passed_filter_rate_from_sources, validated_fastp_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -1513,22 +1513,28 @@ class FastpMetrics:
     sequencing: str
 
 
-def summarise_fastp(fastp_data: dict[str, Any]) -> FastpMetrics:
+def summarise_fastp(fastp_data: object) -> FastpMetrics:
     """Reduce parsed fastp JSON to the metrics the report shows.
 
     Args:
-        fastp_data: The parsed ``output.json`` fastp wrote, or ``{}``.
+        fastp_data: The parsed ``output.json`` fastp wrote, or ``{}`` when it
+            was genuinely unavailable or unparseable.
 
     Returns:
         FastpMetrics: The metrics, with ``available`` False for empty input.
+
+    Raises:
+        ValueError: If available fastp JSON has a malformed object structure.
     """
-    if not fastp_data:
+    root = validated_fastp_mapping(fastp_data, "root")
+    if not root:
         return FastpMetrics(False, None, None, None, None, "")
 
-    summary = fastp_data.get("summary", {})
-    after_filtering = summary.get("after_filtering", {})
-    before_filtering = summary.get("before_filtering", {})
-    filtering_result = fastp_data.get("filtering_result", {})
+    summary = validated_fastp_mapping(root.get("summary", {}), "summary")
+    after_filtering = validated_fastp_mapping(summary.get("after_filtering", {}), "summary.after_filtering")
+    before_filtering = validated_fastp_mapping(summary.get("before_filtering", {}), "summary.before_filtering")
+    filtering_result = validated_fastp_mapping(root.get("filtering_result", {}), "filtering_result")
+    duplication = validated_fastp_mapping(root.get("duplication", {}), "duplication")
 
     passed_filter_rate = calculate_passed_filter_rate_from_sources(before_filtering, filtering_result)
     if passed_filter_rate is not None:
@@ -1538,7 +1544,7 @@ def summarise_fastp(fastp_data: dict[str, Any]) -> FastpMetrics:
 
     return FastpMetrics(
         available=True,
-        duplication_rate=fastp_data.get("duplication", {}).get("rate", None),
+        duplication_rate=duplication.get("rate", None),
         q20_rate=after_filtering.get("q20_rate", None),
         q30_rate=after_filtering.get("q30_rate", None),
         passed_filter_rate=passed_filter_rate,

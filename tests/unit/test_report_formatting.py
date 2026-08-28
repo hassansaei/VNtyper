@@ -14,6 +14,7 @@ by running the whole pipeline:
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -132,6 +133,52 @@ def test_summarise_fastp_reports_unavailable_for_no_data() -> None:
     assert metrics.available is False
     assert metrics.duplication_rate is None
     assert metrics.sequencing == ""
+
+
+@pytest.mark.parametrize("fastp_data", (None, [], "not-an-object"))
+def test_summarise_fastp_rejects_a_malformed_root_object(fastp_data: object, caplog: pytest.LogCaptureFixture) -> None:
+    """A parsed but structurally invalid fastp document is not absent data."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="root"):
+        rf.summarise_fastp(fastp_data)
+
+    assert "root" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("path", "fastp_data"),
+    (
+        ("summary", {"summary": None}),
+        ("summary.before_filtering", {"summary": {"before_filtering": None}}),
+        (
+            "summary.after_filtering",
+            {"summary": {"before_filtering": {"total_reads": 0}, "after_filtering": None}},
+        ),
+        (
+            "filtering_result",
+            {"summary": {"before_filtering": {"total_reads": 0}}, "filtering_result": None},
+        ),
+        (
+            "duplication",
+            {
+                "summary": {"before_filtering": {"total_reads": 0}},
+                "filtering_result": {"passed_filter_reads": 0},
+                "duplication": None,
+            },
+        ),
+    ),
+)
+def test_summarise_fastp_rejects_malformed_nested_objects(
+    path: str, fastp_data: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every nested object boundary fails with its fastp schema path."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=re.escape(path)):
+        rf.summarise_fastp(fastp_data)
+
+    assert path in caplog.text
 
 
 def test_summarise_fastp_computes_the_passed_filter_rate() -> None:

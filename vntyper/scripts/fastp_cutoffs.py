@@ -7,6 +7,7 @@ import numbers
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,26 @@ def calculate_passed_filter_rate_from_sources(
             logger.error(message)
             raise ValueError(message) from error
     return calculate_passed_filter_rate(values["passed_filter_reads"], values["total_reads"])
+
+
+def validated_fastp_mapping(value: object, path: str) -> Mapping[str, Any]:
+    """Validate one object boundary in parsed fastp JSON.
+
+    Args:
+        value: The parsed value at the boundary.
+        path: The schema path reported to the operator.
+
+    Returns:
+        The mapping after validation.
+
+    Raises:
+        ValueError: If the parsed value is not a JSON object.
+    """
+    if not isinstance(value, Mapping):
+        message = f"Fastp output has invalid object at {path!r}: expected a dictionary."
+        logger.error(message)
+        raise ValueError(message)
+    return value
 
 
 def _cutoff(value: object, key: str) -> FastpCutoff:
