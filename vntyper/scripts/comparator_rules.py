@@ -70,6 +70,8 @@ def _scalar_family(value: JsonScalar) -> str:
 
 
 def _validate_scalar(value: object, *, path: str) -> JsonScalar:
+    if isinstance(value, float) and not math.isfinite(value):
+        _invalid(f"{path} must be a finite JSON number")
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     _invalid(f"{path} must be a JSON scalar")
@@ -215,6 +217,8 @@ def _runtime_family(value: object, *, context: str) -> str:
     if isinstance(value, str):
         return "string"
     if isinstance(value, Real):
+        if isinstance(value, (float, np.floating)) and not math.isfinite(value):
+            _invalid(f"{context} requires finite real-number row values")
         return "number"
     _invalid(f"{context} requires JSON-scalar row values")
 

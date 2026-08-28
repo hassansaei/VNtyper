@@ -316,6 +316,47 @@ def test_null_does_not_mask_an_incompatible_non_null_operand(
     assert caplog.messages[-1] == expected_message
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_configured_numbers_are_not_accepted_as_json_scalars(
+    value: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Python's permissive JSON constants cannot widen the data-only DSL."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.comparator_rules")
+
+    with pytest.raises(ValueError) as raised:
+        validate_rule(rule(column("DP"), "lt", literal(value)), allowed_columns=["DP"], context="test.rule")
+
+    message = "test.rule.all[0].right.literal must be a finite JSON number"
+    assert str(raised.value) == message
+    assert caplog.messages[-1] == message
+
+
+def test_nonfinite_configured_membership_value_names_its_list_path() -> None:
+    """A non-finite collection member fails during complete rule validation."""
+    with pytest.raises(ValueError) as raised:
+        validate_rule(
+            rule(column("DP"), "in", literal([1.0, float("inf")])),
+            allowed_columns=["DP"],
+            context="test.rule",
+        )
+
+    assert str(raised.value) == "test.rule.all[0].right.literal[1] must be a finite JSON number"
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), np.float32("inf"), np.float64("-inf")])
+def test_nonfinite_row_numbers_fail_loudly(value: object, caplog: pytest.LogCaptureFixture) -> None:
+    """A sample infinity cannot silently satisfy or evade a configured comparison."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.comparator_rules")
+    compiled = validate_rule(rule(column("DP"), "lt", literal(10)), allowed_columns=["DP"], context="test.rule")
+
+    with pytest.raises(ValueError) as raised:
+        evaluate_rule(compiled, {"DP": value}, context="test.rule")
+
+    message = "test.rule.all[0] requires finite real-number row values"
+    assert str(raised.value) == message
+    assert caplog.messages[-1] == message
+
+
 def test_arbitrary_precision_json_integers_are_not_coerced_during_null_normalization() -> None:
     huge = 10**400
     compiled = validate_rule(rule(column("Value"), "lt", literal(huge)), allowed_columns=["Value"], context="test.rule")

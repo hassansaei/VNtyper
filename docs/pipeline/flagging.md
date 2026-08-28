@@ -164,7 +164,7 @@ The only operators are:
 | `in` | Left scalar membership in a non-empty homogeneous right literal list. |
 | `casefold_eq` | String equality after Unicode case-folding. |
 
-`None`, `pd.NA`, and floating NaN make a predicate false. Values are never coerced: for example, `"7"` is not the number `7`. Missing columns, malformed rules, and incompatible non-null row values abort flagging instead of silently disabling a rule. Flag names must be non-empty strings, cannot contain commas, and cannot use the reserved result values `Not flagged` or `Not applicable`.
+`None`, `pd.NA`, and floating NaN make a predicate false. Configured numbers and non-null runtime numbers must be finite: positive or negative infinity aborts evaluation, while configured NaN is rejected during validation. Values are never coerced: for example, `"7"` is not the number `7`. Missing columns, malformed rules, and incompatible non-null row values abort flagging instead of silently disabling a rule. Flag names must be non-empty strings, cannot contain commas, and cannot use the reserved result values `Not flagged` or `Not applicable`.
 
 Rules are JSON data, never executable source. Calls, attributes, indexing, imports, comprehensions, lambdas, regular expressions, arithmetic, `or`, `not`, and nested boolean forms are unsupported. Code-shaped text inside a `literal` remains inert data; a rule supplied as such a string is rejected.
 
