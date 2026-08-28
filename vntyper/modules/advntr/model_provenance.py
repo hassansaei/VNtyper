@@ -140,9 +140,10 @@ class AdvntrVersionOutcome:
 class AdvntrVersionProbe:
     """Concurrency-safe successful-version cache scoped to one pipeline run.
 
-    A pipeline creates one instance and discards it when the run ends. Parsed versions
-    are cached by the configured command, including known-but-incompatible versions;
-    launch failures and malformed output are never cached.
+    A pipeline creates one instance and discards it when the run ends. Versions parsed
+    from a successful subprocess are cached by the configured command, including
+    known-but-incompatible versions. Launch failures (even one carrying a legacy
+    banner) and malformed output are never cached.
     """
 
     def __init__(self) -> None:
@@ -156,7 +157,8 @@ class AdvntrVersionProbe:
             command: Configured adVNTR command, possibly a multi-token ``mamba run`` command.
 
         Returns:
-            A typed verified, launch-failure, unparseable-success, or exhausted outcome.
+            A typed verified, versioned-launch-failure, unversioned-launch-failure,
+            unparseable-success, or exhausted outcome.
         """
         with self._lock:
             cached = self._versions.get(command)
@@ -273,9 +275,9 @@ def _parse_failed_probe_output(stdout: str, stderr: str) -> tuple[int, int, int]
 def parse_advntr_version(text: str | None) -> tuple[int, int, int] | None:
     """Extract one unambiguous version from strict adVNTR answer lines.
 
-    Returns None when no version can be read. adVNTR 2.0.3 has no `--version` flag, so
-    an unreadable answer is the ordinary signal for "too old", not an anomaly -- and it
-    is never guessed from a diagnostic's unrelated version token.
+    Returns None when no version can be read. A strict tagged legacy banner can identify
+    adVNTR 2.0.3 even though that release has no `--version` flag; unrelated diagnostic
+    version tokens are never guessed to be the answer.
     """
     if not text:
         return None
@@ -291,7 +293,8 @@ def detect_advntr_version(config: dict[str, Any], *, probe: AdvntrVersionProbe |
             an isolated probe and therefore no process-global cache.
 
     Returns:
-        A typed verified, launch-failure, unparseable-success, or exhausted outcome.
+        A typed verified, versioned-launch-failure, unversioned-launch-failure,
+        unparseable-success, or exhausted outcome.
     """
     command = config.get("tools", {}).get("advntr")
     if not command:
