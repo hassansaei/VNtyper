@@ -24,7 +24,6 @@ import pytest
 from vntyper.modules.advntr.model_provenance import (
     AdvntrModelError,
     describe_model,
-    parse_advntr_version,
     require_compatible_advntr,
 )
 
@@ -152,33 +151,6 @@ class TestDescribeModel:
         with pytest.raises(AdvntrModelError) as exc:
             describe_model(path)
         assert "ref_start" in str(exc.value)
-
-
-class TestVersionParsing:
-    @pytest.mark.parametrize(
-        "text,expected",
-        [("2.0.4", (2, 0, 4)), ("2.0.3\n", (2, 0, 3)), ("adVNTR 2.1.0: legacy help", (2, 1, 0))],
-    )
-    def test_parses(self, text, expected):
-        assert parse_advntr_version(text) == expected
-
-    @pytest.mark.parametrize(
-        "text",
-        [
-            "usage: advntr [options]",
-            "Python 3.12.1 required",
-            "warning libmamba 2.1.0",
-            "advntr 2.1.0",
-        ],
-    )
-    def test_unparseable_output_is_not_guessed_at(self, text):
-        # 2.0.3 has no --version flag at all, so this is the realistic old-binary case.
-        assert parse_advntr_version(text) is None
-
-    @pytest.mark.parametrize("text", ["", None])
-    def test_no_output_is_not_a_version(self, text):
-        # A binary that answers nothing must read as "too old", never as "fine".
-        assert parse_advntr_version(text) is None
 
 
 class TestCompatibility:

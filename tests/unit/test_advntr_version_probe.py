@@ -209,7 +209,7 @@ def test_a_transient_mamba_lock_failure_is_retried_then_cached() -> None:
         call(ARGV, capture_output=True, text=True, check=False),
         call(ARGV, capture_output=True, text=True, check=False),
     ]
-    sleep.assert_called_once()
+    sleep.assert_called_once_with(0.1)
 
 
 def test_the_measured_process_lock_failure_is_independently_retried() -> None:
@@ -250,15 +250,18 @@ def test_transient_mamba_lock_failure_exhaustion_aborts_and_is_not_cached() -> N
     responses = [_result(stderr=TRANSIENT_LOCK_OUTPUT) for _ in range(3)] + [_result(stderr="2.0.4\n")]
     with (
         patch("vntyper.modules.advntr.model_provenance.subprocess.run", side_effect=responses) as runner,
-        patch("vntyper.modules.advntr.model_provenance.time.sleep"),
+        patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
         exhausted = detect_advntr_version(CONFIG, probe=probe)
         assert exhausted.status is AdvntrProbeStatus.TRANSIENT_EXHAUSTED
+        assert runner.call_count == 3
+        assert sleep.call_args_list == [call(0.1), call(0.1)]
         with pytest.raises(RuntimeError, match="transient mamba launch failures"):
             require_verified_advntr_version(exhausted)
         _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
 
     assert runner.call_count == 4
+    assert sleep.call_args_list == [call(0.1), call(0.1)]
 
 
 def test_status_zero_malformed_output_is_not_retried_cached_or_accepted() -> None:
@@ -450,6 +453,51 @@ def test_malformed_command_is_a_typed_tools_advntr_launch_failure() -> None:
     assert outcome.status is AdvntrProbeStatus.LAUNCH_FAILURE
     assert outcome.version is None
     assert outcome.message.startswith("adVNTR version launch failed: invalid tools.advntr command:")
+
+
+@pytest.mark.parametrize("command", [["advntr"], {"command": "advntr"}, 1, True, "   \t"])
+def test_invalid_tools_advntr_values_return_a_typed_failure_without_launching(command: object) -> None:
+    """A non-command config value must not escape through the cache or shell parser."""
+    config = {"tools": {"advntr": command}}
+
+    with patch("vntyper.modules.advntr.model_provenance.subprocess.run") as runner:
+        outcome = detect_advntr_version(config, probe=AdvntrVersionProbe())
+
+    runner.assert_not_called()
+    assert outcome == AdvntrVersionOutcome(
+        AdvntrProbeStatus.LAUNCH_FAILURE,
+        message="adVNTR version launch failed: tools.advntr must be a non-empty string.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "expected"),
+    [
+        ("2.0.4", "", (2, 0, 4)),
+        ("", "2.0.3\n", (2, 0, 3)),
+        ("", "adVNTR 2.1.0: legacy help", (2, 1, 0)),
+        ("usage: advntr [options]", "", None),
+        ("Python 3.12.1 required", "", None),
+        ("warning libmamba 2.1.0", "", None),
+        ("advntr 2.1.0", "", None),
+        ("", "", None),
+    ],
+)
+def test_actual_probe_preserves_the_strict_answer_line_contract(
+    stdout: str, stderr: str, expected: tuple[int, int, int] | None
+) -> None:
+    """The production parser accepts only bare or explicitly tagged adVNTR answers."""
+    with patch(
+        "vntyper.modules.advntr.model_provenance.subprocess.run",
+        return_value=_result(stdout=stdout, stderr=stderr),
+    ):
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+
+    if expected is None:
+        assert outcome.status is AdvntrProbeStatus.UNPARSEABLE_SUCCESS
+        assert outcome.version is None
+    else:
+        _assert_verified(outcome, expected)
 
 
 def test_concurrent_callers_share_one_successful_probe() -> None:

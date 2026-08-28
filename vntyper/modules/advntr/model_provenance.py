@@ -272,18 +272,6 @@ def _parse_failed_probe_output(stdout: str, stderr: str) -> tuple[int, int, int]
     return next(iter(candidates))
 
 
-def parse_advntr_version(text: str | None) -> tuple[int, int, int] | None:
-    """Extract one unambiguous version from strict adVNTR answer lines.
-
-    Returns None when no version can be read. A strict tagged legacy banner can identify
-    adVNTR 2.0.3 even though that release has no `--version` flag; unrelated diagnostic
-    version tokens are never guessed to be the answer.
-    """
-    if not text:
-        return None
-    return _parse_probe_output(text, "")
-
-
 def detect_advntr_version(config: dict[str, Any], *, probe: AdvntrVersionProbe | None = None) -> AdvntrVersionOutcome:
     """Return the typed terminal result of the configured adVNTR version probe.
 
@@ -301,6 +289,11 @@ def detect_advntr_version(config: dict[str, Any], *, probe: AdvntrVersionProbe |
         return AdvntrVersionOutcome(
             AdvntrProbeStatus.LAUNCH_FAILURE,
             message="adVNTR version launch failed: no command is configured.",
+        )
+    if not isinstance(command, str) or not command.strip():
+        return AdvntrVersionOutcome(
+            AdvntrProbeStatus.LAUNCH_FAILURE,
+            message="adVNTR version launch failed: tools.advntr must be a non-empty string.",
         )
     active_probe = probe if probe is not None else AdvntrVersionProbe()
     return active_probe.detect(command)

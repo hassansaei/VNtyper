@@ -3,15 +3,23 @@
 import logging
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.modules.advntr import advntr_genotyping as advntr
+from vntyper.modules.advntr.model_provenance import AdvntrProbeStatus, AdvntrVersionOutcome
 
 pytestmark = pytest.mark.unit
 
 MAIN_CONFIG = {"tools": {"advntr": "mamba run -n envadvntr advntr"}}
+
+STALE_ADVNTR_ARTIFACTS = (
+    "output_adVNTR_result.tsv",
+    "output_adVNTR.tsv",
+    "output_adVNTR.vcf",
+)
 
 
 @pytest.fixture
@@ -149,6 +157,105 @@ def test_a_cross_format_rerun_invalidates_all_preexisting_artifacts_before_execu
     assert not harness.stages["process_advntr_output"].called
     assert existence_at_execution == {"tsv": False, "vcf": False, "derived": False}
     assert not any(path.exists() for path in artifacts.values())
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        AdvntrVersionOutcome(
+            AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE,
+            version=(2, 0, 4),
+            message="adVNTR version launch failed: command exited with status 2.",
+        ),
+        AdvntrVersionOutcome(
+            AdvntrProbeStatus.LAUNCH_FAILURE,
+            message="adVNTR version launch failed: command exited with status 127.",
+        ),
+        AdvntrVersionOutcome(
+            AdvntrProbeStatus.UNPARSEABLE_SUCCESS,
+            message="adVNTR version command succeeded but its response was unparseable or ambiguous.",
+        ),
+        AdvntrVersionOutcome(
+            AdvntrProbeStatus.TRANSIENT_EXHAUSTED,
+            message="adVNTR version detection exhausted 3 attempts after transient mamba launch failures.",
+        ),
+    ],
+    ids=lambda outcome: outcome.status.value,
+)
+def test_every_nonverified_startup_outcome_invalidates_all_prior_advntr_artifacts(
+    tmp_path: Path, outcome: AdvntrVersionOutcome
+) -> None:
+    """An early probe refusal must not leave a previous patient's call looking current."""
+    output_dir = tmp_path / "out"
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir(parents=True)
+    artifacts = [advntr_dir / name for name in STALE_ADVNTR_ARTIFACTS]
+    for artifact in artifacts:
+        artifact.write_text("stale prior patient result\n", encoding="utf-8")
+
+    with patch(
+        "vntyper.modules.advntr.model_provenance.detect_advntr_version",
+        return_value=outcome,
+    ):
+        harness = run_pipeline_under_harness(
+            output_dir,
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert not any(artifact.exists() for artifact in artifacts)
+    harness.stages["run_kestrel"].assert_not_called()
+
+
+def test_verified_startup_also_invalidates_all_prior_advntr_artifacts(tmp_path: Path) -> None:
+    """The cleanup move must preserve the established successful-run invalidation."""
+    output_dir = tmp_path / "out"
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir(parents=True)
+    artifacts = [advntr_dir / name for name in STALE_ADVNTR_ARTIFACTS]
+    for artifact in artifacts:
+        artifact.write_text("stale prior patient result\n", encoding="utf-8")
+
+    outcome = AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4))
+    with patch(
+        "vntyper.modules.advntr.model_provenance.detect_advntr_version",
+        return_value=outcome,
+    ):
+        harness = run_pipeline_under_harness(output_dir, extra_modules=["advntr"])
+
+    assert harness.error is None
+    assert not any(artifact.exists() for artifact in artifacts)
+
+
+def test_input_ownership_refusal_precedes_advntr_artifact_invalidation(tmp_path: Path) -> None:
+    """An input aliased into the output tree must be protected before any cleanup write."""
+    output_dir = tmp_path / "out"
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir(parents=True)
+    input_bam = tmp_path / "patient.bam"
+    input_bam.write_text("protected patient input\n", encoding="utf-8")
+    protected_artifact = advntr_dir / STALE_ADVNTR_ARTIFACTS[0]
+    protected_artifact.hardlink_to(input_bam)
+    other_artifacts = [advntr_dir / name for name in STALE_ADVNTR_ARTIFACTS[1:]]
+    for artifact in other_artifacts:
+        artifact.write_text("stale prior patient result\n", encoding="utf-8")
+
+    with patch("vntyper.modules.advntr.model_provenance.detect_advntr_version") as detector:
+        harness = run_pipeline_under_harness(
+            output_dir,
+            bam=str(input_bam),
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    detector.assert_not_called()
+    assert input_bam.read_text(encoding="utf-8") == "protected patient input\n"
+    assert protected_artifact.exists()
+    assert all(artifact.exists() for artifact in other_artifacts)
 
 
 def test_a_success_status_without_current_raw_output_cannot_republish_a_preexisting_call(tmp_path: Path) -> None:

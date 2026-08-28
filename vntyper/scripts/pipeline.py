@@ -208,6 +208,7 @@ def run_pipeline(
         advntr_reference = None
         advntr_version_overrides = {}
         if needs_advntr:
+            from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
             from vntyper.modules.advntr.model_provenance import (
                 AdvntrProbeStatus,
                 AdvntrVersionProbe,
@@ -216,6 +217,13 @@ def run_pipeline(
                 require_compatible_advntr_outcome,
                 require_verified_advntr_version,
             )
+
+            # Input ownership must be proven before any unlink. Once it is, invalidate
+            # every established adVNTR result name before the early probe/model guards
+            # can refuse this attempt and leave a previous patient's call looking current.
+            advntr_output_dir = Path(output_dir) / "advntr"
+            for artifact_name in ("output_adVNTR_result.tsv", "output_adVNTR.tsv", "output_adVNTR.vcf"):
+                invalidate_advntr_artifact(advntr_output_dir / artifact_name)
 
             advntr_version_outcome = detect_advntr_version(config, probe=AdvntrVersionProbe())
             if advntr_version_outcome.status not in {
@@ -579,20 +587,16 @@ def run_pipeline(
                     process_advntr_output,
                     run_advntr,
                 )
-                from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
             except ImportError as exc:
                 logger.error(f"adVNTR module import failed: {exc}")
                 sys.exit(1)
 
-            invalidate_advntr_artifact(Path(dirs["advntr"]) / "output_adVNTR_result.tsv")
             advntr_config = load_advntr_config()
             advntr_settings = advntr_config.get("advntr_settings", {})
             # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
-            # this run's parser, while invalidating both supported producer names so a
-            # cross-format rerun cannot retain patient output from the previous format.
+            # this run's parser. Both supported producer names and the derived result
+            # were already invalidated immediately after input-ownership validation.
             output_ext = advntr_output_extension(advntr_settings)
-            for raw_extension in (".tsv", ".vcf"):
-                invalidate_advntr_artifact(Path(dirs["advntr"]) / f"output_adVNTR{raw_extension}")
             # Which model a run resolved decides which reads adVNTR can ever see: the
             # fetch window comes from the model's own content. Validate before running,
             # because the failure mode is a confident result over a truncated locus
