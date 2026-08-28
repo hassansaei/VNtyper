@@ -29,6 +29,14 @@ class FastpCutoffs:
     passed_filter_rate: FastpCutoff
 
 
+@dataclass(frozen=True)
+class FastpMeasurement:
+    """One validated fastp measurement shared by its display and icon decision."""
+
+    value: Decimal | None
+    display: str | None
+
+
 def _validated_fraction(value: object, key: str) -> Decimal:
     """Validate one configured fastp fraction in the report's decimal domain."""
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
@@ -43,6 +51,25 @@ def _validated_fraction(value: object, key: str) -> Decimal:
         raise ValueError(message) from error
     if not fraction.is_finite() or not Decimal(0) <= fraction <= Decimal(1):
         message = f"Config thresholds has invalid fastp cutoff {key!r}: expected a finite fraction from 0 to 1."
+        logger.error(message)
+        raise ValueError(message)
+    return fraction
+
+
+def _validated_measured_fraction(value: object, key: str) -> Decimal | None:
+    """Validate one output.json fastp fraction while preserving an absent measurement."""
+    if value is None:
+        return None
+    message = f"Fastp output has invalid measured rate {key!r}: expected a finite numeric fraction from 0 to 1."
+    if isinstance(value, bool) or not isinstance(value, (numbers.Real, Decimal)):
+        logger.error(message)
+        raise ValueError(message)
+    try:
+        fraction = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        logger.error(message)
+        raise ValueError(message) from error
+    if not fraction.is_finite() or not Decimal(0) <= fraction <= Decimal(1):
         logger.error(message)
         raise ValueError(message)
     return fraction
@@ -66,7 +93,7 @@ def _cutoff_label(fraction: Decimal) -> str:
     return f"{format((fraction * Decimal(100)).normalize(), 'f')}%"
 
 
-def fastp_display_rate(rate: float | None) -> str | None:
+def fastp_display_rate(rate: object) -> str | None:
     """Format one raw fastp metric with the icon's exact decision rounding.
 
     Args:
@@ -75,13 +102,7 @@ def fastp_display_rate(rate: float | None) -> str | None:
     Returns:
         The visible percentage string, preserving a missing value.
     """
-    displayed_fraction = fastp_threshold_rate(rate)
-    if displayed_fraction is None:
-        return None
-    percentage = format((displayed_fraction * Decimal(100)).normalize(), "f")
-    if "." not in percentage:
-        percentage = f"{percentage}.0"
-    return f"{percentage}%"
+    return build_fastp_measurement(rate, "fastp rate").display
 
 
 def build_fastp_cutoffs(thresholds: Mapping[str, object]) -> FastpCutoffs:
@@ -113,7 +134,7 @@ def build_fastp_cutoffs(thresholds: Mapping[str, object]) -> FastpCutoffs:
     )
 
 
-def fastp_threshold_rate(rate: float | None) -> Decimal | None:
+def fastp_threshold_rate(rate: object) -> Decimal | None:
     """Return a fastp fraction rounded to the two-decimal percentage readers see.
 
     Args:
@@ -122,6 +143,27 @@ def fastp_threshold_rate(rate: float | None) -> Decimal | None:
     Returns:
         The displayed rate as a fraction, preserving a missing value.
     """
-    if rate is None:
-        return None
-    return _displayed_fraction(Decimal(str(rate)))
+    return build_fastp_measurement(rate, "fastp rate").value
+
+
+def build_fastp_measurement(rate: object, key: str) -> FastpMeasurement:
+    """Build one validated fastp value used for both its display and icon.
+
+    Args:
+        rate: Raw fraction from fastp ``output.json``, or ``None`` when unavailable.
+        key: Report metric key used in an error message.
+
+    Returns:
+        One decimal decision value and matching display text, or a missing pair.
+
+    Raises:
+        ValueError: If a nonmissing rate is not a finite numeric 0..1 fraction.
+    """
+    fraction = _validated_measured_fraction(rate, key)
+    if fraction is None:
+        return FastpMeasurement(value=None, display=None)
+    displayed_fraction = _displayed_fraction(fraction)
+    percentage = format((displayed_fraction * Decimal(100)).normalize(), "f")
+    if "." not in percentage:
+        percentage = f"{percentage}.0"
+    return FastpMeasurement(value=displayed_fraction, display=f"{percentage}%")

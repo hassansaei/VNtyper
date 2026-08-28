@@ -39,7 +39,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from vntyper.scripts import report_assets
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
-from vntyper.scripts.fastp_cutoffs import build_fastp_cutoffs, fastp_display_rate, fastp_threshold_rate
+from vntyper.scripts.fastp_cutoffs import build_fastp_cutoffs, build_fastp_measurement
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
@@ -664,18 +664,20 @@ def generate_summary_report(
     uncovered_icon, uncovered_color = threshold_icon(
         percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False
     )
+    duplication_rate = build_fastp_measurement(fastp.duplication_rate, "duplication_rate")
+    q20_rate = build_fastp_measurement(fastp.q20_rate, "q20_rate")
+    q30_rate = build_fastp_measurement(fastp.q30_rate, "q30_rate")
+    passed_filter_rate = build_fastp_measurement(fastp.passed_filter_rate, "passed_filter_rate")
     dup_icon, dup_color = threshold_icon(
-        fastp_threshold_rate(fastp.duplication_rate), fastp_cutoffs.duplication_rate.value, higher_better=False
+        duplication_rate.value, fastp_cutoffs.duplication_rate.value, higher_better=False
     )
-    q20_icon, q20_color = threshold_icon(fastp_threshold_rate(fastp.q20_rate), fastp_cutoffs.q20_rate.value)
-    q30_icon, q30_color = threshold_icon(fastp_threshold_rate(fastp.q30_rate), fastp_cutoffs.q30_rate.value)
-    pf_icon, pf_color = threshold_icon(
-        fastp_threshold_rate(fastp.passed_filter_rate), fastp_cutoffs.passed_filter_rate.value
-    )
-    duplication_rate_display = fastp_display_rate(fastp.duplication_rate)
-    q20_rate_display = fastp_display_rate(fastp.q20_rate)
-    q30_rate_display = fastp_display_rate(fastp.q30_rate)
-    passed_filter_rate_display = fastp_display_rate(fastp.passed_filter_rate)
+    q20_icon, q20_color = threshold_icon(q20_rate.value, fastp_cutoffs.q20_rate.value)
+    q30_icon, q30_color = threshold_icon(q30_rate.value, fastp_cutoffs.q30_rate.value)
+    pf_icon, pf_color = threshold_icon(passed_filter_rate.value, fastp_cutoffs.passed_filter_rate.value)
+    duplication_rate_display = duplication_rate.display
+    q20_rate_display = q20_rate.display
+    q30_rate_display = q30_rate.display
+    passed_filter_rate_display = passed_filter_rate.display
 
     # "" for an empty frame, which is what the template's authored empty states hang
     # on. This used to call `to_html` directly, bypassing the helper written for

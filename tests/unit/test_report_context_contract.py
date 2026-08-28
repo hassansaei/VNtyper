@@ -178,3 +178,13 @@ def test_published_compatibility_documentation_maps_fastp_raw_values_to_display_
         "passed_filter_rate": "passed_filter_rate_display",
     }.items():
         assert f"| `{raw_key}` | `{display_key}` |" in compatibility_section
+
+
+def test_published_report_documentation_describes_fastp_measured_rate_validation() -> None:
+    """The report contract distinguishes a missing rate from malformed output.json data."""
+    reports_documentation = (Path(__file__).parents[2] / "docs" / "pipeline" / "reports.md").read_text(encoding="utf-8")
+    normalized_documentation = " ".join(reports_documentation.split())
+
+    assert "nonmissing measured fastp rate" in normalized_documentation
+    assert "finite numeric fraction from 0 through 1" in normalized_documentation
+    assert "`None` rate remains missing and renders as `N/A`" in normalized_documentation

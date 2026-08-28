@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from decimal import Decimal
 from typing import Any
 
@@ -122,6 +123,81 @@ def test_build_fastp_cutoffs_normalizes_an_oversized_json_integer(
         )
 
     assert "duplication_rate" in caplog.text
+
+
+@pytest.mark.parametrize("metric_key", ("duplication_rate", "q20_rate", "q30_rate", "passed_filter_rate"))
+@pytest.mark.parametrize(
+    "raw_rate",
+    (True, "0.8", float("nan"), float("inf"), float("-inf"), -0.0001, 1.0001, 10**400),
+)
+def test_build_fastp_measurement_rejects_every_malformed_nonmissing_rate(
+    metric_key: str, raw_rate: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every displayed fastp metric fails closed with its output key in the log."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=metric_key):
+        module.build_fastp_measurement(raw_rate, metric_key)
+
+    assert metric_key in caplog.text
+
+
+@pytest.mark.parametrize("token", ("NaN", "Infinity", "-Infinity"))
+def test_build_fastp_measurement_rejects_nonfinite_values_json_loads_accepts(token: str) -> None:
+    """Bare nonfinite JSON tokens reach the report parser and must fail explicitly."""
+    module = _module()
+    raw_rate = json.loads(f'{{"rate": {token}}}')["rate"]
+
+    with pytest.raises(ValueError, match="q20_rate"):
+        module.build_fastp_measurement(raw_rate, "q20_rate")
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "raw_rate", "cutoff", "higher_better", "expected_fraction", "expected_display", "expected_colour"),
+    (
+        ("duplication_rate", Decimal("0.05045"), Decimal("0.0505"), False, Decimal("0.0505"), "5.05%", "green"),
+        ("q20_rate", Decimal("0.77645"), Decimal("0.7765"), True, Decimal("0.7765"), "77.65%", "green"),
+        ("q30_rate", Decimal("0.70045"), Decimal("0.7005"), True, Decimal("0.7005"), "70.05%", "green"),
+        (
+            "passed_filter_rate",
+            Decimal("0.80045"),
+            Decimal("0.8005"),
+            True,
+            Decimal("0.8005"),
+            "80.05%",
+            "green",
+        ),
+    ),
+)
+def test_build_fastp_measurement_supplies_one_validated_display_and_icon_value(
+    metric_key: str,
+    raw_rate: Decimal,
+    cutoff: Decimal,
+    higher_better: bool,
+    expected_fraction: Decimal,
+    expected_display: str,
+    expected_colour: str,
+) -> None:
+    """The same validated Decimal value feeds each metric's visible text and icon."""
+    module = _module()
+
+    measurement = module.build_fastp_measurement(raw_rate, metric_key)
+
+    assert measurement.value == expected_fraction
+    assert measurement.display == expected_display
+    assert threshold_icon(measurement.value, cutoff, higher_better=higher_better)[1] == expected_colour
+
+
+@pytest.mark.parametrize("metric_key", ("duplication_rate", "q20_rate", "q30_rate", "passed_filter_rate"))
+def test_build_fastp_measurement_preserves_none_as_missing(metric_key: str) -> None:
+    """A missing fastp measurement stays an empty display/icon representation."""
+    module = _module()
+
+    measurement = module.build_fastp_measurement(None, metric_key)
+
+    assert measurement.value is None
+    assert measurement.display is None
 
 
 @pytest.mark.parametrize(

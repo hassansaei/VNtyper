@@ -247,6 +247,47 @@ def _render_fastp_rates(output_dir: Path, rates: dict[str, float], thresholds: d
     return render(output_dir, config=config)
 
 
+@pytest.mark.parametrize("metric_key", ("duplication_rate", "q20_rate", "q30_rate", "passed_filter_rate"))
+def test_report_rejects_a_nonfinite_fastp_output_metric_with_its_key(
+    tmp_path: Path, metric_key: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every nonmissing output.json fastp metric fails before it can render or compare."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    payload: dict[str, object] = {
+        "summary": {
+            "before_filtering": {"total_reads": 100},
+            "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+        },
+        "duplication": {"rate": 0.1},
+        "filtering_result": {"passed_filter_reads": 80},
+    }
+    if metric_key == "duplication_rate":
+        payload["duplication"] = {"rate": float("nan")}
+    elif metric_key == "q20_rate":
+        summary = payload["summary"]
+        assert isinstance(summary, dict)
+        after_filtering = summary["after_filtering"]
+        assert isinstance(after_filtering, dict)
+        after_filtering["q20_rate"] = float("nan")
+    elif metric_key == "q30_rate":
+        summary = payload["summary"]
+        assert isinstance(summary, dict)
+        after_filtering = summary["after_filtering"]
+        assert isinstance(after_filtering, dict)
+        after_filtering["q30_rate"] = float("nan")
+    else:
+        payload["filtering_result"] = {"passed_filter_reads": float("nan")}
+    (fastp_dir / "output.json").write_text(json.dumps(payload), encoding="utf-8")
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=metric_key):
+        render(tmp_path)
+
+    assert metric_key in caplog.text
+
+
 @pytest.mark.parametrize(
     ("metric_key", "label", "threshold", "displayed"),
     [
