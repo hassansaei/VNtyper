@@ -110,8 +110,6 @@ def calculate_passed_filter_rate(passed_filter_reads: object, total_reads: objec
     """
     passed_count = _validated_passed_filter_count(passed_filter_reads, "passed_filter_reads")
     total_count = _validated_passed_filter_count(total_reads, "total_reads")
-    if total_count == Decimal(0):
-        return None
     if passed_count > total_count:
         message = (
             "Fastp output has invalid passed_filter_rate source count 'passed_filter_reads': "
@@ -119,6 +117,8 @@ def calculate_passed_filter_rate(passed_filter_reads: object, total_reads: objec
         )
         logger.error(message)
         raise ValueError(message)
+    if total_count == Decimal(0):
+        return None
     return float(passed_count / total_count)
 
 

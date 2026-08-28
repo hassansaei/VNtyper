@@ -219,19 +219,38 @@ def test_summarise_fastp_rejects_a_passed_filter_count_above_the_total(
             }
         )
 
+    assert "passed_filter_rate" in caplog.text
     assert "passed_filter_reads" in caplog.text
 
 
-def test_summarise_fastp_preserves_a_positive_passed_count_with_zero_total_as_missing() -> None:
-    """The supported zero-total path stays distinct from an invalid negative total."""
+def test_summarise_fastp_preserves_zero_counts_as_missing() -> None:
+    """An empty fastp source payload stays distinct from an inconsistent one."""
     metrics = rf.summarise_fastp(
         {
             "summary": {"before_filtering": {"total_reads": 0}, "after_filtering": {}},
-            "filtering_result": {"passed_filter_reads": 80},
+            "filtering_result": {"passed_filter_reads": 0},
         }
     )
 
     assert metrics.passed_filter_rate is None
+
+
+@pytest.mark.parametrize("passed_filter_reads", (1, 80))
+def test_summarise_fastp_rejects_a_positive_passed_count_with_zero_total(
+    passed_filter_reads: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The source boundary rejects a passed count that cannot fit its zero total."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        rf.summarise_fastp(
+            {
+                "summary": {"before_filtering": {"total_reads": 0}, "after_filtering": {}},
+                "filtering_result": {"passed_filter_reads": passed_filter_reads},
+            }
+        )
+
+    assert "passed_filter_reads" in caplog.text
 
 
 # ---------------------------------------------------------------------------

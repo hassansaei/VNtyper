@@ -172,11 +172,26 @@ def test_calculate_passed_filter_rate_rejects_a_count_above_the_total(
     assert "passed_filter_reads" in caplog.text
 
 
-def test_calculate_passed_filter_rate_preserves_a_valid_zero_total_as_missing() -> None:
-    """Zero reads before filtering is the supported absent-measurement case, not malformed input."""
+def test_calculate_passed_filter_rate_preserves_zero_counts_as_missing() -> None:
+    """An empty fastp measurement remains the supported missing-rate representation."""
     module = _module()
 
-    assert module.calculate_passed_filter_rate(passed_filter_reads=80, total_reads=0) is None
+    assert module.calculate_passed_filter_rate(passed_filter_reads=0, total_reads=0) is None
+
+
+@pytest.mark.parametrize("passed_filter_reads", (1, 80))
+def test_calculate_passed_filter_rate_rejects_a_positive_count_with_zero_total(
+    passed_filter_reads: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A positive passed count cannot be missing when fastp says its total is zero."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        module.calculate_passed_filter_rate(passed_filter_reads=passed_filter_reads, total_reads=0)
+
+    assert "passed_filter_rate" in caplog.text
+    assert "passed_filter_reads" in caplog.text
 
 
 @pytest.mark.parametrize("metric_key", ("duplication_rate", "q20_rate", "q30_rate", "passed_filter_rate"))

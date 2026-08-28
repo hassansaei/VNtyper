@@ -367,8 +367,8 @@ def test_report_rejects_a_passed_filter_count_above_the_total(tmp_path: Path, ca
     assert "passed_filter_reads" in caplog.text
 
 
-def test_report_keeps_a_positive_passed_filter_count_with_zero_total_as_missing(tmp_path: Path) -> None:
-    """The real render path still shows the supported zero-total state as N/A without an icon."""
+def test_report_keeps_zero_counts_as_missing(tmp_path: Path) -> None:
+    """The real render path preserves a truly empty fastp measurement as N/A."""
     write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
     fastp_dir = tmp_path / "fastq_bam_processing"
     fastp_dir.mkdir()
@@ -380,7 +380,7 @@ def test_report_keeps_a_positive_passed_filter_count_with_zero_total_as_missing(
                     "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
                 },
                 "duplication": {"rate": 0.1},
-                "filtering_result": {"passed_filter_reads": 80},
+                "filtering_result": {"passed_filter_reads": 0},
             }
         ),
         encoding="utf-8",
@@ -391,6 +391,37 @@ def test_report_keeps_a_positive_passed_filter_count_with_zero_total_as_missing(
 
     assert value == "N/A"
     assert status == ""
+
+
+@pytest.mark.parametrize("passed_filter_reads", (1, 80))
+def test_report_rejects_a_positive_passed_filter_count_with_zero_total(
+    tmp_path: Path, passed_filter_reads: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Inconsistent fastp source counts fail before the renderer writes HTML."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 0},
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": {"passed_filter_reads": passed_filter_reads},
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        render(tmp_path)
+
+    assert "passed_filter_rate" in caplog.text
+    assert "passed_filter_reads" in caplog.text
+    assert not (tmp_path / "summary_report.html").exists()
 
 
 @pytest.mark.parametrize(
