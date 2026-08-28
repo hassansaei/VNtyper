@@ -54,6 +54,7 @@ import numbers
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -612,8 +613,8 @@ EMPTY_SESSION_DICTIONARY = "{}"
 
 
 def threshold_icon(
-    value: float | None,
-    cutoff: float,
+    value: float | Decimal | None,
+    cutoff: float | Decimal,
     *,
     higher_better: bool = True,
     on_missing: tuple[str, str] = MISSING_AS_BLANK,

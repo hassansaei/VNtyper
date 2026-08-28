@@ -46,7 +46,8 @@ Controls tool paths, reference data, processing parameters, and quality threshol
     "percent_vntr_uncovered": 50.0,
     "duplication_rate": 0.1,
     "q20_rate": 0.8,
-    "q30_rate": 0.7
+    "q30_rate": 0.7,
+    "passed_filter_reads_rate": 0.8
   }
 }
 ```
@@ -69,6 +70,20 @@ Controls tool paths, reference data, processing parameters, and quality threshol
 The verdict is evaluated on the figures the report displays, which are rounded to two decimal places, so no report prints `FAIL` beside a mean of `100.00` and a threshold of 100.
 
 Since VNtyper 2.0.8 both keys are enforced. Before it, `percent_vntr_uncovered` had a threshold, was computed on every run and drove only a color-coded icon.
+
+#### fastp report thresholds
+
+The fastp rows in the HTML report require all four `thresholds` keys:
+`duplication_rate`, `q20_rate`, `q30_rate`, and `passed_filter_reads_rate`.
+Each is a finite numeric fraction from 0 through 1, inclusive. The report derives
+both the displayed cutoff label and the status decision from that same configured
+value, in the displayed two-decimal percentage precision.
+
+`duplication_rate` warns strictly above its cutoff; the three rate metrics warn
+strictly below theirs. A measured value exactly at its configured cutoff is OK.
+Missing keys, strings, booleans, non-finite values, or fractions outside 0--1 are
+logged and raise `ValueError` while rendering rather than silently substituting a
+default cutoff.
 
 ## Kestrel Configuration (kestrel_config.json)
 

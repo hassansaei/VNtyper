@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import logging
-import math
 import numbers
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 class FastpCutoff:
     """One numeric fastp decision cutoff and the label derived from it."""
 
-    value: float
+    value: Decimal
     label: str
 
 
@@ -30,19 +29,19 @@ class FastpCutoffs:
     passed_filter_rate: FastpCutoff
 
 
-def _validated_fraction(value: object, key: str) -> float:
-    """Validate one configured fastp fraction and return it as a float."""
+def _validated_fraction(value: object, key: str) -> Decimal:
+    """Validate one configured fastp fraction in the report's decimal domain."""
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         message = f"Config thresholds has invalid fastp cutoff {key!r}: expected a numeric fraction from 0 to 1."
         logger.error(message)
         raise ValueError(message)
     try:
-        fraction = float(value)
-    except OverflowError as error:
+        fraction = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
         message = f"Config thresholds has invalid fastp cutoff {key!r}: expected a finite fraction from 0 to 1."
         logger.error(message)
         raise ValueError(message) from error
-    if not math.isfinite(fraction) or not 0 <= fraction <= 1:
+    if not fraction.is_finite() or not Decimal(0) <= fraction <= Decimal(1):
         message = f"Config thresholds has invalid fastp cutoff {key!r}: expected a finite fraction from 0 to 1."
         logger.error(message)
         raise ValueError(message)
@@ -52,8 +51,15 @@ def _validated_fraction(value: object, key: str) -> float:
 def _cutoff(value: object, key: str) -> FastpCutoff:
     """Build one validated fastp decision/display pair."""
     fraction = _validated_fraction(value, key)
-    percentage = Decimal(str(fraction)) * Decimal(100)
-    return FastpCutoff(value=fraction, label=f"{format(percentage.normalize(), 'f')}%")
+    displayed_fraction = _displayed_fraction(fraction)
+    percentage = displayed_fraction * Decimal(100)
+    return FastpCutoff(value=displayed_fraction, label=f"{format(percentage.normalize(), 'f')}%")
+
+
+def _displayed_fraction(fraction: Decimal) -> Decimal:
+    """Round a fraction into the report's two-decimal percentage domain."""
+    percentage = fraction * Decimal(100)
+    return percentage.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) / Decimal(100)
 
 
 def build_fastp_cutoffs(thresholds: Mapping[str, object]) -> FastpCutoffs:
@@ -85,7 +91,7 @@ def build_fastp_cutoffs(thresholds: Mapping[str, object]) -> FastpCutoffs:
     )
 
 
-def fastp_threshold_rate(rate: float | None) -> float | None:
+def fastp_threshold_rate(rate: float | None) -> Decimal | None:
     """Return a fastp fraction rounded to the two-decimal percentage readers see.
 
     Args:
@@ -96,4 +102,4 @@ def fastp_threshold_rate(rate: float | None) -> float | None:
     """
     if rate is None:
         return None
-    return round(rate * 100, 2) / 100
+    return _displayed_fraction(Decimal(str(rate)))

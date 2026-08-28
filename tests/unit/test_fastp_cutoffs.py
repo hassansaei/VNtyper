@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -30,13 +31,13 @@ def test_build_fastp_cutoffs_pairs_each_numeric_decision_with_its_label() -> Non
         }
     )
 
-    assert cutoffs.duplication_rate.value == pytest.approx(0.1234)
+    assert cutoffs.duplication_rate.value == Decimal("0.1234")
     assert cutoffs.duplication_rate.label == "12.34%"
-    assert cutoffs.q20_rate.value == pytest.approx(0.7555)
+    assert cutoffs.q20_rate.value == Decimal("0.7555")
     assert cutoffs.q20_rate.label == "75.55%"
-    assert cutoffs.q30_rate.value == pytest.approx(0.6543)
+    assert cutoffs.q30_rate.value == Decimal("0.6543")
     assert cutoffs.q30_rate.label == "65.43%"
-    assert cutoffs.passed_filter_rate.value == pytest.approx(0.7765)
+    assert cutoffs.passed_filter_rate.value == Decimal("0.7765")
     assert cutoffs.passed_filter_rate.label == "77.65%"
 
 
@@ -53,8 +54,25 @@ def test_build_fastp_cutoffs_accepts_inclusive_boundaries_with_exact_labels(valu
         }
     )
 
-    assert cutoffs.duplication_rate.value == value
+    assert cutoffs.duplication_rate.value == Decimal(str(value))
     assert cutoffs.duplication_rate.label == label
+
+
+def test_build_fastp_cutoffs_derives_the_decision_and_label_at_display_precision() -> None:
+    """A fractional cutoff shares the two-decimal percentage domain of its label."""
+    module = _module()
+
+    cutoffs = module.build_fastp_cutoffs(
+        {
+            "duplication_rate": 0.1,
+            "q20_rate": 0.77654,
+            "q30_rate": 0.7,
+            "passed_filter_reads_rate": 0.8,
+        }
+    )
+
+    assert cutoffs.q20_rate.value == Decimal("0.7765")
+    assert cutoffs.q20_rate.label == "77.65%"
 
 
 @pytest.mark.parametrize(
@@ -108,10 +126,17 @@ def test_build_fastp_cutoffs_normalizes_an_oversized_json_integer(
 
 @pytest.mark.parametrize(
     ("raw_rate", "expected"),
-    [(None, None), (0.0, 0.0), (0.77654, 0.7765), (0.77655, 0.7766)],
+    [
+        (None, None),
+        (0.0, Decimal(0)),
+        (1.0, Decimal(1)),
+        (0.6005, Decimal("0.6005")),
+        (0.77654, Decimal("0.7765")),
+        (0.77655, Decimal("0.7766")),
+    ],
 )
 def test_fastp_threshold_rate_matches_the_value_rendered_in_the_report(
-    raw_rate: float | None, expected: float | None
+    raw_rate: float | None, expected: Decimal | None
 ) -> None:
     """Icon decisions use the same two-decimal percentage precision readers see."""
     module = _module()
@@ -119,7 +144,7 @@ def test_fastp_threshold_rate_matches_the_value_rendered_in_the_report(
     if expected is None:
         assert module.fastp_threshold_rate(raw_rate) is None
     else:
-        assert module.fastp_threshold_rate(raw_rate) == pytest.approx(expected)
+        assert module.fastp_threshold_rate(raw_rate) == expected
 
 
 @pytest.mark.parametrize(
@@ -143,5 +168,5 @@ def test_fastp_threshold_rate_is_the_icon_decision_value(
     module = _module()
     displayed_rate = module.fastp_threshold_rate(raw_rate)
 
-    assert displayed_rate == pytest.approx(expected_displayed_rate)
-    assert threshold_icon(displayed_rate, cutoff, higher_better=higher_better)[1] == expected_colour
+    assert displayed_rate == Decimal(str(expected_displayed_rate))
+    assert threshold_icon(displayed_rate, Decimal(str(cutoff)), higher_better=higher_better)[1] == expected_colour

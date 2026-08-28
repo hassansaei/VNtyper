@@ -217,11 +217,112 @@ def test_measured_coverage_values_keep_their_threshold_icons(positive_summary) -
 
 def _fastp_metric_cells(html: str, label: str) -> tuple[str, str]:
     """Return one fastp row's normalized value and status cells."""
-    pattern = rf"<tr>\s*<td>{re.escape(label)} \(Cutoff: \d+%\)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>"
+    pattern = rf"<tr>\s*<td>{re.escape(label)} \(Cutoff: \d+(?:\.\d+)?%\)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>"
     match = re.search(pattern, html, re.DOTALL)
     assert match, f"the report has no {label!r} fastp row"
     value = " ".join(html_module.unescape(match.group(1)).split())
     return value, match.group(2).strip()
+
+
+def _render_fastp_rates(output_dir: Path, rates: dict[str, float], thresholds: dict[str, float]) -> str:
+    """Render a report with explicit fastp rates and all four configured cutoffs."""
+    write_summary(output_dir, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = output_dir / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 10000},
+                    "after_filtering": {"q20_rate": rates["q20_rate"], "q30_rate": rates["q30_rate"]},
+                },
+                "duplication": {"rate": rates["duplication_rate"]},
+                "filtering_result": {"passed_filter_reads": int(rates["passed_filter_reads_rate"] * 10000)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = copy.deepcopy(load_config(None))
+    config["thresholds"].update(thresholds)
+    return render(output_dir, config=config)
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "label", "threshold", "displayed"),
+    [
+        ("q20_rate", "Q20 Rate", 0.6005, "60.05%"),
+        ("duplication_rate", "Duplication Rate", 0.0503, "5.03%"),
+    ],
+)
+def test_fastp_exact_decimal_thresholds_render_as_passing(
+    tmp_path, metric_key: str, label: str, threshold: float, displayed: str
+) -> None:
+    """A metric rendered at its exact decimal cutoff must not show a warning."""
+    rates = {
+        "duplication_rate": 0.05,
+        "q20_rate": 0.8,
+        "q30_rate": 0.7,
+        "passed_filter_reads_rate": 0.8,
+    }
+    thresholds = dict(rates)
+    rates[metric_key] = threshold
+    thresholds[metric_key] = threshold
+
+    html = _render_fastp_rates(tmp_path, rates, thresholds)
+    value, status = _fastp_metric_cells(html, label)
+
+    assert value == displayed
+    assert f"{label} (Cutoff: {displayed})" in html
+    assert report_formatting.OK_ICON in status
+    assert report_formatting.WARNING_ICON not in status
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "foreign_key", "metric_label", "metric_cutoff", "foreign_cutoff"),
+    [
+        ("duplication_rate", "q20_rate", "Duplication Rate", 0.0503, 0.0401),
+        ("duplication_rate", "q30_rate", "Duplication Rate", 0.0503, 0.0402),
+        ("duplication_rate", "passed_filter_reads_rate", "Duplication Rate", 0.0503, 0.0403),
+        ("q20_rate", "duplication_rate", "Q20 Rate", 0.6005, 0.9001),
+        ("q20_rate", "q30_rate", "Q20 Rate", 0.6005, 0.9002),
+        ("q20_rate", "passed_filter_reads_rate", "Q20 Rate", 0.6005, 0.9003),
+        ("q30_rate", "duplication_rate", "Q30 Rate", 0.7005, 0.9004),
+        ("q30_rate", "q20_rate", "Q30 Rate", 0.7005, 0.9005),
+        ("q30_rate", "passed_filter_reads_rate", "Q30 Rate", 0.7005, 0.9006),
+        ("passed_filter_reads_rate", "duplication_rate", "Passed Filter Rate", 0.8005, 0.9007),
+        ("passed_filter_reads_rate", "q20_rate", "Passed Filter Rate", 0.8005, 0.9008),
+        ("passed_filter_reads_rate", "q30_rate", "Passed Filter Rate", 0.8005, 0.9009),
+    ],
+)
+def test_fastp_metric_icon_uses_its_own_configured_cutoff(
+    tmp_path,
+    metric_key: str,
+    foreign_key: str,
+    metric_label: str,
+    metric_cutoff: float,
+    foreign_cutoff: float,
+) -> None:
+    """Every metric remains passing only with its own, direction-aware cutoff.
+
+    Each foreign cutoff forces a warning if it is substituted at the target
+    decision call. The three duplication cases use its inverse direction.
+    """
+    rates = {
+        "duplication_rate": 0.0503,
+        "q20_rate": 0.6005,
+        "q30_rate": 0.7005,
+        "passed_filter_reads_rate": 0.8005,
+    }
+    thresholds = dict(rates)
+    rates[metric_key] = metric_cutoff
+    thresholds[metric_key] = metric_cutoff
+    thresholds[foreign_key] = foreign_cutoff
+
+    html = _render_fastp_rates(tmp_path, rates, thresholds)
+    _, status = _fastp_metric_cells(html, metric_label)
+
+    assert report_formatting.OK_ICON in status
+    assert report_formatting.WARNING_ICON not in status
 
 
 def test_fastp_cutoff_labels_and_status_icons_share_the_configured_thresholds(tmp_path) -> None:

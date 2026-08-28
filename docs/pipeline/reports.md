@@ -46,16 +46,16 @@ When both Kestrel and adVNTR results are available, the report indicates whether
 
 The report includes quality metrics from multiple sources:
 
-| Metric | Source | Threshold |
-|--------|--------|-----------|
-| Mean VNTR coverage | samtools depth | >= 100x |
-| Percent VNTR uncovered | samtools depth | <= 50% |
-| Duplication rate | fastp | <= 10% |
-| Q20 rate | fastp | >= 80% |
-| Q30 rate | fastp | >= 70% |
-| Passed filter rate | fastp | >= 80% |
+| Metric | Source | Configured threshold | Inclusive comparison |
+|--------|--------|----------------------|----------------------|
+| Mean VNTR coverage | samtools depth | `thresholds.mean_vntr_coverage` | measured >= configured value |
+| Percent VNTR uncovered | samtools depth | `thresholds.percent_vntr_uncovered` | measured <= configured value |
+| Duplication rate | fastp | `thresholds.duplication_rate` | measured <= configured value |
+| Q20 rate | fastp | `thresholds.q20_rate` | measured >= configured value |
+| Q30 rate | fastp | `thresholds.q30_rate` | measured >= configured value |
+| Passed filter rate | fastp | `thresholds.passed_filter_reads_rate` | measured >= configured value |
 
-Each metric is displayed with a color-coded indicator (green check or red warning) based on its threshold.
+Each metric is displayed with a color-coded indicator (green check or red warning) based on its configured threshold. The four fastp values are required finite numeric fractions from 0 through 1; a missing, malformed, non-finite, or out-of-range value is logged and raises `ValueError` while the report is rendered. Their labels and decisions share the same two-decimal percentage representation, and equality passes.
 
 The two coverage rows also decide a verdict. The report shows it as a **Coverage QC** row reading `PASS` or `FAIL`, and the same value is written to `coverage_summary.tsv` as a `coverage_qc` column and reaches the cohort exports as `cov_coverage_qc`. `FAIL` on either metric is what makes the screening summary report the sample's quality metrics as below threshold.
 
