@@ -202,7 +202,7 @@ class AdvntrVersionProbe:
                     self._versions[command] = version
                     return AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=version)
 
-                if _is_transient_mamba_lock_failure(argv, combined_output):
+                if version is None and _is_transient_mamba_lock_failure(argv, combined_output):
                     if attempt == _VERSION_PROBE_ATTEMPTS:
                         msg = (
                             f"adVNTR version detection exhausted {_VERSION_PROBE_ATTEMPTS} attempts "

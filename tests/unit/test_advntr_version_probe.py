@@ -393,6 +393,28 @@ def test_real_203_argparse_failure_reaches_the_incompatible_version_refusal() ->
         model_provenance.require_compatible_advntr_outcome(V2_MODEL, outcome)
 
 
+def test_nonzero_203_banner_takes_precedence_over_the_measured_process_lock() -> None:
+    """A unique failed-banner version must not be discarded by launcher retry noise."""
+    with (
+        patch(
+            "vntyper.modules.advntr.model_provenance.subprocess.run",
+            return_value=_result(status=2, stderr=PROCESS_LOCK_OUTPUT + REAL_ADVNTR_203_ARGPARSE_STDERR),
+        ) as runner,
+        patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
+    ):
+        outcome = detect_advntr_version(CONFIG, probe=AdvntrVersionProbe())
+
+    assert outcome == AdvntrVersionOutcome(
+        AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE,
+        version=(2, 0, 3),
+        message="adVNTR version launch failed: command exited with status 2.",
+    )
+    runner.assert_called_once_with(ARGV, capture_output=True, text=True, check=False)
+    sleep.assert_not_called()
+    with pytest.raises(AdvntrModelError, match=r"Install adVNTR >= 2\.0\.4"):
+        model_provenance.require_compatible_advntr_outcome(V2_MODEL, outcome)
+
+
 def test_nonzero_compatible_banner_never_authorizes_the_run() -> None:
     """Even a tagged compatible version cannot turn a nonzero subprocess into success."""
     with patch(

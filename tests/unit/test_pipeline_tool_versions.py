@@ -214,13 +214,16 @@ def test_a_model_advntr_cannot_read_stops_the_run(tmp_path: Path, caplog: pytest
 def test_a_203_nonzero_tagged_banner_reaches_the_upgrade_refusal(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The old CLI's argparse failure retains an incompatible-version diagnosis."""
+    """The old CLI's banner outranks lock noise and stops before Kestrel."""
     config = deepcopy(MINIMAL_CONFIG)
+    config["tools"]["advntr"] = "mamba run -n envadvntr advntr"
     incompatible = subprocess.CompletedProcess(
-        [config["tools"]["advntr"], "--version"],
+        ["mamba", "run", "-n", "envadvntr", "advntr", "--version"],
         2,
         stdout="",
         stderr=(
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n"
             "usage: \n"
             "=======================================================\n"
             "adVNTR 2.0.3: Genopyting tool for VNTRs\n"
@@ -231,10 +234,13 @@ def test_a_203_nonzero_tagged_banner_reaches_the_upgrade_refusal(
     )
 
     caplog.set_level("ERROR")
-    with patch(
-        "vntyper.modules.advntr.model_provenance.subprocess.run",
-        return_value=incompatible,
-    ) as runner:
+    with (
+        patch(
+            "vntyper.modules.advntr.model_provenance.subprocess.run",
+            return_value=incompatible,
+        ) as runner,
+        patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
+    ):
         harness = run_pipeline_under_harness(
             tmp_path / "out",
             config=config,
@@ -245,6 +251,7 @@ def test_a_203_nonzero_tagged_banner_reaches_the_upgrade_refusal(
     assert isinstance(harness.error, SystemExit)
     assert harness.error.code == 1
     assert runner.call_count == 1
+    sleep.assert_not_called()
     harness.stages["run_kestrel"].assert_not_called()
     assert "Install adVNTR >= 2.0.4" in caplog.text
     assert "command exited with status 2" not in caplog.text
