@@ -16,12 +16,12 @@ deliberate defect, runs the tests, and records whether anything failed. A
 
 ## Result
 
-**169 of 215 mutants killed - a raw mutation score of 78.6%.**
+**177 of 220 mutants killed - a raw mutation score of 80.5%.**
 
-Of the 46 survivors, 4 are hand-classified as
+Of the 43 survivors, 0 are hand-classified as
 *equivalent* (the mutation cannot change observable behaviour, so no test could
-ever kill it) and 42 are genuine gaps. Excluding the equivalent
-mutants the score is **80.1%** (169/211).
+ever kill it) and 43 are genuine gaps. Excluding the equivalent
+mutants the score is **80.5%** (177/220).
 
 Both numbers are given because neither alone is honest: the raw score
 understates the suite by counting unkillable mutants against it, and the
@@ -30,13 +30,13 @@ Every classification is listed below with its reason so it can be checked.
 
 | Module | Killed | Total | Raw score |
 | --- | ---: | ---: | ---: |
-| `vntyper/scripts/kestrel_genotyping.py` | 59 | 85 | 69.4% |
-| `vntyper/scripts/motif_processing.py` | 44 | 59 | 74.6% |
-| `vntyper/scripts/variant_parsing.py` | 6 | 7 | 85.7% |
+| `vntyper/scripts/kestrel_genotyping.py` | 60 | 85 | 70.6% |
+| `vntyper/scripts/motif_processing.py` | 43 | 59 | 72.9% |
 | `vntyper/scripts/motif_decisions.py` | 7 | 8 | 87.5% |
 | `vntyper/scripts/confidence_assignment.py` | 10 | 11 | 90.9% |
-| `vntyper/scripts/flagging.py` | 23 | 25 | 92.0% |
 | `vntyper/scripts/scoring.py` | 20 | 20 | 100.0% |
+| `vntyper/scripts/variant_parsing.py` | 7 | 7 | 100.0% |
+| `vntyper/scripts/flagging.py` | 30 | 30 | 100.0% |
 
 ## Surviving mutants
 
@@ -60,7 +60,6 @@ kills one is a test that would have caught a real defect of that shape.
 | `vntyper/scripts/kestrel_genotyping.py` | 611 | `True` &rarr; `False` |
 | `vntyper/scripts/kestrel_genotyping.py` | 635 | `not` &rarr; `(deleted)` |
 | `vntyper/scripts/kestrel_genotyping.py` | 639 | `or` &rarr; `and` |
-| `vntyper/scripts/kestrel_genotyping.py` | 639 | `False` &rarr; `True` |
 | `vntyper/scripts/kestrel_genotyping.py` | 777 | `False` &rarr; `True` |
 | `vntyper/scripts/kestrel_genotyping.py` | 876 | `0` &rarr; `1` |
 | `vntyper/scripts/kestrel_genotyping.py` | 933 | `3` &rarr; `4` |
@@ -76,6 +75,7 @@ kills one is a test that would have caught a real defect of that shape.
 | `vntyper/scripts/kestrel_genotyping.py` | 1083 | `==` &rarr; `!=` |
 | `vntyper/scripts/kestrel_genotyping.py` | 1083 | `1` &rarr; `2` |
 | `vntyper/scripts/motif_decisions.py` | 86 | `True` &rarr; `False` |
+| `vntyper/scripts/motif_processing.py` | 216 | `False` &rarr; `True` |
 | `vntyper/scripts/motif_processing.py` | 231 | `==` &rarr; `!=` |
 | `vntyper/scripts/motif_processing.py` | 239 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 290 | `False` &rarr; `True` |
@@ -88,32 +88,13 @@ kills one is a test that would have caught a real defect of that shape.
 | `vntyper/scripts/motif_processing.py` | 491 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 510 | `-` &rarr; `+` |
 | `vntyper/scripts/motif_processing.py` | 510 | `1` &rarr; `2` |
+| `vntyper/scripts/motif_processing.py` | 523 | `not` &rarr; `(deleted)` |
 | `vntyper/scripts/motif_processing.py` | 525 | `not` &rarr; `(deleted)` |
 | `vntyper/scripts/motif_processing.py` | 534 | `False` &rarr; `True` |
 
 ### Classified equivalent
 
-These mutations cannot change behaviour that any test could legitimately
-observe, so they are **not** gaps in the suite. Each reason below is a claim
-you can check against the source; if one turns out to be wrong the entry
-should be deleted, not the score explained away.
-
-Most of them are `.get()` defaults on `kestrel_config.json` keys that the
-shipped config always supplies, which makes the default value dead code.
-Being precise about the scope of that claim: a `--config-path` omitting the
-key *would* reach the default, so these are unreachable **with the shipped
-configuration** rather than unreachable in principle. That is the right
-standard here - `AGENTS.md` trap 2 records that `--config-path` replaces the
-whole config rather than merging it, and that a partial config already fails
-with `KeyError` elsewhere in the pipeline, so a config missing these keys is
-not a supported input.
-
-| Module | Line | Mutation | Why it cannot be killed |
-| --- | ---: | --- | --- |
-| `vntyper/scripts/flagging.py` | 151 | `False` &rarr; `True` | `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly |
-| `vntyper/scripts/flagging.py` | 334 | `False` &rarr; `True` | `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name |
-| `vntyper/scripts/motif_processing.py` | 342 | `60` &rarr; `61` | `.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60 |
-| `vntyper/scripts/variant_parsing.py` | 114 | `0.0` &rarr; `1.0` | `.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469 |
+None classified yet.
 
 ## How this compares to the 43.5% baseline
 
@@ -124,7 +105,7 @@ committed, which is why this one exists.
 !!! note "The two totals are not directly comparable"
 
     Different mutant population, different modules: 62 mutants over eight
-    modules then, 215 over 7 modules now, generated by a different operator set.
+    modules then, 220 over 7 modules now, generated by a different operator set.
     A higher or lower headline number would not by itself mean the suite has
     improved or regressed. Only per-module figures on the same module carry
     across, and even those only loosely.
@@ -268,30 +249,24 @@ VNtyper mutation testing - advisory score
 ============================================================
 
 Command:  make mutation
-Total:    215 mutants, 169 killed, 46 survived
-Score:    78.6%
-Duration: 59.2 min
+Total:    220 mutants, 177 killed, 43 survived
+Score:    80.5%
+Duration: 57.4 min
 
 Per module
 ------------------------------------------------------------
-  69.4%   59/ 85  vntyper/scripts/kestrel_genotyping.py
-  74.6%   44/ 59  vntyper/scripts/motif_processing.py
-  85.7%    6/  7  vntyper/scripts/variant_parsing.py
+  70.6%   60/ 85  vntyper/scripts/kestrel_genotyping.py
+  72.9%   43/ 59  vntyper/scripts/motif_processing.py
   87.5%    7/  8  vntyper/scripts/motif_decisions.py
   90.9%   10/ 11  vntyper/scripts/confidence_assignment.py
-  92.0%   23/ 25  vntyper/scripts/flagging.py
  100.0%   20/ 20  vntyper/scripts/scoring.py
+ 100.0%    7/  7  vntyper/scripts/variant_parsing.py
+ 100.0%   30/ 30  vntyper/scripts/flagging.py
 
 Surviving mutants  [E] = hand-classified equivalent, [ ] = genuine gap
 ------------------------------------------------------------
 vntyper/scripts/confidence_assignment.py
   [ ] line  138  '-' -> '+'
-
-vntyper/scripts/flagging.py
-  [E] line  151  'False' -> 'True'
-          equivalent: `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly
-  [E] line  334  'False' -> 'True'
-          equivalent: `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name
 
 vntyper/scripts/kestrel_genotyping.py
   [ ] line  182  'and' -> 'or'
@@ -305,7 +280,6 @@ vntyper/scripts/kestrel_genotyping.py
   [ ] line  611  'True' -> 'False'
   [ ] line  635  'not' -> ''
   [ ] line  639  'or' -> 'and'
-  [ ] line  639  'False' -> 'True'
   [ ] line  777  'False' -> 'True'
   [ ] line  876  '0' -> '1'
   [ ] line  933  '3' -> '4'
@@ -325,6 +299,7 @@ vntyper/scripts/motif_decisions.py
   [ ] line   86  'True' -> 'False'
 
 vntyper/scripts/motif_processing.py
+  [ ] line  216  'False' -> 'True'
   [ ] line  231  '==' -> '!='
   [ ] line  239  'True' -> 'False'
   [ ] line  290  'False' -> 'True'
@@ -333,17 +308,12 @@ vntyper/scripts/motif_processing.py
   [ ] line  330  'False' -> 'True'
   [ ] line  337  'True' -> 'False'
   [ ] line  341  'False' -> 'True'
-  [E] line  342  '60' -> '61'
-          equivalent: `.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60
   [ ] line  367  'True' -> 'False'
   [ ] line  491  'True' -> 'False'
   [ ] line  510  '-' -> '+'
   [ ] line  510  '1' -> '2'
+  [ ] line  523  'not' -> ''
   [ ] line  525  'not' -> ''
   [ ] line  534  'False' -> 'True'
-
-vntyper/scripts/variant_parsing.py
-  [E] line  114  '0.0' -> '1.0'
-          equivalent: `.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469
 
 ```

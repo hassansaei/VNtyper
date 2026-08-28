@@ -1,5 +1,5 @@
 {
-  "elapsed": 3554.3827589520006,
+  "elapsed": 3445.1912656210043,
   "modules": [
     {
       "path": "vntyper/scripts/confidence_assignment.py",
@@ -21,9 +21,14 @@
     },
     {
       "path": "vntyper/scripts/motif_processing.py",
-      "killed": 44,
-      "survived": 15,
+      "killed": 43,
+      "survived": 16,
       "survivors": [
+        {
+          "line": 216,
+          "original": "False",
+          "replacement": "True"
+        },
         {
           "line": 231,
           "original": "==",
@@ -65,11 +70,6 @@
           "replacement": "True"
         },
         {
-          "line": 342,
-          "original": "60",
-          "replacement": "61"
-        },
-        {
           "line": 367,
           "original": "True",
           "replacement": "False"
@@ -88,6 +88,11 @@
           "line": 510,
           "original": "1",
           "replacement": "2"
+        },
+        {
+          "line": 523,
+          "original": "not",
+          "replacement": ""
         },
         {
           "line": 525,
@@ -115,37 +120,20 @@
     },
     {
       "path": "vntyper/scripts/variant_parsing.py",
-      "killed": 6,
-      "survived": 1,
-      "survivors": [
-        {
-          "line": 114,
-          "original": "0.0",
-          "replacement": "1.0"
-        }
-      ]
+      "killed": 7,
+      "survived": 0,
+      "survivors": []
     },
     {
       "path": "vntyper/scripts/flagging.py",
-      "killed": 23,
-      "survived": 2,
-      "survivors": [
-        {
-          "line": 151,
-          "original": "False",
-          "replacement": "True"
-        },
-        {
-          "line": 334,
-          "original": "False",
-          "replacement": "True"
-        }
-      ]
+      "killed": 30,
+      "survived": 0,
+      "survivors": []
     },
     {
       "path": "vntyper/scripts/kestrel_genotyping.py",
-      "killed": 59,
-      "survived": 26,
+      "killed": 60,
+      "survived": 25,
       "survivors": [
         {
           "line": 182,
@@ -201,11 +189,6 @@
           "line": 639,
           "original": "or",
           "replacement": "and"
-        },
-        {
-          "line": 639,
-          "original": "False",
-          "replacement": "True"
         },
         {
           "line": 777,
