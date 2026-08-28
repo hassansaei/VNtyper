@@ -1,5 +1,6 @@
 """A crashed adVNTR command must stop the pipeline before output parsing."""
 
+import hashlib
 import logging
 from copy import deepcopy
 from pathlib import Path
@@ -256,6 +257,81 @@ def test_input_ownership_refusal_precedes_advntr_artifact_invalidation(tmp_path:
     assert input_bam.read_text(encoding="utf-8") == "protected patient input\n"
     assert protected_artifact.exists()
     assert all(artifact.exists() for artifact in other_artifacts)
+
+
+@pytest.mark.parametrize("model_artifact_name", STALE_ADVNTR_ARTIFACTS)
+@pytest.mark.parametrize("input_mode", ["bam", "fastq"])
+def test_selected_advntr_model_at_cleanup_destination_is_preserved_before_any_work(
+    tmp_path: Path, model_artifact_name: str, input_mode: str
+) -> None:
+    """The selected model is operator input even when configured under the output root."""
+    output_dir = tmp_path / "out"
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir(parents=True)
+    model_path = advntr_dir / model_artifact_name
+    source_model = Path(MINIMAL_CONFIG["reference_data"]["advntr_reference_vntr_hg19"])
+    model_bytes = source_model.read_bytes()
+    model_path.write_bytes(model_bytes)
+    other_artifacts = [advntr_dir / name for name in STALE_ADVNTR_ARTIFACTS if name != model_artifact_name]
+    for artifact in other_artifacts:
+        artifact.write_text("other prior result\n", encoding="utf-8")
+    other_bytes = {artifact: artifact.read_bytes() for artifact in other_artifacts}
+    before_digest = hashlib.sha256(model_bytes).hexdigest()
+    config = deepcopy(MINIMAL_CONFIG)
+    config["reference_data"]["advntr_reference_vntr_hg19"] = str(model_path)
+
+    input_kwargs: dict[str, str] = {}
+    if input_mode == "fastq":
+        input_root = tmp_path / "inputs"
+        input_root.mkdir()
+        fastq = input_root / "reads.fastq.gz"
+        bwa_reference = input_root / "reference.fa"
+        fastq.write_bytes(b"reads")
+        bwa_reference.write_bytes(b"reference")
+        input_kwargs = {"fastq1": str(fastq), "bwa_reference": str(bwa_reference)}
+
+    with patch("vntyper.modules.advntr.model_provenance.subprocess.run") as runner:
+        harness = run_pipeline_under_harness(
+            output_dir,
+            config=config,
+            extra_modules=["advntr"],
+            expect_failure=True,
+            **input_kwargs,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert model_path.read_bytes() == model_bytes
+    assert hashlib.sha256(model_path.read_bytes()).hexdigest() == before_digest
+    assert {artifact: artifact.read_bytes() for artifact in other_artifacts} == other_bytes
+    runner.assert_not_called()
+    harness.stages["run_kestrel"].assert_not_called()
+
+
+@pytest.mark.parametrize("override", [["hg19"], {"build": "hg19"}, {"hg19"}, ("hg19",), True, 1])
+def test_invalid_advntr_override_stops_before_input_ownership_or_pipeline_work(
+    tmp_path: Path, override: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Malformed overrides are typed configuration failures before filesystem safety I/O."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.pipeline_advntr_preflight")
+
+    with (
+        patch("vntyper.scripts.pipeline.protect_pipeline_input_ownership") as ownership_guard,
+        patch("vntyper.modules.advntr.model_provenance.subprocess.run") as version_runner,
+    ):
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            extra_modules=["advntr"],
+            module_args={"advntr": {"advntr_reference": override}},
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert any(message.startswith("Invalid advntr_reference:") for message in caplog.messages)
+    ownership_guard.assert_not_called()
+    version_runner.assert_not_called()
+    harness.stages["run_kestrel"].assert_not_called()
 
 
 def test_a_success_status_without_current_raw_output_cannot_republish_a_preexisting_call(tmp_path: Path) -> None:

@@ -183,6 +183,10 @@ def run_pipeline(
     alignment_plan = None
     primary_outcome_is_active = False
     try:
+        advntr_preflight = plan_advntr_preflight(config, extra_modules, module_args, reference_assembly)
+        needs_advntr = advntr_preflight.enabled
+        advntr_reference = advntr_preflight.reference
+        additional_operator_paths = (advntr_reference,) if advntr_reference is not None else ()
         protect_pipeline_input_ownership(
             output_dir,
             input_type,
@@ -197,15 +201,14 @@ def run_pipeline(
             reference_assembly,
             archive_results,
             archive_format,
+            additional_operator_paths,
         )
 
         # Refuse an unknown/incompatible adVNTR before alignment preparation,
         # conversion, coverage, or Kestrel. Keep the classified startup answer in this
         # run rather than probing again after those expensive stages: failed answers
         # deliberately remain absent from the probe's reusable success cache.
-        needs_advntr = "advntr" in extra_modules
         advntr_model = None
-        advntr_reference = None
         advntr_version_overrides = {}
         if needs_advntr:
             from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
@@ -232,8 +235,6 @@ def run_pipeline(
             }:
                 require_verified_advntr_version(advntr_version_outcome)
 
-            advntr_preflight = plan_advntr_preflight(config, extra_modules, module_args, reference_assembly)
-            advntr_reference = advntr_preflight.reference
             logger.debug(f"adVNTR reference set to: {advntr_reference}")
             advntr_model = describe_model(advntr_reference)
             detected_advntr_version = require_compatible_advntr_outcome(advntr_model, advntr_version_outcome)

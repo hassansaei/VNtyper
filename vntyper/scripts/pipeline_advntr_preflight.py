@@ -57,6 +57,10 @@ def plan_advntr_preflight(
         return AdvntrPreflight(enabled=False, reference=None)
 
     reference = module_args.get("advntr", {}).get("advntr_reference")
+    if reference is not None and not isinstance(reference, str):
+        msg = f"Invalid advntr_reference: {reference}"
+        logger.error(msg)
+        raise ValueError(msg)
     if not reference:
         reference = select_advntr_reference(config, reference_assembly)
     elif reference in {"hg19", "hg38"}:

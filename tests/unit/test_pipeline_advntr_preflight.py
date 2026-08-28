@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import patch
 
 import pytest
 
@@ -55,6 +56,51 @@ def test_literal_path_override_is_rejected_before_processing(caplog: pytest.LogC
         )
 
     assert "Invalid advntr_reference: /tmp/model.db" in caplog.messages
+
+
+@pytest.mark.parametrize("override", [["hg19"], {"build": "hg19"}, {"hg19"}, ("hg19",), True, 1])
+def test_non_string_override_logs_a_keyed_value_error_before_reference_resolution(
+    override: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Unhashable config values must not escape the planner's explicit failure contract."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.pipeline_advntr_preflight")
+
+    with (
+        patch("vntyper.scripts.pipeline_advntr_preflight.select_advntr_reference") as resolver,
+        pytest.raises(ValueError, match="Invalid advntr_reference"),
+    ):
+        plan_advntr_preflight(
+            CONFIG,
+            ["advntr"],
+            {"advntr": {"advntr_reference": override}},
+            "hg19",
+        )
+
+    resolver.assert_not_called()
+    planner_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vntyper.scripts.pipeline_advntr_preflight" and record.levelno == logging.ERROR
+    ]
+    assert len(planner_messages) == 1
+    assert planner_messages[0].startswith("Invalid advntr_reference:")
+
+
+@pytest.mark.parametrize("override", [[], {}, set(), (), False, 0])
+def test_falsy_non_string_override_is_not_mistaken_for_absence(override: object) -> None:
+    """An explicitly configured non-string is invalid even when it is falsy."""
+    with (
+        patch("vntyper.scripts.pipeline_advntr_preflight.select_advntr_reference") as resolver,
+        pytest.raises(ValueError, match="Invalid advntr_reference"),
+    ):
+        plan_advntr_preflight(
+            CONFIG,
+            ["advntr"],
+            {"advntr": {"advntr_reference": override}},
+            "hg19",
+        )
+
+    resolver.assert_not_called()
 
 
 @pytest.mark.parametrize(

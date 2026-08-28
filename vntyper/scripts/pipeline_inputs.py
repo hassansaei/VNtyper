@@ -184,6 +184,7 @@ def protect_pipeline_input_ownership(
     reference_assembly: str,
     archive_results: bool,
     archive_format: str,
+    additional_operator_paths: tuple[str | Path, ...] = (),
 ) -> None:
     """Reject unsafe existing output entries before any pipeline mutation.
 
@@ -205,19 +206,23 @@ def protect_pipeline_input_ownership(
         reference_assembly: Declared reference assembly.
         archive_results: Whether a sibling result archive will be installed.
         archive_format: Requested archive format, ``zip`` or ``tar.gz``.
+        additional_operator_paths: Other operator-owned paths selected before writes.
 
     Raises:
         ValueError: If an input or existing output-tree entry is unsafe.
     """
     if input_type in {"BAM", "CRAM"}:
         input_alignment = cast(str | Path, bam if input_type == "BAM" else cram)
-        operator_paths = alignment_operator_paths(
-            input_alignment,
-            input_type.lower(),
-            bed_file,
-            reference_fasta,
-            config,
-            reference_assembly,
+        operator_paths = (
+            *alignment_operator_paths(
+                input_alignment,
+                input_type.lower(),
+                bed_file,
+                reference_fasta,
+                config,
+                reference_assembly,
+            ),
+            *additional_operator_paths,
         )
         if archive_results:
             _validate_archive_destination(output_dir, archive_format, operator_paths, input_alignment)
@@ -229,14 +234,18 @@ def protect_pipeline_input_ownership(
             reference_fasta,
             config,
             reference_assembly,
+            additional_operator_paths=additional_operator_paths,
         )
         return
-    operator_paths = fastq_operator_paths(
-        cast(str | Path, fastq1),
-        fastq2,
-        bed_file,
-        cast(str | Path, bwa_reference),
-        config,
+    operator_paths = (
+        *fastq_operator_paths(
+            cast(str | Path, fastq1),
+            fastq2,
+            bed_file,
+            cast(str | Path, bwa_reference),
+            config,
+        ),
+        *additional_operator_paths,
     )
     if archive_results:
         _validate_archive_destination(output_dir, archive_format, operator_paths, None)
@@ -247,4 +256,5 @@ def protect_pipeline_input_ownership(
         bed_file,
         cast(str | Path, bwa_reference),
         config,
+        additional_operator_paths=additional_operator_paths,
     )

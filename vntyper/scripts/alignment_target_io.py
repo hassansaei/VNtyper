@@ -319,6 +319,8 @@ def protect_alignment_inputs(
     reference_fasta: str | Path | None,
     config: dict,
     reference_assembly: str,
+    *,
+    additional_operator_paths: tuple[str | Path, ...] = (),
 ) -> None:
     """Protect alignment-mode inputs before any pipeline-owned write.
 
@@ -336,19 +338,23 @@ def protect_alignment_inputs(
         reference_fasta: Operator-provided CRAM reference, when present.
         config: Pipeline configuration containing CRAM reference candidates.
         reference_assembly: Assembly label selecting exact or family reference keys.
+        additional_operator_paths: Other operator-owned paths selected before writes.
 
     Raises:
         ValueError: If an operator input or existing output-tree entry is unsafe.
     """
     output_root = Path(output)
     validate_alignment_output_root(output_root, input_path, file_format)
-    protected_inputs = alignment_operator_paths(
-        input_path,
-        file_format,
-        bed_file,
-        reference_fasta,
-        config,
-        reference_assembly,
+    protected_inputs = (
+        *alignment_operator_paths(
+            input_path,
+            file_format,
+            bed_file,
+            reference_fasta,
+            config,
+            reference_assembly,
+        ),
+        *additional_operator_paths,
     )
     protected_paths = _validate_operator_inputs_outside_output(output_root, protected_inputs)
     preflight_view = output_root / "fastq_bam_processing" / f"input.{file_format}"
@@ -422,6 +428,8 @@ def validate_fastq_pipeline_destinations(
     bed_file: str | Path | None,
     bwa_reference: str | Path,
     config: dict,
+    *,
+    additional_operator_paths: tuple[str | Path, ...] = (),
 ) -> None:
     """Validate the full direct-FASTQ destination set against every input.
 
@@ -438,6 +446,7 @@ def validate_fastq_pipeline_destinations(
         bed_file: Operator-provided BED target, or ``None`` for a generated target.
         bwa_reference: BWA reference FASTA.
         config: Pipeline configuration containing optional BWA index suffixes.
+        additional_operator_paths: Other operator-owned paths selected before writes.
 
     Raises:
         ValueError: If any destructive destination is unsafe or aliases an input.
@@ -447,7 +456,10 @@ def validate_fastq_pipeline_destinations(
     alignment_output = output_root / "alignment_processing"
     sorted_bam = alignment_output / "output_sorted.bam"
     post_alignment = fastq_output / "post_alignment.bam"
-    protected_inputs = fastq_operator_paths(fastq_1, fastq_2, bed_file, bwa_reference, config)
+    protected_inputs = (
+        *fastq_operator_paths(fastq_1, fastq_2, bed_file, bwa_reference, config),
+        *additional_operator_paths,
+    )
     protected_paths = _validate_operator_inputs_outside_output(output_root, protected_inputs)
     _validate_existing_output_tree(
         output_root,
