@@ -341,8 +341,9 @@ EQUIVALENT_MUTANTS: dict[tuple[str, int, str, str], str] = {
     # by default - but `enabled` is a SUPPORTED TOGGLE, so that code is reachable by
     # configuration and its mutants are real gaps, not equivalents. Only the `.get()`
     # default operand itself is classified here.
-    # Line moved 150 -> 151 when the rule evaluator was made fail-closed.
-    ("vntyper/scripts/flagging.py", 151, "False", "True"): (
+    # Line moved 150 -> 151 when the rule evaluator was made fail-closed, then to 217
+    # when issue #286 replaced expression evaluation with validated comparator rules.
+    ("vntyper/scripts/flagging.py", 217, "False", "True"): (
         "`.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly"
     ),
     # `itertuples(index=True)` only prepends an `Index` field to the namedtuple; the loop
@@ -352,8 +353,9 @@ EQUIVALENT_MUTANTS: dict[tuple[str, int, str, str], str] = {
     # `.Flag` to the same column either way, because namedtuple's `rename=True` renames
     # the colliding field and not `Flag`.
     # Line moved 238 -> 243 with the duplicate-flagging changes in 6e7cda2, then
-    # 243 -> 334 when fail-closed evaluation and artifact-gate validation were added.
-    ("vntyper/scripts/flagging.py", 334, "False", "True"): (
+    # 243 -> 334 when fail-closed evaluation and artifact-gate validation were added,
+    # then to 400 when issue #286 added the exact legacy-rule migration table.
+    ("vntyper/scripts/flagging.py", 400, "False", "True"): (
         "`itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name"
     ),
 }
