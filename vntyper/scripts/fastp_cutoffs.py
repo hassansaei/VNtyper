@@ -75,6 +75,53 @@ def _validated_measured_fraction(value: object, key: str) -> Decimal | None:
     return fraction
 
 
+def _validated_passed_filter_count(value: object, component: str) -> Decimal:
+    """Validate one source count before deriving the passed-filter rate."""
+    message = (
+        f"Fastp output has invalid passed_filter_rate source count {component!r}: "
+        "expected a finite non-negative numeric count."
+    )
+    if isinstance(value, bool) or not isinstance(value, (numbers.Real, Decimal)):
+        logger.error(message)
+        raise ValueError(message)
+    try:
+        count = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        logger.error(message)
+        raise ValueError(message) from error
+    if not count.is_finite() or count < Decimal(0):
+        logger.error(message)
+        raise ValueError(message)
+    return count
+
+
+def calculate_passed_filter_rate(passed_filter_reads: object, total_reads: object) -> float | None:
+    """Validate source counts and calculate the passed-filter rate.
+
+    Args:
+        passed_filter_reads: The count fastp reports as passing its filters.
+        total_reads: The count fastp reports before filtering.
+
+    Returns:
+        The valid raw float fraction, or ``None`` when the valid total is zero.
+
+    Raises:
+        ValueError: If either count is malformed, or passed reads exceed total reads.
+    """
+    passed_count = _validated_passed_filter_count(passed_filter_reads, "passed_filter_reads")
+    total_count = _validated_passed_filter_count(total_reads, "total_reads")
+    if total_count == Decimal(0):
+        return None
+    if passed_count > total_count:
+        message = (
+            "Fastp output has invalid passed_filter_rate source count 'passed_filter_reads': "
+            "cannot exceed 'total_reads'."
+        )
+        logger.error(message)
+        raise ValueError(message)
+    return float(passed_count / total_count)
+
+
 def _cutoff(value: object, key: str) -> FastpCutoff:
     """Build one validated fastp decision/display pair."""
     fraction = _validated_fraction(value, key)

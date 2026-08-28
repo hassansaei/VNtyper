@@ -68,6 +68,7 @@ from vntyper.scripts import nomenclature
 # produces them. Re-typing the strings here is how the report silently loses
 # coverage when a column is renamed - `.get(name, 0)` raises nothing.
 from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS, COVERAGE_COLUMNS, COVERAGE_NULL_TOKEN
+from vntyper.scripts.fastp_cutoffs import calculate_passed_filter_rate
 
 logger = logging.getLogger(__name__)
 
@@ -1531,11 +1532,10 @@ def summarise_fastp(fastp_data: dict[str, Any]) -> FastpMetrics:
 
     total_reads_before = before_filtering.get("total_reads", 1)
     passed_filter_reads = filtering_result.get("passed_filter_reads", 0)
-    if total_reads_before > 0:
-        passed_filter_rate = passed_filter_reads / total_reads_before
+    passed_filter_rate = calculate_passed_filter_rate(passed_filter_reads, total_reads_before)
+    if passed_filter_rate is not None:
         logger.debug("Passed filter rate calculated: %.2f", passed_filter_rate)
     else:
-        passed_filter_rate = None
         logger.debug("Total reads before filtering is zero; passed filter rate set to None.")
 
     return FastpMetrics(

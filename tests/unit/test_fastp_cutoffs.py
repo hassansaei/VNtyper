@@ -125,6 +125,60 @@ def test_build_fastp_cutoffs_normalizes_an_oversized_json_integer(
     assert "duplication_rate" in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("component", "value"),
+    (
+        ("passed_filter_reads", "not-a-count"),
+        ("total_reads", "not-a-count"),
+        ("passed_filter_reads", "80"),
+        ("total_reads", "100"),
+        ("passed_filter_reads", True),
+        ("total_reads", True),
+        ("passed_filter_reads", float("nan")),
+        ("total_reads", float("nan")),
+        ("passed_filter_reads", float("inf")),
+        ("total_reads", float("inf")),
+        ("passed_filter_reads", float("-inf")),
+        ("total_reads", float("-inf")),
+        ("passed_filter_reads", -1),
+        ("total_reads", -1),
+    ),
+)
+def test_calculate_passed_filter_rate_rejects_each_invalid_source_count(
+    component: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Parsed source counts fail closed before arithmetic can lose their invalidity."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+    counts: dict[str, object] = {"passed_filter_reads": 80, "total_reads": 100}
+    counts[component] = value
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        module.calculate_passed_filter_rate(**counts)
+
+    assert component in caplog.text
+
+
+def test_calculate_passed_filter_rate_rejects_a_count_above_the_total(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A syntactically numeric count cannot imply an impossible rate above one."""
+    module = _module()
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        module.calculate_passed_filter_rate(passed_filter_reads=101, total_reads=100)
+
+    assert "passed_filter_reads" in caplog.text
+
+
+def test_calculate_passed_filter_rate_preserves_a_valid_zero_total_as_missing() -> None:
+    """Zero reads before filtering is the supported absent-measurement case, not malformed input."""
+    module = _module()
+
+    assert module.calculate_passed_filter_rate(passed_filter_reads=80, total_reads=0) is None
+
+
 @pytest.mark.parametrize("metric_key", ("duplication_rate", "q20_rate", "q30_rate", "passed_filter_rate"))
 @pytest.mark.parametrize(
     "raw_rate",

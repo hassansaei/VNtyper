@@ -289,6 +289,111 @@ def test_report_rejects_a_nonfinite_fastp_output_metric_with_its_key(
 
 
 @pytest.mark.parametrize(
+    ("component", "value"),
+    (
+        ("passed_filter_reads", "not-a-count"),
+        ("total_reads", "not-a-count"),
+        ("passed_filter_reads", "80"),
+        ("total_reads", "100"),
+        ("passed_filter_reads", True),
+        ("total_reads", True),
+        ("passed_filter_reads", float("nan")),
+        ("total_reads", float("nan")),
+        ("passed_filter_reads", float("inf")),
+        ("total_reads", float("inf")),
+        ("passed_filter_reads", float("-inf")),
+        ("total_reads", float("-inf")),
+        ("passed_filter_reads", -1),
+        ("total_reads", -1),
+    ),
+)
+def test_report_rejects_each_invalid_passed_filter_source_count(
+    tmp_path: Path, component: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The real output.json boundary rejects malformed counts before report rendering."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    before_filtering: dict[str, object] = {"total_reads": 100}
+    filtering_result: dict[str, object] = {"passed_filter_reads": 80}
+    if component == "total_reads":
+        before_filtering[component] = value
+    else:
+        filtering_result[component] = value
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": before_filtering,
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": filtering_result,
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        render(tmp_path)
+
+    assert component in caplog.text
+
+
+def test_report_rejects_a_passed_filter_count_above_the_total(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """The real render path refuses a passed-filter rate above one before it writes HTML."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 100},
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": {"passed_filter_reads": 101},
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        render(tmp_path)
+
+    assert "passed_filter_reads" in caplog.text
+
+
+def test_report_keeps_a_positive_passed_filter_count_with_zero_total_as_missing(tmp_path: Path) -> None:
+    """The real render path still shows the supported zero-total state as N/A without an icon."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 0},
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": {"passed_filter_reads": 80},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    html = render(tmp_path)
+    value, status = _fastp_metric_cells(html, "Passed Filter Rate")
+
+    assert value == "N/A"
+    assert status == ""
+
+
+@pytest.mark.parametrize(
     ("metric_key", "label", "threshold", "displayed"),
     [
         ("q20_rate", "Q20 Rate", 0.6005, "60.05%"),

@@ -163,6 +163,77 @@ def test_summarise_fastp_does_not_divide_by_zero() -> None:
     assert metrics.passed_filter_rate is None
 
 
+@pytest.mark.parametrize(
+    ("component", "value"),
+    (
+        ("passed_filter_reads", "not-a-count"),
+        ("total_reads", "not-a-count"),
+        ("passed_filter_reads", "80"),
+        ("total_reads", "100"),
+        ("passed_filter_reads", True),
+        ("total_reads", True),
+        ("passed_filter_reads", float("nan")),
+        ("total_reads", float("nan")),
+        ("passed_filter_reads", float("inf")),
+        ("total_reads", float("inf")),
+        ("passed_filter_reads", float("-inf")),
+        ("total_reads", float("-inf")),
+        ("passed_filter_reads", -1),
+        ("total_reads", -1),
+    ),
+)
+def test_summarise_fastp_rejects_each_invalid_passed_filter_source_count(
+    component: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The extraction boundary names bad passed-filter source counts before division."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+    before_filtering: dict[str, object] = {"total_reads": 100}
+    filtering_result: dict[str, object] = {"passed_filter_reads": 80}
+    if component == "total_reads":
+        before_filtering[component] = value
+    else:
+        filtering_result[component] = value
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        rf.summarise_fastp(
+            {
+                "summary": {"before_filtering": before_filtering, "after_filtering": {}},
+                "filtering_result": filtering_result,
+            }
+        )
+
+    assert component in caplog.text
+
+
+def test_summarise_fastp_rejects_a_passed_filter_count_above_the_total(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The source boundary rejects a valid type that would otherwise become a rate above one."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        rf.summarise_fastp(
+            {
+                "summary": {"before_filtering": {"total_reads": 100}, "after_filtering": {}},
+                "filtering_result": {"passed_filter_reads": 101},
+            }
+        )
+
+    assert "passed_filter_reads" in caplog.text
+
+
+def test_summarise_fastp_preserves_a_positive_passed_count_with_zero_total_as_missing() -> None:
+    """The supported zero-total path stays distinct from an invalid negative total."""
+    metrics = rf.summarise_fastp(
+        {
+            "summary": {"before_filtering": {"total_reads": 0}, "after_filtering": {}},
+            "filtering_result": {"passed_filter_reads": 80},
+        }
+    )
+
+    assert metrics.passed_filter_rate is None
+
+
 # ---------------------------------------------------------------------------
 # Column projection
 # ---------------------------------------------------------------------------
