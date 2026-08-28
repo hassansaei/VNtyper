@@ -77,7 +77,8 @@ The fastp rows in the HTML report require all four `thresholds` keys:
 `duplication_rate`, `q20_rate`, `q30_rate`, and `passed_filter_reads_rate`.
 Each is a finite numeric fraction from 0 through 1, inclusive. The report derives
 both the displayed cutoff label and the status decision from that same configured
-value, in the displayed two-decimal percentage precision.
+value. Each measured rate and configured cutoff is rounded half-up on its exact
+decimal value to two decimal places of percent before display and comparison.
 
 `duplication_rate` warns strictly above its cutoff; the three rate metrics warn
 strictly below theirs. A measured value exactly at its configured cutoff is OK.

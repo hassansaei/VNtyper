@@ -188,3 +188,13 @@ def test_published_report_documentation_describes_fastp_measured_rate_validation
     assert "nonmissing measured fastp rate" in normalized_documentation
     assert "finite numeric fraction from 0 through 1" in normalized_documentation
     assert "`None` rate remains missing and renders as `N/A`" in normalized_documentation
+
+
+def test_published_fastp_contract_names_the_exact_rounding_rule() -> None:
+    """Operators can reconcile half-tie report changes with a published rule."""
+    docs_root = Path(__file__).parents[2] / "docs"
+    required_contract = "rounded half-up on its exact decimal value to two decimal places of percent"
+
+    for relative_path in ("pipeline/reports.md", "user-guide/configuration.md"):
+        documentation = (docs_root / relative_path).read_text(encoding="utf-8")
+        assert required_contract in " ".join(documentation.split())
