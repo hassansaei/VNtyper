@@ -251,6 +251,61 @@ def test_malformed_cross_match_configuration_containers_fail_loudly(config, expe
     assert str(excinfo.value) in [record.message for record in caplog.records]
 
 
+@pytest.mark.parametrize(
+    ("cross_match_config", "unsupported_keys"),
+    [
+        pytest.param({"match_rul": DEFAULT_MATCH_RULE}, ["match_rul"], id="misspelled-rule-only"),
+        pytest.param(
+            {"match_rule": DEFAULT_MATCH_RULE, "match_logc": "typo"},
+            ["match_logc"],
+            id="extra-key-with-structured-rule",
+        ),
+        pytest.param(
+            {"match_logic": LEGACY_MATCH_LOGIC, "zzz": "secret", "aaa": "secret"},
+            ["aaa", "zzz"],
+            id="sorted-extra-keys-with-legacy-rule",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("kestrel_records", "advntr_records"),
+    [
+        pytest.param([], [], id="empty-records"),
+        pytest.param(
+            [{"REF": "C", "ALT": "CC", "POS": 67}],
+            [{"REF": "C", "ALT": "CC", "POS": 67}],
+            id="nonempty-records",
+        ),
+    ],
+)
+def test_unsupported_cross_match_block_keys_raise_before_record_mutation(
+    cross_match_config, unsupported_keys, kestrel_records, advntr_records, monkeypatch, caplog
+):
+    """A non-empty wrapper is valid only when every key belongs to its one-rule schema."""
+    before_kestrel = copy.deepcopy(kestrel_records)
+    before_advntr = copy.deepcopy(advntr_records)
+    determine = Mock(side_effect=AssertionError("record preprocessing must not run"))
+    monkeypatch.setattr(cross_match_module, "determine_variant_type", determine)
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cross_match")
+
+    expected = "cross_match configuration block contains unsupported keys: " + ", ".join(
+        repr(key) for key in unsupported_keys
+    )
+    with pytest.raises(ValueError, match="unsupported keys") as excinfo:
+        cross_match_variants(
+            kestrel_records=kestrel_records,
+            advntr_records=advntr_records,
+            config={"cross_match": cross_match_config},
+        )
+
+    assert str(excinfo.value) == expected
+    assert caplog.messages[-1] == expected
+    assert "secret" not in str(excinfo.value)
+    assert kestrel_records == before_kestrel
+    assert advntr_records == before_advntr
+    determine.assert_not_called()
+
+
 def test_null_comparison_is_false():
     rule = {
         "all": [

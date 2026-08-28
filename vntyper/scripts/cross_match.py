@@ -78,6 +78,10 @@ def _configured_match_rule(config: object) -> object:
     configured = config["cross_match"]
     if not isinstance(configured, Mapping):
         _configuration_error("cross_match configuration block must be a mapping")
+    unsupported_keys = sorted(set(configured) - {"match_rule", "match_logic"}, key=repr)
+    if unsupported_keys:
+        rendered_keys = ", ".join(repr(key) for key in unsupported_keys)
+        _configuration_error(f"cross_match configuration block contains unsupported keys: {rendered_keys}")
     has_rule = "match_rule" in configured
     has_logic = "match_logic" in configured
     if has_rule and has_logic:
