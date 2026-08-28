@@ -172,6 +172,26 @@ def test_each_exact_legacy_flag_rule_is_migrated_for_its_own_name(flag_name: str
     assert result["Flag"].tolist() == [flag_name]
 
 
+def test_exact_legacy_low_depth_rule_does_not_flag_at_its_0_4_boundary() -> None:
+    """Pin the legacy adapter's threshold, not only the shipped structured rule."""
+    result = add_flags(
+        pd.DataFrame({"Depth_Score": [0.4], "Motif": ["2"]}),
+        {"Low_Depth_Conserved_Motifs": LEGACY_FLAG_RULES["Low_Depth_Conserved_Motifs"]},
+    )
+
+    assert result["Flag"].tolist() == ["Not flagged"]
+
+
+def test_exact_legacy_low_coverage_rule_does_not_flag_at_ten_reads() -> None:
+    """Ten supporting reads is the first non-low-coverage legacy value."""
+    result = add_flags(
+        pd.DataFrame({"NumberOfSupportingReads": [10]}),
+        {"Low_Coverage": LEGACY_FLAG_RULES["Low_Coverage"]},
+    )
+
+    assert result["Flag"].tolist() == ["Not flagged"]
+
+
 @pytest.mark.parametrize("suffix", [" ", " and True", ".strip()", "[0]"])
 def test_modified_legacy_rule_is_rejected(suffix: str) -> None:
     legacy = LEGACY_FLAG_RULES["Low_Coverage"] + suffix
