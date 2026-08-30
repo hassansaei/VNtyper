@@ -24,6 +24,7 @@ import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, advntr_stub, run_pipeline_under_harness
 from vntyper.modules.advntr.model_provenance import AdvntrProbeStatus, AdvntrVersionOutcome
+from vntyper.scripts.utils import get_tool_versions
 
 pytestmark = pytest.mark.unit
 
@@ -101,6 +102,20 @@ def test_requesting_advntr_shares_the_verified_version_with_startup_logging(tmp_
     harness = run_pipeline_under_harness(tmp_path / "out", config=config, extra_modules=["advntr"])
 
     assert harness.kwargs("get_tool_versions")["version_overrides"] == {"advntr": "2.0.4"}
+
+
+def test_get_tool_versions_uses_a_run_scoped_override_without_probing_again() -> None:
+    """Ignoring an override would launch adVNTR twice in one pipeline run."""
+    config = {"tools": {"advntr": "mamba run -n envadvntr advntr", "samtools": "samtools"}}
+    with patch("vntyper.scripts.utils.get_tool_version", return_value="1.19") as get_version:
+        versions = get_tool_versions(
+            config,
+            tools_in_use={"advntr", "samtools"},
+            version_overrides={"advntr": "2.0.4"},
+        )
+
+    assert versions == {"advntr": "2.0.4", "samtools": "1.19"}
+    get_version.assert_called_once_with("samtools", "")
 
 
 def test_a_module_the_config_does_not_declare_as_a_tool_is_not_named(tmp_path: Path) -> None:
