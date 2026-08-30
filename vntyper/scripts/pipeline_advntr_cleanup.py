@@ -77,6 +77,14 @@ def _path_variants(path: str | Path) -> tuple[Path, Path]:
     return absolute, absolute.resolve(strict=False)
 
 
+def _paths_alias(left: str | Path, right: str | Path) -> bool:
+    return any(
+        left_variant == right_variant
+        for left_variant in _path_variants(left)
+        for right_variant in _path_variants(right)
+    ) or _same_file(Path(left), Path(right))
+
+
 def plan_advntr_cleanup(
     output_dir: str | Path,
     *,
@@ -134,14 +142,32 @@ def validate_pipeline_log_outside_advntr_preflight(
     if log_file is None:
         return
     log_path = Path(log_file)
-    log_variants = _path_variants(log_path)
     for destination in cleanup_plan.destructive_destinations:
-        destination_variants = _path_variants(destination)
-        if any(
-            log_variant == destination_variant
-            for log_variant in log_variants
-            for destination_variant in destination_variants
-        ) or _same_file(log_path, destination):
+        if _paths_alias(log_path, destination):
             message = f"Pipeline log file aliases an adVNTR destructive preflight destination: {log_path}"
             logger.error(message)
             raise ValueError(message)
+
+
+def validate_pipeline_log_outside_selected_advntr_model(
+    log_file: str | Path | None,
+    model_source: str | Path | None,
+) -> None:
+    """Refuse a selected-model log alias without emitting into that model.
+
+    This direct-call guard runs before the pipeline's first log record. Its refusal
+    deliberately raises without logging because an attached handler may already point
+    at the operator-owned model being protected.
+
+    Args:
+        log_file: Active application-log destination, or None when absent.
+        model_source: Selected operator adVNTR model, or None when disabled.
+
+    Raises:
+        ValueError: If the active log names or aliases the selected model.
+    """
+    if log_file is None or model_source is None:
+        return
+    log_path = Path(log_file)
+    if _paths_alias(log_path, model_source):
+        raise ValueError(f"Pipeline log file aliases selected operator adVNTR model: {log_path}")

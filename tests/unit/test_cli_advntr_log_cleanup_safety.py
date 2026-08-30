@@ -251,6 +251,90 @@ def test_invalid_advntr_model_selection_remains_owned_by_later_validation(
     ]
 
 
+@pytest.mark.parametrize(
+    ("default_values", "archive_arguments"),
+    [
+        (["not", "a", "mapping"], []),
+        ({"reference_assembly": "hg19", "archive_format": ["zip"]}, ["--archive-results"]),
+    ],
+)
+def test_malformed_defaults_and_unhashable_archive_remain_owned_by_later_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    default_values: object,
+    archive_arguments: list[str],
+) -> None:
+    """Malformed config must reach logging setup and the strict pipeline boundary."""
+    input_dir = tmp_path / "inputs"
+    input_dir.mkdir()
+    bam = input_dir / "sample.bam"
+    bam.write_bytes(b"operator input")
+    config = _config()
+    config["default_values"] = default_values
+    events: list[str] = []
+    monkeypatch.setattr(cli, "load_config", lambda _path=None: config)
+    monkeypatch.setattr(cli, "setup_logging", lambda **_kwargs: events.append("setup"))
+    monkeypatch.setitem(cli.HANDLERS, "pipeline", lambda *args, **kwargs: events.append("handler"))
+
+    cli.main(
+        [
+            "--log-file",
+            str(tmp_path / "safe.log"),
+            "pipeline",
+            "-o",
+            str(tmp_path / "output"),
+            "--bam",
+            str(bam),
+            "--extra-modules",
+            "advntr",
+            *archive_arguments,
+        ]
+    )
+
+    assert events == ["setup", "handler"]
+
+
+def test_unknown_advntr_assembly_is_not_swallowed_before_logging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown assembly remains a real pre-open validation error."""
+    input_dir = tmp_path / "inputs"
+    input_dir.mkdir()
+    bam = input_dir / "sample.bam"
+    bam.write_bytes(b"operator input")
+    setup = mock.Mock()
+    handler = mock.Mock()
+    monkeypatch.setattr(cli, "load_config", lambda _path=None: _config())
+    monkeypatch.setattr(cli, "setup_logging", setup)
+    monkeypatch.setitem(cli.HANDLERS, "pipeline", handler)
+
+    parser = cli.build_parser()
+    parsed = parser.parse_args(
+        [
+            "--log-file",
+            str(tmp_path / "safe.log"),
+            "pipeline",
+            "-o",
+            str(tmp_path / "output"),
+            "--bam",
+            str(bam),
+            "--extra-modules",
+            "advntr",
+        ]
+    )
+    parsed.reference_assembly = "unknown"
+    monkeypatch.setattr(parser, "parse_args", lambda _argv=None: parsed)
+    monkeypatch.setattr(cli, "build_parser", lambda: parser)
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main([])
+
+    assert raised.value.code == 1
+    setup.assert_not_called()
+    handler.assert_not_called()
+
+
 def test_non_advntr_log_may_equal_the_unused_configured_model(tmp_path: Path) -> None:
     """A model that this run will not read is not operator-owned by the adVNTR guard."""
     model = tmp_path / "model.db"

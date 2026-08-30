@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
+from vntyper.scripts.reference_registry import reference_keys
 from vntyper.scripts.reference_resolution import resolve_from_mapping
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,17 @@ def plan_valid_advntr_preflight(
 
     Returns:
         A valid preflight plan, or None when strict validation must decide later.
+
+    Raises:
+        ValueError: If an otherwise selected reference assembly is unknown.
     """
+    if "advntr" in extra_modules:
+        try:
+            override = module_args.get("advntr", {}).get("advntr_reference")
+            if override is None or override == "":
+                reference_keys("advntr", reference_assembly)
+        except (AttributeError, TypeError):
+            return None
     try:
         return _plan_advntr_preflight(
             config,

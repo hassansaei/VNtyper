@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from tests.support.pipeline_harness import run_pipeline_under_harness
+from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
+from vntyper.modules.advntr import model_provenance
 from vntyper.modules.advntr.model_provenance import AdvntrProbeStatus, AdvntrVersionOutcome
 
 pytestmark = pytest.mark.unit
@@ -24,6 +26,71 @@ def _unparseable_outcome() -> AdvntrVersionOutcome:
 
 def _verified_outcome() -> AdvntrVersionOutcome:
     return AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4))
+
+
+@pytest.mark.parametrize("model_route", ["exact", "symlinked-source"])
+def test_direct_pipeline_refuses_an_active_log_on_the_selected_operator_model_before_emitting(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    model_route: str,
+) -> None:
+    """The first pipeline diagnostic must not become part of the model snapshot."""
+    output = tmp_path / "out"
+    selected_model = tmp_path / "models" / "selected.db"
+    selected_model.parent.mkdir()
+    shutil.copyfile(MINIMAL_CONFIG["reference_data"]["advntr_reference_vntr_hg19"], selected_model)
+    configured_model = selected_model
+    if model_route == "symlinked-source":
+        configured_model = tmp_path / "models" / "selected-link.db"
+        configured_model.symlink_to(selected_model)
+    original_model = selected_model.read_bytes()
+    stale_result = output / "advntr" / "cross_match_results.tsv"
+    stale_result.parent.mkdir(parents=True)
+    stale_result.write_text("stale result\n", encoding="utf-8")
+    config = deepcopy(MINIMAL_CONFIG)
+    config["reference_data"]["advntr_reference_vntr_hg19"] = str(configured_model)
+
+    file_handler = logging.FileHandler(selected_model, encoding="utf-8")
+    root_logger = logging.getLogger()
+    root_logger.addHandler(file_handler)
+    try:
+        with (
+            patch(
+                "vntyper.scripts.pipeline_advntr_run_context.shutil.copyfileobj",
+                wraps=shutil.copyfileobj,
+            ) as model_copy,
+            patch(
+                "vntyper.modules.advntr.model_provenance.describe_model",
+                wraps=model_provenance.describe_model,
+            ) as provenance,
+            patch(
+                "vntyper.modules.advntr.model_provenance.detect_advntr_version",
+                return_value=_verified_outcome(),
+            ) as detector,
+        ):
+            harness = run_pipeline_under_harness(
+                output,
+                config=config,
+                extra_modules=["advntr"],
+                log_file=str(selected_model),
+                expect_failure=True,
+            )
+    finally:
+        root_logger.removeHandler(file_handler)
+        file_handler.close()
+
+    assert selected_model.read_bytes() == original_model, (
+        "the first pipeline log emission mutated the selected operator model before ownership validation"
+    )
+    assert isinstance(harness.error, ValueError)
+    assert str(harness.error) == f"Pipeline log file aliases selected operator adVNTR model: {selected_model}"
+    assert stale_result.read_text(encoding="utf-8") == "stale result\n"
+    assert not (output / "advntr" / "advntr_model.db").exists()
+    assert not [record for record in caplog.records if record.name == "vntyper.scripts.pipeline"]
+    model_copy.assert_not_called()
+    provenance.assert_not_called()
+    detector.assert_not_called()
+    harness.stages["run_kestrel"].assert_not_called()
 
 
 @pytest.mark.parametrize("path_case", ["exact", "output-alias"])

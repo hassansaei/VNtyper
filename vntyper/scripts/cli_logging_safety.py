@@ -199,6 +199,8 @@ def validate_pipeline_log_destination(
     if not _advntr_requested(args):
         return
     defaults = config.get("default_values", {})
+    if not isinstance(defaults, dict):
+        return
     output_dir = getattr(args, "output_dir", None)
     if output_dir is None:
         output_dir = defaults.get("output_dir", "out")
@@ -207,6 +209,8 @@ def validate_pipeline_log_destination(
     archive_format = getattr(args, "archive_format", None)
     if archive_format is None:
         archive_format = defaults.get("archive_format", "zip")
+    if not isinstance(archive_format, str):
+        return
     archive_results = bool(getattr(args, "archive_results", False))
     if archive_results and archive_format not in {"zip", "tar.gz"}:
         return

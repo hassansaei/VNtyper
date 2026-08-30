@@ -31,8 +31,9 @@ from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
 from vntyper.scripts.pipeline_advntr_cleanup import (
     plan_advntr_cleanup,
     validate_pipeline_log_outside_advntr_preflight,
+    validate_pipeline_log_outside_selected_advntr_model,
 )
-from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight
+from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight, plan_valid_advntr_preflight
 from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
 from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext, prepare_advntr_run_context
 from vntyper.scripts.pipeline_alignment import (
@@ -163,6 +164,16 @@ def run_pipeline(
         FileNotFoundError: If the specified BED file is not found.
         RuntimeError: If alignment fails due to missing indexes.
     """
+    if log_file is not None:
+        early_advntr_preflight = plan_valid_advntr_preflight(
+            config,
+            extra_modules,
+            module_args,
+            reference_assembly,
+        )
+        if early_advntr_preflight is not None:
+            validate_pipeline_log_outside_selected_advntr_model(log_file, early_advntr_preflight.reference)
+
     # Capture the working directory at the start to ensure it remains valid
     # throughout the pipeline execution, especially for tools like Java that need it
     try:
