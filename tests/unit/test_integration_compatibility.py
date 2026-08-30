@@ -922,7 +922,13 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
             "provenance_commit": "f9e57f73e10d88d0c27cc4c4e8501c892594f0db",
             "extends": None,
             "report_overrides": overrides,
-        }
+        },
+        {
+            "version": "2.0.25",
+            "provenance_commit": "ec62d8f4e02212634b63d399275ba40d9e24fc1d",
+            "extends": "2.0.24",
+            "report_overrides": [],
+        },
     ]
     assert len(shipped) == 1
     assert len(overrides) == 2
@@ -1035,5 +1041,5 @@ def test_final_manifest_activates_from_absent_base_without_mutating_historical_t
         live,
         live,
         historical_test_config=historical,
-        observation_version="2.0.24",
+        observation_version="2.0.25",
     )
