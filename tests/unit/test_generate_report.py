@@ -37,6 +37,7 @@ from vntyper.scripts import (
     summary,
     summary_steps,
 )
+from vntyper.scripts.fastp_cutoffs import FastpJsonPayload
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -534,6 +535,7 @@ def test_fastp_json_decimals_and_large_counts_reach_the_report_without_float_rou
 
     loaded = generate_report.load_fastp_output(fastp_path)
     assert isinstance(loaded, dict)
+    assert isinstance(loaded, FastpJsonPayload)
     assert type(loaded["summary"]["after_filtering"]["q20_rate"]) is float
     assert loaded.exact["summary"]["after_filtering"]["q20_rate"] == Decimal("0.60044999999999999")
 
