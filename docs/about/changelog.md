@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.24 (Current)
+
 ### ⚠️ Required before deploying the web service
 
 - **Use a stopped, data-aware migration; this is not a rolling deployment.** The
@@ -26,7 +30,26 @@ All notable changes to VNtyper 2 are documented on this page.
   Arbitrary same-UID code in either the API or worker service namespace is out of scope
   because it can access the private volumes or worker descriptors directly.
 
-## 2.0.23 (Current)
+### adVNTR concurrency and verified run inputs
+
+- **Version detection now remains authoritative under concurrent launches.** The probe
+  parses strict version answers from both stdout and stderr, tolerates unrelated libmamba
+  lock diagnostics, and fails closed on missing, malformed, ambiguous, conflicting or
+  incompatible output. Only a failed launch with the recognized transient lock error is
+  retried; successful commands with invalid output are not.
+- **Only verified compatible successes are cached.** The pipeline performs one early,
+  run-scoped probe and freezes the exact command and tool paths used later. Failed,
+  malformed and incompatible outcomes never poison the cache.
+- **adVNTR inputs and artifacts are bound to the verified run.** Stale public outputs are
+  invalidated through a fixed allowlist, active logs and model inputs are protected, and
+  execution uses an atomic run-owned model snapshot with deterministic provenance.
+
+Three synchronized 12-way launch rounds returned verified adVNTR 2.0.4 in all 36 attempts,
+including 33 launches with lock diagnostics. The final-SHA 400-sample cohort completed
+400/400 jobs and produced 400 byte-identical intended result TSVs against the reviewed
+baseline, with zero schema, row or value deltas.
+
+## 2.0.23
 
 **What the output asserts about a variant, beyond present or absent.**
 

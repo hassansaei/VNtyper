@@ -143,13 +143,13 @@ def test_image_creates_the_default_spool_with_service_ownership() -> None:
 def test_changelog_requires_a_drained_coordinated_deployment() -> None:
     """The incompatible handoff protocol is never described as rolling-safe."""
     changelog = (REPO_ROOT / "docs" / "about" / "changelog.md").read_text(encoding="utf-8")
-    unreleased = changelog.split("## Unreleased", 1)[1].split("\n## ", 1)[0]
+    release_2024 = changelog.split("## 2.0.24", 1)[1].split("\n## ", 1)[0]
     release_206 = changelog.split("## 2.0.6", 1)[1].split("\n## ", 1)[0]
-    normalized = " ".join(unreleased.split())
+    normalized = " ".join(release_2024.split())
     normalized_206 = " ".join(release_206.split())
 
-    assert "Pause new submissions" in unreleased
-    assert "resume submissions" in unreleased
+    assert "Pause new submissions" in release_2024
+    assert "resume submissions" in release_2024
     assert "shared legacy input mount access" in normalized
     assert "service-private result store" in normalized
     assert "operator override" in normalized
@@ -158,7 +158,7 @@ def test_changelog_requires_a_drained_coordinated_deployment() -> None:
     assert "old-API-to-new-worker is safe" in normalized_206
     assert "new-API-to-old-worker is not" in normalized_206
     assert "Pause new submissions" not in release_206
-    _assert_result_store_migration_contract(unreleased)
+    _assert_result_store_migration_contract(release_2024)
 
 
 def test_docker_operator_guide_documents_the_private_result_store_boundary() -> None:
