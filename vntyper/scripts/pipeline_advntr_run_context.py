@@ -18,8 +18,6 @@ from vntyper.scripts.pipeline_advntr_cleanup import AdvntrCleanupPlan, plan_advn
 
 logger = logging.getLogger(__name__)
 
-ADVNTR_MODEL_SNAPSHOT = Path("advntr/advntr_model.db")
-
 
 @dataclass(frozen=True)
 class AdvntrRunContext:
@@ -130,7 +128,7 @@ def prepare_advntr_run_context(
         archive_format=archive_format,
     )
     _revoke_prior_outputs(cleanup_plan, protected_paths=protected_paths)
-    snapshot_path = Path(output_dir) / ADVNTR_MODEL_SNAPSHOT
+    snapshot_path = cleanup_plan.model_snapshot
     model = _snapshot_model(model_source, snapshot_path)
 
     tools = MappingProxyType(dict(config.get("tools", {})))

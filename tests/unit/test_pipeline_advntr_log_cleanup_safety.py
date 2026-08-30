@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,6 +20,64 @@ def _unparseable_outcome() -> AdvntrVersionOutcome:
         AdvntrProbeStatus.UNPARSEABLE_SUCCESS,
         message="adVNTR version command succeeded but its response was unparseable or ambiguous.",
     )
+
+
+def _verified_outcome() -> AdvntrVersionOutcome:
+    return AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4))
+
+
+@pytest.mark.parametrize("path_case", ["exact", "output-alias"])
+def test_direct_pipeline_cannot_replace_an_active_model_snapshot_log(
+    tmp_path: Path,
+    path_case: str,
+) -> None:
+    """Snapshot installation must refuse before replacing an open log with SQLite bytes."""
+    output = tmp_path / "out"
+    output.mkdir()
+    pipeline_output: Path = output
+    if path_case == "output-alias":
+        pipeline_output = tmp_path / "output-alias"
+        pipeline_output.symlink_to(output, target_is_directory=True)
+    snapshot_log = output / "advntr" / "advntr_model.db"
+    snapshot_log.parent.mkdir()
+    stale_result = output / "advntr" / "cross_match_results.tsv"
+    stale_result.write_text("stale result\n", encoding="utf-8")
+
+    file_handler = logging.FileHandler(snapshot_log, encoding="utf-8")
+    root_logger = logging.getLogger()
+    root_logger.addHandler(file_handler)
+    try:
+        with (
+            patch(
+                "vntyper.scripts.pipeline_advntr_run_context.shutil.copyfileobj",
+                wraps=shutil.copyfileobj,
+            ) as model_copy,
+            patch(
+                "vntyper.modules.advntr.model_provenance.detect_advntr_version",
+                return_value=_verified_outcome(),
+            ) as detector,
+        ):
+            harness = run_pipeline_under_harness(
+                output,
+                pipeline_output_dir=pipeline_output,
+                extra_modules=["advntr"],
+                log_file=str(snapshot_log),
+                expect_failure=True,
+            )
+    finally:
+        root_logger.removeHandler(file_handler)
+        file_handler.close()
+
+    assert not snapshot_log.read_bytes().startswith(b"SQLite format 3"), (
+        "snapshot installation replaced the live log and discarded its diagnostics after close"
+    )
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert "aliases an adVNTR destructive preflight destination" in snapshot_log.read_text(encoding="utf-8")
+    assert stale_result.read_text(encoding="utf-8") == "stale result\n"
+    model_copy.assert_not_called()
+    detector.assert_not_called()
+    harness.stages["run_kestrel"].assert_not_called()
 
 
 @pytest.mark.parametrize("log_spelling", ["exact", "redundant"])
@@ -59,7 +118,7 @@ def test_direct_pipeline_preserves_colliding_active_log_and_refuses_before_clean
     assert isinstance(harness.error, SystemExit)
     assert harness.error.code == 1
     assert log_file.is_file(), "cleanup unlinked the active log, so its diagnostics vanished when the handler closed"
-    assert "aliases an adVNTR preflight cleanup destination" in log_file.read_text(encoding="utf-8")
+    assert "aliases an adVNTR destructive preflight destination" in log_file.read_text(encoding="utf-8")
     assert stale_result.read_text(encoding="utf-8") == "stale result\n"
     detector.assert_not_called()
     harness.stages["run_kestrel"].assert_not_called()
@@ -93,7 +152,7 @@ def test_direct_pipeline_preserves_a_selected_archive_log_before_cleanup_or_prob
     assert isinstance(harness.error, SystemExit)
     assert harness.error.code == 1
     assert archive_log.is_file()
-    assert "aliases an adVNTR preflight cleanup destination" in archive_log.read_text(encoding="utf-8")
+    assert "aliases an adVNTR destructive preflight destination" in archive_log.read_text(encoding="utf-8")
     detector.assert_not_called()
     harness.stages["run_kestrel"].assert_not_called()
 

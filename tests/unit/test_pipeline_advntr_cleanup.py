@@ -8,7 +8,7 @@ import pytest
 
 from vntyper.scripts.pipeline_advntr_cleanup import (
     plan_advntr_cleanup,
-    validate_pipeline_log_outside_advntr_cleanup,
+    validate_pipeline_log_outside_advntr_preflight,
 )
 
 pytestmark = pytest.mark.unit
@@ -48,15 +48,18 @@ def test_cleanup_plan_is_the_exact_authoritative_destination_set(
     plan = plan_advntr_cleanup(output, archive_results=archive_results, archive_format=archive_format)
 
     assert plan.public_outputs == tuple(output / relative for relative in PUBLIC_OUTPUTS)
+    assert plan.model_snapshot == output / "advntr" / "advntr_model.db"
     if archive_suffix is None:
         assert plan.archive is None
-        assert plan.destinations == plan.public_outputs
+        assert plan.cleanup_destinations == plan.public_outputs
     else:
         assert plan.archive is not None
         assert plan.archive.destination == Path(f"{output}{archive_suffix}")
         assert plan.archive.base_name == str(output)
         assert plan.archive.shutil_format == shutil_format
-        assert plan.destinations == (*plan.public_outputs, plan.archive.destination)
+        assert plan.cleanup_destinations == (*plan.public_outputs, plan.archive.destination)
+    assert plan.model_snapshot not in plan.cleanup_destinations
+    assert plan.destructive_destinations == (*plan.cleanup_destinations, plan.model_snapshot)
 
 
 def test_cleanup_plan_rejects_an_unknown_selected_archive_format(tmp_path: Path) -> None:
@@ -75,7 +78,7 @@ def test_cleanup_guard_rejects_a_hardlink_alias_and_accepts_no_file_log(tmp_path
     hardlink_alias = tmp_path / "application.log"
     hardlink_alias.hardlink_to(cleanup_destination)
 
-    with pytest.raises(ValueError, match="aliases an adVNTR preflight cleanup destination"):
-        validate_pipeline_log_outside_advntr_cleanup(hardlink_alias, plan)
+    with pytest.raises(ValueError, match="aliases an adVNTR destructive preflight destination"):
+        validate_pipeline_log_outside_advntr_preflight(hardlink_alias, plan)
 
-    validate_pipeline_log_outside_advntr_cleanup(None, plan)
+    validate_pipeline_log_outside_advntr_preflight(None, plan)

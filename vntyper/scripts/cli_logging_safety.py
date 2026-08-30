@@ -12,8 +12,9 @@ from vntyper.scripts.alignment_contract import index_candidate_names
 from vntyper.scripts.alignment_target_io import bwa_index_paths, reference_index_paths
 from vntyper.scripts.pipeline_advntr_cleanup import (
     plan_advntr_cleanup,
-    validate_pipeline_log_outside_advntr_cleanup,
+    validate_pipeline_log_outside_advntr_preflight,
 )
+from vntyper.scripts.pipeline_advntr_preflight import plan_valid_advntr_preflight
 from vntyper.scripts.reference_resolution import configured_reference_candidates, resolve_from_mapping
 
 
@@ -126,6 +127,22 @@ def _pipeline_operator_paths(args: argparse.Namespace, config: dict[str, Any]) -
         if bwa_reference is not None:
             paths.append(bwa_reference)
             paths.extend(bwa_index_paths(bwa_reference, config))
+
+    if _advntr_requested(args):
+        defaults = config.get("default_values", {})
+        reference_assembly = getattr(args, "reference_assembly", None)
+        if reference_assembly is None and isinstance(defaults, dict):
+            reference_assembly = defaults.get("reference_assembly", "hg19")
+        module_args: dict[str, dict[str, Any]] = {"advntr": {}}
+        if hasattr(args, "advntr_reference"):
+            module_args["advntr"]["advntr_reference"] = args.advntr_reference
+        preflight = (
+            plan_valid_advntr_preflight(config, ["advntr"], module_args, reference_assembly)
+            if isinstance(reference_assembly, str)
+            else None
+        )
+        if preflight is not None and preflight.reference is not None:
+            paths.append(Path(preflight.reference))
     return tuple(dict.fromkeys(paths))
 
 
@@ -198,4 +215,4 @@ def validate_pipeline_log_destination(
         archive_results=archive_results,
         archive_format=archive_format,
     )
-    validate_pipeline_log_outside_advntr_cleanup(log_path, cleanup_plan)
+    validate_pipeline_log_outside_advntr_preflight(log_path, cleanup_plan)

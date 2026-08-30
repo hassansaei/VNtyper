@@ -11,6 +11,8 @@ from vntyper.scripts.pipeline_inputs import archive_base_name
 
 logger = logging.getLogger(__name__)
 
+ADVNTR_MODEL_SNAPSHOT = Path("advntr/advntr_model.db")
+
 _PUBLIC_OUTPUTS = (
     Path("advntr/output_adVNTR_result.tsv"),
     Path("advntr/output_adVNTR.tsv"),
@@ -40,17 +42,23 @@ class AdvntrArchiveCleanup:
 
 @dataclass(frozen=True)
 class AdvntrCleanupPlan:
-    """Every exact pathname an adVNTR preflight cleanup may revoke."""
+    """Exact adVNTR cleanup names plus its separately destructive snapshot."""
 
     public_outputs: tuple[Path, ...]
     archive: AdvntrArchiveCleanup | None
+    model_snapshot: Path
 
     @property
-    def destinations(self) -> tuple[Path, ...]:
-        """Return the complete cleanup-owned pathname set."""
+    def cleanup_destinations(self) -> tuple[Path, ...]:
+        """Return only names stale-result cleanup may revoke."""
         if self.archive is None:
             return self.public_outputs
         return (*self.public_outputs, self.archive.destination)
+
+    @property
+    def destructive_destinations(self) -> tuple[Path, ...]:
+        """Return every preflight name that may be unlinked or replaced."""
+        return (*self.cleanup_destinations, self.model_snapshot)
 
 
 def _absolute(path: str | Path) -> Path:
@@ -75,7 +83,7 @@ def plan_advntr_cleanup(
     archive_results: bool,
     archive_format: str,
 ) -> AdvntrCleanupPlan:
-    """Build the single authoritative adVNTR preflight-cleanup destination set.
+    """Build the single authoritative adVNTR destructive-preflight plan.
 
     Args:
         output_dir: Pipeline result root.
@@ -83,15 +91,16 @@ def plan_advntr_cleanup(
         archive_format: Selected public archive format, ``zip`` or ``tar.gz``.
 
     Returns:
-        The exact public outputs and optional selected archive cleanup owns.
+        Exact stale-cleanup outputs and the separately destructive model snapshot.
 
     Raises:
         ValueError: If a selected archive format is unsupported.
     """
     output_root = Path(output_dir)
     public_outputs = tuple(output_root / relative_path for relative_path in _PUBLIC_OUTPUTS)
+    model_snapshot = output_root / ADVNTR_MODEL_SNAPSHOT
     if not archive_results:
-        return AdvntrCleanupPlan(public_outputs=public_outputs, archive=None)
+        return AdvntrCleanupPlan(public_outputs=public_outputs, archive=None, model_snapshot=model_snapshot)
 
     try:
         suffix, shutil_format = _ARCHIVE_FORMATS[archive_format]
@@ -105,34 +114,34 @@ def plan_advntr_cleanup(
         base_name=base_name,
         shutil_format=shutil_format,
     )
-    return AdvntrCleanupPlan(public_outputs=public_outputs, archive=archive)
+    return AdvntrCleanupPlan(public_outputs=public_outputs, archive=archive, model_snapshot=model_snapshot)
 
 
-def validate_pipeline_log_outside_advntr_cleanup(
+def validate_pipeline_log_outside_advntr_preflight(
     log_file: str | Path | None,
     cleanup_plan: AdvntrCleanupPlan,
 ) -> None:
-    """Refuse an active log that cleanup could unlink through any path alias.
+    """Refuse an active log that preflight could unlink or replace by any alias.
 
     Args:
         log_file: Active application-log destination, or None when logging to a file
             was not requested.
-        cleanup_plan: Exact destinations selected for this run's preflight cleanup.
+        cleanup_plan: Exact cleanup and snapshot destinations selected for this run.
 
     Raises:
-        ValueError: If the log names or aliases a cleanup-owned destination.
+        ValueError: If the log names or aliases a destructive destination.
     """
     if log_file is None:
         return
     log_path = Path(log_file)
     log_variants = _path_variants(log_path)
-    for destination in cleanup_plan.destinations:
+    for destination in cleanup_plan.destructive_destinations:
         destination_variants = _path_variants(destination)
         if any(
             log_variant == destination_variant
             for log_variant in log_variants
             for destination_variant in destination_variants
         ) or _same_file(log_path, destination):
-            message = f"Pipeline log file aliases an adVNTR preflight cleanup destination: {log_path}"
+            message = f"Pipeline log file aliases an adVNTR destructive preflight destination: {log_path}"
             logger.error(message)
             raise ValueError(message)
