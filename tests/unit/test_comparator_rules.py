@@ -154,6 +154,19 @@ def test_unknown_column_message_sorts_the_allowlist() -> None:
     assert "['ALT', 'REF']" in str(raised.value)
 
 
+def test_allowed_column_names_must_be_non_empty_strings(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.comparator_rules")
+
+    with pytest.raises(ValueError, match="test.rule allowed columns must be non-empty strings") as raised:
+        validate_rule(
+            rule(column("A"), "eq", literal(1)),
+            allowed_columns=cast(list[str], ["A", 7]),
+            context="test.rule",
+        )
+
+    assert caplog.messages[-1] == str(raised.value)
+
+
 @pytest.mark.parametrize(
     "payload",
     [

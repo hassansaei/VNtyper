@@ -119,7 +119,7 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
     vcf.write_text(META + HEADER + RECORD, encoding="utf-8")
     seen: dict[str, object] = {}
 
-    def fake_process_kmer_results(combined_df, merged_motifs, output_dir, config):
+    def fake_process_kmer_results(combined_df, merged_motifs, output_dir, config, compiled_flag_rules=None):
         seen["combined_rows"] = len(combined_df)
         seen["alts"] = list(combined_df["ALT"])
         return kestrel_stage_frame("final")

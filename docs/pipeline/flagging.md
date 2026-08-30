@@ -23,7 +23,7 @@ An advisory flag identifies a call that may be technically valid but warrants ad
 
 ## How Flagging Works
 
-Each flagging rule is a named, structured boolean tree in `kestrel_config.json`. VNtyper validates the complete rule set against the DataFrame's available columns before processing any row. If the tree evaluates to `true`, the corresponding flag name is appended to the variant's `Flag` column. Multiple flags are comma-separated in configuration order. Variants matching no rules receive `Flag = "Not flagged"`.
+Each flagging rule is a named, structured boolean tree in `kestrel_config.json`. VNtyper validates and compiles the complete rule set against the consumer's declared result schema before any sample-dependent early return, then reuses that immutable tree for every row. Invalid rules therefore abort no-call samples as well as positive samples; they cannot hide behind a negative result. If the tree evaluates to `true`, the corresponding flag name is appended to the variant's `Flag` column. Multiple flags are comma-separated in configuration order. Variants matching no rules receive `Flag = "Not flagged"`.
 
 !!! info "Flagging occurs before variant selection"
     As of VNtyper 2 (Issue #145 fix), flagging is applied **before** the final variant selection step. This ensures that when multiple candidate variants pass all filters, unflagged variants are preferred over flagged ones. Previously, a flagged variant could be selected as the best call because flags were added after selection.
@@ -153,7 +153,7 @@ To add a new flagging rule:
 }
 ```
 
-Every rule starts with exactly one boolean key. `all` and `any` contain a non-empty list of child nodes; `not` contains exactly one child. A child can be another boolean node or a predicate, and boolean nesting is capped at 32 nodes. Every predicate has exactly `left`, `operator`, and `right`; each operand contains exactly one `column` or `literal`. A column must be in the explicit allowlist formed from the DataFrame columns available when flagging begins. Common Kestrel columns include `REF`, `ALT`, `POS`, `Motif`, `Variant`, `Depth_Score`, `Confidence`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion`, and `is_valid_frameshift`.
+Every rule starts with exactly one boolean key. `all` and `any` contain a non-empty list of child nodes; `not` contains exactly one child. A child can be another boolean node or a predicate, and boolean nesting is capped at 32 nodes. Every predicate has exactly `left`, `operator`, and `right`; each operand contains exactly one `column` or `literal`. A column must be in the consumer's explicit declared-schema allowlist. Common Kestrel columns include `REF`, `ALT`, `POS`, `Motif`, `Variant`, `Depth_Score`, `Confidence`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion`, and `is_valid_frameshift`.
 
 The only operators are:
 

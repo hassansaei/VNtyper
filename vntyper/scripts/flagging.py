@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from typing import NoReturn
 
 import pandas as pd
@@ -34,6 +35,37 @@ from vntyper.scripts.comparator_rules import CompiledRule, adapt_legacy_rule, ev
 logger = logging.getLogger(__name__)
 
 _RESERVED_FLAG_NAMES = frozenset({"Not flagged", "Not applicable"})
+KESTREL_FLAG_COLUMNS = frozenset(
+    {
+        "Motifs",
+        "Variant",
+        "POS",
+        "REF",
+        "ALT",
+        "Sample",
+        "Motif_sequence",
+        "Del",
+        "Estimated_Depth_AlternateVariant",
+        "Estimated_Depth_Variant_ActiveRegion",
+        "ref_len",
+        "alt_len",
+        "Frame_Score",
+        "is_frameshift",
+        "direction",
+        "frameshift_amount",
+        "is_valid_frameshift",
+        "Depth_Score",
+        "Confidence",
+        "depth_confidence_pass",
+        "haplo_count",
+        "alt_filter_pass",
+        "motif_filter_pass",
+        "Motif",
+        "Motif_fasta",
+        "POS_fasta",
+    }
+)
+ADVNTR_FLAG_COLUMNS = frozenset({"VID", "Variant", "NumberOfSupportingReads", "MeanCoverage", "Pvalue", "RU", "POS"})
 _LEGACY_FLAG_RULES: dict[str, dict[str, object]] = {
     "False_Positive_4bp_Insertion": {
         "(REF == 'C') and (ALT == 'CGGCA')": {
@@ -113,12 +145,19 @@ _LEGACY_FLAG_RULES: dict[str, dict[str, object]] = {
 }
 
 
+@dataclass(frozen=True)
+class CompiledFlagRules:
+    """Immutable flag names and comparator trees validated for one consumer schema."""
+
+    rules: tuple[tuple[str, CompiledRule], ...]
+
+
 def _invalid_flagging(message: str) -> NoReturn:
     logger.error(message)
     raise ValueError(message)
 
 
-def _compile_flag_rules(flag_rules: object, columns: Collection[str]) -> tuple[tuple[str, CompiledRule], ...]:
+def compile_flag_rules(flag_rules: object, columns: Collection[str]) -> CompiledFlagRules:
     """Validate and compile a complete ordered flag-rule mapping.
 
     Args:
@@ -145,10 +184,14 @@ def _compile_flag_rules(flag_rules: object, columns: Collection[str]) -> tuple[t
         context = f"flagging_rules.{flag}"
         migrated = adapt_legacy_rule(configured, exact_rules=_LEGACY_FLAG_RULES.get(flag, {}), context=context)
         compiled.append((flag, validate_rule(migrated, allowed_columns=columns, context=context)))
-    return tuple(compiled)
+    return CompiledFlagRules(rules=tuple(compiled))
 
 
-def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None = None) -> pd.DataFrame:
+def add_flags(
+    df: pd.DataFrame,
+    flag_rules: object,
+    duplicates_config: dict | None = None,
+) -> pd.DataFrame:
     """
     Applies flagging rules to the DataFrame and adds a 'Flag' column with the matched flags.
 
@@ -163,8 +206,9 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None
 
     Args:
         df (pd.DataFrame): The input DataFrame containing tool output.
-        flag_rules (dict): A dictionary where keys are flag names and values are
-            structured comparator rules.
+        flag_rules: Either an untrusted mapping from flag names to structured comparator
+            rules, or a :class:`CompiledFlagRules` validated by the consumer before any
+            sample-dependent early return.
         duplicates_config (dict, optional): Configuration for marking potential duplicates.
             Example structure:
             {
@@ -181,7 +225,7 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None
     Returns:
         pd.DataFrame: A copy of the input DataFrame with an added 'Flag' column.
     """
-    compiled_rules = _compile_flag_rules(flag_rules, df.columns)
+    compiled = flag_rules if isinstance(flag_rules, CompiledFlagRules) else compile_flag_rules(flag_rules, df.columns)
 
     # Create a copy to avoid modifying the original DataFrame
     df_copy = df.copy()
@@ -192,12 +236,12 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None
     logger.debug("Initialized flags list for each row.")
 
     # Evaluate each flag rule
-    for flag, compiled in compiled_rules:
+    for flag, compiled_rule in compiled.rules:
         context = f"flagging_rules.{flag}"
         logger.debug(f"Evaluating validated flag rule '{flag}'.")
         mask = df_copy.apply(
-            lambda row, compiled_rule=compiled, rule_context=context: evaluate_rule(
-                compiled_rule, row.to_dict(), context=rule_context
+            lambda row, rule=compiled_rule, rule_context=context: evaluate_rule(
+                rule, row.to_dict(), context=rule_context
             ),
             axis=1,
         )

@@ -14,7 +14,8 @@ from typing import cast
 import pandas as pd
 import pytest
 
-from vntyper.scripts.flagging import add_artifact_gate, add_flags
+from tests.builders import STAGE_COLUMNS
+from vntyper.scripts.flagging import KESTREL_FLAG_COLUMNS, add_artifact_gate, add_flags, compile_flag_rules
 
 pytestmark = pytest.mark.unit
 
@@ -130,6 +131,52 @@ def test_nested_boolean_rule_is_applied_by_the_flagging_consumer() -> None:
     result = add_flags(frame, {"Nested": nested_rule})
 
     assert result["Flag"].tolist() == ["Nested", "Nested", "Not flagged"]
+
+
+def test_compiled_flag_rules_can_be_reused_without_reparsing() -> None:
+    rules = {
+        "Low": {
+            "all": [
+                {
+                    "left": {"column": "Depth_Score"},
+                    "operator": "lt",
+                    "right": {"literal": 0.4},
+                }
+            ]
+        }
+    }
+    compiled = compile_flag_rules(rules, {"Depth_Score"})
+
+    result = add_flags(pd.DataFrame({"Depth_Score": [0.3, 0.5]}), compiled)
+
+    assert result["Flag"].tolist() == ["Low", "Not flagged"]
+
+
+def test_kestrel_preflight_schema_matches_the_frame_that_reaches_flagging() -> None:
+    assert set(STAGE_COLUMNS["final"]) - {"Flag", "flag_filter_pass"} == KESTREL_FLAG_COLUMNS
+
+
+def test_mixed_type_column_inventory_is_a_logged_value_error(caplog: pytest.LogCaptureFixture) -> None:
+    frame = pd.DataFrame([[1, 2]], columns=["A", 7])
+    rules = {
+        "Bad": {
+            "all": [
+                {
+                    "left": {"column": "Missing"},
+                    "operator": "eq",
+                    "right": {"literal": 1},
+                }
+            ]
+        }
+    }
+
+    with (
+        caplog.at_level("ERROR", logger="vntyper.scripts.comparator_rules"),
+        pytest.raises(ValueError, match="allowed columns must be non-empty strings"),
+    ):
+        add_flags(frame, rules)
+
+    assert any("allowed columns must be non-empty strings" in record.getMessage() for record in caplog.records)
 
 
 def test_non_mapping_rule_set_is_rejected() -> None:

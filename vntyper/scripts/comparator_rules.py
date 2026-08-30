@@ -255,11 +255,12 @@ def validate_rule(rule: object, *, allowed_columns: Collection[str], context: st
     Raises:
         ValueError: If any part of the rule is malformed or unsupported.
     """
+    columns = tuple(allowed_columns)
+    if any(not isinstance(column, str) or not column for column in columns):
+        _invalid(f"{context} allowed columns must be non-empty strings")
     if not isinstance(rule, Mapping) or len(rule) != 1 or not set(rule) <= _BOOLEAN_KEYS:
         _invalid(f"{context} must contain exactly one of 'all', 'any', or 'not'")
-    return CompiledRule(
-        root=_validate_node(rule, allowed_columns=frozenset(allowed_columns), path=context, boolean_depth=1)
-    )
+    return CompiledRule(root=_validate_node(rule, allowed_columns=frozenset(columns), path=context, boolean_depth=1))
 
 
 def _operand_value(operand: Operand, row: Mapping[str, object], *, context: str) -> object:

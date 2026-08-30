@@ -450,3 +450,84 @@ class TestFlaggingReadsTheOriginalConfigGlobal:
 
         result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
         assert result.iloc[0]["Flag"] == "Not applicable"
+
+    def test_malformed_rules_abort_an_empty_vcf_before_negative_publication(self, tmp_path, monkeypatch, ru_config):
+        monkeypatch.setattr(
+            advntr,
+            "advntr_config",
+            {
+                "flagging_rules": {
+                    "Bad": {
+                        "all": [
+                            {
+                                "left": {"column": "Definitely_Missing"},
+                                "operator": "eq",
+                                "right": {"literal": 1},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        source = tmp_path / "output_adVNTR.vcf"
+        source.write_text(ADVNTR_HEADER)
+
+        with pytest.raises(ValueError, match="Definitely_Missing"):
+            advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
+
+        assert not (tmp_path / "output_adVNTR_result.tsv").exists()
+
+    @pytest.mark.parametrize("operand", ["REF", "ALT"])
+    def test_reference_base_rules_require_a_resolved_ru_fasta(self, tmp_path, monkeypatch, operand):
+        monkeypatch.setattr(
+            advntr,
+            "advntr_config",
+            {
+                "flagging_rules": {
+                    "Reference_Base": {
+                        "all": [
+                            {
+                                "left": {"column": operand},
+                                "operator": "eq",
+                                "right": {"column": operand},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        source = tmp_path / "output_adVNTR.vcf"
+        source.write_text(ADVNTR_HEADER)
+
+        with pytest.raises(ValueError, match=operand):
+            advntr.process_advntr_output(str(source), str(tmp_path), "output", config=None)
+
+        assert not (tmp_path / "output_adVNTR_result.tsv").exists()
+
+    @pytest.mark.parametrize("operand", ["REF", "ALT"])
+    def test_reference_base_rules_run_when_the_ru_fasta_resolves(self, tmp_path, monkeypatch, ru_config, operand):
+        monkeypatch.setattr(
+            advntr,
+            "advntr_config",
+            {
+                "flagging_rules": {
+                    "Reference_Base": {
+                        "all": [
+                            {
+                                "left": {"column": operand},
+                                "operator": "eq",
+                                "right": {"column": operand},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        source = tmp_path / "output_adVNTR.vcf"
+        source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t42\t153.98\t0.0001\n")
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
+
+        result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
+        assert result.iloc[0]["Flag"] == "Reference_Base"
+        assert result.iloc[0][operand] != "Not applicable"
