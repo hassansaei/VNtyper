@@ -1,17 +1,26 @@
 """A crashed adVNTR command must stop the pipeline before output parsing."""
 
+import hashlib
 import logging
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.modules.advntr import advntr_genotyping as advntr
+from vntyper.modules.advntr.model_provenance import AdvntrProbeStatus, AdvntrVersionOutcome
 
 pytestmark = pytest.mark.unit
 
 MAIN_CONFIG = {"tools": {"advntr": "mamba run -n envadvntr advntr"}}
+
+STALE_ADVNTR_ARTIFACTS = (
+    "output_adVNTR_result.tsv",
+    "output_adVNTR.tsv",
+    "output_adVNTR.vcf",
+)
 
 
 @pytest.fixture
@@ -149,6 +158,187 @@ def test_a_cross_format_rerun_invalidates_all_preexisting_artifacts_before_execu
     assert not harness.stages["process_advntr_output"].called
     assert existence_at_execution == {"tsv": False, "vcf": False, "derived": False}
     assert not any(path.exists() for path in artifacts.values())
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        AdvntrVersionOutcome(
+            AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE,
+            version=(2, 0, 4),
+            message="adVNTR version launch failed: command exited with status 2.",
+        ),
+        AdvntrVersionOutcome(
+            AdvntrProbeStatus.LAUNCH_FAILURE,
+            message="adVNTR version launch failed: command exited with status 127.",
+        ),
+        AdvntrVersionOutcome(
+            AdvntrProbeStatus.UNPARSEABLE_SUCCESS,
+            message="adVNTR version command succeeded but its response was unparseable or ambiguous.",
+        ),
+        AdvntrVersionOutcome(
+            AdvntrProbeStatus.TRANSIENT_EXHAUSTED,
+            message="adVNTR version detection exhausted 3 attempts after transient mamba launch failures.",
+        ),
+    ],
+    ids=lambda outcome: outcome.status.value,
+)
+def test_every_nonverified_startup_outcome_invalidates_all_prior_advntr_artifacts(
+    tmp_path: Path, outcome: AdvntrVersionOutcome
+) -> None:
+    """An early probe refusal must not leave a previous patient's call looking current."""
+    output_dir = tmp_path / "out"
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir(parents=True)
+    artifacts = [advntr_dir / name for name in STALE_ADVNTR_ARTIFACTS]
+    for artifact in artifacts:
+        artifact.write_text("stale prior patient result\n", encoding="utf-8")
+
+    with patch(
+        "vntyper.modules.advntr.model_provenance.detect_advntr_version",
+        return_value=outcome,
+    ):
+        harness = run_pipeline_under_harness(
+            output_dir,
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert not any(artifact.exists() for artifact in artifacts)
+    harness.stages["run_kestrel"].assert_not_called()
+
+
+def test_verified_startup_also_invalidates_all_prior_advntr_artifacts(tmp_path: Path) -> None:
+    """The cleanup move must preserve the established successful-run invalidation."""
+    output_dir = tmp_path / "out"
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir(parents=True)
+    artifacts = [advntr_dir / name for name in STALE_ADVNTR_ARTIFACTS]
+    for artifact in artifacts:
+        artifact.write_text("stale prior patient result\n", encoding="utf-8")
+
+    outcome = AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4))
+    with patch(
+        "vntyper.modules.advntr.model_provenance.detect_advntr_version",
+        return_value=outcome,
+    ):
+        harness = run_pipeline_under_harness(output_dir, extra_modules=["advntr"])
+
+    assert harness.error is None
+    assert not any(artifact.exists() for artifact in artifacts)
+
+
+def test_input_ownership_refusal_precedes_advntr_artifact_invalidation(tmp_path: Path) -> None:
+    """An input aliased into the output tree must be protected before any cleanup write."""
+    output_dir = tmp_path / "out"
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir(parents=True)
+    input_bam = tmp_path / "patient.bam"
+    input_bam.write_text("protected patient input\n", encoding="utf-8")
+    protected_artifact = advntr_dir / STALE_ADVNTR_ARTIFACTS[0]
+    protected_artifact.hardlink_to(input_bam)
+    other_artifacts = [advntr_dir / name for name in STALE_ADVNTR_ARTIFACTS[1:]]
+    for artifact in other_artifacts:
+        artifact.write_text("stale prior patient result\n", encoding="utf-8")
+
+    with patch("vntyper.modules.advntr.model_provenance.detect_advntr_version") as detector:
+        harness = run_pipeline_under_harness(
+            output_dir,
+            bam=str(input_bam),
+            extra_modules=["advntr"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    detector.assert_not_called()
+    assert input_bam.read_text(encoding="utf-8") == "protected patient input\n"
+    assert protected_artifact.exists()
+    assert all(artifact.exists() for artifact in other_artifacts)
+
+
+@pytest.mark.parametrize("model_artifact_name", STALE_ADVNTR_ARTIFACTS)
+@pytest.mark.parametrize("input_mode", ["bam", "fastq"])
+def test_selected_advntr_model_at_cleanup_destination_is_preserved_before_any_work(
+    tmp_path: Path, model_artifact_name: str, input_mode: str
+) -> None:
+    """The selected model is operator input even when configured under the output root."""
+    output_dir = tmp_path / "out"
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir(parents=True)
+    model_path = advntr_dir / model_artifact_name
+    source_model = Path(MINIMAL_CONFIG["reference_data"]["advntr_reference_vntr_hg19"])
+    model_bytes = source_model.read_bytes()
+    model_path.write_bytes(model_bytes)
+    other_artifacts = [advntr_dir / name for name in STALE_ADVNTR_ARTIFACTS if name != model_artifact_name]
+    for artifact in other_artifacts:
+        artifact.write_text("other prior result\n", encoding="utf-8")
+    other_bytes = {artifact: artifact.read_bytes() for artifact in other_artifacts}
+    before_digest = hashlib.sha256(model_bytes).hexdigest()
+    config = deepcopy(MINIMAL_CONFIG)
+    config["reference_data"]["advntr_reference_vntr_hg19"] = str(model_path)
+
+    if input_mode == "fastq":
+        input_root = tmp_path / "inputs"
+        input_root.mkdir()
+        fastq = input_root / "reads.fastq.gz"
+        bwa_reference = input_root / "reference.fa"
+        fastq.write_bytes(b"reads")
+        bwa_reference.write_bytes(b"reference")
+
+    with patch("vntyper.modules.advntr.model_provenance.subprocess.run") as runner:
+        if input_mode == "fastq":
+            harness = run_pipeline_under_harness(
+                output_dir,
+                config=config,
+                extra_modules=["advntr"],
+                expect_failure=True,
+                fastq1=str(fastq),
+                bwa_reference=str(bwa_reference),
+            )
+        else:
+            harness = run_pipeline_under_harness(
+                output_dir,
+                config=config,
+                extra_modules=["advntr"],
+                expect_failure=True,
+            )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert model_path.read_bytes() == model_bytes
+    assert hashlib.sha256(model_path.read_bytes()).hexdigest() == before_digest
+    assert {artifact: artifact.read_bytes() for artifact in other_artifacts} == other_bytes
+    runner.assert_not_called()
+    harness.stages["run_kestrel"].assert_not_called()
+
+
+@pytest.mark.parametrize("override", [["hg19"], {"build": "hg19"}, {"hg19"}, ("hg19",), True, 1])
+def test_invalid_advntr_override_stops_before_input_ownership_or_pipeline_work(
+    tmp_path: Path, override: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Malformed overrides are typed configuration failures before filesystem safety I/O."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.pipeline_advntr_preflight")
+
+    with (
+        patch("vntyper.scripts.pipeline.protect_pipeline_input_ownership") as ownership_guard,
+        patch("vntyper.modules.advntr.model_provenance.subprocess.run") as version_runner,
+    ):
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            extra_modules=["advntr"],
+            module_args={"advntr": {"advntr_reference": override}},
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert any(message.startswith("Invalid advntr_reference:") for message in caplog.messages)
+    ownership_guard.assert_not_called()
+    version_runner.assert_not_called()
+    harness.stages["run_kestrel"].assert_not_called()
 
 
 def test_a_success_status_without_current_raw_output_cannot_republish_a_preexisting_call(tmp_path: Path) -> None:

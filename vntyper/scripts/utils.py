@@ -235,7 +235,7 @@ def get_tool_version(command, version_flag):
 UNPROBED_TOOLS = frozenset({"kanalyze", "shark"})
 
 
-def get_tool_versions(config, *, tools_in_use):
+def get_tool_versions(config, *, tools_in_use, version_overrides=None):
     """
     Retrieves the versions of the tools this run will actually invoke.
 
@@ -251,12 +251,15 @@ def get_tool_versions(config, *, tools_in_use):
         tools_in_use (Collection[str]): Names from ``config["tools"]`` this run will
             invoke. Names absent from the config are skipped, as are the members of
             :data:`UNPROBED_TOOLS`.
+        version_overrides (Mapping[str, str] | None): Versions already established by
+            a run-scoped authoritative probe. An override suppresses a redundant launch.
 
     Returns:
         dict: A dictionary with tool names as keys and their version strings as values.
     """
     tools = config.get("tools", {})
     requested = set(tools_in_use) - UNPROBED_TOOLS
+    overrides = version_overrides or {}
     versions = {}
 
     # Define version commands for each tool
@@ -273,6 +276,9 @@ def get_tool_versions(config, *, tools_in_use):
 
     for tool, command in tools.items():
         if tool not in requested:
+            continue
+        if tool in overrides:
+            versions[tool] = overrides[tool]
             continue
         version_flag = version_commands.get(tool, "")
         # Special handling for kestrel as it needs the java_path in front.

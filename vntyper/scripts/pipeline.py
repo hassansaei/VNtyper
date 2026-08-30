@@ -28,6 +28,14 @@ from vntyper.scripts.kestrel_genotyping import run_kestrel
 
 # Import cross-match functions from cross_match.py
 from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
+from vntyper.scripts.pipeline_advntr_cleanup import (
+    plan_advntr_cleanup,
+    validate_pipeline_log_outside_advntr_preflight,
+    validate_pipeline_log_outside_selected_advntr_model,
+)
+from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight, plan_valid_advntr_preflight
+from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
+from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext, prepare_advntr_run_context
 from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
     prepare_alignment_target,
@@ -39,7 +47,6 @@ from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
-from vntyper.scripts.reference_resolution import resolve_from_mapping
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
@@ -75,20 +82,6 @@ from vntyper.scripts.utils import (
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
-
-
-def select_advntr_reference(config: dict, reference_assembly: str) -> str | None:
-    """The adVNTR database for an assembly, by coordinate system.
-
-    Args:
-        config: Pipeline configuration.
-        reference_assembly: Supported assembly label.
-
-    Returns:
-        str | None: Database path, or None when no key is configured.
-    """
-    resolved = resolve_from_mapping("advntr", reference_assembly, config.get("reference_data", {}))
-    return resolved.value if resolved is not None else None
 
 
 def run_pipeline(
@@ -171,6 +164,16 @@ def run_pipeline(
         FileNotFoundError: If the specified BED file is not found.
         RuntimeError: If alignment fails due to missing indexes.
     """
+    if log_file is not None:
+        early_advntr_preflight = plan_valid_advntr_preflight(
+            config,
+            extra_modules,
+            module_args,
+            reference_assembly,
+        )
+        if early_advntr_preflight is not None:
+            validate_pipeline_log_outside_selected_advntr_model(log_file, early_advntr_preflight.reference)
+
     # Capture the working directory at the start to ensure it remains valid
     # throughout the pipeline execution, especially for tools like Java that need it
     try:
@@ -196,6 +199,10 @@ def run_pipeline(
     alignment_plan = None
     primary_outcome_is_active = False
     try:
+        advntr_preflight = plan_advntr_preflight(config, extra_modules, module_args, reference_assembly)
+        needs_advntr = advntr_preflight.enabled
+        advntr_reference = advntr_preflight.reference
+        additional_operator_paths = (advntr_reference,) if advntr_reference is not None else ()
         protect_pipeline_input_ownership(
             output_dir,
             input_type,
@@ -210,7 +217,33 @@ def run_pipeline(
             reference_assembly,
             archive_results,
             archive_format,
+            additional_operator_paths,
         )
+
+        # Refuse an unknown/incompatible adVNTR before alignment preparation,
+        # conversion, coverage, or Kestrel. Keep the classified startup answer in this
+        # run rather than probing again after those expensive stages: failed answers
+        # deliberately remain absent from the probe's reusable success cache.
+        advntr_context: AdvntrRunContext | None = None
+        advntr_version_overrides = {}
+        if needs_advntr:
+            logger.debug(f"adVNTR reference set to: {advntr_reference}")
+            advntr_cleanup = plan_advntr_cleanup(
+                output_dir,
+                archive_results=archive_results,
+                archive_format=archive_format,
+            )
+            validate_pipeline_log_outside_advntr_preflight(log_file, advntr_cleanup)
+            advntr_context = prepare_advntr_run_context(
+                output_dir,
+                advntr_reference,
+                config,
+                archive_results=archive_results,
+                archive_format=archive_format,
+                protected_paths=(*archive_protected_paths, *additional_operator_paths),
+            )
+            advntr_version_overrides["advntr"] = ".".join(str(part) for part in advntr_context.version)
+
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "FASTQ":
             validate_fastq_file(fastq1)
@@ -268,13 +301,16 @@ def run_pipeline(
         # Whether anything will read `<name>_sliced.bam.bai`. The conversion stage is
         # given the answer rather than `extra_modules`, so it cannot grow further
         # dependencies on module state it has no business knowing.
-        needs_advntr = "advntr" in extra_modules
 
         tools_in_use = {"samtools", "kestrel", "java_path"}
         if input_type == "FASTQ":
             tools_in_use |= {"fastp", "bwa"}
         tools_in_use |= {module for module in extra_modules if module in config.get("tools", {})}
-        tool_versions = get_tool_versions(config, tools_in_use=tools_in_use)
+        tool_versions = get_tool_versions(
+            config,
+            tools_in_use=tools_in_use,
+            version_overrides=advntr_version_overrides,
+        )
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
         # What the run actually used, not what BWA was configured with (MAJOR 5,
@@ -549,6 +585,8 @@ def run_pipeline(
         )  # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
         if "advntr" in extra_modules:
             logger.info("adVNTR module included. Starting adVNTR genotyping.")
+            if advntr_context is None:
+                raise RuntimeError("adVNTR execution reached without a verified run context.")
             try:
                 from vntyper.modules.advntr.advntr_genotyping import (
                     advntr_output_extension,
@@ -556,52 +594,23 @@ def run_pipeline(
                     process_advntr_output,
                     run_advntr,
                 )
-                from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
-                from vntyper.modules.advntr.model_provenance import (
-                    describe_model,
-                    detect_advntr_version,
-                    require_compatible_advntr,
-                )
             except ImportError as exc:
                 logger.error(f"adVNTR module import failed: {exc}")
                 sys.exit(1)
 
-            invalidate_advntr_artifact(Path(dirs["advntr"]) / "output_adVNTR_result.tsv")
             advntr_config = load_advntr_config()
             advntr_settings = advntr_config.get("advntr_settings", {})
             # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
-            # this run's parser, while invalidating both supported producer names so a
-            # cross-format rerun cannot retain patient output from the previous format.
+            # this run's parser. Both supported producer names and the derived result
+            # were already invalidated immediately after input-ownership validation.
             output_ext = advntr_output_extension(advntr_settings)
-            for raw_extension in (".tsv", ".vcf"):
-                invalidate_advntr_artifact(Path(dirs["advntr"]) / f"output_adVNTR{raw_extension}")
-            advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
-
-            if not advntr_reference:
-                advntr_reference = select_advntr_reference(config, reference_assembly)
-            else:
-                if advntr_reference == "hg19":
-                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
-                elif advntr_reference == "hg38":
-                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
-                else:
-                    logger.error(f"Invalid advntr_reference: {advntr_reference}")
-                    raise ValueError(f"Invalid advntr_reference: {advntr_reference}")
-
-            if not advntr_reference:
-                logger.error("adVNTR reference path not found in configuration.")
-                raise ValueError("adVNTR reference path not found in configuration.")
-
-            logger.debug(f"adVNTR reference set to: {advntr_reference}")
-
             # Which model a run resolved decides which reads adVNTR can ever see: the
             # fetch window comes from the model's own content. Validate before running,
             # because the failure mode is a confident result over a truncated locus
             # rather than an error (#268).
-            advntr_model = describe_model(advntr_reference)
-            require_compatible_advntr(advntr_model, detect_advntr_version(config))
             # Top-level, not inside record_step: this is run state, and a step record is
             # not where state belongs.
+            advntr_model = dict(advntr_context.model)
             summary["advntr_model"] = advntr_model
             logger.info(
                 "adVNTR model %s (%s), window %s bp over %s",
@@ -626,12 +635,13 @@ def run_pipeline(
                         coverage_prefix="advntr_precheck",
                     )
                 advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                advntr_execution_config = {**config, "tools": dict(advntr_context.tools)}
                 advntr_status = run_advntr(
-                    advntr_reference,
+                    advntr_context.model_snapshot,
                     sorted_bam,
                     dirs["advntr"],
                     "output",
-                    config=config,
+                    config=advntr_execution_config,
                     cwd=project_root,
                     pipeline_threads=threads,
                 )

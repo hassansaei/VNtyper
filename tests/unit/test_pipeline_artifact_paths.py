@@ -99,6 +99,7 @@ BASENAME_INDEPENDENT: set[str] = {
     "fastq_bam_processing/pipeline_info.json",
     "coverage/coverage_summary.tsv",
     "kestrel/kestrel_result.tsv",
+    "advntr/advntr_model.db",
     "advntr/cross_match_results.tsv",
 }
 
@@ -318,6 +319,7 @@ BAM_RUN_ARTEFACTS: set[str] = {
     "kestrel/output.bed",
     "kestrel/kestrel_result.tsv",
     "advntr",
+    "advntr/advntr_model.db",
     "advntr/output_adVNTR.tsv",
     "advntr/output_adVNTR_result.tsv",
     "advntr/cross_match_results.tsv",
@@ -457,6 +459,7 @@ def test_every_declared_path_moves_together_under_a_custom_basename(tmp_path: Pa
     assert unmoved == {
         "coverage_summary",
         "kestrel_result",
+        "advntr_model",
         "cross_match",
         "pipeline_info",
         "pipeline_summary",
