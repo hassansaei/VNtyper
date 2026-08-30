@@ -1,5 +1,6 @@
 """CLI and Git-boundary tests for integration compatibility checking."""
 
+import copy
 import importlib
 import json
 import os
@@ -44,6 +45,9 @@ def _repository(tmp_path: Path) -> tuple[Path, str, str]:
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
+    version_path = repo / "vntyper/version.py"
+    version_path.parent.mkdir(parents=True)
+    version_path.write_text('__version__ = "2.0.24"\n')
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "base")
     base = _git(repo, "rev-parse", "HEAD")
@@ -71,6 +75,37 @@ def test_main_accepts_explicit_pr_or_direct_push_base(tmp_path: Path, capsys: py
 
     assert exit_code == 0
     assert "passed" in capsys.readouterr().out.lower()
+
+
+def test_main_passes_authoritative_checkout_version_to_compatibility_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch selecting observations from mutable test JSON instead of package metadata."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    repo, base, _ = _repository(tmp_path)
+    captured: dict[str, object] = {}
+
+    def capture(*_args: object, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(module, "check_compatibility", capture)
+
+    assert module.main(["--base-revision", base, "--repo-root", str(repo)], environ={"CI": "true"}) == 0
+    assert captured["observation_version"] == "2.0.24"
+
+
+def test_checkout_version_reader_fails_closed_for_missing_or_ambiguous_assignment(tmp_path: Path) -> None:
+    """Never fall back to whichever VNtyper package is installed in the environment."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    with pytest.raises(ValueError, match="cannot read current package version"):
+        module._read_checkout_version(tmp_path)
+    version_path = tmp_path / "vntyper/version.py"
+    version_path.parent.mkdir()
+    version_path.write_text('__version__ = "2.0.24"\n__version__ = "2.0.25"\n')
+    with pytest.raises(ValueError, match="missing or ambiguous"):
+        module._read_checkout_version(tmp_path)
 
 
 def test_main_requires_explicit_base_in_ci(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -314,3 +349,149 @@ def test_git_boundaries_fail_for_missing_worktree_and_inconsistent_tree_output(t
     repo, _, head = _repository(tmp_path)
     with pytest.raises(ValueError, match="inconsistent Git output"):
         module.read_json_at_revision(repo, head, "tests")
+
+
+def test_observation_provenance_resolves_to_matching_ancestral_version(tmp_path: Path) -> None:
+    """Bind each versioned observation to reachable package metadata at its exact commit."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "tests@example.invalid")
+    _git(repo, "config", "user.name", "Tests")
+    version_path = repo / "vntyper/version.py"
+    version_path.parent.mkdir()
+    version_path.write_text('__version__ = "2.0.24"\n')
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "release")
+    provenance = _git(repo, "rev-parse", "HEAD")
+    manifest: dict[str, Any] = {
+        "schema_version": 2,
+        "contracts": [],
+        "observation_sets": [
+            {
+                "version": "2.0.24",
+                "provenance_commit": provenance,
+                "extends": None,
+                "report_overrides": [],
+            }
+        ],
+    }
+
+    module.verify_observation_provenance(repo, manifest)
+
+    wrong_version = copy.deepcopy(manifest)
+    wrong_version["observation_sets"][0]["version"] = "2.0.25"
+    with pytest.raises(ValueError, match="does not match package version"):
+        module.verify_observation_provenance(repo, wrong_version)
+    missing = copy.deepcopy(manifest)
+    missing["observation_sets"][0]["provenance_commit"] = "a" * 40
+    with pytest.raises(ValueError, match="does not resolve"):
+        module.verify_observation_provenance(repo, missing)
+
+
+def test_observation_provenance_rejects_non_ancestral_commit(tmp_path: Path) -> None:
+    """A detached observation commit cannot attest to the current branch."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "tests@example.invalid")
+    _git(repo, "config", "user.name", "Tests")
+    version_path = repo / "vntyper/version.py"
+    version_path.parent.mkdir()
+    version_path.write_text('__version__ = "2.0.24"\n')
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "main")
+    main = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "--orphan", "detached")
+    _git(repo, "commit", "--allow-empty", "-qm", "detached")
+    detached = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    assert _git(repo, "rev-parse", "HEAD") == main
+    manifest = {
+        "schema_version": 2,
+        "contracts": [],
+        "observation_sets": [
+            {
+                "version": "2.0.24",
+                "provenance_commit": detached,
+                "extends": None,
+                "report_overrides": [],
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="not an ancestor"):
+        module.verify_observation_provenance(repo, manifest)
+
+
+@pytest.mark.parametrize(
+    ("observations", "message"),
+    [
+        ({}, "observation_sets must be a list"),
+        (["not-an-object"], r"observation_sets\[0\] must be an object"),
+    ],
+)
+def test_observation_provenance_rejects_malformed_containers(
+    tmp_path: Path, observations: object, message: str
+) -> None:
+    """The Git boundary also fails closed if called before core schema validation."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    with pytest.raises(ValueError, match=message):
+        module.verify_observation_provenance(
+            tmp_path,
+            {"schema_version": 2, "contracts": [], "observation_sets": observations},
+        )
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("ancestry-error", "Git ancestry check failed"),
+        ("version-unreadable", "cannot read package version"),
+        ("version-ambiguous", "package version .* is ambiguous"),
+    ],
+)
+def test_observation_provenance_fails_closed_for_git_and_version_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    message: str,
+) -> None:
+    """Subprocess errors and ambiguous metadata cannot become valid provenance."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    provenance = "a" * 40
+    manifest = {
+        "schema_version": 2,
+        "contracts": [],
+        "observation_sets": [
+            {
+                "version": "2.0.24",
+                "provenance_commit": provenance,
+                "extends": None,
+                "report_overrides": [],
+            }
+        ],
+    }
+
+    def fake_git(_repo_root: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "rev-parse":
+            return subprocess.CompletedProcess(arguments, 0, f"{provenance}\n", "")
+        if arguments[0] == "merge-base":
+            return subprocess.CompletedProcess(arguments, 2 if failure == "ancestry-error" else 0, "", "")
+        if failure == "version-unreadable":
+            return subprocess.CompletedProcess(arguments, 1, "", "missing")
+        output = '__version__ = "2.0.24"\n'
+        if failure == "version-ambiguous":
+            output += '__version__ = "2.0.24"\n'
+        return subprocess.CompletedProcess(arguments, 0, output, "")
+
+    monkeypatch.setattr(module, "_git", fake_git)
+
+    with pytest.raises(ValueError, match=message):
+        module.verify_observation_provenance(tmp_path, manifest)

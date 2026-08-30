@@ -8,6 +8,7 @@ without hidden filesystem or Git access.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import math
 import re
@@ -17,7 +18,12 @@ from typing import Any
 Manifest = dict[str, Any]
 Identity = tuple[str, str]
 
-SCHEMA_VERSION = 1
+_observations_name = (
+    "scripts.integration_compatibility_observations" if __package__ else "integration_compatibility_observations"
+)
+_observations = importlib.import_module(_observations_name)
+
+SCHEMA_VERSION = _observations.OBSERVATION_SCHEMA_VERSION
 BOOTSTRAP_REVISION = "52c4146596fef2d1e2402991fbab062ba8021889^"
 BOOTSTRAP_COMMIT = "47ce0b1168210e55841d07f280ba8134a073e96e"
 BOOTSTRAP_IDENTITIES: frozenset[Identity] = frozenset(
@@ -48,7 +54,6 @@ _BOOTSTRAP_ROUTING_COUNTS: dict[Identity, tuple[int, int, int, int]] = {
 }
 _BOOTSTRAP_SELECTED_BASENAMES = ["output_R1.fastq.gz", "output_R2.fastq.gz", "output_single.fastq.gz"]
 
-_TOP_KEYS = {"schema_version", "contracts"}
 _CONTRACT_KEYS = {
     "suite",
     "test_name",
@@ -521,9 +526,7 @@ def validate_manifest(manifest: Manifest, resource_config: dict[str, Any]) -> di
         ValueError: If the manifest or any resource binding is invalid.
     """
     root = _mapping(manifest, "manifest")
-    _exact_keys(root, _TOP_KEYS, "manifest")
-    if isinstance(root["schema_version"], bool) or root["schema_version"] != SCHEMA_VERSION:
-        raise ValueError(f"manifest schema_version must be {SCHEMA_VERSION}")
+    _observations.validate_manifest_container(root)
     contracts = root["contracts"]
     if not isinstance(contracts, list):
         raise ValueError("manifest contracts must be a list")
@@ -536,6 +539,7 @@ def validate_manifest(manifest: Manifest, resource_config: dict[str, Any]) -> di
         if identity in result:
             raise ValueError(f"manifest contains duplicate identity {identity}")
         result[identity] = contract
+    _observations.validate_observation_sets(root, set(result))
     return result
 
 
@@ -923,6 +927,7 @@ def check_compatibility(
     resource_config: dict[str, Any],
     *,
     historical_test_config: dict[str, Any] | None = None,
+    observation_version: str | None = None,
 ) -> None:
     """Check schema, append-only history, and bidirectional live declarations.
 
@@ -932,6 +937,7 @@ def check_compatibility(
         live_test_config: Current integration declarations.
         resource_config: Current immutable resource registry.
         historical_test_config: Pinned historical declarations, required when ``base_manifest`` is absent.
+        observation_version: Authoritative package version used to select versioned observations.
 
     Raises:
         ValueError: If any compatibility invariant fails.
@@ -942,24 +948,21 @@ def check_compatibility(
             raise ValueError("missing base manifest requires authoritative bootstrap history")
         validate_bootstrap_manifest(current_manifest, historical_test_config, resource_config)
     else:
-        base = validate_manifest(base_manifest, resource_config)
-        removed = sorted(base.keys() - current.keys())
-        if removed:
-            raise ValueError(f"compatibility contracts were removed: {removed}")
-        mutated = [identity for identity in base if base[identity] != current[identity]]
-        if mutated:
-            raise ValueError(f"compatibility contracts were mutated: {mutated}")
+        validate_manifest(base_manifest, resource_config)
+        _observations.validate_append_only_history(base_manifest, current_manifest)
+
+    effective_current = _observations.effective_contracts(current_manifest, current, observation_version)
 
     successes = _live_successes(live_test_config, strict=True)
     duplicate = sorted(identity for identity, cases in successes.items() if len(cases) != 1)
     if duplicate:
         raise ValueError(f"manifest identities do not resolve exactly once: {duplicate}")
-    for identity, contract in current.items():
+    for identity, contract in effective_current.items():
         cases = successes.get(identity, [])
         if len(cases) != 1:
             raise ValueError(f"contract {identity} does not resolve exactly once to an exit-0 live case")
         if _contract_projection(contract) != _live_projection(cases[0], identity[0], resource_config):
             raise ValueError(f"contract {identity} does not match live declaration")
-    missing = sorted(successes.keys() - current.keys())
+    missing = sorted(successes.keys() - effective_current.keys())
     if missing:
         raise ValueError(f"qualifying live successes are missing from manifest: {missing}")

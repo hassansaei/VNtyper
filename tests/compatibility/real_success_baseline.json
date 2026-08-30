@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "contracts": [
     {
       "suite": "bam_tests",
@@ -3671,6 +3671,29 @@
       },
       "compatibility_since": "2.0.11",
       "provenance_commit": "00585119e0d441728e9e4978e0d08057258f1874"
+    }
+  ],
+  "observation_sets": [
+    {
+      "version": "2.0.24",
+      "provenance_commit": "f9e57f73e10d88d0c27cc4c4e8501c892594f0db",
+      "extends": null,
+      "report_overrides": [
+        {
+          "suite": "bam_tests",
+          "test_name": "example_40cf_hg38_subset_fast_gdp_guard",
+          "report": [
+            "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed."
+          ]
+        },
+        {
+          "suite": "bam_tests",
+          "test_name": "example_40cf_hg38_subset_default",
+          "report": [
+            "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed."
+          ]
+        }
+      ]
     }
   ]
 }

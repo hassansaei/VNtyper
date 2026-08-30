@@ -654,11 +654,14 @@ summary | release-summary | none | always records success, failure, skipped jobs
     Adding `scripts/golden_cohort/waiver.py` (#262, the gate's declared-delta waiver
     policy, extracted out of `compare.py`) took it to all 41 Python files and
     `make test-scripts-cov` to 7,869 of 8,392 measured units, or 93.77%, over 6,299
-    passing unit tests. **A new file under `scripts/` must update this sentence** -
+    passing unit tests. Adding `scripts/integration_compatibility_observations.py`
+    (#293, the version-selected append-only report-observation policy) took it to all
+    42 Python files and `make test-scripts-cov` to 94.00% over 8,138 collected unit
+    tests. **A new file under `scripts/` must update this sentence** -
     `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
     counts root `scripts/**/*.py` and fails until it does, which is the tripwire working,
     not a flaky test. Package modules under `vntyper/scripts/` do not change that root-only
-    count; adding `vntyper/scripts/reference_download.py` therefore leaves it at 41.
+    count; adding `vntyper/scripts/reference_download.py` therefore leaves it at 42.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:
@@ -673,8 +676,15 @@ summary | release-summary | none | always records success, failure, skipped jobs
     declarations in `tests/test_data_config.json`. Identity is `(suite, test_name)`, so
     one input may legitimately occur in more than one suite. `make
     check-integration-compatibility` validates baseline-to-live and qualifying
-    live-to-baseline coverage in the same process, then compares the complete current
-    row with the explicit Git event base. Never normalize a regression by changing exit
+    live-to-baseline coverage in the same process, then compares the complete historical
+    row and every versioned observation set with the explicit Git event base. Schema 2
+    preserves the schema-1 `contracts` list as an exact ordered prefix and adds an
+    append-only `observation_sets` chain selected from the exact package version in
+    `vntyper/version.py`, never from mutable test JSON. Observation sets may override
+    only a non-empty report assertion for an existing `(suite, test_name)`; their full
+    provenance commit must resolve, be ancestral to the checkout, and carry the same
+    package version. Missing, stale, ambiguous, reordered, or mutated history fails
+    closed. Never normalize a regression by changing exit
     0 to exit 1, renaming or deleting a case or row, or weakening its input/reference
     digest, threads, log level, CLI options, modules, routing counts or selection,
     required artifacts, archive state, value fields, centers, or tolerances. A new
