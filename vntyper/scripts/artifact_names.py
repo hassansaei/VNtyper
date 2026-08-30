@@ -123,6 +123,7 @@ def pipeline_artifact_paths(
         "advntr_vcf": str(advntr_dir / f"{basename}_adVNTR.vcf"),
         "advntr_result": str(advntr_dir / f"{basename}_adVNTR_result.tsv"),
         # Basename-independent, listed so the enumeration is complete.
+        "advntr_model": str(advntr_dir / "advntr_model.db"),
         "coverage_summary": str(coverage_dir / f"{coverage_basename}_summary.tsv"),
         "kestrel_result": str(kestrel_dir / "kestrel_result.tsv"),
         "cross_match": str(advntr_dir / "cross_match_results.tsv"),
