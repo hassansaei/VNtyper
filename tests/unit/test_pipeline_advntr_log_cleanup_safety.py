@@ -51,6 +51,7 @@ def test_direct_pipeline_refuses_an_active_log_on_the_selected_operator_model_be
     config["reference_data"]["advntr_reference_vntr_hg19"] = str(configured_model)
 
     file_handler = logging.FileHandler(selected_model, encoding="utf-8")
+    file_handler.addFilter(logging.Filter("vntyper.scripts.pipeline"))
     root_logger = logging.getLogger()
     root_logger.addHandler(file_handler)
     try:
