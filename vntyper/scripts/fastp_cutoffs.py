@@ -7,7 +7,7 @@ import logging
 import numbers
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from typing import Any, cast
 
 logger = logging.getLogger(__name__)
@@ -72,8 +72,19 @@ class DecimalPreservingMapping(dict[str, Any]):
         """Store a public value and invalidate source provenance for that key."""
         super().__setitem__(key, value)
         if hasattr(self, "_source_values"):
-            self._source_values.pop(key, None)
-            self._exact_values.pop(key, None)
+            self._invalidate_provenance(key)
+
+    def __delitem__(self, key: str) -> None:
+        """Delete a public value and its exact source provenance."""
+        super().__delitem__(key)
+        self._invalidate_provenance(key)
+
+    # Runtime ``dict.__ior__`` accepts the same mapping/iterable inputs as ``update``;
+    # mypy incorrectly requires its signature to match narrower ``dict.__or__`` too.
+    def __ior__(self, values: object) -> DecimalPreservingMapping:  # type: ignore[override,misc]
+        """Merge public values through the provenance-invalidating update path."""
+        self.update(values)
+        return self
 
     def update(
         self,
@@ -87,6 +98,31 @@ class DecimalPreservingMapping(dict[str, Any]):
         pending.update(kwargs)
         for key, value in pending.items():
             self[key] = value
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        """Insert a default through the invalidating path only when absent."""
+        if key in self:
+            return self[key]
+        self[key] = default
+        return default
+
+    def pop(self, key: str, *default: Any) -> Any:
+        """Remove a public value and its exact source provenance."""
+        value = super().pop(key, *default)
+        self._invalidate_provenance(key)
+        return value
+
+    def popitem(self) -> tuple[str, Any]:
+        """Remove the last public item and its exact source provenance."""
+        key, value = super().popitem()
+        self._invalidate_provenance(key)
+        return key, value
+
+    def clear(self) -> None:
+        """Remove every public value and all exact source provenance."""
+        super().clear()
+        self._source_values.clear()
+        self._exact_values.clear()
 
     def __deepcopy__(self, memo: dict[int, Any]) -> DecimalPreservingMapping:
         """Copy public values and only the provenance that remains valid."""
@@ -111,6 +147,11 @@ class DecimalPreservingMapping(dict[str, Any]):
         if type(current) is type(source) and current == source:
             return self._exact_values.get(key, current)
         return current
+
+    def _invalidate_provenance(self, key: str) -> None:
+        """Discard exact source metadata after one public-key mutation."""
+        self._source_values.pop(key, None)
+        self._exact_values.pop(key, None)
 
 
 class FastpJsonPayload(DecimalPreservingMapping):
@@ -241,7 +282,9 @@ def calculate_passed_filter_rate(passed_filter_reads: object, total_reads: objec
         raise ValueError(message)
     if total_count == Decimal(0):
         return None
-    return passed_count / total_count
+    with localcontext() as context:
+        context.prec = max(context.prec, total_count.adjusted() + 11)
+        return passed_count / total_count
 
 
 def calculate_passed_filter_rate_from_sources(
@@ -303,8 +346,7 @@ def _cutoff(value: object, key: str) -> FastpCutoff:
 
 def _displayed_fraction(fraction: Decimal) -> Decimal:
     """Round a fraction into the report's two-decimal percentage domain."""
-    percentage = fraction * Decimal(100)
-    displayed_fraction = percentage.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) / Decimal(100)
+    displayed_fraction = fraction.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     return Decimal(0) if displayed_fraction.is_zero() else displayed_fraction
 
 

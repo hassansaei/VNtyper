@@ -11,7 +11,7 @@ import pytest
 
 import vntyper
 from vntyper.cli import load_config
-from vntyper.scripts.fastp_cutoffs import build_fastp_cutoffs
+from vntyper.scripts.fastp_cutoffs import DecimalPreservingMapping, build_fastp_cutoffs, exact_json_value
 
 pytestmark = pytest.mark.unit
 
@@ -78,6 +78,57 @@ def test_same_float_mutation_invalidates_loaded_json_provenance(tmp_path: Path, 
     cutoff = build_fastp_cutoffs(thresholds).q20_rate
     assert cutoff.value == Decimal("0.6005")
     assert cutoff.label == "60.05%"
+
+
+@pytest.mark.parametrize("mutation_api", ["ior", "delete", "pop", "popitem", "clear"])
+def test_every_dict_mutation_api_invalidates_exact_provenance(mutation_api: str) -> None:
+    """Inherited dict mutators cannot revive an equal-looking source decimal."""
+    mapping = DecimalPreservingMapping(
+        {"q20_rate": 0.60045},
+        {"q20_rate": Decimal("0.60044999999999999")},
+    )
+    if mutation_api == "ior":
+        mapping |= {"q20_rate": 0.60045}
+    elif mutation_api == "delete":
+        del mapping["q20_rate"]
+        mapping.setdefault("q20_rate", 0.60045)
+    elif mutation_api == "pop":
+        assert mapping.pop("q20_rate") == 0.60045
+        mapping.setdefault("q20_rate", 0.60045)
+    elif mutation_api == "popitem":
+        assert mapping.popitem() == ("q20_rate", 0.60045)
+        mapping.setdefault("q20_rate", 0.60045)
+    else:
+        mapping.clear()
+        mapping.setdefault("q20_rate", 0.60045)
+
+    copied = copy.deepcopy(mapping)
+    assert exact_json_value(copied, "q20_rate") == 0.60045
+
+
+def test_setdefault_without_a_mutation_preserves_exact_provenance() -> None:
+    """Looking up an existing key through setdefault is not a source change."""
+    mapping = DecimalPreservingMapping(
+        {"q20_rate": 0.60045},
+        {"q20_rate": Decimal("0.60044999999999999")},
+    )
+
+    assert mapping.setdefault("q20_rate", 0.8) == 0.60045
+    assert exact_json_value(mapping, "q20_rate") == Decimal("0.60044999999999999")
+
+
+@pytest.mark.parametrize("mutation_api", ["delete", "pop", "popitem"])
+def test_removing_a_missing_provenance_key_keeps_dict_failures(mutation_api: str) -> None:
+    """The mutation adapter retains each ordinary missing-key failure."""
+    mapping = DecimalPreservingMapping({}, {})
+
+    with pytest.raises(KeyError):
+        if mutation_api == "delete":
+            del mapping["q20_rate"]
+        elif mutation_api == "pop":
+            mapping.pop("q20_rate")
+        else:
+            mapping.popitem()
 
 
 def test_replacing_the_threshold_mapping_keeps_plain_dict_compatibility(tmp_path: Path) -> None:

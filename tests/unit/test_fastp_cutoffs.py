@@ -220,6 +220,33 @@ def test_calculate_passed_filter_rate_preserves_a_large_count_ratio_for_display_
     assert threshold_icon(measurement.value, Decimal("0.7765"), higher_better=True)[1] == "red"
 
 
+@pytest.mark.parametrize(
+    ("offset", "comparison", "displayed"),
+    ((-1, "below", "60.04%"), (0, "equal", "60.05%"), (1, "above", "60.05%")),
+)
+def test_calculate_passed_filter_rate_does_not_preround_long_ratios_across_a_half_tie(
+    offset: int, comparison: str, displayed: str
+) -> None:
+    """Count arithmetic must retain enough precision to decide the visible boundary."""
+    module = _module()
+    scale = 10**35
+
+    rate = module.calculate_passed_filter_rate(
+        passed_filter_reads=60045 * scale + offset,
+        total_reads=100000 * scale,
+    )
+    measurement = module.build_fastp_measurement(rate, "passed_filter_rate")
+
+    assert rate is not None
+    if comparison == "below":
+        assert rate < Decimal("0.60045")
+    elif comparison == "equal":
+        assert rate == Decimal("0.60045")
+    else:
+        assert rate > Decimal("0.60045")
+    assert measurement.display == displayed
+
+
 def test_calculate_passed_filter_rate_logs_and_keys_a_decimal_conversion_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -376,6 +403,23 @@ def test_validated_fastp_fraction_preserves_an_exact_decimal_type_and_value() ->
 
     assert fraction == Decimal("0.60044999999999999")
     assert type(fraction) is Decimal
+
+
+@pytest.mark.parametrize(
+    ("rate", "displayed"),
+    (
+        ("0.600449999999999999999999999999999", "60.04%"),
+        ("0.600450000000000000000000000000000", "60.05%"),
+        ("0.600450000000000000000000000000001", "60.05%"),
+    ),
+)
+def test_build_fastp_measurement_quantizes_long_decimals_without_ambient_prerounding(rate: str, displayed: str) -> None:
+    """Digits beyond the default Decimal context still decide a half-up boundary."""
+    module = _module()
+
+    measurement = module.build_fastp_measurement(Decimal(rate), "q20_rate")
+
+    assert measurement.display == displayed
 
 
 def test_build_fastp_cutoffs_normalizes_signed_zero() -> None:

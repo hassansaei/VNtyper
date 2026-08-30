@@ -1551,13 +1551,17 @@ def summarise_fastp(fastp_data: object) -> FastpMetrics:
 
     root = validated_fastp_mapping(raw_data, "root")
     if not root:
+        if isinstance(fastp_data, FastpJsonPayload):
+            message = "Fastp output has invalid object at 'root': expected a non-empty dictionary."
+            logger.error(message)
+            raise ValueError(message)
         return FastpMetrics(False, None, None, None, None, "", ExactFastpMetrics(None, None, None, None))
 
     summary = validated_fastp_mapping(root.get("summary", {}), "summary")
-    after_filtering = validated_fastp_mapping(summary.get("after_filtering", {}), "summary.after_filtering")
+    validated_fastp_mapping(summary.get("after_filtering", {}), "summary.after_filtering")
     validated_fastp_mapping(summary.get("before_filtering", {}), "summary.before_filtering")
     validated_fastp_mapping(root.get("filtering_result", {}), "filtering_result")
-    duplication = validated_fastp_mapping(root.get("duplication", {}), "duplication")
+    validated_fastp_mapping(root.get("duplication", {}), "duplication")
 
     exact_root = validated_fastp_mapping(exact_data, "root")
     exact_summary = validated_fastp_mapping(exact_root.get("summary", {}), "summary")
@@ -1572,6 +1576,9 @@ def summarise_fastp(fastp_data: object) -> FastpMetrics:
         exact_before_filtering,
         exact_filtering_result,
     )
+    exact_duplication_rate = validated_fastp_fraction(exact_duplication.get("rate", None), "duplication_rate")
+    exact_q20_rate = validated_fastp_fraction(exact_after_filtering.get("q20_rate", None), "q20_rate")
+    exact_q30_rate = validated_fastp_fraction(exact_after_filtering.get("q30_rate", None), "q30_rate")
     passed_filter_rate = None if exact_passed_filter_rate is None else float(exact_passed_filter_rate)
     if passed_filter_rate is not None:
         logger.debug("Passed filter rate calculated: %.2f", passed_filter_rate)
@@ -1580,15 +1587,15 @@ def summarise_fastp(fastp_data: object) -> FastpMetrics:
 
     return FastpMetrics(
         available=True,
-        duplication_rate=duplication.get("rate", None),
-        q20_rate=after_filtering.get("q20_rate", None),
-        q30_rate=after_filtering.get("q30_rate", None),
+        duplication_rate=None if exact_duplication_rate is None else float(exact_duplication_rate),
+        q20_rate=None if exact_q20_rate is None else float(exact_q20_rate),
+        q30_rate=None if exact_q30_rate is None else float(exact_q30_rate),
         passed_filter_rate=passed_filter_rate,
         sequencing=summary.get("sequencing", ""),
         exact=ExactFastpMetrics(
-            duplication_rate=validated_fastp_fraction(exact_duplication.get("rate", None), "duplication_rate"),
-            q20_rate=validated_fastp_fraction(exact_after_filtering.get("q20_rate", None), "q20_rate"),
-            q30_rate=validated_fastp_fraction(exact_after_filtering.get("q30_rate", None), "q30_rate"),
+            duplication_rate=exact_duplication_rate,
+            q20_rate=exact_q20_rate,
+            q30_rate=exact_q30_rate,
             passed_filter_rate=exact_passed_filter_rate,
         ),
     )

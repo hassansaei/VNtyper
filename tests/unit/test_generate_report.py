@@ -550,6 +550,37 @@ def test_fastp_json_decimals_and_large_counts_reach_the_report_without_float_rou
     assert mutated_metrics.exact.q20_rate == Decimal("0.60045")
 
 
+def test_integer_json_rate_endpoints_keep_float_public_types(tmp_path: Path) -> None:
+    """Valid JSON integers remain raw in the payload but rates are floats in legacy context."""
+    fastp_path = tmp_path / "output.json"
+    fastp_path.write_text(
+        """{
+  "summary": {
+    "before_filtering": {"total_reads": 1},
+    "after_filtering": {"q20_rate": 1, "q30_rate": 0}
+  },
+  "duplication": {"rate": 0},
+  "filtering_result": {"passed_filter_reads": 1}
+}
+""",
+        encoding="utf-8",
+    )
+
+    loaded = generate_report.load_fastp_output(fastp_path)
+    assert isinstance(loaded, FastpJsonPayload)
+    assert type(loaded["duplication"]["rate"]) is int
+    metrics = report_formatting.summarise_fastp(loaded)
+
+    assert metrics.duplication_rate == 0.0
+    assert metrics.q20_rate == 1.0
+    assert metrics.q30_rate == 0.0
+    assert metrics.passed_filter_rate == 1.0
+    assert type(metrics.duplication_rate) is float
+    assert type(metrics.q20_rate) is float
+    assert type(metrics.q30_rate) is float
+    assert type(metrics.passed_filter_rate) is float
+
+
 def test_fastp_half_tie_values_share_their_visible_cutoffs_and_icons(tmp_path) -> None:
     """All four half ties render in the exact decision domain used by their icons."""
     rates = {
@@ -2481,6 +2512,21 @@ def test_malformed_present_fastp_json_raises_before_report_output(
     assert [record.getMessage() for record in caplog.records if record.name == generate_report.logger.name] == [
         expected
     ]
+    assert not (tmp_path / "summary_report.html").exists()
+
+
+def test_empty_present_fastp_json_raises_before_report_output(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A present empty object is malformed evidence, not optional absence."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text("{}", encoding="utf-8")
+    caplog.set_level(logging.ERROR, logger=report_formatting.logger.name)
+
+    with pytest.raises(ValueError, match="expected a non-empty dictionary"):
+        render(tmp_path)
+
+    assert "expected a non-empty dictionary" in caplog.text
     assert not (tmp_path / "summary_report.html").exists()
 
 
