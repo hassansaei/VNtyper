@@ -28,6 +28,10 @@ from vntyper.scripts.kestrel_genotyping import run_kestrel
 
 # Import cross-match functions from cross_match.py
 from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
+from vntyper.scripts.pipeline_advntr_cleanup import (
+    plan_advntr_cleanup,
+    validate_pipeline_log_outside_advntr_cleanup,
+)
 from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight
 from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
 from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext, prepare_advntr_run_context
@@ -213,6 +217,12 @@ def run_pipeline(
         advntr_version_overrides = {}
         if needs_advntr:
             logger.debug(f"adVNTR reference set to: {advntr_reference}")
+            advntr_cleanup = plan_advntr_cleanup(
+                output_dir,
+                archive_results=archive_results,
+                archive_format=archive_format,
+            )
+            validate_pipeline_log_outside_advntr_cleanup(log_file, advntr_cleanup)
             advntr_context = prepare_advntr_run_context(
                 output_dir,
                 advntr_reference,

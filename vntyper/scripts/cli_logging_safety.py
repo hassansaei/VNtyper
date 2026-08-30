@@ -10,6 +10,10 @@ from typing import Any
 
 from vntyper.scripts.alignment_contract import index_candidate_names
 from vntyper.scripts.alignment_target_io import bwa_index_paths, reference_index_paths
+from vntyper.scripts.pipeline_advntr_cleanup import (
+    plan_advntr_cleanup,
+    validate_pipeline_log_outside_advntr_cleanup,
+)
 from vntyper.scripts.reference_resolution import configured_reference_candidates, resolve_from_mapping
 
 
@@ -26,6 +30,15 @@ def _same_file(left: Path, right: Path) -> bool:
 
 def _is_within(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
+
+
+def _advntr_requested(args: argparse.Namespace) -> bool:
+    """Recognize the same case, whitespace, comma, and repeated-option forms as the handler."""
+    for value in getattr(args, "extra_modules", None) or []:
+        for item in value if isinstance(value, list) else [value]:
+            if any(part.strip().lower() == "advntr" for part in str(item).split(",")):
+                return True
+    return False
 
 
 def _alignment_input_trees(args: argparse.Namespace) -> tuple[Path, ...]:
@@ -165,3 +178,24 @@ def validate_pipeline_log_destination(
                         f"Pipeline log file is inside an operator-owned input tree: {log_path} lies under "
                         f"{ancestor}, which is the same directory as the input tree {tree}."
                     )
+
+    if not _advntr_requested(args):
+        return
+    defaults = config.get("default_values", {})
+    output_dir = getattr(args, "output_dir", None)
+    if output_dir is None:
+        output_dir = defaults.get("output_dir", "out")
+    if not isinstance(output_dir, (str, os.PathLike)):
+        return
+    archive_format = getattr(args, "archive_format", None)
+    if archive_format is None:
+        archive_format = defaults.get("archive_format", "zip")
+    archive_results = bool(getattr(args, "archive_results", False))
+    if archive_results and archive_format not in {"zip", "tar.gz"}:
+        return
+    cleanup_plan = plan_advntr_cleanup(
+        Path(output_dir),
+        archive_results=archive_results,
+        archive_format=archive_format,
+    )
+    validate_pipeline_log_outside_advntr_cleanup(log_path, cleanup_plan)

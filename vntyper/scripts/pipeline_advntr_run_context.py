@@ -14,25 +14,11 @@ from typing import Any
 
 from vntyper.modules.advntr import model_provenance
 from vntyper.scripts.archive_safety import revoke_public_archive
-from vntyper.scripts.pipeline_inputs import archive_base_name
+from vntyper.scripts.pipeline_advntr_cleanup import AdvntrCleanupPlan, plan_advntr_cleanup
 
 logger = logging.getLogger(__name__)
 
 ADVNTR_MODEL_SNAPSHOT = Path("advntr/advntr_model.db")
-
-_PUBLIC_OUTPUTS = (
-    Path("advntr/output_adVNTR_result.tsv"),
-    Path("advntr/output_adVNTR.tsv"),
-    Path("advntr/output_adVNTR.vcf"),
-    Path("advntr/cross_match_results.tsv"),
-    Path("advntr/output_advntr.log"),
-    Path("pipeline_summary.json"),
-    Path("pipeline_summary.csv"),
-    Path("pipeline_summary.tsv"),
-    Path("summary_report.html"),
-)
-
-_ARCHIVE_FORMATS = {"zip": "zip", "tar.gz": "gztar"}
 
 
 @dataclass(frozen=True)
@@ -47,22 +33,19 @@ class AdvntrRunContext:
 
 
 def _revoke_prior_outputs(
-    output_dir: str | Path,
+    cleanup_plan: AdvntrCleanupPlan,
     *,
-    archive_results: bool,
-    archive_format: str,
     protected_paths: Iterable[str | Path],
 ) -> None:
     """Withdraw only the public names that can advertise a previous adVNTR attempt."""
     from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
 
-    output_root = Path(output_dir)
-    for relative_path in _PUBLIC_OUTPUTS:
-        invalidate_advntr_artifact(output_root / relative_path)
-    if archive_results:
+    for destination in cleanup_plan.public_outputs:
+        invalidate_advntr_artifact(destination)
+    if cleanup_plan.archive is not None:
         revoke_public_archive(
-            archive_base_name(output_root),
-            _ARCHIVE_FORMATS[archive_format],
+            cleanup_plan.archive.base_name,
+            cleanup_plan.archive.shutil_format,
             protected_paths=protected_paths,
         )
 
@@ -141,12 +124,12 @@ def prepare_advntr_run_context(
         AdvntrModelError: If the snapshot or binary/model combination is incompatible.
         ValueError: If the version outcome violates its typed invariant.
     """
-    _revoke_prior_outputs(
+    cleanup_plan = plan_advntr_cleanup(
         output_dir,
         archive_results=archive_results,
         archive_format=archive_format,
-        protected_paths=protected_paths,
     )
+    _revoke_prior_outputs(cleanup_plan, protected_paths=protected_paths)
     snapshot_path = Path(output_dir) / ADVNTR_MODEL_SNAPSHOT
     model = _snapshot_model(model_source, snapshot_path)
 
