@@ -34,7 +34,6 @@ PROCESS_LOCK_OUTPUT = (
     "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n    Waiting for other mamba process to finish\n"
 )
 TRANSIENT_LOCK_OUTPUT = RESOURCE_LOCK_OUTPUT + PROCESS_LOCK_OUTPUT
-MEASURED_LOCK_WITH_VERSION = f"{TRANSIENT_LOCK_OUTPUT}2.0.4\n{TRANSIENT_LOCK_OUTPUT}"
 V2_MODEL = {"schema_version": "v2", "path": "model.db", "window_bp": 3525}
 REAL_ADVNTR_203_ARGPARSE_STDERR = (
     "usage: \n"
@@ -227,20 +226,71 @@ def test_the_measured_process_lock_failure_is_independently_retried() -> None:
     sleep.assert_called_once()
 
 
-def test_a_valid_version_surrounded_by_mamba_lock_noise_is_accepted_without_retry() -> None:
-    """Rejecting the measured success shape would turn lock warnings into exhaustion."""
+@pytest.mark.parametrize(
+    ("stdout", "stderr"),
+    [
+        pytest.param(
+            "2.0.4\n"
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n",
+            "",
+            id="answer-stdout-lock-stdout",
+        ),
+        pytest.param(
+            "2.0.4\n",
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n",
+            id="answer-stdout-lock-stderr",
+        ),
+        pytest.param(
+            "2.0.4\n"
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n",
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n",
+            id="answer-stdout-lock-both-streams",
+        ),
+        pytest.param(
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n",
+            "2.0.4\n",
+            id="answer-stderr-lock-stdout",
+        ),
+        pytest.param(
+            "",
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n"
+            "2.0.4\n",
+            id="answer-stderr-lock-stderr",
+        ),
+        pytest.param(
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n",
+            "warning  libmamba Cannot lock '/home/test/.cache/mamba/proc'\n"
+            "    Waiting for other mamba process to finish\n"
+            "2.0.4\n",
+            id="answer-stderr-lock-both-streams",
+        ),
+    ],
+)
+def test_a_bare_version_survives_every_process_lock_stream_placement(stdout: str, stderr: str) -> None:
+    """Restoring one-stream parsing would discard a successful cross-stream answer."""
     probe = AdvntrVersionProbe()
+    expected = AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4))
     with (
         patch(
             "vntyper.modules.advntr.model_provenance.subprocess.run",
-            return_value=_result(stderr=MEASURED_LOCK_WITH_VERSION),
+            return_value=_result(stdout=stdout, stderr=stderr),
         ) as runner,
         patch("vntyper.modules.advntr.model_provenance.time.sleep") as sleep,
     ):
-        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
-        _assert_verified(detect_advntr_version(CONFIG, probe=probe), (2, 0, 4))
+        first = detect_advntr_version(CONFIG, probe=probe)
+        second = detect_advntr_version(CONFIG, probe=probe)
 
-    assert runner.call_count == 1
+    assert first == expected
+    assert second == expected
+    assert require_verified_advntr_version(first) == (2, 0, 4)
+    assert runner.call_args_list == [call(ARGV, capture_output=True, text=True, check=False)]
     sleep.assert_not_called()
 
 
