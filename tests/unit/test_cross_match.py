@@ -127,6 +127,43 @@ def test_a_non_matching_pair_is_not_reported_as_a_match():
     assert result["matches"][0]["Match"] == "No"
 
 
+def test_nested_boolean_rule_is_applied_by_the_cross_match_consumer():
+    rule = {
+        "all": [
+            {
+                "any": [
+                    {
+                        "left": {"column": "Kestrel_Allele_Change"},
+                        "operator": "eq",
+                        "right": {"column": "Advntr_Allele_Change"},
+                    },
+                    {
+                        "not": {
+                            "left": {"column": "Kestrel_Variant_Type"},
+                            "operator": "casefold_eq",
+                            "right": {"literal": "insertion"},
+                        }
+                    },
+                ]
+            },
+            {
+                "left": {"column": "Kestrel_Variant_Type"},
+                "operator": "casefold_eq",
+                "right": {"column": "Advntr_Variant_Type"},
+            },
+        ]
+    }
+
+    result = cross_match_variants(
+        kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+        advntr_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+        config={"cross_match": {"match_rule": rule}},
+    )
+
+    assert result["overall_match"] == "Yes"
+    assert result["matches"][0]["Match"] == "Yes"
+
+
 def test_an_empty_advntr_record_set_produces_no_comparisons():
     """The nested loop at :129-130 never runs, so `matches` is empty."""
     result = cross_match_variants(kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}], advntr_records=[])
@@ -159,6 +196,21 @@ def test_an_explicit_kestrel_variant_field_wins_over_the_inferred_type():
     "match_rule",
     [
         pytest.param({"all": "not-a-list"}, id="malformed-nested-rule"),
+        pytest.param(
+            {
+                "any": [
+                    DEFAULT_MATCH_RULE,
+                    {
+                        "not": {
+                            "left": {"column": "Nonexistent_Column"},
+                            "operator": "eq",
+                            "right": {"literal": 1},
+                        }
+                    },
+                ]
+            },
+            id="invalid-later-nested-node",
+        ),
         pytest.param(
             {
                 "all": [

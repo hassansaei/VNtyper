@@ -147,9 +147,9 @@ Controls Kestrel execution and the entire postprocessing pipeline (scoring, conf
 
 A name listed in `artifact_flags` must also be raised by a `flagging_rules` entry, or it never matches anything. Excluded rows are not lost: they remain in `kestrel_pre_result.tsv` with `flag_filter_pass = False`.
 
-Each flag rule contains exactly one non-empty `all` list. Predicates contain exactly `left`, `operator`, and `right`; operands contain one `column` or `literal`. Available operators are `eq`, `lt`, `in`, and `casefold_eq`. Columns are validated against the frame available to the consumer before any row is processed. Null values make a predicate false, and VNtyper never coerces strings, numbers, or booleans between types. Configured numbers and non-null numbers read from a row must be finite; NaN is null only when it comes from a row, while infinities always abort.
+Each flag rule starts with one explicit boolean node: `all` and `any` take non-empty child lists, while `not` takes one child. Children can be nested boolean nodes or predicates, with boolean nesting capped at 32 nodes. Predicates contain exactly `left`, `operator`, and `right`; operands contain one `column` or `literal`. Available operators are `eq`, `lt`, `in`, and `casefold_eq`. Columns are validated against the frame available to the consumer before any row is processed. Null values make a predicate false, and VNtyper never coerces strings, numbers, or booleans between types. Configured numbers and non-null numbers read from a row must be finite; NaN is null only when it comes from a row, while infinities always abort.
 
-Calls, attributes, indexing, imports, comprehensions, lambdas, regular expressions, arithmetic, and nested boolean forms are not part of the schema and are never executed. The byte-exact last-release string
+Calls, attributes, indexing, imports, comprehensions, lambdas, regular expressions, arithmetic, and executable boolean syntax are not part of the schema and are never executed. Boolean logic is represented only by the bounded `all`, `any`, and `not` JSON nodes. The byte-exact last-release string
 
 ```json
 "(REF == 'C') and (ALT == 'CGGCA')"

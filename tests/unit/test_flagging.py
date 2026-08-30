@@ -93,6 +93,45 @@ def test_structured_rule_is_applied() -> None:
     assert result["Flag"].tolist() == ["Low_Depth"]
 
 
+def test_nested_boolean_rule_is_applied_by_the_flagging_consumer() -> None:
+    nested_rule = {
+        "all": [
+            {
+                "left": {"column": "Depth_Score"},
+                "operator": "lt",
+                "right": {"literal": 0.4},
+            },
+            {
+                "any": [
+                    {
+                        "left": {"column": "Motif"},
+                        "operator": "in",
+                        "right": {"literal": CONSERVED_MOTIFS},
+                    },
+                    {
+                        "not": {
+                            "left": {"column": "Variant"},
+                            "operator": "casefold_eq",
+                            "right": {"literal": "deletion"},
+                        }
+                    },
+                ]
+            },
+        ]
+    }
+    frame = pd.DataFrame(
+        {
+            "Depth_Score": [0.3, 0.3, 0.5],
+            "Motif": ["2", "5", "2"],
+            "Variant": ["Deletion", "Insertion", "Insertion"],
+        }
+    )
+
+    result = add_flags(frame, {"Nested": nested_rule})
+
+    assert result["Flag"].tolist() == ["Nested", "Nested", "Not flagged"]
+
+
 def test_non_mapping_rule_set_is_rejected() -> None:
     with pytest.raises(ValueError, match="flagging_rules must be a mapping"):
         add_flags(pd.DataFrame({"Depth_Score": [0.3]}), cast(dict, [LOW_DEPTH]))
@@ -102,6 +141,7 @@ def test_non_mapping_rule_set_is_rejected() -> None:
     "bad_rule",
     [
         {"all": []},
+        {"any": [LOW_DEPTH["all"][0], {"not": {"all": []}}]},
         {
             "all": [
                 {

@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 JsonScalar: TypeAlias = str | int | float | bool | None
 Operator: TypeAlias = Literal["eq", "lt", "in", "casefold_eq"]
 _OPERATORS = frozenset({"eq", "lt", "in", "casefold_eq"})
+_BOOLEAN_KEYS = frozenset({"all", "any", "not"})
+_MAX_BOOLEAN_NESTING = 32
 _NULL = object()
 
 
@@ -48,10 +50,34 @@ class Predicate:
 
 
 @dataclass(frozen=True)
-class CompiledRule:
-    """A non-empty immutable conjunction of validated predicates."""
+class AllNode:
+    """A non-empty immutable conjunction of rule nodes."""
 
-    predicates: tuple[Predicate, ...]
+    children: tuple[RuleNode, ...]
+
+
+@dataclass(frozen=True)
+class AnyNode:
+    """A non-empty immutable disjunction of rule nodes."""
+
+    children: tuple[RuleNode, ...]
+
+
+@dataclass(frozen=True)
+class NotNode:
+    """An immutable negation of one rule node."""
+
+    child: RuleNode
+
+
+RuleNode: TypeAlias = Predicate | AllNode | AnyNode | NotNode
+
+
+@dataclass(frozen=True)
+class CompiledRule:
+    """An immutable validated boolean comparator tree."""
+
+    root: RuleNode
 
 
 def _invalid(message: str) -> NoReturn:
@@ -154,8 +180,69 @@ def _validate_predicate_compatibility(predicate: Predicate, *, path: str) -> Non
         _invalid(f"{path} has incompatible literal operand families")
 
 
+def _validate_predicate(
+    configured: Mapping[object, object], *, allowed_columns: frozenset[str], path: str
+) -> Predicate:
+    configured_operator = configured["operator"]
+    if not isinstance(configured_operator, str) or configured_operator not in _OPERATORS:
+        _invalid(f"{path}.operator must be one of {sorted(_OPERATORS)!r}")
+    predicate = Predicate(
+        left=_validate_operand(configured["left"], allowed_columns=allowed_columns, path=f"{path}.left"),
+        operator=cast(Operator, configured_operator),
+        right=_validate_operand(configured["right"], allowed_columns=allowed_columns, path=f"{path}.right"),
+    )
+    _validate_predicate_compatibility(predicate, path=path)
+    return predicate
+
+
+def _validate_node(
+    configured: object,
+    *,
+    allowed_columns: frozenset[str],
+    path: str,
+    boolean_depth: int,
+) -> RuleNode:
+    if not isinstance(configured, Mapping):
+        _invalid(f"{path} must be a predicate or a boolean node")
+
+    keys = set(configured)
+    if keys == {"left", "operator", "right"}:
+        return _validate_predicate(configured, allowed_columns=allowed_columns, path=path)
+    if len(keys) != 1 or not keys <= _BOOLEAN_KEYS:
+        _invalid(f"{path} must be a predicate or contain exactly one of 'all', 'any', or 'not'")
+    if boolean_depth > _MAX_BOOLEAN_NESTING:
+        _invalid(f"{path} exceeds maximum boolean nesting of {_MAX_BOOLEAN_NESTING}")
+
+    key = cast(str, next(iter(keys)))
+    value = configured[key]
+    if key == "not":
+        child = _validate_node(
+            value,
+            allowed_columns=allowed_columns,
+            path=f"{path}.not",
+            boolean_depth=boolean_depth + 1,
+        )
+        return NotNode(child=child)
+
+    child_path = f"{path}.{key}"
+    if not isinstance(value, list) or not value:
+        _invalid(f"{child_path} must be a non-empty list")
+    children = tuple(
+        _validate_node(
+            child,
+            allowed_columns=allowed_columns,
+            path=f"{child_path}[{index}]",
+            boolean_depth=boolean_depth + 1,
+        )
+        for index, child in enumerate(value)
+    )
+    if key == "all":
+        return AllNode(children=children)
+    return AnyNode(children=children)
+
+
 def validate_rule(rule: object, *, allowed_columns: Collection[str], context: str) -> CompiledRule:
-    """Validate untrusted JSON data and compile it into immutable comparator values.
+    """Validate untrusted JSON data and compile it into an immutable boolean tree.
 
     Args:
         rule: Untrusted value loaded from configuration JSON.
@@ -168,31 +255,11 @@ def validate_rule(rule: object, *, allowed_columns: Collection[str], context: st
     Raises:
         ValueError: If any part of the rule is malformed or unsupported.
     """
-    if not isinstance(rule, dict) or set(rule) != {"all"}:
-        _invalid(f"{context} must contain exactly the key 'all'")
-    configured_predicates = rule["all"]
-    if not isinstance(configured_predicates, list):
-        _invalid(f"{context}.all must be a non-empty list")
-    if not configured_predicates:
-        _invalid(f"{context}.all must be a non-empty list")
-
-    allowed = frozenset(allowed_columns)
-    predicates: list[Predicate] = []
-    for index, configured in enumerate(configured_predicates):
-        path = f"{context}.all[{index}]"
-        if not isinstance(configured, dict) or set(configured) != {"left", "operator", "right"}:
-            _invalid(f"{path} must contain exactly 'left', 'operator', and 'right'")
-        configured_operator = configured["operator"]
-        if not isinstance(configured_operator, str) or configured_operator not in _OPERATORS:
-            _invalid(f"{path}.operator must be one of {sorted(_OPERATORS)!r}")
-        predicate = Predicate(
-            left=_validate_operand(configured["left"], allowed_columns=allowed, path=f"{path}.left"),
-            operator=cast(Operator, configured_operator),
-            right=_validate_operand(configured["right"], allowed_columns=allowed, path=f"{path}.right"),
-        )
-        _validate_predicate_compatibility(predicate, path=path)
-        predicates.append(predicate)
-    return CompiledRule(predicates=tuple(predicates))
+    if not isinstance(rule, Mapping) or len(rule) != 1 or not set(rule) <= _BOOLEAN_KEYS:
+        _invalid(f"{context} must contain exactly one of 'all', 'any', or 'not'")
+    return CompiledRule(
+        root=_validate_node(rule, allowed_columns=frozenset(allowed_columns), path=context, boolean_depth=1)
+    )
 
 
 def _operand_value(operand: Operand, row: Mapping[str, object], *, context: str) -> object:
@@ -275,8 +342,20 @@ def _evaluate_predicate(predicate: Predicate, row: Mapping[str, object], *, cont
     return cast(str, left).casefold() == cast(str, right).casefold()
 
 
+def _evaluate_node(node: RuleNode, row: Mapping[str, object], *, context: str) -> bool:
+    if isinstance(node, Predicate):
+        return _evaluate_predicate(node, row, context=context)
+    if isinstance(node, NotNode):
+        return not _evaluate_node(node.child, row, context=f"{context}.not")
+    key = "all" if isinstance(node, AllNode) else "any"
+    results = [
+        _evaluate_node(child, row, context=f"{context}.{key}[{index}]") for index, child in enumerate(node.children)
+    ]
+    return all(results) if key == "all" else any(results)
+
+
 def evaluate_rule(rule: CompiledRule, row: Mapping[str, object], *, context: str) -> bool:
-    """Evaluate every predicate in a compiled rule against one row.
+    """Evaluate every node in a compiled rule against one row.
 
     Args:
         rule: A rule returned by :func:`validate_rule`.
@@ -284,15 +363,12 @@ def evaluate_rule(rule: CompiledRule, row: Mapping[str, object], *, context: str
         context: Configuration path included in every diagnostic.
 
     Returns:
-        Whether every predicate evaluates true.
+        The boolean result of the complete rule tree.
 
     Raises:
         ValueError: If a required row value is missing or incompatible.
     """
-    results: list[bool] = []
-    for index, predicate in enumerate(rule.predicates):
-        results.append(_evaluate_predicate(predicate, row, context=f"{context}.all[{index}]"))
-    return all(results)
+    return _evaluate_node(rule.root, row, context=context)
 
 
 def adapt_legacy_rule(rule: object, *, exact_rules: Mapping[str, object], context: str) -> object:

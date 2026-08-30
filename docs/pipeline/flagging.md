@@ -23,7 +23,7 @@ An advisory flag identifies a call that may be technically valid but warrants ad
 
 ## How Flagging Works
 
-Each flagging rule is a named, structured conjunction in `kestrel_config.json`. VNtyper validates the complete rule set against the DataFrame's available columns before processing any row. If every predicate in a rule evaluates to `true`, the corresponding flag name is appended to the variant's `Flag` column. Multiple flags are comma-separated in configuration order. Variants matching no rules receive `Flag = "Not flagged"`.
+Each flagging rule is a named, structured boolean tree in `kestrel_config.json`. VNtyper validates the complete rule set against the DataFrame's available columns before processing any row. If the tree evaluates to `true`, the corresponding flag name is appended to the variant's `Flag` column. Multiple flags are comma-separated in configuration order. Variants matching no rules receive `Flag = "Not flagged"`.
 
 !!! info "Flagging occurs before variant selection"
     As of VNtyper 2 (Issue #145 fix), flagging is applied **before** the final variant selection step. This ensures that when multiple candidate variants pass all filters, unflagged variants are preferred over flagged ones. Previously, a flagged variant could be selected as the best call because flags were added after selection.
@@ -153,7 +153,7 @@ To add a new flagging rule:
 }
 ```
 
-Every rule has exactly one key, `all`, whose value is a non-empty list. Every predicate has exactly `left`, `operator`, and `right`; each operand contains exactly one `column` or `literal`. A column must be in the explicit allowlist formed from the DataFrame columns available when flagging begins. Common Kestrel columns include `REF`, `ALT`, `POS`, `Motif`, `Variant`, `Depth_Score`, `Confidence`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion`, and `is_valid_frameshift`.
+Every rule starts with exactly one boolean key. `all` and `any` contain a non-empty list of child nodes; `not` contains exactly one child. A child can be another boolean node or a predicate, and boolean nesting is capped at 32 nodes. Every predicate has exactly `left`, `operator`, and `right`; each operand contains exactly one `column` or `literal`. A column must be in the explicit allowlist formed from the DataFrame columns available when flagging begins. Common Kestrel columns include `REF`, `ALT`, `POS`, `Motif`, `Variant`, `Depth_Score`, `Confidence`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion`, and `is_valid_frameshift`.
 
 The only operators are:
 
@@ -166,7 +166,7 @@ The only operators are:
 
 `None`, `pd.NA`, and floating NaN make a predicate false. Configured numbers and non-null runtime numbers must be finite: positive or negative infinity aborts evaluation, while configured NaN is rejected during validation. Values are never coerced: for example, `"7"` is not the number `7`. Missing columns, malformed rules, and incompatible non-null row values abort flagging instead of silently disabling a rule. Flag names must be non-empty strings, cannot contain commas, and cannot use the reserved result values `Not flagged` or `Not applicable`.
 
-Rules are JSON data, never executable source. Calls, attributes, indexing, imports, comprehensions, lambdas, regular expressions, arithmetic, `or`, `not`, and nested boolean forms are unsupported. Code-shaped text inside a `literal` remains inert data; a rule supplied as such a string is rejected.
+Rules are JSON data, never executable source. Calls, attributes, indexing, imports, comprehensions, lambdas, regular expressions, arithmetic, and executable boolean syntax are unsupported. Boolean logic exists only through the explicit `all`, `any`, and `not` JSON nodes. Code-shaped text inside a `literal` remains inert data; a rule supplied as such a string is rejected.
 
 ### Migrating a rule from the immediately preceding release
 

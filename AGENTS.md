@@ -480,8 +480,9 @@ summary | release-summary | none | always records success, failure, skipped jobs
    security boundary.** `flagging.py` and `cross_match.py` validate structured rules
    through `comparator_rules.py` before processing any row. Grep the JSON configs before
    renaming any column.
-   - The only operators are `eq`, `lt`, `in`, and `casefold_eq`; rules are non-empty
-     conjunctions only. Null is false, types are not coerced, booleans are accepted only
+   - The only operators are `eq`, `lt`, `in`, and `casefold_eq`; predicates compose through
+     explicit non-empty `all`/`any` nodes and single-child `not` nodes, with nesting capped
+     at 32 boolean nodes. Null is false, types are not coerced, booleans are accepted only
      by same-family `eq`, and configured or non-null runtime numbers must be finite.
      Missing columns, malformed rules, unsafe flag names, and incompatible row values
      log and raise `ValueError` instead of silently producing "not flagged" or "no match".
