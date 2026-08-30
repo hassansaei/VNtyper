@@ -64,6 +64,33 @@ def test_selects_exact_current_version_without_mutating_historical_contracts() -
     assert effective[("bam_tests", "case-a")]["outcomes"]["kestrel"] == original["outcomes"]["kestrel"]
 
 
+def test_legacy_manifest_returns_an_independent_contract_copy() -> None:
+    """Schema v1 remains supported without observations or shared mutable state."""
+    module = _module()
+    assert module is not None, "versioned observation policy is not implemented"
+    contract = _contract()
+    indexed = {("bam_tests", "case-a"): contract}
+
+    effective = module.effective_contracts(_manifest(contract), indexed, None)
+    effective[("bam_tests", "case-a")]["outcomes"]["report"].append("changed")
+
+    assert indexed[("bam_tests", "case-a")]["outcomes"]["report"] == ["High_Precision*"]
+
+
+def test_public_observation_validator_dispatches_by_schema() -> None:
+    """Schema v1 is a no-op while schema v2 validates nested observations."""
+    module = _module()
+    assert module is not None, "versioned observation policy is not implemented"
+    contract = _contract()
+
+    assert module.validate_observation_sets(_manifest(contract), {("bam_tests", "case-a")}) is None
+    malformed = _v2(contract, sets=[])
+    with pytest.raises(ValueError) as error:
+        module.validate_observation_sets(malformed, {("bam_tests", "case-a")})
+
+    assert str(error.value) == "manifest observation_sets must be a non-empty list"
+
+
 @pytest.mark.parametrize("version", [None, "2.0.23", "2.0.25", "2.0", "v2.0.24", "2.0.24-rc1"])
 def test_current_version_must_resolve_exactly_to_the_final_observation_set(version: str | None) -> None:
     """Missing, unknown, prerelease, and stale selectors fail closed."""
@@ -156,6 +183,84 @@ def test_report_overrides_reject_duplicate_identity() -> None:
             {("bam_tests", "case-a"): contract},
             VERSION,
         )
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ([], "manifest must be an object"),
+        ({"schema_version": 1}, "manifest has missing keys: ['contracts']"),
+        ({"schema_version": 1, "contracts": {}}, "manifest contracts must be a list"),
+        (
+            {"schema_version": 2, "contracts": [], "observation_sets": {}},
+            "manifest observation_sets must be a list",
+        ),
+    ],
+)
+def test_manifest_container_rejects_each_malformed_top_level_shape(manifest: object, message: str) -> None:
+    """Top-level object, keys, and list containers fail with exact diagnostics."""
+    module = _module()
+    assert module is not None, "versioned observation policy is not implemented"
+
+    with pytest.raises(ValueError) as error:
+        module.validate_manifest_container(manifest)
+
+    assert str(error.value) == message
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda manifest: manifest.update(observation_sets=[]), "manifest observation_sets must be a non-empty list"),
+        (
+            lambda manifest: manifest["observation_sets"].__setitem__(0, "not-an-object"),
+            "observation_sets[0] must be an object",
+        ),
+        (
+            lambda manifest: manifest["observation_sets"][0].update(provenance_commit="ABC"),
+            "observation_sets[0].provenance_commit must be a full lowercase Git SHA",
+        ),
+        (
+            lambda manifest: manifest["observation_sets"][0].update(report_overrides={}),
+            "observation_sets[0].report_overrides must be a list",
+        ),
+        (
+            lambda manifest: manifest["observation_sets"][0]["report_overrides"][0].update(report="not-a-list"),
+            "observation_sets[0].report_overrides[0].report must be a list",
+        ),
+    ],
+)
+def test_observation_sets_reject_each_malformed_nested_container(mutation: Any, message: str) -> None:
+    """Observation containers, provenance, overrides, and reports fail closed."""
+    module = _module()
+    assert module is not None, "versioned observation policy is not implemented"
+    contract = _contract()
+    manifest = _v2(contract)
+    mutation(manifest)
+
+    with pytest.raises(ValueError) as error:
+        module.effective_contracts(manifest, {("bam_tests", "case-a"): contract}, VERSION)
+
+    assert str(error.value) == message
+
+
+@pytest.mark.parametrize(
+    ("base_contracts", "current_contracts"),
+    [({}, []), ([], {}), (None, []), ([], None)],
+)
+def test_append_only_history_rejects_non_list_contract_containers(
+    base_contracts: object, current_contracts: object
+) -> None:
+    """History comparison requires lists on both sides before prefix checks."""
+    module = _module()
+    assert module is not None, "versioned observation policy is not implemented"
+    base = {"schema_version": 1, "contracts": base_contracts}
+    current = {"schema_version": 1, "contracts": current_contracts}
+
+    with pytest.raises(ValueError) as error:
+        module.validate_append_only_history(base, current)
+
+    assert str(error.value) == "compatibility contracts must be lists"
 
 
 def test_schema_v1_to_v2_migration_preserves_contracts_as_an_ordered_prefix() -> None:

@@ -661,7 +661,7 @@ summary | release-summary | none | always records success, failure, skipped jobs
     `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
     counts root `scripts/**/*.py` and fails until it does, which is the tripwire working,
     not a flaky test. Package modules under `vntyper/scripts/` do not change that root-only
-    count; adding `vntyper/scripts/reference_download.py` therefore leaves it at 41.
+    count; adding `vntyper/scripts/reference_download.py` therefore leaves it at 42.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:
