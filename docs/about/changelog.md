@@ -6,7 +6,24 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.24 (Current)
+## 2.0.25 (Current)
+
+### Versioned integration report observations
+
+- **Docker-fast report assertions now preserve historical truth while tracking current
+  output.** The 24 existing real-success compatibility contracts remain unchanged and
+  ordered. Exact report-only corrections live in an append-only observation chain selected
+  by the checkout's package version and bound to an ancestral provenance commit.
+- **Malformed or stale observation evidence fails closed.** The compatibility gate rejects
+  missing and unknown versions, reordered history, conflicting identities, non-report
+  overrides, detached provenance, and JSON type changes such as an integer replaced by an
+  equal-valued float.
+- **The two affected subthreshold Kestrel Docker cases use the shipped message without
+  weakening their assertions.** No production genotype or report-generation behavior
+  changed; the complete Docker-fast tier and Python 3.10–3.13 unit matrix pass with the
+  corrected oracle ([#293](https://github.com/hassansaei/VNtyper/issues/293)).
+
+## 2.0.24
 
 ### ⚠️ Required before deploying the web service
 
