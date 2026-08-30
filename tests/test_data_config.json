@@ -1362,7 +1362,7 @@
           ]
         },
         "report_assertions": [
-          "No variant detected.<br>Note: adVNTR genotyping was not performed."
+          "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed."
         ]
       },
       {
@@ -1489,7 +1489,7 @@
           ]
         },
         "report_assertions": [
-          "No variant detected.<br>Note: adVNTR genotyping was not performed."
+          "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed."
         ]
       }
     ],

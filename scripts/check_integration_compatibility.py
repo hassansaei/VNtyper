@@ -6,6 +6,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -19,6 +20,7 @@ check_compatibility: Any = _core.check_compatibility
 
 DEFAULT_MANIFEST = "tests/compatibility/real_success_baseline.json"
 DEFAULT_TEST_CONFIG = "tests/test_data_config.json"
+_VERSION_ASSIGNMENT_RE = re.compile(r'^__version__\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 
 
 def _git(repo_root: Path, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -154,6 +156,59 @@ def _read_current_json(repo_root: Path, relative_path: str) -> dict[str, Any]:
     return value
 
 
+def _read_checkout_version(repo_root: Path) -> str:
+    """Read the unique package version assignment from the current worktree."""
+    path = repo_root / "vntyper/version.py"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"cannot read current package version: {error}") from error
+    matches = _VERSION_ASSIGNMENT_RE.findall(text)
+    if len(matches) != 1:
+        raise ValueError("current package version assignment is missing or ambiguous")
+    return matches[0]
+
+
+def verify_observation_provenance(repo_root: Path, manifest: dict[str, Any]) -> None:
+    """Bind schema-v2 observations to ancestral commits with matching versions.
+
+    Args:
+        repo_root: Current Git worktree root.
+        manifest: Validated current compatibility manifest.
+
+    Raises:
+        ValueError: If a provenance commit is missing, detached, or version-mismatched.
+    """
+    if manifest.get("schema_version") != 2:
+        return
+    observations = manifest.get("observation_sets")
+    if not isinstance(observations, list):
+        raise ValueError("schema-v2 manifest observation_sets must be a list")
+    for index, value in enumerate(observations):
+        if not isinstance(value, dict):
+            raise ValueError(f"observation_sets[{index}] must be an object")
+        version = value.get("version")
+        provenance = value.get("provenance_commit")
+        resolved = _git(repo_root, ["rev-parse", "--verify", f"{provenance}^{{commit}}"])
+        if resolved.returncode != 0 or resolved.stdout.strip() != provenance:
+            raise ValueError(f"observation {version} provenance commit {provenance} does not resolve exactly")
+        ancestry = _git(repo_root, ["merge-base", "--is-ancestor", str(provenance), "HEAD"])
+        if ancestry.returncode == 1:
+            raise ValueError(f"observation {version} provenance commit {provenance} is not an ancestor of HEAD")
+        if ancestry.returncode != 0:
+            raise ValueError(f"Git ancestry check failed for observation provenance {provenance}")
+        shown = _git(repo_root, ["show", f"{provenance}:vntyper/version.py"])
+        if shown.returncode != 0:
+            raise ValueError(f"cannot read package version at observation provenance {provenance}")
+        matches = _VERSION_ASSIGNMENT_RE.findall(shown.stdout)
+        if len(matches) != 1:
+            raise ValueError(f"package version at observation provenance {provenance} is ambiguous")
+        if matches[0] != version:
+            raise ValueError(
+                f"observation version {version} does not match package version {matches[0]} at {provenance}"
+            )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-revision")
@@ -209,7 +264,9 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
             live_config,
             resource_config,
             historical_test_config=historical,
+            observation_version=_read_checkout_version(repo_root),
         )
+        verify_observation_provenance(repo_root, current_manifest)
     except ValueError as error:
         print(f"Integration compatibility check failed: {error}", file=sys.stderr)
         return 1

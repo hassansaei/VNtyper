@@ -582,6 +582,38 @@ def test_check_compatibility_rejects_base_deletion_and_mutation() -> None:
         module.check_compatibility(_manifest(contract), _manifest(changed), live, resources)
 
 
+def test_check_compatibility_selects_versioned_report_without_mutating_contract() -> None:
+    """A corrected live report is legal only through an exact versioned observation."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    corrected_report = ["corrected current report"]
+    current = {
+        "schema_version": 2,
+        "contracts": [copy.deepcopy(contract)],
+        "observation_sets": [
+            {
+                "version": "2.0.24",
+                "provenance_commit": "f9e57f73e10d88d0c27cc4c4e8501c892594f0db",
+                "extends": None,
+                "report_overrides": [
+                    {"suite": "bam_tests", "test_name": "case-a", "report": corrected_report},
+                ],
+            }
+        ],
+    }
+    live_case = _live_case(contract)
+    live_case["report_assertions"] = corrected_report
+    live = {"integration_tests": {"bam_tests": [live_case]}}
+    resources = _resources("tests/data/input.bam")
+
+    module.check_compatibility(_manifest(contract), current, live, resources, observation_version="2.0.24")
+
+    assert current["contracts"] == [contract]
+    with pytest.raises(ValueError, match="final observation"):
+        module.check_compatibility(_manifest(contract), current, live, resources, observation_version="2.0.25")
+
+
 @pytest.mark.parametrize(
     "field",
     [
@@ -939,4 +971,11 @@ def test_final_manifest_activates_from_absent_base_without_mutating_historical_t
         "other": 40203,
         "single": 0,
     }
-    module.check_compatibility(None, manifest, live, live, historical_test_config=historical)
+    module.check_compatibility(
+        None,
+        manifest,
+        live,
+        live,
+        historical_test_config=historical,
+        observation_version="2.0.24",
+    )
