@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -41,6 +42,8 @@ def _revoke_prior_outputs(
     for destination in cleanup_plan.public_outputs:
         invalidate_advntr_artifact(destination)
     if cleanup_plan.archive is not None:
+        if not os.path.lexists(cleanup_plan.archive.destination.parent):
+            return
         revoke_public_archive(
             cleanup_plan.archive.base_name,
             cleanup_plan.archive.shutil_format,
@@ -55,6 +58,8 @@ def _snapshot_model(source: str | Path, destination: str | Path) -> dict[str, An
     temporary_path: Path | None = None
     installed = False
     try:
+        if not stat.S_ISREG(source_path.stat().st_mode):
+            raise ValueError(f"adVNTR model source is not a regular file: {source_path}")
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="wb",

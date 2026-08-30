@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import os
 import shutil
+import time
 from copy import deepcopy
+from multiprocessing.connection import Connection
 from pathlib import Path
+from typing import Any
 from unittest.mock import DEFAULT, patch
 
 import pytest
@@ -15,6 +19,7 @@ import pytest
 from tests.support.pipeline_harness import MINIMAL_CONFIG, advntr_stub, run_pipeline_under_harness
 from vntyper.modules.advntr import advntr_genotyping
 from vntyper.modules.advntr.model_provenance import AdvntrProbeStatus, AdvntrVersionOutcome
+from vntyper.scripts import pipeline_advntr_run_context
 
 pytestmark = pytest.mark.unit
 
@@ -46,6 +51,140 @@ def _unparseable_outcome() -> AdvntrVersionOutcome:
         AdvntrProbeStatus.UNPARSEABLE_SUCCESS,
         message="adVNTR version command succeeded but its response was unparseable or ambiguous.",
     )
+
+
+def _snapshot_worker(source: str, destination: str, sender: Connection) -> None:
+    try:
+        pipeline_advntr_run_context._snapshot_model(source, destination)
+        sender.send(("returned",))
+    except BaseException as error:
+        sender.send(("raised", type(error).__name__, str(error)))
+    finally:
+        sender.close()
+
+
+def _snapshot_with_outer_deadline(source: Path, destination: Path) -> tuple[Any, ...]:
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(target=_snapshot_worker, args=(str(source), str(destination), sender))
+    started = time.monotonic()
+    process.start()
+    sender.close()
+    process.join(2)
+    elapsed = time.monotonic() - started
+    blocked = process.is_alive()
+    if blocked:
+        process.terminate()
+        process.join(1)
+    try:
+        assert not blocked, "adVNTR model snapshot opened a FIFO and waited for a writer"
+        assert not process.is_alive(), "adVNTR model snapshot worker did not terminate"
+        assert elapsed < 3, f"adVNTR model snapshot blocked for {elapsed:.2f} s"
+        assert receiver.poll(), "adVNTR model snapshot worker returned no result"
+        return receiver.recv()
+    finally:
+        receiver.close()
+
+
+def test_archive_revocation_treats_a_missing_parent_as_an_empty_stale_state(tmp_path: Path) -> None:
+    """A fresh nested run must reach snapshotting without creating its parent for revocation."""
+    output = tmp_path / "fresh" / "nested" / "out"
+    source = Path(MINIMAL_CONFIG["reference_data"]["advntr_reference_vntr_hg19"])
+    parent_exists_before_snapshot: list[bool] = []
+    real_snapshot = pipeline_advntr_run_context._snapshot_model
+
+    def observe_snapshot(model_source: str | Path, destination: str | Path) -> dict[str, Any]:
+        parent_exists_before_snapshot.append(output.parent.exists())
+        return real_snapshot(model_source, destination)
+
+    assert not output.parent.exists()
+    with (
+        patch.object(pipeline_advntr_run_context, "_snapshot_model", side_effect=observe_snapshot),
+        patch.object(
+            pipeline_advntr_run_context.model_provenance,
+            "detect_advntr_version",
+            return_value=AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4)),
+        ),
+    ):
+        try:
+            context = pipeline_advntr_run_context.prepare_advntr_run_context(
+                output,
+                source,
+                deepcopy(MINIMAL_CONFIG),
+                archive_results=True,
+                archive_format="zip",
+            )
+        except FileNotFoundError as error:
+            pytest.fail(f"fresh archive parent was treated as an unsafe existing parent: {error}")
+
+    assert parent_exists_before_snapshot == [False]
+    assert Path(context.model_snapshot).is_file()
+    assert not Path(f"{output}.zip").exists()
+
+
+def test_fifo_model_source_is_rejected_without_waiting_for_a_writer(tmp_path: Path) -> None:
+    """A selected FIFO must fail before the snapshot path attempts to open it."""
+    source = tmp_path / "model.fifo"
+    destination = tmp_path / "out" / MODEL_SNAPSHOT_RELATIVE
+    os.mkfifo(source)
+
+    result = _snapshot_with_outer_deadline(source, destination)
+
+    assert result == (
+        "raised",
+        "RuntimeError",
+        f"Failed to install run-owned adVNTR model snapshot {destination}: "
+        f"adVNTR model source is not a regular file: {source}",
+    )
+    assert not destination.exists()
+    assert not list(destination.parent.glob(f".{destination.name}.*.tmp"))
+
+
+def test_directory_model_source_is_rejected_as_non_regular(tmp_path: Path) -> None:
+    """Every non-regular followed source type receives the same refusal."""
+    source = tmp_path / "model-directory"
+    source.mkdir()
+    destination = tmp_path / "out" / MODEL_SNAPSHOT_RELATIVE
+
+    with pytest.raises(RuntimeError) as error_info:
+        pipeline_advntr_run_context._snapshot_model(source, destination)
+
+    assert str(error_info.value) == (
+        f"Failed to install run-owned adVNTR model snapshot {destination}: "
+        f"adVNTR model source is not a regular file: {source}"
+    )
+    assert isinstance(error_info.value.__cause__, ValueError)
+    assert not destination.exists()
+
+
+def test_symlink_to_regular_model_remains_supported(tmp_path: Path) -> None:
+    """Following a selected symlink is valid when its target is a regular model."""
+    source = tmp_path / "model.db"
+    source.write_bytes(Path(MINIMAL_CONFIG["reference_data"]["advntr_reference_vntr_hg19"]).read_bytes())
+    link = tmp_path / "model-link.db"
+    link.symlink_to(source)
+    destination = tmp_path / "out" / MODEL_SNAPSHOT_RELATIVE
+
+    provenance = pipeline_advntr_run_context._snapshot_model(link, destination)
+
+    assert destination.read_bytes() == source.read_bytes()
+    assert provenance["source_path"] == str(link)
+
+
+def test_missing_model_source_keeps_the_existing_io_failure(tmp_path: Path) -> None:
+    """Regular-file validation must not reclassify an absent source as non-regular."""
+    source = tmp_path / "missing.db"
+    destination = tmp_path / "out" / MODEL_SNAPSHOT_RELATIVE
+
+    with pytest.raises(RuntimeError) as error_info:
+        pipeline_advntr_run_context._snapshot_model(source, destination)
+
+    assert str(error_info.value) == (
+        f"Failed to install run-owned adVNTR model snapshot {destination}: "
+        f"[Errno 2] No such file or directory: '{source}'"
+    )
+    assert isinstance(error_info.value.__cause__, FileNotFoundError)
+    assert not destination.exists()
 
 
 def test_an_early_refusal_revokes_the_exact_public_output_allowlist_only(tmp_path: Path) -> None:
