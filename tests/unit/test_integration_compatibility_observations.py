@@ -180,6 +180,28 @@ def test_schema_v1_to_v2_migration_preserves_contracts_as_an_ordered_prefix() ->
             module.validate_append_only_history(base, current)
 
 
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("outcomes", "kestrel", "Estimated_Depth_AlternateVariant", "value"), 5.0),
+        (("artifacts", "archive"), 0),
+    ],
+)
+def test_append_only_history_is_type_exact(path: tuple[str, ...], replacement: object) -> None:
+    """Python-equivalent integer, float, and Boolean values are distinct JSON evidence."""
+    module = _module()
+    assert module is not None, "versioned observation policy is not implemented"
+    contract = _contract()
+    current_contract = copy.deepcopy(contract)
+    target = current_contract
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = replacement
+
+    with pytest.raises(ValueError, match="compatibility contracts were mutated"):
+        module.validate_append_only_history(_manifest(contract), _v2(current_contract))
+
+
 def test_schema_v2_history_permits_only_appended_contracts_and_observation_sets() -> None:
     """Existing observation sets retain exact content and order."""
     module = _module()

@@ -426,3 +426,72 @@ def test_observation_provenance_rejects_non_ancestral_commit(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="not an ancestor"):
         module.verify_observation_provenance(repo, manifest)
+
+
+@pytest.mark.parametrize(
+    ("observations", "message"),
+    [
+        ({}, "observation_sets must be a list"),
+        (["not-an-object"], r"observation_sets\[0\] must be an object"),
+    ],
+)
+def test_observation_provenance_rejects_malformed_containers(
+    tmp_path: Path, observations: object, message: str
+) -> None:
+    """The Git boundary also fails closed if called before core schema validation."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    with pytest.raises(ValueError, match=message):
+        module.verify_observation_provenance(
+            tmp_path,
+            {"schema_version": 2, "contracts": [], "observation_sets": observations},
+        )
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("ancestry-error", "Git ancestry check failed"),
+        ("version-unreadable", "cannot read package version"),
+        ("version-ambiguous", "package version .* is ambiguous"),
+    ],
+)
+def test_observation_provenance_fails_closed_for_git_and_version_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    message: str,
+) -> None:
+    """Subprocess errors and ambiguous metadata cannot become valid provenance."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    provenance = "a" * 40
+    manifest = {
+        "schema_version": 2,
+        "contracts": [],
+        "observation_sets": [
+            {
+                "version": "2.0.24",
+                "provenance_commit": provenance,
+                "extends": None,
+                "report_overrides": [],
+            }
+        ],
+    }
+
+    def fake_git(_repo_root: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        if arguments[0] == "rev-parse":
+            return subprocess.CompletedProcess(arguments, 0, f"{provenance}\n", "")
+        if arguments[0] == "merge-base":
+            return subprocess.CompletedProcess(arguments, 2 if failure == "ancestry-error" else 0, "", "")
+        if failure == "version-unreadable":
+            return subprocess.CompletedProcess(arguments, 1, "", "missing")
+        output = '__version__ = "2.0.24"\n'
+        if failure == "version-ambiguous":
+            output += '__version__ = "2.0.24"\n'
+        return subprocess.CompletedProcess(arguments, 0, output, "")
+
+    monkeypatch.setattr(module, "_git", fake_git)
+
+    with pytest.raises(ValueError, match=message):
+        module.verify_observation_provenance(tmp_path, manifest)

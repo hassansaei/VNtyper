@@ -656,7 +656,7 @@ summary | release-summary | none | always records success, failure, skipped jobs
     `make test-scripts-cov` to 7,869 of 8,392 measured units, or 93.77%, over 6,299
     passing unit tests. Adding `scripts/integration_compatibility_observations.py`
     (#293, the version-selected append-only report-observation policy) took it to all
-    42 Python files and `make test-scripts-cov` to 93.67% over 8,115 collected unit
+    42 Python files and `make test-scripts-cov` to 93.68% over 8,115 collected unit
     tests. **A new file under `scripts/` must update this sentence** -
     `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
     counts root `scripts/**/*.py` and fails until it does, which is the tripwire working,

@@ -580,6 +580,15 @@ def test_check_compatibility_rejects_base_deletion_and_mutation() -> None:
     changed["outcomes"]["kestrel"]["Confidence"]["value"] = "Negative"
     with pytest.raises(ValueError, match="mutated"):
         module.check_compatibility(_manifest(contract), _manifest(changed), live, resources)
+    type_changed = copy.deepcopy(contract)
+    type_changed["outcomes"]["kestrel"]["Estimated_Depth_AlternateVariant"]["value"] = 5.0
+    with pytest.raises(ValueError, match="mutated"):
+        module.check_compatibility(
+            _manifest(contract),
+            _manifest(type_changed),
+            {"integration_tests": {"bam_tests": [_live_case(type_changed)]}},
+            resources,
+        )
 
 
 def test_check_compatibility_selects_versioned_report_without_mutating_contract() -> None:
@@ -873,6 +882,55 @@ def test_manifest_contains_every_required_inactive_success_identity() -> None:
     manifest = json.loads(Path("tests/compatibility/real_success_baseline.json").read_text())
 
     assert {(row["suite"], row["test_name"]) for row in manifest["contracts"]} == CURRENT_IDENTITIES
+
+
+def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -> None:
+    """Bind the exact two 40cf observations to unchanged history and report configuration."""
+    manifest = json.loads(Path("tests/compatibility/real_success_baseline.json").read_text())
+    base = json.loads(
+        subprocess.run(
+            ["git", "show", "f9e57f73e10d88d0c27cc4c4e8501c892594f0db:tests/compatibility/real_success_baseline.json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    report_config = json.loads(Path("vntyper/scripts/report_config.json").read_text())
+    shipped = [
+        rule
+        for rule in report_config["screening_summary_rules"]
+        if rule["conditions"]
+        == {"kestrel_result": "negative_subthreshold", "advntr_result": "none", "quality_metrics_pass": True}
+    ]
+    observations = manifest["observation_sets"]
+    overrides = observations[0]["report_overrides"]
+    live = json.loads(Path("tests/test_data_config.json").read_text())
+    live_by_identity = {
+        (suite, case["test_name"]): case for suite, cases in live["integration_tests"].items() for case in cases
+    }
+    expected_identities = {
+        ("bam_tests", "example_40cf_hg38_subset_fast_gdp_guard"),
+        ("bam_tests", "example_40cf_hg38_subset_default"),
+    }
+
+    assert json.dumps(manifest["contracts"], sort_keys=True, separators=(",", ":")) == json.dumps(
+        base["contracts"], sort_keys=True, separators=(",", ":")
+    )
+    assert observations == [
+        {
+            "version": "2.0.24",
+            "provenance_commit": "f9e57f73e10d88d0c27cc4c4e8501c892594f0db",
+            "extends": None,
+            "report_overrides": overrides,
+        }
+    ]
+    assert len(shipped) == 1
+    assert len(overrides) == 2
+    assert {(row["suite"], row["test_name"]) for row in overrides} == expected_identities
+    assert all(row["report"] == [shipped[0]["message"]] for row in overrides)
+    assert all(
+        live_by_identity[identity]["report_assertions"] == [shipped[0]["message"]] for identity in expected_identities
+    )
 
 
 def test_bootstrap_seed_is_reconstructed_from_authoritative_git_history() -> None:

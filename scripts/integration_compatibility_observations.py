@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from typing import Any
 
@@ -197,7 +198,11 @@ def _ordered_prefix(base: object, current: object, label: str) -> None:
         if label == "compatibility contracts":
             raise ValueError("compatibility contracts were removed")
         raise ValueError(f"{label} were removed or mutated")
-    if current[: len(base)] != base:
+    canonical_base = json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    canonical_prefix = json.dumps(
+        current[: len(base)], sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
+    if canonical_prefix != canonical_base:
         if label == "compatibility contracts":
             raise ValueError("compatibility contracts were mutated; historical rows must remain an ordered prefix")
         raise ValueError(f"{label} were removed or mutated; historical entries must remain an ordered prefix")
