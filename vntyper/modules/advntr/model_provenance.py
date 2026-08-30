@@ -34,8 +34,9 @@ logger = logging.getLogger(__name__)
 #: adVNTR releases before this ignore a model's recorded genomic end.
 SPAN_AWARE_ADVNTR = (2, 0, 4)
 
-_BARE_VERSION_LINE = re.compile(r"^\s*(\d+)\.(\d+)\.(\d+)\s*$")
-_LEGACY_VERSION_LINE = re.compile(r"^\s*adVNTR\s+(\d+)\.(\d+)\.(\d+):[^\r\n]*$")
+_SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+_BARE_VERSION_LINE = re.compile(rf"^\s*({_SEMVER_NUMBER})\.({_SEMVER_NUMBER})\.({_SEMVER_NUMBER})\s*$")
+_LEGACY_VERSION_LINE = re.compile(rf"^\s*adVNTR\s+({_SEMVER_NUMBER})\.({_SEMVER_NUMBER})\.({_SEMVER_NUMBER}):[^\r\n]*$")
 
 # Measured under concurrent ``mamba run`` launches: mamba can exit zero while
 # surrounding the tool's real output with these lock-contention diagnostics. That is
@@ -141,9 +142,9 @@ class AdvntrVersionProbe:
     """Concurrency-safe successful-version cache scoped to one pipeline run.
 
     A pipeline creates one instance and discards it when the run ends. Versions parsed
-    from a successful subprocess are cached by the configured command, including
-    known-but-incompatible versions. Launch failures (even one carrying a legacy
-    banner) and malformed output are never cached.
+    from a successful subprocess are cached by the configured command only when they
+    satisfy the minimum compatible version. Known-but-incompatible versions, launch
+    failures (even one carrying a legacy banner), and malformed output are never cached.
     """
 
     def __init__(self) -> None:
@@ -199,7 +200,8 @@ class AdvntrVersionProbe:
                     else _parse_failed_probe_output(result.stdout, result.stderr)
                 )
                 if result.returncode == 0 and version is not None:
-                    self._versions[command] = version
+                    if version >= SPAN_AWARE_ADVNTR:
+                        self._versions[command] = version
                     return AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=version)
 
                 if (

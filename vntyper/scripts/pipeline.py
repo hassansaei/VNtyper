@@ -30,6 +30,7 @@ from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
 from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight
 from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
+from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext, prepare_advntr_run_context
 from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
     prepare_alignment_target,
@@ -208,37 +209,19 @@ def run_pipeline(
         # conversion, coverage, or Kestrel. Keep the classified startup answer in this
         # run rather than probing again after those expensive stages: failed answers
         # deliberately remain absent from the probe's reusable success cache.
-        advntr_model = None
+        advntr_context: AdvntrRunContext | None = None
         advntr_version_overrides = {}
         if needs_advntr:
-            from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
-            from vntyper.modules.advntr.model_provenance import (
-                AdvntrProbeStatus,
-                AdvntrVersionProbe,
-                describe_model,
-                detect_advntr_version,
-                require_compatible_advntr_outcome,
-                require_verified_advntr_version,
-            )
-
-            # Input ownership must be proven before any unlink. Once it is, invalidate
-            # every established adVNTR result name before the early probe/model guards
-            # can refuse this attempt and leave a previous patient's call looking current.
-            advntr_output_dir = Path(output_dir) / "advntr"
-            for artifact_name in ("output_adVNTR_result.tsv", "output_adVNTR.tsv", "output_adVNTR.vcf"):
-                invalidate_advntr_artifact(advntr_output_dir / artifact_name)
-
-            advntr_version_outcome = detect_advntr_version(config, probe=AdvntrVersionProbe())
-            if advntr_version_outcome.status not in {
-                AdvntrProbeStatus.VERIFIED,
-                AdvntrProbeStatus.VERSIONED_LAUNCH_FAILURE,
-            }:
-                require_verified_advntr_version(advntr_version_outcome)
-
             logger.debug(f"adVNTR reference set to: {advntr_reference}")
-            advntr_model = describe_model(advntr_reference)
-            detected_advntr_version = require_compatible_advntr_outcome(advntr_model, advntr_version_outcome)
-            advntr_version_overrides["advntr"] = ".".join(str(part) for part in detected_advntr_version)
+            advntr_context = prepare_advntr_run_context(
+                output_dir,
+                advntr_reference,
+                config,
+                archive_results=archive_results,
+                archive_format=archive_format,
+                protected_paths=(*archive_protected_paths, *additional_operator_paths),
+            )
+            advntr_version_overrides["advntr"] = ".".join(str(part) for part in advntr_context.version)
 
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "FASTQ":
@@ -581,6 +564,8 @@ def run_pipeline(
         )  # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
         if "advntr" in extra_modules:
             logger.info("adVNTR module included. Starting adVNTR genotyping.")
+            if advntr_context is None:
+                raise RuntimeError("adVNTR execution reached without a verified run context.")
             try:
                 from vntyper.modules.advntr.advntr_genotyping import (
                     advntr_output_extension,
@@ -604,6 +589,7 @@ def run_pipeline(
             # rather than an error (#268).
             # Top-level, not inside record_step: this is run state, and a step record is
             # not where state belongs.
+            advntr_model = dict(advntr_context.model)
             summary["advntr_model"] = advntr_model
             logger.info(
                 "adVNTR model %s (%s), window %s bp over %s",
@@ -628,12 +614,13 @@ def run_pipeline(
                         coverage_prefix="advntr_precheck",
                     )
                 advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                advntr_execution_config = {**config, "tools": dict(advntr_context.tools)}
                 advntr_status = run_advntr(
-                    advntr_reference,
+                    advntr_context.model_snapshot,
                     sorted_bam,
                     dirs["advntr"],
                     "output",
-                    config=config,
+                    config=advntr_execution_config,
                     cwd=project_root,
                     pipeline_threads=threads,
                 )
