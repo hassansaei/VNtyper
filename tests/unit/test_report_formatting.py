@@ -16,6 +16,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -227,6 +228,8 @@ def test_summarise_fastp_does_not_divide_by_zero() -> None:
         ("total_reads", float("-inf")),
         ("passed_filter_reads", -1),
         ("total_reads", -1),
+        ("passed_filter_reads", 80.5),
+        ("total_reads", Decimal("100.5")),
     ),
 )
 def test_summarise_fastp_rejects_each_invalid_passed_filter_source_count(

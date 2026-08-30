@@ -19,6 +19,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -305,6 +306,8 @@ def test_report_rejects_a_nonfinite_fastp_output_metric_with_its_key(
         ("total_reads", float("-inf")),
         ("passed_filter_reads", -1),
         ("total_reads", -1),
+        ("passed_filter_reads", 80.5),
+        ("total_reads", 100.5),
     ),
 )
 def test_report_rejects_each_invalid_passed_filter_source_count(
@@ -492,6 +495,57 @@ def test_fastp_exact_decimal_thresholds_render_as_passing(
     assert f"{label} (Cutoff: {displayed})" in html
     assert report_formatting.OK_ICON in status
     assert report_formatting.WARNING_ICON not in status
+
+
+def test_fastp_json_decimals_and_large_counts_reach_the_report_without_float_rounding(tmp_path: Path) -> None:
+    """The shipped report uses exact JSON operands while its legacy context stays raw."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    fastp_path = fastp_dir / "output.json"
+    fastp_path.write_text(
+        """{
+  "summary": {
+    "before_filtering": {"total_reads": 100000000000000000},
+    "after_filtering": {"q20_rate": 0.60044999999999999, "q30_rate": 0.7}
+  },
+  "duplication": {"rate": 0.1},
+  "filtering_result": {"passed_filter_reads": 77644999999999999}
+}
+""",
+        encoding="utf-8",
+    )
+    config = copy.deepcopy(load_config(None))
+    config["thresholds"].update({"q20_rate": 0.6005, "passed_filter_reads_rate": 0.7765})
+
+    html = render(tmp_path, config=config)
+
+    q20_value, q20_status = _fastp_metric_cells(html, "Q20 Rate")
+    assert q20_value == "60.04%"
+    assert q20_value != "60.05%"
+    assert "Q20 Rate (Cutoff: 60.05%)" in html
+    assert report_formatting.WARNING_ICON in q20_status
+
+    passed_value, passed_status = _fastp_metric_cells(html, "Passed Filter Rate")
+    assert passed_value == "77.64%"
+    assert passed_value != "77.65%"
+    assert "Passed Filter Rate (Cutoff: 77.65%)" in html
+    assert report_formatting.WARNING_ICON in passed_status
+
+    loaded = generate_report.load_fastp_output(fastp_path)
+    assert isinstance(loaded, dict)
+    assert type(loaded["summary"]["after_filtering"]["q20_rate"]) is float
+    assert loaded.exact["summary"]["after_filtering"]["q20_rate"] == Decimal("0.60044999999999999")
+
+    metrics = report_formatting.summarise_fastp(loaded)
+    assert type(metrics.q20_rate) is float
+    assert type(metrics.passed_filter_rate) is float
+    assert type(metrics.exact.q20_rate) is Decimal
+    assert type(metrics.exact.passed_filter_rate) is Decimal
+
+    loaded["summary"]["after_filtering"]["q20_rate"] = 0.60045
+    mutated_metrics = report_formatting.summarise_fastp(loaded)
+    assert mutated_metrics.exact.q20_rate == Decimal("0.60045")
 
 
 def test_fastp_half_tie_values_share_their_visible_cutoffs_and_icons(tmp_path) -> None:
@@ -2379,17 +2433,53 @@ def test_no_log_file_says_so_rather_than_failing(positive_summary) -> None:
     assert "No pipeline log file was provided." in render(positive_summary, log_file=None)
 
 
-def test_fastp_failure_returns_empty_mapping(monkeypatch, caplog) -> None:
-    """Unreadable optional fastp metrics are reported as an empty mapping."""
+def test_missing_fastp_output_returns_empty_mapping(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A genuinely absent optional fastp artifact remains unavailable, not malformed."""
+    missing = tmp_path / "missing-fastp.json"
+    caplog.set_level(logging.WARNING, logger=generate_report.logger.name)
+
+    assert generate_report.load_fastp_output(missing) == {}
+    assert [
+        (record.levelno, record.getMessage()) for record in caplog.records if record.name == generate_report.logger.name
+    ] == [(logging.WARNING, f"fastp output file not found: {missing}")]
+
+
+def test_unreadable_present_fastp_output_raises_value_error(monkeypatch, caplog) -> None:
+    """A present unreadable artifact cannot take the optional-absence branch."""
     monkeypatch.setattr(generate_report.os.path, "exists", lambda _path: True)
     monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable fastp")))
     caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
     caplog.clear()
 
-    assert generate_report.load_fastp_output("output.json") == {}
+    with pytest.raises(ValueError, match="Failed to read fastp output 'output.json'.") as exc_info:
+        generate_report.load_fastp_output("output.json")
+
+    assert isinstance(exc_info.value.__cause__, OSError)
     assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
-        (logging.ERROR, "Failed to load or parse fastp output: unreadable fastp")
+        (logging.ERROR, "Failed to read fastp output 'output.json'.")
     ]
+
+
+def test_malformed_present_fastp_json_raises_before_report_output(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A corrupt present artifact fails closed instead of hiding the fastp section."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    fastp_path = fastp_dir / "output.json"
+    fastp_path.write_text("{not valid json", encoding="utf-8")
+    expected = f"Fastp output {str(fastp_path)!r} contains malformed JSON."
+    caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
+
+    with pytest.raises(ValueError, match=re.escape(expected)) as exc_info:
+        render(tmp_path)
+
+    assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+    assert [record.getMessage() for record in caplog.records if record.name == generate_report.logger.name] == [
+        expected
+    ]
+    assert not (tmp_path / "summary_report.html").exists()
 
 
 def test_pipeline_log_failure_returns_failure_message(monkeypatch, caplog) -> None:
@@ -3785,6 +3875,10 @@ def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_
                 "{{ q20_rate }}",
                 "{{ q30_rate }}",
                 "{{ passed_filter_rate }}",
+                "{{ duplication_rate.__class__.__name__ }}",
+                "{{ q20_rate.__class__.__name__ }}",
+                "{{ q30_rate.__class__.__name__ }}",
+                "{{ passed_filter_rate.__class__.__name__ }}",
             )
         ),
         encoding="utf-8",
@@ -3834,7 +3928,7 @@ def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_
     rendered = (tmp_path / "legacy.html").read_text(encoding="utf-8")
     assert rendered.startswith("green|green|red|green|red|green|High_Precision|none|")
     assert '<p id="legacy-igv">legacy alignment view</p>' in rendered
-    assert rendered.endswith("|0.20004|0.90004|0.60004|0.91")
+    assert rendered.endswith("|0.20004|0.90004|0.60004|0.91|float|float|float|float")
 
 
 # ---------------------------------------------------------------------------

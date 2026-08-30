@@ -68,7 +68,12 @@ from vntyper.scripts import nomenclature
 # produces them. Re-typing the strings here is how the report silently loses
 # coverage when a column is renamed - `.get(name, 0)` raises nothing.
 from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS, COVERAGE_COLUMNS, COVERAGE_NULL_TOKEN
-from vntyper.scripts.fastp_cutoffs import calculate_passed_filter_rate_from_sources, validated_fastp_mapping
+from vntyper.scripts.fastp_cutoffs import (
+    FastpJsonPayload,
+    calculate_passed_filter_rate_from_sources,
+    validated_fastp_fraction,
+    validated_fastp_mapping,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1491,6 +1496,16 @@ def parse_coverage_stats(data: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class ExactFastpMetrics:
+    """The exact operands reserved for shipped fastp display and icon decisions."""
+
+    duplication_rate: Decimal | None
+    q20_rate: Decimal | None
+    q30_rate: Decimal | None
+    passed_filter_rate: Decimal | None
+
+
+@dataclass(frozen=True)
 class FastpMetrics:
     """The four fastp rates the report shows, plus the sequencing setup line.
 
@@ -1503,6 +1518,7 @@ class FastpMetrics:
         passed_filter_rate: Reads passing the filter over reads before it, or
             None when no reads were seen.
         sequencing: The free-text sequencing setup, e.g. "paired end (150 cycles)".
+        exact: Exact-decimal companions used only by shipped presentation.
     """
 
     available: bool
@@ -1511,14 +1527,15 @@ class FastpMetrics:
     q30_rate: float | None
     passed_filter_rate: float | None
     sequencing: str
+    exact: ExactFastpMetrics
 
 
 def summarise_fastp(fastp_data: object) -> FastpMetrics:
     """Reduce parsed fastp JSON to the metrics the report shows.
 
     Args:
-        fastp_data: The parsed ``output.json`` fastp wrote, or ``{}`` when it
-            was genuinely unavailable or unparseable.
+        fastp_data: The parsed ``output.json`` fastp wrote, or ``{}`` when the
+            optional output was genuinely unavailable.
 
     Returns:
         FastpMetrics: The metrics, with ``available`` False for empty input.
@@ -1526,17 +1543,36 @@ def summarise_fastp(fastp_data: object) -> FastpMetrics:
     Raises:
         ValueError: If available fastp JSON has a malformed object structure.
     """
-    root = validated_fastp_mapping(fastp_data, "root")
+    raw_data: object = fastp_data
+    exact_data: object = fastp_data
+    if isinstance(fastp_data, FastpJsonPayload):
+        raw_data = fastp_data
+        exact_data = fastp_data.exact
+
+    root = validated_fastp_mapping(raw_data, "root")
     if not root:
-        return FastpMetrics(False, None, None, None, None, "")
+        return FastpMetrics(False, None, None, None, None, "", ExactFastpMetrics(None, None, None, None))
 
     summary = validated_fastp_mapping(root.get("summary", {}), "summary")
     after_filtering = validated_fastp_mapping(summary.get("after_filtering", {}), "summary.after_filtering")
-    before_filtering = validated_fastp_mapping(summary.get("before_filtering", {}), "summary.before_filtering")
-    filtering_result = validated_fastp_mapping(root.get("filtering_result", {}), "filtering_result")
+    validated_fastp_mapping(summary.get("before_filtering", {}), "summary.before_filtering")
+    validated_fastp_mapping(root.get("filtering_result", {}), "filtering_result")
     duplication = validated_fastp_mapping(root.get("duplication", {}), "duplication")
 
-    passed_filter_rate = calculate_passed_filter_rate_from_sources(before_filtering, filtering_result)
+    exact_root = validated_fastp_mapping(exact_data, "root")
+    exact_summary = validated_fastp_mapping(exact_root.get("summary", {}), "summary")
+    exact_after_filtering = validated_fastp_mapping(exact_summary.get("after_filtering", {}), "summary.after_filtering")
+    exact_before_filtering = validated_fastp_mapping(
+        exact_summary.get("before_filtering", {}), "summary.before_filtering"
+    )
+    exact_filtering_result = validated_fastp_mapping(exact_root.get("filtering_result", {}), "filtering_result")
+    exact_duplication = validated_fastp_mapping(exact_root.get("duplication", {}), "duplication")
+
+    exact_passed_filter_rate = calculate_passed_filter_rate_from_sources(
+        exact_before_filtering,
+        exact_filtering_result,
+    )
+    passed_filter_rate = None if exact_passed_filter_rate is None else float(exact_passed_filter_rate)
     if passed_filter_rate is not None:
         logger.debug("Passed filter rate calculated: %.2f", passed_filter_rate)
     else:
@@ -1549,6 +1585,12 @@ def summarise_fastp(fastp_data: object) -> FastpMetrics:
         q30_rate=after_filtering.get("q30_rate", None),
         passed_filter_rate=passed_filter_rate,
         sequencing=summary.get("sequencing", ""),
+        exact=ExactFastpMetrics(
+            duplication_rate=validated_fastp_fraction(exact_duplication.get("rate", None), "duplication_rate"),
+            q20_rate=validated_fastp_fraction(exact_after_filtering.get("q20_rate", None), "q20_rate"),
+            q30_rate=validated_fastp_fraction(exact_after_filtering.get("q30_rate", None), "q30_rate"),
+            passed_filter_rate=exact_passed_filter_rate,
+        ),
     )
 
 

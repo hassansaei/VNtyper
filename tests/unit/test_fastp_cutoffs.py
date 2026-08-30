@@ -175,6 +175,8 @@ def test_build_fastp_cutoffs_logs_and_keys_a_decimal_conversion_failure(
         ("total_reads", float("-inf")),
         ("passed_filter_reads", -1),
         ("total_reads", -1),
+        ("passed_filter_reads", 80.5),
+        ("total_reads", Decimal("100.5")),
     ),
 )
 def test_calculate_passed_filter_rate_rejects_each_invalid_source_count(
@@ -196,7 +198,26 @@ def test_calculate_passed_filter_rate_returns_the_valid_ratio() -> None:
     """A complete valid pair still produces its raw ratio before display rounding."""
     module = _module()
 
-    assert module.calculate_passed_filter_rate(passed_filter_reads=80, total_reads=100) == pytest.approx(0.8)
+    rate = module.calculate_passed_filter_rate(passed_filter_reads=80, total_reads=100)
+
+    assert rate == Decimal("0.8")
+    assert type(rate) is Decimal
+
+
+def test_calculate_passed_filter_rate_preserves_a_large_count_ratio_for_display_and_decision() -> None:
+    """Large integer counts cannot cross a visible half-tie through binary float."""
+    module = _module()
+
+    rate = module.calculate_passed_filter_rate(
+        passed_filter_reads=77644999999999999,
+        total_reads=100000000000000000,
+    )
+    measurement = module.build_fastp_measurement(rate, "passed_filter_rate")
+
+    assert rate == Decimal("0.77644999999999999")
+    assert measurement.display == "77.64%"
+    assert measurement.display != "77.65%"
+    assert threshold_icon(measurement.value, Decimal("0.7765"), higher_better=True)[1] == "red"
 
 
 def test_calculate_passed_filter_rate_logs_and_keys_a_decimal_conversion_failure(
@@ -207,7 +228,7 @@ def test_calculate_passed_filter_rate_logs_and_keys_a_decimal_conversion_failure
     caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
     expected = (
         "Fastp output has invalid passed_filter_rate source count 'passed_filter_reads': "
-        "expected a finite non-negative numeric count."
+        "expected a finite non-negative integer count."
     )
 
     with pytest.raises(ValueError, match="passed_filter_reads") as exc_info:
@@ -261,7 +282,8 @@ def test_calculate_passed_filter_rate_from_sources_extracts_both_required_keys()
         {"passed_filter_reads": 80},
     )
 
-    assert rate == pytest.approx(0.8)
+    assert rate == Decimal("0.8")
+    assert type(rate) is Decimal
 
 
 def test_calculate_passed_filter_rate_rejects_a_count_above_the_total(
@@ -344,6 +366,16 @@ def test_build_fastp_measurement_logs_and_keys_a_decimal_conversion_failure(
     assert [record.getMessage() for record in caplog.records if record.name == "vntyper.scripts.fastp_cutoffs"] == [
         expected
     ]
+
+
+def test_validated_fastp_fraction_preserves_an_exact_decimal_type_and_value() -> None:
+    """The internal report summary cannot coerce an exact JSON rate back to float."""
+    module = _module()
+
+    fraction = module.validated_fastp_fraction(Decimal("0.60044999999999999"), "q20_rate")
+
+    assert fraction == Decimal("0.60044999999999999")
+    assert type(fraction) is Decimal
 
 
 def test_build_fastp_cutoffs_normalizes_signed_zero() -> None:

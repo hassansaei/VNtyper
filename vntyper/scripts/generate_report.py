@@ -30,7 +30,9 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -39,7 +41,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from vntyper.scripts import report_assets
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
-from vntyper.scripts.fastp_cutoffs import build_fastp_cutoffs, build_fastp_measurement
+from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs, build_fastp_measurement
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
@@ -179,7 +181,10 @@ def load_pipeline_summary(summary_file_path):
 def load_fastp_output(fastp_file):
     """
     Loads fastp JSON output (e.g., output.json) for summary metrics if available.
-    Returns an empty dict if file not found or if parsing fails.
+    Returns an empty dict only when the optional file is absent.
+
+    A present unreadable or malformed artifact raises ``ValueError`` so report
+    generation cannot silently misstate missing quality evidence.
     """
     logger.debug("load_fastp_output called with fastp_file=%s", fastp_file)
     if not os.path.exists(fastp_file):
@@ -187,12 +192,25 @@ def load_fastp_output(fastp_file):
         return {}
     try:
         with open(fastp_file) as f:
-            data = json.load(f)
-        logger.debug("fastp output successfully loaded.")
-        return data
-    except Exception as e:
-        logger.error("Failed to load or parse fastp output: %s", e)
-        return {}
+            text = f.read()
+    except OSError as error:
+        message = f"Failed to read fastp output {str(fastp_file)!r}."
+        logger.error(message)
+        raise ValueError(message) from error
+    try:
+        raw_data = json.loads(text)
+        exact_data = json.loads(text, parse_float=Decimal)
+    except json.JSONDecodeError as error:
+        message = f"Fastp output {str(fastp_file)!r} contains malformed JSON."
+        logger.error(message)
+        raise ValueError(message) from error
+    data = (
+        FastpJsonPayload(raw_data, exact_data)
+        if isinstance(raw_data, Mapping) and isinstance(exact_data, Mapping)
+        else raw_data
+    )
+    logger.debug("fastp output successfully loaded.")
+    return data
 
 
 def load_pipeline_log(log_file):
@@ -664,10 +682,10 @@ def generate_summary_report(
     uncovered_icon, uncovered_color = threshold_icon(
         percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False
     )
-    duplication_rate = build_fastp_measurement(fastp.duplication_rate, "duplication_rate")
-    q20_rate = build_fastp_measurement(fastp.q20_rate, "q20_rate")
-    q30_rate = build_fastp_measurement(fastp.q30_rate, "q30_rate")
-    passed_filter_rate = build_fastp_measurement(fastp.passed_filter_rate, "passed_filter_rate")
+    duplication_rate = build_fastp_measurement(fastp.exact.duplication_rate, "duplication_rate")
+    q20_rate = build_fastp_measurement(fastp.exact.q20_rate, "q20_rate")
+    q30_rate = build_fastp_measurement(fastp.exact.q30_rate, "q30_rate")
+    passed_filter_rate = build_fastp_measurement(fastp.exact.passed_filter_rate, "passed_filter_rate")
     dup_icon, dup_color = threshold_icon(
         duplication_rate.value, fastp_cutoffs.duplication_rate.value, higher_better=False
     )
