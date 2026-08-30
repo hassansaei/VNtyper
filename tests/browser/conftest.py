@@ -391,6 +391,60 @@ def rendered_report_with_fastp_half_ties(tmp_path: Path) -> Path:
     return tmp_path / "summary_report.html"
 
 
+@pytest.fixture
+def rendered_report_with_exact_fastp_boundaries(tmp_path: Path) -> Path:
+    """Render exact JSON rates immediately below their displayed cutoffs.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory.
+
+    Returns:
+        Path: The rendered ``summary_report.html``.
+    """
+    payload = {
+        "version": "9.9.9",
+        "input_files": {"bam": "sample.bam"},
+        "steps": [
+            _tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            _tabular_step(summary_steps.STEP_KESTREL, list(KESTREL_ROWS)),
+        ],
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        """{
+  "summary": {
+    "before_filtering": {"total_reads": 100000000000000000},
+    "after_filtering": {"q20_rate": 0.60044999999999999, "q30_rate": 0.7}
+  },
+  "duplication": {"rate": 0.1},
+  "filtering_result": {"passed_filter_reads": 77644999999999999}
+}
+""",
+        encoding="utf-8",
+    )
+
+    shipped_config = (Path(vntyper.__file__).resolve().parent / "config.json").read_text(encoding="utf-8")
+    assert shipped_config.count('"q20_rate": 0.8') == 1
+    assert shipped_config.count('"passed_filter_reads_rate": 0.8') == 1
+    custom_config = shipped_config.replace('"q20_rate": 0.8', '"q20_rate": 0.6005').replace(
+        '"passed_filter_reads_rate": 0.8',
+        '"passed_filter_reads_rate": 0.7765',
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(custom_config, encoding="utf-8")
+
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(TEMPLATE_DIR),
+        report_file="summary_report.html",
+        log_file=None,
+        config=load_config(config_path),
+    )
+    return tmp_path / "summary_report.html"
+
+
 #: Every URL each page asked for, keyed by page. Module-level rather than a fixture so
 #: :func:`external_requests` can be called as a plain function from a test that already
 #: has the page - the same shape ``removed_libraries`` has, and one less fixture to

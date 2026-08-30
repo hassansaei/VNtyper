@@ -79,6 +79,9 @@ Each is a finite numeric fraction from 0 through 1, inclusive. The report derive
 both the displayed cutoff label and the status decision from that same configured
 value. Each measured rate and configured cutoff is rounded half-up on its exact
 decimal value to two decimal places of percent before display and comparison.
+JSON threshold fractions enter that decimal boundary directly, without an
+intermediate binary-float round trip. The ordinary configuration object remains
+dict-compatible and retains its existing numeric values for other consumers.
 
 `duplication_rate` warns strictly above its cutoff; the three rate metrics warn
 strictly below theirs. A measured value exactly at its configured cutoff is OK.

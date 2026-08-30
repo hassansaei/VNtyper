@@ -199,9 +199,11 @@ def test_the_report_reads_identically_online_and_offline(
     )
 
 
+@pytest.mark.parametrize("offline", (False, True), ids=("online", "offline"))
 def test_fastp_labels_and_statuses_share_configured_cutoffs_in_a_browser(
     rendered_report_with_custom_fastp_cutoffs: Path,
     open_report: Callable[..., Page],
+    offline: bool,
 ) -> None:
     """A reader sees each custom cutoff paired with its matching decision.
 
@@ -209,7 +211,7 @@ def test_fastp_labels_and_statuses_share_configured_cutoffs_in_a_browser(
     threshold. A stale label or a status icon judged with a different cutoff
     therefore makes this browser-level report contract fail.
     """
-    page = open_report(rendered_report_with_custom_fastp_cutoffs, offline=True)
+    page = open_report(rendered_report_with_custom_fastp_cutoffs, offline=offline)
 
     for label, cutoff in (
         ("Duplication Rate", "12.34%"),
@@ -224,12 +226,14 @@ def test_fastp_labels_and_statuses_share_configured_cutoffs_in_a_browser(
         )
 
 
+@pytest.mark.parametrize("offline", (False, True), ids=("online", "offline"))
 def test_fastp_half_tie_values_and_icons_agree_in_a_browser(
     rendered_report_with_fastp_half_ties: Path,
     open_report: Callable[..., Page],
+    offline: bool,
 ) -> None:
     """The visible half-tie text, cutoff, and decision remain one browser contract."""
-    page = open_report(rendered_report_with_fastp_half_ties, offline=True)
+    page = open_report(rendered_report_with_fastp_half_ties, offline=offline)
 
     for label, displayed in (
         ("Duplication Rate", "5.05%"),
@@ -241,3 +245,22 @@ def test_fastp_half_tie_values_and_icons_agree_in_a_browser(
         assert row.count() == 1, f"the report has no {label!r} half-tie row at {displayed}"
         assert row.locator("td").nth(1).inner_text().strip() == displayed
         assert row.locator('[aria-label="No warning"]').count() == 1
+
+
+@pytest.mark.parametrize("offline", (False, True), ids=("online", "offline"))
+def test_exact_fastp_json_boundaries_keep_visible_values_and_icons_together(
+    rendered_report_with_exact_fastp_boundaries: Path,
+    open_report: Callable[..., Page],
+    offline: bool,
+) -> None:
+    """Exact JSON operands remain below their cutoffs in either browser mode."""
+    page = open_report(rendered_report_with_exact_fastp_boundaries, offline=offline)
+
+    for label, displayed, cutoff in (
+        ("Q20 Rate", "60.04%", "60.05%"),
+        ("Passed Filter Rate", "77.64%", "77.65%"),
+    ):
+        row = page.locator("tr").filter(has_text=f"{label} (Cutoff: {cutoff})")
+        assert row.count() == 1, f"the report has no {label!r} row with its exact {cutoff} cutoff"
+        assert row.locator("td").nth(1).inner_text().strip() == displayed
+        assert row.locator('[aria-label="Warning"]').count() == 1
