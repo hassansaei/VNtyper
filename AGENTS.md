@@ -135,7 +135,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
-  The reviewed BLE001 policy is 98 normal/105 including suppressions; its executable
+  The reviewed BLE001 policy is 97 normal/104 including suppressions; its executable
   inventory is `scripts/ble001_policy.json` and the policy tests. Not every broad
   handler is a process boundary, so do not globally select or mechanically narrow it.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
