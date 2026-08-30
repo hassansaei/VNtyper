@@ -57,7 +57,7 @@ def _snapshot_worker(source: str, destination: str, sender: Connection) -> None:
     try:
         pipeline_advntr_run_context._snapshot_model(source, destination)
         sender.send(("returned",))
-    except BaseException as error:
+    except RuntimeError as error:
         sender.send(("raised", type(error).__name__, str(error)))
     finally:
         sender.close()
