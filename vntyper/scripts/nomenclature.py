@@ -600,9 +600,9 @@ def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ..
 def _is_corroborated(sources: set[str]) -> bool:
     """Do these sources amount to independent corroboration?
 
-    The test is on *callers*, not sources: ``kestrel_vcf`` and ``kestrel_bam`` are one
-    caller read twice, and counting them as two would make Kestrel agreeing with its
-    own alignment look like the two independent sources tier A requires.
+    The test is on *callers*, not sources: ``kestrel_vcf`` and ``kestrel_bam`` are two
+    outputs from one caller, and counting them as two would make Kestrel agreeing with
+    its own alignment look like the two independent sources tier A requires.
 
     Counting callers subsumes counting sources -- the callers are the image of the
     sources under a map, so there can never be more of them -- which is why there is
@@ -685,8 +685,9 @@ def reconcile(
 
     # An allele two independent callers name outvotes one that only a single caller
     # does. Measured on the benchmark this is what recovers the `insG` families:
-    # Kestrel's VCF places them one base 3' of truth, while adVNTR and the reads
-    # independently agree on the right position (129 -> 135 of 200, no name lost).
+    # Kestrel's VCF places them one base 3' of truth, while adVNTR and Kestrel's
+    # resolved haplotype records agree on the right position (129 -> 135 of 200,
+    # no name lost).
     #
     # Only an unambiguous majority decides. Two corroborated alleles are a genuine
     # conflict rather than a vote to settle, and zero leaves the existing order
@@ -705,14 +706,14 @@ def reconcile(
     agree = _is_corroborated(backing_sources)
 
     # Support must belong to the agreeing evidence. A sample-wide maximum would let a
-    # well-covered but unrelated observation lend its depth to a 1-read agreement.
+    # well-covered but unrelated observation lend its depth to a thin agreement.
     effective_support = support
     if supports is not None:
         relevant = [supports.get(source) for source in backing_sources]
         # Unknown is not sufficient. Dropping the `None`s and taking the minimum of
         # what remained let one caller's depth stand in for the other's missing depth,
         # so an agreement with a blank or non-numeric depth column reached tier A on
-        # one source's reads -- exactly the "two independent sources" claim the tier
+        # one source's support -- exactly the "two independent sources" claim the tier
         # is supposed to guarantee. One unknown makes the whole agreement unknown.
         known = [value for value in relevant if value is not None]
         effective_support = None if len(known) != len(relevant) or not known else min(known)
