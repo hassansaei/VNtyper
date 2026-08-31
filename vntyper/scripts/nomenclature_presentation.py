@@ -135,7 +135,7 @@ COLUMN_HELP: dict[str, str] = {
     "REF": "The reference allele at the reported position.",
     "ALT": "The alternate allele reported by the caller.",
     "Depth (Variant)": "Kestrel alternate-allele k-mer-path depth.",
-    "Depth (Region)": "Kestrel minimum k-mer depth across the active region.",
+    "Depth (Region)": "Kestrel total k-mer depth across the active region.",
     "Depth Score": (
         "Variant depth over region depth. It scales with the inverse of the array length, so it is comparable "
         "within a sample and not between assemblies."

@@ -1444,7 +1444,7 @@ def test_presentation_names_each_current_evidence_unit_truthfully() -> None:
         "Kestrel alternate-allele k-mer-path depth is below the corroborated tier's source-specific evidence threshold."
     )
     assert rf.COLUMN_HELP["Depth (Variant)"] == "Kestrel alternate-allele k-mer-path depth."
-    assert rf.COLUMN_HELP["Depth (Region)"] == "Kestrel minimum k-mer depth across the active region."
+    assert rf.COLUMN_HELP["Depth (Region)"] == "Kestrel total k-mer depth across the active region."
     assert rf.COLUMN_HELP["ALT"] == "The alternate allele reported by the caller."
     assert rf.COLUMN_HELP["Supporting Reads"] == "Reads adVNTR counted in support of this call."
 
