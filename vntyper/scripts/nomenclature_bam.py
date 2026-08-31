@@ -37,6 +37,7 @@ from vntyper.scripts.nomenclature import (
     pair_sequence,
     revcomp,
 )
+from vntyper.scripts.nomenclature_evidence import resolve_bam_thin_haplotype_record_support
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Iterable
@@ -62,7 +63,7 @@ DEFAULT_FLANK: int = nomenclature_config["thresholds"]["bam_flank"]
 #: across many pair records while `Estimated_Depth_AlternateVariant` aggregates
 #: them, so a locus often carries only 1-3 reads; a consensus is only as good as
 #: the reads under it.
-THIN_SUPPORT: int = nomenclature_config["thresholds"]["bam_thin_support"]
+THIN_SUPPORT: int = resolve_bam_thin_haplotype_record_support(nomenclature_config["thresholds"])
 
 # CIGAR operation codes, as pysam returns them.
 _OP_MATCH = 0

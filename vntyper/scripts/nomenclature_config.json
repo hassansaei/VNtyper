@@ -57,9 +57,10 @@
     }
   },
   "thresholds": {
+    "_comment": "The high-confidence threshold applies to each source in its own evidence unit. BAM thin support counts resolved haplotype records.",
     "min_support_for_high_confidence": 5,
     "bam_flank": 8,
-    "bam_thin_support": 3
+    "bam_thin_haplotype_record_support": 3
   },
   "known_variants": {
     "59dupC": "Kirby et al. 2013, PMID:23396133",
