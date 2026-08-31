@@ -17,12 +17,13 @@ from __future__ import annotations
 import csv
 import os
 from collections import Counter
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
 import pytest
 
-from vntyper.scripts.nomenclature import from_advntr, from_kestrel, reconcile, render
+from vntyper.scripts.nomenclature import Nomenclature, from_advntr, from_kestrel, reconcile, render
 from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate, refine
 
 pytestmark = pytest.mark.golden
@@ -101,6 +102,12 @@ def _truth(root: Path, experiment: str) -> dict[str, str]:
     return truth
 
 
+def _normal_pair_ids(root: Path, experiment: str) -> list[str]:
+    """Return normal-control pair IDs from the simulator's truth table."""
+    with (root / experiment / "ground_truth.csv").open() as handle:
+        return [row["pair_id"] for row in csv.DictReader(handle) if row["condition"] == "normal"]
+
+
 def _kestrel_records(path: Path) -> list[dict[str, str]]:
     """Read a Kestrel result TSV, dropping the negative placeholder row."""
     if not path.exists():
@@ -110,25 +117,29 @@ def _kestrel_records(path: Path) -> list[dict[str, str]]:
     return [
         row
         for row in csv.DictReader(lines, delimiter="\t")
-        if row.get("Confidence") != "Negative" and row.get("Motif") != "None"
+        if not (
+            row.get("Confidence") == "Negative"
+            or row.get("VID") == "Negative"
+            or (row.get("Motif") == "None" and "Motifs" not in row)
+        )
     ]
 
 
-def _advntr_records(path: Path) -> list[tuple[str, int]]:
-    """Read an adVNTR result TSV as ``(state, supporting_reads)``."""
+def _advntr_records(path: Path) -> list[tuple[str, int | None]]:
+    """Read kept adVNTR rows as ``(state, optional supporting reads)``."""
     if not path.exists():
         return []
     with path.open() as handle:
         rows = list(csv.DictReader(handle, delimiter="\t"))
-    out: list[tuple[str, int]] = []
+    out: list[tuple[str, int | None]] = []
     for row in rows:
         state = (row.get("Variant") or "").strip()
         if not state or state == "Not applicable":
             continue
         try:
-            support = int(float(row.get("NumberOfSupportingReads") or 0))
-        except ValueError:
-            support = 0
+            support = int(float(row.get("NumberOfSupportingReads") or ""))
+        except (OverflowError, ValueError):
+            support = None
         out.append((state, support))
     return out
 
@@ -159,135 +170,253 @@ def _vcf_only() -> tuple[Counter, Counter, int]:
     return correct, called, samples
 
 
-@lru_cache(maxsize=1)
-def _reconciled() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
-    """Name every mutated sample from both callers reconciled.
+@dataclass(frozen=True)
+class DisplayCounts:
+    """Displayed, exact, and wrong names for one policy or tier."""
 
-    Returns:
-        tuple: correct-per-class, tier-A-correct-per-class, tier-A names that
-        disagree with truth, and the number of negative controls that produced any
-        call at all.
-    """
+    displayed: int
+    exact: int
+    wrong: int
+
+
+@dataclass(frozen=True)
+class PolicyMetrics:
+    """Display-aware outcomes for one reconciliation policy."""
+
+    total: DisplayCounts
+    by_tier: dict[str, DisplayCounts]
+    exact_by_class: Counter[str]
+    control_findings: int
+    render_mismatches: tuple[tuple[str, str | None, str], ...]
+
+
+@dataclass(frozen=True)
+class GoldenReplay:
+    """Both policies plus corpus-shape and BAM-consultation evidence."""
+
+    without_bam: PolicyMetrics
+    with_bam: PolicyMetrics
+    mutated_samples: int
+    normal_samples: int
+    bam_eligible_samples: int
+    bam_row_fetches: int
+    kestrel_records: int
+    usable_row_loci: int
+
+
+@dataclass(frozen=True)
+class _SourceEvidence:
+    """Translated calls and source-bound support for one sample."""
+
+    vcf_calls: list[Nomenclature]
+    advntr_calls: list[Nomenclature]
+    supports: dict[str, int | None]
+
+
+def _lesser(left: int | None, right: int | None) -> int | None:
+    """Return the smaller known value, propagating unknown support."""
+    if left is None or right is None:
+        return None
+    return min(left, right)
+
+
+def _optional_int(value: object) -> int | None:
+    """Parse a production result-cell integer without inventing a zero."""
+    try:
+        return int(float(str(value)))
+    except (OverflowError, TypeError, ValueError):
+        return None
+
+
+def _source_evidence(
+    kestrel_records: list[dict[str, str]],
+    advntr_records: list[tuple[str, int | None]],
+) -> _SourceEvidence:
+    """Translate caller rows in file order and bind support to its source."""
+    vcf_calls = []
+    advntr_calls = []
+    supports: dict[str, int | None] = {}
+
+    for record in kestrel_records:
+        try:
+            call = from_kestrel(record["Motifs"], int(record["POS"]), record["REF"], record["ALT"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        vcf_calls.append(call)
+        depth = _optional_int(record.get("Estimated_Depth_AlternateVariant"))
+        if "kestrel_vcf" not in supports:
+            supports["kestrel_vcf"] = depth
+        else:
+            supports["kestrel_vcf"] = _lesser(supports["kestrel_vcf"], depth)
+
+    for state, state_support in advntr_records:
+        row_calls = list(from_advntr(state))
+        advntr_calls.extend(row_calls)
+        if not row_calls:
+            continue
+        if "advntr" not in supports:
+            supports["advntr"] = state_support
+        else:
+            supports["advntr"] = _lesser(supports["advntr"], state_support)
+
+    return _SourceEvidence(vcf_calls, advntr_calls, supports)
+
+
+def _row_locus(record: dict[str, str]) -> tuple[str, int] | None:
+    """Return the row's own Kestrel pair locus, if both cells are usable."""
+    contig = record.get("Motif_fasta")
+    position = record.get("POS_fasta")
+    if not contig or position is None:
+        return None
+    try:
+        return contig, int(position)
+    except (TypeError, ValueError):
+        return None
+
+
+def _rescue_rows(
+    records: list[dict[str, str]],
+    kestrel_dir: Path,
+    supports: dict[str, int | None],
+) -> tuple[list[Nomenclature | None], int]:
+    """Rescue each Kestrel row at its own locus with one BAM handle."""
+    bam_path = kestrel_dir / "output.bam"
+    if not records or not bam_path.is_file():
+        return [], 0
+
+    calls = []
+    with BamRescuer(bam_path) as rescuer:
+        for record in records:
+            locus = _row_locus(record)
+            if locus is None:
+                calls.append(None)
+                continue
+            contig, position = locus
+            consensus = rescuer.rescue(contig, position)
+            if consensus is None:
+                calls.append(None)
+                continue
+            call = from_bam(contig, consensus)
+            calls.append(call)
+            if call is None:
+                continue
+            support = consensus.supporting_haplotype_records
+            existing = supports.get("kestrel_bam")
+            supports["kestrel_bam"] = support if existing is None else min(existing, support)
+        fetches = rescuer.fetches
+    return calls, fetches
+
+
+def _display_metrics(
+    outcomes: list[tuple[str, str, Nomenclature]],
+    control_findings: int,
+) -> PolicyMetrics:
+    """Measure only names whose emitted text equals the selected name."""
+    displayed: Counter[str] = Counter()
+    exact: Counter[str] = Counter()
+    wrong: Counter[str] = Counter()
+    exact_by_class: Counter[str] = Counter()
+    mismatches: list[tuple[str, str | None, str]] = []
+
+    for pair_id, klass, call in outcomes:
+        shown = render(call)
+        if call.name is not None and shown != call.name:
+            mismatches.append((pair_id, call.name, shown))
+        if call.name is None and shown and shown[0].isdigit():
+            mismatches.append((pair_id, None, shown))
+        is_displayed = call.name is not None and shown == call.name
+        if not is_displayed:
+            continue
+        displayed[call.tier] += 1
+        if shown == EXPECTED_NAME[klass]:
+            exact[call.tier] += 1
+            exact_by_class[klass] += 1
+        else:
+            wrong[call.tier] += 1
+
+    by_tier = {tier: DisplayCounts(displayed[tier], exact[tier], wrong[tier]) for tier in ("A", "B", "C")}
+    total = DisplayCounts(sum(displayed.values()), sum(exact.values()), sum(wrong.values()))
+    return PolicyMetrics(total, by_tier, exact_by_class, control_findings, tuple(mismatches))
+
+
+@lru_cache(maxsize=1)
+def _replay() -> GoldenReplay:
+    """Replay no-BAM and current unweighted row voting over the loaded cohort."""
     root = _require_sim()
     advntr_root = _require_advntr()
-
-    correct: Counter = Counter()
-    tier_a_correct: Counter = Counter()
-    wrong: list[tuple[str, str, str]] = []
-    controls_called = 0
+    without_bam_outcomes = []
+    with_bam_outcomes = []
+    mutated_samples = 0
+    normal_samples = 0
+    control_findings = 0
+    eligible_samples = 0
+    row_fetches = 0
+    kestrel_record_count = 0
+    usable_loci = 0
 
     for experiment in EXPERIMENTS:
         for pair_id, klass in sorted(_truth(root, experiment).items()):
             sample_dir = root / experiment / "vntyper" / pair_id
-            calls = [
-                from_kestrel(record["Motifs"], int(record["POS"]), record["REF"], record["ALT"])
-                for record in _kestrel_records(sample_dir / "mutated" / "kestrel" / "kestrel_result.tsv")
-            ]
-            # Support is bound to the source it came from, and an adVNTR agreement
-            # is taken at its weakest state: a sample-wide maximum would let a
-            # well-covered unrelated observation lend depth to a 1-read agreement.
-            supports: dict[str, int | None] = {}
-            # Every event adVNTR reported, not just the first: a locus showing three
-            # simultaneous events is not one simple allele, and hiding the rest lets
-            # a wrong name reach tier A.
-            for state, state_support in _advntr_records(
-                advntr_root / experiment / pair_id / "mutated" / "advntr" / "output_adVNTR_result.tsv"
-            ):
-                calls.extend(from_advntr(state))
-                seen = supports.get("advntr")
-                supports["advntr"] = state_support if seen is None else min(seen, state_support)
-            for record in _kestrel_records(sample_dir / "mutated" / "kestrel" / "kestrel_result.tsv"):
-                try:
-                    supports["kestrel_vcf"] = int(float(record.get("Estimated_Depth_AlternateVariant") or 0))
-                except ValueError:
-                    supports["kestrel_vcf"] = None
+            kestrel_dir = sample_dir / "mutated" / "kestrel"
+            kestrel_path = kestrel_dir / "kestrel_result.tsv"
+            advntr_path = advntr_root / experiment / pair_id / "mutated" / "advntr" / "output_adVNTR_result.tsv"
+            mutated_samples += int(kestrel_path.is_file() and advntr_path.is_file())
+            records = _kestrel_records(kestrel_path)
+            advntr_rows = _advntr_records(advntr_path)
+            evidence = _source_evidence(records, advntr_rows)
 
-            merged = reconcile(*calls, supports=supports)
-            if merged.name == EXPECTED_NAME[klass]:
-                correct[klass] += 1
-                if merged.tier == "A":
-                    tier_a_correct[klass] += 1
-            elif merged.tier == "A":
-                wrong.append((pair_id, str(merged.name), EXPECTED_NAME[klass]))
+            kestrel_record_count += len(records)
+            usable_loci += sum(_row_locus(record) is not None for record in records)
 
-            if _kestrel_records(sample_dir / "normal" / "kestrel" / "kestrel_result.tsv") or _advntr_records(
-                advntr_root / experiment / pair_id / "normal" / "advntr" / "output_adVNTR_result.tsv"
-            ):
-                controls_called += 1
+            no_bam_call = reconcile(
+                *evidence.vcf_calls,
+                *evidence.advntr_calls,
+                supports=dict(evidence.supports),
+            )
+            without_bam_outcomes.append((pair_id, klass, no_bam_call))
 
-    return correct, tier_a_correct, wrong, controls_called
-
-
-@lru_cache(maxsize=1)
-def _hybrid() -> tuple[Counter, Counter, list[tuple[str, str, str]], int]:
-    """Name every sample from both callers plus BAM rescue.
-
-    Returns:
-        tuple: correct-per-class, tier-A-correct-per-class, tier-A names that
-        disagree with truth, and the number of BAM region fetches performed.
-    """
-    root = _require_sim()
-    advntr_root = _require_advntr()
-
-    correct: Counter = Counter()
-    tier_a_correct: Counter = Counter()
-    wrong: list[tuple[str, str, str]] = []
-    fetches = 0
-
-    for experiment in EXPERIMENTS:
-        for pair_id, klass in sorted(_truth(root, experiment).items()):
-            kestrel_dir = root / experiment / "vntyper" / pair_id / "mutated" / "kestrel"
-            calls = [
-                from_kestrel(record["Motifs"], int(record["POS"]), record["REF"], record["ALT"])
-                for record in _kestrel_records(kestrel_dir / "kestrel_result.tsv")
-            ]
-            supports: dict[str, int | None] = {}
-            for state, state_support in _advntr_records(
-                advntr_root / experiment / pair_id / "mutated" / "advntr" / "output_adVNTR_result.tsv"
-            ):
-                calls.extend(from_advntr(state))
-                seen = supports.get("advntr")
-                supports["advntr"] = state_support if seen is None else min(seen, state_support)
-            for record in _kestrel_records(kestrel_dir / "kestrel_result.tsv"):
-                try:
-                    supports["kestrel_vcf"] = int(float(record.get("Estimated_Depth_AlternateVariant") or 0))
-                except ValueError:
-                    supports["kestrel_vcf"] = None
-
-            # Mirrors `reconcile_caller_outputs`: the reads are a third source,
-            # consulted only where the two callers leave the locus open, then every
-            # source is voted on at once.
+            with_bam_supports = dict(evidence.supports)
+            preliminary = reconcile(
+                *evidence.vcf_calls,
+                *evidence.advntr_calls,
+                supports=with_bam_supports,
+            )
+            eligible = is_candidate(preliminary)
             bam_calls = []
-            if is_candidate(reconcile(*calls, supports=supports)):
-                bed = kestrel_dir / "output.bed"
-                if bed.is_file():
-                    fields = bed.read_text().split()
-                    if len(fields) >= 2:
-                        contig, position = fields[0], int(fields[1])
-                        with BamRescuer(kestrel_dir / "output.bam") as rescuer:
-                            consensus = rescuer.rescue(contig, position)
-                            fetches += rescuer.fetches
-                        if consensus is not None:
-                            bam_call = from_bam(contig, consensus)
-                            if bam_call is not None:
-                                bam_calls.append(bam_call)
-                                seen = supports.get("kestrel_bam")
-                                supports["kestrel_bam"] = (
-                                    consensus.support if seen is None else min(seen, consensus.support)
-                                )
+            if eligible:
+                eligible_samples += 1
+                bam_calls, sample_fetches = _rescue_rows(records, kestrel_dir, with_bam_supports)
+                row_fetches += sample_fetches
+            named_bam = [call for call in bam_calls if call is not None]
+            with_bam_call = reconcile(
+                *evidence.vcf_calls,
+                *named_bam,
+                *evidence.advntr_calls,
+                supports=with_bam_supports,
+            )
+            for bam_call in named_bam:
+                with_bam_call = refine(with_bam_call, bam_call)
+            with_bam_outcomes.append((pair_id, klass, with_bam_call))
 
-            merged = reconcile(*calls, *bam_calls, supports=supports)
-            for bam_call in bam_calls:
-                merged = refine(merged, bam_call)
+        for pair_id in sorted(_normal_pair_ids(root, experiment)):
+            kestrel_path = root / experiment / "vntyper" / pair_id / "normal" / "kestrel" / "kestrel_result.tsv"
+            advntr_path = advntr_root / experiment / pair_id / "normal" / "advntr" / "output_adVNTR_result.tsv"
+            normal_samples += int(kestrel_path.is_file() and advntr_path.is_file())
+            normal_records = _kestrel_records(kestrel_path)
+            normal_advntr = _advntr_records(advntr_path)
+            normal_evidence = _source_evidence(normal_records, normal_advntr)
+            control_findings += int(bool(normal_evidence.vcf_calls or normal_evidence.advntr_calls))
 
-            if merged.name == EXPECTED_NAME[klass]:
-                correct[klass] += 1
-                if merged.tier == "A":
-                    tier_a_correct[klass] += 1
-            elif merged.tier == "A":
-                wrong.append((pair_id, str(merged.name), EXPECTED_NAME[klass]))
-
-    return correct, tier_a_correct, wrong, fetches
+    return GoldenReplay(
+        without_bam=_display_metrics(without_bam_outcomes, control_findings),
+        with_bam=_display_metrics(with_bam_outcomes, control_findings),
+        mutated_samples=mutated_samples,
+        normal_samples=normal_samples,
+        bam_eligible_samples=eligible_samples,
+        bam_row_fetches=row_fetches,
+        kestrel_records=kestrel_record_count,
+        usable_row_loci=usable_loci,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +440,23 @@ def test_the_kestrel_path_makes_one_hundred_and_seventy_eight_calls() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_display_metrics_are_pinned_for_both_policies() -> None:
+    """Every displayed name is counted, including wrong lower-tier names."""
+    replay = _replay()
+    assert replay.without_bam.total == DisplayCounts(displayed=138, exact=119, wrong=19)
+    assert replay.without_bam.by_tier == {
+        "A": DisplayCounts(displayed=53, exact=53, wrong=0),
+        "B": DisplayCounts(displayed=85, exact=66, wrong=19),
+        "C": DisplayCounts(displayed=0, exact=0, wrong=0),
+    }
+    assert replay.with_bam.total == DisplayCounts(displayed=154, exact=136, wrong=18)
+    assert replay.with_bam.by_tier == {
+        "A": DisplayCounts(displayed=53, exact=53, wrong=0),
+        "B": DisplayCounts(displayed=101, exact=83, wrong=18),
+        "C": DisplayCounts(displayed=0, exact=0, wrong=0),
+    }
+
+
 def test_canonical_dupc_is_ninety_six_of_ninety_six() -> None:
     """Exact, not a floor. 96 of the 100 dupC samples produce a call; all 96 name."""
     correct, called, _ = _vcf_only()
@@ -320,26 +466,47 @@ def test_canonical_dupc_is_ninety_six_of_ninety_six() -> None:
 
 def test_no_tier_a_name_is_ever_wrong() -> None:
     """The one hard gate. A confident wrong name fails the build."""
-    _, _, wrong, _ = _reconciled()
-    assert wrong == [], f"tier-A names disagreeing with truth: {wrong}"
+    assert _replay().without_bam.by_tier["A"].wrong == 0
 
 
 def test_no_tier_a_name_is_wrong_with_bam_rescue_either() -> None:
     """The rescue path must not buy coverage with a confident falsehood."""
-    _, _, wrong, _ = _hybrid()
-    assert wrong == [], f"tier-A names disagreeing with truth after rescue: {wrong}"
+    assert _replay().with_bam.by_tier["A"].wrong == 0
 
 
 def test_the_bam_is_consulted_only_for_a_minority_of_samples() -> None:
-    """`VCF primary, BAM refines`: the common path must not pay for the rescue."""
-    _, _, _, fetches = _hybrid()
-    assert fetches < 100, f"{fetches} BAM fetches across 200 samples is not a minority"
+    """Pin sample eligibility and row fetches, not an approximate BED locus."""
+    replay = _replay()
+    assert replay.bam_eligible_samples == 83
+    assert replay.bam_row_fetches == 68
+    assert replay.bam_row_fetches < 100
 
 
 def test_no_negative_control_is_ever_named() -> None:
     """All 200 normal samples must stay silent in both callers."""
-    _, _, _, controls_called = _reconciled()
-    assert controls_called == 0
+    replay = _replay()
+    assert replay.without_bam.control_findings == 0
+    assert replay.with_bam.control_findings == 0
+
+
+def test_external_corpus_is_loaded_and_every_kestrel_row_has_a_locus() -> None:
+    """Prove all samples and row loci entered the replay before asserting metrics."""
+    replay = _replay()
+    assert replay.mutated_samples == 200
+    assert replay.normal_samples == 200
+    assert replay.kestrel_records == 178
+    assert replay.usable_row_loci == 178
+
+
+def test_display_counts_partition_into_exact_and_wrong_names() -> None:
+    """No lower-tier displayed name can fall outside the exact/wrong denominator."""
+    for policy in (_replay().without_bam, _replay().with_bam):
+        assert policy.total.displayed == policy.total.exact + policy.total.wrong
+        assert sum(counts.displayed for counts in policy.by_tier.values()) == policy.total.displayed
+        assert sum(counts.exact for counts in policy.by_tier.values()) == policy.total.exact
+        assert sum(counts.wrong for counts in policy.by_tier.values()) == policy.total.wrong
+        for counts in policy.by_tier.values():
+            assert counts.displayed == counts.exact + counts.wrong
 
 
 # ---------------------------------------------------------------------------
@@ -359,74 +526,40 @@ def test_the_vcf_only_total_does_not_regress() -> None:
     assert sum(correct.values()) >= 123
 
 
-def test_the_hybrid_total_does_not_regress() -> None:
-    """Kestrel VCF + adVNTR + BAM rescue, one uniform policy, no truth consulted.
-
-    Spec §4.3 asks for 136. That figure is the per-class **maximum** of the VCF-only
-    and BAM-only columns in §2.6 -- 96+9+9+6+3+7+4+2 -- so reaching it requires
-    knowing, per class, which of the two methods to believe. A policy that has to
-    decide without truth cannot: preferring the reads costs more than it gains
-    wherever the VCF was already right.
-
-    134 is what one uniform rule achieves. Naively preferring the reads scored 129 and
-    cost `dupA` 6->1 and `insCCCC` 9->3; letting two *independent* sources outvote a
-    third gains 6 and loses none, because the reads may only overturn the VCF when the
-    second caller agrees with them.
-
-    The last call back is deliberate. Of the 20 loci where a read consensus was the
-    only thing naming a locus the two callers described differently, just 6 were
-    right; refusing the 10 that rest on one or two reads gives up 1 correct name and
-    withholds 9 wrong ones, which is the trade this whole design is built on.
-    """
-    correct, _, _, _ = _hybrid()
-    assert sum(correct.values()) >= 134
+def test_the_current_record_voting_total_is_exact() -> None:
+    """Pin all displayed outcomes; current record voting names 154, 136 exactly."""
+    assert _replay().with_bam.total == DisplayCounts(displayed=154, exact=136, wrong=18)
 
 
 def test_the_bam_rescue_recovers_alleles_the_vcf_could_not() -> None:
-    """The rescue path must earn its cost: classes the VCF scores 0 on must gain."""
-    correct, _, _, _ = _hybrid()
-    vcf_correct, _, _ = _vcf_only()
-    gained = {klass for klass in EXPECTED_NAME if correct[klass] > vcf_correct[klass]}
-    assert gained, "BAM rescue changed nothing; the whole path is then dead weight"
+    """Pin the exact classes gained by production-shaped record voting."""
+    replay = _replay()
+    expected_policy_two = {
+        "delGCCCA": 3,
+        "dupA": 6,
+        "dupC": 98,
+        "insCCCC": 6,
+        "insC_pos23": 9,
+        "insG": 6,
+        "insG_pos54": 7,
+        "insG_pos58": 1,
+    }
+    assert {klass: replay.with_bam.exact_by_class[klass] for klass in EXPECTED_NAME} == {
+        klass: expected_policy_two.get(klass, 0) for klass in EXPECTED_NAME
+    }
+    expected_gains = {"insCCCC": 6, "insG": 4, "insG_pos54": 7}
+    gains = {
+        klass: replay.with_bam.exact_by_class[klass] - replay.without_bam.exact_by_class[klass]
+        for klass in EXPECTED_NAME
+    }
+    assert gains == {klass: expected_gains.get(klass, 0) for klass in EXPECTED_NAME}
 
 
 def test_the_emitted_cell_shows_the_name_whenever_one_was_computed() -> None:
-    """Assert the *emitted* cell, not the internal field.
-
-    The golden counts are computed from `Nomenclature.name`; what reaches a user is
-    `render`. Those diverged badly once -- 129 names computed, 46 displayed -- so
-    the emitted text is asserted directly here rather than inferred from the count.
-    """
-    root = _require_sim()
-    advntr_root = _require_advntr()
-    leaked: list[tuple[str, str]] = []
-
-    for experiment in EXPERIMENTS:
-        for pair_id, _ in sorted(_truth(root, experiment).items()):
-            calls = [
-                from_kestrel(record["Motifs"], int(record["POS"]), record["REF"], record["ALT"])
-                for record in _kestrel_records(
-                    root / experiment / "vntyper" / pair_id / "mutated" / "kestrel" / "kestrel_result.tsv"
-                )
-            ]
-            supports: dict[str, int | None] = {}
-            for state, state_support in _advntr_records(
-                advntr_root / experiment / pair_id / "mutated" / "advntr" / "output_adVNTR_result.tsv"
-            ):
-                calls.extend(from_advntr(state))
-                seen = supports.get("advntr")
-                supports["advntr"] = state_support if seen is None else min(seen, state_support)
-            if not calls:
-                continue
-
-            merged = reconcile(*calls, supports=supports)
-            shown = render(merged)
-            if merged.name is not None and shown != merged.name:
-                leaked.append((pair_id, shown))
-            if merged.name is None and shown and shown[0].isdigit():
-                leaked.append((pair_id, shown))
-
-    assert leaked == [], f"emitted cell disagreed with the computed name: {leaked[:5]}"
+    """The display-aware denominator must not hide an internal/render mismatch."""
+    replay = _replay()
+    assert replay.without_bam.render_mismatches == ()
+    assert replay.with_bam.render_mismatches == ()
 
 
 def test_reconciliation_produces_tier_a_names() -> None:
@@ -435,5 +568,4 @@ def test_reconciliation_produces_tier_a_names() -> None:
     Without this, a change that quietly made tier A unreachable would still pass
     the "no tier-A name is wrong" gate -- vacuously.
     """
-    _, tier_a_correct, _, _ = _reconciled()
-    assert sum(tier_a_correct.values()) >= 40
+    assert _replay().without_bam.by_tier["A"] == DisplayCounts(displayed=53, exact=53, wrong=0)
