@@ -21,9 +21,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from vntyper.scripts.nomenclature import Nomenclature, from_advntr, from_kestrel, reconcile, render
+from vntyper.scripts.nomenclature_annotate import _is_negative
 from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate, refine
 
 pytestmark = pytest.mark.golden
@@ -108,31 +110,44 @@ def _normal_pair_ids(root: Path, experiment: str) -> list[str]:
         return [row["pair_id"] for row in csv.DictReader(handle) if row["condition"] == "normal"]
 
 
-def _kestrel_records(path: Path) -> list[dict[str, str]]:
-    """Read a Kestrel result TSV, dropping the negative placeholder row."""
+def _result_rows(path: Path, *, comments: bool = False) -> tuple[list[str], list[dict[str, str]]]:
+    """Read one result TSV and retain its schema even when it has no rows."""
     if not path.exists():
-        return []
+        return [], []
     with path.open() as handle:
-        lines = [line for line in handle if not line.startswith("##")]
-    return [
-        row
-        for row in csv.DictReader(lines, delimiter="\t")
-        if not (
-            row.get("Confidence") == "Negative"
-            or row.get("VID") == "Negative"
-            or (row.get("Motif") == "None" and "Motifs" not in row)
-        )
-    ]
+        lines = [line for line in handle if not comments or not line.startswith("##")]
+    reader = csv.DictReader(lines, delimiter="\t")
+    return list(reader.fieldnames or ()), list(reader)
+
+
+def _golden_is_negative(row: dict[str, str]) -> bool:
+    """Independent CSV-row form of the production negative-placeholder rule."""
+    if row.get("Confidence", "") == "Negative":
+        return True
+    if row.get("VID", "") == "Negative":
+        return True
+    return row.get("Motif", "") == "None" and "Motifs" not in row
+
+
+def _kestrel_records(path: Path) -> list[dict[str, str]]:
+    """Read kept Kestrel rows using the independently guarded row filter."""
+    _, rows = _result_rows(path, comments=True)
+    return [row for row in rows if not _is_negative(pd.Series(row))]
+
+
+def _has_motifs_schema(path: Path) -> bool:
+    """Whether the Kestrel result schema can enter cross-caller reconciliation."""
+    fields, _ = _result_rows(path, comments=True)
+    return "Motifs" in fields
 
 
 def _advntr_records(path: Path) -> list[tuple[str, int | None]]:
-    """Read kept adVNTR rows as ``(state, optional supporting reads)``."""
-    if not path.exists():
-        return []
-    with path.open() as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))
+    """Read kept adVNTR rows after applying the guarded production filter."""
+    _, rows = _result_rows(path)
     out: list[tuple[str, int | None]] = []
     for row in rows:
+        if _is_negative(pd.Series(row)):
+            continue
         state = (row.get("Variant") or "").strip()
         if not state or state == "Not applicable":
             continue
@@ -211,6 +226,17 @@ class _SourceEvidence:
     vcf_calls: list[Nomenclature]
     advntr_calls: list[Nomenclature]
     supports: dict[str, int | None]
+
+
+@dataclass(frozen=True)
+class _PolicyOutcome:
+    """One sample under one policy, including production early-return state."""
+
+    call: Nomenclature
+    bam_candidate: bool
+    bam_fetches: int
+    finding: bool
+    early_return: str | None
 
 
 def _lesser(left: int | None, right: int | None) -> int | None:
@@ -307,6 +333,55 @@ def _rescue_rows(
     return calls, fetches
 
 
+def _is_displayed_name(call: Nomenclature) -> bool:
+    """Whether the emitted cell contains the call's selected positional name."""
+    return call.name is not None and render(call) == call.name
+
+
+def _reconcile_sample(
+    records: list[dict[str, str]],
+    advntr_rows: list[tuple[str, int | None]],
+    kestrel_dir: Path,
+    *,
+    has_motifs_schema: bool,
+    use_bam: bool,
+) -> _PolicyOutcome:
+    """Apply one reconciliation policy with production's early-return gates."""
+    evidence = _source_evidence(records, advntr_rows)
+    supports = dict(evidence.supports)
+    preliminary = reconcile(*evidence.vcf_calls, *evidence.advntr_calls, supports=supports)
+    candidate = is_candidate(preliminary)
+    has_translated_calls = bool(evidence.vcf_calls or evidence.advntr_calls)
+
+    # Production leaves already-written per-caller output untouched at either
+    # early return. The preliminary value represents that caller-only evidence for
+    # the display oracle, but no BAM path may be reached from these states.
+    if not has_motifs_schema:
+        return _PolicyOutcome(
+            preliminary,
+            candidate,
+            0,
+            _is_displayed_name(preliminary),
+            "missing-motifs-schema",
+        )
+    if not has_translated_calls:
+        return _PolicyOutcome(preliminary, candidate, 0, False, "no-named-calls")
+    if not use_bam or not candidate:
+        return _PolicyOutcome(preliminary, candidate, 0, _is_displayed_name(preliminary), None)
+
+    bam_calls, fetches = _rescue_rows(records, kestrel_dir, supports)
+    named_bam = [call for call in bam_calls if call is not None]
+    merged = reconcile(
+        *evidence.vcf_calls,
+        *named_bam,
+        *evidence.advntr_calls,
+        supports=supports,
+    )
+    for bam_call in named_bam:
+        merged = refine(merged, bam_call)
+    return _PolicyOutcome(merged, candidate, fetches, _is_displayed_name(merged), None)
+
+
 def _display_metrics(
     outcomes: list[tuple[str, str, Nomenclature]],
     control_findings: int,
@@ -324,7 +399,7 @@ def _display_metrics(
             mismatches.append((pair_id, call.name, shown))
         if call.name is None and shown and shown[0].isdigit():
             mismatches.append((pair_id, None, shown))
-        is_displayed = call.name is not None and shown == call.name
+        is_displayed = _is_displayed_name(call)
         if not is_displayed:
             continue
         displayed[call.tier] += 1
@@ -348,7 +423,8 @@ def _replay() -> GoldenReplay:
     with_bam_outcomes = []
     mutated_samples = 0
     normal_samples = 0
-    control_findings = 0
+    without_bam_control_findings = 0
+    with_bam_control_findings = 0
     eligible_samples = 0
     row_fetches = 0
     kestrel_record_count = 0
@@ -363,40 +439,28 @@ def _replay() -> GoldenReplay:
             mutated_samples += int(kestrel_path.is_file() and advntr_path.is_file())
             records = _kestrel_records(kestrel_path)
             advntr_rows = _advntr_records(advntr_path)
-            evidence = _source_evidence(records, advntr_rows)
 
             kestrel_record_count += len(records)
             usable_loci += sum(_row_locus(record) is not None for record in records)
 
-            no_bam_call = reconcile(
-                *evidence.vcf_calls,
-                *evidence.advntr_calls,
-                supports=dict(evidence.supports),
+            no_bam = _reconcile_sample(
+                records,
+                advntr_rows,
+                kestrel_dir,
+                has_motifs_schema=_has_motifs_schema(kestrel_path),
+                use_bam=False,
             )
-            without_bam_outcomes.append((pair_id, klass, no_bam_call))
-
-            with_bam_supports = dict(evidence.supports)
-            preliminary = reconcile(
-                *evidence.vcf_calls,
-                *evidence.advntr_calls,
-                supports=with_bam_supports,
+            with_bam = _reconcile_sample(
+                records,
+                advntr_rows,
+                kestrel_dir,
+                has_motifs_schema=_has_motifs_schema(kestrel_path),
+                use_bam=True,
             )
-            eligible = is_candidate(preliminary)
-            bam_calls = []
-            if eligible:
-                eligible_samples += 1
-                bam_calls, sample_fetches = _rescue_rows(records, kestrel_dir, with_bam_supports)
-                row_fetches += sample_fetches
-            named_bam = [call for call in bam_calls if call is not None]
-            with_bam_call = reconcile(
-                *evidence.vcf_calls,
-                *named_bam,
-                *evidence.advntr_calls,
-                supports=with_bam_supports,
-            )
-            for bam_call in named_bam:
-                with_bam_call = refine(with_bam_call, bam_call)
-            with_bam_outcomes.append((pair_id, klass, with_bam_call))
+            without_bam_outcomes.append((pair_id, klass, no_bam.call))
+            with_bam_outcomes.append((pair_id, klass, with_bam.call))
+            eligible_samples += int(with_bam.bam_candidate)
+            row_fetches += with_bam.bam_fetches
 
         for pair_id in sorted(_normal_pair_ids(root, experiment)):
             kestrel_path = root / experiment / "vntyper" / pair_id / "normal" / "kestrel" / "kestrel_result.tsv"
@@ -404,12 +468,27 @@ def _replay() -> GoldenReplay:
             normal_samples += int(kestrel_path.is_file() and advntr_path.is_file())
             normal_records = _kestrel_records(kestrel_path)
             normal_advntr = _advntr_records(advntr_path)
-            normal_evidence = _source_evidence(normal_records, normal_advntr)
-            control_findings += int(bool(normal_evidence.vcf_calls or normal_evidence.advntr_calls))
+            normal_dir = kestrel_path.parent
+            normal_without_bam = _reconcile_sample(
+                normal_records,
+                normal_advntr,
+                normal_dir,
+                has_motifs_schema=_has_motifs_schema(kestrel_path),
+                use_bam=False,
+            )
+            normal_with_bam = _reconcile_sample(
+                normal_records,
+                normal_advntr,
+                normal_dir,
+                has_motifs_schema=_has_motifs_schema(kestrel_path),
+                use_bam=True,
+            )
+            without_bam_control_findings += int(normal_without_bam.finding)
+            with_bam_control_findings += int(normal_with_bam.finding)
 
     return GoldenReplay(
-        without_bam=_display_metrics(without_bam_outcomes, control_findings),
-        with_bam=_display_metrics(with_bam_outcomes, control_findings),
+        without_bam=_display_metrics(without_bam_outcomes, without_bam_control_findings),
+        with_bam=_display_metrics(with_bam_outcomes, with_bam_control_findings),
         mutated_samples=mutated_samples,
         normal_samples=normal_samples,
         bam_eligible_samples=eligible_samples,
@@ -498,6 +577,51 @@ def test_external_corpus_is_loaded_and_every_kestrel_row_has_a_locus() -> None:
     assert replay.usable_row_loci == 178
 
 
+def test_corpus_row_filters_match_production() -> None:
+    """Both caller filters must agree with production for every corpus row."""
+    root, advntr_root = _require_sim(), _require_advntr()
+    mismatches = []
+    for experiment in EXPERIMENTS:
+        pairs_by_condition = (("mutated", _truth(root, experiment)), ("normal", _normal_pair_ids(root, experiment)))
+        for condition, pair_ids in pairs_by_condition:
+            for pair_id in pair_ids:
+                paths = (
+                    (root / experiment / "vntyper" / pair_id / condition / "kestrel" / "kestrel_result.tsv", True),
+                    (
+                        advntr_root / experiment / pair_id / condition / "advntr" / "output_adVNTR_result.tsv",
+                        False,
+                    ),
+                )
+                for path, comments in paths:
+                    _, rows = _result_rows(path, comments=comments)
+                    for index, row in enumerate(rows):
+                        if _golden_is_negative(row) != _is_negative(pd.Series(row)):
+                            mismatches.append((experiment, pair_id, condition, path.name, index))
+    assert mismatches == []
+
+
+def test_policy_replay_stops_at_missing_motifs_schema() -> None:
+    """Caller-only evidence remains visible, but BAM rescue is unreachable."""
+    outcome = _reconcile_sample(
+        [],
+        [("I22_2_G_LEN1", 24)],
+        Path(),
+        has_motifs_schema=False,
+        use_bam=True,
+    )
+    assert outcome.early_return == "missing-motifs-schema"
+    assert outcome.call.name == "59dupC"
+    assert outcome.bam_fetches == 0
+
+
+def test_policy_replay_stops_without_translated_calls() -> None:
+    """An empty translated call set cannot reach the BAM rescue path."""
+    outcome = _reconcile_sample([], [], Path(), has_motifs_schema=True, use_bam=True)
+    assert outcome.early_return == "no-named-calls"
+    assert outcome.finding is False
+    assert outcome.bam_fetches == 0
+
+
 def test_display_counts_partition_into_exact_and_wrong_names() -> None:
     """No lower-tier displayed name can fall outside the exact/wrong denominator."""
     for policy in (_replay().without_bam, _replay().with_bam):
@@ -544,15 +668,17 @@ def test_the_bam_rescue_recovers_alleles_the_vcf_could_not() -> None:
         "insG_pos54": 7,
         "insG_pos58": 1,
     }
-    assert {klass: replay.with_bam.exact_by_class[klass] for klass in EXPECTED_NAME} == {
-        klass: expected_policy_two.get(klass, 0) for klass in EXPECTED_NAME
+    policy_two_classes = set(EXPECTED_NAME) | set(replay.with_bam.exact_by_class)
+    assert {klass: replay.with_bam.exact_by_class[klass] for klass in policy_two_classes} == {
+        klass: expected_policy_two.get(klass, 0) for klass in policy_two_classes
     }
     expected_gains = {"insCCCC": 6, "insG": 4, "insG_pos54": 7}
+    gain_classes = set(EXPECTED_NAME) | set(replay.without_bam.exact_by_class) | set(replay.with_bam.exact_by_class)
     gains = {
         klass: replay.with_bam.exact_by_class[klass] - replay.without_bam.exact_by_class[klass]
-        for klass in EXPECTED_NAME
+        for klass in gain_classes
     }
-    assert gains == {klass: expected_gains.get(klass, 0) for klass in EXPECTED_NAME}
+    assert gains == {klass: expected_gains.get(klass, 0) for klass in gain_classes}
 
 
 def test_the_emitted_cell_shows_the_name_whenever_one_was_computed() -> None:
