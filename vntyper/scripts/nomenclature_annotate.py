@@ -134,10 +134,10 @@ def annotate_kestrel_frame(frame: pd.DataFrame, output_dir: str | Path | None = 
 
     Args:
         frame: The final Kestrel frame, as written to ``kestrel_result.tsv``.
-        output_dir: The Kestrel output directory, when the reads are available. Given
-            one, rows the VCF cannot resolve are refined against ``output.bam`` --
-            the rescue path that recovers a delins. Omitted, the VCF result stands
-            and no BAM is opened.
+        output_dir: The Kestrel output directory, when resolved haplotype records
+            are available. Given one, rows the VCF cannot resolve are refined
+            against ``output.bam`` -- the rescue path that recovers a delins.
+            Omitted, the VCF result stands and no BAM is opened.
 
     Returns:
         pd.DataFrame: A copy with the five columns appended. The negative-run frame
@@ -166,7 +166,7 @@ def annotate_kestrel_frame(frame: pd.DataFrame, output_dir: str | Path | None = 
             # the common path never opens it.
             bam_call = None
             if rescuer is not None and is_candidate(merged):
-                bam_call, _ = _row_read_call(row, rescuer)
+                bam_call, _ = _row_haplotype_call(row, rescuer)
             merged = refine(merged, bam_call)
             # adVNTR is optional and has not run at this point, so its column is
             # empty; the cross-caller stage fills it in when it does run.
@@ -181,7 +181,7 @@ def annotate_kestrel_frame(frame: pd.DataFrame, output_dir: str | Path | None = 
 
 
 def _open_rescuer(output_dir: str | Path | None) -> BamRescuer | None:
-    """Build a rescuer for a sample, or ``None`` when the reads are unavailable.
+    """Build a rescuer for a sample, or ``None`` without haplotype records.
 
     Args:
         output_dir: The Kestrel output directory.
@@ -221,18 +221,18 @@ def _kestrel_row_call(row: pd.Series) -> Nomenclature | None:
         return None
 
 
-def _row_read_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclature | None, int | None]:
-    """What the reads say at one Kestrel row's locus.
+def _row_haplotype_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclature | None, int | None]:
+    """What the resolved haplotype records say at one Kestrel row's locus.
 
     Args:
         row: One Kestrel result row.
         rescuer: The open rescuer for this sample.
 
     Returns:
-        tuple: ``(call, supporting reads)``; ``(None, None)`` when the locus is
-        unreadable or the reads carry no length-changing edit. The read count is
-        returned alongside because the tier gate must weigh an agreement by the reads
-        actually under it, not by an unrelated source's depth.
+        tuple: ``(call, supporting haplotype records)``; ``(None, None)`` when the
+        locus is unavailable or the records carry no length-changing edit. The
+        record count is returned alongside because the tier gate must weigh an
+        agreement by its own evidence, not an unrelated source's depth.
     """
     locus = _row_locus(row)
     if locus is None:
@@ -241,7 +241,7 @@ def _row_read_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclature | 
     consensus = rescuer.rescue(contig, position)
     if consensus is None:
         return None, None
-    return from_bam(contig, consensus), consensus.support
+    return from_bam(contig, consensus), consensus.supporting_haplotype_records
 
 
 def _row_locus(row: pd.Series) -> tuple[str, int] | None:
@@ -344,7 +344,13 @@ def reconcile_caller_outputs(
     if not named_vcf and not advntr_calls:
         return False
 
-    bam_calls = _read_calls(kestrel_rows, kestrel_dir or kestrel_path.parent, named_vcf, advntr_calls, supports)
+    bam_calls = _haplotype_calls(
+        kestrel_rows,
+        kestrel_dir or kestrel_path.parent,
+        named_vcf,
+        advntr_calls,
+        supports,
+    )
     named_bam = [call for call in bam_calls if call is not None]
 
     # Order matters: the Kestrel VCF is offered first so that whenever nothing
@@ -352,8 +358,8 @@ def reconcile_caller_outputs(
     merged = reconcile(*named_vcf, *named_bam, *advntr_calls, supports=supports)
     for bam_call in named_bam:
         # Still applied after the vote, because it carries one rule the vote cannot:
-        # a delins is unrepresentable in Kestrel's VCF, so a delins seen in the reads
-        # is better evidence than the closest shape the VCF could write.
+        # A delins is unrepresentable in Kestrel's VCF, so one seen in the
+        # haplotype records is better evidence than the closest VCF shape.
         merged = refine(merged, bam_call)
 
     # Each row keeps its *own* caller's name. Broadcasting one joined string to every
@@ -409,15 +415,15 @@ def _row_verdicts(
     vcf_calls: list[Nomenclature | None],
     bam_calls: list[Nomenclature | None],
 ) -> list[Nomenclature | None]:
-    """What Kestrel concludes for each of its own rows, refined by that row's reads.
+    """What Kestrel concludes per row, refined by that row's haplotype records.
 
     Both lists are aligned to the Kestrel rows, so the pairing is by position. An
-    earlier version compacted the read consensuses, which pushed row 2's reads onto
-    row 1 whenever row 1 had none.
+    earlier version compacted the haplotype consensuses, which pushed row 2's
+    records onto row 1 whenever row 1 had none.
 
     Args:
         vcf_calls: Per Kestrel row, ``None`` where untranslatable.
-        bam_calls: Per Kestrel row, ``None`` where the reads said nothing.
+        bam_calls: Per Kestrel row, ``None`` where the haplotype records said nothing.
 
     Returns:
         list: Per Kestrel row, ``None`` where untranslatable.
@@ -427,8 +433,8 @@ def _row_verdicts(
         if call is None:
             verdicts.append(None)
             continue
-        reads = bam_calls[index] if index < len(bam_calls) else None
-        verdicts.append(refine(reconcile(call), reads))
+        haplotype_call = bam_calls[index] if index < len(bam_calls) else None
+        verdicts.append(refine(reconcile(call), haplotype_call))
     return verdicts
 
 
@@ -466,30 +472,29 @@ def _advntr_calls_by_row(
     return grouped
 
 
-def _read_calls(
+def _haplotype_calls(
     kestrel_rows: list[pd.Series],
     kestrel_dir: str | Path,
     vcf_calls: list[Nomenclature],
     advntr_calls: list[Nomenclature],
     supports: dict[str, int | None],
 ) -> list[Nomenclature | None]:
-    """The reads, as a third source, where the two callers leave something open.
+    """Resolved haplotype records where the callers leave something open.
 
-    The reads are what separate a Kestrel misplacement from a real disagreement, and
-    they are the only evidence available when the two callers conflict. They are
-    consulted only when the callers do not already settle the locus, so a sample
-    where the two agree still never opens the BAM.
+    The records can separate a Kestrel VCF misplacement from a real disagreement.
+    They are consulted only when the callers do not already settle the locus, so a
+    sample where the two agree still never opens the BAM.
 
     Args:
         kestrel_rows: The non-negative Kestrel rows, in file order.
         kestrel_dir: Directory holding ``output.bam``.
         vcf_calls: The Kestrel VCF calls.
         advntr_calls: The adVNTR calls.
-        supports: Per-source depths, updated in place with the read count.
+        supports: Per-source quantities, updated with haplotype-record support.
 
     Returns:
         list[Nomenclature | None]: One entry per Kestrel row, `None` where the
-        reads said nothing.
+        haplotype records said nothing.
     """
     if not is_candidate(reconcile(*vcf_calls, *advntr_calls, supports=supports)):
         return []
@@ -498,18 +503,18 @@ def _read_calls(
     if rescuer is None:
         return []
 
-    # One entry per Kestrel row, `None` where the reads said nothing. The positions
-    # are what pairs a read consensus back to the record it came from; compacting the
-    # list would refine row 2's allele onto row 1.
+    # One entry per Kestrel row, `None` where the haplotype records said nothing.
+    # Positions pair each consensus back to its row; compacting the list would
+    # refine row 2's allele onto row 1.
     calls: list[Nomenclature | None] = []
     try:
         for row in kestrel_rows:
-            call, support = _row_read_call(row, rescuer)
+            call, support = _row_haplotype_call(row, rescuer)
             calls.append(call)
             if call is None:
                 continue
             existing = supports.get("kestrel_bam")
-            # The weakest read consensus sets the depth, as for every other source:
+            # The weakest haplotype-record consensus sets this source's support:
             # an agreement is only as strong as its thinnest contributing evidence.
             supports["kestrel_bam"] = support if existing is None else min(existing, support or existing)
     finally:

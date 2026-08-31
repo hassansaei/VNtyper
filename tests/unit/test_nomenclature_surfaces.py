@@ -14,16 +14,22 @@ import pysam
 import pytest
 
 from tests.builders import STAGE_COLUMNS, kestrel_stage_frame
-from vntyper.scripts import nomenclature
+from vntyper.scripts import nomenclature, nomenclature_annotate
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
-from vntyper.scripts.nomenclature import Nomenclature
+from vntyper.scripts.nomenclature import (
+    FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+    Nomenclature,
+    from_advntr,
+    from_kestrel,
+)
 from vntyper.scripts.nomenclature_annotate import (
     NOMENCLATURE_COLUMNS,
     annotate_advntr_frame,
     annotate_kestrel_frame,
     reconcile_caller_outputs,
 )
+from vntyper.scripts.nomenclature_bam import BamRescuer
 from vntyper.scripts.report_formatting import ADVNTR_DISPLAY_COLUMNS, KESTREL_DISPLAY_COLUMNS
 from vntyper.scripts.summary import parse_tsv
 
@@ -244,67 +250,207 @@ def test_the_advntr_frame_records_its_own_name_as_the_advntr_column() -> None:
     assert named.loc[0, "Nomenclature_Kestrel"] == ""
 
 
-def _write_pair_bam(path: Path, inserted_at: int, base: str, reads: int) -> None:
+def _write_pair_bam(
+    path: Path,
+    inserted_at: int,
+    base: str,
+    minimum_kmer_depths: tuple[int | None, ...],
+) -> None:
     """Write an indexed ``output.bam`` over the real ``X-X`` pair reference.
 
     Args:
         path: Destination ``output.bam``.
         inserted_at: 0-based reference position the insertion sits before.
         base: The inserted plus-strand base.
-        reads: How many reads carry it.
+        minimum_kmer_depths: One optional XD value per resolved haplotype record.
     """
     pair = nomenclature.pair_sequence("X-X")
     assert pair is not None
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "X-X", "LN": len(pair)}]}
     trailing = len(pair) - inserted_at
     with pysam.AlignmentFile(str(path), "wb", header=header) as handle:
-        for index in range(reads):
+        for index, minimum_kmer_depth in enumerate(minimum_kmer_depths):
             record = pysam.AlignedSegment(handle.header)
-            record.query_name = f"read{index}"
+            record.query_name = f"resolved_haplotype_{index}"
             record.reference_id = 0
             record.reference_start = 0
             record.mapping_quality = 255
             record.cigarstring = f"{inserted_at}=1I{trailing}="
             record.query_sequence = pair[:inserted_at] + base + pair[inserted_at:]
+            if minimum_kmer_depth is not None:
+                record.set_tag("XD", minimum_kmer_depth)
             handle.write(record)
     pysam.index(str(path))  # type: ignore[attr-defined]
 
 
-def test_the_cross_caller_stage_consults_the_reads(tmp_path) -> None:
-    """The reads must reach the only step that can see both callers.
+def test_the_cross_caller_stage_consults_resolved_haplotype_records(tmp_path) -> None:
+    """The haplotype records must reach the only step that sees both callers.
 
     This is the production path for the whole vote. The Kestrel VCF places the
-    insertion at ``59_60insG``; adVNTR and the reads independently say ``58_59insG``,
+    insertion at ``59_60insG``; adVNTR and the BAM records say ``58_59insG``,
     and two sources from two callers outvote one. Without the BAM the cross-caller
     step sees only the two callers disagreeing and the wrong VCF placement stands.
     """
     kestrel, advntr = _write_disagreeing_outputs(tmp_path)
-    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", reads=4)
+    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", minimum_kmer_depths=(5, 181, 7_416, 8_704))
 
     assert reconcile_caller_outputs(kestrel, advntr) is True
 
     written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
-    assert written.loc[0, "Nomenclature"] == "58_59insG", "the reads corroborated adVNTR; the VCF was outvoted"
+    assert written.loc[0, "Nomenclature"] == "58_59insG", "the haplotype records corroborated adVNTR"
     assert written.loc[0, "Nomenclature_Kestrel"] == "59_60insG", "Kestrel's own record is still reported"
     assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
+    assert FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT in written.loc[0, "Nomenclature_Flags"]
+    assert written.loc[0, "Nomenclature_Tier"] == "B", "four records, not XD, set the support boundary"
 
 
-def test_the_reads_alone_do_not_outvote_the_vcf(tmp_path) -> None:
-    """Same reads, but adVNTR agreeing with Kestrel instead.
+def test_the_haplotype_records_alone_do_not_outvote_the_vcf(tmp_path) -> None:
+    """Same haplotype records, but adVNTR agreeing with Kestrel instead.
 
-    The reads are Kestrel's own alignment, so on their own they are not a second
+    The records are Kestrel's own output, so on their own they are not a second
     caller and must not overturn the VCF -- the guard against the earlier policy that
     cost `dupA` 6 correct calls out of 10.
     """
     kestrel, advntr = _write_disagreeing_outputs(tmp_path)
     # I22_2_C_LEN1 names 59_60insG, the same allele the Kestrel VCF names.
     advntr.write_text(advntr.read_text().replace("I23_2_C_LEN1", "I22_2_C_LEN1"))
-    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", reads=4)
+    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", minimum_kmer_depths=(5, 181, 7_416, 8_704))
 
     assert reconcile_caller_outputs(kestrel, advntr) is True
 
     written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
-    assert written.loc[0, "Nomenclature"] == "59_60insG", "one caller's reads may not veto its own VCF"
+    assert written.loc[0, "Nomenclature"] == "59_60insG", "one caller's BAM records may not veto its own VCF"
+
+
+@pytest.mark.parametrize(
+    "minimum_kmer_depths",
+    [
+        (None, None, None, None),
+        (0, 0, 0, 0),
+        (5, 181, 7_416, 8_704),
+        (2_147_483_647, 2_147_483_647, 2_147_483_647, 2_147_483_647),
+    ],
+)
+def test_xd_cannot_change_production_nomenclature_decisions(
+    tmp_path: Path,
+    minimum_kmer_depths: tuple[int | None, ...],
+) -> None:
+    """Changing only XD cannot change any displayed decision or candidate fetch."""
+    case_dir = tmp_path / str(minimum_kmer_depths[0])
+    case_dir.mkdir()
+    kestrel, advntr = _write_disagreeing_outputs(case_dir)
+    _write_pair_bam(case_dir / "output.bam", 62, "C", minimum_kmer_depths)
+
+    rescuers: list[BamRescuer] = []
+    open_rescuer = nomenclature_annotate._open_rescuer
+
+    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir)
+        if rescuer is not None:
+            rescuers.append(rescuer)
+        return rescuer
+
+    with mock.patch.object(nomenclature_annotate, "_open_rescuer", side_effect=tracked_open):
+        assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    decision_columns = [
+        "Nomenclature",
+        "Nomenclature_Tier",
+        "Nomenclature_Flags",
+        "Nomenclature_Kestrel",
+        "Nomenclature_adVNTR",
+    ]
+    assert written.loc[0, decision_columns].to_dict() == {
+        "Nomenclature": "58_59insG",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "caller-disagreement;known-variant;low-haplotype-record-support",
+        "Nomenclature_Kestrel": "59_60insG",
+        "Nomenclature_adVNTR": "58_59insG",
+    }
+    assert len(rescuers) == 1
+    assert rescuers[0].opens == 1
+    assert rescuers[0].fetches == 1
+
+
+def test_haplotype_support_is_the_record_count_not_xd(tmp_path: Path) -> None:
+    """High XD must not replace four resolved records in the support mapping."""
+    _write_pair_bam(
+        tmp_path / "output.bam",
+        62,
+        "C",
+        (2_147_483_647, 2_147_483_647, 2_147_483_647, 2_147_483_647),
+    )
+    row = pd.Series({"Motif_fasta": "X-X", "POS_fasta": 61})
+    rescuer = BamRescuer(tmp_path / "output.bam")
+    try:
+        call, support = nomenclature_annotate._row_haplotype_call(row, rescuer)
+    finally:
+        rescuer.close()
+
+    assert call is not None
+    assert support == 4
+    assert rescuer.opens == 1
+    assert rescuer.fetches == 1
+
+
+def test_non_candidate_never_opens_or_fetches_the_bam(tmp_path: Path) -> None:
+    """A settled caller agreement must return before constructing a rescuer."""
+    _write_pair_bam(tmp_path / "output.bam", 62, "C", (5, 181, 7_416, 8_704))
+    supports: dict[str, int | None] = {"kestrel_vcf": 40, "advntr": 40}
+    with mock.patch.object(nomenclature_annotate, "_open_rescuer", wraps=nomenclature_annotate._open_rescuer) as opened:
+        calls = nomenclature_annotate._haplotype_calls(
+            [pd.Series({"Motif_fasta": "X-X", "POS_fasta": 61})],
+            tmp_path,
+            [from_kestrel("X-X", 67, "G", "GG")],
+            [from_advntr("I22_2_G_LEN1")[0]],
+            supports,
+        )
+
+    assert calls == []
+    opened.assert_not_called()
+
+
+def test_candidate_rows_share_one_rescuer_and_keep_fetch_order(tmp_path: Path) -> None:
+    """Recreating or reordering the rescuer would detach evidence from its row."""
+    _write_pair_bam(tmp_path / "output.bam", 62, "C", (5, 181, 7_416, 8_704))
+    rows = [
+        pd.Series({"Motif_fasta": "X-X", "POS_fasta": 61}),
+        pd.Series({"Motif_fasta": "X-X", "POS_fasta": 67}),
+    ]
+    supports: dict[str, int | None] = {"kestrel_vcf": 40, "advntr": 40}
+    fetched_loci: list[tuple[str, int]] = []
+    rescuers: list[BamRescuer] = []
+    open_rescuer = nomenclature_annotate._open_rescuer
+
+    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir)
+        assert rescuer is not None
+        original_rescue = rescuer.rescue
+
+        def tracked_rescue(contig: str, position: int):
+            fetched_loci.append((contig, position))
+            return original_rescue(contig, position)
+
+        rescuer.rescue = tracked_rescue  # type: ignore[method-assign]
+        rescuers.append(rescuer)
+        return rescuer
+
+    with mock.patch.object(nomenclature_annotate, "_open_rescuer", side_effect=tracked_open):
+        calls = nomenclature_annotate._haplotype_calls(
+            rows,
+            tmp_path,
+            [from_kestrel("X-X", 61, "T", "TC")],
+            [from_advntr("I23_2_C_LEN1")[0]],
+            supports,
+        )
+
+    assert len(rescuers) == 1
+    assert rescuers[0].opens == 1
+    assert rescuers[0].fetches == 2
+    assert fetched_loci == [("X-X", 61), ("X-X", 67)]
+    assert len(calls) == 2
+    assert supports["kestrel_bam"] == 4, "the production mapping must carry the record count, not XD"
 
 
 def test_a_missing_allele_cell_does_not_become_a_name(tmp_path) -> None:
