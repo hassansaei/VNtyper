@@ -132,6 +132,11 @@ def test_a_report_is_written(positive_summary) -> None:
     assert '<h1><i class="gene">MUC1</i> VNTR report — sample</h1>' in html
 
 
+def test_the_gene_symbol_is_italic_without_bold_weight(positive_summary) -> None:
+    html = render(positive_summary)
+    assert ".gene { font-style: italic; font-weight: normal; }" in html
+
+
 def test_the_config_is_required(tmp_path) -> None:
     with pytest.raises(ValueError, match="Config dictionary must be provided"):
         generate_summary_report(

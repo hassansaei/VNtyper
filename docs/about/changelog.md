@@ -8,6 +8,11 @@ No unreleased changes.
 
 ## 2.0.26 (Current)
 
+### Report typography
+
+- **Gene symbols use nonbold italics.** The *MUC1* symbol in the report title no longer
+  inherits the heading's bold weight.
+
 ### Configured fastp quality boundaries
 
 - **Report cutoffs, displayed values, and pass/fail indicators now share the configured

@@ -66,9 +66,9 @@
         /* What produced this file, under what it is of. A byline rather than a second
            heading: it names the tool, not a section, so it takes no rank in the
            document outline. */
-        /* A gene symbol is set in italics. Stated as a class rather than left to the
-           `<i>` default so the rule is one a deployment can find and restyle. */
-        .gene { font-style: italic; }
+        /* A gene symbol is set in nonbold italics. Stated as a class rather than left
+           to the `<i>` default so the rule is one a deployment can find and restyle. */
+        .gene { font-style: italic; font-weight: normal; }
         .byline {
             margin: 0 0 var(--s-5);
             font-size: var(--step--1);
