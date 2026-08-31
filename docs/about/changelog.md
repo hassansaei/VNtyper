@@ -6,7 +6,32 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.25 (Current)
+## 2.0.26 (Current)
+
+### Configured fastp quality boundaries
+
+- **Report cutoffs, displayed values, and pass/fail indicators now share the configured
+  decision boundary.** Exact JSON decimal spellings are retained for report decisions,
+  rates use documented half-up rounding, and the public dictionary/float compatibility
+  surface remains available ([#290](https://github.com/hassansaei/VNtyper/issues/290)).
+- **Present fastp evidence is validated instead of silently treated as unavailable.**
+  Malformed values, impossible counts, and non-finite or fractional counts fail explicitly;
+  a genuinely absent fastp artifact remains an unavailable optional report section.
+
+### Bounded comparator rules
+
+- **Flagging and cross-match rules no longer execute Python expressions.** Kestrel and
+  adVNTR flagging plus cross-match now share a data-only comparator DSL limited to the
+  shipped comparisons and explicit bounded boolean composition
+  ([#286](https://github.com/hassansaei/VNtyper/issues/286)).
+- **Invalid rules fail before result publication.** Complete rule trees, consumer columns,
+  operand types, null behavior, and finite numeric values are validated up front; exact
+  adapters preserve the documented shipped legacy expressions during migration.
+- **Genotyping behavior remained stable in the sealed parity cohort.** The 1,600 baseline
+  and candidate Kestrel/adVNTR jobs completed with zero artifact deltas, and the final
+  combined head passed the Python 3.10–3.13 and Docker gates.
+
+## 2.0.25
 
 ### Versioned integration report observations
 
