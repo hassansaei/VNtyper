@@ -17,6 +17,7 @@ import pytest
 
 from tests.builders import kestrel_stage_frame
 from vntyper.scripts import kestrel_genotyping as kg
+from vntyper.scripts.identity_candidates import IdentityTranslationComponent
 from vntyper.scripts.summary import parse_tsv
 
 pytestmark = pytest.mark.unit
@@ -119,9 +120,17 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
     vcf.write_text(META + HEADER + RECORD, encoding="utf-8")
     seen: dict[str, object] = {}
 
-    def fake_process_kmer_results(combined_df, merged_motifs, output_dir, config, compiled_flag_rules=None):
+    def fake_process_kmer_results(
+        combined_df,
+        merged_motifs,
+        output_dir,
+        config,
+        compiled_flag_rules=None,
+        identity_component=None,
+    ):
         seen["combined_rows"] = len(combined_df)
         seen["alts"] = list(combined_df["ALT"])
+        seen["identity_component"] = identity_component
         return kestrel_stage_frame("final")
 
     with (
@@ -136,7 +145,8 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
     ):
         returned = kg.process_kestrel_output(str(tmp_path), vcf, "ref.fa", {}, {})
 
-    assert seen == {"combined_rows": 1, "alts": ["CC"]}, "the real VCF record must reach the scoring seam"
+    assert seen["combined_rows"] == 1 and seen["alts"] == ["CC"], "the real VCF record must reach the scoring seam"
+    assert isinstance(seen["identity_component"], IdentityTranslationComponent)
     assert returned is not None and len(returned) == 1
 
     parsed = parse_tsv(str(tmp_path / "kestrel_result.tsv"))

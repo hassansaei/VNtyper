@@ -258,7 +258,14 @@ class TestTheScoredEmptyBranch:
         """
         vcf = self.raw_vcf(tmp_path, self.RECORD)
 
-        def fake_process_kmer_results(combined_df, merged_motifs, output_dir, config, compiled_flag_rules=None):
+        def fake_process_kmer_results(
+            combined_df,
+            merged_motifs,
+            output_dir,
+            config,
+            compiled_flag_rules=None,
+            identity_component=None,
+        ):
             row = {} if eligible else {st.DEPTH_GATE: True}
             pre_result(Path(output_dir) / "kestrel_pre_result.tsv", [row])
             return pd.DataFrame()

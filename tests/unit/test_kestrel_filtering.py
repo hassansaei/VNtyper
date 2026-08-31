@@ -31,11 +31,18 @@ import pytest
 from tests.builders import kestrel_config, kestrel_stage_frame
 from tests.support.pipeline_harness import run_pipeline_under_harness
 from vntyper.scripts import kestrel_genotyping
+from vntyper.scripts.identity_candidate_persistence import (
+    IDENTITY_CAPTURE_COLUMNS,
+    IDENTITY_SELECTION_COLUMNS,
+    parse_selected_candidate_cells,
+)
+from vntyper.scripts.identity_candidates import translation_component_from_config
 from vntyper.scripts.kestrel_genotyping import (
     construct_kestrel_command,
     filter_final_dataframe,
     select_single_best_variant,
 )
+from vntyper.scripts.nomenclature import nomenclature_config
 
 pytestmark = pytest.mark.unit
 
@@ -539,6 +546,77 @@ def test_filter_final_dataframe_does_not_leak_sort_keys_into_the_result(tmp_path
     pre_result = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t")
     assert "_priority" not in pre_result.columns
     assert "_is_unflagged" not in pre_result.columns
+
+
+def test_identity_capture_precedes_haplo_projection_and_survives_selection(tmp_path, monkeypatch):
+    """Complete raw observations are captured before counting and persist through TSV."""
+    motifs = nomenclature_config["motifs"]
+    rows = pd.DataFrame(
+        [
+            {
+                **kestrel_stage_frame(
+                    "raw",
+                    rows=1,
+                    motifs="S-C",
+                    pos=67,
+                    ref="G",
+                    alt="GG",
+                    depth_alt=4,
+                    depth_region=400,
+                )
+                .iloc[0]
+                .to_dict(),
+                "Motif_sequence": motifs["C"] + motifs["S"],
+            },
+            {
+                **kestrel_stage_frame(
+                    "raw",
+                    rows=1,
+                    motifs="A-J",
+                    pos=67,
+                    ref="C",
+                    alt="CG",
+                    depth_alt=7,
+                    depth_region=500,
+                )
+                .iloc[0]
+                .to_dict(),
+                "Motif_sequence": motifs["J"] + motifs["A"],
+            },
+        ]
+    )
+    merged = pd.DataFrame({"Motif": ["S", "A"], "Motif_sequence": [motifs["S"], motifs["A"]]})
+    real_add_haplo_count = kestrel_genotyping.add_haplo_count
+    saw_capture_before_count = False
+
+    def checking_add_haplo_count(frame):
+        nonlocal saw_capture_before_count
+        saw_capture_before_count = set(IDENTITY_CAPTURE_COLUMNS).issubset(frame.columns)
+        return real_add_haplo_count(frame)
+
+    monkeypatch.setattr(kestrel_genotyping, "add_haplo_count", checking_add_haplo_count)
+
+    result = kestrel_genotyping.process_kmer_results(
+        rows,
+        merged,
+        str(tmp_path),
+        kestrel_config(),
+        identity_component=translation_component_from_config(nomenclature_config),
+    )
+
+    assert saw_capture_before_count is True
+    assert len(result) == 1
+    assert set(IDENTITY_CAPTURE_COLUMNS).issubset(result.columns)
+    assert set(IDENTITY_SELECTION_COLUMNS).issubset(result.columns)
+    replayed = parse_selected_candidate_cells(result.iloc[0].to_dict())
+    assert replayed.equivalent_representation_count == 2
+    assert replayed.identity_hypothesis_count == 1
+    assert replayed.selected_row_key.values == ("A-J", 67, "C", "CG")
+
+    pre_result = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t", keep_default_na=False)
+    assert len(pre_result) == 2
+    assert set(IDENTITY_CAPTURE_COLUMNS).issubset(pre_result.columns)
+    assert pre_result[IDENTITY_CAPTURE_COLUMNS[2]].tolist() == ["resolved", "resolved"]
 
 
 class TestConstructKestrelCommand:
