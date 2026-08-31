@@ -140,21 +140,30 @@ class FrameConsequence:
 
 @dataclass(frozen=True)
 class KestrelRepresentation:
-    """A Kestrel VCF representation in its caller-specific reference context."""
+    """A Kestrel VCF representation with its complete observed pair context.
+
+    The source representation key remains ``(motifs, position, reference_allele,
+    alternate_allele)``. ``pair_sequence`` is independent context used to prove or
+    close translation, not another identity or representation-key component.
+    """
 
     motifs: str
     position: int
     reference_allele: str
     alternate_allele: str
+    pair_sequence: str
 
     def __post_init__(self) -> None:
-        """Validate the complete raw Kestrel representation key."""
+        """Validate the raw representation fields and complete observed context."""
         if not isinstance(self.motifs, str) or not self.motifs:
             raise ValueError("Kestrel motifs must be a non-empty string")
         if isinstance(self.position, bool) or not isinstance(self.position, int) or self.position < 1:
             raise ValueError("Kestrel position must be a positive integer")
         _validate_allele(self.reference_allele, "Kestrel reference allele", allow_empty=False)
         _validate_allele(self.alternate_allele, "Kestrel alternate allele", allow_empty=False)
+        _validate_allele(self.pair_sequence, "Kestrel pair sequence", allow_empty=False)
+        if len(self.pair_sequence) != 120:
+            raise ValueError("Kestrel pair sequence must contain exactly 120 bases")
 
 
 @dataclass(frozen=True)

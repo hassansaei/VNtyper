@@ -24,6 +24,8 @@ from vntyper.scripts.molecular_identity import (
 
 pytestmark = pytest.mark.unit
 
+_COMPLETE_PAIR = "A" * 120
+
 
 def test_canonical_dupc_has_stable_identity() -> None:
     """Canonical dupC retains its versioned serialization."""
@@ -221,9 +223,41 @@ def test_translation_value_type_rejects_unknown_or_divergent_unresolved_states(
 @pytest.mark.parametrize(
     "factory",
     [
-        lambda: KestrelRepresentation(motifs="", position=1, reference_allele="A", alternate_allele="G"),
-        lambda: KestrelRepresentation(motifs="M1-M2", position=0, reference_allele="A", alternate_allele="G"),
-        lambda: KestrelRepresentation(motifs="M1-M2", position=1, reference_allele="a", alternate_allele="G"),
+        lambda: KestrelRepresentation(
+            motifs="",
+            position=1,
+            reference_allele="A",
+            alternate_allele="G",
+            pair_sequence=_COMPLETE_PAIR,
+        ),
+        lambda: KestrelRepresentation(
+            motifs="M1-M2",
+            position=0,
+            reference_allele="A",
+            alternate_allele="G",
+            pair_sequence=_COMPLETE_PAIR,
+        ),
+        lambda: KestrelRepresentation(
+            motifs="M1-M2",
+            position=1,
+            reference_allele="a",
+            alternate_allele="G",
+            pair_sequence=_COMPLETE_PAIR,
+        ),
+        lambda: KestrelRepresentation(
+            motifs="M1-M2",
+            position=1,
+            reference_allele="A",
+            alternate_allele="G",
+            pair_sequence="A" * 119,
+        ),
+        lambda: KestrelRepresentation(
+            motifs="M1-M2",
+            position=1,
+            reference_allele="A",
+            alternate_allele="G",
+            pair_sequence="A" * 119 + "n",
+        ),
         lambda: AdvntrRepresentation(state="", repeat_unit=None, position=None),
         lambda: AdvntrRepresentation(state="3-1", repeat_unit="", position=None),
         lambda: AdvntrRepresentation(state="3-1", repeat_unit=None, position=0),
@@ -239,7 +273,13 @@ def test_representation_and_disposition_values_reject_invalid_fields(factory: Ca
 def test_value_types_reject_inconsistent_observation_and_decision_states() -> None:
     """The supporting identity values preserve source and decision boundaries."""
     identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
-    kestrel = KestrelRepresentation(motifs="M1-M2", position=1, reference_allele="A", alternate_allele="G")
+    kestrel = KestrelRepresentation(
+        motifs="M1-M2",
+        position=1,
+        reference_allele="A",
+        alternate_allele="G",
+        pair_sequence=_COMPLETE_PAIR,
+    )
     advntr = AdvntrRepresentation(state="3-1", repeat_unit="X", position=1)
     translation = IdentityTranslation(identity=identity, status="resolved", failure=None, context_diverges=False)
     consequence = FrameConsequence(net_length_change=1, is_frameshift=True)
@@ -285,7 +325,13 @@ def test_nested_identity_values_reject_invalid_direct_construction() -> None:
     identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
     translation = IdentityTranslation(identity=identity, status="resolved", failure=None, context_diverges=False)
     consequence = FrameConsequence(net_length_change=1, is_frameshift=True)
-    kestrel = KestrelRepresentation(motifs="M1-M2", position=1, reference_allele="A", alternate_allele="G")
+    kestrel = KestrelRepresentation(
+        motifs="M1-M2",
+        position=1,
+        reference_allele="A",
+        alternate_allele="G",
+        pair_sequence=_COMPLETE_PAIR,
+    )
 
     assert IdentityDecision(identity=identity, tier="B", molecular_agreement=True, abstention_reason=None).tier == "B"
     assert IdentityDecision(identity=identity, tier="C", molecular_agreement=False, abstention_reason=None).tier == "C"
