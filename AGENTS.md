@@ -732,10 +732,6 @@ summary | release-summary | none | always records success, failure, skipped jobs
 
 ## Never
 
-- Never create, move, or push a release tag as an agent. A tag alone no longer starts
-  current production policy, but operators must create the reviewed existing tag before
-  sending the authenticated `vntyper_release` dispatch; `PYPI_API_TOKEN` has been deleted
-  after the green OIDC releases, so historical token workflows cannot retrieve it.
 - Never commit into `tests/data/`, `reference/`, `out/`, `download/`, `vntyper.egg-info/`
   or the local `adVNTR/` clone — all are generated or downloaded.
 - Never hand-edit `vntyper/dependencies/kestrel/*.jar` or anything in `vntyper.egg-info/`.
