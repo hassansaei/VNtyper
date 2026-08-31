@@ -319,4 +319,5 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
         assert f"- {title}: {docs_relative}" in mkdocs
         page = (repo_root / repo_relative).read_text(encoding="utf-8")
         assert all(delimiter not in page for delimiter in ("{{", "{%", "{#"))
+        assert "/home/" not in page, f"{repo_relative} exposes a contributor-specific absolute path"
     assert not (docs_root / "plans").exists()

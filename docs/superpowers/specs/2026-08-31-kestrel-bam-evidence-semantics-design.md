@@ -383,7 +383,11 @@ The older `_reconciled()` policy-1 helper is also replaced by the shared product
 
 The oracle will report missing external roots as skips, but verification will treat those skips as unavailable evidence rather than success. The final PR record will distinguish unit-gate completion from external benchmark validation.
 
-In the current verification environment the corpus is reachable through `VNTYPER_SIM_ROOT=/home/bernt-popp/development/vntyper-analyses/results/simulation` and `VNTYPER_ADVNTR_ROOT=/home/bernt-popp/development/vntyper-bench-266-267/advntr`. The final golden command must show 200 mutated samples, 200 normal controls, zero skips, and the exact metric table; a separate XD survey over the same 200 BAMs must show the record count and range stated in Section 2.2.
+The verifier must set `VNTYPER_SIM_ROOT` and `VNTYPER_ADVNTR_ROOT` to the local
+simulation and adVNTR corpus directories. The final golden command fails before pytest
+when either variable is unset and must show 200 mutated samples, 200 normal controls,
+zero skips, and the exact metric table; a separate XD survey over the same 200 BAMs must
+show the record count and range stated in Section 2.2.
 
 ## 12. Documentation and changelog
 

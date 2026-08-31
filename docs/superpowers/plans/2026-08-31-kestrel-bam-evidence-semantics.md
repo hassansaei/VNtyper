@@ -341,7 +341,7 @@ Exact per-tier equality catches added wrong Tier-B names, hidden lower-tier erro
 5. Retain explicit non-vacuity checks for Tier A and BAM recovery and remove the obsolete 134-exact narrative.
 6. Run with explicit roots:
 
-   `VNTYPER_SIM_ROOT=/home/bernt-popp/development/vntyper-analyses/results/simulation VNTYPER_ADVNTR_ROOT=/home/bernt-popp/development/vntyper-bench-266-267/advntr conda run --no-capture-output -n vntyper python -m pytest -m golden tests/golden/test_nomenclature_golden.py -q -rs`
+   `VNTYPER_SIM_ROOT="${VNTYPER_SIM_ROOT:?set VNTYPER_SIM_ROOT to the simulation corpus}" VNTYPER_ADVNTR_ROOT="${VNTYPER_ADVNTR_ROOT:?set VNTYPER_ADVNTR_ROOT to the adVNTR corpus}" conda run --no-capture-output -n vntyper python -m pytest -m golden tests/golden/test_nomenclature_golden.py -q -rs`
 
    Expected RED while the old helpers remain: new metrics and exact fetch/per-class assertions are absent. After the test rewrite but before any accidental decision change, the exact established values must pass with zero skips.
 
