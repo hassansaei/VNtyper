@@ -19,6 +19,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -36,6 +37,7 @@ from vntyper.scripts import (
     summary,
     summary_steps,
 )
+from vntyper.scripts.fastp_cutoffs import FastpJsonPayload
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -217,11 +219,615 @@ def test_measured_coverage_values_keep_their_threshold_icons(positive_summary) -
 
 def _fastp_metric_cells(html: str, label: str) -> tuple[str, str]:
     """Return one fastp row's normalized value and status cells."""
-    pattern = rf"<tr>\s*<td>{re.escape(label)} \(Cutoff: \d+%\)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>"
+    pattern = rf"<tr>\s*<td>{re.escape(label)} \(Cutoff: \d+(?:\.\d+)?%\)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>"
     match = re.search(pattern, html, re.DOTALL)
     assert match, f"the report has no {label!r} fastp row"
     value = " ".join(html_module.unescape(match.group(1)).split())
     return value, match.group(2).strip()
+
+
+def _render_fastp_rates(output_dir: Path, rates: dict[str, float], thresholds: dict[str, float]) -> str:
+    """Render a report with explicit fastp rates and all four configured cutoffs."""
+    write_summary(output_dir, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = output_dir / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 100000},
+                    "after_filtering": {"q20_rate": rates["q20_rate"], "q30_rate": rates["q30_rate"]},
+                },
+                "duplication": {"rate": rates["duplication_rate"]},
+                "filtering_result": {"passed_filter_reads": int(rates["passed_filter_reads_rate"] * 100000)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = copy.deepcopy(load_config(None))
+    config["thresholds"].update(thresholds)
+    return render(output_dir, config=config)
+
+
+@pytest.mark.parametrize("metric_key", ("duplication_rate", "q20_rate", "q30_rate", "passed_filter_rate"))
+def test_report_rejects_a_nonfinite_fastp_output_metric_with_its_key(
+    tmp_path: Path, metric_key: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every nonmissing output.json fastp metric fails before it can render or compare."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    payload: dict[str, object] = {
+        "summary": {
+            "before_filtering": {"total_reads": 100},
+            "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+        },
+        "duplication": {"rate": 0.1},
+        "filtering_result": {"passed_filter_reads": 80},
+    }
+    if metric_key == "duplication_rate":
+        payload["duplication"] = {"rate": float("nan")}
+    elif metric_key == "q20_rate":
+        summary = payload["summary"]
+        assert isinstance(summary, dict)
+        after_filtering = summary["after_filtering"]
+        assert isinstance(after_filtering, dict)
+        after_filtering["q20_rate"] = float("nan")
+    elif metric_key == "q30_rate":
+        summary = payload["summary"]
+        assert isinstance(summary, dict)
+        after_filtering = summary["after_filtering"]
+        assert isinstance(after_filtering, dict)
+        after_filtering["q30_rate"] = float("nan")
+    else:
+        payload["filtering_result"] = {"passed_filter_reads": float("nan")}
+    (fastp_dir / "output.json").write_text(json.dumps(payload), encoding="utf-8")
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=metric_key):
+        render(tmp_path)
+
+    assert metric_key in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("component", "value"),
+    (
+        ("passed_filter_reads", "not-a-count"),
+        ("total_reads", "not-a-count"),
+        ("passed_filter_reads", "80"),
+        ("total_reads", "100"),
+        ("passed_filter_reads", True),
+        ("total_reads", True),
+        ("passed_filter_reads", float("nan")),
+        ("total_reads", float("nan")),
+        ("passed_filter_reads", float("inf")),
+        ("total_reads", float("inf")),
+        ("passed_filter_reads", float("-inf")),
+        ("total_reads", float("-inf")),
+        ("passed_filter_reads", -1),
+        ("total_reads", -1),
+        ("passed_filter_reads", 80.5),
+        ("total_reads", 100.5),
+    ),
+)
+def test_report_rejects_each_invalid_passed_filter_source_count(
+    tmp_path: Path, component: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The real output.json boundary rejects malformed counts before report rendering."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    before_filtering: dict[str, object] = {"total_reads": 100}
+    filtering_result: dict[str, object] = {"passed_filter_reads": 80}
+    if component == "total_reads":
+        before_filtering[component] = value
+    else:
+        filtering_result[component] = value
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": before_filtering,
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": filtering_result,
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        render(tmp_path)
+
+    assert component in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("missing_path", "before_filtering", "filtering_result"),
+    (
+        ("summary.before_filtering.total_reads", {}, {"passed_filter_reads": 80}),
+        ("filtering_result.passed_filter_reads", {"total_reads": 100}, {}),
+    ),
+)
+def test_report_rejects_each_missing_passed_filter_source_key_before_writing_html(
+    tmp_path: Path,
+    missing_path: str,
+    before_filtering: dict[str, object],
+    filtering_result: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An incomplete output.json fails with its source path before report output."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": before_filtering,
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": filtering_result,
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=missing_path.replace(".", r"\.")):
+        render(tmp_path)
+
+    assert missing_path in caplog.text
+    assert not (tmp_path / "summary_report.html").exists()
+
+
+def test_report_rejects_a_passed_filter_count_above_the_total(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """The real render path refuses a passed-filter rate above one before it writes HTML."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 100},
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": {"passed_filter_reads": 101},
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        render(tmp_path)
+
+    assert "passed_filter_reads" in caplog.text
+
+
+def test_report_keeps_zero_counts_as_missing(tmp_path: Path) -> None:
+    """The real render path preserves a truly empty fastp measurement as N/A."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 0},
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": {"passed_filter_reads": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    html = render(tmp_path)
+    value, status = _fastp_metric_cells(html, "Passed Filter Rate")
+
+    assert value == "N/A"
+    assert status == ""
+
+
+@pytest.mark.parametrize("passed_filter_reads", (1, 80))
+def test_report_rejects_a_positive_passed_filter_count_with_zero_total(
+    tmp_path: Path, passed_filter_reads: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Inconsistent fastp source counts fail before the renderer writes HTML."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 0},
+                    "after_filtering": {"q20_rate": 0.8, "q30_rate": 0.7},
+                },
+                "duplication": {"rate": 0.1},
+                "filtering_result": {"passed_filter_reads": passed_filter_reads},
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        render(tmp_path)
+
+    assert "passed_filter_rate" in caplog.text
+    assert "passed_filter_reads" in caplog.text
+    assert not (tmp_path / "summary_report.html").exists()
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "label", "threshold", "displayed"),
+    [
+        ("q20_rate", "Q20 Rate", 0.6005, "60.05%"),
+        ("duplication_rate", "Duplication Rate", 0.0503, "5.03%"),
+    ],
+)
+def test_fastp_exact_decimal_thresholds_render_as_passing(
+    tmp_path, metric_key: str, label: str, threshold: float, displayed: str
+) -> None:
+    """A metric rendered at its exact decimal cutoff must not show a warning."""
+    rates = {
+        "duplication_rate": 0.05,
+        "q20_rate": 0.8,
+        "q30_rate": 0.7,
+        "passed_filter_reads_rate": 0.8,
+    }
+    thresholds = dict(rates)
+    rates[metric_key] = threshold
+    thresholds[metric_key] = threshold
+
+    html = _render_fastp_rates(tmp_path, rates, thresholds)
+    value, status = _fastp_metric_cells(html, label)
+
+    assert value == displayed
+    assert f"{label} (Cutoff: {displayed})" in html
+    assert report_formatting.OK_ICON in status
+    assert report_formatting.WARNING_ICON not in status
+
+
+def test_fastp_json_decimals_and_large_counts_reach_the_report_without_float_rounding(tmp_path: Path) -> None:
+    """The shipped report uses exact JSON operands while its legacy context stays raw."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    fastp_path = fastp_dir / "output.json"
+    fastp_path.write_text(
+        """{
+  "summary": {
+    "before_filtering": {"total_reads": 100000000000000000},
+    "after_filtering": {"q20_rate": 0.60044999999999999, "q30_rate": 0.7}
+  },
+  "duplication": {"rate": 0.1},
+  "filtering_result": {"passed_filter_reads": 77644999999999999}
+}
+""",
+        encoding="utf-8",
+    )
+    config = copy.deepcopy(load_config(None))
+    config["thresholds"].update({"q20_rate": 0.6005, "passed_filter_reads_rate": 0.7765})
+
+    html = render(tmp_path, config=config)
+
+    q20_value, q20_status = _fastp_metric_cells(html, "Q20 Rate")
+    assert q20_value == "60.04%"
+    assert q20_value != "60.05%"
+    assert "Q20 Rate (Cutoff: 60.05%)" in html
+    assert report_formatting.WARNING_ICON in q20_status
+
+    passed_value, passed_status = _fastp_metric_cells(html, "Passed Filter Rate")
+    assert passed_value == "77.64%"
+    assert passed_value != "77.65%"
+    assert "Passed Filter Rate (Cutoff: 77.65%)" in html
+    assert report_formatting.WARNING_ICON in passed_status
+
+    loaded = generate_report.load_fastp_output(fastp_path)
+    assert isinstance(loaded, dict)
+    assert isinstance(loaded, FastpJsonPayload)
+    assert type(loaded["summary"]["after_filtering"]["q20_rate"]) is float
+    assert loaded.exact["summary"]["after_filtering"]["q20_rate"] == Decimal("0.60044999999999999")
+
+    metrics = report_formatting.summarise_fastp(loaded)
+    assert type(metrics.q20_rate) is float
+    assert type(metrics.passed_filter_rate) is float
+    assert type(metrics.exact.q20_rate) is Decimal
+    assert type(metrics.exact.passed_filter_rate) is Decimal
+
+    loaded["summary"]["after_filtering"]["q20_rate"] = 0.60045
+    mutated_metrics = report_formatting.summarise_fastp(loaded)
+    assert mutated_metrics.exact.q20_rate == Decimal("0.60045")
+
+
+def test_integer_json_rate_endpoints_keep_float_public_types(tmp_path: Path) -> None:
+    """Valid JSON integers remain raw in the payload but rates are floats in legacy context."""
+    fastp_path = tmp_path / "output.json"
+    fastp_path.write_text(
+        """{
+  "summary": {
+    "before_filtering": {"total_reads": 1},
+    "after_filtering": {"q20_rate": 1, "q30_rate": 0}
+  },
+  "duplication": {"rate": 0},
+  "filtering_result": {"passed_filter_reads": 1}
+}
+""",
+        encoding="utf-8",
+    )
+
+    loaded = generate_report.load_fastp_output(fastp_path)
+    assert isinstance(loaded, FastpJsonPayload)
+    assert type(loaded["duplication"]["rate"]) is int
+    metrics = report_formatting.summarise_fastp(loaded)
+
+    assert metrics.duplication_rate == 0.0
+    assert metrics.q20_rate == 1.0
+    assert metrics.q30_rate == 0.0
+    assert metrics.passed_filter_rate == 1.0
+    assert type(metrics.duplication_rate) is float
+    assert type(metrics.q20_rate) is float
+    assert type(metrics.q30_rate) is float
+    assert type(metrics.passed_filter_rate) is float
+
+
+def test_fastp_half_tie_values_share_their_visible_cutoffs_and_icons(tmp_path) -> None:
+    """All four half ties render in the exact decision domain used by their icons."""
+    rates = {
+        "duplication_rate": 0.05045,
+        "q20_rate": 0.77645,
+        "q30_rate": 0.70045,
+        "passed_filter_reads_rate": 0.80045,
+    }
+
+    html = _render_fastp_rates(tmp_path, rates, dict(rates))
+
+    for label, displayed in (
+        ("Duplication Rate", "5.05%"),
+        ("Q20 Rate", "77.65%"),
+        ("Q30 Rate", "70.05%"),
+        ("Passed Filter Rate", "80.05%"),
+    ):
+        value, status = _fastp_metric_cells(html, label)
+        assert value == displayed
+        assert f"{label} (Cutoff: {displayed})" in html
+        assert report_formatting.OK_ICON in status
+        assert report_formatting.WARNING_ICON not in status
+
+
+def test_fastp_signed_zero_renders_without_a_negative_sign(tmp_path: Path) -> None:
+    """Configured and measured signed zero share the canonical nonnegative display."""
+    rates = {
+        "duplication_rate": -0.0,
+        "q20_rate": 0.8,
+        "q30_rate": 0.7,
+        "passed_filter_reads_rate": 0.8,
+    }
+    thresholds = dict(rates)
+
+    html = _render_fastp_rates(tmp_path, rates, thresholds)
+    value, status = _fastp_metric_cells(html, "Duplication Rate")
+
+    assert value == "0.0%"
+    assert "Duplication Rate (Cutoff: 0%)" in html
+    assert "-0" not in value
+    assert report_formatting.OK_ICON in status
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "label", "rate", "cutoff", "displayed_rate", "displayed_cutoff", "icon"),
+    [
+        ("duplication_rate", "Duplication Rate", 0.05044, 0.05045, "5.04%", "5.05%", report_formatting.OK_ICON),
+        ("duplication_rate", "Duplication Rate", 0.05055, 0.05045, "5.06%", "5.05%", report_formatting.WARNING_ICON),
+        ("q20_rate", "Q20 Rate", 0.77644, 0.77645, "77.64%", "77.65%", report_formatting.WARNING_ICON),
+        ("q20_rate", "Q20 Rate", 0.77646, 0.77645, "77.65%", "77.65%", report_formatting.OK_ICON),
+    ],
+)
+def test_fastp_adjacent_displayed_rates_keep_their_comparison_direction(
+    tmp_path,
+    metric_key: str,
+    label: str,
+    rate: float,
+    cutoff: float,
+    displayed_rate: str,
+    displayed_cutoff: str,
+    icon: str,
+) -> None:
+    """The displayed cells preserve higher- and lower-is-better directions."""
+    rates = {
+        "duplication_rate": 0.05045,
+        "q20_rate": 0.77645,
+        "q30_rate": 0.70045,
+        "passed_filter_reads_rate": 0.80045,
+    }
+    thresholds = dict(rates)
+    rates[metric_key] = rate
+    thresholds[metric_key] = cutoff
+
+    html = _render_fastp_rates(tmp_path, rates, thresholds)
+    value, status = _fastp_metric_cells(html, label)
+
+    assert value == displayed_rate
+    assert f"{label} (Cutoff: {displayed_cutoff})" in html
+    assert icon in status
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "foreign_key", "metric_label", "metric_cutoff", "foreign_cutoff"),
+    [
+        ("duplication_rate", "q20_rate", "Duplication Rate", 0.0503, 0.0401),
+        ("duplication_rate", "q30_rate", "Duplication Rate", 0.0503, 0.0402),
+        ("duplication_rate", "passed_filter_reads_rate", "Duplication Rate", 0.0503, 0.0403),
+        ("q20_rate", "duplication_rate", "Q20 Rate", 0.6005, 0.9001),
+        ("q20_rate", "q30_rate", "Q20 Rate", 0.6005, 0.9002),
+        ("q20_rate", "passed_filter_reads_rate", "Q20 Rate", 0.6005, 0.9003),
+        ("q30_rate", "duplication_rate", "Q30 Rate", 0.7005, 0.9004),
+        ("q30_rate", "q20_rate", "Q30 Rate", 0.7005, 0.9005),
+        ("q30_rate", "passed_filter_reads_rate", "Q30 Rate", 0.7005, 0.9006),
+        ("passed_filter_reads_rate", "duplication_rate", "Passed Filter Rate", 0.8005, 0.9007),
+        ("passed_filter_reads_rate", "q20_rate", "Passed Filter Rate", 0.8005, 0.9008),
+        ("passed_filter_reads_rate", "q30_rate", "Passed Filter Rate", 0.8005, 0.9009),
+    ],
+)
+def test_fastp_metric_icon_uses_its_own_configured_cutoff(
+    tmp_path,
+    metric_key: str,
+    foreign_key: str,
+    metric_label: str,
+    metric_cutoff: float,
+    foreign_cutoff: float,
+) -> None:
+    """Every metric remains passing only with its own, direction-aware cutoff.
+
+    Each foreign cutoff forces a warning if it is substituted at the target
+    decision call. The three duplication cases use its inverse direction.
+    """
+    rates = {
+        "duplication_rate": 0.0503,
+        "q20_rate": 0.6005,
+        "q30_rate": 0.7005,
+        "passed_filter_reads_rate": 0.8005,
+    }
+    thresholds = dict(rates)
+    rates[metric_key] = metric_cutoff
+    thresholds[metric_key] = metric_cutoff
+    thresholds[foreign_key] = foreign_cutoff
+
+    html = _render_fastp_rates(tmp_path, rates, thresholds)
+    _, status = _fastp_metric_cells(html, metric_label)
+
+    assert report_formatting.OK_ICON in status
+    assert report_formatting.WARNING_ICON not in status
+
+
+def test_fastp_cutoff_labels_and_status_icons_share_the_configured_thresholds(tmp_path) -> None:
+    """Catch static labels that disagree with fastp's configured decision cutoffs."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 10000},
+                    "after_filtering": {"q20_rate": 0.7555, "q30_rate": 0.6543},
+                },
+                "duplication": {"rate": 0.1234},
+                "filtering_result": {"passed_filter_reads": 7765},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = copy.deepcopy(load_config(None))
+    config["thresholds"].update(
+        {
+            "duplication_rate": 0.1234,
+            "q20_rate": 0.7555,
+            "q30_rate": 0.6543,
+            "passed_filter_reads_rate": 0.7765,
+        }
+    )
+
+    html = render(tmp_path, config=config)
+
+    for label, cutoff in (
+        ("Duplication Rate", "12.34%"),
+        ("Q20 Rate", "75.55%"),
+        ("Q30 Rate", "65.43%"),
+        ("Passed Filter Rate", "77.65%"),
+    ):
+        assert f"{label} (Cutoff: {cutoff})" in html
+    assert html.count(report_formatting.OK_ICON) == 4
+    assert report_formatting.WARNING_ICON not in html
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("duplication_rate", None, "duplication_rate"),
+        ("q20_rate", "not-a-number", "q20_rate"),
+        ("q30_rate", True, "q30_rate"),
+        ("passed_filter_reads_rate", 1.01, "passed_filter_reads_rate"),
+    ],
+)
+def test_fastp_cutoff_configuration_rejects_missing_or_malformed_values(
+    tmp_path, key: str, value: object, message: str
+) -> None:
+    """Catch silent fallback or invalid threshold values in report configuration."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    config = copy.deepcopy(load_config(None))
+    if value is None:
+        del config["thresholds"][key]
+    else:
+        config["thresholds"][key] = value
+
+    with pytest.raises(ValueError, match=message):
+        render(tmp_path, config=config)
+
+
+@pytest.mark.parametrize("thresholds", [[], "not-a-dictionary", None])
+def test_report_configuration_rejects_nondictionary_thresholds_at_render_time(
+    tmp_path, caplog: pytest.LogCaptureFixture, thresholds: object
+) -> None:
+    """The renderer fails loudly before any threshold consumer sees malformed configuration."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    config = copy.deepcopy(load_config(None))
+    config["thresholds"] = thresholds
+    caplog.set_level("ERROR", logger="vntyper.scripts.generate_report")
+
+    with pytest.raises(ValueError, match=re.escape("Config thresholds must be a dictionary.")):
+        render(tmp_path, config=config)
+
+    assert "Config thresholds must be a dictionary." in caplog.text
+
+
+@pytest.mark.parametrize("malformed", (None, [], "not-an-object"))
+@pytest.mark.parametrize(
+    "path",
+    ("root", "summary", "summary.before_filtering", "summary.after_filtering", "filtering_result", "duplication"),
+)
+def test_malformed_fastp_objects_fail_before_report_output(
+    tmp_path, path: str, malformed: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Valid JSON with the wrong object shape fails loudly instead of hiding fastp QC."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_data: object
+    if path == "root":
+        fastp_data = malformed
+    elif path == "summary":
+        fastp_data = {"summary": malformed}
+    elif path == "summary.before_filtering":
+        fastp_data = {"summary": {"before_filtering": malformed}}
+    elif path == "summary.after_filtering":
+        fastp_data = {"summary": {"before_filtering": {"total_reads": 0}, "after_filtering": malformed}}
+    elif path == "filtering_result":
+        fastp_data = {"summary": {"before_filtering": {"total_reads": 0}}, "filtering_result": malformed}
+    else:
+        fastp_data = {
+            "summary": {"before_filtering": {"total_reads": 0}},
+            "filtering_result": {"passed_filter_reads": 0},
+            "duplication": malformed,
+        }
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(json.dumps(fastp_data), encoding="utf-8")
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=re.escape(path)):
+        render(tmp_path)
+
+    assert path in caplog.text
+    assert not (tmp_path / "summary_report.html").exists()
 
 
 def test_missing_fastp_rates_render_na_without_a_percent_sign(tmp_path) -> None:
@@ -230,13 +836,23 @@ def test_missing_fastp_rates_render_na_without_a_percent_sign(tmp_path) -> None:
     fastp_dir = tmp_path / "fastq_bam_processing"
     fastp_dir.mkdir()
     (fastp_dir / "output.json").write_text(
-        json.dumps({"summary": {"before_filtering": {"total_reads": 0}}, "duplication": {}}),
+        json.dumps(
+            {
+                "summary": {"before_filtering": {"total_reads": 0}},
+                "duplication": {},
+                "filtering_result": {"passed_filter_reads": 0},
+            }
+        ),
         encoding="utf-8",
     )
 
     html = render(tmp_path)
 
-    assert [_fastp_metric_cells(html, label)[0] for label in ("Q20 Rate", "Q30 Rate", "Passed Filter Rate")] == [
+    assert [
+        _fastp_metric_cells(html, label)[0]
+        for label in ("Duplication Rate", "Q20 Rate", "Q30 Rate", "Passed Filter Rate")
+    ] == [
+        "N/A",
         "N/A",
         "N/A",
         "N/A",
@@ -319,6 +935,14 @@ def test_fastp_icons_judge_the_percentage_each_cell_displays(tmp_path) -> None:
         assert value == expected_value
         assert report_formatting.OK_ICON in status
         assert report_formatting.WARNING_ICON not in status
+
+    for default_label in (
+        "Duplication Rate (Cutoff: 10%)",
+        "Q20 Rate (Cutoff: 80%)",
+        "Q30 Rate (Cutoff: 70%)",
+        "Passed Filter Rate (Cutoff: 80%)",
+    ):
+        assert default_label in html
 
 
 def _coverage_not_measured_note() -> str:
@@ -1842,17 +2466,68 @@ def test_no_log_file_says_so_rather_than_failing(positive_summary) -> None:
     assert "No pipeline log file was provided." in render(positive_summary, log_file=None)
 
 
-def test_fastp_failure_returns_empty_mapping(monkeypatch, caplog) -> None:
-    """Unreadable optional fastp metrics are reported as an empty mapping."""
+def test_missing_fastp_output_returns_empty_mapping(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A genuinely absent optional fastp artifact remains unavailable, not malformed."""
+    missing = tmp_path / "missing-fastp.json"
+    caplog.set_level(logging.WARNING, logger=generate_report.logger.name)
+
+    assert generate_report.load_fastp_output(missing) == {}
+    assert [
+        (record.levelno, record.getMessage()) for record in caplog.records if record.name == generate_report.logger.name
+    ] == [(logging.WARNING, f"fastp output file not found: {missing}")]
+
+
+def test_unreadable_present_fastp_output_raises_value_error(monkeypatch, caplog) -> None:
+    """A present unreadable artifact cannot take the optional-absence branch."""
     monkeypatch.setattr(generate_report.os.path, "exists", lambda _path: True)
     monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable fastp")))
     caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
     caplog.clear()
 
-    assert generate_report.load_fastp_output("output.json") == {}
+    with pytest.raises(ValueError, match="Failed to read fastp output 'output.json'.") as exc_info:
+        generate_report.load_fastp_output("output.json")
+
+    assert isinstance(exc_info.value.__cause__, OSError)
     assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
-        (logging.ERROR, "Failed to load or parse fastp output: unreadable fastp")
+        (logging.ERROR, "Failed to read fastp output 'output.json'.")
     ]
+
+
+def test_malformed_present_fastp_json_raises_before_report_output(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A corrupt present artifact fails closed instead of hiding the fastp section."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    fastp_path = fastp_dir / "output.json"
+    fastp_path.write_text("{not valid json", encoding="utf-8")
+    expected = f"Fastp output {str(fastp_path)!r} contains malformed JSON."
+    caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
+
+    with pytest.raises(ValueError, match=re.escape(expected)) as exc_info:
+        render(tmp_path)
+
+    assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+    assert [record.getMessage() for record in caplog.records if record.name == generate_report.logger.name] == [
+        expected
+    ]
+    assert not (tmp_path / "summary_report.html").exists()
+
+
+def test_empty_present_fastp_json_raises_before_report_output(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A present empty object is malformed evidence, not optional absence."""
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text("{}", encoding="utf-8")
+    caplog.set_level(logging.ERROR, logger=report_formatting.logger.name)
+
+    with pytest.raises(ValueError, match="expected a non-empty dictionary"):
+        render(tmp_path)
+
+    assert "expected a non-empty dictionary" in caplog.text
+    assert not (tmp_path / "summary_report.html").exists()
 
 
 def test_pipeline_log_failure_returns_failure_message(monkeypatch, caplog) -> None:
@@ -3248,6 +3923,10 @@ def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_
                 "{{ q20_rate }}",
                 "{{ q30_rate }}",
                 "{{ passed_filter_rate }}",
+                "{{ duplication_rate.__class__.__name__ }}",
+                "{{ q20_rate.__class__.__name__ }}",
+                "{{ q30_rate.__class__.__name__ }}",
+                "{{ passed_filter_rate.__class__.__name__ }}",
             )
         ),
         encoding="utf-8",
@@ -3297,7 +3976,7 @@ def test_a_legacy_custom_template_can_render_every_deprecated_context_value(tmp_
     rendered = (tmp_path / "legacy.html").read_text(encoding="utf-8")
     assert rendered.startswith("green|green|red|green|red|green|High_Precision|none|")
     assert '<p id="legacy-igv">legacy alignment view</p>' in rendered
-    assert rendered.endswith("|0.20004|0.90004|0.60004|0.91")
+    assert rendered.endswith("|0.20004|0.90004|0.60004|0.91|float|float|float|float")
 
 
 # ---------------------------------------------------------------------------

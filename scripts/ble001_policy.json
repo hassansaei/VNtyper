@@ -1,13 +1,13 @@
 {
   "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 96,
-    "ignore_noqa": 103,
-    "identities": 74,
+    "normal": 95,
+    "ignore_noqa": 102,
+    "identities": 73,
     "categories": {
       "A": 28,
       "B": 16,
-      "C": 30
+      "C": 29
     }
   },
   "handlers": [
@@ -381,14 +381,6 @@
     },
     {
       "path": "vntyper/scripts/generate_report.py",
-      "symbol": "load_fastp_output",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "C",
-      "rationale": "vntyper/scripts/generate_report.py::load_fastp_output: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_fastp_failure_returns_empty_mapping and failure remains observable via ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/generate_report.py",
       "symbol": "load_pipeline_log",
       "normal_count": 1,
       "all_count": 1,
@@ -720,15 +712,6 @@
       "outcome": "Returns the exact tuple of three empty strings.",
       "rationale": "IGV content is optional and its three-part caller contract must remain safe to unpack on read failure.",
       "behavior_test": "tests/unit/test_generate_report.py::test_igv_extraction_failure_returns_empty_fragment",
-      "observable_via": "ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/generate_report.py",
-      "symbol": "load_fastp_output",
-      "disposition": "preserved-contract",
-      "outcome": "Returns an empty mapping for unreadable fastp output.",
-      "rationale": "Unavailable optional fastp metrics must not abort report rendering.",
-      "behavior_test": "tests/unit/test_generate_report.py::test_fastp_failure_returns_empty_mapping",
       "observable_via": "ERROR log"
     },
     {

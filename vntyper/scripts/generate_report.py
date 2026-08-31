@@ -30,7 +30,9 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -39,6 +41,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from vntyper.scripts import report_assets
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
+from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs, build_fastp_measurement
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
@@ -56,7 +59,6 @@ from vntyper.scripts.report_formatting import (
     confidence_html,
     drop_empty_result_rows,
     escaped_table_html,
-    fastp_threshold_rate,
     flag_html,
     flagged_row_count,
     folded_record_html,
@@ -179,7 +181,10 @@ def load_pipeline_summary(summary_file_path):
 def load_fastp_output(fastp_file):
     """
     Loads fastp JSON output (e.g., output.json) for summary metrics if available.
-    Returns an empty dict if file not found or if parsing fails.
+    Returns an empty dict only when the optional file is absent.
+
+    A present unreadable or malformed artifact raises ``ValueError`` so report
+    generation cannot silently misstate missing quality evidence.
     """
     logger.debug("load_fastp_output called with fastp_file=%s", fastp_file)
     if not os.path.exists(fastp_file):
@@ -187,12 +192,25 @@ def load_fastp_output(fastp_file):
         return {}
     try:
         with open(fastp_file) as f:
-            data = json.load(f)
-        logger.debug("fastp output successfully loaded.")
-        return data
-    except Exception as e:
-        logger.error("Failed to load or parse fastp output: %s", e)
-        return {}
+            text = f.read()
+    except OSError as error:
+        message = f"Failed to read fastp output {str(fastp_file)!r}."
+        logger.error(message)
+        raise ValueError(message) from error
+    try:
+        raw_data = json.loads(text)
+        exact_data = json.loads(text, parse_float=Decimal)
+    except json.JSONDecodeError as error:
+        message = f"Fastp output {str(fastp_file)!r} contains malformed JSON."
+        logger.error(message)
+        raise ValueError(message) from error
+    data = (
+        FastpJsonPayload(raw_data, exact_data)
+        if isinstance(raw_data, Mapping) and isinstance(exact_data, Mapping)
+        else raw_data
+    )
+    logger.debug("fastp output successfully loaded.")
+    return data
 
 
 def load_pipeline_log(log_file):
@@ -410,12 +428,13 @@ def generate_summary_report(
         logger.debug("Flanking region set to %s based on config.", flanking)
 
     thresholds = config.get("thresholds", {})
+    if not isinstance(thresholds, dict):
+        message = "Config thresholds must be a dictionary."
+        logger.error(message)
+        raise ValueError(message)
     mean_vntr_cov_threshold = thresholds.get("mean_vntr_coverage", 100)
     percent_vntr_uncovered_threshold = thresholds.get("percent_vntr_uncovered", 50.0)
-    dup_rate_cutoff = thresholds.get("duplication_rate", 0.1)
-    q20_rate_cutoff = thresholds.get("q20_rate", 0.8)
-    q30_rate_cutoff = thresholds.get("q30_rate", 0.7)
-    passed_filter_rate_cutoff = thresholds.get("passed_filter_reads_rate", 0.8)
+    fastp_cutoffs = build_fastp_cutoffs(thresholds)
 
     # Load the pipeline summary JSON.
     summary_file_path = Path(output_dir) / "pipeline_summary.json"
@@ -663,12 +682,20 @@ def generate_summary_report(
     uncovered_icon, uncovered_color = threshold_icon(
         percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False
     )
+    duplication_rate = build_fastp_measurement(fastp.exact.duplication_rate, "duplication_rate")
+    q20_rate = build_fastp_measurement(fastp.exact.q20_rate, "q20_rate")
+    q30_rate = build_fastp_measurement(fastp.exact.q30_rate, "q30_rate")
+    passed_filter_rate = build_fastp_measurement(fastp.exact.passed_filter_rate, "passed_filter_rate")
     dup_icon, dup_color = threshold_icon(
-        fastp_threshold_rate(fastp.duplication_rate), dup_rate_cutoff, higher_better=False
+        duplication_rate.value, fastp_cutoffs.duplication_rate.value, higher_better=False
     )
-    q20_icon, q20_color = threshold_icon(fastp_threshold_rate(fastp.q20_rate), q20_rate_cutoff)
-    q30_icon, q30_color = threshold_icon(fastp_threshold_rate(fastp.q30_rate), q30_rate_cutoff)
-    pf_icon, pf_color = threshold_icon(fastp_threshold_rate(fastp.passed_filter_rate), passed_filter_rate_cutoff)
+    q20_icon, q20_color = threshold_icon(q20_rate.value, fastp_cutoffs.q20_rate.value)
+    q30_icon, q30_color = threshold_icon(q30_rate.value, fastp_cutoffs.q30_rate.value)
+    pf_icon, pf_color = threshold_icon(passed_filter_rate.value, fastp_cutoffs.passed_filter_rate.value)
+    duplication_rate_display = duplication_rate.display
+    q20_rate_display = q20_rate.display
+    q30_rate_display = q30_rate.display
+    passed_filter_rate_display = passed_filter_rate.display
 
     # "" for an empty frame, which is what the template's authored empty states hang
     # on. This used to call `to_html` directly, bypassing the helper written for
@@ -963,16 +990,26 @@ def generate_summary_report(
         "mean_vntr_coverage_icon": coverage_icon,
         "mean_vntr_coverage_color": coverage_color,
         "fastp_available": fastp.available,
+        # Preserve raw values for custom templates; shipped HTML renders these
+        # Decimal-derived presentation fields so the reader sees icon operands.
         "duplication_rate": fastp.duplication_rate,
+        "duplication_rate_display": duplication_rate_display,
+        "duplication_rate_cutoff": fastp_cutoffs.duplication_rate.label,
         "duplication_rate_icon": dup_icon,
         "duplication_rate_color": dup_color,
         "q20_rate": fastp.q20_rate,
+        "q20_rate_display": q20_rate_display,
+        "q20_rate_cutoff": fastp_cutoffs.q20_rate.label,
         "q20_icon": q20_icon,
         "q20_color": q20_color,
         "q30_rate": fastp.q30_rate,
+        "q30_rate_display": q30_rate_display,
+        "q30_rate_cutoff": fastp_cutoffs.q30_rate.label,
         "q30_icon": q30_icon,
         "q30_color": q30_color,
         "passed_filter_rate": fastp.passed_filter_rate,
+        "passed_filter_rate_display": passed_filter_rate_display,
+        "passed_filter_rate_cutoff": fastp_cutoffs.passed_filter_rate.label,
         "passed_filter_icon": pf_icon,
         "passed_filter_color": pf_color,
         "sequencing_str": fastp.sequencing,

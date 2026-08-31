@@ -5,6 +5,7 @@ import importlib.resources as pkg_resources  # For accessing package data
 import json
 import logging
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 from vntyper.scripts.artifact_names import validate_output_name
@@ -18,6 +19,7 @@ from vntyper.scripts.cli_handlers import (
 from vntyper.scripts.cli_logging_safety import validate_pipeline_log_destination
 from vntyper.scripts.cli_parser import build_parser
 from vntyper.scripts.cli_report import handle_report
+from vntyper.scripts.fastp_cutoffs import preserve_exact_fastp_thresholds
 from vntyper.scripts.utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -45,13 +47,19 @@ def load_config(config_path=None):
     """
     if config_path is not None and Path(config_path).exists():
         with open(config_path, encoding="utf-8") as f:
-            config = json.load(f)
+            config_text = f.read()
+        config = json.loads(config_text)
+        exact_config = json.loads(config_text, parse_float=Decimal)
+        config = preserve_exact_fastp_thresholds(config, exact_config)
         logger.debug(f"Loaded configuration from {config_path}")
     else:
         # No config path provided or file does not exist; use default config from package data
         try:
             with pkg_resources.open_text("vntyper", "config.json") as f:
-                config = json.load(f)
+                config_text = f.read()
+            config = json.loads(config_text)
+            exact_config = json.loads(config_text, parse_float=Decimal)
+            config = preserve_exact_fastp_thresholds(config, exact_config)
             logger.debug("Loaded default configuration from package data.")
         except Exception as exc:
             logger.error("Error: Default config file not found in package data.")

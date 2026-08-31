@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Iterator
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -273,6 +274,173 @@ def rendered_report(tmp_path: Path) -> Path:
         report_file="summary_report.html",
         log_file=None,
         config=load_config(None),
+    )
+    return tmp_path / "summary_report.html"
+
+
+@pytest.fixture
+def rendered_report_with_custom_fastp_cutoffs(tmp_path: Path) -> Path:
+    """Render a report whose fastp values sit exactly on custom cutoffs.
+
+    The values are intentionally unlike the shipped defaults. A correct report
+    must show these labels and judge every value as passing, so the test using
+    this fixture detects a label and icon decision taking their cutoffs from
+    different places.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory.
+
+    Returns:
+        Path: The rendered ``summary_report.html``.
+    """
+    payload = {
+        "version": "9.9.9",
+        "input_files": {"bam": "sample.bam"},
+        "steps": [
+            _tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            _tabular_step(summary_steps.STEP_KESTREL, list(KESTREL_ROWS)),
+        ],
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 10000},
+                    "after_filtering": {"q20_rate": 0.7555, "q30_rate": 0.6543},
+                },
+                "duplication": {"rate": 0.1234},
+                "filtering_result": {"passed_filter_reads": 7765},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = deepcopy(load_config(None))
+    config["thresholds"].update(
+        {
+            "duplication_rate": 0.1234,
+            "q20_rate": 0.7555,
+            "q30_rate": 0.6543,
+            "passed_filter_reads_rate": 0.7765,
+        }
+    )
+
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(TEMPLATE_DIR),
+        report_file="summary_report.html",
+        log_file=None,
+        config=config,
+    )
+    return tmp_path / "summary_report.html"
+
+
+@pytest.fixture
+def rendered_report_with_fastp_half_ties(tmp_path: Path) -> Path:
+    """Render every fastp metric at a Decimal half-tie configured cutoff.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory.
+
+    Returns:
+        Path: The rendered ``summary_report.html``.
+    """
+    payload = {
+        "version": "9.9.9",
+        "input_files": {"bam": "sample.bam"},
+        "steps": [
+            _tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            _tabular_step(summary_steps.STEP_KESTREL, list(KESTREL_ROWS)),
+        ],
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "before_filtering": {"total_reads": 100000},
+                    "after_filtering": {"q20_rate": 0.77645, "q30_rate": 0.70045},
+                },
+                "duplication": {"rate": 0.05045},
+                "filtering_result": {"passed_filter_reads": 80045},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = deepcopy(load_config(None))
+    config["thresholds"].update(
+        {
+            "duplication_rate": 0.05045,
+            "q20_rate": 0.77645,
+            "q30_rate": 0.70045,
+            "passed_filter_reads_rate": 0.80045,
+        }
+    )
+
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(TEMPLATE_DIR),
+        report_file="summary_report.html",
+        log_file=None,
+        config=config,
+    )
+    return tmp_path / "summary_report.html"
+
+
+@pytest.fixture
+def rendered_report_with_exact_fastp_boundaries(tmp_path: Path) -> Path:
+    """Render exact JSON rates immediately below their displayed cutoffs.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory.
+
+    Returns:
+        Path: The rendered ``summary_report.html``.
+    """
+    payload = {
+        "version": "9.9.9",
+        "input_files": {"bam": "sample.bam"},
+        "steps": [
+            _tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            _tabular_step(summary_steps.STEP_KESTREL, list(KESTREL_ROWS)),
+        ],
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+    fastp_dir = tmp_path / "fastq_bam_processing"
+    fastp_dir.mkdir()
+    (fastp_dir / "output.json").write_text(
+        """{
+  "summary": {
+    "before_filtering": {"total_reads": 100000000000000000},
+    "after_filtering": {"q20_rate": 0.60044999999999999, "q30_rate": 0.7}
+  },
+  "duplication": {"rate": 0.1},
+  "filtering_result": {"passed_filter_reads": 77644999999999999}
+}
+""",
+        encoding="utf-8",
+    )
+
+    shipped_config = (Path(vntyper.__file__).resolve().parent / "config.json").read_text(encoding="utf-8")
+    assert shipped_config.count('"q20_rate": 0.8') == 1
+    assert shipped_config.count('"passed_filter_reads_rate": 0.8') == 1
+    custom_config = shipped_config.replace('"q20_rate": 0.8', '"q20_rate": 0.6005').replace(
+        '"passed_filter_reads_rate": 0.8',
+        '"passed_filter_reads_rate": 0.7765',
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(custom_config, encoding="utf-8")
+
+    generate_summary_report(
+        output_dir=str(tmp_path),
+        template_dir=str(TEMPLATE_DIR),
+        report_file="summary_report.html",
+        log_file=None,
+        config=load_config(config_path),
     )
     return tmp_path / "summary_report.html"
 

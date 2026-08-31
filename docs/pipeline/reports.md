@@ -46,16 +46,18 @@ When both Kestrel and adVNTR results are available, the report indicates whether
 
 The report includes quality metrics from multiple sources:
 
-| Metric | Source | Threshold |
-|--------|--------|-----------|
-| Mean VNTR coverage | samtools depth | >= 100x |
-| Percent VNTR uncovered | samtools depth | <= 50% |
-| Duplication rate | fastp | <= 10% |
-| Q20 rate | fastp | >= 80% |
-| Q30 rate | fastp | >= 70% |
-| Passed filter rate | fastp | >= 80% |
+| Metric | Source | Configured threshold | Inclusive comparison |
+|--------|--------|----------------------|----------------------|
+| Mean VNTR coverage | samtools depth | `thresholds.mean_vntr_coverage` | measured >= configured value |
+| Percent VNTR uncovered | samtools depth | `thresholds.percent_vntr_uncovered` | measured <= configured value |
+| Duplication rate | fastp | `thresholds.duplication_rate` | measured <= configured value |
+| Q20 rate | fastp | `thresholds.q20_rate` | measured >= configured value |
+| Q30 rate | fastp | `thresholds.q30_rate` | measured >= configured value |
+| Passed filter rate | fastp | `thresholds.passed_filter_reads_rate` | measured >= configured value |
 
-Each metric is displayed with a color-coded indicator (green check or red warning) based on its threshold.
+Each metric is displayed with a color-coded indicator (green check or red warning) based on its configured threshold. The four configured fastp cutoffs are required finite numeric fractions from 0 through 1; a missing, malformed, non-finite, or out-of-range cutoff is logged and raises `ValueError` while the report is rendered. Each nonmissing measured fastp rate from `output.json` must also be a finite numeric fraction from 0 through 1; malformed, non-finite, and out-of-range rates are logged and raise `ValueError` with their metric key. A `None` rate remains missing and renders as `N/A` with no status icon. JSON fractions enter this decision boundary as exact decimal values, without first being rounded through a binary float. Each measured rate and configured cutoff is rounded half-up on its exact decimal value to two decimal places of percent before display and comparison, and equality passes.
+
+The passed-filter rate uses exact division of `filtering_result.passed_filter_reads` by `summary.before_filtering.total_reads`. Both sources must be finite non-negative integer counts, passed reads cannot exceed total reads, and a zero total is accepted only with zero passed reads; that empty case renders as unavailable. A genuinely absent optional `output.json` also renders fastp as unavailable. If the file is present but unreadable, malformed JSON, or structurally invalid, report generation logs the failure and raises `ValueError` instead of describing corrupt evidence as absent.
 
 The two coverage rows also decide a verdict. The report shows it as a **Coverage QC** row reading `PASS` or `FAIL`, and the same value is written to `coverage_summary.tsv` as a `coverage_qc` column and reaches the cohort exports as `cov_coverage_qc`. `FAIL` on either metric is what makes the screening summary report the sample's quality metrics as below threshold.
 
@@ -111,10 +113,20 @@ The pipeline log is the deliberate exception. It prints as a one-line pointer ba
 `paths.template_dir` may point at a custom Jinja template directory, so the values
 VNtyper passes to `report_template.html` are a public compatibility interface. VNtyper
 2.x continues to provide the deprecated keys below even though the shipped template no
-longer reads them. They are scheduled for removal in **VNtyper 3.0.0**, not before:
+longer reads them. They remain available throughout 2.x and may be removed in
+**VNtyper 3.0.0**, not before:
 
 - `percent_vntr_uncovered_color`, `mean_vntr_coverage_color`,
   `duplication_rate_color`, `q20_color`, `q30_color`, and `passed_filter_color`;
+- raw fastp fractions and the display values new templates should use instead:
+
+  | Deprecated raw key (available through 2.x) | Display replacement |
+  | --- | --- |
+  | `duplication_rate` | `duplication_rate_display` |
+  | `q20_rate` | `q20_rate_display` |
+  | `q30_rate` | `q30_rate_display` |
+  | `passed_filter_rate` | `passed_filter_rate_display` |
+
 - `igv_content`;
 - `screening_state.kestrel_result` and `screening_state.advntr_result`.
 
