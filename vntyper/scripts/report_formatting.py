@@ -377,7 +377,20 @@ NOMENCLATURE_FLAG_MEANINGS: dict[str, str] = {
         "The allele cannot be written in the caller's VCF shape. The name comes from the "
         "reads, which are the better evidence for this locus."
     ),
+    "thin-haplotype-record-support": (
+        "Resolved Kestrel haplotype-record support is below the BAM rescue thinness threshold."
+    ),
+    "low-haplotype-record-support": (
+        "Resolved Kestrel haplotype-record support is below the corroborated tier's source-specific evidence threshold."
+    ),
+    "low-kmer-path-support": (
+        "Kestrel alternate-allele k-mer-path depth is below the corroborated tier's source-specific evidence threshold."
+    ),
     "low-read-support": "Fewer reads support the call than the corroborated tier requires.",
+    "low-evidence-support": (
+        "Support from a source whose evidence unit is not declared is below the corroborated "
+        "tier's source-specific evidence threshold."
+    ),
     "caller-disagreement": "Kestrel and adVNTR did not name the same allele.",
     "length-truncated": "The reported length is a lower bound rather than the full extent.",
     "sequence-undetermined": (

@@ -2,6 +2,7 @@
 
 import pytest
 
+from vntyper.scripts.nomenclature import load_nomenclature_config
 from vntyper.scripts.nomenclature_evidence import (
     FLAG_LOW_EVIDENCE_SUPPORT,
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
@@ -35,6 +36,13 @@ def test_canonical_bam_thin_threshold_wins_over_legacy_value() -> None:
 def test_missing_bam_thin_threshold_has_no_silent_default() -> None:
     with pytest.raises(KeyError, match="bam_thin_support"):
         resolve_bam_thin_haplotype_record_support({})
+
+
+def test_shipped_bam_thin_threshold_uses_only_the_canonical_key() -> None:
+    thresholds = load_nomenclature_config()["thresholds"]
+
+    assert thresholds["bam_thin_haplotype_record_support"] == 3
+    assert "bam_thin_support" not in thresholds
 
 
 @pytest.mark.parametrize(
