@@ -3,12 +3,10 @@
 """
 Contract tests for the adVNTR flagging rules in ``vntyper/modules/advntr/advntr_config.json``.
 
-Those rule strings are handed to :func:`vntyper.scripts.flagging.evaluate_condition`, which
-``eval``s them with the row's column names as locals. Two failure modes follow, and neither
-of them is loud:
+Those rules are validated as structured comparator data before any row is processed. Two
+historical failure modes motivate this live contract:
 
-* a name that is not a column raises ``NameError``, which the evaluator downgrades to a
-  ``logger.warning`` and a ``False`` result -- the rule is disabled and nothing fails;
+* a name that is not a column used to disable a string expression without failing the run;
 * a comparison against the wrong *type* is simply ``False`` for every row -- the rule is
   dead and nothing fails.
 
@@ -21,20 +19,17 @@ classifies an adVNTR call as ``positive`` when ``Flag == "Not flagged"`` and
 positive.
 """
 
-import ast
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
-from vntyper.scripts.flagging import evaluate_condition
+from vntyper.scripts.flagging import add_flags
 
 pytestmark = pytest.mark.unit
-
-#: Names the evaluator injects itself, so they are legal without being columns.
-EVALUATOR_BUILTINS = {"regex_match"}
 
 #: The flag names this module is expected to emit. Pinning them catches a typo in a rule
 #: *key* -- the exact defect that shipped as ``Poylmorhic_Call``.
@@ -65,10 +60,33 @@ def ru_config(tmp_path: Path) -> dict:
     return {"reference_data": {"code_adVNTR_RUs": str(fasta)}}
 
 
-def free_names(expression: str) -> set[str]:
-    """Every bare name an expression reads, i.e. every name ``eval`` must resolve."""
-    tree = ast.parse(expression, mode="eval")
-    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+def configured_columns(configured: object) -> set[str]:
+    """Extract column operands from one structured rule without parsing source text."""
+    assert isinstance(configured, Mapping)
+    assert set(configured) == {"all"}
+    predicates = configured["all"]
+    assert isinstance(predicates, list) and predicates
+    columns: set[str] = set()
+    for predicate in predicates:
+        assert isinstance(predicate, Mapping)
+        assert set(predicate) == {"left", "operator", "right"}
+        for side in ("left", "right"):
+            operand = predicate[side]
+            assert isinstance(operand, Mapping)
+            assert len(operand) == 1
+            if "column" in operand:
+                column = operand["column"]
+                assert isinstance(column, str) and column
+                columns.add(column)
+            else:
+                assert "literal" in operand
+    return columns
+
+
+def flag_fires(name: str, configured: object, row: Mapping[str, object]) -> bool:
+    """Evaluate one rule through ``add_flags`` and report whether its flag was emitted."""
+    result = add_flags(pd.DataFrame([dict(row)]), {name: configured})
+    return result.iloc[0]["Flag"] == name
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +98,7 @@ class TestEveryRuleNameResolves:
     def test_the_scan_found_a_plausible_number_of_rules(self, flagging_rules):
         """Guard against a vacuous pass: everything below iterates this dict."""
         assert len(flagging_rules) >= 3, f"expected at least 3 adVNTR flagging rules, found {len(flagging_rules)}"
-        assert all(isinstance(expression, str) and expression.strip() for expression in flagging_rules.values())
+        assert all(isinstance(configured, dict) and configured for configured in flagging_rules.values())
 
     def test_the_flag_names_are_the_expected_set(self, flagging_rules):
         """A typo in a rule *key* renames the flag silently; ``Poylmorhic_Call`` did exactly that."""
@@ -93,23 +111,17 @@ class TestEveryRuleNameResolves:
         the provenance record; this is the cheap tripwire in the file that already reads
         these rules, so an edit to the list is noticed here even if that file is not run.
         """
-        node = ast.parse(flagging_rules["Polymorphic_Call"], mode="eval").body
-        states = ast.literal_eval(node.comparators[0])
+        predicate = flagging_rules["Polymorphic_Call"]["all"][0]
+        assert predicate["left"] == {"column": "Variant"}
+        assert predicate["operator"] == "in"
+        states = predicate["right"]["literal"]
 
         assert len(states) == 24
         assert len(set(states)) == 24
 
-    def test_every_rule_is_syntactically_valid_python(self, flagging_rules):
-        for name, expression in flagging_rules.items():
-            try:
-                ast.parse(expression, mode="eval")
-            except SyntaxError as exc:  # pragma: no cover - only on a broken config
-                pytest.fail(f"flagging rule {name!r} is not parseable: {exc}")
-
-    def test_the_scan_finds_names_to_check(self, flagging_rules):
-        """Second vacuity guard: an expression scan that matches nothing proves nothing."""
-        all_names = set().union(*(free_names(expression) for expression in flagging_rules.values()))
-        columns = all_names - EVALUATOR_BUILTINS
+    def test_the_scan_finds_columns_to_check(self, flagging_rules):
+        """Second vacuity guard: a structured scan that matches nothing proves nothing."""
+        columns = set().union(*(configured_columns(configured) for configured in flagging_rules.values()))
 
         assert len(columns) >= 3, f"expected the rules to reference at least 3 columns, found {sorted(columns)}"
 
@@ -119,20 +131,20 @@ class TestEveryRuleNameResolves:
         actually hands to ``add_flags``, so renaming a column in ``advntr_genotyping.py``
         without updating this JSON fails here instead of silently disabling a flag.
         """
-        for name, expression in flagging_rules.items():
-            unresolved = free_names(expression) - EVALUATOR_BUILTINS - produced_columns
+        for name, configured in flagging_rules.items():
+            unresolved = configured_columns(configured) - produced_columns
             assert not unresolved, (
                 f"flagging rule {name!r} reads {sorted(unresolved)}, which the adVNTR parser "
                 f"never produces. Available columns: {sorted(produced_columns)}. "
-                "A missing name evaluates to False, so this rule is silently disabled."
+                "A missing column must be rejected before flagging begins."
             )
 
     def test_every_name_a_rule_reads_resolves_without_an_ru_fasta(
         self, flagging_rules, produced_columns_without_ru_fasta
     ):
         """No missing column may silently disable a rule on the no-FASTA branch."""
-        for name, expression in flagging_rules.items():
-            unresolved = free_names(expression) - EVALUATOR_BUILTINS - produced_columns_without_ru_fasta
+        for name, configured in flagging_rules.items():
+            unresolved = configured_columns(configured) - produced_columns_without_ru_fasta
             assert not unresolved, (
                 f"flagging rule {name!r} reads {sorted(unresolved)}, which the adVNTR parser "
                 "does not produce when no RU FASTA resolves"
@@ -215,19 +227,23 @@ class TestRepeatUnitSeven:
         assert all(isinstance(value, str) for value in ru_values)
 
     def test_the_rule_fires_for_a_repeat_unit_seven_row(self, flagging_rules):
-        row = pd.Series({"RU": "7", "Variant": "I3_7_A_LEN1", "NumberOfSupportingReads": 42})
+        row = {"RU": "7", "Variant": "I3_7_A_LEN1", "NumberOfSupportingReads": 42}
 
-        assert evaluate_condition(row, flagging_rules["Repeat_Unit_7"]) is True
+        assert flag_fires("Repeat_Unit_7", flagging_rules["Repeat_Unit_7"], row) is True
 
     def test_the_rule_does_not_fire_for_another_repeat_unit(self, flagging_rules):
-        row = pd.Series({"RU": "2", "Variant": "I3_2_A_LEN1", "NumberOfSupportingReads": 42})
+        row = {"RU": "2", "Variant": "I3_2_A_LEN1", "NumberOfSupportingReads": 42}
 
-        assert evaluate_condition(row, flagging_rules["Repeat_Unit_7"]) is False
+        assert flag_fires("Repeat_Unit_7", flagging_rules["Repeat_Unit_7"], row) is False
 
     def test_a_compound_call_spanning_two_units_does_not_fire(self, flagging_rules):
-        row = pd.Series({"RU": "7,2", "Variant": "I3_7_A_LEN1&I9_2_A_LEN1", "NumberOfSupportingReads": 42})
+        row = {"RU": "7,2", "Variant": "I3_7_A_LEN1&I9_2_A_LEN1", "NumberOfSupportingReads": 42}
 
-        assert evaluate_condition(row, flagging_rules["Repeat_Unit_7"]) is False
+        assert flag_fires("Repeat_Unit_7", flagging_rules["Repeat_Unit_7"], row) is False
+
+    def test_integer_repeat_unit_seven_is_rejected(self, flagging_rules):
+        with pytest.raises(ValueError, match="compatible families"):
+            flag_fires("Repeat_Unit_7", flagging_rules["Repeat_Unit_7"], {"RU": 7})
 
     #: The expression as it shipped before the repair. Kept as a literal so the "it could
     #: never fire" claim is *asserted* rather than asserted-about-the-past in prose.
@@ -263,42 +279,13 @@ class TestRepeatUnitSeven:
             ]
         )
 
-    def test_the_historic_expression_could_not_fire_for_any_row(self, flagging_rules):
-        """``RU`` is always a ``str``, so ``RU == 7`` was dead code, not a live rule."""
+    def test_the_historic_integer_expression_is_not_a_supported_migration(self, flagging_rules):
+        """Only the exact last-release string is eligible for migration."""
         rows = self.probe_rows()
         assert len(rows) >= 100, f"vacuity guard: only {len(rows)} probe rows"
 
-        fired = [
-            index for index, row in rows.iterrows() if evaluate_condition(row, self.HISTORIC_EXPRESSION) is not False
-        ]
-
-        assert not fired, f"the historic integer comparison fired for rows {fired}"
-
-    def test_the_repair_only_ever_adds_a_flag_and_moves_no_other_column(self, flagging_rules):
-        """
-        The safety argument for shipping this change: reviving the rule is monotone. No row
-        loses a flag, the only flag any row gains is ``Repeat_Unit_7``, and no genotype
-        column moves -- ``add_flags`` appends a column and filters nothing.
-        """
-        from vntyper.scripts.flagging import add_flags
-
-        historic_rules = {**flagging_rules, "Repeat_Unit_7": self.HISTORIC_EXPRESSION}
-        rows = self.probe_rows()
-
-        before = add_flags(rows.copy(), historic_rules)
-        after = add_flags(rows.copy(), flagging_rules)
-
-        def flags(frame, index):
-            return set(str(frame.iloc[index]["Flag"]).split(", ")) - {"Not flagged"}
-
-        gained = set()
-        for index in range(len(rows)):
-            was, now = flags(before, index), flags(after, index)
-            assert not was - now, f"row {index} ({rows.iloc[index]['RU']!r}) lost flags {sorted(was - now)}"
-            gained |= now - was
-
-        assert gained == {"Repeat_Unit_7"}, f"unexpected new flags: {sorted(gained)}"
-        pd.testing.assert_frame_equal(before.drop(columns=["Flag"]), after.drop(columns=["Flag"]))
+        with pytest.raises(ValueError, match="unsupported legacy expression"):
+            add_flags(rows, {"Repeat_Unit_7": self.HISTORIC_EXPRESSION})
 
     def test_end_to_end_a_repeat_unit_seven_call_is_flagged_in_the_result_file(self, tmp_path, ru_config):
         source = tmp_path / "output_adVNTR.vcf"
@@ -362,8 +349,8 @@ class TestNoRuleIsDead:
         frame = pd.DataFrame(self.TRIGGER_ROWS)
         fired = {
             name
-            for name, expression in flagging_rules.items()
-            if frame.apply(lambda row, e=expression: evaluate_condition(row, e), axis=1).any()
+            for name, configured in flagging_rules.items()
+            if add_flags(frame, {name: configured})["Flag"].eq(name).any()
         }
 
         assert fired == set(flagging_rules), f"these rules can never fire: {sorted(set(flagging_rules) - fired)}"
@@ -373,14 +360,19 @@ class TestTheOtherRules:
     def test_low_coverage_fires_below_ten_supporting_reads(self, flagging_rules):
         rule = flagging_rules["Low_Coverage"]
 
-        assert evaluate_condition(pd.Series({"NumberOfSupportingReads": 9}), rule) is True
-        assert evaluate_condition(pd.Series({"NumberOfSupportingReads": 10}), rule) is False
+        assert flag_fires("Low_Coverage", rule, {"NumberOfSupportingReads": 9}) is True
+        assert flag_fires("Low_Coverage", rule, {"NumberOfSupportingReads": 10}) is False
 
     def test_polymorphic_call_fires_for_a_listed_variant(self, flagging_rules):
         rule = flagging_rules["Polymorphic_Call"]
 
-        assert evaluate_condition(pd.Series({"Variant": "I10_2_A_LEN1"}), rule) is True
-        assert evaluate_condition(pd.Series({"Variant": "I22_2_G_LEN1"}), rule) is False
+        assert flag_fires("Polymorphic_Call", rule, {"Variant": "I10_2_A_LEN1"}) is True
+        assert flag_fires("Polymorphic_Call", rule, {"Variant": "I22_2_G_LEN1"}) is False
+
+    def test_one_character_polymorphism_mutation_does_not_fire(self, flagging_rules):
+        rule = flagging_rules["Polymorphic_Call"]
+
+        assert flag_fires("Polymorphic_Call", rule, {"Variant": "I10_2_A_LEN2"}) is False
 
     def test_several_rules_combine_into_one_comma_separated_flag(self, tmp_path, ru_config):
         source = tmp_path / "output_adVNTR.vcf"
@@ -413,7 +405,19 @@ class TestFlaggingReadsTheOriginalConfigGlobal:
         monkeypatch.setattr(
             advntr,
             "advntr_config",
-            {"flagging_rules": {"Custom_Flag": "NumberOfSupportingReads > 1"}},
+            {
+                "flagging_rules": {
+                    "Custom_Flag": {
+                        "all": [
+                            {
+                                "left": {"literal": 1},
+                                "operator": "lt",
+                                "right": {"column": "NumberOfSupportingReads"},
+                            }
+                        ]
+                    }
+                }
+            },
         )
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t42\t153.98\t0.0001\n")
@@ -424,7 +428,11 @@ class TestFlaggingReadsTheOriginalConfigGlobal:
         assert result.iloc[0]["Flag"] == "Custom_Flag"
 
     def test_patching_the_derived_settings_global_does_not_change_the_flags(self, tmp_path, monkeypatch, ru_config):
-        monkeypatch.setattr(advntr, "advntr_settings", {"flagging_rules": {"Custom_Flag": "True"}})
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"flagging_rules": {"Custom_Flag": {"all": [{"invalid": True}]}}},
+        )
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t42\t153.98\t0.0001\n")
 
@@ -442,3 +450,84 @@ class TestFlaggingReadsTheOriginalConfigGlobal:
 
         result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
         assert result.iloc[0]["Flag"] == "Not applicable"
+
+    def test_malformed_rules_abort_an_empty_vcf_before_negative_publication(self, tmp_path, monkeypatch, ru_config):
+        monkeypatch.setattr(
+            advntr,
+            "advntr_config",
+            {
+                "flagging_rules": {
+                    "Bad": {
+                        "all": [
+                            {
+                                "left": {"column": "Definitely_Missing"},
+                                "operator": "eq",
+                                "right": {"literal": 1},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        source = tmp_path / "output_adVNTR.vcf"
+        source.write_text(ADVNTR_HEADER)
+
+        with pytest.raises(ValueError, match="Definitely_Missing"):
+            advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
+
+        assert not (tmp_path / "output_adVNTR_result.tsv").exists()
+
+    @pytest.mark.parametrize("operand", ["REF", "ALT"])
+    def test_reference_base_rules_require_a_resolved_ru_fasta(self, tmp_path, monkeypatch, operand):
+        monkeypatch.setattr(
+            advntr,
+            "advntr_config",
+            {
+                "flagging_rules": {
+                    "Reference_Base": {
+                        "all": [
+                            {
+                                "left": {"column": operand},
+                                "operator": "eq",
+                                "right": {"column": operand},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        source = tmp_path / "output_adVNTR.vcf"
+        source.write_text(ADVNTR_HEADER)
+
+        with pytest.raises(ValueError, match=operand):
+            advntr.process_advntr_output(str(source), str(tmp_path), "output", config=None)
+
+        assert not (tmp_path / "output_adVNTR_result.tsv").exists()
+
+    @pytest.mark.parametrize("operand", ["REF", "ALT"])
+    def test_reference_base_rules_run_when_the_ru_fasta_resolves(self, tmp_path, monkeypatch, ru_config, operand):
+        monkeypatch.setattr(
+            advntr,
+            "advntr_config",
+            {
+                "flagging_rules": {
+                    "Reference_Base": {
+                        "all": [
+                            {
+                                "left": {"column": operand},
+                                "operator": "eq",
+                                "right": {"column": operand},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+        source = tmp_path / "output_adVNTR.vcf"
+        source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t42\t153.98\t0.0001\n")
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
+
+        result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
+        assert result.iloc[0]["Flag"] == "Reference_Base"
+        assert result.iloc[0][operand] != "Not applicable"

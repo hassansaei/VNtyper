@@ -16,6 +16,7 @@ from vntyper.modules.advntr.advntr_variant_annotations import (
     derive_ru_and_pos,
 )
 from vntyper.scripts.command_builders import quote_path
+from vntyper.scripts.flagging import ADVNTR_FLAG_COLUMNS, compile_flag_rules
 from vntyper.scripts.nomenclature_annotate import NOMENCLATURE_COLUMNS, annotate_advntr_frame
 from vntyper.scripts.utils import load_config, run_command
 
@@ -783,11 +784,19 @@ def process_advntr_output(output_path, output, output_name, config=None):
         config (dict, optional): Main configuration dictionary.
 
     Raises:
+        ValueError: If the configured flag rules are invalid for the adVNTR result schema.
         RuntimeError: If the source is absent or unreadable, processing fails, or the
             complete result cannot be published atomically.
     """
     output_result_path = Path(output) / f"{output_name}_adVNTR_result.tsv"
     invalidate_advntr_artifact(output_result_path)
+
+    flag_columns = set(ADVNTR_FLAG_COLUMNS)
+    if config:
+        ru_fasta_path = config.get("reference_data", {}).get("code_adVNTR_RUs")
+        if ru_fasta_path and os.path.exists(ru_fasta_path):
+            flag_columns.update({"REF", "ALT"})
+    compiled_flag_rules = compile_flag_rules(advntr_config.get("flagging_rules", {}), flag_columns)
 
     if not os.path.exists(output_path):
         message = f"adVNTR output file {output_path} not found!"
@@ -919,12 +928,11 @@ def process_advntr_output(output_path, output, output_name, config=None):
                     advntr_concat["ALT"] = alt_ann
 
             # Apply flagging rules if available
-            flagging_rules = advntr_config.get("flagging_rules", {})
-            if flagging_rules:
+            if compiled_flag_rules.rules:
                 logger.info("Applying flagging rules to adVNTR output.")
                 from vntyper.scripts.flagging import add_flags
 
-                advntr_concat = add_flags(advntr_concat, flagging_rules)
+                advntr_concat = add_flags(advntr_concat, compiled_flag_rules)
 
             # Name the variants. Done before the "ensure all columns present" sweep
             # below so the five land as computed values, not as "Not applicable".

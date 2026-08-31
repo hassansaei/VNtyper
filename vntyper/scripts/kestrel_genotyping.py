@@ -36,6 +36,13 @@ from vntyper.scripts.confidence_assignment import (
     calculate_depth_score_and_assign_confidence,
 )
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
+from vntyper.scripts.flagging import (
+    KESTREL_FLAG_COLUMNS,
+    CompiledFlagRules,
+    add_artifact_gate,
+    add_flags,
+    compile_flag_rules,
+)
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
@@ -536,7 +543,12 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     Returns:
         pd.DataFrame or None:
           The final processed DataFrame of variants, or None if no variants found.
+
+    Raises:
+        ValueError: If the configured flag rules are invalid for the Kestrel result schema.
     """
+    flagging_rules = kestrel_config.get("flagging_rules", {})
+    compiled_flag_rules = compile_flag_rules(flagging_rules, KESTREL_FLAG_COLUMNS)
     logger.info("Processing Kestrel VCF results...")
 
     # Step 1) Filter the original VCF to extract INDELs
@@ -619,7 +631,13 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     merged_motifs = load_additional_motifs(config)
 
     # Perform frame scoring, depth scoring, confidence assignment, etc.
-    processed_df = process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
+    processed_df = process_kmer_results(
+        combined_df,
+        merged_motifs,
+        output_dir,
+        kestrel_config,
+        compiled_flag_rules=compiled_flag_rules,
+    )
 
     if processed_df.empty:
         logger.warning("Final processed DataFrame is empty. Writing empty result.")
@@ -633,13 +651,10 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     # here if the Flag column is missing (e.g., process_kmer_results was called
     # without flagging rules configured).
     if "Flag" not in processed_df.columns:
-        flagging_rules = kestrel_config.get("flagging_rules", {})
         duplicates_config = kestrel_config.get("duplicate_flagging", {})
 
-        if flagging_rules or duplicates_config.get("enabled", False):
-            from vntyper.scripts.flagging import add_flags
-
-            processed_df = add_flags(processed_df, flagging_rules, duplicates_config=duplicates_config)
+        if compiled_flag_rules.rules or duplicates_config.get("enabled", False):
+            processed_df = add_flags(processed_df, compiled_flag_rules, duplicates_config=duplicates_config)
 
     # Name the variants before writing. Doing it here rather than in a later stage is
     # what makes one edit reach every surface: the TSV below, the pipeline summary
@@ -699,7 +714,13 @@ def output_empty_result(output_dir, header, note=None):
     logger.info(f"Empty result file with placeholder saved at {final_output_path}")
 
 
-def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config):
+def process_kmer_results(
+    combined_df,
+    merged_motifs,
+    output_dir,
+    kestrel_config,
+    compiled_flag_rules: CompiledFlagRules | None = None,
+):
     """
     Applies the main postprocessing heuristics:
       1) Split the depth from the 'Sample' column and compute frame score
@@ -727,10 +748,15 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
             Folder to store optional BED file / final outputs.
         kestrel_config (dict):
             Contains thresholds for depth score & confidence assignment.
+        compiled_flag_rules: Rules already validated against the Kestrel postprocessing
+            schema by the VCF-level caller. Direct callers may omit this argument.
 
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
     """
+    if compiled_flag_rules is None:
+        compiled_flag_rules = compile_flag_rules(kestrel_config.get("flagging_rules", {}), KESTREL_FLAG_COLUMNS)
+
     if combined_df.empty:
         return combined_df
 
@@ -772,20 +798,15 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
     # are available after step (6). Moving flagging here fixes #145: previously,
     # a flagged variant could be selected over an unflagged one because
     # select_single_best_variant ran before add_flags.
-    flagging_rules = kestrel_config.get("flagging_rules", {})
     duplicates_config = kestrel_config.get("duplicate_flagging", {})
-    if flagging_rules or duplicates_config.get("enabled", False):
-        from vntyper.scripts.flagging import add_flags
-
-        df = add_flags(df, flagging_rules, duplicates_config=duplicates_config)
+    if compiled_flag_rules.rules or duplicates_config.get("enabled", False):
+        df = add_flags(df, compiled_flag_rules, duplicates_config=duplicates_config)
 
     # (6.5b) #174: derive the artifact gate. Unconditional, unlike add_flags above: a
     # frame that reached the final filter without `flag_filter_pass` would abort the run
     # on a missing required gate column (#185). Which flags are artifacts is
     # configuration; an absent or empty `artifact_flags` list excludes nothing, which is
     # exactly the pre-#174 behaviour.
-    from vntyper.scripts.flagging import add_artifact_gate
-
     df = add_artifact_gate(df, kestrel_config.get("artifact_flags", []))
 
     # (7) Final Filter

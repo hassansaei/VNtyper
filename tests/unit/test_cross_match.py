@@ -1,11 +1,7 @@
 """Unit tests for cross_match.py.
 
-This module had no test file. It evaluates a rule string from config against
-DataFrame-derived names (AGENTS.md trap 3) and emits a summary step matched by
-exact string literal downstream (trap 5). The eval no longer fails open -- a rule
-that cannot be evaluated now raises rather than reporting "no match", see
-``test_a_rule_naming_a_column_that_does_not_exist_raises`` below. The step-name
-literal is still a silent-failure surface.
+This module pins the structured comparator contract used for cross-match and emits
+a summary step matched by exact string literal downstream (AGENTS.md trap 5).
 
 Two behaviours are easy to assume wrong from the name alone, so they get their
 own tests rather than being taken on faith: ``determine_variant_type`` returns
@@ -19,12 +15,15 @@ import csv
 import json
 import logging
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 import vntyper
+import vntyper.scripts.cross_match as cross_match_module
 from vntyper.scripts.cross_match import (
-    DEFAULT_MATCH_LOGIC,
+    CROSS_MATCH_COLUMNS,
+    DEFAULT_MATCH_RULE,
     compute_allele_change,
     cross_match_variants,
     determine_variant_type,
@@ -34,6 +33,10 @@ from vntyper.scripts.cross_match import (
 from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_COVERAGE, STEP_KESTREL
 
 pytestmark = pytest.mark.unit
+
+LEGACY_MATCH_LOGIC = (
+    "Kestrel_Allele_Change == Advntr_Allele_Change and Kestrel_Variant_Type.lower() == Advntr_Variant_Type.lower()"
+)
 
 
 def _shipped_cross_match_config():
@@ -124,6 +127,43 @@ def test_a_non_matching_pair_is_not_reported_as_a_match():
     assert result["matches"][0]["Match"] == "No"
 
 
+def test_nested_boolean_rule_is_applied_by_the_cross_match_consumer():
+    rule = {
+        "all": [
+            {
+                "any": [
+                    {
+                        "left": {"column": "Kestrel_Allele_Change"},
+                        "operator": "eq",
+                        "right": {"column": "Advntr_Allele_Change"},
+                    },
+                    {
+                        "not": {
+                            "left": {"column": "Kestrel_Variant_Type"},
+                            "operator": "casefold_eq",
+                            "right": {"literal": "insertion"},
+                        }
+                    },
+                ]
+            },
+            {
+                "left": {"column": "Kestrel_Variant_Type"},
+                "operator": "casefold_eq",
+                "right": {"column": "Advntr_Variant_Type"},
+            },
+        ]
+    }
+
+    result = cross_match_variants(
+        kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+        advntr_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+        config={"cross_match": {"match_rule": rule}},
+    )
+
+    assert result["overall_match"] == "Yes"
+    assert result["matches"][0]["Match"] == "Yes"
+
+
 def test_an_empty_advntr_record_set_produces_no_comparisons():
     """The nested loop at :129-130 never runs, so `matches` is empty."""
     result = cross_match_variants(kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}], advntr_records=[])
@@ -140,113 +180,227 @@ def test_an_explicit_kestrel_variant_field_wins_over_the_inferred_type():
     assert result["matches"][0]["Kestrel_Variant_Type"] == "Duplication"
 
 
-def test_a_rule_naming_a_column_that_does_not_exist_raises(caplog):
-    """SPECIFICATION. Was `..._today` characterisation of a live trap-3 fail-open.
+@pytest.mark.parametrize(
+    ("kestrel_records", "advntr_records"),
+    [
+        pytest.param([], [], id="both-empty"),
+        pytest.param([{"REF": "C", "ALT": "CC", "POS": 67}], [], id="adVNTR-empty"),
+        pytest.param(
+            [{"REF": "C", "ALT": "CC", "POS": 67}],
+            [{"REF": "C", "ALT": "CC", "POS": 67}],
+            id="both-nonempty",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "match_rule",
+    [
+        pytest.param({"all": "not-a-list"}, id="malformed-nested-rule"),
+        pytest.param(
+            {
+                "any": [
+                    DEFAULT_MATCH_RULE,
+                    {
+                        "not": {
+                            "left": {"column": "Nonexistent_Column"},
+                            "operator": "eq",
+                            "right": {"literal": 1},
+                        }
+                    },
+                ]
+            },
+            id="invalid-later-nested-node",
+        ),
+        pytest.param(
+            {
+                "all": [
+                    {
+                        "left": {"column": "Nonexistent_Column"},
+                        "operator": "eq",
+                        "right": {"literal": 1},
+                    }
+                ]
+            },
+            id="unknown-column",
+        ),
+    ],
+)
+def test_invalid_rules_raise_before_record_processing_or_mutation(
+    kestrel_records, advntr_records, match_rule, monkeypatch
+):
+    before_kestrel = copy.deepcopy(kestrel_records)
+    before_advntr = copy.deepcopy(advntr_records)
+    determine = Mock(side_effect=AssertionError("record preprocessing must not run"))
+    monkeypatch.setattr(cross_match_module, "determine_variant_type", determine)
 
-    Decided by the repository owner on branch `fix/issue-181-197-followups`: the
-    cross-match step must fail loudly on a rule it cannot evaluate rather than
-    report "no match". The issue draft is
-    `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/issue-cross-match-fail-open.md`
-    (never filed on GitHub, so there is no issue number to cite -- see
-    `task-8-report.md`).
-
-    A `NameError` is a *configuration* defect: the ten names the rule can use are
-    the fixed dict literal in `cross_match_variants`, identical for every record
-    pair, so a rule naming anything else fails for all of them. Reporting "no
-    match" made that indistinguishable from genuine discordance -- the same shape
-    as the `Poylmorhic_Call` typo that disabled a flag for months, and the
-    `RU == 7` rule that never fired in its life.
-
-    The message must name the rule and the available columns, because the whole
-    point is that the next person sees which column name is wrong.
-    """
-    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cross_match")
-
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match=r"cross_match\.match_rule"):
         cross_match_variants(
-            kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
-            advntr_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
-            config={"cross_match": {"match_logic": "Nonexistent_Column == 1"}},
+            kestrel_records=kestrel_records,
+            advntr_records=advntr_records,
+            config={"cross_match": {"match_rule": match_rule}},
         )
 
-    message = str(excinfo.value)
-    # The offending rule string, verbatim.
-    assert "Nonexistent_Column == 1" in message
-    assert "NameError" in message
-    # The columns that WERE available, so the typo is visible without reading the source.
-    for column in ("Kestrel_Allele_Change", "Kestrel_Variant_Type", "Advntr_Allele_Change", "Advntr_Variant_Type"):
-        assert column in message
-    # Classified as a configuration defect, not as a bad record pair: no record dump.
-    assert message.startswith("Invalid cross_match match_logic")
-    assert "Record:" not in message
-    # Repo convention: logger.error(msg) then raise ValueError(msg), same message.
-    assert message in [r.message for r in caplog.records]
-
-
-def test_a_rule_that_is_not_a_valid_expression_raises(caplog):
-    """SPECIFICATION, same decision as above.
-
-    A `SyntaxError` is the other purely *structural* failure: like `NameError` it
-    is a property of the rule string alone, so it fails identically for every
-    record pair and can only ever be a configuration defect. `eval` raises it at
-    compile time, before any record value is read.
-    """
-    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cross_match")
-
-    with pytest.raises(ValueError) as excinfo:
-        cross_match_variants(
-            kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
-            advntr_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
-            config={"cross_match": {"match_logic": "Kestrel_Allele_Change =="}},
-        )
-
-    message = str(excinfo.value)
-    assert "Kestrel_Allele_Change ==" in message
-    assert "SyntaxError" in message
-    assert "Advntr_Allele_Change" in message
-    # Same classification as the NameError above, and for the same reason.
-    assert message.startswith("Invalid cross_match match_logic")
-    assert "Record:" not in message
-    assert message in [r.message for r in caplog.records]
+    assert kestrel_records == before_kestrel
+    assert advntr_records == before_advntr
+    determine.assert_not_called()
 
 
 @pytest.mark.parametrize(
-    ("match_logic", "pos"),
+    "legacy_rule",
     [
-        pytest.param("Kestrel_POS.lower() == Advntr_POS.lower()", 67, id="AttributeError-on-a-numeric-POS"),
-        pytest.param("Kestrel_POS > 1", "67", id="TypeError-comparing-a-string-POS-to-an-int"),
+        f" {LEGACY_MATCH_LOGIC}",
+        f"{LEGACY_MATCH_LOGIC} ",
+        LEGACY_MATCH_LOGIC.replace("Advntr_Allele_Change", "Advntr_ALT"),
+        f"{LEGACY_MATCH_LOGIC} and Kestrel_POS == Advntr_POS",
+        "Kestrel_Variant_Type.upper() == Advntr_Variant_Type.upper()",
+        "__import__('os').system('id')",
+        "Kestrel_Variant_Type.__class__ == str",
+        "Kestrel_Allele_Change[0] == Advntr_Allele_Change[0]",
+        "all(x for x in [True])",
+        "(lambda: True)()",
     ],
 )
-def test_a_rule_that_cannot_be_evaluated_against_the_record_values_raises(match_logic, pos, caplog):
-    """SPECIFICATION, same decision as above.
+def test_only_the_exact_historical_match_logic_is_accepted(legacy_rule):
+    with pytest.raises(ValueError, match=r"cross_match\.match_logic uses an unsupported legacy expression"):
+        cross_match_variants([], [], config={"cross_match": {"match_logic": legacy_rule}})
 
-    These are the *value*-dependent failures: the rule parses and every name it
-    uses exists, but the values in this record pair do not support the operation.
-    They take a separate handler because the useful diagnostic is different -- the
-    record pair, not just the column list -- but they raise for the same reason:
-    a pair that could not be compared is not evidence of discordance.
-    """
-    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cross_match")
 
+def test_the_legacy_match_logic_key_rejects_structured_rules():
+    with pytest.raises(ValueError, match=r"cross_match\.match_logic must contain the exact historical string"):
+        cross_match_variants([], [], config={"cross_match": {"match_logic": DEFAULT_MATCH_RULE}})
+
+
+def test_both_cross_match_rule_keys_are_rejected_loudly():
     with pytest.raises(ValueError) as excinfo:
         cross_match_variants(
-            kestrel_records=[{"REF": "C", "ALT": "CC", "POS": pos}],
-            advntr_records=[{"REF": "C", "ALT": "CC", "POS": pos}],
-            config={"cross_match": {"match_logic": match_logic}},
+            [],
+            [],
+            config={"cross_match": {"match_rule": DEFAULT_MATCH_RULE, "match_logic": LEGACY_MATCH_LOGIC}},
         )
 
     message = str(excinfo.value)
-    assert match_logic in message
-    assert "Kestrel_POS" in message
-    # Classified as a bad record pair, not as a bad rule, and carries the pair itself --
-    # this is what stops the two handlers being quietly collapsed back into one.
-    assert message.startswith("Could not evaluate cross_match match_logic")
-    assert "Record: {" in message
-    assert "'Kestrel_Variant_Type': 'Insertion'" in message
-    assert message in [r.message for r in caplog.records]
+    assert "match_rule" in message
+    assert "match_logic" in message
 
 
-def test_the_default_match_logic_is_used_when_no_config_is_given():
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        pytest.param([], "cross_match configuration must be a mapping", id="root-not-mapping"),
+        pytest.param(
+            {"cross_match": []},
+            "cross_match configuration block must be a mapping",
+            id="block-not-mapping",
+        ),
+    ],
+)
+def test_malformed_cross_match_configuration_containers_fail_loudly(config, expected, caplog):
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cross_match")
+
+    with pytest.raises(ValueError, match=expected) as excinfo:
+        cross_match_variants([], [], config=config)
+
+    assert str(excinfo.value) in [record.message for record in caplog.records]
+
+
+@pytest.mark.parametrize(
+    ("cross_match_config", "unsupported_keys"),
+    [
+        pytest.param({"match_rul": DEFAULT_MATCH_RULE}, ["match_rul"], id="misspelled-rule-only"),
+        pytest.param(
+            {"match_rule": DEFAULT_MATCH_RULE, "match_logc": "typo"},
+            ["match_logc"],
+            id="extra-key-with-structured-rule",
+        ),
+        pytest.param(
+            {"match_logic": LEGACY_MATCH_LOGIC, "zzz": "secret", "aaa": "secret"},
+            ["aaa", "zzz"],
+            id="sorted-extra-keys-with-legacy-rule",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("kestrel_records", "advntr_records"),
+    [
+        pytest.param([], [], id="empty-records"),
+        pytest.param(
+            [{"REF": "C", "ALT": "CC", "POS": 67}],
+            [{"REF": "C", "ALT": "CC", "POS": 67}],
+            id="nonempty-records",
+        ),
+    ],
+)
+def test_unsupported_cross_match_block_keys_raise_before_record_mutation(
+    cross_match_config, unsupported_keys, kestrel_records, advntr_records, monkeypatch, caplog
+):
+    """A non-empty wrapper is valid only when every key belongs to its one-rule schema."""
+    before_kestrel = copy.deepcopy(kestrel_records)
+    before_advntr = copy.deepcopy(advntr_records)
+    determine = Mock(side_effect=AssertionError("record preprocessing must not run"))
+    monkeypatch.setattr(cross_match_module, "determine_variant_type", determine)
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cross_match")
+
+    expected = "cross_match configuration block contains unsupported keys: " + ", ".join(
+        repr(key) for key in unsupported_keys
+    )
+    with pytest.raises(ValueError, match="unsupported keys") as excinfo:
+        cross_match_variants(
+            kestrel_records=kestrel_records,
+            advntr_records=advntr_records,
+            config={"cross_match": cross_match_config},
+        )
+
+    assert str(excinfo.value) == expected
+    assert caplog.messages[-1] == expected
+    assert "secret" not in str(excinfo.value)
+    assert kestrel_records == before_kestrel
+    assert advntr_records == before_advntr
+    determine.assert_not_called()
+
+
+def test_null_comparison_is_false():
+    rule = {
+        "all": [
+            {
+                "left": {"column": "Kestrel_POS"},
+                "operator": "eq",
+                "right": {"column": "Advntr_POS"},
+            }
+        ]
+    }
+    result = cross_match_variants(
+        [{"REF": "C", "ALT": "CC", "POS": None}],
+        [{"REF": "C", "ALT": "CC", "POS": None}],
+        config={"cross_match": {"match_rule": rule}},
+    )
+
+    assert result["matches"][0]["Match"] == "No"
+
+
+def test_incompatible_record_value_types_fail_loudly_without_record_disclosure(caplog):
+    caplog.set_level(logging.ERROR)
+    rule = {
+        "all": [
+            {
+                "left": {"column": "Kestrel_POS"},
+                "operator": "eq",
+                "right": {"column": "Advntr_POS"},
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match=r"cross_match\.match_rule\.all\[0\] requires compatible families") as excinfo:
+        cross_match_variants(
+            [{"REF": "C", "ALT": "CC", "POS": 67}],
+            [{"REF": "C", "ALT": "CC", "POS": "67"}],
+            config={"cross_match": {"match_rule": rule}},
+        )
+
+    assert "Record:" not in str(excinfo.value)
+    assert str(excinfo.value) in [record.message for record in caplog.records]
+
+
+def test_the_default_match_rule_is_used_when_no_config_is_given():
     """cross_match.py:108-111 -- both arms of the config branch."""
     with_none = cross_match_variants(
         kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
@@ -292,15 +446,14 @@ def _row(k_pos, k_ref, k_alt, k_change, k_type, a_pos, a_ref, a_alt, a_change, a
     }
 
 
-# Every way the shipped tree can arrive at a rule. `vntyper/config.json` carries
-# exactly one key under `cross_match` and its value is byte-identical to
-# DEFAULT_MATCH_LOGIC -- pinned by the test immediately below -- so this is the
-# complete set of correct configurations, not a sample of it.
+# Every supported way the shipped tree can arrive at a rule. The exact historical
+# string is a one-release compatibility adapter, not a general expression surface.
 _SHIPPED_CONFIGURATIONS = [
     pytest.param(None, id="config-is-None"),
     pytest.param({}, id="config-without-a-cross_match-key"),
-    pytest.param({"cross_match": {}}, id="cross_match-without-a-match_logic-key"),
-    pytest.param({"cross_match": {"match_logic": DEFAULT_MATCH_LOGIC}}, id="explicit-DEFAULT_MATCH_LOGIC"),
+    pytest.param({"cross_match": {}}, id="cross_match-without-a-match_rule-key"),
+    pytest.param({"cross_match": {"match_rule": DEFAULT_MATCH_RULE}}, id="explicit-DEFAULT_MATCH_RULE"),
+    pytest.param({"cross_match": {"match_logic": LEGACY_MATCH_LOGIC}}, id="exact-historical-match_logic"),
     pytest.param({"cross_match": _shipped_cross_match_config()}, id="shipped-vntyper-config.json"),
 ]
 
@@ -342,6 +495,15 @@ _MATCH_SCENARIOS = [
         id="explicit-Kestrel-Variant-field-agrees",
     ),
     pytest.param(
+        [{"REF": "C", "ALT": "CC", "POS": "67", "Variant": "insertion"}],
+        [{"REF": "C", "ALT": "CC", "POS": "67"}],
+        {
+            "matches": [_row("67", "C", "CC", "C", "insertion", "67", "C", "CC", "C", "Insertion", "Yes")],
+            "overall_match": "Yes",
+        },
+        id="variant-type-comparison-is-case-insensitive",
+    ),
+    pytest.param(
         [{"REF": "C", "ALT": "CC", "POS": "67", "Variant": "Duplication"}],
         [{"REF": "C", "ALT": "CC", "POS": "67"}],
         {
@@ -379,28 +541,40 @@ _MATCH_SCENARIOS = [
 ]
 
 
-def test_every_shipped_match_logic_configuration_is_the_default_rule():
+def test_the_shipped_cross_match_configuration_is_the_default_rule():
     """The enumeration above is complete only while this holds.
 
     `vntyper/config.json` must carry exactly one `cross_match` key, and its
-    `match_logic` must be byte-identical to DEFAULT_MATCH_LOGIC. Adding a second
-    rule, or diverging the shipped one from the default, fails here rather than
-    leaving an unexercised configuration behind.
+    `match_rule` must equal DEFAULT_MATCH_RULE. Adding a second rule, or diverging
+    the shipped one from the default, fails rather than going unexercised.
     """
     shipped = _shipped_cross_match_config()
 
-    assert sorted(shipped) == ["match_logic"]
-    assert shipped["match_logic"] == DEFAULT_MATCH_LOGIC
+    assert sorted(shipped) == ["match_rule"]
+    assert shipped["match_rule"] == DEFAULT_MATCH_RULE
+    assert (
+        frozenset(
+            {
+                "Kestrel_POS",
+                "Kestrel_REF",
+                "Kestrel_ALT",
+                "Kestrel_Allele_Change",
+                "Kestrel_Variant_Type",
+                "Advntr_POS",
+                "Advntr_REF",
+                "Advntr_ALT",
+                "Advntr_Allele_Change",
+                "Advntr_Variant_Type",
+            }
+        )
+        == CROSS_MATCH_COLUMNS
+    )
 
 
 @pytest.mark.parametrize("config", _SHIPPED_CONFIGURATIONS)
 @pytest.mark.parametrize(("kestrel_records", "advntr_records", "expected"), _MATCH_SCENARIOS)
-def test_a_rule_that_evaluates_is_unaffected_by_the_fail_closed_change(
-    config, kestrel_records, advntr_records, expected
-):
-    """SPECIFICATION. The expected values were captured from the code as it stood
-    BEFORE the eval was made fail-closed, so this table passing means the fix
-    changed nothing for a configuration that works.
+def test_a_supported_rule_preserves_the_captured_cross_match_output(config, kestrel_records, advntr_records, expected):
+    """The expected values were captured before the comparator migration.
 
     `cross_match_variants` mutates the records it is given (it writes back
     `Variant_Type` and `Allele_Change`), so each case gets its own deep copy.

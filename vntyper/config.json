@@ -156,7 +156,20 @@
     "preflight_text_max_bytes": 1048576
   },
   "cross_match": {
-    "match_logic": "Kestrel_Allele_Change == Advntr_Allele_Change and Kestrel_Variant_Type.lower() == Advntr_Variant_Type.lower()"
+    "match_rule": {
+      "all": [
+        {
+          "left": {"column": "Kestrel_Allele_Change"},
+          "operator": "eq",
+          "right": {"column": "Advntr_Allele_Change"}
+        },
+        {
+          "left": {"column": "Kestrel_Variant_Type"},
+          "operator": "casefold_eq",
+          "right": {"column": "Advntr_Variant_Type"}
+        }
+      ]
+    }
   },
   "assembly_detection": {
     "detection_threshold": 0.9,

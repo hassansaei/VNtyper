@@ -198,6 +198,52 @@ def test_an_empty_frame_is_the_documented_empty_result_path(tmp_path):
     assert out.empty
 
 
+def test_malformed_flag_rules_abort_an_empty_postprocessing_frame(tmp_path):
+    """A no-call sample must not make an invalid security configuration look valid."""
+    config = kestrel_config(
+        flagging_rules={
+            "Bad": {
+                "all": [
+                    {
+                        "left": {"column": "Definitely_Missing"},
+                        "operator": "eq",
+                        "right": {"literal": 1},
+                    }
+                ]
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="Definitely_Missing"):
+        kestrel_genotyping.process_kmer_results(pd.DataFrame(), pd.DataFrame(), str(tmp_path), config)
+
+
+def test_malformed_flag_rules_abort_before_kestrel_can_publish_a_negative(tmp_path):
+    """The VCF-level no-call path validates before it can write a negative result."""
+    config = kestrel_config(
+        flagging_rules={
+            "Bad": {
+                "all": [
+                    {
+                        "left": {"column": "Definitely_Missing"},
+                        "operator": "eq",
+                        "right": {"literal": 1},
+                    }
+                ]
+            }
+        }
+    )
+
+    with (
+        mock.patch.object(kestrel_genotyping, "filter_vcf") as filter_vcf,
+        pytest.raises(ValueError, match="Definitely_Missing"),
+    ):
+        kestrel_genotyping.process_kestrel_output(str(tmp_path), tmp_path / "output.vcf", "reference.fa", config, {})
+
+    filter_vcf.assert_not_called()
+    assert not (tmp_path / "kestrel_result.tsv").exists()
+
+
 def test_the_pre_result_tsv_is_still_written_before_the_raise(tmp_path):
     """``kestrel_pre_result.tsv`` is the debuggability artefact (AGENTS.md trap 4).
 

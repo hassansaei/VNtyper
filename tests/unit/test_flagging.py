@@ -2,24 +2,49 @@
 
 """
 Unit tests for the flagging module.
-Validates flagging rules, condition evaluation, and duplicate detection
+Validates structured flagging rules and duplicate detection
 using vntyper/scripts/kestrel_config.json.
 """
 
+import inspect
 import json
-import logging
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import pytest
 
-from vntyper.scripts.flagging import add_artifact_gate, add_flags, evaluate_condition, regex_match
+from tests.builders import STAGE_COLUMNS
+from vntyper.scripts.flagging import KESTREL_FLAG_COLUMNS, add_artifact_gate, add_flags, compile_flag_rules
 
 pytestmark = pytest.mark.unit
 
 # Conserved motifs defined in kestrel_config.json flagging_rules
 CONSERVED_MOTIFS = ["1", "2", "3", "4", "6", "7", "8", "9"]
 NON_CONSERVED_MOTIFS = ["5", "6p", "D", "E", "Q", "X"]
+LOW_DEPTH = {
+    "all": [
+        {
+            "left": {"column": "Depth_Score"},
+            "operator": "lt",
+            "right": {"literal": 0.4},
+        }
+    ]
+}
+LEGACY_FLAG_RULES = {
+    "False_Positive_4bp_Insertion": "(REF == 'C') and (ALT == 'CGGCA')",
+    "Low_Depth_Conserved_Motifs": ("(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])"),
+    "Low_Coverage": "NumberOfSupportingReads < 10",
+    "Repeat_Unit_7": "RU == '7'",
+    "Polymorphic_Call": (
+        "Variant in ['I10_2_A_LEN1', 'D8_2&D9_2&I9_2_A_LEN9', 'D2_2&I2_2_C_LEN5', "
+        "'I39_2_A_LEN4', 'I52_2_A_LEN7', 'I45_2_A_LEN4', 'D45_2&I45_2_A_LEN2', "
+        "'D14_2&I14_2_G_LEN14', 'D58_2&D59_2', 'I60_2_A_LEN10', 'I14_2_G_LEN16', "
+        "'I18_2_T_LEN1', 'I21_2_G_LEN4', 'D29_2&I29_2_A_LEN2', 'D8_2&I8_2_A_LEN20', "
+        "'D20_2&D21_2', 'D21_2&D22_2', 'I14_2_A_LEN1', 'I11_2_G_LEN1', 'I26_7_A_LEN25', "
+        "'D17_2&D18_2&D19_2&D20_2&D21_2', 'I14_2_C_LEN4', 'I23_6_G_LEN1', 'I21_2_T_LEN1']"
+    ),
+}
 
 
 @pytest.fixture(scope="session")
@@ -39,88 +64,269 @@ def flagging_rules(kestrel_config):
     return kestrel_config["flagging_rules"]
 
 
-# --- regex_match tests ---
+def test_shipped_kestrel_flag_rules_use_the_exact_structured_schema(kestrel_config: dict) -> None:
+    assert kestrel_config["flagging_rules"] == {
+        "False_Positive_4bp_Insertion": {
+            "all": [
+                {"left": {"column": "REF"}, "operator": "eq", "right": {"literal": "C"}},
+                {"left": {"column": "ALT"}, "operator": "eq", "right": {"literal": "CGGCA"}},
+            ]
+        },
+        "Low_Depth_Conserved_Motifs": {
+            "all": [
+                {"left": {"column": "Depth_Score"}, "operator": "lt", "right": {"literal": 0.4}},
+                {
+                    "left": {"column": "Motif"},
+                    "operator": "in",
+                    "right": {"literal": CONSERVED_MOTIFS},
+                },
+            ]
+        },
+    }
 
 
-class TestRegexMatch:
-    def test_simple_match(self):
-        assert regex_match(r"^D", "D5") is True
-
-    def test_no_match(self):
-        assert regex_match(r"^D", "E5") is False
-
-    def test_non_string_value(self):
-        assert regex_match(r"^\d+", 42) is True
-
-    def test_invalid_pattern_returns_false(self):
-        assert regex_match(r"[invalid", "test") is False
+# --- Structured-rule validation and legacy migration ---
 
 
-def test_invalid_regex_is_false_and_observable(caplog: pytest.LogCaptureFixture) -> None:
-    """An invalid configured regex fails closed and leaves an ERROR breadcrumb."""
-    with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
-        assert regex_match("[", "value") is False
-    records = [record for record in caplog.records if "Error in regex_match" in record.getMessage()]
-    assert len(records) == 1
-    assert records[0].levelno == logging.ERROR
+def test_structured_rule_is_applied() -> None:
+    result = add_flags(pd.DataFrame({"Depth_Score": [0.3]}), {"Low_Depth": LOW_DEPTH})
+
+    assert result["Flag"].tolist() == ["Low_Depth"]
 
 
-# --- evaluate_condition tests ---
+def test_nested_boolean_rule_is_applied_by_the_flagging_consumer() -> None:
+    nested_rule = {
+        "all": [
+            {
+                "left": {"column": "Depth_Score"},
+                "operator": "lt",
+                "right": {"literal": 0.4},
+            },
+            {
+                "any": [
+                    {
+                        "left": {"column": "Motif"},
+                        "operator": "in",
+                        "right": {"literal": CONSERVED_MOTIFS},
+                    },
+                    {
+                        "not": {
+                            "left": {"column": "Variant"},
+                            "operator": "casefold_eq",
+                            "right": {"literal": "deletion"},
+                        }
+                    },
+                ]
+            },
+        ]
+    }
+    frame = pd.DataFrame(
+        {
+            "Depth_Score": [0.3, 0.3, 0.5],
+            "Motif": ["2", "5", "2"],
+            "Variant": ["Deletion", "Insertion", "Insertion"],
+        }
+    )
+
+    result = add_flags(frame, {"Nested": nested_rule})
+
+    assert result["Flag"].tolist() == ["Nested", "Nested", "Not flagged"]
 
 
-class TestEvaluateCondition:
-    def test_simple_comparison(self):
-        row = pd.Series({"Depth_Score": 0.3, "Motif": "2"})
-        assert evaluate_condition(row, "Depth_Score < 0.4") is True
+def test_compiled_flag_rules_can_be_reused_without_reparsing() -> None:
+    rules = {
+        "Low": {
+            "all": [
+                {
+                    "left": {"column": "Depth_Score"},
+                    "operator": "lt",
+                    "right": {"literal": 0.4},
+                }
+            ]
+        }
+    }
+    compiled = compile_flag_rules(rules, {"Depth_Score"})
 
-    def test_in_operator(self):
-        row = pd.Series({"Motif": "2"})
-        assert evaluate_condition(row, "Motif in ['1', '2', '3']") is True
+    result = add_flags(pd.DataFrame({"Depth_Score": [0.3, 0.5]}), compiled)
 
-    def test_not_in_operator(self):
-        row = pd.Series({"Motif": "5"})
-        assert evaluate_condition(row, "Motif in ['1', '2', '3']") is False
+    assert result["Flag"].tolist() == ["Low", "Not flagged"]
 
-    def test_missing_column_returns_false(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A missing condition name fails closed and records its name at WARNING."""
-        row = pd.Series({"Motif": "2"})
-        with caplog.at_level(logging.WARNING, logger="vntyper.scripts.flagging"):
-            assert evaluate_condition(row, "NonExistent > 0") is False
-        matching_records = [record for record in caplog.records if "NonExistent" in record.getMessage()]
-        assert len(matching_records) == 1
-        assert matching_records[0].levelno == logging.WARNING
 
-    def test_combined_and_condition(self):
-        row = pd.Series({"Depth_Score": 0.3, "Motif": "2"})
-        condition = "(Depth_Score < 0.4) and (Motif in ['1', '2', '3'])"
-        assert evaluate_condition(row, condition) is True
+def test_kestrel_preflight_schema_matches_the_frame_that_reaches_flagging() -> None:
+    assert set(STAGE_COLUMNS["final"]) - {"Flag", "flag_filter_pass"} == KESTREL_FLAG_COLUMNS
 
-    def test_combined_and_condition_fails_one(self):
-        row = pd.Series({"Depth_Score": 0.5, "Motif": "2"})
-        condition = "(Depth_Score < 0.4) and (Motif in ['1', '2', '3'])"
-        assert evaluate_condition(row, condition) is False
 
-    def test_regex_match_in_condition(self):
-        row = pd.Series({"REF": "C", "ALT": "CGGCA"})
-        condition = "regex_match('^C', REF) and ALT == 'CGGCA'"
-        assert evaluate_condition(row, condition) is True
+def test_mixed_type_column_inventory_is_a_logged_value_error(caplog: pytest.LogCaptureFixture) -> None:
+    frame = pd.DataFrame([[1, 2]], columns=["A", 7])
+    rules = {
+        "Bad": {
+            "all": [
+                {
+                    "left": {"column": "Missing"},
+                    "operator": "eq",
+                    "right": {"literal": 1},
+                }
+            ]
+        }
+    }
 
-    def test_pd_na_in_list_returns_false(self):
-        """pd.NA in an 'in' check should return False, not raise TypeError (#154)."""
-        row = pd.Series({"Depth_Score": 0.015, "Motif": pd.NA})
-        condition = "(Depth_Score < 0.4) and (Motif in ['1', '2', '3'])"
-        assert evaluate_condition(row, condition) is False
+    with (
+        caplog.at_level("ERROR", logger="vntyper.scripts.comparator_rules"),
+        pytest.raises(ValueError, match="allowed columns must be non-empty strings"),
+    ):
+        add_flags(frame, rules)
 
-    def test_pd_na_equality_returns_false(self):
-        """pd.NA in an '==' check should return False, not raise TypeError."""
-        row = pd.Series({"REF": pd.NA, "ALT": "CG"})
-        assert evaluate_condition(row, "REF == 'C'") is False
+    assert any("allowed columns must be non-empty strings" in record.getMessage() for record in caplog.records)
 
-    def test_none_in_list_returns_false(self):
-        """Explicit None in an 'in' check should also return False."""
-        row = pd.Series({"Motif": None, "Depth_Score": 0.1})
-        condition = "(Depth_Score < 0.4) and (Motif in ['1', '2'])"
-        assert evaluate_condition(row, condition) is False
+
+def test_non_mapping_rule_set_is_rejected() -> None:
+    with pytest.raises(ValueError, match="flagging_rules must be a mapping"):
+        add_flags(pd.DataFrame({"Depth_Score": [0.3]}), cast(dict, [LOW_DEPTH]))
+
+
+@pytest.mark.parametrize(
+    "bad_rule",
+    [
+        {"all": []},
+        {"any": [LOW_DEPTH["all"][0], {"not": {"all": []}}]},
+        {
+            "all": [
+                {
+                    "left": {"column": "Missing"},
+                    "operator": "eq",
+                    "right": {"literal": "x"},
+                }
+            ]
+        },
+    ],
+)
+def test_invalid_complete_rule_set_raises_before_copy(monkeypatch: pytest.MonkeyPatch, bad_rule: object) -> None:
+    frame = pd.DataFrame({"Depth_Score": [0.3]})
+    copy_calls = 0
+    apply_calls = 0
+    real_copy = pd.DataFrame.copy
+    real_apply = pd.DataFrame.apply
+
+    def copy_spy(self: pd.DataFrame, *args: object, **kwargs: object) -> pd.DataFrame:
+        nonlocal copy_calls
+        copy_calls += 1
+        return real_copy(self, *args, **kwargs)
+
+    def apply_spy(self: pd.DataFrame, *args: object, **kwargs: object) -> pd.Series:
+        nonlocal apply_calls
+        apply_calls += 1
+        return real_apply(self, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "copy", copy_spy)
+    monkeypatch.setattr(pd.DataFrame, "apply", apply_spy)
+
+    with pytest.raises(ValueError, match="flagging_rules.Bad"):
+        add_flags(frame, {"Bad": bad_rule})
+
+    assert copy_calls == 0
+    assert apply_calls == 0
+    assert "Flag" not in frame.columns
+
+
+def test_invalid_later_rule_prevents_partial_flag_output() -> None:
+    frame = pd.DataFrame({"Depth_Score": [0.3]})
+    rules = {"Would_Flag": LOW_DEPTH, "Broken": {"all": []}}
+
+    with pytest.raises(ValueError, match="flagging_rules.Broken"):
+        add_flags(frame, rules)
+
+    assert "Flag" not in frame.columns
+
+
+@pytest.mark.parametrize("flag_name", ["Comma,Flag", "Not flagged", "Not applicable", "", 7])
+def test_unsafe_flag_names_are_rejected(flag_name: object) -> None:
+    with pytest.raises(ValueError, match="flag name"):
+        add_flags(pd.DataFrame({"Depth_Score": [0.3]}), {flag_name: LOW_DEPTH})
+
+
+@pytest.mark.parametrize(("flag_name", "legacy"), LEGACY_FLAG_RULES.items())
+def test_each_exact_legacy_flag_rule_is_migrated_for_its_own_name(flag_name: str, legacy: str) -> None:
+    rows = {
+        "False_Positive_4bp_Insertion": {"REF": "C", "ALT": "CGGCA"},
+        "Low_Depth_Conserved_Motifs": {"Depth_Score": 0.3, "Motif": "2"},
+        "Low_Coverage": {"NumberOfSupportingReads": 9},
+        "Repeat_Unit_7": {"RU": "7"},
+        "Polymorphic_Call": {"Variant": "I10_2_A_LEN1"},
+    }
+
+    result = add_flags(pd.DataFrame([rows[flag_name]]), {flag_name: legacy})
+
+    assert result["Flag"].tolist() == [flag_name]
+
+
+def test_exact_legacy_low_depth_rule_does_not_flag_at_its_0_4_boundary() -> None:
+    """Pin the legacy adapter's threshold, not only the shipped structured rule."""
+    result = add_flags(
+        pd.DataFrame({"Depth_Score": [0.4], "Motif": ["2"]}),
+        {"Low_Depth_Conserved_Motifs": LEGACY_FLAG_RULES["Low_Depth_Conserved_Motifs"]},
+    )
+
+    assert result["Flag"].tolist() == ["Not flagged"]
+
+
+def test_exact_legacy_low_coverage_rule_does_not_flag_at_ten_reads() -> None:
+    """Ten supporting reads is the first non-low-coverage legacy value."""
+    result = add_flags(
+        pd.DataFrame({"NumberOfSupportingReads": [10]}),
+        {"Low_Coverage": LEGACY_FLAG_RULES["Low_Coverage"]},
+    )
+
+    assert result["Flag"].tolist() == ["Not flagged"]
+
+
+@pytest.mark.parametrize("suffix", [" ", " and True", ".strip()", "[0]"])
+def test_modified_legacy_rule_is_rejected(suffix: str) -> None:
+    legacy = LEGACY_FLAG_RULES["Low_Coverage"] + suffix
+
+    with pytest.raises(ValueError, match="unsupported legacy expression"):
+        add_flags(pd.DataFrame({"NumberOfSupportingReads": [9]}), {"Low_Coverage": legacy})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "regex_match('^C', REF)",
+        "__import__('os')",
+        "row.attr",
+        "row[0]",
+        "(lambda: True)()",
+        "[x for x in values]",
+    ],
+)
+def test_executable_legacy_shapes_are_rejected(payload: str) -> None:
+    with pytest.raises(ValueError, match="unsupported legacy expression"):
+        add_flags(pd.DataFrame({"REF": ["C"]}), {"Custom": payload})
+
+
+@pytest.mark.parametrize(
+    ("flag_name", "other_legacy"),
+    [
+        (flag_name, legacy)
+        for flag_name in LEGACY_FLAG_RULES
+        for other_name, legacy in LEGACY_FLAG_RULES.items()
+        if flag_name != other_name
+    ],
+)
+def test_every_flag_rejects_every_other_flags_exact_historical_expression(flag_name: str, other_legacy: str) -> None:
+    frame = pd.DataFrame(
+        {
+            "REF": ["C"],
+            "ALT": ["CGGCA"],
+            "Depth_Score": [0.3],
+            "Motif": ["2"],
+            "NumberOfSupportingReads": [9],
+            "RU": ["7"],
+            "Variant": ["I10_2_A_LEN1"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="unsupported legacy expression"):
+        add_flags(frame, {flag_name: other_legacy})
 
 
 # --- Low_Depth_Conserved_Motifs flagging rule tests ---
@@ -193,9 +399,7 @@ class TestMultipleFlags:
         """A variant matching both rules should have both flags comma-separated."""
         df = pd.DataFrame({"REF": ["C"], "ALT": ["CGGCA"], "Depth_Score": [0.1], "Motif": ["2"]})
         result = add_flags(df, flagging_rules)
-        flag_value = result.loc[0, "Flag"]
-        assert "False_Positive_4bp_Insertion" in flag_value
-        assert "Low_Depth_Conserved_Motifs" in flag_value
+        assert result.loc[0, "Flag"] == "False_Positive_4bp_Insertion, Low_Depth_Conserved_Motifs"
 
     def test_no_flags_applied(self, flagging_rules):
         """A variant matching no rules should get 'Not flagged'."""
@@ -271,45 +475,22 @@ def _dup_config(sort_by=None, flag_name="Potential_Duplicate"):
     return config
 
 
-class TestEvaluateConditionErrorPath:
-    """flagging.py:89 - the non-NameError error path must fail closed, not open."""
+class TestStructuredRuleErrorPath:
+    """Malformed configuration and incompatible row data abort instead of failing open."""
 
-    def test_type_error_in_condition_returns_false(self):
-        """A condition raising TypeError evaluates to False, never True (kills 89).
+    def test_incompatible_non_null_row_value_raises(self) -> None:
+        frame = pd.DataFrame({"Depth_Score": ["n/a"]})
 
-        The whole point of the except-Exception handler is that a malformed row
-        cannot invent a flag. A non-numeric Depth_Score makes `<` raise TypeError,
-        which is not a NameError and so reaches the second handler.
-        """
-        row = pd.Series({"Depth_Score": "n/a", "Motif": "2"})
-        assert evaluate_condition(row, "Depth_Score < 0.4") is False
+        with pytest.raises(ValueError, match="real numbers other than booleans"):
+            add_flags(frame, {"Low_Depth": LOW_DEPTH})
 
-    def test_zero_division_in_condition_returns_false(self):
-        """Any other evaluation error also evaluates to False (kills 89)."""
-        row = pd.Series({"Depth_Score": 0.0, "Motif": "2"})
-        assert evaluate_condition(row, "1 / Depth_Score > 1") is False
+    def test_missing_column_aborts_before_any_result(self) -> None:
+        frame = pd.DataFrame({"Motif": ["2"]})
 
-    def test_error_path_is_logged_at_error_level(self, caplog: pytest.LogCaptureFixture) -> None:
-        """The failing condition is reported at ERROR, not merely DEBUG (kills 89)."""
-        row = pd.Series({"Depth_Score": "n/a"})
-        with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
-            assert evaluate_condition(row, "Depth_Score < 0.4") is False
-        assert "Error evaluating condition" in caplog.text
+        with pytest.raises(ValueError, match="unknown column 'Depth_Score'"):
+            add_flags(frame, {"Low_Depth": LOW_DEPTH})
 
-    def test_evaluation_error_is_false_and_observable(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A non-NameError condition failure stays false and logs at ERROR."""
-        row = pd.Series({"Depth_Score": "n/a"})
-        with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
-            assert evaluate_condition(row, "Depth_Score < 0.4") is False
-        matching_records = [record for record in caplog.records if "Error evaluating condition" in record.getMessage()]
-        assert len(matching_records) == 1
-        assert matching_records[0].levelno == logging.ERROR
-
-    def test_a_broken_rule_cannot_invent_a_flag(self):
-        """End to end: a rule that cannot be evaluated leaves the row unflagged (kills 89)."""
-        df = pd.DataFrame({"Depth_Score": ["n/a"], "Motif": ["2"], "REF": ["C"], "ALT": ["CG"]})
-        result = add_flags(df, {"Low_Depth": "Depth_Score < 0.4"})
-        assert result.loc[0, "Flag"] == "Not flagged"
+        assert "Flag" not in frame.columns
 
 
 class TestDuplicateSortSelection:
@@ -593,7 +774,17 @@ class TestDuplicateFlagCombination:
         )
         result = add_flags(
             df,
-            {"Low_Depth": "Depth_Score < 0.9"},
+            {
+                "Low_Depth": {
+                    "all": [
+                        {
+                            "left": {"column": "Depth_Score"},
+                            "operator": "lt",
+                            "right": {"literal": 0.9},
+                        }
+                    ]
+                }
+            },
             duplicates_config=_dup_config(sort_by=[{"column": "Depth_Score", "ascending": False}]),
         )
         assert result.loc[0, "Flag"] == "Low_Depth"
@@ -837,10 +1028,10 @@ def test_no_artifact_flag_name_is_written_into_the_flagging_module(kestrel_confi
     appears in the module's source, the reversibility property above is a fiction:
     emptying `artifact_flags` would no longer restore the previous behaviour.
     """
-    source = (Path(__file__).resolve().parents[2] / "vntyper" / "scripts" / "flagging.py").read_text(encoding="utf-8")
+    source = inspect.getsource(add_artifact_gate)
 
     for flag in kestrel_config["artifact_flags"]:
-        assert flag not in source, f"{flag!r} is hardcoded in flagging.py; it must come from configuration"
+        assert flag not in source, f"{flag!r} is hardcoded in add_artifact_gate; it must come from configuration"
 
 
 def test_a_string_artifact_flags_value_is_refused_rather_than_iterated():

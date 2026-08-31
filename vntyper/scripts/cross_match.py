@@ -4,7 +4,7 @@ vntyper/scripts/cross_match.py
 This module compares variant calls from Kestrel and adVNTR outputs.
 It performs a configurable allele match by subtracting the REF from ALT for insertions/duplications
 (or vice versa for deletions) and comparing the resulting allele change along with the variant type.
-The matching logic is defined in the main configuration (under the "cross_match" key) and can be customized.
+The matching rule is defined in the main configuration (under the "cross_match" key) and can be customized.
 If a match is found according to the configured logic, the variant is considered concordant.
 The module returns a summary dictionary that includes both all the individual comparisons
 and an overall flag indicating if at least one combination has matched.
@@ -15,6 +15,10 @@ It accepts already‑parsed results (e.g. from a pipeline summary) without re‑
 
 import csv
 import logging
+from collections.abc import Mapping
+from typing import NoReturn
+
+from vntyper.scripts.comparator_rules import adapt_legacy_rule, evaluate_rule, validate_rule
 
 # These names are matched by exact string comparison against what pipeline.py
 # records. A typo does not fail - it silently drops the cross-match section
@@ -23,9 +27,77 @@ from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_KESTREL
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MATCH_LOGIC = (
+_LEGACY_MATCH_LOGIC = (
     "Kestrel_Allele_Change == Advntr_Allele_Change and Kestrel_Variant_Type.lower() == Advntr_Variant_Type.lower()"
 )
+
+DEFAULT_MATCH_RULE: dict[str, object] = {
+    "all": [
+        {
+            "left": {"column": "Kestrel_Allele_Change"},
+            "operator": "eq",
+            "right": {"column": "Advntr_Allele_Change"},
+        },
+        {
+            "left": {"column": "Kestrel_Variant_Type"},
+            "operator": "casefold_eq",
+            "right": {"column": "Advntr_Variant_Type"},
+        },
+    ]
+}
+
+CROSS_MATCH_COLUMNS: frozenset[str] = frozenset(
+    {
+        "Kestrel_POS",
+        "Kestrel_REF",
+        "Kestrel_ALT",
+        "Kestrel_Allele_Change",
+        "Kestrel_Variant_Type",
+        "Advntr_POS",
+        "Advntr_REF",
+        "Advntr_ALT",
+        "Advntr_Allele_Change",
+        "Advntr_Variant_Type",
+    }
+)
+
+
+def _configuration_error(message: str) -> NoReturn:
+    logger.error(message)
+    raise ValueError(message)
+
+
+def _configured_match_rule(config: object) -> object:
+    """Resolve the structured rule or the exact historical compatibility value."""
+    if config is None:
+        return DEFAULT_MATCH_RULE
+    if not isinstance(config, Mapping):
+        _configuration_error("cross_match configuration must be a mapping")
+    if "cross_match" not in config:
+        return DEFAULT_MATCH_RULE
+    configured = config["cross_match"]
+    if not isinstance(configured, Mapping):
+        _configuration_error("cross_match configuration block must be a mapping")
+    unsupported_keys = sorted(set(configured) - {"match_rule", "match_logic"}, key=repr)
+    if unsupported_keys:
+        rendered_keys = ", ".join(repr(key) for key in unsupported_keys)
+        _configuration_error(f"cross_match configuration block contains unsupported keys: {rendered_keys}")
+    has_rule = "match_rule" in configured
+    has_logic = "match_logic" in configured
+    if has_rule and has_logic:
+        _configuration_error("cross_match configuration cannot contain both 'match_rule' and 'match_logic'")
+    if has_rule:
+        return configured["match_rule"]
+    if has_logic:
+        legacy_logic = configured["match_logic"]
+        if not isinstance(legacy_logic, str):
+            _configuration_error("cross_match.match_logic must contain the exact historical string")
+        return adapt_legacy_rule(
+            legacy_logic,
+            exact_rules={_LEGACY_MATCH_LOGIC: DEFAULT_MATCH_RULE},
+            context="cross_match.match_logic",
+        )
+    return DEFAULT_MATCH_RULE
 
 
 def determine_variant_type(ref, alt):
@@ -79,18 +151,18 @@ def compute_allele_change(ref, alt, variant_type):
 
 def cross_match_variants(kestrel_records, advntr_records, config=None):
     """
-    Cross-match variants from Kestrel and adVNTR outputs using configurable logic.
+    Cross-match variants from Kestrel and adVNTR outputs using a configurable rule.
 
     For each combination of Kestrel and adVNTR record, the function computes the allele change
-    and variant type (if not already set) and then evaluates the matching logic.
-    The matching logic is obtained from the configuration dictionary under the key
-    "cross_match" -> "match_logic". If not provided, the default logic is used.
+    and variant type (if not already set) and then evaluates the matching rule.
+    The rule is obtained from ``cross_match.match_rule``. The exact expression
+    shipped before issue #286 is accepted under ``match_logic`` for migration.
 
     Args:
         kestrel_records (list of dict): Kestrel genotyping records.
         advntr_records (list of dict): adVNTR genotyping records.
         config (dict, optional): Main configuration dictionary.
-            If provided, the matching logic is read from config["cross_match"]["match_logic"].
+            If provided, the matching rule is read from config["cross_match"]["match_rule"].
 
     Returns:
         dict: A dictionary with keys:
@@ -99,16 +171,15 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
             else "No". Never a boolean; downstream code matches on the string.
 
     Raises:
-        ValueError: If the configured match logic cannot be evaluated. This is
-            deliberately fail-closed: reporting "no match" for a rule that errored
-            is indistinguishable from a genuine discordance, which is how a
-            misconfigured rule stays invisible (AGENTS.md trap 3). The message
-            names the rule and the columns that were available.
+        ValueError: If the configured rule is malformed or cannot be evaluated.
+            Validation happens before any input record is modified.
     """
-    if config is not None:
-        match_logic = config.get("cross_match", {}).get("match_logic", DEFAULT_MATCH_LOGIC)
-    else:
-        match_logic = DEFAULT_MATCH_LOGIC
+    configured_rule = _configured_match_rule(config)
+    compiled_rule = validate_rule(
+        configured_rule,
+        allowed_columns=CROSS_MATCH_COLUMNS,
+        context="cross_match.match_rule",
+    )
 
     results = []
     overall = False
@@ -140,35 +211,7 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
                 "Advntr_Allele_Change": a["Allele_Change"],
                 "Advntr_Variant_Type": a["Variant_Type"],
             }
-            try:
-                # Evaluate the matching condition in a restricted namespace.
-                match = bool(eval(match_logic, {"__builtins__": {}}, result))
-            except (NameError, SyntaxError) as e:
-                # Structural: a name no record carries, or an expression that does not
-                # parse. Both are properties of the rule string and the fixed key set of
-                # `result` above, so they fail identically for EVERY record pair - a
-                # configuration defect, never a data anomaly. Reporting "no match" here
-                # is indistinguishable from genuine discordance (AGENTS.md trap 3), so
-                # fail loudly instead. The message names the rule and the columns that
-                # did exist so the wrong column name is visible without reading this file.
-                msg = (
-                    f"Invalid cross_match match_logic {match_logic!r}: {type(e).__name__}: {e}. "
-                    f"Available columns: {', '.join(sorted(result))}"
-                )
-                logger.error(msg)
-                raise ValueError(msg) from e
-            except Exception as e:
-                # Value-dependent: the rule parses and every name exists, but the values
-                # in this pair do not support the operation (e.g. `.lower()` on a numeric
-                # POS). A separate handler because the useful diagnostic is the record
-                # itself, not the column list - but it raises for the same reason: a pair
-                # that could not be compared is not evidence that the calls disagree.
-                msg = (
-                    f"Could not evaluate cross_match match_logic {match_logic!r} against a record pair: "
-                    f"{type(e).__name__}: {e}. Available columns: {', '.join(sorted(result))}. Record: {result}"
-                )
-                logger.error(msg)
-                raise ValueError(msg) from e
+            match = evaluate_rule(compiled_rule, result, context="cross_match.match_rule")
             result["Match"] = "Yes" if match else "No"
             if match:
                 overall = True

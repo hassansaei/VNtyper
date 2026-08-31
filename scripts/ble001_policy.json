@@ -1,13 +1,13 @@
 {
   "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 97,
-    "ignore_noqa": 104,
-    "identities": 75,
+    "normal": 95,
+    "ignore_noqa": 102,
+    "identities": 73,
     "categories": {
       "A": 28,
       "B": 16,
-      "C": 31
+      "C": 29
     }
   },
   "handlers": [
@@ -364,22 +364,6 @@
       "rationale": "vntyper/scripts/cohort_summary.py::load_report_config: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_summary_oracle.py::test_report_config_failure_returns_empty_mapping and failure remains observable via ERROR log"
     },
     {
-      "path": "vntyper/scripts/flagging.py",
-      "symbol": "evaluate_condition",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "C",
-      "rationale": "vntyper/scripts/flagging.py::evaluate_condition: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_flagging.py::TestEvaluateConditionErrorPath::test_error_path_is_logged_at_error_level and failure remains observable via WARNING or ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/flagging.py",
-      "symbol": "regex_match",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "C",
-      "rationale": "vntyper/scripts/flagging.py::regex_match: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_flagging.py::test_invalid_regex_is_false_and_observable and failure remains observable via ERROR log"
-    },
-    {
       "path": "vntyper/scripts/generate_report.py",
       "symbol": "build_kestrel_frames",
       "normal_count": 1,
@@ -710,24 +694,6 @@
       "outcome": "Returns an empty mapping for unreadable or invalid report configuration.",
       "rationale": "The cohort report uses its established unavailable configuration fallback without inventing clinical text.",
       "behavior_test": "tests/unit/test_cohort_summary_oracle.py::test_report_config_failure_returns_empty_mapping",
-      "observable_via": "ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/flagging.py",
-      "symbol": "evaluate_condition",
-      "disposition": "preserved-contract",
-      "outcome": "Returns False for missing names and other evaluation failures.",
-      "rationale": "A malformed configured flag condition cannot invent a sample flag and remains visible at the established severity.",
-      "behavior_test": "tests/unit/test_flagging.py::TestEvaluateConditionErrorPath::test_error_path_is_logged_at_error_level",
-      "observable_via": "WARNING or ERROR log"
-    },
-    {
-      "path": "vntyper/scripts/flagging.py",
-      "symbol": "regex_match",
-      "disposition": "preserved-contract",
-      "outcome": "Returns False for an invalid regular expression.",
-      "rationale": "An invalid configured regex cannot turn a non-match into a flagging match.",
-      "behavior_test": "tests/unit/test_flagging.py::test_invalid_regex_is_false_and_observable",
       "observable_via": "ERROR log"
     },
     {

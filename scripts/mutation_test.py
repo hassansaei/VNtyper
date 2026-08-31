@@ -319,43 +319,10 @@ def mutate_number(literal: str) -> str | None:
 #: Line numbers are checked against the live sweep, so a stale entry is reported rather
 #: than silently ignored.
 EQUIVALENT_MUTANTS: dict[tuple[str, int, str, str], str] = {
-    # --- confidence_assignment.py -------------------------------------------------
-    # Six entries used to live here, one per `<subdict>.get(<key>, <default>)` read of a
-    # calibration constant. They are gone because the code is: the six defaults were
-    # DELETED (#184 follow-up), not reclassified. The constants are now read as direct
-    # subscripts, so a missing key raises KeyError instead of silently substituting a
-    # second, wrong calibration - and there is no default operand left to mutate.
-    # --- variant_parsing.py -------------------------------------------------------
-    ("vntyper/scripts/variant_parsing.py", 114, "0.0", "1.0"): (
-        "`.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469"
-    ),
-    # --- motif_processing.py ------------------------------------------------------
-    # Line moved 315 -> 342 when 11e2300 extracted the decision layer. The sweep's stale-
-    # entry check caught the drift; the mutant is the same one and is still equivalent.
-    ("vntyper/scripts/motif_processing.py", 342, "60", "61"): (
-        "`.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60"
-    ),
-    # --- flagging.py --------------------------------------------------------------
-    # NOTE the deliberately narrow scope here. The shipped config sets
-    # `duplicate_flagging.enabled = false`, so the whole duplicate-marking block is dead
-    # by default - but `enabled` is a SUPPORTED TOGGLE, so that code is reachable by
-    # configuration and its mutants are real gaps, not equivalents. Only the `.get()`
-    # default operand itself is classified here.
-    # Line moved 150 -> 151 when the rule evaluator was made fail-closed.
-    ("vntyper/scripts/flagging.py", 151, "False", "True"): (
-        "`.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly"
-    ),
-    # `itertuples(index=True)` only prepends an `Index` field to the namedtuple; the loop
-    # body reads `row_tuple.Flag` by name and never touches position, so both forms yield
-    # the same value. Checked against the awkward cases too - a column literally named
-    # `Index`, duplicate `Flag` columns, a string index and a MultiIndex all resolve
-    # `.Flag` to the same column either way, because namedtuple's `rename=True` renames
-    # the colliding field and not `Flag`.
-    # Line moved 238 -> 243 with the duplicate-flagging changes in 6e7cda2, then
-    # 243 -> 334 when fail-closed evaluation and artifact-gate validation were added.
-    ("vntyper/scripts/flagging.py", 334, "False", "True"): (
-        "`itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name"
-    ),
+    # Four entries remained before the issue #286 sweep: one each in variant parsing
+    # and motif processing plus two in flagging. The fresh 220-mutant run killed every
+    # one. A killed mutant is observably different and therefore cannot remain classified
+    # as equivalent, regardless of the older rationale attached to it.
 }
 
 

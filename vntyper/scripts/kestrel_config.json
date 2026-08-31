@@ -55,8 +55,22 @@
     "exclude_motifs_combined": ["6", "6p", "7"]
   },
   "flagging_rules": {
-    "False_Positive_4bp_Insertion": "(REF == 'C') and (ALT == 'CGGCA')",
-    "Low_Depth_Conserved_Motifs": "(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])"
+    "False_Positive_4bp_Insertion": {
+      "all": [
+        {"left": {"column": "REF"}, "operator": "eq", "right": {"literal": "C"}},
+        {"left": {"column": "ALT"}, "operator": "eq", "right": {"literal": "CGGCA"}}
+      ]
+    },
+    "Low_Depth_Conserved_Motifs": {
+      "all": [
+        {"left": {"column": "Depth_Score"}, "operator": "lt", "right": {"literal": 0.4}},
+        {
+          "left": {"column": "Motif"},
+          "operator": "in",
+          "right": {"literal": ["1", "2", "3", "4", "6", "7", "8", "9"]}
+        }
+      ]
+    }
   },
   "artifact_flags": ["False_Positive_4bp_Insertion"],
   "duplicate_flagging": {
