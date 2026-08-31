@@ -19,6 +19,7 @@ IdentitySource: TypeAlias = Literal["kestrel", "advntr"]
 EvidenceDispositionValue: TypeAlias = Literal["admissible", "identity-insufficient"]
 
 CANONICAL_MOLECULAR_IDENTITY_REFERENCE: Final[IdentityReference] = "MUC1-X-60-coding-v1"
+CANONICAL_MUC1_X_CODING_UNIT: Final[str] = "GCCCACGGTGTCACCTCGGCCCCGGACACCAGGCCGGCCCCGGGCTCCACCGCCCCCCCA"
 
 _TRANSLATION_FAILURES: frozenset[str] = frozenset(
     {
@@ -31,6 +32,7 @@ _TRANSLATION_FAILURES: frozenset[str] = frozenset(
     }
 )
 _EVIDENCE_DISPOSITIONS: frozenset[str] = frozenset({"admissible", "identity-insufficient"})
+_IDENTITY_TIERS: frozenset[str] = frozenset({"A", "B", "C", "abstained"})
 
 
 @dataclass(frozen=True)
@@ -55,13 +57,13 @@ class CodingEdit:
                 raise ValueError("Insertion end must be an integer coordinate")
             if self.end != self.start - 1:
                 raise ValueError("Insertion coordinates require end == start - 1")
-            return
-
-        _validate_position(self.end, "end")
-        if self.end < self.start:
-            raise ValueError("Non-insertion coordinates require end >= start")
-        if len(self.deleted) != self.end - self.start + 1:
-            raise ValueError("Deleted allele length must match the coding interval")
+        else:
+            _validate_position(self.end, "end")
+            if self.end < self.start:
+                raise ValueError("Non-insertion coordinates require end >= start")
+            if len(self.deleted) != self.end - self.start + 1:
+                raise ValueError("Deleted allele length must match the coding interval")
+        _validate_canonical_edit(self)
 
 
 @dataclass(frozen=True)
@@ -86,8 +88,8 @@ class MolecularIdentity:
         if self.edits != ordered_edits:
             raise ValueError("Molecular identity edits must be sorted by coordinate")
         for previous, current in zip(self.edits, self.edits[1:], strict=False):
-            if current.start <= previous.end:
-                raise ValueError("Molecular identity edits must not overlap")
+            if _edits_collide(previous, current):
+                raise ValueError("Molecular identity edits must not overlap or form a compound collision")
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,10 @@ class IdentityTranslation:
 
     def __post_init__(self) -> None:
         """Require a consistent translation state."""
+        if self.identity is not None and not isinstance(self.identity, MolecularIdentity):
+            raise ValueError("Identity translation identity must be a MolecularIdentity or None")
+        if not isinstance(self.context_diverges, bool):
+            raise ValueError("Identity translation context divergence must be a boolean")
         if self.status not in {"resolved", "unresolved"}:
             raise ValueError(f"Unsupported molecular identity translation status: {self.status}")
         if self.failure is not None and self.failure not in _TRANSLATION_FAILURES:
@@ -182,6 +188,12 @@ class IdentityObservation:
 
     def __post_init__(self) -> None:
         """Keep a source bound to its own caller representation."""
+        if self.source not in {"kestrel", "advntr"}:
+            raise ValueError(f"Identity observation source is unsupported: {self.source}")
+        if not isinstance(self.translation, IdentityTranslation):
+            raise ValueError("Identity observation translation must be an IdentityTranslation")
+        if not isinstance(self.frame_consequence, FrameConsequence):
+            raise ValueError("Identity observation frame consequence must be a FrameConsequence")
         if self.source == "kestrel" and isinstance(self.representation, KestrelRepresentation):
             return
         if self.source == "advntr" and isinstance(self.representation, AdvntrRepresentation):
@@ -212,8 +224,12 @@ class IdentityDecision:
 
     def __post_init__(self) -> None:
         """Keep selected-identity and abstention states distinct."""
+        if self.identity is not None and not isinstance(self.identity, MolecularIdentity):
+            raise ValueError("Identity decision identity must be a MolecularIdentity or None")
         if not isinstance(self.tier, str) or not self.tier:
             raise ValueError("Identity decision tier must be a non-empty string")
+        if self.tier not in _IDENTITY_TIERS:
+            raise ValueError(f"Identity decision tier is unsupported: {self.tier}")
         if not isinstance(self.molecular_agreement, bool):
             raise ValueError("Molecular agreement must be a boolean")
         if self.tier == "abstained":
@@ -226,6 +242,8 @@ class IdentityDecision:
             raise ValueError(f"Identity decision tier {self.tier} does not accept an identity-free decision")
         if self.abstention_reason is not None:
             raise ValueError("A selected identity decision cannot include an abstention reason")
+        if self.tier == "A" and not self.molecular_agreement:
+            raise ValueError("Tier A requires molecular agreement")
 
 
 def make_coding_edit(start: int, end: int, deleted: str, inserted: str) -> CodingEdit:
@@ -289,11 +307,8 @@ def parse_molecular_identity(value: str) -> MolecularIdentity:
         start_text, end_text, deleted, inserted = fields
         if not start_text or not end_text or not deleted or not inserted:
             raise ValueError("Molecular identity edit serialization has an empty field")
-        try:
-            start = int(start_text)
-            end = int(end_text)
-        except ValueError as error:
-            raise ValueError("Molecular identity edit coordinates must be integers") from error
+        start = _parse_coordinate(start_text)
+        end = _parse_coordinate(end_text)
         edits.append(CodingEdit(start, end, _decode_allele(deleted), _decode_allele(inserted)))
     return make_molecular_identity(tuple(edits))
 
@@ -307,6 +322,7 @@ def serialize_molecular_identity(identity: MolecularIdentity) -> str:
     Returns:
         The versioned canonical serialization.
     """
+
     def allele(value: str) -> str:
         return value or "-"
 
@@ -314,6 +330,71 @@ def serialize_molecular_identity(identity: MolecularIdentity) -> str:
         f"{edit.start}|{edit.end}|{allele(edit.deleted)}|{allele(edit.inserted)}" for edit in identity.edits
     )
     return f"{identity.reference}|{encoded}"
+
+
+def _validate_canonical_edit(edit: CodingEdit) -> None:
+    """Reject edits that do not use the canonical reference or normalized representation."""
+    expected_deleted = CANONICAL_MUC1_X_CODING_UNIT[edit.start - 1 : edit.end]
+    if edit.deleted != expected_deleted:
+        raise ValueError("Deleted allele does not match the canonical MUC1 X coding reference")
+
+    canonical_edit = _canonicalize_edit(edit)
+    if canonical_edit is None:
+        raise ValueError("Coding edit must change the canonical MUC1 X coding reference")
+    if canonical_edit != (edit.start, edit.end, edit.deleted, edit.inserted):
+        raise ValueError("Coding edit must use the minimal 3-prime-most canonical representation")
+
+
+def _canonicalize_edit(edit: CodingEdit) -> tuple[int, int, str, str] | None:
+    """Return the minimal 3-prime-most representation of an edit's alternate unit."""
+    alternate = (
+        CANONICAL_MUC1_X_CODING_UNIT[: edit.start - 1] + edit.inserted + CANONICAL_MUC1_X_CODING_UNIT[edit.end :]
+    )
+    prefix_length = 0
+    while (
+        prefix_length < len(CANONICAL_MUC1_X_CODING_UNIT)
+        and prefix_length < len(alternate)
+        and CANONICAL_MUC1_X_CODING_UNIT[prefix_length] == alternate[prefix_length]
+    ):
+        prefix_length += 1
+
+    reference_end = len(CANONICAL_MUC1_X_CODING_UNIT)
+    alternate_end = len(alternate)
+    while (
+        reference_end > prefix_length
+        and alternate_end > prefix_length
+        and CANONICAL_MUC1_X_CODING_UNIT[reference_end - 1] == alternate[alternate_end - 1]
+    ):
+        reference_end -= 1
+        alternate_end -= 1
+
+    deleted = CANONICAL_MUC1_X_CODING_UNIT[prefix_length:reference_end]
+    inserted = alternate[prefix_length:alternate_end]
+    if not deleted and not inserted:
+        return None
+    start = prefix_length + 1
+    end = reference_end if deleted else start - 1
+    return start, end, deleted, inserted
+
+
+def _edits_collide(previous: CodingEdit, current: CodingEdit) -> bool:
+    """Return whether sorted edits overlap an insertion anchor or compound boundary."""
+    previous_is_insertion = not previous.deleted
+    current_is_insertion = not current.deleted
+    if previous_is_insertion and current_is_insertion:
+        return previous.start == current.start
+    if previous_is_insertion:
+        return current.start <= previous.start
+    if current_is_insertion:
+        return current.start <= previous.end + 1
+    return current.start <= previous.end
+
+
+def _parse_coordinate(value: str) -> int:
+    """Parse one canonical decimal coordinate token from the identity wire format."""
+    if not value.isascii() or not value.isdecimal() or (len(value) > 1 and value.startswith("0")):
+        raise ValueError("Molecular identity edit coordinates must be canonical decimal integers")
+    return int(value)
 
 
 def _validate_position(value: int, name: str) -> None:
