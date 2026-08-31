@@ -409,7 +409,7 @@ This task catches cross-module breakage that isolated RED/GREEN loops miss: comp
 
 1. Run targeted families:
 
-   `conda run --no-capture-output -n vntyper python -m pytest tests/unit/test_nomenclature_bam.py tests/unit/test_nomenclature_evidence.py tests/unit/test_nomenclature_reconcile.py tests/unit/test_nomenclature_surfaces.py tests/unit/test_nomenclature_annotate.py tests/unit/test_report_formatting.py tests/unit/test_generate_report.py tests/unit/test_report_igv_modes.py tests/unit/test_cohort_summary_escaping.py tests/unit/test_cohort_summary_oracle.py -q`
+   `conda run --no-capture-output -n vntyper python -m pytest tests/unit/test_nomenclature_bam.py tests/unit/test_nomenclature_evidence.py tests/unit/test_nomenclature_reconcile.py tests/unit/test_nomenclature_surfaces.py tests/unit/test_nomenclature_kestrel.py tests/unit/test_report_formatting.py tests/unit/test_generate_report.py tests/unit/test_report_igv_modes.py tests/unit/test_cohort_summary_escaping.py tests/unit/test_cohort_summary_oracle.py -q`
 
 2. Run complete nomenclature unit family:
 
