@@ -143,6 +143,7 @@ nav:
     - CI/CD Follow-ups: development/ci-followups.md
     - Golden-Cohort Gate: development/golden-cohort-gate.md
     - Mutation Testing: development/mutation-testing.md
+    - Kestrel BAM Evidence Semantics Design: superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md
   - About:
     - about/index.md
     - Scientific Background: about/scientific-background.md
