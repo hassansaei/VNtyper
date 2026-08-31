@@ -13,7 +13,14 @@ All notable changes to VNtyper 2 are documented on this page.
 - **Evidence flags now state their units.** New Kestrel-specific
   `thin-haplotype-record-support`, `low-haplotype-record-support`, and
   `low-kmer-path-support` tokens are separate from genuine `low-read-support`; an
-  undeclared source uses `low-evidence-support`. Reports explain the same distinction.
+  undeclared source uses `low-evidence-support`. Current Kestrel BAM rows replace the
+  pre-Phase-1 `low-read-support` token with BAM-specific
+  `thin-haplotype-record-support` and `low-haplotype-record-support` tokens. Reports
+  explain the same distinction; archived tokens retain their compatibility meaning.
+- **The internal BAM consensus interface uses truthful canonical fields.**
+  `supporting_haplotype_records`, `fetched_haplotype_records`, and
+  `distinct_edit_count` replace the ambiguous constructor fields. Existing attribute
+  readers retain read-only `support`, `total`, and `n_distinct` compatibility properties.
 - **Existing complete custom configurations remain compatible.** The shipped thinness
   key is `bam_thin_haplotype_record_support`; the former `bam_thin_support` is accepted
   as a fallback. `min_support_for_high_confidence`, numeric values, record voting,

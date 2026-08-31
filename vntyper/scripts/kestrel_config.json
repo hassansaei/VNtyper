@@ -38,7 +38,7 @@
   "subthreshold_note": {
     "_comment": "#266. One banner line on a sample that called nothing but held a candidate failing only the depth gate. It is a note, never a row: summary.parse_tsv routes '#' lines into `comments`, so no consumer of the table can read it as a call. Only the sentence is configurable; the marker it starts with is a machine contract in subthreshold.NOTE_MARKER, because the writer (kestrel_genotyping) and the reader (generate_report) do not load the same config file. Set `enabled` to false to restore the pre-#266 output exactly.",
     "enabled": true,
-    "template": "{marker} {events} {noun} in the pathogenic frame identified below the reporting floor (best Depth_Score {best_depth_score}, floor {floor}); filtered out and NOT a call. Depth_Score is a ratio against an active-region depth summed over the repeat array, so the same read support scores lower on a longer allele."
+    "template": "{marker} {events} {noun} in the pathogenic frame identified below the reporting floor (best Depth_Score {best_depth_score}, floor {floor}); filtered out and NOT a call. Depth_Score is a ratio against an active-region depth summed over the repeat array, so the same alternate k-mer-path depth scores lower on a longer allele."
   },
   "alt_filtering": {
     "gg_alt_value": "GG",

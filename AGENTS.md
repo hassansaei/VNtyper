@@ -117,14 +117,19 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     and model-reference resolution before the pipeline performs model or alignment I/O.
   - `comparator_rules.py` — validation and evaluation of the deliberately small,
     non-executable comparator DSL shared by flagging and cross-match rules.
-  - `nomenclature_evidence.py` — source-specific nomenclature evidence units, XD parsing,
-    and the compatibility resolver for the BAM thin-support configuration key.
+  - `nomenclature_evidence.py` — source-specific evidence-unit flags and the BAM
+    thin-support configuration-key resolver.
   - `nomenclature_presentation.py` — source-specific report flag meanings, tier blockers,
     column help and the Kestrel BAM semantics clarification.
-  `reference_resolution_environment.py` separately owns CRAM-only process-environment
-  pin/restore I/O. These eighteen focused modules keep pure decisions independently testable;
-  measure their current branch coverage rather than assuming a fixed percentage. Put new
-  pure logic there rather than back in the file it came from.
+
+`nomenclature_bam.py` separately owns XD parsing, resolved haplotype-record voting, and
+the `BamConsensus` interface; those BAM-facing responsibilities do not belong in the
+source-vocabulary helper. `reference_resolution_environment.py` separately owns CRAM-only
+process-environment pin/restore I/O.
+
+These eighteen focused modules keep pure decisions independently testable; measure their
+current branch coverage rather than assuming a fixed percentage. Put new pure logic there
+rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
   package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs

@@ -184,6 +184,21 @@ class TestTheNoteHelper:
     def test_the_shipped_config_enables_the_feature(self):
         assert kg.kestrel_config["subthreshold_note"]["enabled"] is True
 
+    def test_the_documented_banner_quote_matches_the_shipped_evidence_units(self):
+        """A truthful docs quote cannot conceal stale config-driven read-count prose."""
+        template = kg.kestrel_config["subthreshold_note"]["template"]
+        depth_sentence = template[template.index("Depth_Score is") :]
+        docs = Path("docs/pipeline/kestrel.md").read_text(encoding="utf-8")
+        documented_quote = " ".join(
+            docs[
+                docs.index("## Subthreshold candidate:") : docs.index("```", docs.index("## Subthreshold candidate:"))
+            ].split()
+        )
+
+        assert "same alternate k-mer-path depth" in template
+        assert "same read support" not in template
+        assert depth_sentence in documented_quote
+
 
 class TestFilterColumns:
     def test_the_constant_is_the_six_gates_in_order(self):

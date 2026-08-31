@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from vntyper.scripts import nomenclature_bam
 from vntyper.scripts.nomenclature_presentation import NOMENCLATURE_FLAG_MEANINGS
 
 pytestmark = pytest.mark.unit
@@ -51,11 +52,19 @@ def test_agents_inventory_includes_both_phase_1_focused_modules() -> None:
     """Catch stale sixteen-module wording after the evidence split has landed."""
     page = _read("AGENTS.md")
     layout = _section(page, "## Layout", "## Code style")
+    normalized = " ".join(layout.split())
 
-    assert "These eighteen focused modules" in layout
-    assert "`nomenclature_evidence.py` — source-specific nomenclature evidence units" in layout
-    assert "`nomenclature_presentation.py` — source-specific report flag meanings" in layout
-    assert "reserves two further focused destinations" not in layout
+    assert "These eighteen focused modules" in normalized
+    assert "`nomenclature_evidence.py` — source-specific evidence-unit flags and the" in normalized
+    assert "BAM thin-support configuration-key resolver" in normalized
+    assert "`nomenclature_bam.py` separately owns XD parsing, resolved haplotype-record voting, and" in normalized
+    assert "`BamConsensus`" in normalized
+    evidence_line = normalized[
+        normalized.index("`nomenclature_evidence.py`") : normalized.index("`nomenclature_presentation.py`")
+    ]
+    assert "XD parsing" not in evidence_line
+    assert "`nomenclature_presentation.py` — source-specific report flag meanings" in normalized
+    assert "reserves two further focused destinations" not in normalized
 
 
 def test_changelog_states_the_current_lossless_selection_and_invalid_parity_policy() -> None:
@@ -107,6 +116,12 @@ def test_phase_1_changelog_entry_does_not_rewrite_released_history() -> None:
     assert "does not weight votes or alter names or tiers" in normalized
     assert "bam_thin_haplotype_record_support" in unreleased
     assert "bam_thin_support" in unreleased
+    assert "supporting_haplotype_records" in unreleased
+    assert "fetched_haplotype_records" in unreleased
+    assert "distinct_edit_count" in unreleased
+    assert "read-only `support`, `total`, and `n_distinct` compatibility properties" in normalized
+    assert "replace the pre-Phase-1 `low-read-support` token" in normalized
+    assert "BAM-specific `thin-haplotype-record-support` and `low-haplotype-record-support`" in normalized
     assert all(f"#{issue}" in unreleased for issue in (270, 267, 269))
 
 
@@ -144,10 +159,11 @@ def test_nomenclature_page_states_the_typed_xd_contract() -> None:
     """Catch collapsing retained zero/extreme integers into unavailable XD evidence."""
     page = " ".join(_read("docs/pipeline/nomenclature.md").split()).lower()
 
-    assert "integer values from 1 through 2,147,483,647 are retained exactly" in page
+    maximum = f"{nomenclature_bam._MAXIMUM_MINIMUM_KMER_DEPTH:,}"
+    assert f"integer values from 1 through {maximum} are retained exactly" in page
     assert "zero is retained as zero" in page
     assert "missing or malformed values are unavailable" in page
-    assert "negative values and unsigned integers above 2,147,483,647 are unavailable" in page
+    assert f"negative values and unsigned integers above {maximum} are unavailable" in page
     assert "every resolved haplotype record still contributes one unweighted vote" in page
 
 
