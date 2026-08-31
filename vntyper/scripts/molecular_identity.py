@@ -347,6 +347,10 @@ def _validate_canonical_edit(edit: CodingEdit) -> None:
 
 def _canonicalize_edit(edit: CodingEdit) -> tuple[int, int, str, str] | None:
     """Return the minimal 3-prime-most representation of an edit's alternate unit."""
+    if not edit.deleted:
+        start, inserted = _canonicalize_insertion(edit.start, edit.inserted)
+        return start, start - 1, "", inserted
+
     alternate = (
         CANONICAL_MUC1_X_CODING_UNIT[: edit.start - 1] + edit.inserted + CANONICAL_MUC1_X_CODING_UNIT[edit.end :]
     )
@@ -375,6 +379,16 @@ def _canonicalize_edit(edit: CodingEdit) -> tuple[int, int, str, str] | None:
     start = prefix_length + 1
     end = reference_end if deleted else start - 1
     return start, end, deleted, inserted
+
+
+def _canonicalize_insertion(start: int, inserted: str) -> tuple[int, str]:
+    """Roll an insertion 3-prime within, but never beyond, the closed repeat reference."""
+    boundary = start
+    rotated = inserted
+    while boundary < len(CANONICAL_MUC1_X_CODING_UNIT) and CANONICAL_MUC1_X_CODING_UNIT[boundary - 1] == rotated[0]:
+        rotated = rotated[1:] + rotated[0]
+        boundary += 1
+    return boundary, rotated
 
 
 def _edits_collide(previous: CodingEdit, current: CodingEdit) -> bool:

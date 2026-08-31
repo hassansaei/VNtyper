@@ -141,6 +141,12 @@ def test_canonical_three_prime_c_insertion_is_accepted() -> None:
     assert CodingEdit(60, 59, "", "C") == make_coding_edit(60, 59, "", "C")
 
 
+def test_terminal_a_insertion_does_not_roll_across_the_repeat_junction() -> None:
+    """A terminal dupA remains at the last valid closed-reference insertion boundary."""
+    identity = make_molecular_identity((CodingEdit(60, 59, "", "A"),))
+    assert serialize_molecular_identity(identity) == "MUC1-X-60-coding-v1|60|59|-|A"
+
+
 def test_identity_rejects_insertion_anchor_and_compound_edit_collisions() -> None:
     """Separate edits cannot encode one collision-prone insertion or compound event."""
     insertion = make_coding_edit(60, 59, "", "C")
