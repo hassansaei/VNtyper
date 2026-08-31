@@ -53,17 +53,18 @@ PER_CALL_BUDGET_RATIO = 120.0
 PER_LOCUS_BUDGET_MS = 15.0
 
 
-def _write_bam(path: Path, reads: int = 200) -> Path:
+def _write_bam(path: Path, haplotype_records: int = 200) -> Path:
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "K-J", "LN": 120}]}
     with pysam.AlignmentFile(str(path), "wb", header=header) as handle:
-        for index in range(reads):
+        for index in range(haplotype_records):
             record = pysam.AlignedSegment(handle.header)
-            record.query_name = f"r{index}"
+            record.query_name = f"haplotype{index}"
             record.reference_id = 0
             record.reference_start = 10
             record.mapping_quality = 255
             record.cigarstring = "20=1X1I20=" if index % 4 == 0 else "20=1X20="
             record.query_sequence = "A" * (42 if index % 4 == 0 else 41)
+            record.set_tag("XD", (5, 181, 7_416, 8_704)[index % 4])
             handle.write(record)
     pysam.index(str(path))  # type: ignore[attr-defined]
     return path
