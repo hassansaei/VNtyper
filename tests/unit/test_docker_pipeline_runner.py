@@ -202,12 +202,14 @@ def test_generic_docker_runner_builds_exact_request_argv_and_captures_output(tmp
     )
 
     assert result == PipelineRunResult(1, "captured combined docker output", "")
+    assert container.commands[0][2].startswith("umask 0002 && source /opt/conda/etc/profile.d/conda.sh && ")
     assert container.commands == [
         [
             "/bin/bash",
             "-c",
             (
-                "source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper "
+                "umask 0002 && source /opt/conda/etc/profile.d/conda.sh && "
+                "conda run --no-capture-output -n vntyper "
                 "vntyper -l WARNING pipeline --bam /opt/vntyper/input/nested/sample.bam --threads 7 "
                 "--reference-assembly hg19 --output-dir /opt/vntyper/output/suite/case --fast-mode "
                 "--archive-results"
@@ -241,7 +243,9 @@ def test_local_and_docker_commands_have_identical_normalized_semantics(tmp_path:
         test_data_root=data_root,
         output_mount_root=output_root,
     )
-    docker_prefix = "source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper "
+    docker_prefix = (
+        "umask 0002 && source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper "
+    )
     docker_argv = shlex.split(container.commands[0][2].removeprefix(docker_prefix))
     identities = {
         str(input_path): "INPUT:nested/sample.bam",
@@ -324,7 +328,7 @@ def test_generic_docker_runner_maps_reference_compressed_cram_without_transport_
 
     command = container.commands[0][2]
     expected = (
-        "source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper "
+        "umask 0002 && source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper "
         "vntyper -l DEBUG pipeline --cram /opt/vntyper/input/cram/reference-compressed/sample.cram "
         "--threads 2 --reference-assembly hg19 --output-dir /opt/vntyper/output/cram-case "
         "--reference-fasta /opt/vntyper/reference/alignment/chr1.hg19.fa --fast-mode --archive-results"

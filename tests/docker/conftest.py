@@ -109,14 +109,11 @@ def vntyper_container(
     # Create temp output directory for this module
     output_dir = tmp_path_factory.mktemp("docker_output")
 
-    # Set permissions on output directory for container user (appuser, UID 1001)
-    # This is necessary because the container runs as non-root user
-    # Using chmod 777 is acceptable here because:
-    # 1. This is an isolated pytest tmpdir that gets cleaned up after tests
-    # 2. The container user (UID 1001) needs write access
-    # 3. This approach is simpler than chown/chgrp which requires sudo
-    # Note: For production environments, use chmod 775 with group ownership instead
-    subprocess.run(["chmod", "777", str(output_dir)], check=True)
+    # Keep the production appuser UID/GID while sharing this isolated output tree
+    # with the host pytest user. The setgid bit makes descendants inherit the host
+    # group, and run_vntyper_pipeline's group-writable umask lets pytest remove them.
+    output_dir.chmod(0o2770)
+    output_gid = output_dir.stat().st_gid
 
     # Create container with volume mounts
     container = DockerContainer(vntyper_image)
@@ -144,6 +141,7 @@ def vntyper_container(
     container.with_kwargs(
         entrypoint=["/bin/bash", "-c", "tail -f /dev/null"],
         user="1001:1001",  # Match the appuser UID:GID from Dockerfile
+        group_add=[str(output_gid)],
         working_dir="/opt/vntyper",  # Set working directory as per Docker README
     )
 
@@ -273,7 +271,8 @@ def run_vntyper_pipeline(
     command = [
         "/bin/bash",
         "-c",
-        "source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper " + shlex.join(argv),
+        "umask 0002 && source /opt/conda/etc/profile.d/conda.sh && "
+        "conda run --no-capture-output -n vntyper " + shlex.join(argv),
     ]
     result = container.exec(command)
     return PipelineRunResult(exit_code=_exit_code(result), stdout=_exec_output(result), stderr="")

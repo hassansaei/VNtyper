@@ -1,15 +1,15 @@
 import logging
 import os
-import subprocess
 import tempfile
 import zipfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from enum import Enum
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
 import redis
-import redis.asyncio as aioredis
 from celery.result import AsyncResult
 from email_validator import EmailNotValidError, validate_email
 from fastapi import (
@@ -26,7 +26,6 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field
 
@@ -47,6 +46,7 @@ from .config import build_redis_url, get_redis_password, require_redis_password,
 from .identifiers import canonical_id
 from .job_failures import stored_preflight_message
 from .job_workspace import job_workspace
+from .lifecycle import AsyncRedisClient, close_rate_limiter_client, initialize_rate_limiter, probe_tool_version
 from .request_limits import RequestSizeLimitMiddleware
 from .tasks import run_cohort_analysis_job, run_vntyper_job
 from .uploads import INDEX_EXTENSIONS, UploadReceipt, safe_upload_path, save_upload_bounded
@@ -123,6 +123,51 @@ JOB_FAILURE_MESSAGE = (
     "failure can be looked up in the server logs."
 )
 
+
+async def startup_event() -> AsyncRedisClient:
+    """Initialize rate limiting and cache the VNtyper tool version.
+
+    Returns:
+        The initialized rate-limiter Redis client owned by the app lifespan.
+
+    Raises:
+        RuntimeError: If REDIS_PASSWORD is unset. Checked before anything opens
+            a connection, so a misconfigured deployment fails closed.
+        Exception: Propagates Redis, limiter, or version-probe failures after
+            closing any Redis client already created.
+    """
+    redis_password = require_redis_password()
+    rate_limit_redis_url = build_redis_url(REDIS_HOST, REDIS_PORT, RATE_LIMITING_REDIS_DB, redis_password)
+    redis_rate_limit = await initialize_rate_limiter(rate_limit_redis_url)
+
+    try:
+        global TOOL_VERSION
+        TOOL_VERSION = probe_tool_version()
+    except BaseException:
+        try:
+            await close_rate_limiter_client(redis_rate_limit)
+        except BaseException as close_error:
+            logger.error(f"Failed to close rate-limiting Redis after version-probe failure: {close_error}")
+        raise
+    return redis_rate_limit
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Own the rate-limiter Redis client for the complete ASGI lifespan."""
+    redis_rate_limit = await startup_event()
+    try:
+        yield
+    except BaseException:
+        try:
+            await close_rate_limiter_client(redis_rate_limit)
+        except BaseException as close_error:
+            logger.error(f"Failed to close rate-limiting Redis while preserving lifespan failure: {close_error}")
+        raise
+    else:
+        await close_rate_limiter_client(redis_rate_limit)
+
+
 app = FastAPI(
     title="VNtyper Online API",
     version=API_VERSION,
@@ -155,6 +200,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 # Bound the size of every request before it is read, not only the part of it
@@ -182,49 +228,6 @@ if ENVIRONMENT in ["development", "local"]:
         allow_headers=["*"],
     )
     logger.info(f"CORS enabled for {ENVIRONMENT} environment with origins: localhost:3000, localhost:8000")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize rate limiting and cache the VNtyper tool version.
-
-    Raises:
-        RuntimeError: If REDIS_PASSWORD is unset. Checked first, before anything
-            opens a connection, so a misconfigured deployment fails here rather
-            than coming up half-authenticated.
-    """
-    redis_password = require_redis_password()
-
-    # Initialize Redis client for rate limiting
-    try:
-        rate_limit_redis_url = build_redis_url(REDIS_HOST, REDIS_PORT, RATE_LIMITING_REDIS_DB, redis_password)
-        redis_rate_limit = aioredis.from_url(rate_limit_redis_url, encoding="utf8", decode_responses=True)
-        await FastAPILimiter.init(redis_rate_limit)
-        logger.info("Rate limiting initialized successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize rate limiting: {e}")
-        raise
-
-    # Cache the VNtyper tool version
-    global TOOL_VERSION
-    try:
-        tool_version_output = subprocess.check_output(
-            ["vntyper", "-v"],
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=5,  # Timeout after 5 seconds to prevent hanging
-        )
-        TOOL_VERSION = tool_version_output.strip()
-        logger.info(f"VNtyper tool version: {TOOL_VERSION}")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error retrieving tool version: {e.output.strip()}")
-        TOOL_VERSION = "error retrieving tool version"
-    except FileNotFoundError:
-        logger.error("VNtyper tool not found.")
-        TOOL_VERSION = "VNtyper tool not installed"
-    except subprocess.TimeoutExpired:
-        logger.error("Timeout expired while retrieving tool version.")
-        TOOL_VERSION = "timeout retrieving tool version"
 
 
 def require_job_id(job_id: str, detail: str = "Job ID not found") -> str:

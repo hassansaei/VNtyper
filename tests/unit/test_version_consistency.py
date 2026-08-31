@@ -514,6 +514,17 @@ def test_web_extra_declares_nothing_the_image_does_not_install() -> None:
     )
 
 
+def test_dev_extra_installs_starlettes_current_test_client_only_for_tests() -> None:
+    """The deployed ASGI stack stays lean while tests use Starlette's supported client."""
+    from packaging.requirements import Requirement
+
+    dev = {_normalise(Requirement(line).name): Requirement(line) for line in optional_dependencies("dev")}
+    web = {_normalise(Requirement(line).name): Requirement(line) for line in optional_dependencies("web")}
+
+    assert str(dev["httpx2"].specifier) == "==2.12.0"
+    assert "httpx2" not in web
+
+
 def test_docker_app_imports_are_declared_in_the_web_requirements() -> None:
     """Every third-party module ``docker/app`` imports must be a declared dependency.
 

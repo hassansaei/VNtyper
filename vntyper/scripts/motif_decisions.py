@@ -45,8 +45,36 @@ import logging
 from collections.abc import Sequence
 
 import pandas as pd
+from pandas.api.types import is_bool, is_number
 
 logger = logging.getLogger(__name__)
+
+
+def normalise_frameshift_validity(values: pd.Series) -> pd.Series:
+    """Return a complete ordinary-boolean frameshift-validity series.
+
+    Missing values mean that frameshift validity was not established and are
+    therefore false. Present values are validated explicitly before returning
+    the ordinary ``bool`` dtype expected by sorting and mask operations.
+
+    Args:
+        values: Boolean-like values, optionally including missing values.
+
+    Returns:
+        A boolean Series with missing values replaced by false.
+
+    Raises:
+        TypeError: If a present value is not boolean-like.
+    """
+    missing = values.isna()
+    present = values[~missing]
+    valid = present.map(lambda value: is_bool(value) or (is_number(value) and value in (0, 1)))
+    if not valid.all():
+        raise TypeError("Need to pass bool-like values")
+
+    result = values.copy()
+    result.loc[missing] = False
+    return result.astype(bool)
 
 
 def split_left_right(df: pd.DataFrame, position_threshold: int) -> tuple[pd.DataFrame, pd.DataFrame]:
