@@ -58,7 +58,7 @@ The available 200-sample simulated cohort and matching adVNTR corpus were loaded
 
 Both policies called zero normal controls. The emitted display agreed with the internal selected name for all measured samples.
 
-Both replays are production-shaped. For each sample they read every non-negative Kestrel row and every kept adVNTR row in file order. `kestrel_vcf` support is the minimum `Estimated_Depth_AlternateVariant` across translated Kestrel rows with the current unknown-propagation rule. Each adVNTR row may translate to multiple events, but its `NumberOfSupportingReads` enters the source minimum once when that row produced at least one translated event, exactly like `_advntr_calls_by_row`; an unparseable/empty row contributes neither a call nor support. Policy 1 stops there and runs `reconcile(*named_vcf, *advntr_calls, supports=supports)`. Policy 2 uses that same preliminary reconciliation to decide BAM-consultation eligibility. If eligible, one `BamRescuer` is opened and each Kestrel row is rescued at that row's own `Motif_fasta` and 1-based `POS_fasta`, preserving an aligned `None` for rows without a consensus. Every named BAM call contributes its unweighted supporting-haplotype-record count to the minimum `kestrel_bam` support. The final call is `reconcile(*named_vcf, *named_bam, *advntr_calls, supports=supports)`, followed by `refine` once for each named BAM call in row order. The displayed-name predicate is defined in Section 11.4.
+Both replays are production-shaped. For each sample they read every non-negative Kestrel row and every kept adVNTR row in file order. Independent CSV-row predicates select replay rows, while a separate guard compares them with production `_is_negative` over rows loaded by pandas with production's real dtypes. `kestrel_vcf` support is the minimum `Estimated_Depth_AlternateVariant` across translated Kestrel rows with the current unknown-propagation rule. Each adVNTR row may translate to multiple events, but its `NumberOfSupportingReads` enters the source minimum once when that row produced at least one translated event, exactly like `_advntr_calls_by_row`. A row whose variant state does not translate contributes neither a call nor support; a translated state with an unparseable supporting-read cell contributes its calls and `None` support, exactly as production already does. Policy 1 stops there and runs `reconcile(*named_vcf, *advntr_calls, supports=supports)`. Policy 2 uses that same preliminary reconciliation to decide BAM-consultation eligibility. If eligible, one `BamRescuer` is opened and each Kestrel row is rescued at that row's own `Motif_fasta` and 1-based `POS_fasta`, preserving an aligned `None` for rows without a consensus. Every named BAM call contributes its unweighted supporting-haplotype-record count to the minimum `kestrel_bam` support. The final call is `reconcile(*named_vcf, *named_bam, *advntr_calls, supports=supports)`, followed by `refine` once for each named BAM call in row order. The displayed-name predicate is defined in Section 11.4.
 
 The current `_hybrid()` golden helper instead reads one locus from `output.bed`; its `test_the_hybrid_total_does_not_regress` docstring describes the resulting 134-exact approximation. That helper, its docstring, and its floor will be replaced by the production-shaped replay above. The 136-exact requirement does not coexist with the obsolete 134 claim.
 
@@ -276,9 +276,9 @@ The Kestrel table's `Estimated_Depth_*` help text will agree with the existing s
 
 `NOMENCLATURE_FLAG_MEANINGS["allele-unrepresentable-in-vcf"]` will say that the name comes from resolved haplotype records, not “the reads”. This is a public Kestrel-BAM semantic surface even though it does not contain a numeric count.
 
-The embedded IGV panel displays this same Kestrel `output.bam`. Its accessible `aria-label` and any sibling panel prose will say resolved haplotype-record alignments, not read alignments. The visual track behavior does not change.
+The embedded IGV panel displays this same Kestrel `output.bam`. A BAM-backed session's accessible `aria-label` says resolved haplotype-record alignments, not read alignments. A session containing only other tracks keeps a generic genome-browser label, and a report with no session makes no alignment claim. The visual track behavior does not change.
 
-The cohort HTML tables also carry `Nomenclature_Flags`. `generate_cohort_summary_report` will add context keys named `nomenclature_legend` (the existing helper evaluated over the unformatted Kestrel/adVNTR frames) and `show_kestrel_bam_semantics` (true when either BAM-specific token occurs). `cohort_summary_template.html` will insert an ordinary autoescaped reading-key block immediately after the complete `advntr_missing` conditional block and before the `additional_stats` conditional block. This real anchor is after the existing adVNTR summary plot; no new value uses `safe`. The block defines every present token and conditionally renders the same BAM semantics paragraph. CSV and Excel exports keep the stable `Nomenclature_Flags` column name, ordering, and schema without prose rows; token values change exactly as Section 7.1 describes. The vocabulary is defined in the published nomenclature/output documentation and the cohort HTML artifact.
+The cohort HTML tables also carry `Nomenclature_Flags`. `generate_cohort_summary_report` will add context keys named `nomenclature_legend` (the existing helper evaluated over the unformatted Kestrel/adVNTR frames) and `show_kestrel_bam_semantics` (true when either BAM-specific token occurs). `cohort_summary_template.html` will insert an ordinary autoescaped reading-key block immediately after the complete `advntr_missing` conditional block and before the `additional_stats` conditional block. This real anchor is after the existing adVNTR summary plot; no new value uses `safe`. The block defines every present token and conditionally renders the same BAM semantics paragraph. CSV, TSV and JSON exports keep the stable `Nomenclature_Flags` column name, ordering, and schema without prose rows; token values change exactly as Section 7.1 describes. The vocabulary is defined in the published nomenclature/output documentation and the cohort HTML artifact.
 
 All TSV, spreadsheet, and summary fields keep their names. Only the truthful source-specific nomenclature flag tokens can change as described in Section 7.
 
@@ -344,7 +344,7 @@ Unit tests will render the real report context/template and assert the exact vis
 - a targeted source-text/identifier contract inspects the full Kestrel-BAM functions in `nomenclature_bam.py`; `annotate_kestrel_frame`, `_open_rescuer`, `_row_haplotype_call`, `_row_verdicts`, and `_haplotype_calls` in `nomenclature_annotate.py`; and support/reconciliation prose in `nomenclature.py`; it rejects the old private names, read-named BAM locals, “row's reads”/“reads per source” prose, and tie-log wording while allowing legitimate file-reading verbs and adVNTR/input-read terminology;
 - the real HTML fixtures carry each new token, so the dynamic legend path is non-vacuous;
 - the IGV `aria-label` describes resolved haplotype-record alignments, not read alignments;
-- the cohort HTML explains every new token it displays, while cohort CSV/Excel schemas remain unchanged;
+- the cohort HTML explains every new token it displays, while cohort CSV/TSV/JSON schemas remain unchanged;
 - the published flag table in `docs/pipeline/nomenclature.md` grows from 8 to all 14 authoritative tokens: the two currently omitted legacy tokens (`known-variant`, `representation-of-caller-call`) plus the four new evidence-unit tokens; a guard requires all 14 and prevents future code/report/docs vocabulary drift;
 - legacy `low-read-support` summaries still render intelligibly;
 - TSV/JSON/nomenclature column names remain stable.
@@ -470,7 +470,7 @@ A fresh restricted Claude Code review verified `canonicalModel: claude-opus-5` a
 | I1 | Important | Splits `< 3` thin BAM support from `< 5` Tier-A low BAM support and their report meanings. |
 | I2 | Important | Requires the full authoritative flag vocabulary to remain re-exported and guarded across both modules. |
 | I3 | Important | Adds the IGV accessible label and sibling panel prose to the report surfaces/tests. |
-| I4 | Important | Adds a dynamic cohort HTML legend and explicitly preserves CSV/Excel schemas with published definitions. |
+| I4 | Important | Adds a dynamic cohort HTML legend and explicitly preserves CSV/TSV/JSON schemas with published definitions. |
 | I5 | Important | Makes neither config key individually mandatory while preserving `KeyError` when both are absent, and specifies all compatibility cases/tests. |
 | I6 | Important | Adds the MkDocs macros delimiter constraint and verification scan for both published pages. |
 | I7 | Important | Defines displayed/exact/wrong names as explicit predicates over `call.name` and `render`. |
@@ -527,7 +527,29 @@ A fourth fresh restricted review verified `canonicalModel: claude-opus-5`. It co
 | H7 | Minor | Replaces `_reconciled()` with the shared production-shaped policy-1 replay and retains all consumers. |
 | H8 | Minor | Replaces stale “about a fifth” prose with measured 83 eligible / 68 fetched sample loci. |
 
-The subsequent oversized Opus 5 session did not return a usable final verdict. At the
-owner's direction, no further review loop was started; approval rests on the completed
-review dispositions above and the owner's explicit instruction to proceed. This note
-does not claim a final adversarial verdict that was unavailable.
+## 19. Split final-review disposition
+
+The initial whole-diff and tool-enabled partition reviews did not return usable verdicts:
+they repeatedly ended in repository-tool exploration. A no-tools smoke prompt returned
+from canonical `claude-opus-5` immediately, and a one-file diff review completed in one
+turn. The final review therefore supplied three bounded diff partitions on standard
+input with repository tools disabled. All three canonical Opus 5 reviews completed in
+one turn.
+
+The validated Important findings were: an IGV session without a BAM was left without a
+truthful accessible name; the golden replay selected rows through production's own
+predicate; and its guard applied production `_is_negative` to CSV-shaped rather than
+production-shaped pandas rows. This revision gives non-BAM sessions a generic
+genome-browser name, adds the negative report test, selects replay rows independently,
+and compares the predicates over pandas-loaded production dtypes. It also clarifies and
+tests the already-existing production contract that a translated adVNTR state with an
+unparseable supporting-read cell contributes its call with unknown support.
+
+The proposed addition of `thin-haplotype-record-support` to `TIER_A_BLOCKERS` was
+rejected: Sections 7.1 and 11.3 deliberately keep the unchanged BAM-refinement thinness
+guard distinct from reconciliation's Tier-A evidence blockers, and direct tests enforce
+that separation. Findings that treated the golden oracle's former zero fallback as
+production behavior were also rejected because production on `origin/main` already
+propagates unknown adVNTR support. At the owner's direction to avoid another review
+loop, the controlled fixes were verified directly rather than sent through another
+Opus cycle.

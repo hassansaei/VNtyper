@@ -1076,7 +1076,7 @@ def name_coding_pair_edit(
     """Name an edit already expressed in coding-frame pair coordinates.
 
     Shared by the VCF and BAM paths so the two cannot drift: a name recovered from
-    the reads must be produced by exactly the machinery that names a VCF record,
+    resolved haplotype records must be produced by exactly the machinery that names a VCF record,
     or the two would disagree for reasons that have nothing to do with the evidence.
 
     Args:

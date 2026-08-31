@@ -672,6 +672,7 @@ def generate_summary_report(
     # alignments carries none of it.
     session_literal = js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY)
     igv_session_available = session_literal.strip() not in ("", EMPTY_SESSION_DICTIONARY)
+    igv_bam_track_available = bool(igv_session_available and bam_file and os.path.exists(bam_file))
     igv_payload = report_assets.igv_payload(report_igv) if igv_session_available else None
     if igv_payload is None:
         logger.info(
@@ -895,6 +896,7 @@ def generate_summary_report(
         "igv_mode": report_igv,
         "igv_version": report_assets.IGV_VERSION,
         "igv_session_available": igv_session_available,
+        "igv_bam_track_available": igv_bam_track_available,
         # One line for the Provenance block: which library, which digest, and where it
         # is. Built in the pure module because choosing the wording is presentation
         # logic over a computed state (AGENTS.md trap 11).

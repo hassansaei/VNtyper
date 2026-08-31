@@ -270,7 +270,7 @@ The rendered-report tests fail if the clarification disappears when IGV is off, 
 2. Require static `<code>` markup for `output.bam` and `XD`, ordinary autoescaping, and placement directly below the Reading key independent of IGV/BAM availability.
 3. Assert the IGV region's accessible name says resolved haplotype-record alignments.
 4. Render cohort reports with and without Kestrel nomenclature tokens. Require `show_kestrel_bam_semantics` and `nomenclature_legend` to produce the concise block after the complete `advntr_missing` conditional and before `additional_stats`; hostile values must be escaped.
-5. Pin CSV/Excel columns unchanged and add the required Move 9 cohort skeleton fingerprint reason.
+5. Pin CSV/TSV/JSON columns unchanged and add the required Move 9 cohort skeleton fingerprint reason.
 6. Run:
 
    `conda run --no-capture-output -n vntyper python -m pytest tests/unit/test_generate_report.py tests/unit/test_report_igv_modes.py tests/unit/test_cohort_summary_escaping.py tests/unit/test_cohort_summary_oracle.py tests/unit/test_template_escaping.py -q`
@@ -282,7 +282,7 @@ The rendered-report tests fail if the clarification disappears when IGV is off, 
 1. Add the exact static sample text with no `safe` filter.
 2. Derive the cohort boolean from actual Kestrel BAM evidence tokens and pass only plain strings/booleans to the template.
 3. Add the conditional cohort block at the exact anchor and update the reasoned fingerprint history.
-4. Do not change tables, charts, filtering, searching, paging, CSV, or Excel schemas.
+4. Do not change tables, charts, filtering, searching, paging, CSV, TSV, or JSON schemas.
 5. Run the RED command, then:
 
    `conda run --no-capture-output -n vntyper python -m pytest tests/unit/test_generate_report.py tests/unit/test_report_*.py tests/unit/test_cohort_summary*.py tests/unit/test_template_escaping.py -q`
@@ -443,8 +443,8 @@ Do not run `make ci-local`; workflow files are out of scope and must remain unch
 
 ## Final review and branch finish
 
-1. Run one fresh Opus 5 adversarial review over `git merge-base origin/main HEAD..HEAD`, providing this plan, the approved spec, exact changed-file list, complete verification output, and golden metrics. Require it to try to prove decision drift, XD coupling, stale Kestrel read language, mirrored test logic, or omitted lower-tier wrong names.
-2. If and only if it reports Critical/Important findings, make one controlled fix wave, request one scoped re-review, rerun affected targeted tests, golden tests when decision surfaces changed, and `make check-all`.
+1. Smoke-test canonical Opus 5 without repository tools, then review bounded core, report/docs, and golden/spec diff partitions supplied on standard input with tools disabled. Require the combined review to try to prove decision drift, XD coupling, stale Kestrel read language, mirrored test logic, or omitted lower-tier wrong names.
+2. If and only if it reports validated Critical/Important findings, make one controlled fix wave and rerun affected targeted tests, golden tests when decision surfaces changed, and `make check-all`. At the owner's direction, do not start another review loop after that verified fix wave.
 3. Invoke verification-before-completion: compare every claim with fresh command output and report unavailable external evidence separately.
 4. Invoke finishing-a-development-branch and prepare, but do not merge, a PR titled `fix(nomenclature): correct Kestrel BAM evidence semantics`.
 5. The PR body must include `Refs #295`; Phase 1 scope/non-goals; before/after terms; XD parser contract; exact unchanged golden table; every verification result; any unavailable evidence; Opus findings/dispositions; and follow-up order `#270 -> #267 -> joint #295/#269 calibration`.

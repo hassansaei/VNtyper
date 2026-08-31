@@ -135,6 +135,9 @@ def run_with_alignments(tmp_path: Path, monkeypatch) -> Path:
     )
     bed = tmp_path / "regions.bed"
     bed.write_text("chr1\t155188100\t155188300\n", encoding="utf-8")
+    kestrel_dir = tmp_path / "kestrel"
+    kestrel_dir.mkdir()
+    (kestrel_dir / "output.bam").write_bytes(b"synthetic resolved haplotype records")
 
     def _stub(bed_file, bam_file, fasta_file, output_html, **kwargs) -> None:
         Path(output_html).write_text(_igv_reports_page(), encoding="utf-8")
@@ -156,6 +159,9 @@ def _render(output_dir: Path, **kwargs: Any) -> str:
     bed = output_dir / "regions.bed"
     if bed.is_file():
         kwargs.setdefault("bed_file", str(bed))
+    bam = output_dir / "kestrel" / "output.bam"
+    if bam.is_file():
+        kwargs.setdefault("bam_file", str(bam))
     generate_summary_report(
         output_dir=str(output_dir),
         template_dir=str(TEMPLATE_DIR),
@@ -266,6 +272,17 @@ def test_igv_accessible_name_describes_resolved_haplotype_record_alignments(run_
 
     assert "Resolved haplotype-record alignments around the called variant" in document
     assert "Read alignments around the called variant" not in document
+
+
+def test_igv_session_without_a_bam_has_a_truthful_accessible_name(run_with_alignments: Path) -> None:
+    """A VCF/BED-only session remains named without claiming BAM evidence."""
+    (run_with_alignments / "kestrel" / "output.bam").unlink()
+
+    document = _render(run_with_alignments)
+
+    assert 'role="img"' in document
+    assert "Genome-browser tracks around the called variant" in document
+    assert "Resolved haplotype-record alignments around the called variant" not in document
 
 
 def test_the_provenance_section_names_the_library_and_its_digest(run_with_alignments: Path) -> None:

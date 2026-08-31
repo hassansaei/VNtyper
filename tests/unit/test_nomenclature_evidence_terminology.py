@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 KESTREL_BAM_FUNCTIONS: tuple[Callable[..., object], ...] = (
+    nomenclature.name_coding_pair_edit,
     nomenclature_bam.BamRescuer.rescue,
     nomenclature_bam.from_bam,
     nomenclature_bam.refine,
@@ -36,6 +37,7 @@ KESTREL_BAM_FUNCTIONS: tuple[Callable[..., object], ...] = (
 
 READ_NAMED_IDENTIFIER = re.compile(r"(?:^|_)(?:read|reads)(?:_|$)")
 BANNED_BAM_PROSE = (
+    "from the reads",
     "row's reads",
     "reads per source",
     "what the reads say",
@@ -55,7 +57,7 @@ def _read_named_identifiers(source: str) -> set[str]:
 
 
 def _forbidden_bam_prose(source: str) -> list[str]:
-    lowered = source.lower()
+    lowered = " ".join(source.lower().split())
     return [phrase for phrase in BANNED_BAM_PROSE if phrase in lowered]
 
 
@@ -107,7 +109,7 @@ def test_kestrel_bam_function_prose_does_not_call_haplotype_records_reads(
 
 @pytest.mark.parametrize(
     "phrase",
-    ("row's reads", "reads per source", "What the reads say", "The reads, as a third source"),
+    ("from the reads", "row's reads", "reads per source", "What the reads say", "The reads, as a third source"),
 )
 def test_bam_prose_guard_catches_each_deliberate_regression(phrase: str) -> None:
     assert _forbidden_bam_prose(f'def rescue():\n    """{phrase}."""\n') == [phrase.lower()]

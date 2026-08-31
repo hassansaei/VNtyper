@@ -165,6 +165,14 @@ def test_a_report_without_a_bam_still_explains_kestrel_bam_evidence(tmp_path) ->
     assert html.index("<h2>Reading key</h2>") < html.index("<code>output.bam</code>")
 
 
+def test_a_report_without_a_bam_does_not_announce_haplotype_alignments(tmp_path) -> None:
+    """An empty IGV placeholder cannot claim a resolved-haplotype alignment track."""
+    html = render(tmp_path, report_igv=report_assets.REPORT_IGV_OFF)
+
+    assert 'id="igvDiv" role="img"' not in html
+    assert "Resolved haplotype-record alignments around the called variant" not in html
+
+
 # ---------------------------------------------------------------------------
 # Coverage - contract C1 read through to the HTML
 # ---------------------------------------------------------------------------

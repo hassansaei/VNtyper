@@ -511,6 +511,10 @@ def rendered_report_with_alignments(tmp_path: Path, monkeypatch) -> Callable[...
         (run / "pipeline_summary.json").write_text(json.dumps(payload), encoding="utf-8")
         bed = run / "regions.bed"
         bed.write_text("chr1\t155188100\t155188300\n", encoding="utf-8")
+        kestrel_dir = run / "kestrel"
+        kestrel_dir.mkdir()
+        bam = kestrel_dir / "output.bam"
+        bam.write_bytes(b"synthetic resolved haplotype records")
 
         generate_summary_report(
             output_dir=str(run),
@@ -519,6 +523,7 @@ def rendered_report_with_alignments(tmp_path: Path, monkeypatch) -> Callable[...
             log_file=None,
             config=load_config(None),
             bed_file=str(bed),
+            bam_file=str(bam),
             report_igv=mode,
         )
         report = run / "summary_report.html"

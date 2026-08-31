@@ -1219,7 +1219,7 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
     """Explain every coded nomenclature value this report actually prints.
 
     Only the terms present in these rows are returned. A key listing all three tiers and
-    all ten flags under a table that uses two of them is a wall the reader has to filter
+    all defined flags under a table that uses two of them is a wall the reader has to filter
     themselves, and the terms they do meet are the ones worth the space.
 
     Args:

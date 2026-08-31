@@ -551,7 +551,7 @@ def test_agreement_leaves_the_call_alone() -> None:
     assert refine(vcf, _named("59dupC", "duplication", "kestrel_bam")) is vcf
 
 
-def test_a_delins_from_the_reads_overrides_a_shape_the_vcf_cannot_hold() -> None:
+def test_a_delins_from_haplotype_records_overrides_a_shape_the_vcf_cannot_hold() -> None:
     """Kestrel's VariantType has SNP, INSERTION and DELETION and nothing else, so
     whatever it wrote for a delins locus is the closest representable shape rather
     than the allele."""
@@ -561,6 +561,6 @@ def test_a_delins_from_the_reads_overrides_a_shape_the_vcf_cannot_hold() -> None
     assert "allele-unrepresentable-in-vcf" in refined.flags
 
 
-def test_silence_from_the_reads_changes_nothing() -> None:
+def test_silence_from_haplotype_records_changes_nothing() -> None:
     vcf = _named("59dupC", "duplication")
     assert refine(vcf, None) is vcf

@@ -156,7 +156,7 @@ The cohort summary module (`cohort_summary.py`) aggregates results from multiple
 - **Version and assembly tracking** -- VNtyper 2 versions and detected reference assemblies
 
 When a cohort contains a BAM-specific nomenclature flag, its reading key gives the same
-resolved-haplotype-record and `XD` explanation as the sample report. CSV and Excel keep
+resolved-haplotype-record and `XD` explanation as the sample report. CSV, TSV and JSON keep
 the stable `Nomenclature_Flags` column and token values without adding prose rows.
 
 ### Pseudonymization

@@ -132,7 +132,7 @@ def _golden_is_negative(row: dict[str, str]) -> bool:
 def _kestrel_records(path: Path) -> list[dict[str, str]]:
     """Read kept Kestrel rows using the independently guarded row filter."""
     _, rows = _result_rows(path, comments=True)
-    return [row for row in rows if not _is_negative(pd.Series(row))]
+    return [row for row in rows if not _golden_is_negative(row)]
 
 
 def _has_motifs_schema(path: Path) -> bool:
@@ -146,7 +146,7 @@ def _advntr_records(path: Path) -> list[tuple[str, int | None]]:
     _, rows = _result_rows(path)
     out: list[tuple[str, int | None]] = []
     for row in rows:
-        if _is_negative(pd.Series(row)):
+        if _golden_is_negative(row):
             continue
         state = (row.get("Variant") or "").strip()
         if not state or state == "Not applicable":
@@ -157,6 +157,21 @@ def _advntr_records(path: Path) -> list[tuple[str, int | None]]:
             support = None
         out.append((state, support))
     return out
+
+
+def _row_filter_mismatches(path: Path, *, comments: bool) -> list[int]:
+    """Compare the independent filter with production-shaped pandas rows."""
+    _, rows = _result_rows(path, comments=comments)
+    if not rows:
+        return []
+    production = pd.read_csv(path, sep="\t", comment="#" if comments else None, dtype=str)
+    if len(production.index) != len(rows):
+        return list(range(max(len(production.index), len(rows))))
+    return [
+        index
+        for index, (csv_row, (_, production_row)) in enumerate(zip(rows, production.iterrows(), strict=True))
+        if _golden_is_negative(csv_row) != _is_negative(production_row)
+    ]
 
 
 @lru_cache(maxsize=1)
@@ -580,7 +595,7 @@ def test_external_corpus_is_loaded_and_every_kestrel_row_has_a_locus() -> None:
 def test_corpus_row_filters_match_production() -> None:
     """Both caller filters must agree with production for every corpus row."""
     root, advntr_root = _require_sim(), _require_advntr()
-    mismatches = []
+    mismatches: list[tuple[str, str, str, str, int]] = []
     for experiment in EXPERIMENTS:
         pairs_by_condition = (("mutated", _truth(root, experiment)), ("normal", _normal_pair_ids(root, experiment)))
         for condition, pair_ids in pairs_by_condition:
@@ -593,11 +608,32 @@ def test_corpus_row_filters_match_production() -> None:
                     ),
                 )
                 for path, comments in paths:
-                    _, rows = _result_rows(path, comments=comments)
-                    for index, row in enumerate(rows):
-                        if _golden_is_negative(row) != _is_negative(pd.Series(row)):
-                            mismatches.append((experiment, pair_id, condition, path.name, index))
+                    mismatches.extend(
+                        (experiment, pair_id, condition, path.name, index)
+                        for index in _row_filter_mismatches(path, comments=comments)
+                    )
     assert mismatches == []
+
+
+def test_replay_row_selection_does_not_call_the_production_filter(tmp_path: Path, monkeypatch) -> None:
+    """The replay predicate must remain independent enough to detect production drift."""
+    path = tmp_path / "kestrel_result.tsv"
+    path.write_text("Motifs\tPOS\tREF\tALT\nX-X\t67\tG\tGG\n", encoding="utf-8")
+
+    def _unexpected_production_filter(row: pd.Series) -> bool:
+        raise AssertionError(f"production filter called for replay row: {row.to_dict()}")
+
+    monkeypatch.setitem(globals(), "_is_negative", _unexpected_production_filter)
+
+    assert _kestrel_records(path) == [{"Motifs": "X-X", "POS": "67", "REF": "G", "ALT": "GG"}]
+
+
+def test_row_filter_guard_uses_the_dtypes_production_reads(tmp_path: Path) -> None:
+    """A short TSV row must be checked as pandas NaN, not a CSV ``None`` cell."""
+    path = tmp_path / "short.tsv"
+    path.write_text("Confidence\tMotif\nHigh_Precision\n", encoding="utf-8")
+
+    assert _row_filter_mismatches(path, comments=False) == []
 
 
 def test_policy_replay_stops_at_missing_motifs_schema() -> None:
@@ -611,7 +647,17 @@ def test_policy_replay_stops_at_missing_motifs_schema() -> None:
     )
     assert outcome.early_return == "missing-motifs-schema"
     assert outcome.call.name == "59dupC"
+    assert render(outcome.call) == "59dupC"
+    assert outcome.finding is True
     assert outcome.bam_fetches == 0
+
+
+def test_unknown_advntr_read_support_matches_the_production_contract() -> None:
+    """A translated state keeps its call while its malformed support stays unknown."""
+    evidence = _source_evidence([], [("I22_2_G_LEN1", None)])
+
+    assert [call.name for call in evidence.advntr_calls] == ["59dupC"]
+    assert evidence.supports == {"advntr": None}
 
 
 def test_policy_replay_stops_without_translated_calls() -> None:
