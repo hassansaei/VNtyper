@@ -1553,13 +1553,18 @@
                    here the reader who cannot see it goes from a described state to an
                    unnamed region. The name is on the element that outlives the swap. #}
                 <div id="igvDiv" role="img"
-                     aria-label="Read alignments around the called variant, drawn by the embedded
-                                 alignment browser. Every variant this report found is listed in
-                                 the tables above."></div>
+                     aria-label="Resolved haplotype-record alignments around the called variant,
+                                 drawn by the embedded alignment browser. Every variant this report
+                                 found is listed in the tables above."></div>
             </div>
         </div>
 
         <h2>Reading key</h2>
+        <p class="kestrel-bam-semantics">
+            Kestrel <code>output.bam</code> contains resolved haplotype records, not sequencing reads.
+            Its record counts are haplotype-record support; <code>XD</code> is minimum k-mer depth and
+            does not weight votes or alter names or tiers.
+        </p>
         {#
           THE READING KEY, as an appendix. Every coded value the results tables print,
           in words, at the foot of the document.

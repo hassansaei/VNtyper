@@ -125,6 +125,19 @@ def test_the_igv_variant_table_writes_text_not_markup() -> None:
     assert "cell.textContent = rowData[j];" in source
 
 
+def test_kestrel_bam_semantics_uses_static_code_markup_without_safe() -> None:
+    """The fixed artifact names need markup without opening a generated-HTML path."""
+    for template in (
+        Path("vntyper/templates/report_template.html"),
+        Path("vntyper/templates/cohort_summary_template.html"),
+    ):
+        source = template.read_text(encoding="utf-8")
+        assert "<code>output.bam</code>" in source
+        assert "<code>XD</code>" in source
+        paragraph = source[source.index("Kestrel <code>output.bam</code>") :].split("</p>", 1)[0]
+        assert "safe" not in paragraph
+
+
 #: ``innerHTML``/``outerHTML`` assigned from anything other than a plain string
 #: literal (Finding 3) -- the general shape of the sink A3 removes. A plain
 #: literal is deliberately left alone: ``report_template.html`` sets

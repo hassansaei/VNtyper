@@ -127,8 +127,22 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved eight times, and each reason is recorded here because a changed
+#: It has moved nine times, and each reason is recorded here because a changed
 #: fingerprint with no explanation should be read as the worst case.
+#:
+#: Move 9 (#295 - nomenclature evidence reading key)
+#: ------------------------------------------------
+#: * **Old**: ``70dd1cb258c001fb92f5ef7f36c33b2905eb9a0be6dde26f40e20469ce4dc882``
+#: * **New**: ``8d32ebc38e6efb7dcaa286e8182d324f583990e902f3495331a2c037c9eca75c``
+#:
+#: **Cause: one intentional autoescaped reading-key block.** The fixture carries no
+#: nomenclature columns, so the new conditional renders no visible content here; only
+#: its authored whitespace changes the canonical skeleton at the anchor between the
+#: complete adVNTR-missing block and Additional Statistics. The template diff and the
+#: canonical sections were inspected before updating this digest: tables, chart values,
+#: chart labels, chart totals, filtering, searching and paging are unchanged. The
+#: machine-readable CSV/TSV/JSON exports are outside this HTML fingerprint and retain
+#: their existing schemas, pinned below by the end-to-end export-header assertion.
 #:
 #: Move 8 (#278 - one Plotly library, no orphan PNGs, and a zoned timestamp)
 #: --------------------------------------------------------------------------
@@ -379,7 +393,7 @@ pytestmark = pytest.mark.unit
 #: Re-recorded 2026-08-26 when the ``[IMAGES]`` section was dropped from the document.
 #: Verified identical under pandas 2.2.2 / plotly 6.9.0 and pandas 2.2.3 / plotly 7.0.0,
 #: which is the point of dropping it.
-EXPECTED_FINGERPRINT = "70dd1cb258c001fb92f5ef7f36c33b2905eb9a0be6dde26f40e20469ce4dc882"
+EXPECTED_FINGERPRINT = "8d32ebc38e6efb7dcaa286e8182d324f583990e902f3495331a2c037c9eca75c"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid
@@ -1343,6 +1357,44 @@ def test_an_export_written_after_the_report_carries_no_internal_columns(tmp_path
 
     assert kestrel_header == "Motif,Confidence,Flag,Sample"
     assert advntr_header == "VID,Flag,Sample"
+
+
+def test_the_html_reading_key_does_not_change_nomenclature_export_columns(tmp_path) -> None:
+    """Report-only prose must not add fields to the supported machine-readable exports."""
+    cohort_root = _cohort_on_disk(tmp_path / "cohort")
+    summary_path = cohort_root / "sample_one" / "pipeline_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    kestrel_row = summary["steps"][0]["parsed_result"]["data"][0]
+    kestrel_row.update(
+        {
+            "Nomenclature": "dupC",
+            "Nomenclature_Tier": "B",
+            "Nomenclature_Flags": "low-haplotype-record-support",
+        }
+    )
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    output_dir = tmp_path / "out"
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(cohort_root)],
+        output_dir=str(output_dir),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        additional_formats="csv,tsv,json",
+    )
+
+    expected = [
+        "Motif",
+        "Confidence",
+        "Flag",
+        "Nomenclature",
+        "Nomenclature_Tier",
+        "Nomenclature_Flags",
+        "Sample",
+    ]
+    assert pd.read_csv(output_dir / "cohort_kestrel.csv").columns.tolist() == expected
+    assert pd.read_csv(output_dir / "cohort_kestrel.tsv", sep="\t").columns.tolist() == expected
+    assert pd.read_json(output_dir / "cohort_kestrel.json").columns.tolist() == expected
 
 
 def test_report_config_failure_returns_empty_mapping(caplog, monkeypatch) -> None:

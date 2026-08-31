@@ -16,6 +16,8 @@ list cannot quietly grow: the `Confidence` column's colour span, the two Plotly 
 and the pandas table scaffolding itself.
 """
 
+import html as html_module
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -24,6 +26,7 @@ import pytest
 from vntyper.cli import load_config
 from vntyper.scripts import cohort_summary
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS, KESTREL_DISPLAY_COLUMNS
+from vntyper.scripts.nomenclature_presentation import KESTREL_BAM_SEMANTICS
 
 pytestmark = pytest.mark.unit
 
@@ -32,6 +35,11 @@ INJECTION = "<script>alert(1)</script>"
 
 #: The escaped form the page must carry instead.
 ESCAPED = "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+
+def _normalized_visible_text(document: str) -> str:
+    """Return whitespace-normalized text from rendered cohort markup."""
+    return " ".join(html_module.unescape(re.sub(r"<[^>]+>", " ", document)).split())
 
 
 def _render(tmp_path: Path, kestrel_df=None, advntr_df=None, additional_stats_html="") -> str:
@@ -105,6 +113,66 @@ def test_the_additional_statistics_table_is_escaped(tmp_path) -> None:
 
     assert INJECTION not in html
     assert ESCAPED in html
+
+
+@pytest.mark.parametrize("token", ["thin-haplotype-record-support", "low-haplotype-record-support"])
+def test_each_kestrel_bam_token_shows_the_cohort_semantics_note(tmp_path, token) -> None:
+    """Either BAM-specific support flag is sufficient to explain the evidence unit."""
+    frame = pd.DataFrame([{"Sample": "s1", "Nomenclature_Tier": "B", "Nomenclature_Flags": token}])
+
+    html = _render(tmp_path, kestrel_df=frame)
+    visible_text = _normalized_visible_text(html)
+
+    assert visible_text.count(KESTREL_BAM_SEMANTICS) == 1
+    assert f"<dt>{token}" in html
+
+
+def test_cohort_semantics_note_is_absent_without_a_kestrel_bam_token(tmp_path) -> None:
+    """A general nomenclature key must not imply that BAM rescue supplied evidence."""
+    frame = pd.DataFrame([{"Sample": "s1", "Nomenclature_Tier": "B", "Nomenclature_Flags": "known-variant"}])
+
+    html = _render(tmp_path, kestrel_df=frame)
+
+    assert "<h2>Reading key</h2>" in html
+    assert KESTREL_BAM_SEMANTICS not in _normalized_visible_text(html)
+
+
+def test_cohort_reading_key_uses_the_required_report_anchor(tmp_path) -> None:
+    """The key follows the complete missing-adVNTR block and precedes statistics."""
+    frame = pd.DataFrame(
+        [
+            {
+                "Sample": "s1",
+                "Nomenclature_Tier": "B",
+                "Nomenclature_Flags": "low-haplotype-record-support",
+            }
+        ]
+    )
+    stats = cohort_summary.stats_table_html(pd.DataFrame([{"Sample": "s1", "version": "2.0.5"}]))
+
+    html = _render(tmp_path, kestrel_df=frame, additional_stats_html=stats)
+
+    assert html.index("contributed no adVNTR result") < html.index("<h2>Reading key</h2>")
+    assert html.index("<h2>Reading key</h2>") < html.index("<h2>Additional Statistics</h2>")
+
+
+def test_hostile_nomenclature_legend_values_are_autoescaped(tmp_path, monkeypatch) -> None:
+    """The context seam passes legend strings to Jinja autoescaping, never through ``safe``."""
+    legend = [
+        {"term": INJECTION, "label": INJECTION, "meaning": INJECTION},
+        {
+            "term": "low-haplotype-record-support",
+            "label": "",
+            "meaning": "Resolved haplotype-record support is low.",
+        },
+    ]
+    monkeypatch.setattr(cohort_summary, "nomenclature_legend", lambda *_frames: legend)
+
+    html = _render(tmp_path)
+
+    assert INJECTION not in html
+    assert html.count(ESCAPED) == 3
+    assert _normalized_visible_text(html).count(KESTREL_BAM_SEMANTICS) == 1
 
 
 # ---------------------------------------------------------------------------

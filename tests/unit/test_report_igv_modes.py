@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import gzip
 import hashlib
+import html as html_module
 import json
 import re
 import subprocess
@@ -40,6 +41,7 @@ import vntyper
 from vntyper.cli import load_config
 from vntyper.scripts import generate_report, igv_report, report_assets, summary_steps
 from vntyper.scripts.generate_report import generate_summary_report
+from vntyper.scripts.nomenclature_presentation import KESTREL_BAM_SEMANTICS
 
 pytestmark = pytest.mark.unit
 
@@ -76,6 +78,11 @@ _PAYLOAD = re.compile(r'const IGV_GZ_B64 = "([A-Za-z0-9+/=]+)";')
 #: alone would fail against a correct 30 KB document. The declaration is the fact that
 #: matters - it is what 497 KB of base64 is attached to.
 PAYLOAD_DECLARATION = 'const IGV_GZ_B64 = "'
+
+
+def _normalized_visible_text(document: str) -> str:
+    """Return whitespace-normalized text from rendered report markup."""
+    return " ".join(html_module.unescape(re.sub(r"<[^>]+>", " ", document)).split())
 
 
 def _igv_reports_page() -> str:
@@ -229,6 +236,36 @@ def test_the_embedded_payload_survives_the_round_trip_into_the_document(run_with
 # ---------------------------------------------------------------------------
 # What the reader is told, in each mode
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        report_assets.REPORT_IGV_EMBEDDED,
+        report_assets.REPORT_IGV_SIDECAR,
+        report_assets.REPORT_IGV_OFF,
+    ],
+)
+def test_each_igv_mode_states_kestrel_bam_semantics_once(run_with_alignments: Path, mode: str) -> None:
+    """The evidence ontology remains visible regardless of alignment-browser packaging."""
+    document = _render(run_with_alignments, report_igv=mode)
+    visible_text = _normalized_visible_text(document)
+
+    assert visible_text.count(KESTREL_BAM_SEMANTICS) == 1
+    assert re.search(
+        r"<h2>Reading key</h2>\s*<p[^>]*>\s*Kestrel\s*<code>output\.bam</code>.*?"
+        r"<code>XD</code>\s+is minimum k-mer depth",
+        document,
+        re.DOTALL,
+    )
+
+
+def test_igv_accessible_name_describes_resolved_haplotype_record_alignments(run_with_alignments: Path) -> None:
+    """Restoring the old read-alignment ontology must fail at the accessible surface."""
+    document = _render(run_with_alignments)
+
+    assert "Resolved haplotype-record alignments around the called variant" in document
+    assert "Read alignments around the called variant" not in document
 
 
 def test_the_provenance_section_names_the_library_and_its_digest(run_with_alignments: Path) -> None:

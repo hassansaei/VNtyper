@@ -23,6 +23,10 @@ Two things about this module are load-bearing and easy to break:
   :data:`vntyper.scripts.coverage_stats.COVERAGE_COLUMNS` (contract C1) by way
   of ``report_formatting``. They are read with ``.get(name, 0)``, so a rename
   makes the report state that an uncovered sample has full coverage.
+* The reading key always states that Kestrel ``output.bam`` rows are resolved
+  haplotype records and that ``XD`` is observational minimum k-mer depth. The
+  template owns this static artifact contract so it remains present without BAM
+  retention or an enabled alignment browser.
 """
 
 import json
