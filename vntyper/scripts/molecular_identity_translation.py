@@ -150,6 +150,7 @@ def translate_advntr_representation(
 
     raw_edits: list[_RawEdit] = []
     deletion_positions: set[int] = set()
+    state_components: set[tuple[str, int]] = set()
     for part in representation.state.split("&"):
         insertion = _ADVNTR_INSERTION.fullmatch(part.strip())
         deletion = _ADVNTR_DELETION.fullmatch(part.strip())
@@ -158,11 +159,19 @@ def translate_advntr_representation(
             if length != 1:
                 return _unresolved("reconstruction-mismatch")
             position = int(insertion.group(1))
+            component = ("insertion", position)
+            if component in state_components:
+                return _unresolved("reconstruction-mismatch")
+            state_components.add(component)
             if _advntr_plus_position(position, rotation_offset) == _UNIT_LENGTH:
                 return _unresolved("pair-boundary-edit")
             raw_edits.append(_advntr_insertion(position, insertion.group(3), rotation_offset))
         elif deletion is not None:
             position = int(deletion.group(1))
+            component = ("deletion", position)
+            if component in state_components:
+                return _unresolved("reconstruction-mismatch")
+            state_components.add(component)
             deletion_positions.add(position)
             raw_edits.append(_advntr_deletion(position, rotation_offset))
         else:

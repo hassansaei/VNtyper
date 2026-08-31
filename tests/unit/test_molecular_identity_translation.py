@@ -420,6 +420,36 @@ def test_advntr_connected_deletion_and_insertion_normalize_jointly() -> None:
     assert serialize_molecular_identity(result.identity) == "MUC1-X-60-coding-v1|54|55|CC|T"
 
 
+def test_advntr_duplicate_deletion_component_is_unresolved() -> None:
+    """Duplicate deletion evidence at one HMM position cannot mint 58_59delCC."""
+    representation = AdvntrRepresentation(
+        state="D27_2&D27_2",
+        repeat_units=("2", "2"),
+        positions=(27, 27),
+    )
+
+    result = translate_advntr_representation(representation)
+
+    assert result.identity is None
+    assert result.status == "unresolved"
+    assert result.failure == "reconstruction-mismatch"
+
+
+def test_advntr_duplicate_insertion_component_is_unresolved() -> None:
+    """Duplicate insertion evidence at one HMM gap cannot mint 55_54insGT."""
+    representation = AdvntrRepresentation(
+        state="I27_2_A_LEN1&I27_2_C_LEN1",
+        repeat_units=("2", "2"),
+        positions=(27, 27),
+    )
+
+    result = translate_advntr_representation(representation)
+
+    assert result.identity is None
+    assert result.status == "unresolved"
+    assert result.failure == "reconstruction-mismatch"
+
+
 @pytest.mark.parametrize(
     "state",
     [
