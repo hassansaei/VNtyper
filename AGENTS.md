@@ -762,7 +762,8 @@ summary | release-summary | none | always records success, failure, skipped jobs
   contents. The #295 program has one bounded, published exception for these exact paths:
   `docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md` and
   `docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md`, plus the umbrella
-  `docs/superpowers/specs/2026-08-31-issue-295-completion-program-design.md`.
+  `docs/superpowers/specs/2026-08-31-issue-295-completion-program-design.md` and
+  `docs/superpowers/plans/2026-08-31-issue-295-completion-program.md`.
   No other planning artifact under `docs/` is allowed. All listed pages are registered in
   `mkdocs.yml` and tested against raw Jinja opening delimiters; this exception does not
   restore `exclude_docs:` or permit an unpublished page beneath `docs/`.

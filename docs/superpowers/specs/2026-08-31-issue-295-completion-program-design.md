@@ -3,7 +3,7 @@
 **Date:** 2026-08-31  
 **Scope:** issues 270, 267, 175, 269, and 295  
 **Baseline:** `530599ab479b83e45807c4305cb5d5cf3763f7a8`  
-**Status:** proposed for owner approval
+**Status:** approved by the owner on 2026-08-31
 
 ## Purpose
 
@@ -36,8 +36,9 @@ complete.
    values in the packaged profile. The migration inventory covers every decision field
    from the existing Kestrel, adVNTR, SHARK, nomenclature, flagging, and cross-match
    configurations, including its unit, comparator, inclusivity, and value. A checked-in
-   canonical profile hash and golden decision projection prove that the entire
-   inventory—not only the values listed above—matches pre-migration behavior. A future
+   canonical profile hash detects forward drift. Independent literal-value tests bind
+   every migrated field to the pre-migration files, and every field is classified as
+   exercised by a named behavioral/golden case or as structural-only provenance. A future
    custom profile can be selected only by an explicit CLI path; generating it never
    installs or activates it. `legacy-selection-v1` remains the packaged default in every
    pull request in this program. Identity-based reconciliation in work package A and the
@@ -139,6 +140,10 @@ class IdentityTranslation:
     context_diverges: bool
 ```
 
+`IdentityTranslation` validates `status == "resolved"` if and only if identity is present
+and failure is absent; divergence is meaningful only for a resolved identity. A strict
+deserializer rejects foreign identity-reference versions.
+
 Insertion coordinates use `end == start - 1`. Edits are non-overlapping, normalized, and
 sorted by coordinate; an empty edit tuple is invalid. The identity key is the normalized
 tuple `(reference, edits)`. Its stable serialization is one edit followed by any
@@ -173,7 +178,8 @@ to the coding-strand 3-prime-most representation. Reapplying the resulting edit 
 reconstruct the entire 60 bp alternate X unit exactly. This exact 60 bp window, plus the
 neighbouring-unit anchor, is the equivalence proof. A wrong motif anchor therefore cannot
 become equivalent merely because its `POS/REF/ALT`, event word, or display name resembles
-another row.
+another row: it is unresolved with `motif-anchor-mismatch`, and therefore cannot compare
+equal to any resolved identity.
 
 Equivalent representations include the two observed canonical dupC shapes `G>GG` and
 `C>CG`, homopolymer anchors that reconstruct the same alternate sequence, and motif-pair
@@ -195,11 +201,13 @@ representations and exposes every distinct identity hypothesis to policy. Within
 the existing total ordering chooses the representative and that row alone supplies
 reported support and depth; support is never summed. Blocking gates, flags, and context
 divergence are the union across the group, so grouping cannot unblock Tier A. The packaged
-`legacy-selection-v1` policy nevertheless selects the exact row selected before this
-program from the compatibility projection, preserving row cardinality, order, name,
-confidence, flag, depth, support, tie behavior, and tier. Identity grouping is additive
-evidence until an operator explicitly supplies a custom policy path; no program milestone
-activates another default.
+`legacy-selection-v1` policy nevertheless selects the exact Kestrel row selected before
+this program from the compatibility projection, preserving caller-row cardinality, order,
+name, confidence, flag, depth, support, and tie behavior. Reconciled agreement and tier may
+change only where identity-keyed backing corrects former name-string agreement; those
+changes are measured separately. Identity grouping is additive evidence until an operator
+explicitly supplies a custom policy path; no program milestone activates another numeric
+selection or dominance default.
 
 This boundary is deliberate. Work package A establishes the correct truth target and
 records truly equivalent representations without collapsing the packaged selection or
@@ -212,15 +220,21 @@ without reparsing caller rows.
 Reconciliation keys caller backing by `MolecularIdentity`, never by a name string. An
 unresolved translation cannot agree merely through event class or position. Context
 divergence means the source motif differs from canonical X outside the normalized edit;
-it remains representation evidence and continues to block Tier A. After work package B,
+it maps to the existing non-valid motif-status Tier-A blocker and remains representation
+evidence at lower tiers. After work package B,
 Tier A requires two independent callers with the same resolved identity, a known-variant
 match, source-bound
 support at or above separately named `5 alternate k-mer-path depth` and `5 adVNTR
 sequencing reads` fields, and none of context divergence, sequence-undetermined, caller
 disagreement, or inadmissible-evidence dispositions. Kestrel VCF and BAM together still
 count as one caller. In work package A every existing adVNTR row retains its current
-admissibility; work package B is the later boundary that assigns `Polymorphic_Call` the
-inadmissible disposition.
+admissibility and the identity-keyed Tier-A rule otherwise matches the post-B rule above;
+work package B is the later boundary that assigns `Polymorphic_Call` the inadmissible
+disposition. adVNTR translation parses its State with `advntr_variant_annotations`,
+validates repeat-unit identity and position against the same canonical X reference,
+reconstructs the complete alternate 60 bp unit when the State supplies enough information,
+and otherwise returns a closed unresolved result. A bare State label never supplies
+missing sequence context.
 
 Positive caller TSVs append these columns while retaining existing columns and meanings:
 
@@ -239,13 +253,28 @@ has representation count `0`; its hypothesis count still reports other resolved
 hypotheses, if any. Hypothesis count includes only rows that already pass the issue 266
 reporting floor and the unchanged packaged detection policy. The ten-column negative row contract and its
 single `##` comment are unchanged and gain no identity text. `kestrel_pre_result.tsv`
-retains every raw representation and all six gates, with additive diagnostic identity
-columns that never enter result or finding counts. Sample and cohort HTML/TSV/CSV/JSON
-surfaces use the same four field names and carry all four values. They never infer identity
-from old `POS/REF/ALT` or `Nomenclature` cells.
+retains every raw representation and all six gates, with additive diagnostic columns named
+`Molecular_Identity`, `Molecular_Identity_Translation_Status`,
+`Molecular_Identity_Translation_Failure`, and `Molecular_Identity_Context_Diverges` that
+never enter result or finding counts. For a caller with multiple emitted positive rows,
+`Identity_Hypothesis_Count` is the number of distinct resolved identities in that caller's
+complete positive candidate set and is repeated on each row; the Kestrel set is limited by
+the unchanged reporting floor and detection policy. Negative adVNTR output retains its
+existing schema, just as the ten-column negative Kestrel row does. Sample and cohort
+HTML/TSV/CSV/JSON surfaces use the same four field names and carry all four values. They
+never infer identity from old `POS/REF/ALT` or `Nomenclature` cells. Showing the exact
+labels in result tables satisfies the HTML contract; the masthead records policy and
+provenance only.
 
-Work package A adds fields without changing the summary schema version. Work package C
-introduces summary schema 3 once, with the complete required identity and decision-profile
+Work package B additionally appends `Evidence_Disposition` to positive adVNTR rows and
+decision explanations. Its closed value is `admissible` or `identity-insufficient`, so a
+governed tier result remains auditable from run artifacts. Negative caller schemas are not
+widened.
+
+Work package A adds fields without changing the summary schema version. Presence of the
+complete quartet selects identity rendering; a schema 1 or schema 2 row without it renders
+the literal legacy text. Work package C introduces summary schema 3 once, with the complete
+required identity and decision-profile
 field set defined together. Schema 1 and schema 2 remain readable and render the literal
 `legacy identity not recorded`; schema 3 rejects missing fields, invalid status/count
 combinations, unknown identity versions, or a profile snapshot/hash mismatch. Provenance
@@ -289,8 +318,8 @@ Detection and interpretation remain separate:
   agreement; and
 - if Kestrel is positive, the packaged decision is exactly the Kestrel-only name and tier;
 - if Kestrel is negative, the flagged adVNTR finding remains visible with its existing
-  `Positive (Flagged)` result and caller-local nomenclature, but reconciliation emits no
-  molecular agreement and no Tier-A name; and
+  `Positive (Flagged)` result, caller-local nomenclature, and caller-local tier, but
+  reconciliation emits no molecular agreement and cannot promote a Tier-A name; and
 - a future explicit custom policy may abstain but cannot use the flagged state to promote,
   switch, or name an identity.
 
@@ -298,7 +327,10 @@ This policy applies to both confirmed and pending entries because the collision 
 property of the bare State key, not of provenance confidence. The evidence record marks
 each entry `confirmed` or `pending`, stores null for every unknown count, denominator,
 frequency, and exact tool revision, and has canonical bytes plus a checked-in SHA-256.
-The loader verifies that digest, and summary schema 3 records it beside the profile hash.
+Canonical bytes are RFC 8785 serialization plus exactly one trailing byte `0x0A`; the
+sidecar is 64 lowercase hexadecimal characters plus `0x0A`, and hashes the canonical file
+bytes. The digest is not embedded in the evidence payload. The loader verifies that digest,
+and summary schema 3 records it beside the profile hash.
 The legacy `Polymorphic_Call` and `Positive (Flagged)` labels are retained compatibility
 terms, not endorsements of polymorphism. Revalidation can change list membership only
 through an owner-approved data revision carrying counts, denominators, software/model
@@ -317,11 +349,14 @@ Add a complete standalone `decision_profile.json` containing the exhaustively in
 Kestrel scoring, flagging, motif filtering, selection, adVNTR flagging, SHARK filtering,
 nomenclature, and cross-match decision components. Every numeric decision field carries a
 declared evidence unit and comparator. Runtime paths, executables, references, coverage
-presentation, input routing, report text, the issue 266 reporting floor, and issue 268
-model/version compatibility guards remain outside the profile in the existing whole-file
-configuration or code. Generated profiles cannot supply clinical-sounding text.
+presentation, input routing, report text, and issue 268 model/version compatibility guards
+remain outside the profile in the existing whole-file configuration or code. The issue 266
+reporting floor is declared as fixed safety metadata and projected unchanged, but remains
+outside every mutable custom/generated surface. Generated profiles contain no free-form
+report text.
 
-Every configuration field belongs to exactly one validation class:
+Every decision field belongs to exactly one validation class; profile metadata and
+provenance are validated by a separate closed metadata schema:
 
 | Class | Explicit CLI profile | Generated profile | Failure |
 | --- | --- | --- | --- |
@@ -343,8 +378,10 @@ that packaged profile. `--decision-profile PATH` selects exactly one complete cu
 profile. There are no overlays, includes, inheritance, environment-variable selection,
 assay-name discovery, current-directory discovery, or missing-field fallback.
 
-Generated profiles are future explicit opt-ins. Profile kind is exactly `packaged` or
-`generated`; persisted source is exactly `package` or `explicit-cli` and is never a path.
+Generated profiles are future explicit opt-ins. Profile kind is exactly `packaged`,
+`explicit-custom`, or `generated`; persisted source is exactly `package` or `explicit-cli`
+and is never a path. A hand-authored complete profile is `explicit-custom`; a generated
+profile is `generated`; neither is selected without the explicit CLI path.
 Generated profiles record `profile_kind: generated`,
 the packaged base-profile hash, generator name/version, objective, dataset manifest hash,
 partition manifest hash, and seed. Generation never selects the output.
@@ -354,12 +391,20 @@ partition manifest hash, and seed. Generation never selects the output.
 The profile is parsed once before stage artifacts are created. Duplicate JSON keys,
 nonfinite values, unknown or missing keys, invalid types/ranges/enums, comparator-rule
 errors, rule/evidence mismatches, or incomplete components raise with completed-application
-exit code 1. An explicit invalid path never warns and falls back.
+exit code 1. An explicit invalid path raises; it never warns and never falls back.
 
-Canonical profile bytes use RFC 8785 JSON canonicalization followed by one trailing
-newline. SHA-256 covers exactly the payload bytes snapshotted under
+Canonical profile bytes use RFC 8785 JSON canonicalization followed by one trailing byte
+`0x0A`. SHA-256 covers exactly those canonical bytes snapshotted under
 `provenance/decision_profile.json`; the digest is never embedded in its own payload. The
-summary records the profile identifier, revision, kind, source, hash, and relative
+decision inventory is an object keyed by JSON Pointer, so its input key order is
+nonsemantic. Arrays whose order defines behavior, including comparator clauses and sort
+orders, remain order-sensitive under RFC 8785. The SHARK profile component is the empty
+object because its current sidecar contains reference paths only, and those paths are
+excluded runtime configuration; a source scan pins that SHARK currently has no separate
+decision constant. Package loading verifies the checked-in sidecar. `source == package`
+requires `kind == packaged` and the checked-in packaged hash; `source == explicit-cli`
+requires `kind` in `{explicit-custom, generated}`. The summary records the profile
+identifier, revision, kind, source, hash, and relative
 snapshot path in schema 3. Absolute operator paths are not persisted.
 
 Kestrel, adVNTR, SHARK, nomenclature annotation, reconciliation, report generation, and
@@ -402,27 +447,45 @@ vntyper calibrate validate --profile PROFILE --evidence VALIDATION --output VALI
 vntyper calibrate evaluate --profile PROFILE --evidence LOCKED_HELDOUT --output HELDOUT_ATTESTATION
 ```
 
+`PARTITIONS` is the canonical study declaration: it contains the protocol, finite grid,
+four role manifests, group keys, minimum stratum counts, abstention cap, multiplicity
+method, seed, and maximum free-parameter count. `extract` snapshots and hashes it into
+`EVIDENCE`; `fit --objective` must equal the snapshotted objective. `EVIDENCE` is an atomic
+directory containing separate allowlisted features, separately keyed labels, the immutable
+decision-projection baseline needed for replay, and role-bound manifests. The decision
+projection is never exposed as a model feature.
+
 The objective is mandatory. No objective, including F1, is silently selected. The primary
 objective is the lexicographic tuple:
 
-1. wrong Tier-A displayed identities;
+1. wrong Tier-A displayed names;
 2. normal-control findings;
-3. all wrong displayed identities across every tier;
+3. all wrong displayed names across every tier;
 4. exact-recovery rate multiplied by `-1`, macro-averaged across assay and
    mutation-class strata;
 5. binary-detection sensitivity multiplied by `-1`;
 6. number of free policy parameters; and
 7. canonical profile hash as a deterministic final tie-break.
 
-All rates use the complete predeclared truth population as denominator. Abstention is a
-non-recovery and a missed detection for these objectives; it is never removed from a
-denominator. Wrong-name counts include every displayed name, and component 3 includes
-component 1. A candidate is inadmissible before comparison if Tier A becomes unreachable,
+Exact recovery and binary-detection sensitivity use every mutated member of the complete
+predeclared truth population as denominator; normal controls are the denominator for
+control findings and do not enter sensitivity. Macro exact recovery is the unweighted mean
+over the predeclared assay-by-mutation-class cross-product. Abstention is a non-recovery and
+a missed detection for these objectives; it is never removed from a denominator. Wrong-name
+counts compare the rendered name with the independently established expected name,
+separately from exact molecular-identity correctness, and component 3 includes component 1.
+A candidate with any wrong Tier-A displayed name or any normal-control finding is
+inadmissible; if every candidate violates either constraint, fitting emits no candidate. The dominance
+model selects an identity or abstains for the whole locus; it never assigns or demotes a
+tier, which remains the fixed reconciliation projection. A candidate is inadmissible before comparison if Tier A becomes unreachable,
 its paired detection or macro exact-recovery difference from the packaged policy has a
 one-sided 95% group-bootstrap lower confidence bound below the zero-percentage-point
 non-inferiority margin, a required stratum is below its protocol-fixed sample count, its
 abstention rate exceeds the protocol-fixed cap, or applicability metadata does not match.
-The bootstrap resamples complete leakage groups 10,000 times with the recorded seed. The
+The percentile bootstrap resamples complete connected leakage groups 10,000 times with the
+recorded seed, stratified by the predeclared cross-product; a connected group spanning
+strata or an empty bootstrap stratum is invalid. Protocol-selected multiplicity handling is
+applied across the finite candidate family. The
 candidate grid and maximum free-parameter count are frozen in the protocol before fitting;
 fitting cannot add thresholds or split points.
 
@@ -434,6 +497,11 @@ GDP/DP-derived values, structural gates, co-occurring identity hypotheses, resol
 haplotype-record counts/shares/margins/ties, typed XD availability and the summaries named
 below, governed adVNTR disposition, adVNTR sequencing-read support/p-value/coverage, and
 tool/reference/assay-class metadata.
+
+Fixed-safety quantities may be retained for shipped-baseline reproduction and reporting,
+but the generated rule schema cannot threshold, split, promote, or abstain on them. This
+prevents a dominance field from proxy-recalibrating `3`, either `5`, flank `8`, any Kestrel
+boundary, the reporting floor, or an issue 268 guard.
 
 For one identity, haplotype-record count is the number of eligible resolved records whose
 canonical co-occurring edit set contains that identity; one record contributes at most one
@@ -468,14 +536,17 @@ batch, and repeat context. Any group crossing a split is a fatal input error. As
 may be a feature; batch identity may only be a split key. Transforms, caps, missing-value
 rules, and feature selection are fitted on training data only; the frozen candidate grid
 is compared on policy-selection data. Labels live in a separately keyed sidecar, and the
-feature artifact is enforced against an allowlist. `fit` cannot open validation or
-held-out roots, `validate` cannot select another candidate, and `evaluate` accepts only a
-held-out-role manifest.
+feature artifact is enforced against an allowlist. `fit` fits transforms only from the
+training partition and compares the frozen grid only on the distinct policy-selection
+partition; it cannot open validation or held-out roots. `validate` cannot select another
+candidate, and `evaluate` accepts only a held-out-role manifest.
 
 The profile hash and protocol hash are precommitted to an append-only record before the
 custodian opens locked evidence. A failed validation retires the candidate; reusing that
 set for another candidate makes it selection data. The independent custodian runs held-out
-evaluation once. A consumption ledger keyed by evidence hash refuses a second local
+evaluation once. Extraction of held-out evidence is itself part of that custodian run and
+occurs only after the public precommit; no developer-side extraction may create
+closure-eligible evidence. A consumption ledger keyed by evidence hash refuses a second local
 evaluation, and any access outside the custodian run invalidates the set for issue closure.
 Evaluation records seeds, software and reference versions, sample composition, assay,
 depth, read length, array-size information when independently measured, mutation classes,
@@ -522,8 +593,8 @@ member is opened. That protocol fixes the leakage groups, minimum sample count p
 stratum, abstention cap, multiplicity handling, and independently justified precision
 target; these values cannot be inferred from or revised after seeing the cohort. Only then
 may one frozen policy be evaluated once. Closure additionally requires zero observed
-wrong Tier-A identities, zero observed control findings, no increase in wrong displayed
-identities, and the zero-margin paired non-inferiority bound for exact recovery. Two-sided
+wrong Tier-A displayed names, zero observed control findings, no increase in wrong displayed
+names, and the zero-margin paired non-inferiority bound for exact recovery. Two-sided
 95% Clopper-Pearson intervals for zero-event proportions and group-bootstrap intervals for
 paired performance are reported with sample-size limitations. Reporting an interval is
 not a clinical safety claim.
@@ -536,7 +607,7 @@ marked `unit`.
 
 Required invariants include:
 
-- the Phase 1 reference remains explicitly pinned at 154 displayed, 136 exact, 18 wrong,
+- the historical Phase 1 reference remains explicitly pinned at 154 displayed, 136 exact, 18 wrong,
   Tier A 53/53/0, zero control findings, 83 BAM-eligible samples, and 68 BAM fetches;
 - work package A preserves the exact Kestrel selected-row projection and independently
   reports every full-result delta caused by identity-based reconciliation;
@@ -545,7 +616,8 @@ Required invariants include:
 - work package C reproduces the governed-policy baseline exactly;
 - canonical dupC remains exactly 96/96 and named `59dupC`;
 - equivalent anchors and `G>GG`/`C>CG` shapes share one identity;
-- `dupA` off-by-one and wrong motif anchors remain different identities;
+- `dupA` off-by-one remains a different identity, and wrong motif anchors remain
+  unresolved rather than becoming equivalent;
 - same raw tuple under different motifs remains distinct in the typed identity candidate
   set even though the packaged compatibility projection is unchanged;
 - identity equality never uses display name, tier, depth, support, or raw tuple alone;
@@ -563,9 +635,10 @@ Required invariants include:
   as unknown, while changing issue 266 or any fixed-safety field, including the separately
   named `3` and two `5` fields, raises an immutable-field error;
 - the complete shipped decision projection is reproduced before any sweep;
-- every objective component has a mutation that changes the winner and fails;
+- every objective component and adjacent priority boundary has a mutation that changes the
+  winner and fails;
 - all-abstain and Tier-A-unreachable candidates are inadmissible;
-- a more sensitive policy with one extra wrong Tier-A identity loses;
+- a more sensitive policy with one extra wrong Tier-A displayed name is inadmissible;
 - a policy with fewer wrong names but one control finding loses;
 - record ties abstain and unequal XD cannot break them;
 - an XD veto with a runner-up abstains rather than selecting the runner-up;

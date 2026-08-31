@@ -45,6 +45,7 @@ def test_agents_records_the_exact_issue_295_published_planning_exceptions() -> N
     assert "docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md" in page
     assert "docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md" in page
     assert "docs/superpowers/specs/2026-08-31-issue-295-completion-program-design.md" in page
+    assert "docs/superpowers/plans/2026-08-31-issue-295-completion-program.md" in page
     assert "No other planning artifact under `docs/` is allowed" in normalized
     assert "untracked `.planning/` workspace" in normalized
 

@@ -310,6 +310,10 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
             "Issue 295 Completion Program Design",
             "superpowers/specs/2026-08-31-issue-295-completion-program-design.md",
         ),
+        "docs/superpowers/plans/2026-08-31-issue-295-completion-program.md": (
+            "Issue 295 Completion Program Plan",
+            "superpowers/plans/2026-08-31-issue-295-completion-program.md",
+        ),
     }
     published_planning_pages = {
         path.relative_to(repo_root).as_posix()
