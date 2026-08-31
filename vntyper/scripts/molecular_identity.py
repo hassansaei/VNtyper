@@ -168,22 +168,30 @@ class KestrelRepresentation:
 
 @dataclass(frozen=True)
 class AdvntrRepresentation:
-    """An adVNTR representation, retaining its caller-local State context."""
+    """An adVNTR representation with part-for-part parsed State context."""
 
     state: str
-    repeat_unit: str | None
-    position: int | None
+    repeat_units: tuple[str, ...] | None
+    positions: tuple[int, ...] | None
 
     def __post_init__(self) -> None:
-        """Validate the available adVNTR state and optional repeat coordinates."""
+        """Validate complete parsed tuples or the intentionally bare context."""
         if not isinstance(self.state, str) or not self.state:
             raise ValueError("adVNTR State must be a non-empty string")
-        if self.repeat_unit is not None and (not isinstance(self.repeat_unit, str) or not self.repeat_unit):
-            raise ValueError("adVNTR repeat unit must be a non-empty string when supplied")
-        if self.position is not None and (
-            isinstance(self.position, bool) or not isinstance(self.position, int) or self.position < 1
+        if self.repeat_units is None or self.positions is None:
+            if self.repeat_units is not None or self.positions is not None:
+                raise ValueError("adVNTR repeat units and positions must be supplied together")
+            return
+        if not isinstance(self.repeat_units, tuple) or not isinstance(self.positions, tuple):
+            raise ValueError("adVNTR repeat units and positions must be tuples")
+        if not self.repeat_units or len(self.repeat_units) != len(self.positions):
+            raise ValueError("adVNTR repeat units and positions must be non-empty and have equal length")
+        if any(not isinstance(unit, str) or not unit for unit in self.repeat_units):
+            raise ValueError("adVNTR repeat units must be non-empty strings")
+        if any(
+            isinstance(position, bool) or not isinstance(position, int) or position < 1 for position in self.positions
         ):
-            raise ValueError("adVNTR position must be a positive integer when supplied")
+            raise ValueError("adVNTR positions must be positive integers")
 
 
 @dataclass(frozen=True)

@@ -16,14 +16,34 @@ from vntyper.scripts.molecular_identity import (
 from vntyper.scripts.molecular_identity_translation import (
     bind_bam_translation,
     resolve_coding_pair_edit,
-    translate_advntr_representation,
     translate_kestrel_representation,
 )
-from vntyper.scripts.nomenclature import MOTIFS, pair_sequence
+from vntyper.scripts.molecular_identity_translation import (
+    translate_advntr_representation as _translate_advntr_representation,
+)
 
 pytestmark = pytest.mark.unit
 
-TEST_MOTIF_MAP = {symbol: MOTIFS[symbol] for symbol in ("A", "C", "J", "S", "X")}
+TEST_MOTIF_MAP = {
+    "5C": "TTGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCTGAGGTGACATCGTGGGC",
+    "A": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
+    "C": "TTGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+    "J": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGTGCCGAGGTGACACCGTGGGC",
+    "S": "TGCGGGGGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCTGAGGTGACACCGTGGGC",
+    "X": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+}
+TEST_PAIRS = {
+    "5C-S": "TGCGGGGGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCTGAGGTGACACCGTGGGC"
+    "TTGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCTGAGGTGACATCGTGGGC",
+    "A-J": "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGTGCCGAGGTGACACCGTGGGC"
+    "TGCGGGCGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCCGAGGTGACACCGTGGGC",
+    "S-C": "TTGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC"
+    "TGCGGGGGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCTGAGGTGACACCGTGGGC",
+    "X-X": "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC"
+    "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC",
+}
+TEST_ADVNTR_MOTIF_MAP = {"2": "X", "5": "V", "6": "C"}
+TEST_ADVNTR_ROTATION_OFFSET = 39
 CANONICAL_DUPC = "MUC1-X-60-coding-v1|60|59|-|C"
 CANONICAL_DUPA = "MUC1-X-60-coding-v1|60|59|-|A"
 
@@ -41,16 +61,23 @@ def kestrel_representation(
 
 
 def required_pair(motifs: str) -> str:
-    """Return one checked-in complete pair or fail the test fixture."""
-    pair = pair_sequence(motifs)
-    assert pair is not None
-    return pair
+    """Return one independently pinned complete pair fixture."""
+    return TEST_PAIRS[motifs]
 
 
 def replace_neighbour(pair: str, base: str) -> str:
     """Replace a base in the half neighbouring the POS-67 affected unit."""
     assert base != pair[0]
     return base + pair[1:]
+
+
+def translate_advntr_representation(representation: AdvntrRepresentation) -> IdentityTranslation:
+    """Translate with independently pinned checked-in adVNTR configuration."""
+    return _translate_advntr_representation(
+        representation,
+        TEST_ADVNTR_MOTIF_MAP,
+        TEST_ADVNTR_ROTATION_OFFSET,
+    )
 
 
 @pytest.mark.parametrize(
@@ -119,6 +146,23 @@ def test_first_pair_half_is_oriented_without_swapping_the_identity() -> None:
 
     assert result.identity is not None
     assert serialize_molecular_identity(result.identity) == CANONICAL_DUPA
+
+
+def test_asymmetric_first_half_uses_right_then_left_pair_order() -> None:
+    """The real asymmetric 5C-S pair projects its first half in coding orientation."""
+    result = translate_kestrel_representation(
+        kestrel_representation(
+            required_pair("5C-S"),
+            motifs="5C-S",
+            position=30,
+            reference="T",
+            alternate="TG",
+        ),
+        TEST_MOTIF_MAP,
+    )
+
+    assert result.identity is not None
+    assert serialize_molecular_identity(result.identity) == "MUC1-X-60-coding-v1|31|30|-|C"
 
 
 def test_invalid_runtime_allele_is_unresolved() -> None:
@@ -246,7 +290,9 @@ def test_unchanged_allele_fails_reconstruction() -> None:
 
 def test_advntr_uses_parsed_ru_and_position_context() -> None:
     """The complete single-base RU2 State resolves to canonical dupC."""
-    result = translate_advntr_representation(AdvntrRepresentation(state="I22_2_G_LEN1", repeat_unit="2", position=22))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state="I22_2_G_LEN1", repeat_units=("2",), positions=(22,))
+    )
 
     assert result.identity is not None
     assert result.context_diverges is False
@@ -256,7 +302,7 @@ def test_advntr_uses_parsed_ru_and_position_context() -> None:
 def test_advntr_bare_state_fails_closed() -> None:
     """State text alone is insufficient complete translation context."""
     result = translate_advntr_representation(
-        AdvntrRepresentation(state="I22_2_G_LEN1", repeat_unit=None, position=None)
+        AdvntrRepresentation(state="I22_2_G_LEN1", repeat_units=None, positions=None)
     )
 
     assert result.identity is None
@@ -266,7 +312,9 @@ def test_advntr_bare_state_fails_closed() -> None:
 
 def test_advntr_parsed_position_mismatch_fails_reconstruction() -> None:
     """A stale parsed POS annotation cannot translate a different State position."""
-    result = translate_advntr_representation(AdvntrRepresentation(state="I22_2_G_LEN1", repeat_unit="2", position=23))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state="I22_2_G_LEN1", repeat_units=("2",), positions=(23,))
+    )
 
     assert result.identity is None
     assert result.status == "unresolved"
@@ -275,7 +323,9 @@ def test_advntr_parsed_position_mismatch_fails_reconstruction() -> None:
 
 def test_advntr_non_x_repeat_unit_is_unresolved() -> None:
     """A mapped but non-X repeat unit cannot inherit canonical-X identity."""
-    result = translate_advntr_representation(AdvntrRepresentation(state="I23_6_G_LEN1", repeat_unit="6", position=23))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state="I23_6_G_LEN1", repeat_units=("6",), positions=(23,))
+    )
 
     assert result.identity is None
     assert result.status == "unresolved"
@@ -284,7 +334,9 @@ def test_advntr_non_x_repeat_unit_is_unresolved() -> None:
 
 def test_advntr_position_outside_x_repeat_is_unresolved() -> None:
     """Modulo arithmetic cannot wrap an out-of-unit State position into canonical X."""
-    result = translate_advntr_representation(AdvntrRepresentation(state="I61_2_G_LEN1", repeat_unit="2", position=61))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state="I61_2_G_LEN1", repeat_units=("2",), positions=(61,))
+    )
 
     assert result.identity is None
     assert result.failure == "non-x-unit"
@@ -292,7 +344,9 @@ def test_advntr_position_outside_x_repeat_is_unresolved() -> None:
 
 def test_advntr_incomplete_multibase_insertion_fails_reconstruction() -> None:
     """adVNTR's first-base-only LEN4 State cannot invent the other three bases."""
-    result = translate_advntr_representation(AdvntrRepresentation(state="I22_2_G_LEN4", repeat_unit="2", position=22))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state="I22_2_G_LEN4", repeat_units=("2",), positions=(22,))
+    )
 
     assert result.identity is None
     assert result.status == "unresolved"
@@ -301,14 +355,16 @@ def test_advntr_incomplete_multibase_insertion_fails_reconstruction() -> None:
 
 def test_advntr_unparseable_state_is_an_invalid_allele() -> None:
     """Parsed context cannot turn unrecognized State syntax into an identity."""
-    result = translate_advntr_representation(AdvntrRepresentation(state="banana", repeat_unit="2", position=1))
+    result = translate_advntr_representation(AdvntrRepresentation(state="banana", repeat_units=("2",), positions=(1,)))
 
     assert result.failure == "invalid-allele"
 
 
 def test_advntr_repeat_unit_annotation_must_match_state() -> None:
     """A stale parsed RU annotation cannot authenticate a different State unit."""
-    result = translate_advntr_representation(AdvntrRepresentation(state="I22_2_G_LEN1", repeat_unit="5", position=22))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state="I22_2_G_LEN1", repeat_units=("5",), positions=(22,))
+    )
 
     assert result.failure == "reconstruction-mismatch"
 
@@ -316,7 +372,13 @@ def test_advntr_repeat_unit_annotation_must_match_state() -> None:
 def test_advntr_complete_consecutive_deletion_reconstructs_the_unit() -> None:
     """Five complete deletion State parts become the exact canonical 1_5 deletion."""
     state = "D17_2&D18_2&D19_2&D20_2&D21_2"
-    result = translate_advntr_representation(AdvntrRepresentation(state=state, repeat_unit="2", position=17))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(
+            state=state,
+            repeat_units=("2", "2", "2", "2", "2"),
+            positions=(17, 18, 19, 20, 21),
+        )
+    )
 
     assert result.identity is not None
     assert serialize_molecular_identity(result.identity) == "MUC1-X-60-coding-v1|1|5|GCCCA|-"
@@ -325,7 +387,9 @@ def test_advntr_complete_consecutive_deletion_reconstructs_the_unit() -> None:
 def test_advntr_noncontiguous_complete_state_preserves_each_edit() -> None:
     """Separated complete State changes remain co-occurring edits, not one delins."""
     state = "I28_2_C_LEN1&I24_2_C_LEN1"
-    result = translate_advntr_representation(AdvntrRepresentation(state=state, repeat_unit="2", position=28))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state=state, repeat_units=("2", "2"), positions=(28, 24))
+    )
 
     assert result.identity is not None
     assert result.identity.edits == (
@@ -337,10 +401,124 @@ def test_advntr_noncontiguous_complete_state_preserves_each_edit() -> None:
 def test_advntr_complete_colocated_delins_is_one_edit() -> None:
     """A complete deletion and insertion at one State position remain one replacement."""
     state = "D27_2&I27_2_A_LEN1"
-    result = translate_advntr_representation(AdvntrRepresentation(state=state, repeat_unit="2", position=27))
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state=state, repeat_units=("2", "2"), positions=(27, 27))
+    )
 
     assert result.identity is not None
     assert result.identity.edits == (CodingEdit(55, 55, "C", "T"),)
+
+
+def test_advntr_connected_deletion_and_insertion_normalize_jointly() -> None:
+    """Adjacent deletion bases and a colocated insertion form one exact delins."""
+    state = "D27_2&D28_2&I27_2_A_LEN1"
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state=state, repeat_units=("2", "2", "2"), positions=(27, 28, 27))
+    )
+
+    assert result.identity is not None
+    assert serialize_molecular_identity(result.identity) == "MUC1-X-60-coding-v1|54|55|CC|T"
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "D21_2&D22_2",
+        "I21_2_G_LEN1",
+        "D21_2&D22_2&I21_2_A_LEN1",
+    ],
+)
+def test_advntr_hmm_seam_changes_are_pair_boundary_edits(state: str) -> None:
+    """Connected HMM changes crossing 60/1 cannot become a within-unit identity."""
+    parts = state.split("&")
+    positions = tuple(int(part[1:].split("_", maxsplit=1)[0]) for part in parts)
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state=state, repeat_units=("2",) * len(parts), positions=positions)
+    )
+
+    assert result.identity is None
+    assert result.status == "unresolved"
+    assert result.failure == "pair-boundary-edit"
+
+
+def test_advntr_circular_hmm_topology_is_preserved_at_positions_sixty_and_one() -> None:
+    """The original HMM's 60-to-1 edge remains connected before projection."""
+    representation = AdvntrRepresentation(
+        state="D60_2&D1_2",
+        repeat_units=("2", "2"),
+        positions=(60, 1),
+    )
+
+    result = _translate_advntr_representation(representation, {"2": "X"}, 60)
+
+    assert result.identity is None
+    assert result.status == "unresolved"
+    assert result.failure == "pair-boundary-edit"
+
+
+@pytest.mark.parametrize(
+    ("repeat_units", "positions"),
+    [
+        (("2", "5"), (28, 24)),
+        (("2", "2"), (28, 25)),
+    ],
+)
+def test_advntr_complete_compound_annotations_must_match_each_part(
+    repeat_units: tuple[str, ...],
+    positions: tuple[int, ...],
+) -> None:
+    """Agreement with only the first parsed part cannot authenticate a compound State."""
+    state = "I28_2_C_LEN1&I24_2_C_LEN1"
+    result = translate_advntr_representation(
+        AdvntrRepresentation(state=state, repeat_units=repeat_units, positions=positions)
+    )
+
+    assert result.identity is None
+    assert result.status == "unresolved"
+    assert result.failure == "reconstruction-mismatch"
+
+
+def test_advntr_repeat_unit_to_motif_mapping_is_injected() -> None:
+    """A configured RU mapped to X translates without a hardcoded RU2 special case."""
+    representation = AdvntrRepresentation(state="I22_5_G_LEN1", repeat_units=("5",), positions=(22,))
+
+    result = _translate_advntr_representation(representation, {"5": "X"}, TEST_ADVNTR_ROTATION_OFFSET)
+
+    assert result.identity is not None
+    assert serialize_molecular_identity(result.identity) == CANONICAL_DUPC
+
+
+def test_advntr_rotation_offset_is_injected() -> None:
+    """Changing the supplied rotation changes the exact projected coding coordinate."""
+    representation = AdvntrRepresentation(state="I22_2_A_LEN1", repeat_units=("2",), positions=(22,))
+
+    result = _translate_advntr_representation(representation, {"2": "X"}, 40)
+
+    assert result.identity is not None
+    assert serialize_molecular_identity(result.identity) == "MUC1-X-60-coding-v1|59|58|-|T"
+
+
+@pytest.mark.parametrize(
+    ("repeat_unit_motifs", "rotation_offset"),
+    [
+        ({"2": ""}, 39),
+        ({"2": "X"}, 0),
+        ({"2": "X"}, 61),
+        ({"2": "X"}, True),
+    ],
+)
+def test_advntr_invalid_injected_context_fails_closed(
+    repeat_unit_motifs: dict[str, str],
+    rotation_offset: int,
+) -> None:
+    """Malformed injected domain context cannot produce a molecular identity."""
+    representation = AdvntrRepresentation(state="I22_2_G_LEN1", repeat_units=("2",), positions=(22,))
+
+    result = _translate_advntr_representation(representation, repeat_unit_motifs, rotation_offset)
+
+    assert result.identity is None
+    assert result.status == "unresolved"
+    assert result.failure == "missing-motif-context"
 
 
 def test_complete_unit_resolver_rejects_an_unchanged_or_foreign_reference() -> None:
@@ -350,6 +528,20 @@ def test_complete_unit_resolver_rejects_an_unchanged_or_foreign_reference() -> N
 
     assert resolve_coding_pair_edit(coding_x, coding_x) is None
     assert resolve_coding_pair_edit("A" * 60, "C" + "A" * 59) is None
+
+
+@pytest.mark.parametrize(
+    ("reference", "alternate"),
+    [
+        ("A" * 60, "A" * 61),
+        (TEST_MOTIF_MAP["X"][:-1], TEST_MOTIF_MAP["X"]),
+        (TEST_MOTIF_MAP["X"].lower(), TEST_MOTIF_MAP["X"].lower() + "A"),
+        (TEST_MOTIF_MAP["X"], TEST_MOTIF_MAP["X"] + "N"),
+    ],
+)
+def test_complete_unit_resolver_rejects_open_reference_context(reference: str, alternate: str) -> None:
+    """Only exact uppercase canonical-X reference and alternate contexts are admissible."""
+    assert resolve_coding_pair_edit(reference, alternate) is None
 
 
 def test_bam_binding_preserves_complete_cooccurring_edit_set() -> None:

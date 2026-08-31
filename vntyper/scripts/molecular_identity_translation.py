@@ -22,8 +22,6 @@ from vntyper.scripts.molecular_identity import (
 
 _UNIT_LENGTH: Final[int] = len(CANONICAL_MUC1_X_CODING_UNIT)
 _PAIR_LENGTH: Final[int] = _UNIT_LENGTH * 2
-_ADVNTR_X_REPEAT_UNIT: Final[str] = "2"
-_ADVNTR_ROTATION_OFFSET: Final[int] = 39
 _DNA: Final[frozenset[str]] = frozenset("ACGT")
 _COMPLEMENT: Final[dict[int, int]] = str.maketrans("ACGT", "TGCA")
 _ADVNTR_INSERTION: Final[re.Pattern[str]] = re.compile(r"^I(\d+)_([0-9]+)_([ACGT])_LEN(\d+)$")
@@ -114,35 +112,44 @@ def translate_kestrel_representation(
     )
 
 
-def translate_advntr_representation(representation: AdvntrRepresentation) -> IdentityTranslation:
+def translate_advntr_representation(
+    representation: AdvntrRepresentation,
+    repeat_unit_motifs: Mapping[str, str],
+    rotation_offset: int,
+) -> IdentityTranslation:
     """Translate complete parsed adVNTR State evidence on canonical repeat unit X.
 
     Args:
         representation: State text plus its independently parsed repeat-unit and
             position annotations.
+        repeat_unit_motifs: Injected repeat-unit identifiers mapped to motif names.
+        rotation_offset: Injected one-based rotation from adVNTR to genomic-plus
+            motif orientation.
 
     Returns:
         A resolved canonical identity or a closed unresolved translation. A bare
         State label and first-base-only multibase insertions fail closed.
     """
-    if representation.repeat_unit is None or representation.position is None:
+    if representation.repeat_units is None or representation.positions is None:
+        return _unresolved("missing-motif-context")
+    if not _valid_advntr_context(repeat_unit_motifs, rotation_offset):
         return _unresolved("missing-motif-context")
 
     ru_annotations, position_annotations = derive_ru_and_pos((representation.state,))
-    ru_tokens = ru_annotations[0].split(",")
-    position_tokens = position_annotations[0].split(",")
+    ru_tokens = tuple(ru_annotations[0].split(","))
+    position_tokens = tuple(position_annotations[0].split(","))
     if "." in ru_tokens or "." in position_tokens:
         return _unresolved("invalid-allele")
-    if representation.repeat_unit not in {ru_annotations[0], ru_tokens[0]}:
+    parsed_positions = tuple(int(position) for position in position_tokens)
+    if representation.repeat_units != ru_tokens or representation.positions != parsed_positions:
         return _unresolved("reconstruction-mismatch")
-    if str(representation.position) != position_tokens[0]:
-        return _unresolved("reconstruction-mismatch")
-    if any(unit != _ADVNTR_X_REPEAT_UNIT for unit in ru_tokens):
+    if any(repeat_unit_motifs.get(unit) != "X" for unit in ru_tokens):
         return _unresolved("non-x-unit")
-    if any(not 1 <= int(position) <= _UNIT_LENGTH for position in position_tokens):
+    if any(position > _UNIT_LENGTH for position in parsed_positions):
         return _unresolved("non-x-unit")
 
     raw_edits: list[_RawEdit] = []
+    deletion_positions: set[int] = set()
     for part in representation.state.split("&"):
         insertion = _ADVNTR_INSERTION.fullmatch(part.strip())
         deletion = _ADVNTR_DELETION.fullmatch(part.strip())
@@ -150,11 +157,18 @@ def translate_advntr_representation(representation: AdvntrRepresentation) -> Ide
             length = int(insertion.group(4))
             if length != 1:
                 return _unresolved("reconstruction-mismatch")
-            raw_edits.append(_advntr_insertion(int(insertion.group(1)), insertion.group(3)))
+            position = int(insertion.group(1))
+            if _advntr_plus_position(position, rotation_offset) == _UNIT_LENGTH:
+                return _unresolved("pair-boundary-edit")
+            raw_edits.append(_advntr_insertion(position, insertion.group(3), rotation_offset))
         elif deletion is not None:
-            raw_edits.append(_advntr_deletion(int(deletion.group(1))))
+            position = int(deletion.group(1))
+            deletion_positions.add(position)
+            raw_edits.append(_advntr_deletion(position, rotation_offset))
         else:
             return _unresolved("invalid-allele")
+    if _deletions_cross_advntr_seam(deletion_positions, rotation_offset):
+        return _unresolved("pair-boundary-edit")
 
     identity = _resolve_raw_edit_set(CANONICAL_MUC1_X_CODING_UNIT, tuple(raw_edits))
     if identity is None:
@@ -192,6 +206,8 @@ def resolve_coding_pair_edit(reference_unit: str, alternate_unit: str) -> Molecu
     Returns:
         The exact normalized identity, or ``None`` when reconstruction cannot prove it.
     """
+    if reference_unit != CANONICAL_MUC1_X_CODING_UNIT or not _is_dna(alternate_unit):
+        return None
     raw_edit = _minimal_raw_edit(reference_unit, alternate_unit)
     if raw_edit is None:
         return None
@@ -220,6 +236,21 @@ def _unresolved(failure: TranslationFailure) -> IdentityTranslation:
 def _is_dna(sequence: object) -> bool:
     """Return whether a value is a non-empty uppercase DNA allele."""
     return isinstance(sequence, str) and bool(sequence) and set(sequence) <= _DNA
+
+
+def _valid_advntr_context(repeat_unit_motifs: Mapping[str, str], rotation_offset: int) -> bool:
+    """Return whether injected adVNTR coordinate context is closed and usable."""
+    return (
+        isinstance(repeat_unit_motifs, Mapping)
+        and bool(repeat_unit_motifs)
+        and all(
+            isinstance(unit, str) and bool(unit) and isinstance(motif, str) and bool(motif)
+            for unit, motif in repeat_unit_motifs.items()
+        )
+        and not isinstance(rotation_offset, bool)
+        and isinstance(rotation_offset, int)
+        and 1 <= rotation_offset <= _UNIT_LENGTH
+    )
 
 
 def _reverse_complement(sequence: str) -> str:
@@ -343,8 +374,8 @@ def _resolve_raw_edit_set(reference: str, raw_edits: tuple[_RawEdit, ...]) -> Mo
     """Normalize distinct co-occurring changes without fusing unchanged sequence."""
     expected_alternate = _apply_raw_edits(reference, raw_edits)
     normalized_edits: list[CodingEdit] = []
-    for raw_edit in _merge_adjacent_raw_edits(raw_edits):
-        single_alternate = _apply_raw_edit(reference, raw_edit)
+    for component in _raw_edit_components(raw_edits):
+        single_alternate = _apply_raw_edits(reference, component)
         identity = resolve_coding_pair_edit(reference, single_alternate)
         if identity is None:
             return None
@@ -358,33 +389,28 @@ def _resolve_raw_edit_set(reference: str, raw_edits: tuple[_RawEdit, ...]) -> Mo
     return complete_identity
 
 
-def _merge_adjacent_raw_edits(raw_edits: tuple[_RawEdit, ...]) -> tuple[_RawEdit, ...]:
-    """Merge consecutive deletions and same-position replacement components."""
-    merged: list[_RawEdit] = []
+def _raw_edit_components(raw_edits: tuple[_RawEdit, ...]) -> tuple[tuple[_RawEdit, ...], ...]:
+    """Group overlapping or adjacent raw changes without joining separated edits."""
+    components: list[list[_RawEdit]] = []
     for current in sorted(raw_edits, key=lambda edit: (edit.start, edit.end)):
-        if not merged:
-            merged.append(current)
-            continue
-        previous = merged[-1]
-        consecutive_deletions = (
-            not previous.inserted
-            and previous.end >= previous.start
-            and not current.inserted
-            and current.end >= current.start
-            and current.start == previous.end + 1
-        )
-        colocated_replacement = current.start == previous.start and (
-            (current.end < current.start) != (previous.end < previous.start)
-        )
-        if consecutive_deletions:
-            merged[-1] = _RawEdit(previous.start, current.end, "")
-        elif colocated_replacement:
-            deletion = current if current.end >= current.start else previous
-            insertion = previous if current.end >= current.start else current
-            merged[-1] = _RawEdit(deletion.start, deletion.end, insertion.inserted)
+        if components and any(_raw_edits_connect(previous, current) for previous in components[-1]):
+            components[-1].append(current)
         else:
-            merged.append(current)
-    return tuple(merged)
+            components.append([current])
+    return tuple(tuple(component) for component in components)
+
+
+def _raw_edits_connect(left: _RawEdit, right: _RawEdit) -> bool:
+    """Return whether two edits belong to one connected replacement component."""
+    left_insertion = left.end < left.start
+    right_insertion = right.end < right.start
+    if left_insertion and right_insertion:
+        return left.start == right.start
+    if left_insertion:
+        return right.start <= left.start <= right.end + 1
+    if right_insertion:
+        return left.start <= right.start <= left.end + 1
+    return right.start <= left.end + 1 and left.start <= right.end + 1
 
 
 def _apply_identity(reference: str, identity: MolecularIdentity) -> str:
@@ -395,18 +421,31 @@ def _apply_identity(reference: str, identity: MolecularIdentity) -> str:
     return alternate
 
 
-def _advntr_plus_position(position: int) -> int:
+def _advntr_plus_position(position: int, rotation_offset: int) -> int:
     """Rotate one adVNTR HMM position into the genomic-plus X unit."""
-    return ((_ADVNTR_ROTATION_OFFSET - 1 + position) % _UNIT_LENGTH) + 1
+    return ((rotation_offset - 1 + position) % _UNIT_LENGTH) + 1
 
 
-def _advntr_insertion(position: int, base: str) -> _RawEdit:
+def _advntr_insertion(position: int, base: str, rotation_offset: int) -> _RawEdit:
     """Project one complete adVNTR single-base insertion to coding orientation."""
-    coding_left = _UNIT_LENGTH - _advntr_plus_position(position)
+    coding_left = _UNIT_LENGTH - _advntr_plus_position(position, rotation_offset)
     return _RawEdit(coding_left + 1, coding_left, _reverse_complement(base))
 
 
-def _advntr_deletion(position: int) -> _RawEdit:
+def _advntr_deletion(position: int, rotation_offset: int) -> _RawEdit:
     """Project one adVNTR deletion to a coding-reference position."""
-    coding_position = _UNIT_LENGTH + 1 - _advntr_plus_position(position)
+    coding_position = _UNIT_LENGTH + 1 - _advntr_plus_position(position, rotation_offset)
     return _RawEdit(coding_position, coding_position, "")
+
+
+def _deletions_cross_advntr_seam(positions: set[int], rotation_offset: int) -> bool:
+    """Detect adjacent HMM deletions whose projection wraps across coding 60/1."""
+    for position in positions:
+        next_position = (position % _UNIT_LENGTH) + 1
+        if next_position not in positions:
+            continue
+        left = _advntr_plus_position(position, rotation_offset)
+        right = _advntr_plus_position(next_position, rotation_offset)
+        if {left, right} == {1, _UNIT_LENGTH}:
+            return True
+    return False

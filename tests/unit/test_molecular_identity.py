@@ -258,9 +258,16 @@ def test_translation_value_type_rejects_unknown_or_divergent_unresolved_states(
             alternate_allele="G",
             pair_sequence="A" * 119 + "n",
         ),
-        lambda: AdvntrRepresentation(state="", repeat_unit=None, position=None),
-        lambda: AdvntrRepresentation(state="3-1", repeat_unit="", position=None),
-        lambda: AdvntrRepresentation(state="3-1", repeat_unit=None, position=0),
+        lambda: AdvntrRepresentation(state="", repeat_units=None, positions=None),
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=(), positions=()),
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=("",), positions=(1,)),
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=("2",), positions=None),
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=None, positions=(1,)),
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=("2", "2"), positions=(1,)),
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=("2",), positions=(0,)),
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=("2",), positions=(True,)),
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=["2"], positions=(1,)),  # type: ignore[arg-type]
+        lambda: AdvntrRepresentation(state="3-1", repeat_units=("2",), positions=[1]),  # type: ignore[arg-type]
         lambda: EvidenceDisposition(value="unknown"),  # type: ignore[arg-type]
     ],
 )
@@ -280,7 +287,7 @@ def test_value_types_reject_inconsistent_observation_and_decision_states() -> No
         alternate_allele="G",
         pair_sequence=_COMPLETE_PAIR,
     )
-    advntr = AdvntrRepresentation(state="3-1", repeat_unit="X", position=1)
+    advntr = AdvntrRepresentation(state="3-1", repeat_units=("X",), positions=(1,))
     translation = IdentityTranslation(identity=identity, status="resolved", failure=None, context_diverges=False)
     consequence = FrameConsequence(net_length_change=1, is_frameshift=True)
 
