@@ -310,7 +310,7 @@ def _rescue_rows(
     if not records or not bam_path.is_file():
         return [], 0
 
-    calls = []
+    calls: list[Nomenclature | None] = []
     with BamRescuer(bam_path) as rescuer:
         for record in records:
             locus = _row_locus(record)
