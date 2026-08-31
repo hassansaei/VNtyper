@@ -43,7 +43,7 @@ Consequently:
 
 ### 2.2 Current decision baseline
 
-The available 200-sample simulated cohort and matching adVNTR corpus were loaded explicitly from the local benchmark trees. The golden tests collected 23 tests, skipped none, and passed all 23. An independent replay of the displayed result, rather than the internal `name` field alone, measured:
+The available 200-sample simulated cohort and matching adVNTR corpus were loaded explicitly from the local benchmark trees. The golden tests collected 23 tests, skipped none, and passed all 23. An independent display-aware replay applied the emitted-name predicate defined in Section 11.4. That predicate currently agrees with the internal non-`None` name count for every sample, and the oracle asserts the agreement rather than assuming it. The replay measured:
 
 | Policy | Tier | Displayed | Exact | Wrong |
 | --- | ---: | ---: | ---: | ---: |
@@ -58,9 +58,11 @@ The available 200-sample simulated cohort and matching adVNTR corpus were loaded
 
 Both policies called zero normal controls. The emitted display agreed with the internal selected name for all measured samples.
 
-Both replays are production-shaped. For each sample they read every non-negative Kestrel row and every adVNTR event in file order. `kestrel_vcf` support is the minimum `Estimated_Depth_AlternateVariant` across translated Kestrel rows with the current unknown-propagation rule; `advntr` support is the minimum `NumberOfSupportingReads` across translated adVNTR states. Policy 1 stops there and runs `reconcile(*named_vcf, *advntr_calls, supports=supports)`. Policy 2 uses that same preliminary reconciliation to decide BAM-consultation eligibility. If eligible, one `BamRescuer` is opened and each Kestrel row is rescued at that row's own `Motif_fasta` and 1-based `POS_fasta`, preserving an aligned `None` for rows without a consensus. Every named BAM call contributes its unweighted supporting-haplotype-record count to the minimum `kestrel_bam` support. The final call is `reconcile(*named_vcf, *named_bam, *advntr_calls, supports=supports)`, followed by `refine` once for each named BAM call in row order. The displayed-name predicate is defined in Section 11.4.
+Both replays are production-shaped. For each sample they read every non-negative Kestrel row and every kept adVNTR row in file order. `kestrel_vcf` support is the minimum `Estimated_Depth_AlternateVariant` across translated Kestrel rows with the current unknown-propagation rule. Each adVNTR row may translate to multiple events, but its `NumberOfSupportingReads` enters the source minimum once when that row produced at least one translated event, exactly like `_advntr_calls_by_row`; an unparseable/empty row contributes neither a call nor support. Policy 1 stops there and runs `reconcile(*named_vcf, *advntr_calls, supports=supports)`. Policy 2 uses that same preliminary reconciliation to decide BAM-consultation eligibility. If eligible, one `BamRescuer` is opened and each Kestrel row is rescued at that row's own `Motif_fasta` and 1-based `POS_fasta`, preserving an aligned `None` for rows without a consensus. Every named BAM call contributes its unweighted supporting-haplotype-record count to the minimum `kestrel_bam` support. The final call is `reconcile(*named_vcf, *named_bam, *advntr_calls, supports=supports)`, followed by `refine` once for each named BAM call in row order. The displayed-name predicate is defined in Section 11.4.
 
 The current `_hybrid()` golden helper instead reads one locus from `output.bed`; its `test_the_hybrid_total_does_not_regress` docstring describes the resulting 134-exact approximation. That helper, its docstring, and its floor will be replaced by the production-shaped replay above. The 136-exact requirement does not coexist with the obsolete 134 claim.
+
+The production-shaped policy-2 replay performed exactly 68 per-row BAM fetches across 200 samples. Its exact displayed calls by truth class were: `delGCCCA=3`, `dupA=6`, `dupC=98`, `insCCCC=6`, `insC_pos23=9`, `insG=6`, `insG_pos54=7`, and `insG_pos58=1`, with every other class zero. Relative to policy 1, BAM rescue adds 6 exact `insCCCC`, 4 exact `insG`, and 7 exact `insG_pos54` calls. All 178 non-negative Kestrel records in the corpus carry valid `Motif_fasta` and `POS_fasta`; zero records silently collapse out of the per-row replay.
 
 The corpus contains 200 Kestrel BAMs and 1,327,794 records with integral `XD`; none was missing or malformed. Observed values ranged from 5 to 8,704, with median 181 and 95th percentile 7,416. These observations establish realistic fixture values, but they do not calibrate a threshold.
 
@@ -253,7 +255,7 @@ The extraction is limited to the semantics touched here. It will not move unrela
 
 ## 9. HTML and public report behavior
 
-The per-sample HTML report will always include one concise static paragraph immediately below its existing `Reading key` heading. This is intentionally outside the `nomenclature_legend` conditional: that conditional suppresses only the tier/flag definition list when no recognized tier or flag is present, not the heading, and it does not prove that BAM rescue ran. The paragraph states an artifact contract and remains useful for the Kestrel BAM/IGV surface even when no rescue vote contributed.
+The per-sample HTML report will always include one concise static paragraph immediately below its existing `Reading key` heading. This is intentionally outside the `nomenclature_legend` conditional: that conditional suppresses only the tier/flag definition list when no recognized tier or flag is present, not the heading, and it does not prove that BAM rescue ran. The paragraph states the Kestrel artifact contract rather than claiming that the current run used or retained a BAM; it is intentionally present for IGV-off runs and report rerenders where `output.bam` is absent.
 
 The template markup will use literal `<code>output.bam</code>` and `<code>XD</code>` elements with ordinary autoescaped static text; it will not pass generated HTML through `safe`. Normalized visible text must be exactly:
 
@@ -268,11 +270,13 @@ Report tier and flag explanations will use:
 - `supporting reads` only for adVNTR or other true read-count sources;
 - `source-specific evidence support` when describing the common temporary Tier A threshold.
 
-The Kestrel table's `Estimated_Depth_*` help text will agree with the existing scoring documentation and describe k-mer-path/k-mer depth, not reads. The adVNTR `Supporting Reads` heading and explanation remain unchanged because they are legitimate raw-read terminology.
+The Kestrel table's `Estimated_Depth_*` help text will agree with the existing scoring documentation and describe k-mer-path/k-mer depth, not reads. The shared `ALT` help becomes the caller-neutral “The alternate allele reported by the caller.” so it is truthful for both Kestrel and adVNTR. The adVNTR `Supporting Reads` heading and explanation remain unchanged because they are legitimate raw-read terminology.
+
+`NOMENCLATURE_FLAG_MEANINGS["allele-unrepresentable-in-vcf"]` will say that the name comes from resolved haplotype records, not “the reads”. This is a public Kestrel-BAM semantic surface even though it does not contain a numeric count.
 
 The embedded IGV panel displays this same Kestrel `output.bam`. Its accessible `aria-label` and any sibling panel prose will say resolved haplotype-record alignments, not read alignments. The visual track behavior does not change.
 
-The cohort HTML tables also carry `Nomenclature_Flags`. `generate_cohort_summary_report` will add context keys named `nomenclature_legend` (the existing helper evaluated over the unformatted Kestrel/adVNTR frames) and `show_kestrel_bam_semantics` (true when either BAM-specific token occurs). `cohort_summary_template.html` will insert an ordinary autoescaped reading-key block immediately after the adVNTR results table and before the summary plots/statistics; no new value uses `safe`. The block defines every present token and conditionally renders the same BAM semantics paragraph. CSV and Excel exports keep the stable `Nomenclature_Flags` column name, ordering, and schema without prose rows; token values change exactly as Section 7.1 describes. The vocabulary is defined in the published nomenclature/output documentation and the cohort HTML artifact.
+The cohort HTML tables also carry `Nomenclature_Flags`. `generate_cohort_summary_report` will add context keys named `nomenclature_legend` (the existing helper evaluated over the unformatted Kestrel/adVNTR frames) and `show_kestrel_bam_semantics` (true when either BAM-specific token occurs). `cohort_summary_template.html` will insert an ordinary autoescaped reading-key block immediately after the adVNTR table's missing-sample status block and before the adVNTR summary-plot heading; no new value uses `safe`. The block defines every present token and conditionally renders the same BAM semantics paragraph. CSV and Excel exports keep the stable `Nomenclature_Flags` column name, ordering, and schema without prose rows; token values change exactly as Section 7.1 describes. The vocabulary is defined in the published nomenclature/output documentation and the cohort HTML artifact.
 
 All TSV, spreadsheet, and summary fields keep their names. Only the truthful source-specific nomenclature flag tokens can change as described in Section 7.
 
@@ -334,11 +338,12 @@ Unit tests will render the real report context/template and assert the exact vis
 - adVNTR supporting-read terminology remains present;
 - every authoritative `FLAG_*` token is re-exported through `nomenclature` and has a non-empty meaning;
 - only low-support tokens emitted by `reconcile` have Tier-A blocker explanations; `thin-haplotype-record-support` has none and cannot produce a false Tier-A reason;
-- direct assertions over the flag-meaning table, Tier-A blocker table, and Kestrel column-help entries reject read-count language on Kestrel evidence even when a fixture would not render that entry;
-- a targeted source-text/identifier contract rejects the old Kestrel-BAM private names (`_row_read_call`, `_read_calls`), read-named rescue locals, and tie-log wording while allowing legitimate file-reading and adVNTR/input-read terminology;
+- direct assertions over the flag-meaning table, Tier-A blocker table, and column-help entries reject any use of `read`/`reads` for Kestrel evidence, not merely numeric read-count phrases; this explicitly covers `allele-unrepresentable-in-vcf`, both Kestrel depth entries, and the shared caller-neutral `ALT` help while allowing adVNTR `Supporting Reads`;
+- a targeted source-text/identifier contract inspects the full Kestrel-BAM functions in `nomenclature_bam.py`, `_row_haplotype_call`, `_row_verdicts`, and `_haplotype_calls` in `nomenclature_annotate.py`, and support/reconciliation prose in `nomenclature.py`; it rejects the old private names, read-named BAM locals, “row's reads”/“reads per source” prose, and tie-log wording while allowing legitimate file-reading verbs and adVNTR/input-read terminology;
 - the real HTML fixtures carry each new token, so the dynamic legend path is non-vacuous;
 - the IGV `aria-label` describes resolved haplotype-record alignments, not read alignments;
 - the cohort HTML explains every new token it displays, while cohort CSV/Excel schemas remain unchanged;
+- the published flag table in `docs/pipeline/nomenclature.md` contains every authoritative `FLAG_*` token, preventing code/report/docs vocabulary drift;
 - legacy `low-read-support` summaries still render intelligibly;
 - TSV/JSON/nomenclature column names remain stable.
 
@@ -362,7 +367,15 @@ For each policy it will assert:
 - every internal named/displayed relationship follows `render`;
 - normal-control findings are zero;
 - the exact baseline table in Section 2.2;
+- exactly 68 per-row BAM fetches, all 178 Kestrel records carrying a valid row locus, the exact policy-2 per-class counter in Section 2.2, and the three exact gains relative to policy 1;
 - Tier-A wrong is zero without relying on a vacuous empty Tier A.
+
+All four current `_hybrid()` consumers receive an explicit production-shaped disposition:
+
+1. `test_no_tier_a_name_is_wrong_with_bam_rescue_either` remains as a named non-vacuity guard and is also implied by the exact per-tier wrong counts;
+2. `test_the_bam_is_consulted_only_for_a_minority_of_samples` is restated as exactly 68 per-row fetches and retains its `< 100` budget, now explicitly counting row fetches rather than one approximate locus per sample;
+3. `test_the_hybrid_total_does_not_regress` becomes the exact 154 displayed / 136 exact / 18 wrong policy-2 assertion and removes the obsolete 134 narrative;
+4. `test_the_bam_rescue_recovers_alleles_the_vcf_could_not` is retained against the production-shaped per-class counter and strengthened to the exact policy-1 gains listed in Section 2.2.
 
 The oracle will report missing external roots as skips, but verification will treat those skips as unavailable evidence rather than success. The final PR record will distinguish unit-gate completion from external benchmark validation.
 
@@ -392,7 +405,7 @@ The user-requested specification and plan pages under `docs/superpowers/` confli
 - `docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md`, nav title `Kestrel BAM Evidence Semantics Design`;
 - `docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md`, nav title `Kestrel BAM Evidence Semantics Plan`.
 
-The coverage-gate test will replace its blanket prohibition with this exact allowlist, assert that both exact paths are present in `mkdocs.yml`, and continue rejecting every other planning artifact under published `docs/`. `AGENTS.md`, `tests/unit/test_issue_233_documentation_contract.py`, and the planning-artifact policy comment at the top of `mkdocs.yml` will be updated in the same task so prose and executable policy agree. This does not reopen `docs/` as a general planning workspace.
+The coverage-gate filesystem allowlist uses the two repo-relative paths above. Its MkDocs navigation assertions use the corresponding docs-relative values, `superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md` and `superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md`, with the stated titles. Every other planning artifact under published `docs/` remains rejected. `AGENTS.md`, `tests/unit/test_issue_233_documentation_contract.py`, and the planning-artifact policy comment at the top of `mkdocs.yml` will be updated in the same task so prose and executable policy agree. `AGENTS.md`'s focused-module inventory will also add `nomenclature_evidence.py` and `nomenclature_presentation.py` and update its count from sixteen to eighteen. This does not reopen `docs/` as a general planning workspace.
 
 Because the MkDocs macros plugin evaluates every published page as Jinja, both required pages must avoid raw Jinja opening delimiters (double-left-brace expressions, percent-brace statements, and hash-brace comments) unless enclosed in an explicit raw block. A dedicated source scan and strict docs build will verify both pages before completion; no plan example may be silently interpolated or parsed as a template comment.
 
@@ -472,3 +485,18 @@ A second fresh restricted review again verified `canonicalModel: claude-opus-5`.
 | F9 | Minor | Gives exact source-aware legacy-token meaning and Tier-A-reason text, including historical threshold ambiguity. |
 | F10 | Minor | Names cohort context keys, insertion point, and ordinary autoescaping. |
 | F11 | Minor | Adds the stale documentation-contract docstring and explicitly records why root `SPEC.md` needs no semantic edit. |
+
+## 17. Second scoped re-review disposition
+
+A third fresh restricted review verified `canonicalModel: claude-opus-5`. It confirmed the preceding blockers resolved and returned two remaining Important test-scope gaps plus six Minor ambiguities. This revision resolves them and requires a final scoped specification re-review:
+
+| ID | Severity | Disposition in this revision |
+| --- | --- | --- |
+| G1 | Important | Gives all four old `_hybrid()` consumers explicit replacements and pins 68 per-row fetches plus exact per-class gains. |
+| G2 | Important | Widens terminology tests to reconciliation/BAM function prose and the nonnumeric `allele-unrepresentable-in-vcf` report meaning. |
+| G3 | Minor | States that the display-aware predicate currently agrees with named counts and is asserted rather than assumed. |
+| G4 | Minor | Anchors the cohort legend after the adVNTR missing-status block and before the adVNTR plot heading. |
+| G5 | Minor | Separates repo-relative filesystem allowlist paths from docs-relative MkDocs nav values. |
+| G6 | Minor | Adds a published nomenclature flag-table drift guard. |
+| G7 | Minor | Adds both focused modules to the `AGENTS.md` inventory and updates sixteen to eighteen. |
+| G8 | Minor | Makes shared `ALT` help caller-neutral and explicitly tests it. |
