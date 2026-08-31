@@ -31,18 +31,65 @@ KESTREL_BAM_FUNCTIONS: tuple[Callable[..., object], ...] = (
     nomenclature_annotate._haplotype_calls,
 )
 
+READ_NAMED_IDENTIFIER = re.compile(r"(?:^|_)(?:read|reads)(?:_|$)")
+BANNED_BAM_PROSE = (
+    "row's reads",
+    "reads per source",
+    "what the reads say",
+    "the reads, as a third source",
+)
 
-def _identifiers(function: Callable[..., object]) -> set[str]:
-    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+
+def _identifiers(source: str) -> set[str]:
+    tree = ast.parse(textwrap.dedent(source))
     return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
         node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)
     }
 
 
+def _read_named_identifiers(source: str) -> set[str]:
+    return {identifier for identifier in _identifiers(source) if READ_NAMED_IDENTIFIER.search(identifier)}
+
+
+def _forbidden_bam_prose(source: str) -> list[str]:
+    lowered = source.lower()
+    return [phrase for phrase in BANNED_BAM_PROSE if phrase in lowered]
+
+
 @pytest.mark.parametrize("function", KESTREL_BAM_FUNCTIONS, ids=lambda function: function.__name__)
 def test_kestrel_bam_functions_do_not_name_haplotype_records_as_reads(function: Callable[..., object]) -> None:
-    """A restored ``read``/``reads`` BAM local would fail even if output stayed unchanged."""
-    assert _identifiers(function).isdisjoint({"read", "reads", "read_call", "read_calls"})
+    """A read-named BAM local would fail even if output stayed unchanged."""
+    assert not _read_named_identifiers(inspect.getsource(function))
+
+
+def test_identifier_guard_catches_underscore_delimited_read_names_but_not_file_reading() -> None:
+    """Catch broad BAM-local regressions without rejecting pandas/path reading APIs."""
+    mutation = """
+def rescue(path):
+    fetched_reads = path.read_text()
+    bam_reads = fetched_reads
+    read_count = len(bam_reads)
+    frame = pd.read_csv(path)
+    return read_count, frame
+"""
+
+    assert _read_named_identifiers(mutation) == {"bam_reads", "fetched_reads", "read_count"}
+
+
+@pytest.mark.parametrize("function", KESTREL_BAM_FUNCTIONS, ids=lambda function: function.__name__)
+def test_kestrel_bam_function_prose_does_not_call_haplotype_records_reads(
+    function: Callable[..., object],
+) -> None:
+    """Inspect each full function so old BAM-specific prose cannot return."""
+    assert not _forbidden_bam_prose(inspect.getsource(function))
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    ("row's reads", "reads per source", "What the reads say", "The reads, as a third source"),
+)
+def test_bam_prose_guard_catches_each_deliberate_regression(phrase: str) -> None:
+    assert _forbidden_bam_prose(f'def rescue():\n    """{phrase}."""\n') == [phrase.lower()]
 
 
 def test_old_read_named_bam_helpers_cannot_return() -> None:
@@ -86,7 +133,13 @@ def test_evidence_flags_are_contained_in_the_public_nomenclature_vocabulary() ->
     evidence_flags = {name: value for name, value in vars(nomenclature_evidence).items() if name.startswith("FLAG_")}
     public_flags = {name: value for name, value in vars(nomenclature).items() if name.startswith("FLAG_")}
 
-    assert evidence_flags
+    assert evidence_flags == {
+        "FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT": "thin-haplotype-record-support",
+        "FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT": "low-haplotype-record-support",
+        "FLAG_LOW_KMER_PATH_SUPPORT": "low-kmer-path-support",
+        "FLAG_LOW_READ_SUPPORT": "low-read-support",
+        "FLAG_LOW_EVIDENCE_SUPPORT": "low-evidence-support",
+    }
     assert evidence_flags.items() <= public_flags.items()
     assert set(public_flags.values()) == set(nomenclature_presentation.NOMENCLATURE_FLAG_MEANINGS)
 
