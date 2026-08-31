@@ -4,7 +4,7 @@ Date: 2026-08-31
 
 Issue: [#295](https://github.com/hassansaei/VNtyper/issues/295)
 
-Status: proposed for explicit approval after adversarial review
+Status: approved for implementation
 
 ## 1. Purpose
 
@@ -522,3 +522,8 @@ A fourth fresh restricted review verified `canonicalModel: claude-opus-5`. It co
 | H6 | Minor | Defines a pure hard-subscript config resolver so all compatibility cases are testable without reloads. |
 | H7 | Minor | Replaces `_reconciled()` with the shared production-shaped policy-1 replay and retains all consumers. |
 | H8 | Minor | Replaces stale “about a fifth” prose with measured 83 eligible / 68 fetched sample loci. |
+
+The subsequent oversized Opus 5 session did not return a usable final verdict. At the
+owner's direction, no further review loop was started; approval rests on the completed
+review dispositions above and the owner's explicit instruction to proceed. This note
+does not claim a final adversarial verdict that was unavailable.

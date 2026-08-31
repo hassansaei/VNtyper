@@ -121,6 +121,10 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   pin/restore I/O. These sixteen focused modules keep pure decisions independently testable;
   measure their current branch coverage rather than assuming a fixed percentage. Put new
   pure logic there rather than back in the file it came from.
+  Phase 1 of #295 reserves two further focused destinations for its subsequent production
+  commits: `nomenclature_evidence.py` for source-aware evidence semantics and
+  `nomenclature_presentation.py` for source-aware report terminology. Once both land, this
+  inventory contains eighteen focused modules.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
   package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs
@@ -750,11 +754,12 @@ summary | release-summary | none | always records success, failure, skipped jobs
   gate artifacts) belong in an untracked `.planning/` workspace, conventionally
   `specs/`, `plans/`, `prompts/` and `milestones/` beneath it. That directory is
   gitignored, so **a fresh clone does not have one** and nothing may depend on its
-  contents. They used to live in `docs/plans/` and
-  `docs/superpowers/` behind `exclude_docs:`, and that key is now gone: while every page
-  under `docs/` is published, there is nothing to exclude. A document kept out of the
-  build is also kept out of the macro hazard above, which is most of why planning prose
-  does not belong under `docs/` — it is full of `{#...}` issue lists.
+  contents. Phase 1 of #295 has one bounded, published exception for these exact paths:
+  `docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md` and
+  `docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md`.
+  No other planning artifact under `docs/` is allowed. Both pages are registered in
+  `mkdocs.yml` and tested against raw Jinja opening delimiters; this exception does not
+  restore `exclude_docs:` or permit an unpublished page beneath `docs/`.
 
   Because `.planning/` is untracked, **the durable record of why a change was made is the
   commit message, the pull request and the issue** — not a file only the author has.

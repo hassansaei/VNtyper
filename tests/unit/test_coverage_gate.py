@@ -288,14 +288,35 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert "three untested lines moved it 0.03" not in agents
     assert "dedicated ratchet change" in normalized_agents
     assert "sustained by the Python 3.10–3.13 matrix" in normalized_agents
-    # `docs/` is strictly the published site now. Planning artifacts used to live under
-    # `docs/superpowers/` and `docs/plans/` and be excluded from the build here; they live in
-    # the untracked `.planning/` workspace instead, so there is nothing left to exclude and
-    # `exclude_docs:` is gone. Pin the invariant that replaced it: a page under `docs/` is a
-    # published page.
+    # `docs/` is strictly the published site. Phase 1 of #295 directly requires exactly
+    # these two reviewed pages; every other planning artifact remains in the untracked
+    # `.planning/` workspace. Equality is deliberate: a directory-wide exception would
+    # let an unrelated third page ship without review.
     assert not any(line.startswith("exclude_docs:") for line in mkdocs.splitlines()), (
         "docs/ must contain nothing that is excluded from the site"
     )
-    docs_root = Path(__file__).resolve().parents[2] / "docs"
-    assert not (docs_root / "superpowers").exists()
+    repo_root = Path(__file__).resolve().parents[2]
+    docs_root = repo_root / "docs"
+    approved_planning_pages = {
+        "docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md": (
+            "Kestrel BAM Evidence Semantics Design",
+            "superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md",
+        ),
+        "docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md": (
+            "Kestrel BAM Evidence Semantics Plan",
+            "superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md",
+        ),
+    }
+    published_planning_pages = {
+        path.relative_to(repo_root).as_posix()
+        for directory in (docs_root / "superpowers", docs_root / "plans")
+        if directory.exists()
+        for path in directory.rglob("*")
+        if path.is_file()
+    }
+    assert published_planning_pages == set(approved_planning_pages)
+    for repo_relative, (title, docs_relative) in approved_planning_pages.items():
+        assert f"- {title}: {docs_relative}" in mkdocs
+        page = (repo_root / repo_relative).read_text(encoding="utf-8")
+        assert all(delimiter not in page for delimiter in ("{{", "{%", "{#"))
     assert not (docs_root / "plans").exists()
