@@ -23,7 +23,7 @@ vntyper [global-options] report
 | `--input-dir` | path | — | If provided, search this directory (and its subdirectories) for standard pipeline output filenames |
 | `--report-file` | string | `summary_report.html` | Name of the output report file |
 | `--bed-file` | path | — | Path to the BED file for IGV reports |
-| `--bam-file` | path | — | Path to the BAM file for IGV reports |
+| `--bam-file` | path | — | Path to Kestrel's resolved haplotype-record BAM for IGV reports |
 | `--reference-fasta` | path | (from config) | Path to the reference FASTA file for IGV reports. Falls back to `muc1_reference_vntr` in config if not provided |
 | `--flanking` | int | `50` | Flanking region size for IGV reports |
 | `-s, --sample-name` | string | (derived) | What the report calls its sample, in the title, the heading and the header block |
@@ -49,6 +49,12 @@ verification specimen measured **78,486 bytes without alignment data** and **575
 bytes with embedded alignment data**, against **2,002,405 bytes** fetched over 11 CDN
 tags by the old report. These numbers are measurements to be refreshed for a release,
 not size guarantees; sample content also affects the artifact.
+
+Kestrel `output.bam` contains resolved haplotype records, not sequencing reads. Its
+record counts are haplotype-record support; `XD` is minimum k-mer depth and does not
+weight votes or alter names or tiers. The report prints this concise clarification in
+the reading key even in `off` mode, and the IGV panel identifies the track as resolved
+haplotype-record alignments.
 
 The report's Provenance block states the version and the **SHA-256 of the decompressed
 library**, in full, so it can be checked against upstream. That digest is verified in
@@ -130,7 +136,7 @@ second.
 
 When `--input-dir` is provided and `--bam-file` or `--bed-file` are not specified, the report command will attempt to auto-discover standard pipeline output files:
 
-- **BAM file:** `<input-dir>/kestrel/output.bam`
+- **BAM file:** `<input-dir>/kestrel/output.bam` (Kestrel resolved haplotype records)
 - **BED file:** `<input-dir>/kestrel/output.bed`
 
 ## Examples

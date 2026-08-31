@@ -105,17 +105,17 @@ outcome for any of these cells — see the warning below for why.
     Score above 0.00515 matches no condition at all unless its region depth is at most
     200, so it is reported **Negative** on a deep active region and Low_Precision on a
     shallow one — the only place in the whole table where the region-depth rule decides
-    anything. Alternate depths come from Kestrel's `Sample` field as read counts and
-    are always whole numbers in practice, so this gap is unreachable in production —
+    anything. Alternate depths come from Kestrel's `Sample` field as k-mer-path depths
+    and are always whole numbers in practice, so this gap is unreachable in production —
     but `confidence_assignment.py` performs no integer cast, so nothing in the module
     itself enforces it.
 
 !!! warning "The region-depth threshold does not cap the confidence label"
     A region depth at or below 200 demotes a variant to Low_Precision, but that
     demotion is applied **first** and is overwritten by either High_Precision tier
-    whenever one applies. A variant with an alt depth of 50 on a 150-read active
-    region is reported as High_Precision today, not Low_Precision — the same label it
-    would receive on a 5000-read active region.
+    whenever one applies. A variant with an alt depth of 50 and a total active-region
+    k-mer depth of 150 is reported as High_Precision today, not Low_Precision — the same
+    label it would receive at a total active-region k-mer depth of 5000.
 
     It is in fact overwritten in **every** case where a High tier is in play, as
     arithmetic rather than as a coincidence: a non-zero region depth of at most 200

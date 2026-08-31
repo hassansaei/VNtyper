@@ -77,7 +77,11 @@ genuinely parallel and keeps the G1 default; calling is single-threaded, where G
 a GC worker per core against one application thread, so it uses `-XX:+UseSerialGC`.
 `-XX:+UseParallelGC` is harmful on both and must not be used.
 
-Kestrel produces a VCF file with all detected variants and a SAM file of haplotype alignments. The SAM is converted to an indexed BAM for downstream IGV visualization.
+Kestrel produces a VCF file with all detected variants and a SAM file containing one
+alignment record per resolved haplotype. The SAM is converted to indexed `output.bam`
+for downstream IGV visualization. These are resolved haplotype records, not sequencing
+reads. Their optional `XD` tag is minimum k-mer depth for the haplotype; VNtyper records
+it separately and does not use it to weight a record's vote.
 
 ### Output layout and logs
 
@@ -159,7 +163,9 @@ The INDEL VCF is split into two separate files: `output_insertion.vcf` and `outp
 
 ### Step 3: Depth Splitting and Frame Score Calculation
 
-The Kestrel `Sample` column (format: `DEL:AltDepth:ActiveRegionDepth`) is split into separate depth fields. The frame score is then calculated:
+The Kestrel `Sample` column (format: `DEL:AltDepth:ActiveRegionDepth`) is split into
+separate fields for alternate-allele k-mer-path depth and total active-region k-mer
+depth. The frame score is then calculated:
 
 **Frame Score** = (len(ALT) - len(REF)) / 3
 
@@ -226,7 +232,7 @@ It now produces one extra `##` banner line in `kestrel_result.tsv`:
 ## Subthreshold candidate: 4 candidate variants in the pathogenic frame identified below the
    reporting floor (best Depth_Score 0.0040072, floor 0.00469); filtered out and NOT a call.
    Depth_Score is a ratio against an active-region depth summed over the repeat array, so the
-   same read support scores lower on a longer allele.
+   same alternate k-mer-path depth scores lower on a longer allele.
 ```
 
 **It is a comment, never a row.** `summary.parse_tsv` routes `#` lines into `comments` and

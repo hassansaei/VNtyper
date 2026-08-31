@@ -17,7 +17,7 @@ results/
 │   ├── output.vcf               # Raw Kestrel VCF
 │   ├── output_indel.vcf         # Filtered INDEL VCF
 │   ├── output_indel.vcf.gz      # Compressed INDEL VCF (if bcftools available)
-│   ├── output.bam               # Kestrel alignment BAM
+│   ├── output.bam               # Kestrel resolved haplotype-record BAM
 │   ├── output.bam.bai           # BAM index
 │   └── output.bed               # BED file for coverage visualization
 ├── fastq_bam_processing/
@@ -46,8 +46,8 @@ This is the primary output file. Each row represents a genotyped variant.
 | `REF` | Reference allele |
 | `ALT` | Alternate allele |
 | `Motif_sequence` | 60 bp sequence of the repeat-unit half named in `Motif` (one half of the 120 bp reference pair record) |
-| `Estimated_Depth_AlternateVariant` | Read depth supporting the alternate allele |
-| `Estimated_Depth_Variant_ActiveRegion` | Total read depth in the variant active region |
+| `Estimated_Depth_AlternateVariant` | k-mer-path depth supporting the alternate allele |
+| `Estimated_Depth_Variant_ActiveRegion` | total k-mer depth in the variant active region |
 | `Depth_Score` | Ratio of alternate depth to active region depth |
 | `Confidence` | Confidence classification (see below) |
 | `Flag` | Quality flag (`Not flagged` or a flag reason) |
@@ -71,6 +71,21 @@ placeholder.
 
 A negative run writes a different, narrower schema (first column `Motif`, no depth or
 flag columns) and carries none of these — there is no variant, so there is no name.
+
+## Kestrel output.bam evidence
+
+Kestrel `output.bam` contains resolved haplotype records, not sequencing reads. A count
+of those records is haplotype-record support. Its optional `XD` tag is the minimum k-mer
+depth of one resolved haplotype and does not weight votes or alter names or tiers. The
+HTML report states the same distinction in its reading key and labels its IGV track as
+resolved haplotype-record alignments.
+
+These units are separate from both Kestrel VCF k-mer-path depth and adVNTR supporting
+read counts. The stable `Nomenclature_Flags` field can therefore contain
+`thin-haplotype-record-support`, `low-haplotype-record-support`,
+`low-kmer-path-support`, `low-read-support`, or `low-evidence-support`; see the
+[authoritative flag table](../pipeline/nomenclature.md#flags) for their source-specific
+meanings.
 
 ## Confidence Levels
 

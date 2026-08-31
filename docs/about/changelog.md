@@ -4,7 +4,23 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Kestrel BAM evidence semantics
+
+- **Phase 1 corrects the public ontology of Kestrel `output.bam` (Refs #295).** Its
+  alignments are resolved haplotype records, not sequencing reads; their counts are
+  haplotype-record support. The optional `XD` tag is parsed separately as minimum k-mer
+  depth and does not weight votes or alter names or tiers.
+- **Evidence flags now state their units.** New Kestrel-specific
+  `thin-haplotype-record-support`, `low-haplotype-record-support`, and
+  `low-kmer-path-support` tokens are separate from genuine `low-read-support`; an
+  undeclared source uses `low-evidence-support`. Reports explain the same distinction.
+- **Existing complete custom configurations remain compatible.** The shipped thinness
+  key is `bam_thin_haplotype_record_support`; the former `bam_thin_support` is accepted
+  as a fallback. `min_support_for_high_confidence`, numeric values, record voting,
+  candidate selection, allele names, ties, and tiers are unchanged.
+- **This is not the full #295 policy change.** Molecular identity (#270), adVNTR artifact
+  reliability (#267), threshold calibration and a calibrate command (#269), XD
+  weighting, and new dominance or abstention rules remain out of scope.
 
 ## 2.0.26 (Current)
 

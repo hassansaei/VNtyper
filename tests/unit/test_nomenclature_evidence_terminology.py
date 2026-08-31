@@ -5,6 +5,7 @@ import inspect
 import re
 import textwrap
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +19,8 @@ from vntyper.scripts import (
 )
 
 pytestmark = pytest.mark.unit
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 KESTREL_BAM_FUNCTIONS: tuple[Callable[..., object], ...] = (
@@ -54,6 +57,24 @@ def _read_named_identifiers(source: str) -> set[str]:
 def _forbidden_bam_prose(source: str) -> list[str]:
     lowered = source.lower()
     return [phrase for phrase in BANNED_BAM_PROSE if phrase in lowered]
+
+
+def _forbidden_published_kestrel_bam_prose(source: str) -> list[str]:
+    lowered = " ".join(source.lower().split())
+    return [
+        phrase
+        for phrase in (
+            "where the reads are consulted",
+            "the reads may supply an allele",
+            "thin read consensus",
+            "one to three reads",
+            "alignment splits reads",
+            "sample` field as read counts",
+            "read depth supporting the alternate allele",
+            "total read depth in the variant active region",
+        )
+        if phrase in lowered
+    ]
 
 
 @pytest.mark.parametrize("function", KESTREL_BAM_FUNCTIONS, ids=lambda function: function.__name__)
@@ -165,3 +186,41 @@ def test_presentation_reexports_stay_compatible_and_read_wording_stays_source_sp
     assert report_formatting.COLUMN_HELP is nomenclature_presentation.COLUMN_HELP
     assert "Reads adVNTR counted" in report_formatting.COLUMN_HELP["Supporting Reads"]
     assert "Reads adVNTR counted" in report_formatting.COLUMN_HELP["NumberOfSupportingReads"]
+
+
+def test_published_kestrel_bam_pages_do_not_call_resolved_records_reads() -> None:
+    """Scan only Kestrel evidence pages so genuine input/adVNTR reads remain allowed."""
+    paths = (
+        "docs/pipeline/nomenclature.md",
+        "docs/pipeline/reports.md",
+        "docs/user-guide/output-files.md",
+        "docs/cli/report.md",
+        "docs/getting-started/quickstart.md",
+        "docs/pipeline/kestrel.md",
+        "docs/pipeline/scoring-and-confidence.md",
+        "vntyper/scripts/README.md",
+    )
+
+    failures = {
+        path: found
+        for path in paths
+        if (found := _forbidden_published_kestrel_bam_prose((ROOT / path).read_text(encoding="utf-8")))
+    }
+    assert not failures
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    (
+        "Where the reads are consulted",
+        "the reads may supply an allele",
+        "thin read consensus",
+        "one to three reads",
+        "the alignment splits reads",
+        "Sample` field as read counts",
+        "Read depth supporting the alternate allele",
+        "Total read depth in the variant active region",
+    ),
+)
+def test_published_prose_guard_catches_each_deliberate_regression(phrase: str) -> None:
+    assert _forbidden_published_kestrel_bam_prose(phrase)

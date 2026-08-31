@@ -63,13 +63,17 @@ results/sample/
   kestrel/
     kestrel_result.tsv          # Genotyping results (main output)
     output_indel.vcf            # Filtered INDEL VCF
-    output.bam                  # Kestrel alignments
+    output.bam                  # Kestrel resolved haplotype records
   fastq_bam_processing/         # Extracted FASTQ reads
   alignment_processing/         # BWA-aligned BAM (FASTQ input)
   coverage/                     # Coverage statistics
 ```
 
 The primary output is `kestrel/kestrel_result.tsv`, which contains detected MUC1 VNTR variants with confidence scores, frameshift analysis, and depth metrics.
+
+Kestrel's `output.bam` is an alignment of resolved haplotype records; it is not a second
+copy of the input sequencing reads. The HTML report explains the evidence units beside
+its nomenclature reading key.
 
 ## 5. Generate an HTML Report
 
