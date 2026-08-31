@@ -50,7 +50,6 @@ from vntyper.scripts.identity_candidate_persistence import (
 )
 from vntyper.scripts.identity_candidates import (
     IdentityTranslationComponent,
-    RawRepresentationKey,
     capture_kestrel_observations,
     overlay_legacy_projection,
     translation_component_from_config,
@@ -67,7 +66,7 @@ from vntyper.scripts.motif_processing import (
     preprocessing_deletion,
     preprocessing_insertion,
 )
-from vntyper.scripts.nomenclature import nomenclature_config
+from vntyper.scripts.nomenclature import load_nomenclature_config
 from vntyper.scripts.nomenclature_annotate import annotate_kestrel_frame
 from vntyper.scripts.scoring import (
     extract_frameshifts,
@@ -651,7 +650,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
         output_dir,
         kestrel_config,
         compiled_flag_rules=compiled_flag_rules,
-        identity_component=translation_component_from_config(nomenclature_config),
+        identity_component=translation_component_from_config(load_nomenclature_config()),
     )
 
     if processed_df.empty:
@@ -801,7 +800,10 @@ def process_kmer_results(
 
     identity_candidates = None
     if identity_component is not None:
-        identity_candidates = capture_kestrel_observations(df.to_dict("records"), identity_component)
+        capture_records = df.to_dict("records")
+        for record in capture_records:
+            record["Motif_sequence"] = str(record["Motif_sequence"])
+        identity_candidates = capture_kestrel_observations(capture_records, identity_component)
         capture_rows = [candidate_capture_cells(candidate) for candidate in identity_candidates.candidates]
         df = df.copy()
         for column in IDENTITY_CAPTURE_COLUMNS:
@@ -837,18 +839,12 @@ def process_kmer_results(
     df = add_artifact_gate(df, kestrel_config.get("artifact_flags", []))
 
     evidenced_candidates = None
-    passing_identity_keys: tuple[RawRepresentationKey, ...] = ()
-    identity_by_serialized_key: dict[str, RawRepresentationKey] = {}
+    passing_identity_ordinals: tuple[int, ...] = ()
     if identity_candidates is not None:
         evidenced_candidates = with_candidate_evidence(identity_candidates, df.to_dict("records"))
-        identity_by_serialized_key = {
-            candidate_capture_cells(candidate)[IDENTITY_CAPTURE_COLUMNS[0]]: candidate.row_key
-            for candidate in evidenced_candidates.candidates
-        }
         passing_mask = df[list(FILTER_COLUMNS)].all(axis=1)
-        passing_identity_keys = tuple(
-            identity_by_serialized_key[str(serialized)]
-            for serialized in df.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[0]]
+        passing_identity_ordinals = tuple(
+            int(serialized) for serialized in df.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]]
         )
 
     # (7) Final Filter
@@ -858,11 +854,11 @@ def process_kmer_results(
         return df
 
     if evidenced_candidates is not None:
-        selected_serialized_key = str(df.iloc[0][IDENTITY_CAPTURE_COLUMNS[0]])
+        selected_ordinal = int(df.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]])
         selected_candidates = overlay_legacy_projection(
             evidenced_candidates,
-            passing_identity_keys,
-            identity_by_serialized_key[selected_serialized_key],
+            passing_identity_ordinals,
+            selected_ordinal,
         )
         for column, value in selected_candidate_cells(selected_candidates).items():
             df[column] = value

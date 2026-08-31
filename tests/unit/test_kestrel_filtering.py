@@ -619,6 +619,74 @@ def test_identity_capture_precedes_haplo_projection_and_survives_selection(tmp_p
     assert pre_result[IDENTITY_CAPTURE_COLUMNS[2]].tolist() == ["resolved", "resolved"]
 
 
+def test_reference_loader_seq_reaches_the_string_capture_adapter(tmp_path):
+    """The real FASTA loader's Bio.Seq.Seq value is normalized only at the stage boundary."""
+    motifs = nomenclature_config["motifs"]
+    reference = tmp_path / "motifs.fa"
+    reference.write_text(f">S-C\n{motifs['C'] + motifs['S']}\n", encoding="utf-8")
+    loaded = kestrel_genotyping.load_muc1_reference(reference)
+    assert type(loaded.iloc[0]["Motif_sequence"]).__name__ == "Seq"
+    row = kestrel_stage_frame(
+        "raw",
+        rows=1,
+        motifs="S-C",
+        pos=67,
+        ref="G",
+        alt="GG",
+        depth_alt=7,
+        depth_region=500,
+    )
+    row["Motif_sequence"] = pd.Series([loaded.iloc[0]["Motif_sequence"]], dtype=object)
+    merged = pd.DataFrame({"Motif": ["S"], "Motif_sequence": [motifs["S"]]})
+
+    result = kestrel_genotyping.process_kmer_results(
+        row,
+        merged,
+        str(tmp_path),
+        kestrel_config(),
+        identity_component=translation_component_from_config(nomenclature_config),
+    )
+
+    replayed = parse_selected_candidate_cells(result.iloc[0].to_dict())
+    assert replayed.translation.status == "resolved"
+
+
+def test_duplicate_raw_rows_keep_ordinal_binding_through_legacy_selection(tmp_path):
+    """Motif dedupe may reject one duplicate, but cannot collapse its captured observation."""
+    motifs = nomenclature_config["motifs"]
+    rows = kestrel_stage_frame(
+        "raw",
+        rows=2,
+        motifs="S-C",
+        pos=67,
+        ref="G",
+        alt="GG",
+        depth_alt=4,
+        depth_region=400,
+    )
+    rows.loc[1, "POS"] = 67
+    rows.loc[1, "Sample"] = "1/1:7:500"
+    rows["Motif_sequence"] = [motifs["C"] + motifs["S"]] * 2
+    merged = pd.DataFrame({"Motif": ["S"], "Motif_sequence": [motifs["S"]]})
+
+    result = kestrel_genotyping.process_kmer_results(
+        rows,
+        merged,
+        str(tmp_path),
+        kestrel_config(),
+        identity_component=translation_component_from_config(nomenclature_config),
+    )
+
+    replayed = parse_selected_candidate_cells(result.iloc[0].to_dict())
+    assert replayed.selected_observation_ordinal == 1
+    assert replayed.equivalent_representation_count == 2
+    assert result.iloc[0]["Estimated_Depth_AlternateVariant"] == 7
+    assert result.iloc[0]["Estimated_Depth_Variant_ActiveRegion"] == 500
+
+    pre_result = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t", dtype=str)
+    assert pre_result["__Identity_Observation_Ordinal"].tolist() == ["0", "1"]
+
+
 class TestConstructKestrelCommand:
     """The exact command line the pinned Kestrel 1.0.1 JAR is invoked with.
 

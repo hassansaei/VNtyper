@@ -119,6 +119,10 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
     vcf = tmp_path / "output.vcf"
     vcf.write_text(META + HEADER + RECORD, encoding="utf-8")
     seen: dict[str, object] = {}
+    runtime_identity_config = {
+        "motifs": {"runtime-X": "A"},
+        "advntr": {"mappable_repeat_units": {"runtime-2": "runtime-X"}, "rotation_offset": 17},
+    }
 
     def fake_process_kmer_results(
         combined_df,
@@ -142,11 +146,20 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
         ),
         mock.patch.object(kg, "load_additional_motifs", return_value=pd.DataFrame()),
         mock.patch.object(kg, "process_kmer_results", side_effect=fake_process_kmer_results),
+        mock.patch.object(
+            kg,
+            "load_nomenclature_config",
+            return_value=runtime_identity_config,
+            create=True,
+        ) as load_identity_config,
     ):
         returned = kg.process_kestrel_output(str(tmp_path), vcf, "ref.fa", {}, {})
 
     assert seen["combined_rows"] == 1 and seen["alts"] == ["CC"], "the real VCF record must reach the scoring seam"
     assert isinstance(seen["identity_component"], IdentityTranslationComponent)
+    load_identity_config.assert_called_once_with()
+    assert seen["identity_component"].kestrel_motifs == {"runtime-X": "A"}
+    assert seen["identity_component"].advntr_rotation_offset == 17
     assert returned is not None and len(returned) == 1
 
     parsed = parse_tsv(str(tmp_path / "kestrel_result.tsv"))

@@ -55,6 +55,10 @@ ALL_GATES = (
     "flag_filter_pass",
 )
 
+CAPTURE_ORDINAL_COLUMN = "__Identity_Observation_Ordinal"
+SELECTED_ORDINAL_COLUMN = "__Identity_Selected_Observation_Ordinal"
+GROUP_CONTEXT_COLUMN = "__Identity_Group_Context_Diverges"
+
 
 def _translation(inserted: str, *, context_diverges: bool = False) -> IdentityTranslation:
     identity = make_molecular_identity((make_coding_edit(60, 59, "", inserted),))
@@ -118,9 +122,9 @@ def _captured(
 
 
 def _overlay_all(captured: IdentityCandidateSet, selected_index: int = 0) -> IdentityCandidateSet:
-    keys = tuple(candidate.row_key for candidate in captured.candidates)
+    ordinals = tuple(candidate.observation_ordinal for candidate in captured.candidates)
     evidenced = with_candidate_evidence(captured, [_row_for_candidate(candidate) for candidate in captured.candidates])
-    return overlay_legacy_projection(evidenced, keys, keys[selected_index])
+    return overlay_legacy_projection(evidenced, ordinals, ordinals[selected_index])
 
 
 def _row_for_candidate(candidate: Any, **changes: object) -> dict[str, object]:
@@ -134,6 +138,7 @@ def _row_for_candidate(candidate: Any, **changes: object) -> dict[str, object]:
         depth=int(candidate.depth),
     )
     row["POS"] = int(values[1])
+    row[CAPTURE_ORDINAL_COLUMN] = str(candidate.observation_ordinal)
     row.update(changes)
     return row
 
@@ -151,13 +156,13 @@ def test_same_raw_tuple_under_two_motifs_retains_two_hypotheses() -> None:
         _kestrel_row("S-C", _C + _S),
     ]
     captured = _captured(rows, _MotifSensitiveComponent())
-    passing_keys = tuple(candidate.row_key for candidate in captured.candidates)
-    legacy_selected = passing_keys[0]
+    passing_ordinals = tuple(candidate.observation_ordinal for candidate in captured.candidates)
+    legacy_selected_ordinal = passing_ordinals[0]
 
-    candidates = overlay_legacy_projection(captured, passing_keys, legacy_selected)
+    candidates = overlay_legacy_projection(captured, passing_ordinals, legacy_selected_ordinal)
 
     assert candidates.identity_hypothesis_count == 2
-    assert candidates.selected_row_key == legacy_selected
+    assert candidates.selected_row_key == captured.candidates[0].row_key
     assert {candidate.row_key.values for candidate in candidates.candidates} == {
         ("X-5", 67, "G", "GG"),
         ("S-C", 67, "G", "GG"),
@@ -201,14 +206,14 @@ def test_group_unions_every_false_gate_and_flag() -> None:
             captured.candidates[1],
             motif_filter_pass=False,
             flag_filter_pass=False,
-            Flag="Context_Doubt;Technical_Artifact",
+            Flag="Context_Doubt, Technical_Artifact",
         ),
     ]
     evidenced = with_candidate_evidence(captured, evidence)
     selected = overlay_legacy_projection(
         evidenced,
-        (captured.candidates[0].row_key,),
-        captured.candidates[0].row_key,
+        (captured.candidates[0].observation_ordinal,),
+        captured.candidates[0].observation_ordinal,
     )
 
     assert selected.selected_group.blocking_gates == frozenset({"motif_filter_pass", "flag_filter_pass"})
@@ -266,8 +271,8 @@ def test_below_floor_resolved_row_does_not_enter_hypothesis_count() -> None:
     )
     selected = overlay_legacy_projection(
         evidenced,
-        (captured.candidates[0].row_key,),
-        captured.candidates[0].row_key,
+        (captured.candidates[0].observation_ordinal,),
+        captured.candidates[0].observation_ordinal,
     )
 
     assert selected.identity_hypothesis_count == 1
@@ -306,17 +311,19 @@ def test_selected_candidate_metadata_survives_tsv_round_trip(tmp_path: Any) -> N
         _kestrel_row("A-J", _J + _A, ref="C", alt="CG", support=7, motif_filter_pass=False),
     ]
     captured = _captured(rows)
+    for candidate, row in zip(captured.candidates, rows, strict=True):
+        row[CAPTURE_ORDINAL_COLUMN] = str(candidate.observation_ordinal)
     evidenced = with_candidate_evidence(captured, rows)
     selected = overlay_legacy_projection(
         evidenced,
-        (captured.candidates[0].row_key,),
-        captured.candidates[0].row_key,
+        (captured.candidates[0].observation_ordinal,),
+        captured.candidates[0].observation_ordinal,
     )
     cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
     path = tmp_path / "candidate.tsv"
     pd.DataFrame([cells]).to_csv(path, sep="\t", index=False)
 
-    row = pd.read_csv(path, sep="\t", keep_default_na=False).iloc[0].to_dict()
+    row = pd.read_csv(path, sep="\t", dtype=str).iloc[0].to_dict()
     replayed = parse_selected_candidate_cells(row)
 
     assert replayed.translation == selected.selected_candidate.observation.translation
@@ -334,8 +341,8 @@ def test_unresolved_selected_row_persists_zero_equivalent_representations() -> N
     evidenced = with_candidate_evidence(captured, [_row_for_candidate(captured.candidates[0])])
     selected = overlay_legacy_projection(
         evidenced,
-        (captured.candidates[0].row_key,),
-        captured.candidates[0].row_key,
+        (captured.candidates[0].observation_ordinal,),
+        captured.candidates[0].observation_ordinal,
     )
 
     cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
@@ -384,8 +391,8 @@ def test_overlay_rejects_a_selected_key_that_did_not_pass() -> None:
     with pytest.raises(ValueError, match="selected Kestrel row did not pass"):
         overlay_legacy_projection(
             captured,
-            (captured.candidates[0].row_key,),
-            captured.candidates[1].row_key,
+            (captured.candidates[0].observation_ordinal,),
+            captured.candidates[1].observation_ordinal,
         )
 
 
@@ -458,14 +465,10 @@ def test_candidate_sets_reject_inconsistent_selection_state() -> None:
         IdentityCandidateSet("kestrel", [])  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="cannot mix"):
         IdentityCandidateSet("advntr", (candidate,))
-    with pytest.raises(ValueError, match="source does not match"):
-        IdentityCandidateSet("advntr", (), candidate.row_key)
     with pytest.raises(ValueError, match="absent"):
-        IdentityCandidateSet("kestrel", (), candidate.row_key)
+        IdentityCandidateSet("kestrel", (), candidate.observation_ordinal)
     with pytest.raises(ValueError, match="no selected row"):
         _ = IdentityCandidateSet("kestrel", (candidate,)).selected_candidate
-    with pytest.raises(ValueError, match="not unique"):
-        _ = IdentityCandidateSet("kestrel", (candidate, candidate), candidate.row_key).selected_candidate
 
 
 def test_evidence_and_projection_reject_incomplete_or_unknown_raw_keys() -> None:
@@ -479,9 +482,8 @@ def test_evidence_and_projection_reject_incomplete_or_unknown_raw_keys() -> None
         with_candidate_evidence(captured, [])
     with pytest.raises(ValueError, match="only for Kestrel"):
         with_candidate_evidence(IdentityCandidateSet("advntr", ()), [])
-    unknown = RawRepresentationKey("kestrel", ("S-C", 67, "G", "GG"))
-    with pytest.raises(ValueError, match="unknown raw representation"):
-        overlay_legacy_projection(captured, (unknown,), unknown)
+    with pytest.raises(ValueError, match="unknown observation ordinal"):
+        overlay_legacy_projection(captured, (99,), 99)
 
 
 @pytest.mark.parametrize(
@@ -491,10 +493,10 @@ def test_evidence_and_projection_reject_incomplete_or_unknown_raw_keys() -> None
         (IDENTITY_SELECTION_COLUMNS[0], "{}", "invalid shape"),
         (IDENTITY_SELECTION_COLUMNS[3], '["z","a"]', "sorted unique"),
         (IDENTITY_SELECTION_COLUMNS[4], "[1]", "non-empty strings"),
-        (IDENTITY_CAPTURE_COLUMNS[4], 1, "boolean scalar"),
+        (IDENTITY_CAPTURE_COLUMNS[4], 1, "canonical boolean"),
         (IDENTITY_SELECTION_COLUMNS[1], -1, "non-negative integer"),
         (IDENTITY_SELECTION_COLUMNS[2], "01", "non-negative integer"),
-        (IDENTITY_SELECTION_COLUMNS[1], "0", "zero exactly"),
+        (IDENTITY_SELECTION_COLUMNS[1], "0", "positive equivalent"),
     ],
 )
 def test_persisted_candidate_codec_rejects_malformed_scalars(column: str, value: object, message: str) -> None:
@@ -509,8 +511,240 @@ def test_persisted_candidate_codec_rejects_malformed_scalars(column: str, value:
 def test_persisted_candidate_codec_parses_complete_advntr_raw_key() -> None:
     """The persistence codec reconstructs nested adVNTR RU/POS tuples exactly."""
     cells = _persisted_cells()
-    cells[IDENTITY_SELECTION_COLUMNS[0]] = '{"source":"advntr","values":["I22_2_G_LEN1",["2"],[22]]}'
+    raw_key = '{"source":"advntr","values":["I22_2_G_LEN1",["2"],[22]]}'
+    cells[IDENTITY_CAPTURE_COLUMNS[0]] = raw_key
+    cells[IDENTITY_SELECTION_COLUMNS[0]] = raw_key
 
     replayed = parse_selected_candidate_cells(cells)
 
     assert replayed.selected_row_key == RawRepresentationKey("advntr", ("I22_2_G_LEN1", ("2",), (22,)))
+
+
+def test_duplicate_raw_keys_retain_distinct_ordinal_bound_observations() -> None:
+    """Exact duplicate raw keys remain separate and selection binds the chosen observation."""
+    captured = _captured(
+        [
+            _kestrel_row("S-C", _C + _S, support=4, depth=400),
+            _kestrel_row("S-C", _C + _S, support=7, depth=700),
+        ]
+    )
+    assert [candidate.observation_ordinal for candidate in captured.candidates] == [0, 1]
+    assert captured.candidates[0].row_key == captured.candidates[1].row_key
+    evidence = []
+    for candidate in captured.candidates:
+        row = _row_for_candidate(candidate)
+        row[CAPTURE_ORDINAL_COLUMN] = str(candidate.observation_ordinal)
+        evidence.append(row)
+
+    evidenced = with_candidate_evidence(captured, evidence)
+    selected = overlay_legacy_projection(evidenced, (1,), 1)
+
+    assert len(selected.candidates) == 2
+    assert selected.selected_row_key == captured.candidates[1].row_key
+    assert selected.selected_candidate.observation_ordinal == 1
+    assert selected.selected_support == 7
+    assert selected.selected_depth == 700
+    assert selected.equivalent_representation_count == 2
+
+    cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
+    replayed = parse_selected_candidate_cells(cells)
+    assert replayed.selected_observation_ordinal == 1
+
+
+def test_candidate_set_requires_unique_nonnegative_observation_ordinals() -> None:
+    """An ordinal is stable row identity and therefore cannot be negative or duplicated."""
+    captured = _captured([_kestrel_row("S-C", _C + _S), _kestrel_row("A-J", _J + _A, ref="C", alt="CG")])
+    first, second = captured.candidates
+
+    with pytest.raises(ValueError, match="non-negative"):
+        replace(first, observation_ordinal=-1)
+    with pytest.raises(ValueError, match="unique"):
+        IdentityCandidateSet("kestrel", (first, replace(second, observation_ordinal=first.observation_ordinal)))
+    with pytest.raises(ValueError, match="non-negative"):
+        IdentityCandidateSet("kestrel", (first, second), False)
+    with pytest.raises(ValueError, match="non-negative"):
+        overlay_legacy_projection(captured, (False,), False)
+
+
+def test_evidence_ordinal_must_bind_its_original_raw_key() -> None:
+    """A projected row cannot borrow another captured observation's ordinal."""
+    captured = _captured([_kestrel_row("S-C", _C + _S)])
+    row = _row_for_candidate(captured.candidates[0], Motifs="A-J", REF="C", ALT="CG")
+    row[CAPTURE_ORDINAL_COLUMN] = "0"
+
+    with pytest.raises(ValueError, match="raw key does not match"):
+        with_candidate_evidence(captured, [row])
+
+
+def test_production_comma_joined_flags_are_trimmed_and_unioned() -> None:
+    """Candidate flags consume the exact comma-and-space format emitted by add_flags."""
+    captured = _captured([_kestrel_row("S-C", _C + _S)])
+    row = _row_for_candidate(captured.candidates[0], Flag="Context_Doubt, Technical_Artifact")
+    row[CAPTURE_ORDINAL_COLUMN] = "0"
+
+    evidenced = with_candidate_evidence(captured, [row])
+
+    assert evidenced.candidates[0].flags == frozenset({"Context_Doubt", "Technical_Artifact"})
+
+
+@pytest.mark.parametrize("flag", [",Context_Doubt", "Context_Doubt,", "Context_Doubt,,Technical_Artifact"])
+def test_malformed_comma_joined_flags_fail_closed(flag: str) -> None:
+    """Empty flag elements cannot silently disappear during candidate capture."""
+    with pytest.raises(ValueError, match="empty element"):
+        _captured([_kestrel_row("S-C", _C + _S, flag=flag)])
+
+
+def test_group_context_divergence_survives_tsv_round_trip() -> None:
+    """One divergent equivalent representation persists a conservative group scalar."""
+    captured = _captured(
+        [_kestrel_row("X-5", _FIVE + _X), _kestrel_row("S-C", _C + _S)],
+        _MotifSensitiveComponent(equivalent=True, divergent_motif="S-C"),
+    )
+    evidence = []
+    for candidate in captured.candidates:
+        row = _row_for_candidate(candidate)
+        row[CAPTURE_ORDINAL_COLUMN] = str(candidate.observation_ordinal)
+        evidence.append(row)
+    selected = overlay_legacy_projection(with_candidate_evidence(captured, evidence), (0, 1), 0)
+    cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
+
+    assert cells[GROUP_CONTEXT_COLUMN] == "true"
+    assert parse_selected_candidate_cells(cells).group_context_diverges is True
+
+
+@pytest.mark.parametrize("unresolved", [False, True])
+def test_absent_translation_cells_survive_default_string_tsv_loading(tmp_path: Any, unresolved: bool) -> None:
+    """Canonical nonempty absence tokens survive pandas' default NA recognition."""
+    component = _UnresolvedComponent() if unresolved else REAL_COMPONENT
+    captured = _captured([_kestrel_row("S-C", _C + _S)], component)
+    row = _row_for_candidate(captured.candidates[0])
+    row[CAPTURE_ORDINAL_COLUMN] = "0"
+    selected = overlay_legacy_projection(with_candidate_evidence(captured, [row]), (0,), 0)
+    cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
+    path = tmp_path / "identity.tsv"
+    pd.DataFrame([cells]).to_csv(path, sep="\t", index=False)
+
+    loaded = pd.read_csv(path, sep="\t", dtype=str).iloc[0].to_dict()
+    replayed = parse_selected_candidate_cells(loaded)
+
+    assert loaded[IDENTITY_CAPTURE_COLUMNS[1]] != "" and loaded[IDENTITY_CAPTURE_COLUMNS[3]] != ""
+    assert replayed.translation == selected.selected_candidate.observation.translation
+
+
+def test_replay_rejects_capture_and_selection_raw_key_mismatch() -> None:
+    """Selected metadata cannot be combined with another observation's translation."""
+    first = _overlay_all(_captured([_kestrel_row("S-C", _C + _S)]))
+    second = _overlay_all(_captured([_kestrel_row("A-J", _J + _A, ref="C", alt="CG")]))
+    cells = {**candidate_capture_cells(first.selected_candidate), **selected_candidate_cells(second)}
+
+    with pytest.raises(ValueError, match="capture and selected raw keys"):
+        parse_selected_candidate_cells(cells)
+
+
+def test_replay_rejects_capture_and_selection_ordinal_mismatch_for_duplicate_key() -> None:
+    """Equal raw keys cannot conceal selection metadata from another observation."""
+    captured = _captured([_kestrel_row("S-C", _C + _S), _kestrel_row("S-C", _C + _S, support=7)])
+    evidence = []
+    for candidate in captured.candidates:
+        row = _row_for_candidate(candidate)
+        row[CAPTURE_ORDINAL_COLUMN] = str(candidate.observation_ordinal)
+        evidence.append(row)
+    evidenced = with_candidate_evidence(captured, evidence)
+    first = overlay_legacy_projection(evidenced, (0, 1), 0)
+    second = overlay_legacy_projection(evidenced, (0, 1), 1)
+    cells = {**candidate_capture_cells(first.selected_candidate), **selected_candidate_cells(second)}
+
+    with pytest.raises(ValueError, match="capture and selected observation ordinals"):
+        parse_selected_candidate_cells(cells)
+
+
+@pytest.mark.parametrize(
+    "raw_json",
+    [
+        '{"source":"kestrel","values":["S-C",67,"G","GG"]} ',
+        '{"values":["S-C",67,"G","GG"],"source":"kestrel"}',
+        '{"source":"kestrel","values":["\\u0053-C",67,"G","GG"]}',
+        '{"source":"kestrel","source":"kestrel","values":["S-C",67,"G","GG"]}',
+    ],
+)
+def test_replay_rejects_noncanonical_raw_key_json(raw_json: str) -> None:
+    """Equivalent JSON spellings cannot create multiple raw-key encodings."""
+    cells = _persisted_cells()
+    cells[IDENTITY_CAPTURE_COLUMNS[0]] = raw_json
+    cells[IDENTITY_SELECTION_COLUMNS[0]] = raw_json
+
+    with pytest.raises(ValueError, match="canonical"):
+        parse_selected_candidate_cells(cells)
+
+
+def test_replay_rejects_noncanonical_boolean_tokens() -> None:
+    """Case variants are not accepted when the codec emits lowercase booleans."""
+    cells = _persisted_cells()
+    cells[IDENTITY_CAPTURE_COLUMNS[4]] = "TRUE"
+
+    with pytest.raises(ValueError, match="canonical boolean"):
+        parse_selected_candidate_cells(cells)
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        (IDENTITY_SELECTION_COLUMNS[2], "0"),
+        (IDENTITY_SELECTION_COLUMNS[3], '["not_a_legacy_gate"]'),
+        (CAPTURE_ORDINAL_COLUMN, "01"),
+        (SELECTED_ORDINAL_COLUMN, 0),
+    ],
+)
+def test_replay_rejects_closed_state_and_noncanonical_ordinal_values(column: str, value: object) -> None:
+    """Counts, blockers, and ordinals must form a possible canonical selected state."""
+    cells: dict[str, object] = _persisted_cells()
+    cells[column] = value
+
+    with pytest.raises(ValueError):
+        parse_selected_candidate_cells(cells)
+
+
+def test_unresolved_replay_may_report_other_resolved_hypotheses() -> None:
+    """An unresolved selection has zero equivalents but may coexist with resolved hypotheses."""
+    captured = _captured([_kestrel_row("S-C", _C + _S)], _UnresolvedComponent())
+    row = _row_for_candidate(captured.candidates[0])
+    row[CAPTURE_ORDINAL_COLUMN] = "0"
+    selected = overlay_legacy_projection(with_candidate_evidence(captured, [row]), (0,), 0)
+    cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
+    cells[IDENTITY_SELECTION_COLUMNS[2]] = "1"
+
+    assert parse_selected_candidate_cells(cells).identity_hypothesis_count == 1
+
+
+def test_replay_rejects_impossible_context_divergence_states() -> None:
+    """Group context must conservatively contain selected context and cannot exist unresolved."""
+    unresolved = _captured([_kestrel_row("S-C", _C + _S)], _UnresolvedComponent())
+    unresolved_selected = overlay_legacy_projection(
+        with_candidate_evidence(unresolved, [_row_for_candidate(unresolved.candidates[0])]),
+        (0,),
+        0,
+    )
+    unresolved_cells = {
+        **candidate_capture_cells(unresolved_selected.selected_candidate),
+        **selected_candidate_cells(unresolved_selected),
+    }
+    unresolved_cells[GROUP_CONTEXT_COLUMN] = "true"
+    with pytest.raises(ValueError, match="unresolved selected identity"):
+        parse_selected_candidate_cells(unresolved_cells)
+
+    divergent = _captured(
+        [_kestrel_row("S-C", _C + _S)],
+        _MotifSensitiveComponent(equivalent=True, divergent_motif="S-C"),
+    )
+    divergent_selected = overlay_legacy_projection(
+        with_candidate_evidence(divergent, [_row_for_candidate(divergent.candidates[0])]),
+        (0,),
+        0,
+    )
+    divergent_cells = {
+        **candidate_capture_cells(divergent_selected.selected_candidate),
+        **selected_candidate_cells(divergent_selected),
+    }
+    divergent_cells[GROUP_CONTEXT_COLUMN] = "false"
+    with pytest.raises(ValueError, match="Selected context divergence"):
+        parse_selected_candidate_cells(divergent_cells)

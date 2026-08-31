@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from numbers import Integral
 from typing import cast
 
 from vntyper.scripts.identity_candidates import (
+    LEGACY_GATE_COLUMNS,
+    OBSERVATION_ORDINAL_COLUMN,
     CandidateSource,
     IdentityCandidate,
     IdentityCandidateSet,
@@ -29,6 +30,7 @@ IDENTITY_CAPTURE_COLUMNS: tuple[str, ...] = (
     "__Identity_Translation_Status",
     "__Identity_Translation_Failure",
     "__Identity_Context_Diverges",
+    OBSERVATION_ORDINAL_COLUMN,
 )
 
 IDENTITY_SELECTION_COLUMNS: tuple[str, ...] = (
@@ -37,7 +39,11 @@ IDENTITY_SELECTION_COLUMNS: tuple[str, ...] = (
     "__Identity_Hypothesis_Count",
     "__Identity_Group_Blocking_Gates",
     "__Identity_Group_Flags",
+    "__Identity_Selected_Observation_Ordinal",
+    "__Identity_Group_Context_Diverges",
 )
+
+ABSENT_TOKEN = "absent"
 
 
 @dataclass(frozen=True)
@@ -46,10 +52,12 @@ class PersistedIdentityCandidate:
 
     translation: IdentityTranslation
     selected_row_key: RawRepresentationKey
+    selected_observation_ordinal: int
     equivalent_representation_count: int
     identity_hypothesis_count: int
     blocking_gates: frozenset[str]
     flags: frozenset[str]
+    group_context_diverges: bool
 
 
 def candidate_capture_cells(candidate: IdentityCandidate) -> dict[str, str]:
@@ -64,10 +72,13 @@ def candidate_capture_cells(candidate: IdentityCandidate) -> dict[str, str]:
     translation = candidate.observation.translation
     return {
         IDENTITY_CAPTURE_COLUMNS[0]: _serialize_raw_key(candidate.row_key),
-        IDENTITY_CAPTURE_COLUMNS[1]: serialize_molecular_identity(translation.identity) if translation.identity else "",
+        IDENTITY_CAPTURE_COLUMNS[1]: (
+            serialize_molecular_identity(translation.identity) if translation.identity else ABSENT_TOKEN
+        ),
         IDENTITY_CAPTURE_COLUMNS[2]: translation.status,
-        IDENTITY_CAPTURE_COLUMNS[3]: translation.failure or "",
+        IDENTITY_CAPTURE_COLUMNS[3]: translation.failure or ABSENT_TOKEN,
         IDENTITY_CAPTURE_COLUMNS[4]: "true" if translation.context_diverges else "false",
+        IDENTITY_CAPTURE_COLUMNS[5]: str(candidate.observation_ordinal),
     }
 
 
@@ -85,17 +96,21 @@ def selected_candidate_cells(candidates: IdentityCandidateSet) -> dict[str, str]
         equivalent_count = 0
         blocking_gates = selected.blocking_gates
         flags = selected.flags
+        group_context_diverges = False
     else:
         group = candidates.selected_group
         equivalent_count = len(group.candidates)
         blocking_gates = group.blocking_gates
         flags = group.flags
+        group_context_diverges = group.context_diverges
     return {
         IDENTITY_SELECTION_COLUMNS[0]: _serialize_raw_key(selected.row_key),
         IDENTITY_SELECTION_COLUMNS[1]: str(equivalent_count),
         IDENTITY_SELECTION_COLUMNS[2]: str(candidates.identity_hypothesis_count),
         IDENTITY_SELECTION_COLUMNS[3]: _serialize_strings(blocking_gates),
         IDENTITY_SELECTION_COLUMNS[4]: _serialize_strings(flags),
+        IDENTITY_SELECTION_COLUMNS[5]: str(selected.observation_ordinal),
+        IDENTITY_SELECTION_COLUMNS[6]: "true" if group_context_diverges else "false",
     }
 
 
@@ -112,27 +127,49 @@ def parse_selected_candidate_cells(row: Mapping[str, object]) -> PersistedIdenti
         KeyError: If a required internal column is absent.
         ValueError: If serialized values are inconsistent or malformed.
     """
-    identity_text = _required_string(row, IDENTITY_CAPTURE_COLUMNS[1], allow_empty=True)
+    capture_raw_key = _parse_raw_key(_required_string(row, IDENTITY_CAPTURE_COLUMNS[0]))
+    selected_raw_key = _parse_raw_key(_required_string(row, IDENTITY_SELECTION_COLUMNS[0]))
+    if capture_raw_key != selected_raw_key:
+        raise ValueError("Identity capture and selected raw keys must match exactly")
+    capture_ordinal = _nonnegative_int(row, IDENTITY_CAPTURE_COLUMNS[5])
+    selected_ordinal = _nonnegative_int(row, IDENTITY_SELECTION_COLUMNS[5])
+    if capture_ordinal != selected_ordinal:
+        raise ValueError("Identity capture and selected observation ordinals must match exactly")
+    identity_text = _required_string(row, IDENTITY_CAPTURE_COLUMNS[1])
     status = _required_string(row, IDENTITY_CAPTURE_COLUMNS[2])
-    failure_text = _required_string(row, IDENTITY_CAPTURE_COLUMNS[3], allow_empty=True)
-    identity = parse_molecular_identity(identity_text) if identity_text else None
+    failure_text = _required_string(row, IDENTITY_CAPTURE_COLUMNS[3])
+    identity = None if identity_text == ABSENT_TOKEN else parse_molecular_identity(identity_text)
+    failure = None if failure_text == ABSENT_TOKEN else cast(TranslationFailure, failure_text)
     translation = IdentityTranslation(
         identity,
         cast(TranslationStatus, status),
-        cast(TranslationFailure | None, failure_text or None),
+        failure,
         _parse_bool(row[IDENTITY_CAPTURE_COLUMNS[4]]),
     )
     equivalent_count = _nonnegative_int(row, IDENTITY_SELECTION_COLUMNS[1])
     hypothesis_count = _nonnegative_int(row, IDENTITY_SELECTION_COLUMNS[2])
-    if (translation.identity is None) != (equivalent_count == 0):
-        raise ValueError("Equivalent representation count must be zero exactly when identity is unresolved")
+    blocking_gates = _parse_strings(_required_string(row, IDENTITY_SELECTION_COLUMNS[3]))
+    if not blocking_gates <= frozenset(LEGACY_GATE_COLUMNS):
+        raise ValueError("Persisted candidate blockers must use the six legacy gate names")
+    group_context_diverges = _parse_bool(row[IDENTITY_SELECTION_COLUMNS[6]])
+    if translation.identity is None:
+        if equivalent_count != 0:
+            raise ValueError("An unresolved selected identity requires zero equivalent representations")
+        if group_context_diverges:
+            raise ValueError("An unresolved selected identity cannot have divergent group context")
+    elif equivalent_count < 1 or hypothesis_count < 1:
+        raise ValueError("A resolved selected identity requires positive equivalent and hypothesis counts")
+    if translation.context_diverges and not group_context_diverges:
+        raise ValueError("Selected context divergence must be present in its identity group")
     return PersistedIdentityCandidate(
         translation=translation,
-        selected_row_key=_parse_raw_key(_required_string(row, IDENTITY_SELECTION_COLUMNS[0])),
+        selected_row_key=selected_raw_key,
+        selected_observation_ordinal=selected_ordinal,
         equivalent_representation_count=equivalent_count,
         identity_hypothesis_count=hypothesis_count,
-        blocking_gates=_parse_strings(_required_string(row, IDENTITY_SELECTION_COLUMNS[3])),
+        blocking_gates=blocking_gates,
         flags=_parse_strings(_required_string(row, IDENTITY_SELECTION_COLUMNS[4])),
+        group_context_diverges=group_context_diverges,
     )
 
 
@@ -153,7 +190,10 @@ def _parse_raw_key(value: str) -> RawRepresentationKey:
         typed_values: RawKeyValues = (values[0], tuple(values[1]), tuple(values[2]))
     else:
         typed_values = cast(RawKeyValues, tuple(values))
-    return RawRepresentationKey(cast(CandidateSource, source), typed_values)
+    raw_key = RawRepresentationKey(cast(CandidateSource, source), typed_values)
+    if _serialize_raw_key(raw_key) != value:
+        raise ValueError("Raw representation key must use its canonical JSON serialization")
+    return raw_key
 
 
 def _serialize_strings(values: frozenset[str]) -> str:
@@ -169,31 +209,33 @@ def _parse_strings(value: str) -> frozenset[str]:
         raise ValueError("Candidate string set must contain non-empty strings")
     if parsed != sorted(set(parsed)):
         raise ValueError("Candidate string set must use sorted unique canonical form")
-    return frozenset(parsed)
+    result = frozenset(parsed)
+    if _serialize_strings(result) != value:
+        raise ValueError("Candidate string set must use canonical JSON serialization")
+    return result
 
 
 def _parse_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str) and value.casefold() in {"true", "false"}:
-        return value.casefold() == "true"
-    raise ValueError("Identity context divergence must be a boolean scalar")
+    if not isinstance(value, str) or value not in {"true", "false"}:
+        raise ValueError("Identity context divergence must use a canonical boolean token")
+    return value == "true"
 
 
-def _required_string(row: Mapping[str, object], column: str, *, allow_empty: bool = False) -> str:
+def _required_string(row: Mapping[str, object], column: str) -> str:
     value = row[column]
-    if not isinstance(value, str) or (not allow_empty and not value):
-        raise ValueError(f"{column} must be a {'possibly empty ' if allow_empty else 'non-empty '}string")
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{column} must be a non-empty string")
     return value
 
 
 def _nonnegative_int(row: Mapping[str, object], column: str) -> int:
-    scalar = row[column]
-    if isinstance(scalar, Integral) and not isinstance(scalar, bool):
-        if scalar < 0:
-            raise ValueError(f"{column} must be a canonical non-negative integer")
-        return int(scalar)
-    text = _required_string(row, column)
-    if not text.isascii() or not text.isdecimal() or (len(text) > 1 and text.startswith("0")):
+    value = row[column]
+    if (
+        not isinstance(value, str)
+        or not value
+        or not value.isascii()
+        or not value.isdecimal()
+        or (len(value) > 1 and value.startswith("0"))
+    ):
         raise ValueError(f"{column} must be a canonical non-negative integer")
-    return int(text)
+    return int(value)

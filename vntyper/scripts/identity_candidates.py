@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -25,6 +24,7 @@ from vntyper.scripts.molecular_identity_translation import (
 CandidateSource: TypeAlias = Literal["kestrel", "advntr"]
 RawKeyValues: TypeAlias = tuple[str, int, str, str] | tuple[str, tuple[str, ...], tuple[int, ...]]
 SupportValue: TypeAlias = int | float
+OBSERVATION_ORDINAL_COLUMN = "__Identity_Observation_Ordinal"
 
 LEGACY_GATE_COLUMNS: tuple[str, ...] = (
     "is_frameshift",
@@ -121,6 +121,7 @@ class IdentityCandidate:
     """One independently translated caller representation and its evidence."""
 
     row_key: RawRepresentationKey
+    observation_ordinal: int
     observation: IdentityObservation
     support: SupportValue
     depth: SupportValue
@@ -130,6 +131,7 @@ class IdentityCandidate:
 
     def __post_init__(self) -> None:
         """Keep source, scalar evidence, blockers, and eligibility typed."""
+        _validate_observation_ordinal(self.observation_ordinal, "Candidate observation ordinal")
         if self.row_key.source != self.observation.source:
             raise ValueError("Candidate row-key source does not match its observation")
         _validate_support(self.support, "Candidate support")
@@ -166,21 +168,30 @@ class IdentityCandidateSet:
 
     source: CandidateSource
     candidates: tuple[IdentityCandidate, ...]
-    selected_row_key: RawRepresentationKey | None = None
+    selected_observation_ordinal: int | None = None
 
     def __post_init__(self) -> None:
-        """Require one source and a selected key drawn from the candidate set."""
+        """Require one source, unique ordinals, and a selected ordinal in the set."""
         if self.source not in {"kestrel", "advntr"}:
             raise ValueError(f"Unsupported candidate-set source: {self.source}")
         if not isinstance(self.candidates, tuple):
             raise ValueError("Identity candidates must be a tuple")
         if any(candidate.row_key.source != self.source for candidate in self.candidates):
             raise ValueError("Identity candidate set cannot mix caller sources")
-        if self.selected_row_key is not None:
-            if self.selected_row_key.source != self.source:
-                raise ValueError("Selected raw key source does not match its candidate set")
-            if self.selected_row_key not in {candidate.row_key for candidate in self.candidates}:
-                raise ValueError("Selected raw key is absent from its candidate set")
+        ordinals = tuple(candidate.observation_ordinal for candidate in self.candidates)
+        if len(set(ordinals)) != len(ordinals):
+            raise ValueError("Identity candidate observation ordinals must be unique")
+        if self.selected_observation_ordinal is not None:
+            _validate_observation_ordinal(self.selected_observation_ordinal, "Selected observation ordinal")
+            if self.selected_observation_ordinal not in set(ordinals):
+                raise ValueError("Selected observation ordinal is absent from its candidate set")
+
+    @property
+    def selected_row_key(self) -> RawRepresentationKey | None:
+        """Return the exact legacy-selected raw key while ordinals disambiguate rows."""
+        if self.selected_observation_ordinal is None:
+            return None
+        return self.selected_candidate.row_key
 
     @property
     def identity_hypothesis_count(self) -> int:
@@ -192,13 +203,17 @@ class IdentityCandidateSet:
         """Return the exact legacy-selected row without re-ranking.
 
         Raises:
-            ValueError: If selection has not been overlaid or the key is ambiguous.
+            ValueError: If selection has not been overlaid or the ordinal is ambiguous.
         """
-        if self.selected_row_key is None:
+        if self.selected_observation_ordinal is None:
             raise ValueError("Identity candidate set has no selected row")
-        matches = [candidate for candidate in self.candidates if candidate.row_key == self.selected_row_key]
+        matches = [
+            candidate
+            for candidate in self.candidates
+            if candidate.observation_ordinal == self.selected_observation_ordinal
+        ]
         if len(matches) != 1:
-            raise ValueError("Selected raw representation key is not unique")
+            raise ValueError("Selected observation ordinal is not unique")
         return matches[0]
 
     @property
@@ -283,7 +298,7 @@ def capture_kestrel_observations(
         ValueError: If a field cannot form the strict typed representation.
     """
     candidates: list[IdentityCandidate] = []
-    for row in rows:
+    for observation_ordinal, row in enumerate(rows):
         representation = KestrelRepresentation(
             motifs=_required_string(row, "Motifs"),
             position=_required_int(row, "POS"),
@@ -301,6 +316,7 @@ def capture_kestrel_observations(
         candidates.append(
             IdentityCandidate(
                 row_key=_kestrel_key(representation),
+                observation_ordinal=observation_ordinal,
                 observation=observation,
                 support=_required_support(row, "Estimated_Depth_AlternateVariant"),
                 depth=_required_support(row, "Estimated_Depth_Variant_ActiveRegion"),
@@ -328,7 +344,7 @@ def capture_advntr_observations(
         ValueError: If typed RU/POS or numeric evidence is malformed.
     """
     candidates: list[IdentityCandidate] = []
-    for row in rows:
+    for observation_ordinal, row in enumerate(rows):
         state = _state(row)
         repeat_units = _string_tuple(row, "RU")
         positions = _integer_tuple(row, "POS")
@@ -343,6 +359,7 @@ def capture_advntr_observations(
         candidates.append(
             IdentityCandidate(
                 row_key=RawRepresentationKey("advntr", (state, repeat_units, positions)),
+                observation_ordinal=observation_ordinal,
                 observation=observation,
                 support=_required_support(row, "NumberOfSupportingReads"),
                 depth=_required_support(row, "MeanCoverage"),
@@ -364,18 +381,27 @@ def with_candidate_evidence(
         rows: Post-projection rows retaining the four-field raw key and all gates.
 
     Returns:
-        The same observations with conservative raw-key-level blocker/flag unions.
+        The same observations with conservative per-observation blocker/flag unions.
 
     Raises:
         ValueError: If called for another source, a gate is absent, or evidence is incomplete.
     """
     if captured.source != "kestrel":
         raise ValueError("Six-gate evidence overlay is defined only for Kestrel candidates")
-    blockers_by_key: dict[RawRepresentationKey, set[str]] = defaultdict(set)
-    flags_by_key: dict[RawRepresentationKey, set[str]] = defaultdict(set)
-    seen: set[RawRepresentationKey] = set()
+    candidates_by_ordinal = {candidate.observation_ordinal: candidate for candidate in captured.candidates}
+    blockers_by_ordinal: dict[int, frozenset[str]] = {}
+    flags_by_ordinal: dict[int, frozenset[str]] = {}
     for row in rows:
+        ordinal = _canonical_nonnegative_ordinal(row[OBSERVATION_ORDINAL_COLUMN])
+        if ordinal in blockers_by_ordinal:
+            raise ValueError("Post-projection evidence repeats a captured observation ordinal")
+        candidate = candidates_by_ordinal.get(ordinal)
+        if candidate is None:
+            raise ValueError("Post-projection evidence contains an unknown observation ordinal")
         key = _kestrel_key_from_row(row)
+        if key != candidate.row_key:
+            raise ValueError("Post-projection row raw key does not match its captured observation ordinal")
+        blockers: set[str] = set()
         for gate in LEGACY_GATE_COLUMNS:
             if gate not in row:
                 raise ValueError(f"Required legacy gate column is missing: {gate}")
@@ -383,52 +409,58 @@ def with_candidate_evidence(
             if not isinstance(value, bool):
                 raise ValueError(f"Legacy gate {gate} must be a boolean")
             if not value:
-                blockers_by_key[key].add(gate)
-        flags_by_key[key].update(_flags(row.get("Flag")))
-        seen.add(key)
-    missing = {candidate.row_key for candidate in captured.candidates} - seen
+                blockers.add(gate)
+        blockers_by_ordinal[ordinal] = frozenset(blockers)
+        flags_by_ordinal[ordinal] = _flags(row.get("Flag"))
+    missing = set(candidates_by_ordinal) - set(blockers_by_ordinal)
     if missing:
-        raise ValueError("Post-projection evidence is missing a captured Kestrel raw key")
+        raise ValueError("Post-projection evidence is missing a captured Kestrel observation ordinal")
     return IdentityCandidateSet(
         source="kestrel",
         candidates=tuple(
             replace(
                 candidate,
-                blocking_gates=frozenset(blockers_by_key[candidate.row_key]),
-                flags=candidate.flags | frozenset(flags_by_key[candidate.row_key]),
+                blocking_gates=blockers_by_ordinal[candidate.observation_ordinal],
+                flags=candidate.flags | flags_by_ordinal[candidate.observation_ordinal],
             )
             for candidate in captured.candidates
         ),
-        selected_row_key=captured.selected_row_key,
+        selected_observation_ordinal=captured.selected_observation_ordinal,
     )
 
 
 def overlay_legacy_projection(
     captured: IdentityCandidateSet,
-    legacy_passing_keys: Iterable[RawRepresentationKey],
-    legacy_selected: RawRepresentationKey,
+    legacy_passing_ordinals: Iterable[int],
+    legacy_selected_ordinal: int,
 ) -> IdentityCandidateSet:
     """Overlay unchanged legacy eligibility and selection without ranking candidates.
 
     Args:
         captured: Independently translated caller observations.
-        legacy_passing_keys: Raw keys surviving the existing complete gate policy.
-        legacy_selected: Exact raw key returned by the unchanged legacy selector.
+        legacy_passing_ordinals: Observation ordinals surviving the existing complete gate policy.
+        legacy_selected_ordinal: Exact observation ordinal returned by the unchanged legacy selector.
 
     Returns:
         A candidate set with eligibility and selected-row metadata overlaid.
 
     Raises:
-        ValueError: If keys are unknown or the selected row did not pass.
+        ValueError: If ordinals are invalid or unknown, or the selected row did not pass.
     """
-    passing = frozenset(legacy_passing_keys)
-    known = {candidate.row_key for candidate in captured.candidates}
+    passing_values = tuple(legacy_passing_ordinals)
+    for ordinal in passing_values:
+        _validate_observation_ordinal(ordinal, "Legacy passing observation ordinal")
+    _validate_observation_ordinal(legacy_selected_ordinal, "Legacy selected observation ordinal")
+    passing = frozenset(passing_values)
+    known = {candidate.observation_ordinal for candidate in captured.candidates}
     if not passing <= known:
-        raise ValueError("Legacy projection contains an unknown raw representation key")
-    if legacy_selected not in passing:
+        raise ValueError("Legacy projection contains an unknown observation ordinal")
+    if legacy_selected_ordinal not in passing:
         raise ValueError("The selected Kestrel row did not pass the complete legacy projection")
-    candidates = tuple(replace(candidate, eligible=candidate.row_key in passing) for candidate in captured.candidates)
-    return IdentityCandidateSet(captured.source, candidates, legacy_selected)
+    candidates = tuple(
+        replace(candidate, eligible=candidate.observation_ordinal in passing) for candidate in captured.candidates
+    )
+    return IdentityCandidateSet(captured.source, candidates, legacy_selected_ordinal)
 
 
 def _validated_string_map(value: Mapping[str, str], name: str) -> dict[str, str]:
@@ -562,9 +594,27 @@ def _is_advntr_key(values: object) -> bool:
 
 
 def _flags(value: object) -> frozenset[str]:
-    """Parse non-placeholder semicolon-delimited flags."""
+    """Parse the production comma-delimited flags without losing empty elements."""
     if value is None or value in {"", "Not flagged", "Not applicable"}:
         return frozenset()
     if not isinstance(value, str):
         raise ValueError("Candidate Flag must be a string when present")
-    return frozenset(flag for flag in value.split(";") if flag)
+    flags = tuple(flag.strip() for flag in value.split(","))
+    if any(not flag for flag in flags):
+        raise ValueError("Candidate Flag must not contain an empty element")
+    return frozenset(flags)
+
+
+def _canonical_nonnegative_ordinal(value: object) -> int:
+    """Parse the exact decimal string emitted in the observation-ordinal column."""
+    if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+        raise ValueError("Candidate observation ordinal must be a canonical non-negative integer")
+    if len(value) > 1 and value.startswith("0"):
+        raise ValueError("Candidate observation ordinal must be a canonical non-negative integer")
+    return int(value)
+
+
+def _validate_observation_ordinal(value: object, name: str) -> None:
+    """Require a runtime integer ordinal without accepting booleans as integers."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
