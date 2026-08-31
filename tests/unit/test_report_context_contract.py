@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from jinja2 import DictLoader, Environment, TemplateNotFound
 
@@ -143,6 +145,10 @@ def test_every_deprecated_context_path_has_an_explicit_major_release() -> None:
                 "q20_color",
                 "q30_color",
                 "passed_filter_color",
+                "duplication_rate",
+                "q20_rate",
+                "q30_rate",
+                "passed_filter_rate",
                 "igv_content",
                 "screening_state.kestrel_result",
                 "screening_state.advntr_result",
@@ -153,3 +159,42 @@ def test_every_deprecated_context_path_has_an_explicit_major_release() -> None:
         == contract.DEPRECATED_KEYS
     )
     assert contract.DEPRECATED_KEYS_REMOVAL_RELEASE == "3.0.0"
+
+
+def test_published_compatibility_documentation_maps_fastp_raw_values_to_display_values() -> None:
+    """Custom templates can migrate before the raw fastp values leave the 2.x API."""
+    reports_documentation = (Path(__file__).parents[2] / "docs" / "pipeline" / "reports.md").read_text(encoding="utf-8")
+    compatibility_section = reports_documentation.split("### Custom template context compatibility", 1)[1].split(
+        "\n## ", 1
+    )[0]
+    normalized_section = " ".join(compatibility_section.split())
+
+    assert "VNtyper 2.x" in normalized_section
+    assert "VNtyper 3.0.0" in normalized_section
+    for raw_key, display_key in {
+        "duplication_rate": "duplication_rate_display",
+        "q20_rate": "q20_rate_display",
+        "q30_rate": "q30_rate_display",
+        "passed_filter_rate": "passed_filter_rate_display",
+    }.items():
+        assert f"| `{raw_key}` | `{display_key}` |" in compatibility_section
+
+
+def test_published_report_documentation_describes_fastp_measured_rate_validation() -> None:
+    """The report contract distinguishes a missing rate from malformed output.json data."""
+    reports_documentation = (Path(__file__).parents[2] / "docs" / "pipeline" / "reports.md").read_text(encoding="utf-8")
+    normalized_documentation = " ".join(reports_documentation.split())
+
+    assert "nonmissing measured fastp rate" in normalized_documentation
+    assert "finite numeric fraction from 0 through 1" in normalized_documentation
+    assert "`None` rate remains missing and renders as `N/A`" in normalized_documentation
+
+
+def test_published_fastp_contract_names_the_exact_rounding_rule() -> None:
+    """Operators can reconcile half-tie report changes with a published rule."""
+    docs_root = Path(__file__).parents[2] / "docs"
+    required_contract = "rounded half-up on its exact decimal value to two decimal places of percent"
+
+    for relative_path in ("pipeline/reports.md", "user-guide/configuration.md"):
+        documentation = (docs_root / relative_path).read_text(encoding="utf-8")
+        assert required_contract in " ".join(documentation.split())

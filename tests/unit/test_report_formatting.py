@@ -14,7 +14,9 @@ by running the whole pipeline:
 
 import json
 import logging
+import re
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -134,6 +136,52 @@ def test_summarise_fastp_reports_unavailable_for_no_data() -> None:
     assert metrics.sequencing == ""
 
 
+@pytest.mark.parametrize("fastp_data", (None, [], "not-an-object"))
+def test_summarise_fastp_rejects_a_malformed_root_object(fastp_data: object, caplog: pytest.LogCaptureFixture) -> None:
+    """A parsed but structurally invalid fastp document is not absent data."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="root"):
+        rf.summarise_fastp(fastp_data)
+
+    assert "root" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("path", "fastp_data"),
+    (
+        ("summary", {"summary": None}),
+        ("summary.before_filtering", {"summary": {"before_filtering": None}}),
+        (
+            "summary.after_filtering",
+            {"summary": {"before_filtering": {"total_reads": 0}, "after_filtering": None}},
+        ),
+        (
+            "filtering_result",
+            {"summary": {"before_filtering": {"total_reads": 0}}, "filtering_result": None},
+        ),
+        (
+            "duplication",
+            {
+                "summary": {"before_filtering": {"total_reads": 0}},
+                "filtering_result": {"passed_filter_reads": 0},
+                "duplication": None,
+            },
+        ),
+    ),
+)
+def test_summarise_fastp_rejects_malformed_nested_objects(
+    path: str, fastp_data: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every nested object boundary fails with its fastp schema path."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=re.escape(path)):
+        rf.summarise_fastp(fastp_data)
+
+    assert path in caplog.text
+
+
 def test_summarise_fastp_computes_the_passed_filter_rate() -> None:
     metrics = rf.summarise_fastp(
         {
@@ -164,33 +212,122 @@ def test_summarise_fastp_does_not_divide_by_zero() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw_rate", "cutoff", "higher_better", "expected_displayed_rate", "expected_colour"),
-    [
-        (0.10004, 0.1, False, 0.1, "green"),
-        (0.10006, 0.1, False, 0.1001, "red"),
-        (0.79996, 0.8, True, 0.8, "green"),
-        (0.79994, 0.8, True, 0.7999, "red"),
-        (0.00065, 0.0007, True, 0.0007, "green"),
-    ],
+    ("component", "value"),
+    (
+        ("passed_filter_reads", "not-a-count"),
+        ("total_reads", "not-a-count"),
+        ("passed_filter_reads", "80"),
+        ("total_reads", "100"),
+        ("passed_filter_reads", True),
+        ("total_reads", True),
+        ("passed_filter_reads", float("nan")),
+        ("total_reads", float("nan")),
+        ("passed_filter_reads", float("inf")),
+        ("total_reads", float("inf")),
+        ("passed_filter_reads", float("-inf")),
+        ("total_reads", float("-inf")),
+        ("passed_filter_reads", -1),
+        ("total_reads", -1),
+        ("passed_filter_reads", 80.5),
+        ("total_reads", Decimal("100.5")),
+    ),
 )
-def test_fastp_threshold_rate_matches_the_displayed_percentage_on_both_sides(
-    raw_rate: float,
-    cutoff: float,
-    higher_better: bool,
-    expected_displayed_rate: float,
-    expected_colour: str,
+def test_summarise_fastp_rejects_each_invalid_passed_filter_source_count(
+    component: str, value: object, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Catch icons judging the raw fraction or a double-rounded fraction."""
-    displayed_rate = rf.fastp_threshold_rate(raw_rate)
+    """The extraction boundary names bad passed-filter source counts before division."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+    before_filtering: dict[str, object] = {"total_reads": 100}
+    filtering_result: dict[str, object] = {"passed_filter_reads": 80}
+    if component == "total_reads":
+        before_filtering[component] = value
+    else:
+        filtering_result[component] = value
 
-    assert displayed_rate == pytest.approx(expected_displayed_rate)
-    assert rf.threshold_icon(displayed_rate, cutoff, higher_better=higher_better)[1] == expected_colour
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        rf.summarise_fastp(
+            {
+                "summary": {"before_filtering": before_filtering, "after_filtering": {}},
+                "filtering_result": filtering_result,
+            }
+        )
+
+    assert component in caplog.text
 
 
-def test_fastp_threshold_rate_preserves_missing_and_zero() -> None:
-    """Catch an absent rate becoming zero, or a measured zero becoming absent."""
-    assert rf.fastp_threshold_rate(None) is None
-    assert rf.fastp_threshold_rate(0.0) == 0.0
+@pytest.mark.parametrize(
+    ("missing_path", "before_filtering", "filtering_result"),
+    (
+        ("summary.before_filtering.total_reads", {}, {"passed_filter_reads": 80}),
+        ("filtering_result.passed_filter_reads", {"total_reads": 100}, {}),
+    ),
+)
+def test_summarise_fastp_rejects_each_missing_passed_filter_source_key(
+    missing_path: str,
+    before_filtering: dict[str, object],
+    filtering_result: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The extraction boundary refuses incomplete source counts instead of defaulting them."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match=missing_path.replace(".", r"\.")):
+        rf.summarise_fastp(
+            {
+                "summary": {"before_filtering": before_filtering, "after_filtering": {}},
+                "filtering_result": filtering_result,
+            }
+        )
+
+    assert missing_path in caplog.text
+
+
+def test_summarise_fastp_rejects_a_passed_filter_count_above_the_total(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The source boundary rejects a valid type that would otherwise become a rate above one."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        rf.summarise_fastp(
+            {
+                "summary": {"before_filtering": {"total_reads": 100}, "after_filtering": {}},
+                "filtering_result": {"passed_filter_reads": 101},
+            }
+        )
+
+    assert "passed_filter_rate" in caplog.text
+    assert "passed_filter_reads" in caplog.text
+
+
+def test_summarise_fastp_preserves_zero_counts_as_missing() -> None:
+    """An empty fastp source payload stays distinct from an inconsistent one."""
+    metrics = rf.summarise_fastp(
+        {
+            "summary": {"before_filtering": {"total_reads": 0}, "after_filtering": {}},
+            "filtering_result": {"passed_filter_reads": 0},
+        }
+    )
+
+    assert metrics.passed_filter_rate is None
+
+
+@pytest.mark.parametrize("passed_filter_reads", (1, 80))
+def test_summarise_fastp_rejects_a_positive_passed_count_with_zero_total(
+    passed_filter_reads: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The source boundary rejects a passed count that cannot fit its zero total."""
+    caplog.set_level("ERROR", logger="vntyper.scripts.fastp_cutoffs")
+
+    with pytest.raises(ValueError, match="passed_filter_rate"):
+        rf.summarise_fastp(
+            {
+                "summary": {"before_filtering": {"total_reads": 0}, "after_filtering": {}},
+                "filtering_result": {"passed_filter_reads": passed_filter_reads},
+            }
+        )
+
+    assert "passed_filter_reads" in caplog.text
 
 
 # ---------------------------------------------------------------------------

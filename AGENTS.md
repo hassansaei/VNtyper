@@ -88,6 +88,9 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     discovery and export writers, split out of `cohort_summary.py`.
   - `coverage_presentation.py` — config-driven presentation decisions for coverage QC,
     split out of `screening_summary.py` and `generate_report.py`.
+  - `fastp_cutoffs.py` — validation of configured fastp fractions, their paired numeric
+    decision values and exact percentage labels, and report-display rounding before icon
+    comparison, split out of `report_formatting.py` and `generate_report.py` (#290).
   - `cross_match_presentation.py` — structural cross-match assessability and fixed
     verdict presentation, split out of `generate_report.py`.
   - `advntr_variant_annotations.py` — filesystem-free parsing of repeat-unit identity and
@@ -113,8 +116,9 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   - `pipeline_advntr_preflight.py` — pure, typed planning of optional adVNTR enablement
     and model-reference resolution before the pipeline performs model or alignment I/O.
   `reference_resolution_environment.py` separately owns CRAM-only process-environment
-  pin/restore I/O. All fifteen pure modules are fully annotated and at or near 100% branch
-  coverage. Put new pure logic there rather than back in the file it came from.
+  pin/restore I/O. These focused modules keep pure decisions independently testable;
+  measure their current branch coverage rather than assuming a fixed percentage. Put new
+  pure logic there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
   package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs
@@ -131,7 +135,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
-  The reviewed BLE001 policy is 98 normal/105 including suppressions; its executable
+  The reviewed BLE001 policy is 97 normal/104 including suppressions; its executable
   inventory is `scripts/ble001_policy.json` and the policy tests. Not every broad
   handler is a process boundary, so do not globally select or mechanically narrow it.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
@@ -579,8 +583,10 @@ summary | release-summary | none | always records success, failure, skipped jobs
     four newly-shipped genomes add roughly 2.57 GiB uncompressed.
 11. **The report's presentation logic lives outside `generate_report.py`.**
     `screening_summary.py` owns the screening state and the `report_config.json` rule
-    table; `report_formatting.py` owns the icons, the column projections and the IGV
-    fragment splicing. Put new pure logic there, not back in `generate_report.py`.
+    table; `fastp_cutoffs.py` owns validated fastp decision values, their paired labels
+    and report-display rounding; `report_formatting.py` owns the icons, the column
+    projections and the IGV fragment splicing. Put new pure logic in the focused owner,
+    not back in `generate_report.py`.
     Two rules that are easy to break: emphasis in the report comes from the computed
     state (`screening_state.emphasis`, and `cross_match_is_positive` for the
     cross-match box), never from searching the message text, and the
