@@ -49,6 +49,15 @@ class DisplayCounts:
 
 
 @dataclass(frozen=True)
+class IdentityCounts:
+    """Resolved identity accuracy on rows whose caller-local name matches truth."""
+
+    resolved: int
+    exact: int
+    wrong: int
+
+
+@dataclass(frozen=True)
 class GoldenCorpus:
     """Independently loaded truth, historical projection, and public-row contract."""
 
@@ -57,14 +66,15 @@ class GoldenCorpus:
     expected_by_class: dict[str, ExpectedIdentity]
     expected_by_sample: dict[str, SampleExpectation]
     mutated_keys: frozenset[str]
+    control_keys: frozenset[str]
     mutated_samples: int
     control_samples: int
     total: DisplayCounts
     by_tier: dict[str, DisplayCounts]
     tier_keys: dict[str, frozenset[str]]
     control_findings: int
-    kestrel_positive_keys: frozenset[str]
     dupc_vcf_names: tuple[str, ...]
+    identity_on_truth_exact_names: IdentityCounts
     identity_contract_violations: tuple[str, ...]
 
 
@@ -136,6 +146,10 @@ def assert_independent_import_closure(entrypoint: Path, repository_root: Path) -
                     for alias in node.names
                     if alias.name != "*"
                 )
+            elif isinstance(node, ast.Call):
+                dynamic_module = _literal_dynamic_import(node)
+                if dynamic_module is not None:
+                    modules.append((dynamic_module, 0))
             else:
                 continue
 
@@ -150,6 +164,22 @@ def assert_independent_import_closure(entrypoint: Path, repository_root: Path) -
     if forbidden:
         raise AssertionError("forbidden production import in oracle closure: " + "; ".join(sorted(forbidden)))
     return tuple(sorted(scanned))
+
+
+def _literal_dynamic_import(node: ast.Call) -> str | None:
+    """Return the literal target of a supported dynamic-import spelling."""
+    if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
+        return None
+    if isinstance(node.func, ast.Name) and node.func.id == "__import__":
+        return node.args[0].value
+    if (
+        isinstance(node.func, ast.Attribute)
+        and node.func.attr == "import_module"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "importlib"
+    ):
+        return node.args[0].value
+    return None
 
 
 def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
@@ -191,14 +221,23 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
     tier_counts = {tier: [0, 0, 0] for tier in tier_keys}
     total = [0, 0, 0]
     control_findings = 0
-    kestrel_positive_keys: set[str] = set()
     dupc_vcf_names: list[str] = []
+    identity_counts = [0, 0, 0]
     violations: list[str] = []
 
     for key, expectation in sorted(expected_by_sample.items()):
         experiment, pair_id = key.split("/", maxsplit=1)
         public_rows = _public_rows(advntr, experiment, pair_id, "mutated")
-        violations.extend(_identity_violations(key, "mutated", public_rows))
+        row_violations, row_identity_counts = _identity_observations(
+            key,
+            "mutated",
+            public_rows,
+            expectation.expected,
+        )
+        violations.extend(row_violations)
+        identity_counts[0] += row_identity_counts.resolved
+        identity_counts[1] += row_identity_counts.exact
+        identity_counts[2] += row_identity_counts.wrong
         verdicts = _displayed_verdicts(public_rows)
         if len(verdicts) > 1:
             raise AssertionError(f"conflicting public verdicts for {key}: {sorted(verdicts)}")
@@ -215,9 +254,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
             tier_counts[tier][2] += int(not exact)
             tier_keys[tier].add(key)
 
-        raw_kestrel = _simulation_kestrel_rows(sim, experiment, pair_id, "mutated")
-        if raw_kestrel:
-            kestrel_positive_keys.add(key)
+        _simulation_kestrel_rows(sim, experiment, pair_id, "mutated")
         if expectation.mutation == "dupC":
             for row in public_rows["kestrel"]:
                 name = (row.get("Nomenclature_Kestrel") or "").strip()
@@ -227,7 +264,8 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
     for key in sorted(normal_keys):
         experiment, pair_id = key.split("/", maxsplit=1)
         public_rows = _public_rows(advntr, experiment, pair_id, "normal")
-        violations.extend(_identity_violations(key, "normal", public_rows))
+        row_violations, _ = _identity_observations(key, "normal", public_rows, None)
+        violations.extend(row_violations)
         control_findings += int(bool(_displayed_verdicts(public_rows)))
         _simulation_kestrel_rows(sim, experiment, pair_id, "normal")
 
@@ -237,14 +275,15 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         expected_by_class=expected_by_class,
         expected_by_sample=expected_by_sample,
         mutated_keys=frozenset(expected_by_sample),
+        control_keys=frozenset(normal_keys),
         mutated_samples=len(expected_by_sample),
         control_samples=len(normal_keys),
         total=DisplayCounts(*total),
         by_tier={tier: DisplayCounts(*counts) for tier, counts in tier_counts.items()},
         tier_keys={tier: frozenset(keys) for tier, keys in tier_keys.items()},
         control_findings=control_findings,
-        kestrel_positive_keys=frozenset(kestrel_positive_keys),
         dupc_vcf_names=tuple(dupc_vcf_names),
+        identity_on_truth_exact_names=IdentityCounts(*identity_counts),
         identity_contract_violations=tuple(violations),
     )
 
@@ -399,12 +438,16 @@ def _displayed_verdicts(public_rows: dict[str, tuple[dict[str, str], ...]]) -> s
     return verdicts
 
 
-def _identity_violations(
+def _identity_observations(
     key: str,
     condition: str,
     public_rows: dict[str, tuple[dict[str, str], ...]],
-) -> list[str]:
+    expected: ExpectedIdentity | None,
+) -> tuple[list[str], IdentityCounts]:
     violations: list[str] = []
+    resolved = 0
+    exact_count = 0
+    wrong = 0
     for caller, rows in public_rows.items():
         for index, row in enumerate(rows):
             row_key = f"{key}/{condition}/{caller}[{index}]"
@@ -428,6 +471,19 @@ def _identity_violations(
             elif status in {"unique", "legacy-selected-among-multiple"}:
                 if not identity or representations < 1 or hypotheses < 1:
                     violations.append(f"{row_key}: inconsistent resolved identity quartet")
+                elif expected is not None:
+                    caller_name_column = "Nomenclature_Kestrel" if caller == "kestrel" else "Nomenclature_adVNTR"
+                    caller_name = (row.get(caller_name_column) or "").strip()
+                    if caller_name == expected.name:
+                        exact = identity == expected.identity
+                        resolved += 1
+                        exact_count += int(exact)
+                        wrong += int(not exact)
+                        if not exact:
+                            violations.append(
+                                f"{row_key}: truth-exact caller name {caller_name!r} has identity {identity!r}, "
+                                f"expected {expected.identity!r}"
+                            )
             else:
                 violations.append(f"{row_key}: unknown identity status {status!r}")
-    return violations
+    return violations, IdentityCounts(resolved, exact_count, wrong)

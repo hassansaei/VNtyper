@@ -3,21 +3,41 @@
 from __future__ import annotations
 
 import os
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
+from tests.golden import identity_oracle
 from tests.golden.identity_oracle import (
     IDENTITY_COLUMNS,
     ExpectedIdentity,
+    GoldenCorpus,
     assert_independent_import_closure,
     load_golden_corpus,
 )
+from vntyper.scripts import nomenclature_annotate
+from vntyper.scripts.nomenclature import Nomenclature
+from vntyper.scripts.nomenclature_bam import BamConsensus, BamRescuer
 
 pytestmark = pytest.mark.golden
 
 SIM_ROOT = Path(os.environ["VNTYPER_SIM_ROOT"])
 ADVNTR_ROOT = Path(os.environ["VNTYPER_ADVNTR_ROOT"])
+
+
+@dataclass(frozen=True)
+class UutReplay:
+    """Real reconciliation outputs and directly observed BAM decision counts."""
+
+    corpus: GoldenCorpus
+    eligible: int
+    bam_fetches: int
+    mutated_replays: int
+    control_replays: int
+
 
 EXPECTED_CLASS_IDENTITIES = {
     "delGCCCA": ExpectedIdentity("MUC1-X-60-coding-v1|1|5|GCCCA|-", "1_5delGCCCA"),
@@ -200,107 +220,115 @@ PHASE1_TIER_B_KEYS = frozenset(
     }
 )
 
-PHASE1_BAM_ELIGIBLE_KEYS = frozenset(
-    {
-        "experiment1_dupC/pair_3019",
-        "experiment1_dupC/pair_3060",
-        "experiment2_atypical/pair_4000",
-        "experiment2_atypical/pair_4001",
-        "experiment2_atypical/pair_4002",
-        "experiment2_atypical/pair_4003",
-        "experiment2_atypical/pair_4004",
-        "experiment2_atypical/pair_4006",
-        "experiment2_atypical/pair_4008",
-        "experiment2_atypical/pair_4009",
-        "experiment2_atypical/pair_4010",
-        "experiment2_atypical/pair_4012",
-        "experiment2_atypical/pair_4013",
-        "experiment2_atypical/pair_4014",
-        "experiment2_atypical/pair_4015",
-        "experiment2_atypical/pair_4016",
-        "experiment2_atypical/pair_4017",
-        "experiment2_atypical/pair_4019",
-        "experiment2_atypical/pair_4020",
-        "experiment2_atypical/pair_4021",
-        "experiment2_atypical/pair_4022",
-        "experiment2_atypical/pair_4023",
-        "experiment2_atypical/pair_4024",
-        "experiment2_atypical/pair_4025",
-        "experiment2_atypical/pair_4026",
-        "experiment2_atypical/pair_4027",
-        "experiment2_atypical/pair_4028",
-        "experiment2_atypical/pair_4029",
-        "experiment2_atypical/pair_4030",
-        "experiment2_atypical/pair_4031",
-        "experiment2_atypical/pair_4032",
-        "experiment2_atypical/pair_4033",
-        "experiment2_atypical/pair_4034",
-        "experiment2_atypical/pair_4035",
-        "experiment2_atypical/pair_4036",
-        "experiment2_atypical/pair_4037",
-        "experiment2_atypical/pair_4038",
-        "experiment2_atypical/pair_4039",
-        "experiment2_atypical/pair_4040",
-        "experiment2_atypical/pair_4051",
-        "experiment2_atypical/pair_4052",
-        "experiment2_atypical/pair_4053",
-        "experiment2_atypical/pair_4054",
-        "experiment2_atypical/pair_4055",
-        "experiment2_atypical/pair_4056",
-        "experiment2_atypical/pair_4057",
-        "experiment2_atypical/pair_4058",
-        "experiment2_atypical/pair_4059",
-        "experiment2_atypical/pair_4060",
-        "experiment2_atypical/pair_4061",
-        "experiment2_atypical/pair_4062",
-        "experiment2_atypical/pair_4063",
-        "experiment2_atypical/pair_4064",
-        "experiment2_atypical/pair_4065",
-        "experiment2_atypical/pair_4066",
-        "experiment2_atypical/pair_4067",
-        "experiment2_atypical/pair_4068",
-        "experiment2_atypical/pair_4069",
-        "experiment2_atypical/pair_4070",
-        "experiment2_atypical/pair_4071",
-        "experiment2_atypical/pair_4072",
-        "experiment2_atypical/pair_4073",
-        "experiment2_atypical/pair_4074",
-        "experiment2_atypical/pair_4075",
-        "experiment2_atypical/pair_4077",
-        "experiment2_atypical/pair_4078",
-        "experiment2_atypical/pair_4079",
-        "experiment2_atypical/pair_4081",
-        "experiment2_atypical/pair_4084",
-        "experiment2_atypical/pair_4085",
-        "experiment2_atypical/pair_4086",
-        "experiment2_atypical/pair_4087",
-        "experiment2_atypical/pair_4088",
-        "experiment2_atypical/pair_4089",
-        "experiment2_atypical/pair_4090",
-        "experiment2_atypical/pair_4091",
-        "experiment2_atypical/pair_4093",
-        "experiment2_atypical/pair_4094",
-        "experiment2_atypical/pair_4095",
-        "experiment2_atypical/pair_4096",
-        "experiment2_atypical/pair_4097",
-        "experiment2_atypical/pair_4098",
-        "experiment2_atypical/pair_4099",
-    }
-)
-
 
 @pytest.fixture(scope="module")
-def corpus():
+def corpus() -> GoldenCorpus:
     """Load both owner-supplied roots without a skip fallback."""
     return load_golden_corpus(SIM_ROOT, ADVNTR_ROOT)
 
 
+@pytest.fixture(scope="module")
+def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -> UutReplay:
+    """Run real reconciliation on isolated TSV copies with original BAM inputs."""
+    output_root = tmp_path_factory.mktemp("molecular_identity_replay")
+    eligible = 0
+    bam_fetches = 0
+    count_eligibility_outcome = False
+    original_is_candidate = nomenclature_annotate.is_candidate
+    original_rescue = BamRescuer.rescue
+
+    def counted_is_candidate(call: Nomenclature) -> bool:
+        nonlocal eligible
+        result = original_is_candidate(call)
+        if count_eligibility_outcome:
+            eligible += int(result)
+        return result
+
+    def counted_rescue(self: BamRescuer, contig: str, position: int) -> BamConsensus | None:
+        nonlocal bam_fetches
+        bam_fetches += 1
+        return original_rescue(self, contig, position)
+
+    def probe_candidate(kestrel_path: Path, advntr_path: Path) -> None:
+        """Exercise the production candidate seam even across later I/O early returns."""
+        nonlocal count_eligibility_outcome
+        kestrel = pd.read_csv(kestrel_path, sep="\t", comment="#", dtype=str)
+        advntr = pd.read_csv(advntr_path, sep="\t", dtype=str)
+        supports: dict[str, int | None] = {}
+        kestrel_rows = [row for _, row in kestrel.iterrows() if not nomenclature_annotate._is_negative(row)]
+        vcf_calls = []
+        for row in kestrel_rows:
+            call = nomenclature_annotate._kestrel_row_call(row)
+            if call is None:
+                continue
+            vcf_calls.append(call)
+            depth = nomenclature_annotate._as_int(row.get("Estimated_Depth_AlternateVariant"))
+            existing = supports.get("kestrel_vcf")
+            supports["kestrel_vcf"] = (
+                depth if "kestrel_vcf" not in supports else nomenclature_annotate._lesser(existing, depth)
+            )
+        advntr_keep = [not nomenclature_annotate._is_negative(row) for _, row in advntr.iterrows()]
+        advntr_calls_by_row = nomenclature_annotate._advntr_calls_by_row(advntr, advntr_keep, supports)
+        advntr_calls = [call for calls in advntr_calls_by_row for call in calls]
+        count_eligibility_outcome = True
+        try:
+            nomenclature_annotate._haplotype_calls(
+                kestrel_rows,
+                output_root / "eligibility-probe-without-bam",
+                vcf_calls,
+                advntr_calls,
+                supports,
+            )
+        finally:
+            count_eligibility_outcome = False
+
+    def copy_and_reconcile(key: str, condition: str) -> None:
+        experiment, pair_id = key.split("/", maxsplit=1)
+        source_kestrel = SIM_ROOT / experiment / "vntyper" / pair_id / condition / "kestrel"
+        source_advntr = ADVNTR_ROOT / experiment / pair_id / condition / "advntr"
+        output_sample = output_root / experiment / pair_id / condition
+        source_and_relative_paths = (
+            (source_kestrel / "kestrel_result.tsv", Path("kestrel/kestrel_result.tsv")),
+            (source_advntr / "output_adVNTR_result.tsv", Path("advntr/output_adVNTR_result.tsv")),
+        )
+        for source, relative_path in source_and_relative_paths:
+            destination = output_sample / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+        kestrel_output = output_sample / source_and_relative_paths[0][1]
+        advntr_output = output_sample / source_and_relative_paths[1][1]
+        if condition == "mutated":
+            probe_candidate(kestrel_output, advntr_output)
+        nomenclature_annotate.reconcile_caller_outputs(
+            kestrel_output,
+            advntr_output,
+            source_kestrel,
+        )
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(nomenclature_annotate, "is_candidate", counted_is_candidate)
+        patch.setattr(BamRescuer, "rescue", counted_rescue)
+        for key in sorted(corpus.mutated_keys):
+            copy_and_reconcile(key, "mutated")
+
+    for key in sorted(corpus.control_keys):
+        copy_and_reconcile(key, "normal")
+
+    observed = load_golden_corpus(SIM_ROOT, output_root)
+    return UutReplay(
+        corpus=observed,
+        eligible=eligible,
+        bam_fetches=bam_fetches,
+        mutated_replays=len(corpus.mutated_keys),
+        control_replays=len(corpus.control_keys),
+    )
+
+
 def test_oracle_import_closure_is_independent() -> None:
     """A production helper entering any recursive local import must fail the guard."""
-    scanned = assert_independent_import_closure(Path(__file__), Path(__file__).parents[2])
-    assert Path(__file__).resolve() in scanned
-    assert (Path(__file__).parents[1] / "__init__.py").resolve() in scanned
-    assert (Path(__file__).parent / "identity_oracle.py").resolve() in scanned
+    oracle_path = Path(identity_oracle.__file__)
+    scanned = assert_independent_import_closure(oracle_path, Path(__file__).parents[2])
+    assert oracle_path.resolve() in scanned
 
 
 def test_recursive_guard_rejects_nested_production_import(tmp_path: Path) -> None:
@@ -314,6 +342,22 @@ def test_recursive_guard_rejects_nested_production_import(tmp_path: Path) -> Non
         assert_independent_import_closure(entry, tmp_path)
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import importlib\nvalue = importlib.import_module('vntyper.scripts.nomenclature')\n",
+        "value = __import__('vntyper.scripts.nomenclature')\n",
+    ],
+)
+def test_recursive_guard_rejects_literal_dynamic_production_import(tmp_path: Path, source: str) -> None:
+    """Literal dynamic imports must not bypass the independent-oracle boundary."""
+    entry = tmp_path / "entry.py"
+    entry.write_text(source, encoding="utf-8")
+
+    with pytest.raises(AssertionError, match=r"entry\.py.*vntyper\.scripts\.nomenclature"):
+        assert_independent_import_closure(entry, tmp_path)
+
+
 def test_truth_oracle_derives_every_literal_identity_and_name(corpus) -> None:
     """A coordinate, allele, normalization, or display projection change must fail."""
     assert corpus.expected_by_class == EXPECTED_CLASS_IDENTITIES
@@ -323,48 +367,77 @@ def test_truth_oracle_derives_every_literal_identity_and_name(corpus) -> None:
     }
 
 
-def test_both_roots_and_every_sample_are_loaded(corpus) -> None:
+def test_oracle_rejects_wrong_identity_under_a_truth_exact_caller_name() -> None:
+    """One repeated nonempty identity cannot satisfy independently exact caller rows."""
+    expected = EXPECTED_CLASS_IDENTITIES["delGCCCA"]
+    public_rows = {
+        "kestrel": (
+            {
+                "Nomenclature_Kestrel": expected.name,
+                "Molecular_Identity": EXPECTED_CLASS_IDENTITIES["dupC"].identity,
+                "Molecular_Identity_Status": "unique",
+                "Equivalent_Representation_Count": "1",
+                "Identity_Hypothesis_Count": "1",
+            },
+        ),
+        "advntr": (),
+    }
+
+    violations, counts = identity_oracle._identity_observations("sample", "mutated", public_rows, expected)
+
+    assert counts == identity_oracle.IdentityCounts(resolved=1, exact=0, wrong=1)
+    assert len(violations) == 1
+    assert f"expected {expected.identity!r}" in violations[0]
+
+
+def test_both_roots_and_every_sample_are_loaded(corpus: GoldenCorpus, uut_replay: UutReplay) -> None:
     """A missing root, sample, condition, or caller artifact must fail rather than skip."""
     assert corpus.sim_root == SIM_ROOT.resolve()
     assert corpus.advntr_root == ADVNTR_ROOT.resolve()
     assert corpus.mutated_samples == 200
     assert corpus.control_samples == 200
+    assert uut_replay.corpus.sim_root == SIM_ROOT.resolve()
+    assert uut_replay.mutated_replays == 200
+    assert uut_replay.control_replays == 200
 
 
-def test_historical_phase1_projection_is_literal_per_sample(corpus) -> None:
+def test_historical_phase1_projection_is_literal_per_sample(uut_replay) -> None:
     """Aggregate swaps and disappearance of a lower tier must fail on exact sample keys."""
-    assert corpus.tier_keys == {
+    observed = uut_replay.corpus
+    assert observed.tier_keys == {
         "A": PHASE1_TIER_A_KEYS,
         "B": PHASE1_TIER_B_KEYS,
         "C": frozenset(),
     }
-    assert corpus.total.displayed == 154
-    assert corpus.total.exact == 136
-    assert corpus.total.wrong == 18
-    assert corpus.by_tier["A"].displayed == 53
-    assert corpus.by_tier["A"].exact == 53
-    assert corpus.by_tier["A"].wrong == 0
-    assert corpus.by_tier["B"].displayed == 101
-    assert corpus.by_tier["B"].exact == 83
-    assert corpus.by_tier["B"].wrong == 18
-    assert corpus.by_tier["C"].displayed == 0
-    assert corpus.by_tier["C"].exact == 0
-    assert corpus.by_tier["C"].wrong == 0
-    assert corpus.control_findings == 0
+    assert observed.total.displayed == 154
+    assert observed.total.exact == 136
+    assert observed.total.wrong == 18
+    assert observed.by_tier["A"].displayed == 53
+    assert observed.by_tier["A"].exact == 53
+    assert observed.by_tier["A"].wrong == 0
+    assert observed.by_tier["B"].displayed == 101
+    assert observed.by_tier["B"].exact == 83
+    assert observed.by_tier["B"].wrong == 18
+    assert observed.by_tier["C"].displayed == 0
+    assert observed.by_tier["C"].exact == 0
+    assert observed.by_tier["C"].wrong == 0
+    assert observed.control_findings == 0
 
 
-def test_historical_bam_consultation_and_canonical_dupc_are_literal(corpus) -> None:
+def test_historical_bam_consultation_and_canonical_dupc_are_literal(uut_replay) -> None:
     """Eligibility, fetch cardinality, or canonical dupC naming drift must fail."""
-    assert len(PHASE1_BAM_ELIGIBLE_KEYS) == 83
-    assert corpus.mutated_keys >= PHASE1_BAM_ELIGIBLE_KEYS
-    bam_fetch_keys = PHASE1_BAM_ELIGIBLE_KEYS & corpus.kestrel_positive_keys
-    assert len(bam_fetch_keys) == 68
-    assert corpus.dupc_vcf_names == ("59dupC",) * 96
+    assert uut_replay.eligible == 83
+    assert uut_replay.bam_fetches == 68
+    assert uut_replay.corpus.dupc_vcf_names == ("59dupC",) * 96
 
 
-def test_positive_caller_rows_publish_the_complete_identity_quartet(corpus) -> None:
+def test_positive_caller_rows_publish_the_complete_identity_quartet(uut_replay) -> None:
     """A positive caller row missing any identity field must fail semantically."""
-    assert corpus.identity_contract_violations == (), (
-        f"{len(corpus.identity_contract_violations)} positive caller rows violate the identity quartet "
-        f"{IDENTITY_COLUMNS}: {corpus.identity_contract_violations[:5]}"
+    observed = uut_replay.corpus
+    assert observed.identity_contract_violations == (), (
+        f"{len(observed.identity_contract_violations)} positive caller rows violate the identity quartet "
+        f"{IDENTITY_COLUMNS}: {observed.identity_contract_violations[:5]}"
     )
+    identity_counts = observed.identity_on_truth_exact_names
+    assert identity_counts.wrong == 0
+    assert identity_counts.exact == identity_counts.resolved
