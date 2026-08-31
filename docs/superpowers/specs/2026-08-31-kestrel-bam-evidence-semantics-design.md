@@ -58,6 +58,10 @@ The available 200-sample simulated cohort and matching adVNTR corpus were loaded
 
 Both policies called zero normal controls. The emitted display agreed with the internal selected name for all measured samples.
 
+Both replays are production-shaped. For each sample they read every non-negative Kestrel row and every adVNTR event in file order. `kestrel_vcf` support is the minimum `Estimated_Depth_AlternateVariant` across translated Kestrel rows with the current unknown-propagation rule; `advntr` support is the minimum `NumberOfSupportingReads` across translated adVNTR states. Policy 1 stops there and runs `reconcile(*named_vcf, *advntr_calls, supports=supports)`. Policy 2 uses that same preliminary reconciliation to decide BAM-consultation eligibility. If eligible, one `BamRescuer` is opened and each Kestrel row is rescued at that row's own `Motif_fasta` and 1-based `POS_fasta`, preserving an aligned `None` for rows without a consensus. Every named BAM call contributes its unweighted supporting-haplotype-record count to the minimum `kestrel_bam` support. The final call is `reconcile(*named_vcf, *named_bam, *advntr_calls, supports=supports)`, followed by `refine` once for each named BAM call in row order. The displayed-name predicate is defined in Section 11.4.
+
+The current `_hybrid()` golden helper instead reads one locus from `output.bed`; its `test_the_hybrid_total_does_not_regress` docstring describes the resulting 134-exact approximation. That helper, its docstring, and its floor will be replaced by the production-shaped replay above. The 136-exact requirement does not coexist with the obsolete 134 claim.
+
 The corpus contains 200 Kestrel BAMs and 1,327,794 records with integral `XD`; none was missing or malformed. Observed values ranged from 5 to 8,704, with median 181 and 95th percentile 7,416. These observations establish realistic fixture values, but they do not calibrate a threshold.
 
 These figures are the behavior-preservation oracle for this phase. They were verified from the available data rather than copied from the issue.
@@ -141,7 +145,7 @@ The existing `supports: Mapping[str, int | None]` remains in place to contain sc
 | `kestrel_bam` | resolved haplotype records carrying the selected BAM edit |
 | `advntr` | adVNTR supporting sequencing reads |
 
-The mapping remains heterogeneous and the current minimum comparison remains temporarily in force. That comparison is uncalibrated across unlike units; Phase 1 documents rather than redesigns it. The shared threshold is described as a source-specific evidence-support threshold, never as a read-count threshold.
+The mapping remains heterogeneous and open to future source keys, matching `_is_corroborated`'s current unknown-source behavior. The current minimum comparison remains temporarily in force. That comparison is uncalibrated across unlike units; Phase 1 documents rather than redesigns it. The shared threshold is described as a source-specific evidence-support threshold, never as a read-count threshold.
 
 ## 5. XD validation contract
 
@@ -199,8 +203,9 @@ The closed public flag vocabulary will distinguish evidence units:
 
 - `thin-haplotype-record-support`: Kestrel BAM support is below the unchanged BAM-rescue thinness threshold of 3 records; this is produced by `from_bam` and is not itself a Tier-A blocker;
 - `low-haplotype-record-support`: Kestrel BAM support is below the unchanged Tier-A evidence threshold of 5 records; this is produced by `reconcile` and is a Tier-A blocker;
-- `low-kmer-path-support`: Kestrel VCF alternate-allele k-mer-path depth is below the applicable threshold;
+- `low-kmer-path-support`: Kestrel VCF alternate-allele k-mer-path depth is below the unchanged Tier-A evidence threshold of 5;
 - `low-read-support`: genuine sequencing-read support, currently adVNTR and the legacy scalar `support=` compatibility input, is below the applicable threshold.
+- `low-evidence-support`: a future/unrecognized backing source is below the Tier-A evidence threshold but has no declared unit; this source-neutral fallback preserves the existing flag instead of silently losing the blocker or guessing that its integer counts reads.
 
 The two BAM flags deliberately preserve two existing thresholds that the old `low-read-support` token conflated. `nomenclature_bam.refine` currently uses the `< 3` token as a behavioral guard: a thin BAM consensus cannot settle a caller-disagreement result whose allele is undetermined. That guard will test `thin-haplotype-record-support` after the rename. This consumer is part of decision preservation, not presentation, and receives a direct regression test.
 
@@ -208,7 +213,14 @@ For `supports=`, flag emission retains `reconcile`'s current all-known gate. If 
 
 For the older scalar `support=` argument, the existing `low-read-support` token remains because the argument's established contract calls it read support and carries no source key. No current production path uses that scalar for Kestrel BAM evidence.
 
-`low-read-support` remains recognized and explained in report formatting so archived summaries and true read-count sources retain their contract. It is not globally renamed. The three new tokens are an acknowledged public vocabulary expansion, and current Kestrel-BAM rows replace the old misleading token with one or both truthful BAM tokens according to the unchanged producer thresholds. This is an intentional terminology/schema correction; it is not a confidence or naming decision change.
+`low-read-support` remains recognized and explained in report formatting so archived summaries and true read-count sources retain their contract. It is not globally renamed. The four new tokens are an acknowledged public vocabulary expansion, and current Kestrel-BAM rows replace the old misleading token with one or both truthful BAM tokens according to the unchanged producer thresholds. This is an intentional terminology/schema correction; it is not a confidence or naming decision change.
+
+The retained legacy token will use these exact source-aware report explanations rather than repeating the old false universal-read claim:
+
+- flag meaning: “Low source support under the emitting version's rule. Current adVNTR or legacy scalar evidence counts sequencing reads; pre-Phase-1 Kestrel BAM rows used this token for resolved haplotype-record support.”
+- Tier-A reason: “a retained low-read-support token records support below the emitting version's applicable rule; older Kestrel BAM rows may use it for legacy haplotype-record thinness rather than a sequencing-read count”.
+
+This is intentionally explicit about the historical ambiguity: older Kestrel BAM data used one token for both the `< 3` rescue-thinness producer and the `< 5` Tier-A producer, so archived rows cannot be assigned a single threshold from the token alone.
 
 ### 7.2 Config compatibility
 
@@ -222,15 +234,17 @@ The old `bam_thin_support` key remains accepted as a compatibility fallback for 
 
 `min_support_for_high_confidence` remains the stable config key to avoid a broader configuration migration. Its comment and code documentation will explicitly state that the value is applied to each source in that source's own evidence unit; it is not a universal read-count threshold.
 
+The module constant becomes `THIN_HAPLOTYPE_RECORD_SUPPORT`; production and repository tests use that canonical name. The old `THIN_SUPPORT` module-global spelling is not a documented/exported interface and is removed rather than retained as another ambiguous production accessor.
+
 ### 7.3 Python compatibility
 
-The source key `kestrel_bam`, caller map, nomenclature column names, TSV/JSON shapes, and rendered allele syntax remain unchanged. Read-only `BamConsensus` aliases cover common attribute access. The new canonical constructor field names are an intentional internal API correction and will be listed in the changelog.
+The source key `kestrel_bam`, caller map, nomenclature column names, TSV/JSON shapes, and rendered allele syntax remain unchanged. Read-only `BamConsensus` aliases cover compatibility attribute access, but production call sites in `nomenclature_annotate.py` and the golden replay move from `.support` to `.supporting_haplotype_records`. The new canonical constructor field names are an intentional internal API correction and will be listed in the changelog.
 
 ## 8. Focused module boundaries
 
 Two touched production modules already exceed the repository's approximate 650-line limit, so the pure part under change will be extracted rather than growing them:
 
-1. `vntyper/scripts/nomenclature_evidence.py` will own evidence-source unit constants and the pure mapping from a low backing source to its low-support flag. `vntyper/scripts/nomenclature.py` will re-export every authoritative `FLAG_*` constant, including all three new tokens, and will retain `reconcile`; its arithmetic and winner/tier conditions remain unchanged. The closed-vocabulary unit guard will inspect the authoritative evidence module and assert that the re-exported vocabulary is identical, so declaring a flag only in the extracted module cannot evade report explanations.
+1. `vntyper/scripts/nomenclature_evidence.py` will own evidence-source unit constants and the pure mapping from a low backing source to its low-support flag, including the `low-evidence-support` fallback for unrecognized sources. `vntyper/scripts/nomenclature.py` will re-export every `FLAG_*` constant declared by the evidence module, with the same value, and will retain `reconcile`; its arithmetic and winner/tier conditions remain unchanged. The closed-vocabulary unit guard will assert this containment relationship, then the existing meanings-coverage guard over `vars(nomenclature)` closes the loop. Constants that remain owned only by `nomenclature.py` do not have to appear in the smaller evidence module.
 2. `vntyper/scripts/nomenclature_presentation.py` will own the nomenclature tier wording, flag meanings, Tier-A blocker wording, and the compact Kestrel BAM semantics note. `vntyper/scripts/report_formatting.py` will import/re-export these values so existing imports remain valid.
 
 The extraction is limited to the semantics touched here. It will not move unrelated nomenclature translation, report table formatting, or I/O.
@@ -258,7 +272,7 @@ The Kestrel table's `Estimated_Depth_*` help text will agree with the existing s
 
 The embedded IGV panel displays this same Kestrel `output.bam`. Its accessible `aria-label` and any sibling panel prose will say resolved haplotype-record alignments, not read alignments. The visual track behavior does not change.
 
-The cohort HTML tables also carry `Nomenclature_Flags`. The cohort context will reuse the same dynamic nomenclature legend for the tokens present in its Kestrel/adVNTR frames and will render the BAM semantics paragraph when either BAM-specific token is present. CSV and Excel exports keep the stable `Nomenclature_Flags` column and token values without adding prose rows or changing schemas; the flag vocabulary is defined in the published nomenclature/output documentation and the cohort HTML artifact.
+The cohort HTML tables also carry `Nomenclature_Flags`. `generate_cohort_summary_report` will add context keys named `nomenclature_legend` (the existing helper evaluated over the unformatted Kestrel/adVNTR frames) and `show_kestrel_bam_semantics` (true when either BAM-specific token occurs). `cohort_summary_template.html` will insert an ordinary autoescaped reading-key block immediately after the adVNTR results table and before the summary plots/statistics; no new value uses `safe`. The block defines every present token and conditionally renders the same BAM semantics paragraph. CSV and Excel exports keep the stable `Nomenclature_Flags` column name, ordering, and schema without prose rows; token values change exactly as Section 7.1 describes. The vocabulary is defined in the published nomenclature/output documentation and the cohort HTML artifact.
 
 All TSV, spreadsheet, and summary fields keep their names. Only the truthful source-specific nomenclature flag tokens can change as described in Section 7.
 
@@ -305,8 +319,8 @@ Each invariant test is chosen to catch a realistic regression:
 - altering XD on a BAM-rescue candidate cannot change BAM-consultation eligibility (`is_candidate`), `refine`, or reconciliation output;
 - a record with invalid/missing XD still votes, catching accidental evidence filtering;
 - a caller-disagreement result with no allele remains undetermined when the only BAM name has one or two supporting haplotype records, catching any loss of `refine`'s thin-consensus veto during retokenization;
-- source-specific low-support tests prove BAM counts cannot emit `low-read-support`, adVNTR reads still can, Kestrel VCF depth uses its k-mer-path token, dissenting/non-backing sources cannot donate flags, and multiple low backing units are all named truthfully;
-- `{kestrel_vcf: None, advntr: 2}` and the corresponding source permutations emit no low-support flag, preserving the all-known gate;
+- source-specific low-support tests prove BAM counts cannot emit `low-read-support`, adVNTR reads still can, Kestrel VCF depth uses its k-mer-path token, an unrecognized source uses `low-evidence-support`, dissenting/non-backing sources cannot donate flags, and multiple low backing units are all named truthfully;
+- an agreement in which both `kestrel_vcf` and `advntr` back the selected same name but their supports are `{kestrel_vcf: None, advntr: 2}` (and the source-order permutation) emits no low-support token of any kind and remains Tier B, preserving the all-known gate; a paired positive control gives both backing sources known values with one below 5 and requires the corresponding unit-specific token;
 - the `< 3` thin-BAM token and `< 5` Tier-A low-BAM token are tested independently, including a four-record BAM that is not thin but is below the Tier-A evidence threshold;
 - all currently modified functions receive direct regression coverage.
 
@@ -321,6 +335,7 @@ Unit tests will render the real report context/template and assert the exact vis
 - every authoritative `FLAG_*` token is re-exported through `nomenclature` and has a non-empty meaning;
 - only low-support tokens emitted by `reconcile` have Tier-A blocker explanations; `thin-haplotype-record-support` has none and cannot produce a false Tier-A reason;
 - direct assertions over the flag-meaning table, Tier-A blocker table, and Kestrel column-help entries reject read-count language on Kestrel evidence even when a fixture would not render that entry;
+- a targeted source-text/identifier contract rejects the old Kestrel-BAM private names (`_row_read_call`, `_read_calls`), read-named rescue locals, and tie-log wording while allowing legitimate file-reading and adVNTR/input-read terminology;
 - the real HTML fixtures carry each new token, so the dynamic legend path is non-vacuous;
 - the IGV `aria-label` describes resolved haplotype-record alignments, not read alignments;
 - the cohort HTML explains every new token it displays, while cohort CSV/Excel schemas remain unchanged;
@@ -333,7 +348,7 @@ Because browser-visible report text changes, `make test-browser` is required in 
 
 For this oracle, a **displayed name** means `call.name is not None` and `render(call) == call.name`: the emitted cell contains the selected positional allele name rather than an `allele undetermined` rendering. An exact displayed name equals that sample's truth name; a wrong displayed name is any displayed name that does not. The existing 178 Kestrel VCF calls count is a separate record/caller coverage measure and is not the denominator for these per-sample reconciled display metrics.
 
-`tests/golden/test_nomenclature_golden.py` will compute displayed outcomes for both policies:
+`tests/golden/test_nomenclature_golden.py` will replace its single-`output.bed` `_hybrid()` approximation and compute displayed outcomes for both policies using the exact per-row replay defined in Section 2.2:
 
 1. no BAM rescue;
 2. current unweighted BAM record voting.
@@ -351,11 +366,13 @@ For each policy it will assert:
 
 The oracle will report missing external roots as skips, but verification will treat those skips as unavailable evidence rather than success. The final PR record will distinguish unit-gate completion from external benchmark validation.
 
+In the current verification environment the corpus is reachable through `VNTYPER_SIM_ROOT=/home/bernt-popp/development/vntyper-analyses/results/simulation` and `VNTYPER_ADVNTR_ROOT=/home/bernt-popp/development/vntyper-bench-266-267/advntr`. The final golden command must show 200 mutated samples, 200 normal controls, zero skips, and the exact metric table; a separate XD survey over the same 200 BAMs must show the record count and range stated in Section 2.2.
+
 ## 12. Documentation and changelog
 
 The implementation will update all Kestrel-BAM-specific terminology found in:
 
-- code docstrings and comments in the BAM, annotation, reconciliation, and presentation flow;
+- code identifiers, local variables, log strings, docstrings, and comments in the BAM, annotation, reconciliation, and presentation flow; specifically `_row_read_call` becomes `_row_haplotype_call`, `_read_calls` becomes `_haplotype_calls`, fetched `reads`/`read` locals become `records`/`record`, and the tie-abstention log reports haplotype records;
 - `vntyper/scripts/nomenclature_config.json` comments and the BAM threshold key;
 - the HTML nomenclature reading key and report column help;
 - `docs/pipeline/nomenclature.md`;
@@ -365,15 +382,23 @@ The implementation will update all Kestrel-BAM-specific terminology found in:
 - `docs/getting-started/quickstart.md` where `output.bam` is described as reads/alignments;
 - `docs/pipeline/kestrel.md` and `docs/pipeline/scoring-and-confidence.md` only where consistency requires it;
 - `vntyper/scripts/README.md` and Kestrel-BAM-specific test module/fixture docstrings;
+- `tests/unit/test_issue_233_documentation_contract.py`, whose module docstring currently says no published `docs/superpowers` page exists;
 - the Unreleased section of `docs/about/changelog.md`, including the public flag/config compatibility notes.
 
 Released changelog sections will not be rewritten. The Unreleased entry will explicitly correct the current artifact terminology and, where useful, point back to the older release text it supersedes. Terminology-only consistency edits in `docs/pipeline/scoring-and-confidence.md` may clarify k-mer-path depth, but no equation, threshold narrative, calibration recommendation, or decision is changed.
 
-The user-requested specification and plan pages under `docs/superpowers/` conflict with the repository's ordinary rule that planning artifacts live under `.planning/`. The committed specification already makes `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope` fail at the branch tip because that test unconditionally forbids `docs/superpowers`. The direct task requirement controls for these two files only. That test will replace its blanket prohibition with an exact allowlist for this specification and its matching implementation plan, assert that both are present in `mkdocs.yml`, and continue rejecting every other planning artifact under published `docs/`. `AGENTS.md` and the planning-artifact policy comment at the top of `mkdocs.yml` will be updated in the same task so prose and executable policy agree. This does not reopen `docs/` as a general planning workspace.
+The user-requested specification and plan pages under `docs/superpowers/` conflict with the repository's ordinary rule that planning artifacts live under `.planning/`. The committed specification already makes `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope` fail at the branch tip because that test unconditionally forbids `docs/superpowers`. The direct task requirement controls for exactly these two paths:
+
+- `docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md`, nav title `Kestrel BAM Evidence Semantics Design`;
+- `docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md`, nav title `Kestrel BAM Evidence Semantics Plan`.
+
+The coverage-gate test will replace its blanket prohibition with this exact allowlist, assert that both exact paths are present in `mkdocs.yml`, and continue rejecting every other planning artifact under published `docs/`. `AGENTS.md`, `tests/unit/test_issue_233_documentation_contract.py`, and the planning-artifact policy comment at the top of `mkdocs.yml` will be updated in the same task so prose and executable policy agree. This does not reopen `docs/` as a general planning workspace.
 
 Because the MkDocs macros plugin evaluates every published page as Jinja, both required pages must avoid raw Jinja opening delimiters (double-left-brace expressions, percent-brace statements, and hash-brace comments) unless enclosed in an explicit raw block. A dedicated source scan and strict docs build will verify both pages before completion; no plan example may be silently interpolated or parsed as a template comment.
 
 Legitimate read language for input BAM/CRAM/FASTQ processing, adVNTR, SHARK, and sequencing-read recovery is out of scope and remains unchanged.
+
+Root `SPEC.md` was reviewed because it names `output.bam`; its statement only says the artifact is regenerated after a Kestrel rerun and assigns no read/haplotype semantics, so it deliberately remains unchanged.
 
 ## 13. Explicit non-goals
 
@@ -422,10 +447,28 @@ A fresh restricted Claude Code review verified `canonicalModel: claude-opus-5` a
 | I2 | Important | Requires the full authoritative flag vocabulary to remain re-exported and guarded across both modules. |
 | I3 | Important | Adds the IGV accessible label and sibling panel prose to the report surfaces/tests. |
 | I4 | Important | Adds a dynamic cohort HTML legend and explicitly preserves CSV/Excel schemas with published definitions. |
-| I5 | Important | Makes neither config key a hard `KeyError` and specifies all compatibility cases/tests. |
+| I5 | Important | Makes neither config key individually mandatory while preserving `KeyError` when both are absent, and specifies all compatibility cases/tests. |
 | I6 | Important | Adds the MkDocs macros delimiter constraint and verification scan for both published pages. |
 | I7 | Important | Defines displayed/exact/wrong names as explicit predicates over `call.name` and `render`. |
 | I8 | Important | Specifies literal template markup, exact normalized text, unconditional sample-report placement, and cohort trigger. |
 | I9 | Important | Adds direct vocabulary-table assertions and non-vacuous fixtures in addition to rendered-HTML checks. |
 | M1–M4 | Minor | Excludes XD from equality, names parser exceptions, covers unchanged counts, and makes the new tuple keyword-only. |
 | M5–M6 | Minor | Disambiguates both candidate-selection concepts and adds the omitted CLI/README/test-docstring surfaces. |
+
+## 16. First scoped re-review disposition
+
+A second fresh restricted review again verified `canonicalModel: claude-opus-5`. It confirmed that C1–C3 and I1–I9 were resolved, but returned `FAIL / BLOCKED` for five remaining Important ambiguities plus six Minor findings. This revision resolves them as follows and requires another fresh scoped re-review:
+
+| ID | Severity | Disposition in this revision |
+| --- | --- | --- |
+| F1 | Important | Defines both production-shaped replay policies, per-row locus/order/support flow, and replacement of the obsolete single-`output.bed` 134-exact helper. |
+| F2 | Important | Names the exact required plan path and MkDocs navigation title. |
+| F3 | Important | Adds private identifiers, rescue locals, and tie-log wording to the production terminology scope plus a targeted source contract. |
+| F4 | Important | Requires both unknown/low sources to back the selected same name and adds a fully known positive control. |
+| F5 | Important | Adds the truthful source-neutral `low-evidence-support` fallback and its behavior test for unrecognized sources. |
+| F6 | Minor | Clarifies that export schemas stay stable while token values change under Section 7.1. |
+| F7 | Minor | Corrects the first-review I5 disposition to preserve `KeyError` when both keys are absent. |
+| F8 | Minor | Defines evidence-module-to-nomenclature flag containment rather than impossible whole-module equality. |
+| F9 | Minor | Gives exact source-aware legacy-token meaning and Tier-A-reason text, including historical threshold ambiguity. |
+| F10 | Minor | Names cohort context keys, insertion point, and ordinary autoescaping. |
+| F11 | Minor | Adds the stale documentation-contract docstring and explicitly records why root `SPEC.md` needs no semantic edit. |
