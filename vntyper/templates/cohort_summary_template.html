@@ -151,6 +151,26 @@
         rows and are counted as Unestablished: {{ advntr_missing | join(", ") }}.</p>
     {% endif %}
 
+    {% if nomenclature_legend %}
+    <h2>Reading key</h2>
+    <div class="reading-key">
+      <p>How to read the coded values in the tables above</p>
+      <dl>
+        {% for entry in nomenclature_legend %}
+          <dt>{{ entry.term }}{% if entry.label %}<span>{{ entry.label }}</span>{% endif %}</dt>
+          <dd>{{ entry.meaning }}</dd>
+        {% endfor %}
+      </dl>
+      {% if show_kestrel_bam_semantics %}
+      <p class="kestrel-bam-semantics">
+        Kestrel <code>output.bam</code> contains resolved haplotype records, not sequencing reads.
+        Its record counts are haplotype-record support; <code>XD</code> is minimum k-mer depth and
+        does not weight votes or alter names or tiers.
+      </p>
+      {% endif %}
+    </div>
+    {% endif %}
+
     {% if additional_stats %}
     <h2>Additional Statistics</h2>
     <div class="table-container">

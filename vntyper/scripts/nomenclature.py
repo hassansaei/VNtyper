@@ -33,6 +33,14 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
+from vntyper.scripts.nomenclature_evidence import (
+    FLAG_LOW_EVIDENCE_SUPPORT,
+    FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+    FLAG_LOW_KMER_PATH_SUPPORT,
+    FLAG_LOW_READ_SUPPORT,
+    FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
+    low_support_flag_for_source,
+)
 from vntyper.scripts.utils import load_config
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -40,7 +48,23 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = [
     "CANONICAL_UNIT",
+    "CALLER_OF",
+    "FLAG_ALLELE_UNREPRESENTABLE",
+    "FLAG_CALLER_DISAGREEMENT",
+    "FLAG_KNOWN_VARIANT",
+    "FLAG_LENGTH_TRUNCATED",
+    "FLAG_LOW_EVIDENCE_SUPPORT",
+    "FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT",
+    "FLAG_LOW_KMER_PATH_SUPPORT",
+    "FLAG_LOW_READ_SUPPORT",
+    "FLAG_MOTIF_CONTEXT_DIVERGES",
+    "FLAG_POSITION_AMBIGUOUS",
+    "FLAG_REPRESENTATION_ONLY",
+    "FLAG_SEQUENCE_UNDETERMINED",
+    "FLAG_SPANS_UNIT_JUNCTION",
+    "FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT",
     "MAPPABLE_RUS",
+    "MIN_SUPPORT_FOR_TIER_A",
     "MOTIFS",
     "pair_sequence",
     "UNIT_LENGTH",
@@ -117,11 +141,10 @@ MAPPABLE_RUS: dict[int, str] = {
 #: Rotation offset shared by every mappable repeat unit.
 _RU_ROTATION: int = nomenclature_config["advntr"]["rotation_offset"]
 
-#: Reads supporting a call below which the top confidence is withheld.
+#: Source-specific evidence support below which the top confidence is withheld.
 #:
-#: The benchmark's ``output.bam`` splits reads across many pair records, so per-locus
-#: support is often 1-3 even where ``Estimated_Depth_AlternateVariant`` aggregates to
-#: tens; a name is only as good as the reads under it.
+#: Each source retains its own evidence unit: Kestrel VCF k-mer-path depth,
+#: Kestrel BAM resolved haplotype records, or adVNTR sequencing reads.
 MIN_SUPPORT_FOR_TIER_A: int = nomenclature_config["thresholds"]["min_support_for_high_confidence"]
 
 #: Evidence source -> the caller that produced it.
@@ -150,7 +173,6 @@ FLAG_POSITION_AMBIGUOUS = "position-ambiguous"
 FLAG_SPANS_UNIT_JUNCTION = "spans-unit-junction"
 FLAG_MOTIF_CONTEXT_DIVERGES = "motif-context-diverges"
 FLAG_ALLELE_UNREPRESENTABLE = "allele-unrepresentable-in-vcf"
-FLAG_LOW_READ_SUPPORT = "low-read-support"
 FLAG_CALLER_DISAGREEMENT = "caller-disagreement"
 FLAG_LENGTH_TRUNCATED = "length-truncated"
 FLAG_SEQUENCE_UNDETERMINED = "sequence-undetermined"
@@ -578,9 +600,9 @@ def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ..
 def _is_corroborated(sources: set[str]) -> bool:
     """Do these sources amount to independent corroboration?
 
-    The test is on *callers*, not sources: ``kestrel_vcf`` and ``kestrel_bam`` are one
-    caller read twice, and counting them as two would make Kestrel agreeing with its
-    own alignment look like the two independent sources tier A requires.
+    The test is on *callers*, not sources: ``kestrel_vcf`` and ``kestrel_bam`` are two
+    outputs from one caller, and counting them as two would make Kestrel agreeing with
+    its own alignment look like the two independent sources tier A requires.
 
     Counting callers subsumes counting sources -- the callers are the image of the
     sources under a map, so there can never be more of them -- which is why there is
@@ -617,12 +639,14 @@ def reconcile(
 
     Args:
         *calls: Translations of the same locus from different sources.
-        support: Reads supporting the call, when known. ``None`` means unknown, which
-            is not the same as sufficient. Ignored when ``supports`` is given.
-        supports: Reads per source, e.g. ``{"advntr": 24}``. Preferred: it binds the
-            depth to the evidence it came from, so an unrelated well-covered
-            observation cannot lend its depth to a thin agreement. The agreement is
-            taken to be as strong as its weakest contributing source.
+        support: Legacy sequencing-read support for the call, when known. ``None``
+            means unknown, which is not the same as sufficient. Ignored when
+            ``supports`` is given.
+        supports: Evidence support per source in that source's own unit, e.g.
+            ``{"advntr": 24}`` sequencing reads. Preferred: it binds support to the
+            evidence it came from, so an unrelated well-supported observation cannot
+            lend support to a thin agreement. The agreement is taken to be as strong
+            as its weakest contributing source.
 
     Returns:
         Nomenclature: The reconciled call. Tier C when nothing was supplied or the
@@ -661,8 +685,9 @@ def reconcile(
 
     # An allele two independent callers name outvotes one that only a single caller
     # does. Measured on the benchmark this is what recovers the `insG` families:
-    # Kestrel's VCF places them one base 3' of truth, while adVNTR and the reads
-    # independently agree on the right position (129 -> 135 of 200, no name lost).
+    # Kestrel's VCF places them one base 3' of truth, while adVNTR and Kestrel's
+    # resolved haplotype records agree on the right position (129 -> 135 of 200,
+    # no name lost).
     #
     # Only an unambiguous majority decides. Two corroborated alleles are a genuine
     # conflict rather than a vote to settle, and zero leaves the existing order
@@ -681,19 +706,24 @@ def reconcile(
     agree = _is_corroborated(backing_sources)
 
     # Support must belong to the agreeing evidence. A sample-wide maximum would let a
-    # well-covered but unrelated observation lend its depth to a 1-read agreement.
+    # well-covered but unrelated observation lend its depth to a thin agreement.
     effective_support = support
     if supports is not None:
         relevant = [supports.get(source) for source in backing_sources]
         # Unknown is not sufficient. Dropping the `None`s and taking the minimum of
         # what remained let one caller's depth stand in for the other's missing depth,
         # so an agreement with a blank or non-numeric depth column reached tier A on
-        # one source's reads -- exactly the "two independent sources" claim the tier
+        # one source's support -- exactly the "two independent sources" claim the tier
         # is supposed to guarantee. One unknown makes the whole agreement unknown.
         known = [value for value in relevant if value is not None]
         effective_support = None if len(known) != len(relevant) or not known else min(known)
 
-    if effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
+        if effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
+            for source in backing_sources:
+                source_support = supports.get(source)
+                if source_support is not None and source_support < MIN_SUPPORT_FOR_TIER_A:
+                    flags.add(low_support_flag_for_source(source))
+    elif effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
         flags.add(FLAG_LOW_READ_SUPPORT)
 
     # Known variants are used to *check* a name, never to make one. Matching the
@@ -1046,7 +1076,7 @@ def name_coding_pair_edit(
     """Name an edit already expressed in coding-frame pair coordinates.
 
     Shared by the VCF and BAM paths so the two cannot drift: a name recovered from
-    the reads must be produced by exactly the machinery that names a VCF record,
+    resolved haplotype records must be produced by exactly the machinery that names a VCF record,
     or the two would disagree for reasons that have nothing to do with the evidence.
 
     Args:

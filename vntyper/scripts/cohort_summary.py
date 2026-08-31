@@ -54,8 +54,13 @@ from vntyper.scripts.cohort_tables import (
     kestrel_table_html,
     stats_table_html,
 )
+from vntyper.scripts.nomenclature import (
+    FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+    FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
+)
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_assets import template_search_paths
+from vntyper.scripts.report_formatting import nomenclature_legend
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +227,8 @@ def generate_cohort_summary_report(
     # tables state that per column rather than per table; see cohort_tables.
     kestrel_html = kestrel_table_html(kestrel_df)
     advntr_html = advntr_table_html(advntr_df)
+    legend = nomenclature_legend(kestrel_df, advntr_df)
+    bam_evidence_flags = {FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT, FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT}
 
     template_dir = config.get("paths", {}).get("template_dir")
     # Autoescaping, to parity with the per-sample report (AGENTS.md trap 11): anything
@@ -247,6 +254,8 @@ def generate_cohort_summary_report(
         "plotly_library": get_plotlyjs() if (kestrel_plot_html or advntr_plot_html) else "",
         "kestrel_missing": samples_without_rows(kestrel_df, sample_names),
         "advntr_missing": samples_without_rows(advntr_df, sample_names),
+        "nomenclature_legend": legend,
+        "show_kestrel_bam_semantics": any(entry["term"] in bam_evidence_flags for entry in legend),
         "additional_stats": additional_stats_html,
     }
 

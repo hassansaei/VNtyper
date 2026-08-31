@@ -1,10 +1,11 @@
-"""Recover MUC1 alleles the Kestrel VCF cannot represent, from the reads.
+"""Recover MUC1 alleles the Kestrel VCF cannot represent, from resolved haplotypes.
 
 Kestrel's pinned jar (1.0.1) emits only 1-vs-1, 1-vs-N and N-vs-1 records -- its
 ``VariantType`` has SNP, INSERTION and DELETION and nothing else -- so a delins is
 unrepresentable in its VCF. ``output.bam`` is already produced (it is the report's
-IGV track) and keeps the reads aligned to the 120 bp pair reference with full
-``=``/``X``/``I``/``D`` CIGARs. A ``1X1I`` block **is** a delins.
+IGV track) and keeps resolved haplotype records aligned to the 120 bp pair
+reference with full ``=``/``X``/``I``/``D`` CIGARs. A ``1X1I`` block **is** a
+delins.
 
 Kept separate from :mod:`vntyper.scripts.nomenclature` so the translator stays pure
 and free of pysam.
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,14 +30,15 @@ import pysam
 from vntyper.scripts.nomenclature import (
     FLAG_ALLELE_UNREPRESENTABLE,
     FLAG_CALLER_DISAGREEMENT,
-    FLAG_LOW_READ_SUPPORT,
     FLAG_SEQUENCE_UNDETERMINED,
+    FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
     Nomenclature,
     name_coding_pair_edit,
     nomenclature_config,
     pair_sequence,
     revcomp,
 )
+from vntyper.scripts.nomenclature_evidence import resolve_bam_thin_haplotype_record_support
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Iterable
@@ -48,9 +50,11 @@ __all__ = [
     "BamConsensus",
     "BamRescuer",
     "Edit",
+    "THIN_HAPLOTYPE_RECORD_SUPPORT",
     "from_bam",
     "is_candidate",
     "merge_edits",
+    "minimum_kmer_depth",
     "refine",
     "walk_cigar",
 ]
@@ -58,11 +62,12 @@ __all__ = [
 #: Window either side of the called locus, in bases. Configured, not hard-coded.
 DEFAULT_FLANK: int = nomenclature_config["thresholds"]["bam_flank"]
 
-#: Reads below which a consensus is reported as thin. `output.bam` splits reads
-#: across many pair records while `Estimated_Depth_AlternateVariant` aggregates
-#: them, so a locus often carries only 1-3 reads; a consensus is only as good as
-#: the reads under it.
-THIN_SUPPORT: int = nomenclature_config["thresholds"]["bam_thin_support"]
+#: Resolved haplotype records below which a consensus is reported as thin.
+THIN_HAPLOTYPE_RECORD_SUPPORT: int = resolve_bam_thin_haplotype_record_support(nomenclature_config["thresholds"])
+
+#: Maximum XD emitted by the pinned Java implementation's signed integer field.
+_MAXIMUM_MINIMUM_KMER_DEPTH = 2_147_483_647
+_BAM_INTEGER_TAG_TYPES = frozenset({"c", "C", "s", "S", "i", "I"})
 
 # CIGAR operation codes, as pysam returns them.
 _OP_MATCH = 0
@@ -85,8 +90,8 @@ class Edit:
         kind: ``substitution`` | ``insertion`` | ``deletion`` | ``delins``.
         start: 0-based reference position the block starts at.
         ref_span: Reference bases consumed.
-        inserted: Read bases inserted.
-        bases: The inserted read bases. Empty when the read sequence was not
+        inserted: Haplotype-record bases inserted.
+        bases: The inserted haplotype-record bases. Empty when the sequence was not
             supplied -- the *count* is enough to vote, but naming the allele needs
             the sequence, which is the whole reason the BAM is consulted at all.
     """
@@ -111,34 +116,93 @@ class BamConsensus:
         kind: The edit class.
         start: 0-based reference position.
         ref_span: Reference bases consumed.
-        inserted: Read bases inserted.
-        bases: The inserted read bases, on the genomic plus strand.
-        support: Reads carrying this exact edit.
-        total: Reads examined at the locus.
-        n_distinct: Distinct length-changing edits seen.
+        inserted: Haplotype-record bases inserted.
+        supporting_haplotype_records: Resolved haplotype records carrying this
+            exact edit.
+        fetched_haplotype_records: Resolved haplotype records examined at the locus.
+        distinct_edit_count: Distinct length-changing edits seen.
+        bases: Inserted bases on the genomic plus strand.
+        supporting_record_minimum_kmer_depths: Optional XD minimum k-mer depth for
+            each supporting haplotype record, in encounter order. Observational only.
     """
 
     kind: str
     start: int
     ref_span: int
     inserted: int
-    support: int
-    total: int
-    n_distinct: int
+    supporting_haplotype_records: int
+    fetched_haplotype_records: int
+    distinct_edit_count: int
     bases: str = ""
+    supporting_record_minimum_kmer_depths: tuple[int | None, ...] = field(kw_only=True, compare=False)
+
+    @property
+    def support(self) -> int:
+        """Return the winning support through the pre-Phase-1 attribute name."""
+        return self.supporting_haplotype_records
+
+    @property
+    def total(self) -> int:
+        """Return fetched record count through the pre-Phase-1 attribute name."""
+        return self.fetched_haplotype_records
+
+    @property
+    def n_distinct(self) -> int:
+        """Return distinct edit count through the pre-Phase-1 attribute name."""
+        return self.distinct_edit_count
 
     @property
     def is_thin(self) -> bool:
-        """Whether the consensus rests on too few reads to stand on its own."""
-        return self.support < THIN_SUPPORT
+        """Whether the consensus rests on too few haplotype records to stand alone."""
+        return self.supporting_haplotype_records < THIN_HAPLOTYPE_RECORD_SUPPORT
+
+
+def minimum_kmer_depth(record: pysam.AlignedSegment) -> int | None:
+    """Parse optional XD minimum k-mer depth from a resolved haplotype record.
+
+    XD is observational evidence only. Missing or invalid XD does not invalidate
+    the record and cannot affect its vote.
+
+    Args:
+        record: One resolved haplotype record from Kestrel ``output.bam``.
+
+    Returns:
+        int | None: The validated signed Java integer, including zero, or ``None``
+        when XD is absent or invalid.
+    """
+    try:
+        value, value_type = record.get_tag("XD", with_value_type=True)
+    except KeyError:
+        return None
+    except (TypeError, ValueError, OverflowError) as error:
+        logger.debug("Invalid XD minimum k-mer depth on haplotype record %s: %s", record.query_name, error)
+        return None
+
+    if type(value) is not int or value_type not in _BAM_INTEGER_TAG_TYPES:
+        logger.debug(
+            "Invalid XD minimum k-mer depth on haplotype record %s: value=%r type=%r",
+            record.query_name,
+            value,
+            value_type,
+        )
+        return None
+    if value < 0 or value > _MAXIMUM_MINIMUM_KMER_DEPTH:
+        logger.debug(
+            "Invalid XD minimum k-mer depth on haplotype record %s: value=%r outside 0..%d",
+            record.query_name,
+            value,
+            _MAXIMUM_MINIMUM_KMER_DEPTH,
+        )
+        return None
+    return value
 
 
 def from_bam(motifs: str, consensus: BamConsensus) -> Nomenclature | None:
-    """Name the allele a read consensus describes.
+    """Name the allele a resolved haplotype-record consensus describes.
 
     The consensus arrives in plus-strand pair coordinates, exactly like a Kestrel
     VCF record, and is handed to the same naming machinery -- a name recovered from
-    the reads must be produced the way a name from the VCF is, or the two would
+    the BAM must be produced the way a name from the VCF is, or the two would
     disagree for reasons that have nothing to do with the evidence.
 
     Args:
@@ -147,8 +211,9 @@ def from_bam(motifs: str, consensus: BamConsensus) -> Nomenclature | None:
 
     Returns:
         Nomenclature | None: The named allele, or ``None`` when the pair is unknown.
-        A thin consensus is named but flagged ``low-read-support``; it is never
-        silently accepted, and never promoted on its own.
+        A thin consensus is named but flagged
+        ``thin-haplotype-record-support``; it is never silently accepted or
+        promoted on its own.
     """
     pair = pair_sequence(motifs)
     if pair is None:
@@ -187,7 +252,7 @@ def from_bam(motifs: str, consensus: BamConsensus) -> Nomenclature | None:
             event=named.event,
             unit=named.unit,
             tier=named.tier,
-            flags=tuple(sorted({*named.flags, FLAG_LOW_READ_SUPPORT})),
+            flags=tuple(sorted({*named.flags, FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT})),
             ambiguity=named.ambiguity,
             repeat_form=named.repeat_form,
             net_length=named.net_length,
@@ -201,14 +266,14 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
 
     The BAM may supply an allele the VCF had none for, and may corroborate one the
     VCF already has. It may **not** veto one. Measured on the benchmark, letting a
-    read consensus overrule an existing name cost more than it gained: `output.bam`
-    splits reads across many pair records, so a locus often carries 1-3 reads, and a
-    thin consensus disagreeing with a well-supported VCF record destroyed names that
-    were right -- ``dupA`` fell from 6 to 1 and ``insCCCC`` from 9 to 3.
+    haplotype-record consensus overrule an existing name cost more than it gained:
+    a locus often carries only 1-3 resolved records, and a thin consensus
+    disagreeing with a well-supported VCF record destroyed names that were right
+    -- ``dupA`` fell from 6 to 1 and ``insCCCC`` from 9 to 3.
 
     Args:
         call: The reconciled VCF/adVNTR call.
-        bam_call: What the reads say, or ``None`` when they say nothing.
+        bam_call: What the resolved haplotypes say, or ``None`` when they say nothing.
 
     Returns:
         Nomenclature: The refined call. Unchanged when the BAM adds nothing.
@@ -217,15 +282,16 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         return call
 
     if call.name is None:
-        if FLAG_CALLER_DISAGREEMENT in call.flags and FLAG_LOW_READ_SUPPORT in bam_call.flags:
+        if FLAG_CALLER_DISAGREEMENT in call.flags and FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT in bam_call.flags:
             # There is no name here because two callers described different events,
-            # which is a real conflict rather than a gap the reads may fill. A thin
-            # consensus -- one or two reads at a locus covered by a hundred -- is not
+            # which is a real conflict rather than a gap the BAM may fill. A thin
+            # consensus -- one or two haplotype records -- is not
             # enough to settle it, and adopting it turned an honest "allele
-            # undetermined" into a bare number backed by a single read.
+            # undetermined" into a bare number backed by a single record.
             return call
-        # The VCF had no allele to offer; the reads do. This is the whole point of
-        # the rescue path -- it is where delins and the insG family come from.
+        # The VCF had no allele to offer; the resolved haplotypes do. This is the
+        # whole point of the rescue path -- it is where delins and the insG family
+        # come from.
         return Nomenclature(
             name=bam_call.name,
             event=bam_call.event,
@@ -240,14 +306,15 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
 
     if bam_call.name == call.name:
         # Corroboration. Recorded as agreement, but tier promotion still belongs to
-        # `reconcile`, which is the only place that sees the read support.
+        # `reconcile`, which is the only place that sees the support quantity.
         return call
 
     if bam_call.event == "delins" and call.event != "delins":
         # The VCF shape cannot hold this. Kestrel's `VariantType` has SNP, INSERTION
         # and DELETION and nothing else, so whatever it wrote for this locus is the
-        # closest representable shape rather than the allele -- the reads are the
-        # better evidence here even though they are the junior source everywhere else.
+        # closest representable shape rather than the allele -- the haplotype
+        # records are the better evidence here even though they are the junior
+        # source everywhere else.
         return Nomenclature(
             name=bam_call.name,
             event=bam_call.event,
@@ -279,9 +346,9 @@ def is_candidate(call: Nomenclature) -> bool:
     """Should the BAM be consulted for this call?
 
     The BAM is not scanned per row. It is consulted only where the VCF cannot hold
-    what the reads show, where the callers disagree, or where the result would
-    otherwise be tier C. An ordinary tier-B call -- the common outcome -- is not a
-    candidate, which is what keeps the common path free.
+    what its resolved haplotype records show, where the callers disagree, or where
+    the result would otherwise be tier C. An ordinary tier-B call -- the common
+    outcome -- is not a candidate, which is what keeps the common path free.
 
     Args:
         call: The reconciled call.
@@ -297,16 +364,16 @@ def is_candidate(call: Nomenclature) -> bool:
 
 
 def walk_cigar(reference_start: int, cigar: Iterable[tuple[int, int]], sequence: str | None = None) -> list[Edit]:
-    """Turn one read's CIGAR into reference-anchored non-matching blocks.
+    """Turn one haplotype record's CIGAR into reference-anchored non-matching blocks.
 
-    A single pass, O(len(cigar)); no per-read reference slicing beyond the edit
+    A single pass, O(len(cigar)); no per-record reference slicing beyond the edit
     spans themselves.
 
     Args:
         reference_start: 0-based alignment start.
         cigar: ``(operation, length)`` pairs as pysam returns them.
-        sequence: The read sequence, when the inserted bases are wanted. Voting only
-            needs lengths, but naming the allele needs the bases.
+        sequence: The haplotype sequence, when the inserted bases are wanted.
+            Voting only needs lengths, but naming the allele needs the bases.
 
     Returns:
         list[Edit]: The non-matching blocks, in reference order.
@@ -336,8 +403,8 @@ def merge_edits(edits: Iterable[Edit]) -> list[Edit]:
     """Merge adjacent non-matching blocks into single events.
 
     This is what turns a ``1X1I`` pair into a delins -- one reference base replaced
-    by two read bases -- and it is the only reason the BAM can express an allele the
-    VCF cannot.
+    by two haplotype-record bases -- and it is the only reason the BAM can express
+    an allele the VCF cannot.
 
     Args:
         edits: Reference-ordered blocks from :func:`walk_cigar`.
@@ -421,7 +488,7 @@ class BamRescuer:
         self.close()
 
     def rescue(self, contig: str, position: int) -> BamConsensus | None:
-        """Read the consensus length-changing edit at one locus.
+        """Resolve the consensus length-changing edit at one locus.
 
         Only length-changing edits are voted on. Substitutions against this
         reference are overwhelmingly motif polymorphism -- a first attempt that
@@ -444,39 +511,44 @@ class BamRescuer:
         end = position + self._flank
 
         try:
-            reads = list(handle.fetch(contig, start, end))
+            records = list(handle.fetch(contig, start, end))
         except (KeyError, ValueError) as error:
             logger.debug("BAM rescue skipped; %s:%s unavailable: %s", contig, position, error)
             return None
         self.fetches += 1
 
         votes: Counter[tuple[str, int, int, int, str]] = Counter()
-        total = 0
-        for read in reads:
-            total += 1
-            if read.cigartuples is None:
+        minimum_kmer_depths: dict[tuple[str, int, int, int, str], list[int | None]] = {}
+        fetched_haplotype_records = 0
+        for record in records:
+            fetched_haplotype_records += 1
+            if record.cigartuples is None:
                 continue
-            for edit in merge_edits(walk_cigar(read.reference_start, read.cigartuples, read.query_sequence)):
+            depth = minimum_kmer_depth(record)
+            for edit in merge_edits(walk_cigar(record.reference_start, record.cigartuples, record.query_sequence)):
                 if edit.changes_length and start <= edit.start <= end:
-                    votes[(edit.kind, edit.start, edit.ref_span, edit.inserted, edit.bases)] += 1
+                    edit_key = (edit.kind, edit.start, edit.ref_span, edit.inserted, edit.bases)
+                    votes[edit_key] += 1
+                    minimum_kmer_depths.setdefault(edit_key, []).append(depth)
 
         if not votes:
             return None
 
         ranked = votes.most_common()
-        (kind, edit_start, ref_span, inserted, bases), support = ranked[0]
+        winning_edit, supporting_haplotype_records = ranked[0]
+        kind, edit_start, ref_span, inserted, bases = winning_edit
 
         # A tie has no winner. `Counter.most_common` breaks one by insertion order,
-        # which here is BAM order -- so whichever read happened to be written first
-        # would decide the allele, and that allele can override the VCF. Report no
-        # rescue instead of choosing arbitrarily.
-        if len(ranked) > 1 and ranked[1][1] == support:
+        # which here is BAM order -- so whichever haplotype record happened to be
+        # written first would decide the allele, and that allele can override the
+        # VCF. Report no rescue instead of choosing arbitrarily.
+        if len(ranked) > 1 and ranked[1][1] == supporting_haplotype_records:
             logger.debug(
-                "BAM rescue declined at %s:%s; %d alleles tied on %d reads",
+                "BAM rescue declined at %s:%s; %d alleles tied on %d haplotype records",
                 contig,
                 position,
-                sum(1 for _, count in ranked if count == support),
-                support,
+                sum(1 for _, count in ranked if count == supporting_haplotype_records),
+                supporting_haplotype_records,
             )
             return None
         return BamConsensus(
@@ -485,7 +557,8 @@ class BamRescuer:
             ref_span=ref_span,
             inserted=inserted,
             bases=bases,
-            support=support,
-            total=total,
-            n_distinct=len(votes),
+            supporting_haplotype_records=supporting_haplotype_records,
+            fetched_haplotype_records=fetched_haplotype_records,
+            distinct_edit_count=len(votes),
+            supporting_record_minimum_kmer_depths=tuple(minimum_kmer_depths[winning_edit]),
         )

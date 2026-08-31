@@ -1,12 +1,12 @@
-"""Documentation contracts for #233, over *published* documentation only.
+"""Documentation contracts for #233 and the bounded published Phase 1 exception.
 
 Three tests were removed when planning documents left the repository. They asserted
 that historical design documents under `docs/superpowers/specs/` and `docs/plans/`
 led with a dated supersession note, so that a reader meeting an old design was told
-its routing policy had been replaced. Those documents now live in the untracked
-`.planning/` workspace, which is gitignored, and are not shipped, not built by
-mkdocs, and not reachable by a reader of the site -- so there is no longer a reader to
-mislead, and nothing for a repository test to hold.
+its routing policy had been replaced. Those historical documents now live in the
+untracked `.planning/` workspace. Phase 1 of #295 separately publishes exactly its
+reviewed design and implementation plan under `docs/superpowers/`; they are built by
+MkDocs and do not reopen a general planning-docs exception.
 
 What survives here is the half that was always about published output: the changelog
 and the golden-cohort page state the current routing policy, and AGENTS.md states the
@@ -16,9 +16,14 @@ The changelog assertions below were previously entangled with the two planning
 documents in one loop. They are kept, applied to the changelog alone.
 """
 
+import hashlib
+import re
 from pathlib import Path
 
 import pytest
+
+from vntyper.scripts import nomenclature_bam
+from vntyper.scripts.nomenclature_presentation import NOMENCLATURE_FLAG_MEANINGS
 
 pytestmark = pytest.mark.unit
 
@@ -27,6 +32,39 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def _section(page: str, start: str, end: str) -> str:
+    return page[page.index(start) : page.index(end)]
+
+
+def test_agents_records_the_exact_phase_1_published_planning_exception() -> None:
+    """The exceptional public pages stay exact while ordinary planning stays untracked."""
+    page = _read("AGENTS.md")
+    normalized = " ".join(page.split())
+    assert "docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md" in page
+    assert "docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md" in page
+    assert "No other planning artifact under `docs/` is allowed" in normalized
+    assert "untracked `.planning/` workspace" in normalized
+
+
+def test_agents_inventory_includes_both_phase_1_focused_modules() -> None:
+    """Catch stale sixteen-module wording after the evidence split has landed."""
+    page = _read("AGENTS.md")
+    layout = _section(page, "## Layout", "## Code style")
+    normalized = " ".join(layout.split())
+
+    assert "These eighteen focused modules" in normalized
+    assert "`nomenclature_evidence.py` — source-specific evidence-unit flags and the" in normalized
+    assert "BAM thin-support configuration-key resolver" in normalized
+    assert "`nomenclature_bam.py` separately owns XD parsing, resolved haplotype-record voting, and" in normalized
+    assert "`BamConsensus`" in normalized
+    evidence_line = normalized[
+        normalized.index("`nomenclature_evidence.py`") : normalized.index("`nomenclature_presentation.py`")
+    ]
+    assert "XD parsing" not in evidence_line
+    assert "`nomenclature_presentation.py` — source-specific report flag meanings" in normalized
+    assert "reserves two further focused destinations" not in normalized
 
 
 def test_changelog_states_the_current_lossless_selection_and_invalid_parity_policy() -> None:
@@ -59,6 +97,123 @@ def test_changelog_preserves_released_history_and_records_the_fix_in_2_0_12() ->
     assert "Valid mixed alignment conversions are now routed losslessly" in release
     assert "Superseded on 2026-08-11 by #233" in page
     assert "## 2.0.11 (Current)" not in page
+
+
+def test_phase_1_changelog_entry_does_not_rewrite_released_history() -> None:
+    """Catch edits below Unreleased while allowing this Phase 1 entry to evolve."""
+    page = _read("docs/about/changelog.md")
+    released = page[page.index("## 2.0.26") :]
+    assert hashlib.sha256(released.encode()).hexdigest() == (
+        "a73bb192c6d2cf6cd0fede04ec9f9ec55b0eac9eaa5743fe558d82709d3c54f7"
+    )
+
+    unreleased = _section(page, "## Unreleased", "## 2.0.26")
+    normalized = " ".join(unreleased.split())
+    assert "Phase 1" in normalized
+    assert "Refs #295" in normalized
+    assert "resolved haplotype records" in normalized
+    assert "minimum k-mer depth" in normalized
+    assert "does not weight votes or alter names or tiers" in normalized
+    assert "bam_thin_haplotype_record_support" in unreleased
+    assert "bam_thin_support" in unreleased
+    assert "supporting_haplotype_records" in unreleased
+    assert "fetched_haplotype_records" in unreleased
+    assert "distinct_edit_count" in unreleased
+    assert "read-only `support`, `total`, and `n_distinct` compatibility properties" in normalized
+    assert "replace the pre-Phase-1 `low-read-support` token" in normalized
+    assert "BAM-specific `thin-haplotype-record-support` and `low-haplotype-record-support`" in normalized
+    assert all(f"#{issue}" in unreleased for issue in (270, 267, 269))
+
+
+def test_nomenclature_page_documents_every_authoritative_flag_and_source_unit() -> None:
+    """Catch a deleted flag row or a source-specific evidence unit relabelled as reads."""
+    page = _read("docs/pipeline/nomenclature.md")
+    flags = _section(page, "## Flags", "## The two companion fields")
+    documented = set(re.findall(r"^\| `([^`]+)` \|", flags, flags=re.MULTILINE))
+
+    assert documented == set(NOMENCLATURE_FLAG_MEANINGS)
+    assert "all 14" in flags
+    assert "Kestrel VCF" in flags and "k-mer-path depth" in flags
+    assert "Kestrel `output.bam`" in flags and "haplotype-record support" in flags
+    assert "adVNTR" in flags and "sequencing reads" in flags
+    assert "`min_support_for_high_confidence`" in flags
+    assert "`bam_thin_haplotype_record_support`" in flags
+    assert "`bam_thin_support`" in flags
+
+
+def test_nomenclature_page_pins_the_measured_bam_consultation_counts() -> None:
+    """Catch restoration of the stale approximate benchmark claim."""
+    page = _read("docs/pipeline/nomenclature.md")
+    section = _section(page, "## Where the resolved haplotype records are consulted", "## When two sources")
+    normalized = " ".join(section.split())
+
+    assert "83/200 samples are eligible" in normalized
+    assert "15 have no Kestrel result row" in normalized
+    assert "68/200 (34%) produce one BAM row fetch" in normalized
+    assert "about a fifth" not in section
+    assert "minimum k-mer depth" in normalized
+    assert "does not weight votes or alter names or tiers" in normalized
+
+
+def test_nomenclature_page_states_the_typed_xd_contract() -> None:
+    """Catch collapsing retained zero/extreme integers into unavailable XD evidence."""
+    page = " ".join(_read("docs/pipeline/nomenclature.md").split()).lower()
+
+    maximum = f"{nomenclature_bam._MAXIMUM_MINIMUM_KMER_DEPTH:,}"
+    assert f"integer values from 1 through {maximum} are retained exactly" in page
+    assert "zero is retained as zero" in page
+    assert "missing or malformed values are unavailable" in page
+    assert f"negative values and unsigned integers above {maximum} are unavailable" in page
+    assert "every resolved haplotype record still contributes one unweighted vote" in page
+
+
+def test_report_and_output_pages_explain_the_kestrel_bam_artifact() -> None:
+    """Catch omission of the concise HTML and IGV semantics from a public surface."""
+    pages = {
+        path: " ".join(_read(path).split())
+        for path in (
+            "docs/pipeline/reports.md",
+            "docs/user-guide/output-files.md",
+            "docs/cli/report.md",
+            "docs/getting-started/quickstart.md",
+            "vntyper/scripts/README.md",
+        )
+    }
+    for path, page in pages.items():
+        assert "resolved haplotype records" in page, path
+        assert "output.bam" in page, path
+
+    for path in ("docs/pipeline/reports.md", "docs/user-guide/output-files.md", "docs/cli/report.md"):
+        page = pages[path]
+        assert "not sequencing reads" in page, path
+        assert "minimum k-mer depth" in page, path
+        assert "does not weight votes or alter names or tiers" in page, path
+
+
+def test_kestrel_depth_pages_use_kmer_units_without_changing_the_rules() -> None:
+    """Catch either Kestrel Sample depth being called reads or a threshold rewrite."""
+    output_page = _read("docs/user-guide/output-files.md")
+    scoring = " ".join(_read("docs/pipeline/scoring-and-confidence.md").split())
+    kestrel = _read("docs/pipeline/kestrel.md")
+
+    assert "k-mer-path depth supporting the alternate allele" in output_page
+    assert "total k-mer depth in the variant active region" in output_page
+    assert "Alternate depths come from Kestrel's `Sample` field as k-mer-path depths" in scoring
+    assert "total active-region k-mer depth of 150" in scoring
+    assert "total active-region k-mer depth of 5000" in scoring
+    assert "same alternate k-mer-path depth" in kestrel
+    assert "0.00469" in scoring and "0.00515" in scoring
+
+
+def test_genuine_input_and_advntr_read_language_remains_public() -> None:
+    """Prevent an ontology correction from globally deleting legitimate read counts."""
+    reports = _read("docs/pipeline/reports.md")
+    quickstart = _read("docs/getting-started/quickstart.md")
+    scripts_readme = _read("vntyper/scripts/README.md")
+
+    assert "supporting read count" in reports
+    assert "Extracted FASTQ reads" in quickstart
+    assert "BAM/CRAM" in scripts_readme and "FASTQ" in scripts_readme
 
 
 def test_golden_page_records_the_issue_233_run_and_retained_evidence() -> None:

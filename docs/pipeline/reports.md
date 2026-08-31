@@ -12,6 +12,12 @@ The sample report (`summary_report.html`) is generated at the end of each pipeli
 
 The Kestrel results are displayed in a sortable table with columns for motif, variant type, position, REF/ALT alleles, depth metrics, depth score, confidence level, flag status, the mutation-naming record, and motif sequence. The naming record includes the reconciled MUC1 name, confidence tier and flags, both callers' own names, ambiguity interval, repeat form and naming note; it is not collapsed to the reconciled name because caller disagreement is evidence the reader needs. See [MUC1 Nomenclature](nomenclature.md).
 
+The reading key under the result tables includes this concise artifact clarification:
+Kestrel `output.bam` contains resolved haplotype records, not sequencing reads. Its
+record counts are haplotype-record support; `XD` is minimum k-mer depth and does not
+weight votes or alter names or tiers. This clarification remains visible when the
+alignment browser is off or no BAM is available.
+
 Confidence is written as a labelled pill rather than encoded only by an alert colour:
 
 - High_Precision / High_Precision* -- high-precision call
@@ -71,7 +77,8 @@ For BAM/CRAM input, the report displays the detected reference assembly (from bo
 
 The report embeds an interactive IGV genome browser view using the [igv-reports](https://github.com/igvteam/igv-reports) library. The IGV view is generated from:
 
-- **BAM track** -- Kestrel's haplotype alignment output (`output.bam`)
+- **BAM track** -- Kestrel's resolved haplotype-record alignment output (`output.bam`),
+  not an alignment of the input sequencing reads
 - **VCF track** -- filtered INDEL variants (`output_indel.vcf.gz` or `.vcf`)
 - **BED track** -- variant position file (`output.bed`)
 - **FASTA reference** -- MUC1 VNTR reference sequence
@@ -147,6 +154,10 @@ The cohort summary module (`cohort_summary.py`) aggregates results from multiple
 - **Coverage statistics** -- per-sample VNTR coverage metrics
 - **Runtime statistics** -- pipeline execution times
 - **Version and assembly tracking** -- VNtyper 2 versions and detected reference assemblies
+
+When a cohort contains a BAM-specific nomenclature flag, its reading key gives the same
+resolved-haplotype-record and `XD` explanation as the sample report. CSV, TSV and JSON keep
+the stable `Nomenclature_Flags` column and token values without adding prose rows.
 
 ### Pseudonymization
 

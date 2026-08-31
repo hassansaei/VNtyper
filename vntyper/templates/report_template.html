@@ -431,7 +431,7 @@
         /* --- the reading key --------------------------------------------------
            Every coded value the tables above actually print, in words, under the
            tables that print them. Only the terms present in this sample's rows are
-           listed: a key naming all three tiers and all ten flags under a table that
+           listed: a key naming all three tiers and all defined flags under a table that
            uses two of them is a wall the reader has to filter themselves.
 
            It is printed rather than put behind a hover, for the reason the token layer
@@ -1552,14 +1552,23 @@
                    authored paragraph beside it on a successful load - so without a name
                    here the reader who cannot see it goes from a described state to an
                    unnamed region. The name is on the element that outlives the swap. #}
-                <div id="igvDiv" role="img"
-                     aria-label="Read alignments around the called variant, drawn by the embedded
-                                 alignment browser. Every variant this report found is listed in
-                                 the tables above."></div>
+                {% if igv_bam_track_available %}
+                    {% set igv_track_label = "Resolved haplotype-record alignments around the called variant" %}
+                {% else %}
+                    {% set igv_track_label = "Genome-browser tracks around the called variant" %}
+                {% endif %}
+                <div id="igvDiv"{% if igv_session_available %} role="img"
+                     aria-label="{{ igv_track_label }}, drawn by the embedded alignment browser.
+                                 Every variant this report found is listed in the tables above."{% endif %}></div>
             </div>
         </div>
 
         <h2>Reading key</h2>
+        <p class="kestrel-bam-semantics">
+            Kestrel <code>output.bam</code> contains resolved haplotype records, not sequencing reads.
+            Its record counts are haplotype-record support; <code>XD</code> is minimum k-mer depth and
+            does not weight votes or alter names or tiers.
+        </p>
         {#
           THE READING KEY, as an appendix. Every coded value the results tables print,
           in words, at the foot of the document.
@@ -1576,7 +1585,7 @@
           printed with nothing anywhere in the artefact saying what either meant - and
           this is a file that is forwarded, archived and opened offline years later, so
           "look it up" has no object. `nomenclature_legend` lists only the terms these
-          rows carry: a key naming all three tiers and all ten flags under a table that
+          rows carry: a key naming all three tiers and all defined flags under a table that
           uses two of them is a wall the reader has to filter themselves.
 
           It is printed rather than put behind a hover, for the same reason the token

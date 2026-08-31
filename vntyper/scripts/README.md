@@ -65,7 +65,8 @@ flowchart TD
 
 1. **Construct command** for each k-mer size (often just 20).  
 2. **Kestrel** jar produces `output.vcf` and intermediate `output.sam`.  
-3. **Convert** that SAM → `output.bam`.  
+3. **Convert** that SAM → `output.bam`. Its entries are Kestrel-resolved haplotype
+   records, not sequencing reads; `XD` is minimum k-mer depth and never weights a vote.
 4. **Postprocess** the raw VCF by extracting only **INDEL** calls, splitting them into “insertion” vs. “deletion.”  
 5. **Motif merging** + frame/coverage logic (Saei et al., iScience 26, 107171).  
 6. **Confidence** assigned (Low vs. High Precision).  
@@ -160,6 +161,17 @@ flowchart TD
   - `run_command()`: Shell command runner with logging.  
   - `create_output_directories()`: Makes standard pipeline dirs.  
   - `validate_bam_file()`, `validate_fastq_file()`: Basic file checks.
+
+### 2.11 `nomenclature_evidence.py`
+
+- **Purpose**: Owns source-specific nomenclature evidence units and threshold-key
+  compatibility. Kestrel VCF uses k-mer-path depth, Kestrel `output.bam` uses resolved
+  haplotype-record support, and adVNTR uses sequencing-read support.
+
+### 2.12 `nomenclature_presentation.py`
+
+- **Purpose**: Owns the report-facing nomenclature flag meanings, tier explanations, and
+  the concise Kestrel BAM evidence clarification shared by sample and cohort HTML.
 
 ---
 

@@ -3,7 +3,7 @@
 Tier A is the only tier that emits a bare number, so it is the only tier that can
 be confidently wrong. It therefore requires evidence no single caller can supply:
 two independent sources agreeing after normalisation, a motif context that matches
-canonical X, and read support at or above a threshold.
+canonical X, and source-specific support at or above a threshold.
 
 Research use only.
 """
@@ -11,12 +11,20 @@ Research use only.
 import pytest
 
 from vntyper.scripts.nomenclature import (
+    CALLER_OF,
+    FLAG_LOW_EVIDENCE_SUPPORT,
+    FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+    FLAG_LOW_KMER_PATH_SUPPORT,
+    FLAG_LOW_READ_SUPPORT,
+    FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
+    MIN_SUPPORT_FOR_TIER_A,
     Nomenclature,
     from_advntr,
     from_kestrel,
     reconcile,
     render,
 )
+from vntyper.scripts.nomenclature_bam import refine
 
 pytestmark = pytest.mark.unit
 
@@ -30,8 +38,8 @@ def _advntr_dupc() -> Nomenclature:
     return call
 
 
-def _from_reads(name: str, event: str) -> Nomenclature:
-    """A call recovered from ``output.bam`` -- Kestrel's own alignment."""
+def _from_haplotypes(name: str, event: str) -> Nomenclature:
+    """A call recovered from Kestrel's resolved ``output.bam`` haplotypes."""
     return Nomenclature(
         name=name,
         event=event,
@@ -54,14 +62,14 @@ def test_two_independent_callers_outvote_a_single_dissenting_caller() -> None:
     """The real ``insG`` case, where the VCF alone is wrong.
 
     Kestrel places the whole ``insG`` family one base 3' of truth. adVNTR and the
-    reads independently say ``58_59insG``; the Kestrel VCF alone says ``59_60insG``.
+    resolved haplotypes say ``58_59insG``; the Kestrel VCF alone says ``59_60insG``.
     Two sources from two different callers outvote one, so the name that two
     independent lines of evidence support is the one reported.
     """
     merged = reconcile(
         from_kestrel("X-X", 61, "T", "TC"),
         from_advntr("I23_2_C_LEN1")[0],
-        _from_reads("58_59insG", "insertion"),
+        _from_haplotypes("58_59insG", "insertion"),
     )
     assert merged.name == "58_59insG"
 
@@ -74,7 +82,7 @@ def test_kestrel_agreeing_with_its_own_alignment_is_not_a_majority() -> None:
     """
     merged = reconcile(
         from_kestrel("X-X", 61, "T", "TC"),
-        _from_reads("59_60insG", "insertion"),
+        _from_haplotypes("59_60insG", "insertion"),
         from_advntr("I23_2_C_LEN1")[0],
     )
     assert merged.name == "59_60insG", "the VCF stands; nothing outvoted it"
@@ -82,7 +90,7 @@ def test_kestrel_agreeing_with_its_own_alignment_is_not_a_majority() -> None:
 
 
 def test_kestrel_agreeing_with_its_own_alignment_never_reaches_tier_a() -> None:
-    """The false-confidence path that adding the reads as a third source opens.
+    """The false-confidence path that adding BAM records as a third source opens.
 
     ``59dupC`` is a described variant with ample support and no divergent context,
     so every other tier-A condition is met: only the independence of the two sources
@@ -90,17 +98,17 @@ def test_kestrel_agreeing_with_its_own_alignment_never_reaches_tier_a() -> None:
     """
     merged = reconcile(
         _kestrel_dupc(),
-        _from_reads("59dupC", "duplication"),
+        _from_haplotypes("59dupC", "duplication"),
         supports={"kestrel_vcf": 40, "kestrel_bam": 40},
     )
     assert merged.tier != "A"
 
 
-def test_the_reads_corroborating_a_second_caller_still_reach_tier_a() -> None:
+def test_the_haplotype_records_corroborating_a_second_caller_reach_tier_a() -> None:
     """Independence is the test, not which source the name came from."""
     merged = reconcile(
         _advntr_dupc(),
-        _from_reads("59dupC", "duplication"),
+        _from_haplotypes("59dupC", "duplication"),
         supports={"advntr": 40, "kestrel_bam": 40},
     )
     assert merged.tier == "A"
@@ -125,15 +133,15 @@ def test_two_corroborated_alleles_are_a_conflict_rather_than_a_vote() -> None:
     """Only an unambiguous majority decides.
 
     adVNTR may report several events at one locus, so it can corroborate two
-    different alleles at once -- here it backs the VCF's allele *and* the reads'. Both
+    different alleles at once -- here it backs the VCF and BAM alleles. Both
     then clear the independence bar, and picking whichever happened to be seen first
     would settle a real conflict by input order.
     """
     merged = reconcile(
         from_kestrel("X-X", 61, "T", "TC"),  # 59_60insG, backed by the VCF alone
-        _from_reads("58_59insG", "insertion"),
-        _from_reads("57_58insG", "insertion"),
-        from_advntr("I23_2_C_LEN1")[0],  # 58_59insG -- corroborates the first read call
+        _from_haplotypes("58_59insG", "insertion"),
+        _from_haplotypes("57_58insG", "insertion"),
+        from_advntr("I23_2_C_LEN1")[0],  # 58_59insG -- corroborates the first BAM call
         from_advntr("I24_2_C_LEN1")[0],  # 57_58insG -- corroborates the second
     )
     assert merged.tier != "A"
@@ -145,17 +153,178 @@ def test_support_is_taken_from_the_sources_backing_the_chosen_name() -> None:
     """A dissenting source's depth is not the agreement's depth.
 
     The two callers backing ``58_59insG`` are both deep; the Kestrel VCF dissents on
-    a single read. Letting the dissent set the depth would withhold tier A from an
+    one unit of k-mer-path support. Letting the dissent set support would withhold tier A from an
     agreement that is in fact well covered.
     """
     merged = reconcile(
         from_kestrel("X-X", 61, "T", "TC"),
         from_advntr("I23_2_C_LEN1")[0],
-        _from_reads("58_59insG", "insertion"),
+        _from_haplotypes("58_59insG", "insertion"),
         supports={"kestrel_vcf": 1, "advntr": 40, "kestrel_bam": 40},
     )
     assert merged.name == "58_59insG"
-    assert "low-read-support" not in merged.flags
+    assert not {
+        FLAG_LOW_EVIDENCE_SUPPORT,
+        FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+        FLAG_LOW_KMER_PATH_SUPPORT,
+        FLAG_LOW_READ_SUPPORT,
+    }.intersection(merged.flags)
+
+
+@pytest.mark.parametrize(
+    ("low_source", "other_source", "expected_flag"),
+    [
+        ("kestrel_bam", "advntr", FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT),
+        ("kestrel_vcf", "advntr", FLAG_LOW_KMER_PATH_SUPPORT),
+        ("advntr", "kestrel_vcf", FLAG_LOW_READ_SUPPORT),
+        ("future_caller", "kestrel_vcf", FLAG_LOW_EVIDENCE_SUPPORT),
+    ],
+)
+def test_low_support_flags_name_each_backing_sources_evidence_unit(
+    low_source: str,
+    other_source: str,
+    expected_flag: str,
+) -> None:
+    calls = [
+        Nomenclature("59dupC", "duplication", "X", "B", (), None, None, 1, low_source),
+        Nomenclature("59dupC", "duplication", "X", "B", (), None, None, 1, other_source),
+    ]
+
+    merged = reconcile(*calls, supports={low_source: 4, other_source: 40})
+
+    assert merged.name == "59dupC"
+    assert render(merged) == "59dupC"
+    assert merged.tier == "B"
+    assert expected_flag in merged.flags
+    assert {
+        FLAG_LOW_EVIDENCE_SUPPORT,
+        FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+        FLAG_LOW_KMER_PATH_SUPPORT,
+        FLAG_LOW_READ_SUPPORT,
+    }.intersection(merged.flags) == {expected_flag}
+
+
+def test_all_low_known_backing_units_are_reported_truthfully() -> None:
+    merged = reconcile(
+        _kestrel_dupc(),
+        _advntr_dupc(),
+        supports={"kestrel_vcf": 2, "advntr": 4},
+    )
+
+    assert merged.name == "59dupC"
+    assert {FLAG_LOW_KMER_PATH_SUPPORT, FLAG_LOW_READ_SUPPORT}.issubset(merged.flags)
+    assert FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT not in merged.flags
+    assert FLAG_LOW_EVIDENCE_SUPPORT not in merged.flags
+
+
+def test_a_low_non_backing_source_cannot_contribute_a_flag() -> None:
+    merged = reconcile(
+        from_kestrel("X-X", 61, "T", "TC"),
+        from_advntr("I23_2_C_LEN1")[0],
+        _from_haplotypes("58_59insG", "insertion"),
+        supports={"kestrel_vcf": 1, "advntr": 40, "kestrel_bam": 40},
+    )
+
+    assert merged.name == "58_59insG"
+    assert not {
+        FLAG_LOW_EVIDENCE_SUPPORT,
+        FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+        FLAG_LOW_KMER_PATH_SUPPORT,
+        FLAG_LOW_READ_SUPPORT,
+    }.intersection(merged.flags)
+
+
+@pytest.mark.parametrize(
+    "calls",
+    [
+        (_kestrel_dupc(), _advntr_dupc()),
+        (_advntr_dupc(), _kestrel_dupc()),
+    ],
+)
+def test_one_unknown_backing_value_suppresses_every_low_support_token(calls: tuple[Nomenclature, ...]) -> None:
+    merged = reconcile(*calls, supports={"kestrel_vcf": None, "advntr": 2})
+
+    assert merged.tier == "B"
+    assert not {
+        FLAG_LOW_EVIDENCE_SUPPORT,
+        FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+        FLAG_LOW_KMER_PATH_SUPPORT,
+        FLAG_LOW_READ_SUPPORT,
+    }.intersection(merged.flags)
+
+
+def test_all_known_backing_values_enable_the_truthful_low_support_token() -> None:
+    merged = reconcile(_kestrel_dupc(), _advntr_dupc(), supports={"kestrel_vcf": 40, "advntr": 2})
+
+    assert merged.tier == "B"
+    assert FLAG_LOW_READ_SUPPORT in merged.flags
+    assert FLAG_LOW_KMER_PATH_SUPPORT not in merged.flags
+
+
+def test_scalar_support_retains_its_legacy_read_support_contract() -> None:
+    merged = reconcile(_kestrel_dupc(), _advntr_dupc(), support=4)
+
+    assert merged.tier == "B"
+    assert FLAG_LOW_READ_SUPPORT in merged.flags
+    assert FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT not in merged.flags
+
+
+def test_bam_support_of_four_is_not_thin_but_remains_below_the_tier_a_threshold() -> None:
+    merged = reconcile(
+        _from_haplotypes("59dupC", "duplication"),
+        _advntr_dupc(),
+        supports={"kestrel_bam": 4, "advntr": 40},
+    )
+
+    assert MIN_SUPPORT_FOR_TIER_A == 5
+    assert FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT not in merged.flags
+    assert FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT in merged.flags
+    assert merged.tier == "B"
+
+
+def test_thin_haplotype_records_cannot_settle_a_caller_disagreement() -> None:
+    """Renaming the thin token must not bypass the established refine veto."""
+    disagreement = reconcile(
+        _kestrel_dupc(),
+        from_advntr("D17_2&D18_2&D19_2&D20_2&D21_2")[0],
+        supports={"kestrel_vcf": 40, "advntr": 40},
+    )
+    thin = Nomenclature(
+        name="58_59insG",
+        event="insertion",
+        unit="X",
+        tier="B",
+        flags=(FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=1,
+        source="kestrel_bam",
+    )
+
+    assert disagreement.name is None
+    assert refine(disagreement, thin) is disagreement
+
+
+def test_support_at_five_is_not_low_and_preserves_tier_a() -> None:
+    merged = reconcile(
+        _from_haplotypes("59dupC", "duplication"),
+        _advntr_dupc(),
+        supports={"kestrel_bam": 5, "advntr": 40},
+    )
+
+    assert FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT not in merged.flags
+    assert merged.tier == "A"
+
+
+def test_kestrel_vcf_and_bam_remain_one_caller() -> None:
+    assert CALLER_OF["kestrel_vcf"] == CALLER_OF["kestrel_bam"] == "kestrel"
+    merged = reconcile(
+        _kestrel_dupc(),
+        _from_haplotypes("59dupC", "duplication"),
+        supports={"kestrel_vcf": 40, "kestrel_bam": 40},
+    )
+
+    assert merged.tier == "B"
 
 
 # ---------------------------------------------------------------------------

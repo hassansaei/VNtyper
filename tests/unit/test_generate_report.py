@@ -31,6 +31,7 @@ import vntyper
 from vntyper.cli import load_config
 from vntyper.scripts import (
     generate_report,
+    report_assets,
     report_context_contract,
     report_formatting,
     subthreshold,
@@ -153,6 +154,23 @@ def test_a_missing_pipeline_summary_still_renders(tmp_path) -> None:
     html = render(tmp_path)
     assert '<h1><i class="gene">MUC1</i> VNTR report — unnamed sample</h1>' in html
     assert "Not calculated" in html
+
+
+def test_a_report_without_a_bam_still_explains_kestrel_bam_evidence(tmp_path) -> None:
+    """The artifact contract is report help, not a claim that this run retained a BAM."""
+    html = render(tmp_path, report_igv=report_assets.REPORT_IGV_OFF)
+
+    assert "<code>output.bam</code>" in html
+    assert "<code>XD</code>" in html
+    assert html.index("<h2>Reading key</h2>") < html.index("<code>output.bam</code>")
+
+
+def test_a_report_without_a_bam_does_not_announce_haplotype_alignments(tmp_path) -> None:
+    """An empty IGV placeholder cannot claim a resolved-haplotype alignment track."""
+    html = render(tmp_path, report_igv=report_assets.REPORT_IGV_OFF)
+
+    assert 'id="igvDiv" role="img"' not in html
+    assert "Resolved haplotype-record alignments around the called variant" not in html
 
 
 # ---------------------------------------------------------------------------

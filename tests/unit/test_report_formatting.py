@@ -1358,9 +1358,146 @@ def test_every_flag_the_caller_can_set_is_explained() -> None:
         value for name, value in vars(nomenclature).items() if name.startswith("FLAG_") and isinstance(value, str)
     }
 
-    missing = sorted(declared - set(rf.NOMENCLATURE_FLAG_MEANINGS))
+    assert len(declared) == 14, "the authoritative closed vocabulary changed without updating the report contract"
+    assert set(rf.NOMENCLATURE_FLAG_MEANINGS) == declared
+    assert all(rf.NOMENCLATURE_FLAG_MEANINGS.values())
 
-    assert missing == [], f"these nomenclature flags have no explanation: {missing}"
+
+def test_report_formatting_reexports_the_focused_nomenclature_presentation_contract() -> None:
+    """Extraction cannot leave callers holding copied tables that drift independently."""
+    from vntyper.scripts import nomenclature_presentation as presentation
+
+    assert rf.NOMENCLATURE_TIERS is presentation.NOMENCLATURE_TIERS
+    assert rf.TIER_A_BLOCKERS is presentation.TIER_A_BLOCKERS
+    assert rf.NOMENCLATURE_FLAG_MEANINGS is presentation.NOMENCLATURE_FLAG_MEANINGS
+    assert rf.COLUMN_HELP is presentation.COLUMN_HELP
+    assert rf.KESTREL_BAM_SEMANTICS is presentation.KESTREL_BAM_SEMANTICS
+
+
+def test_only_reconciliation_low_support_tokens_have_support_blocker_reasons() -> None:
+    """The BAM-rescue `< 3` thinness flag is a refine guard, not a Tier-A reason."""
+    from vntyper.scripts import nomenclature
+
+    support_flags = {
+        value
+        for name, value in vars(nomenclature).items()
+        if name.startswith("FLAG_") and isinstance(value, str) and "support" in value
+    }
+    support_blockers = support_flags & set(rf.TIER_A_BLOCKERS)
+
+    assert support_blockers == {
+        nomenclature.FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+        nomenclature.FLAG_LOW_KMER_PATH_SUPPORT,
+        nomenclature.FLAG_LOW_READ_SUPPORT,
+        nomenclature.FLAG_LOW_EVIDENCE_SUPPORT,
+    }
+    assert nomenclature.FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT not in rf.TIER_A_BLOCKERS
+    assert rf.tier_reason("B", [nomenclature.FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT]) == ""
+
+
+def test_tier_reason_preserves_tier_filtering_blocker_order_and_joining() -> None:
+    """The extraction cannot alter the established generated-sentence contract."""
+    from vntyper.scripts import nomenclature
+
+    blockers = [
+        nomenclature.FLAG_CALLER_DISAGREEMENT,
+        nomenclature.FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+    ]
+    expected = (
+        "Held below the corroborated tier because the two callers did not name the same allele; and resolved "
+        "Kestrel haplotype-record support is below the corroborated tier's source-specific evidence threshold."
+    )
+
+    assert rf.tier_reason("B", blockers) == expected
+    assert rf.tier_reason("A", blockers) == ""
+    assert rf.tier_reason("C", blockers) == ""
+    assert rf.tier_reason("B", ["unknown-token"]) == ""
+
+
+def test_legacy_low_read_support_wording_preserves_its_source_history_exactly() -> None:
+    """Archived Kestrel rows cannot be relabelled as sequencing-read measurements."""
+    from vntyper.scripts import nomenclature
+
+    assert rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_LOW_READ_SUPPORT] == (
+        "Low source support under the emitting version's rule. Current adVNTR or legacy scalar evidence "
+        "counts sequencing reads; pre-Phase-1 Kestrel BAM rows used this token for resolved "
+        "haplotype-record support."
+    )
+    assert rf.TIER_A_BLOCKERS[nomenclature.FLAG_LOW_READ_SUPPORT] == (
+        "a retained low-read-support token records support below the emitting version's applicable rule; "
+        "older Kestrel BAM rows may use it for legacy haplotype-record thinness rather than a "
+        "sequencing-read count"
+    )
+
+
+def test_presentation_names_each_current_evidence_unit_truthfully() -> None:
+    """A unit swap in any public table must fail even when the numeric decision is unchanged."""
+    from vntyper.scripts import nomenclature
+
+    assert rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT] == (
+        "Resolved Kestrel haplotype-record support is below the BAM rescue thinness threshold."
+    )
+    assert rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT] == (
+        "Resolved Kestrel haplotype-record support is below the corroborated tier's source-specific evidence threshold."
+    )
+    assert rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_LOW_KMER_PATH_SUPPORT] == (
+        "Kestrel alternate-allele k-mer-path depth is below the corroborated tier's source-specific evidence threshold."
+    )
+    assert rf.COLUMN_HELP["Depth (Variant)"] == "Kestrel alternate-allele k-mer-path depth."
+    assert rf.COLUMN_HELP["Depth (Region)"] == "Kestrel total k-mer depth across the active region."
+    assert rf.COLUMN_HELP["ALT"] == "The alternate allele reported by the caller."
+    assert rf.COLUMN_HELP["Supporting Reads"] == "Reads adVNTR counted in support of this call."
+
+
+def test_kestrel_and_shared_presentation_entries_never_call_evidence_reads() -> None:
+    """Catch broad `read`/`reads` regressions, including nonnumeric allele wording."""
+    from vntyper.scripts import nomenclature
+
+    kestrel_or_shared_entries = [
+        *(meaning for _label, meaning in rf.NOMENCLATURE_TIERS.values()),
+        rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_ALLELE_UNREPRESENTABLE],
+        rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT],
+        rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT],
+        rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_LOW_KMER_PATH_SUPPORT],
+        rf.NOMENCLATURE_FLAG_MEANINGS[nomenclature.FLAG_LOW_EVIDENCE_SUPPORT],
+        rf.TIER_A_BLOCKERS[nomenclature.FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT],
+        rf.TIER_A_BLOCKERS[nomenclature.FLAG_LOW_KMER_PATH_SUPPORT],
+        rf.TIER_A_BLOCKERS[nomenclature.FLAG_LOW_EVIDENCE_SUPPORT],
+        rf.COLUMN_HELP["ALT"],
+        rf.COLUMN_HELP["Depth (Variant)"],
+        rf.COLUMN_HELP["Depth (Region)"],
+    ]
+
+    assert not re.search(r"\breads?\b", "\n".join(kestrel_or_shared_entries), flags=re.IGNORECASE)
+
+
+def test_evidence_flag_legend_path_is_nonvacuous_and_source_aware() -> None:
+    """Every current and legacy evidence token must survive real dynamic filtering."""
+    from vntyper.scripts import nomenclature
+
+    evidence_flags = [
+        nomenclature.FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
+        nomenclature.FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+        nomenclature.FLAG_LOW_KMER_PATH_SUPPORT,
+        nomenclature.FLAG_LOW_READ_SUPPORT,
+        nomenclature.FLAG_LOW_EVIDENCE_SUPPORT,
+    ]
+    entries = rf.nomenclature_legend(
+        pd.DataFrame([{"Nomenclature_Tier": "B", "Nomenclature_Flags": ";".join(evidence_flags)}])
+    )
+
+    assert [entry["term"] for entry in entries] == ["Tier B", *evidence_flags]
+    assert [entry["meaning"] for entry in entries[1:]] == [
+        rf.NOMENCLATURE_FLAG_MEANINGS[token] for token in evidence_flags
+    ]
+
+
+def test_compact_kestrel_bam_semantics_note_is_exact_and_nondecisional() -> None:
+    """The HTML task consumes one shared sentence rather than paraphrasing the ontology."""
+    assert rf.KESTREL_BAM_SEMANTICS == (
+        "Kestrel output.bam contains resolved haplotype records, not sequencing reads. Its record counts are "
+        "haplotype-record support; XD is minimum k-mer depth and does not weight votes or alter names or tiers."
+    )
 
 
 def test_every_tier_the_caller_can_assign_is_explained() -> None:

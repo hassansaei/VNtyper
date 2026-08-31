@@ -1,9 +1,9 @@
-"""BAM rescue for alleles the Kestrel VCF cannot represent.
+"""Kestrel BAM rescue for alleles its VCF cannot represent.
 
 Kestrel's pinned jar emits only 1-vs-1, 1-vs-N and N-vs-1 records, so a delins is
 unrepresentable in its VCF. ``output.bam`` -- already produced, it is the report's
-IGV track -- keeps the reads aligned to the 120 bp pair reference with full
-``=``/``X``/``I``/``D`` CIGARs, and a ``1X1I`` block *is* a delins.
+IGV track -- keeps resolved haplotype records aligned to the 120 bp pair reference
+with full ``=``/``X``/``I``/``D`` CIGARs, and a ``1X1I`` block *is* a delins.
 
 These tests build small BAMs with pysam rather than reading benchmark files, so the
 tier stays in ``make test-unit`` and needs no downloaded data.
@@ -13,17 +13,21 @@ Research use only.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import pysam
 import pytest
 
-from vntyper.scripts.nomenclature import Nomenclature
+from vntyper.scripts.nomenclature import FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT, Nomenclature
 from vntyper.scripts.nomenclature_bam import (
     BamConsensus,
     BamRescuer,
+    from_bam,
     is_candidate,
     merge_edits,
+    minimum_kmer_depth,
     refine,
     walk_cigar,
 )
@@ -32,33 +36,84 @@ pytestmark = pytest.mark.unit
 
 #: A 120 bp pair reference, long enough for the spans these tests use.
 _REFERENCE = "ACGT" * 30
+_TagType = Literal["c", "C", "s", "S", "i", "I", "f", "Z"]
 
 
-def _write_bam(path: Path, reads: list[tuple[str, int, str]]) -> Path:
+@dataclass(frozen=True)
+class _HaplotypeRecordSpec:
+    """One synthetic resolved Kestrel haplotype record."""
+
+    name: str
+    start: int
+    cigar: str
+    minimum_kmer_depth: int | float | str | None = 181
+    xd_type: _TagType | None = None
+
+
+class _UnreadableXdRecord(pysam.AlignedSegment):
+    """Real pysam record with injected auxiliary-tag decoding failure."""
+
+    xd_error: Exception
+
+    def get_tag(self, *_: object, **__: object) -> object:  # type: ignore[override]
+        raise self.xd_error
+
+
+def _haplotypes(
+    prefix: str,
+    count: int,
+    cigar: str,
+    depths: tuple[int | None, ...] | None = None,
+) -> list[_HaplotypeRecordSpec]:
+    """Build resolved haplotype-record specifications with realistic XD values."""
+    observed_depths = depths or tuple((5, 181, 7_416, 8_704)[index % 4] for index in range(count))
+    return [_HaplotypeRecordSpec(f"{prefix}{index}", 10, cigar, observed_depths[index]) for index in range(count)]
+
+
+def _write_bam(path: Path, records: list[_HaplotypeRecordSpec]) -> Path:
     """Write a tiny indexed BAM.
 
     Args:
         path: Destination ``.bam``.
-        reads: ``(name, 0-based start, cigar string)`` per read.
+        records: Resolved haplotype-record specifications.
 
     Returns:
         Path: The written BAM.
     """
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "K-J", "LN": len(_REFERENCE)}]}
     with pysam.AlignmentFile(str(path), "wb", header=header) as handle:
-        for name, start, cigar in reads:
+        for specification in records:
             record = pysam.AlignedSegment(handle.header)
-            record.query_name = name
+            record.query_name = specification.name
             record.reference_id = 0
-            record.reference_start = start
+            record.reference_start = specification.start
             record.mapping_quality = 255
-            record.cigarstring = cigar
+            record.cigarstring = specification.cigar
             tuples = record.cigartuples or []
             length = sum(count for op, count in tuples if op in (0, 1, 4, 7, 8))
             record.query_sequence = "A" * length
+            if specification.minimum_kmer_depth is not None:
+                record.set_tag("XD", specification.minimum_kmer_depth, value_type=specification.xd_type)
             handle.write(record)
     pysam.index(str(path))  # type: ignore[attr-defined]
     return path
+
+
+def _tagged_record(value: int | float | str | None, value_type: _TagType | None = None) -> pysam.AlignedSegment:
+    """Build a real pysam record carrying one optional XD tag."""
+    header = pysam.AlignmentHeader.from_dict({"HD": {"VN": "1.6"}, "SQ": [{"SN": "K-J", "LN": 120}]})
+    record = pysam.AlignedSegment(header)
+    if value is not None:
+        record.set_tag("XD", value, value_type=value_type)
+    return record
+
+
+def _unreadable_xd_record(error_type: type[Exception]) -> pysam.AlignedSegment:
+    """Build a real pysam record whose XD decoding raises at the parser boundary."""
+    header = pysam.AlignmentHeader.from_dict({"HD": {"VN": "1.6"}, "SQ": [{"SN": "K-J", "LN": 120}]})
+    record = _UnreadableXdRecord(header)
+    record.xd_error = error_type("invalid auxiliary tag")
+    return record
 
 
 def _tier(tier: str, flags: tuple[str, ...] = ()) -> Nomenclature:
@@ -117,7 +172,7 @@ def test_the_rescuer_never_opens_the_bam_without_a_candidate(tmp_path: Path) -> 
 def test_a_substitution_beside_an_insertion_merges_into_one_delins() -> None:
     """This is what recovers the allele the VCF cannot hold.
 
-    ``1X1I`` replaces one reference base with two read bases -- the shape of
+    ``1X1I`` replaces one reference base with two haplotype-record bases -- the shape of
     ``delinsAT`` -- which is precisely what Kestrel's 1-vs-1 / 1-vs-N / N-vs-1
     record set has no way to write down.
     """
@@ -150,8 +205,66 @@ def test_a_plain_deletion_stays_a_deletion() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Voting
+# XD parsing and record voting
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "value_type"),
+    [(5, "c"), (181, "C"), (7_416, "s"), (7_416, "S"), (181, "i"), (2_147_483_647, "I")],
+)
+def test_minimum_kmer_depth_accepts_pysam_integer_subtypes(value: int, value_type: _TagType) -> None:
+    """pysam compacts SAM integer tags, so all BAM integer subtypes are valid."""
+    assert minimum_kmer_depth(_tagged_record(value, value_type)) == value
+
+
+def test_minimum_kmer_depth_returns_none_silently_when_xd_is_absent(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("DEBUG", logger="vntyper.scripts.nomenclature_bam"):
+        assert minimum_kmer_depth(_tagged_record(None)) is None
+    assert "XD minimum k-mer depth" not in caplog.text
+
+
+@pytest.mark.parametrize("error_type", [TypeError, ValueError, OverflowError])
+def test_minimum_kmer_depth_contains_present_tag_decoding_errors(
+    error_type: type[Exception],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("DEBUG", logger="vntyper.scripts.nomenclature_bam"):
+        assert minimum_kmer_depth(_unreadable_xd_record(error_type)) is None
+    assert "Invalid XD minimum k-mer depth" in caplog.text
+
+
+@pytest.mark.parametrize(("value", "value_type"), [(1.5, "f"), ("malformed", "Z")])
+def test_minimum_kmer_depth_rejects_nonintegral_xd(
+    value: float | str,
+    value_type: _TagType,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("DEBUG", logger="vntyper.scripts.nomenclature_bam"):
+        assert minimum_kmer_depth(_tagged_record(value, value_type)) is None
+    assert "Invalid XD minimum k-mer depth" in caplog.text
+
+
+def test_minimum_kmer_depth_preserves_zero() -> None:
+    assert minimum_kmer_depth(_tagged_record(0)) == 0
+
+
+def test_minimum_kmer_depth_rejects_negative_xd(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("DEBUG", logger="vntyper.scripts.nomenclature_bam"):
+        assert minimum_kmer_depth(_tagged_record(-1)) is None
+    assert "Invalid XD minimum k-mer depth" in caplog.text
+
+
+def test_minimum_kmer_depth_preserves_the_largest_producer_integer() -> None:
+    assert minimum_kmer_depth(_tagged_record(2_147_483_647)) == 2_147_483_647
+
+
+def test_minimum_kmer_depth_rejects_unsigned_values_above_the_producer_range(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("DEBUG", logger="vntyper.scripts.nomenclature_bam"):
+        assert minimum_kmer_depth(_tagged_record(2_147_483_648, "I")) is None
+    assert "Invalid XD minimum k-mer depth" in caplog.text
 
 
 def test_only_length_changing_edits_are_voted_on(tmp_path: Path) -> None:
@@ -162,41 +275,94 @@ def test_only_length_changing_edits_are_voted_on(tmp_path: Path) -> None:
     """
     bam = _write_bam(
         tmp_path / "subs.bam",
-        [(f"r{n}", 10, "20=1X20=") for n in range(12)] + [(f"i{n}", 10, "20=1I20=") for n in range(3)],
+        _haplotypes("sub", 12, "20=1X20=") + _haplotypes("ins", 3, "20=1I20="),
     )
     consensus = BamRescuer(bam).rescue("K-J", 30)
     assert consensus is not None
     assert consensus.kind == "insertion"
-    assert consensus.support == 3
+    assert consensus.supporting_haplotype_records == 3
 
 
 def test_support_is_reported_not_hidden(tmp_path: Path) -> None:
     """A thin consensus must be visible as thin, never silently accepted."""
     bam = _write_bam(
         tmp_path / "thin.bam",
-        [("only", 10, "20=1X1I20=")] + [(f"m{n}", 10, "41=") for n in range(9)],
+        _haplotypes("variant", 1, "20=1X1I20=", (5,)) + _haplotypes("reference", 9, "41="),
     )
     consensus = BamRescuer(bam).rescue("K-J", 30)
     assert consensus is not None
-    assert consensus.support == 1
-    assert consensus.total == 10
+    assert consensus.supporting_haplotype_records == 1
+    assert consensus.fetched_haplotype_records == 10
     assert consensus.is_thin is True
 
 
 def test_a_locus_with_no_length_changing_edit_yields_nothing(tmp_path: Path) -> None:
-    bam = _write_bam(tmp_path / "flat.bam", [(f"r{n}", 10, "41=") for n in range(8)])
+    bam = _write_bam(tmp_path / "flat.bam", _haplotypes("reference", 8, "41="))
     assert BamRescuer(bam).rescue("K-J", 30) is None
 
 
 def test_distinct_alleles_are_counted(tmp_path: Path) -> None:
     bam = _write_bam(
         tmp_path / "mixed.bam",
-        [(f"a{n}", 10, "20=1I20=") for n in range(4)] + [(f"b{n}", 10, "20=2I20=") for n in range(2)],
+        _haplotypes("one-base", 4, "20=1I20=") + _haplotypes("two-base", 2, "20=2I20="),
     )
     consensus = BamRescuer(bam).rescue("K-J", 30)
     assert consensus is not None
-    assert consensus.n_distinct == 2
-    assert consensus.support == 4
+    assert consensus.distinct_edit_count == 2
+    assert consensus.supporting_haplotype_records == 4
+
+
+def test_changing_only_xd_does_not_change_a_three_to_two_record_winner(tmp_path: Path) -> None:
+    low_winner = _write_bam(
+        tmp_path / "low-winner.bam",
+        _haplotypes("winner", 3, "20=1I20=", (5, 5, 5)) + _haplotypes("runner-up", 2, "20=2I20=", (8_704, 8_704)),
+    )
+    high_winner = _write_bam(
+        tmp_path / "high-winner.bam",
+        _haplotypes("winner", 3, "20=1I20=", (8_704, None, 0))
+        + _haplotypes("runner-up", 2, "20=2I20=", (-1, 2_147_483_647)),
+    )
+
+    low_consensus = BamRescuer(low_winner).rescue("K-J", 30)
+    high_consensus = BamRescuer(high_winner).rescue("K-J", 30)
+
+    assert low_consensus is not None
+    assert high_consensus is not None
+    assert low_consensus == high_consensus
+    assert low_consensus.supporting_record_minimum_kmer_depths == (5, 5, 5)
+    assert high_consensus.supporting_record_minimum_kmer_depths == (8_704, None, 0)
+
+
+def test_unequal_xd_cannot_break_an_equal_record_vote(tmp_path: Path) -> None:
+    bam = _write_bam(
+        tmp_path / "xd-tie.bam",
+        _haplotypes("weak", 2, "20=1I20=", (5, 5)) + _haplotypes("strong", 2, "20=2I20=", (8_704, 8_704)),
+    )
+    assert BamRescuer(bam).rescue("K-J", 30) is None
+
+
+def test_several_weak_xd_records_outvote_one_maximum_xd_record(tmp_path: Path) -> None:
+    bam = _write_bam(
+        tmp_path / "weak-majority.bam",
+        _haplotypes("weak", 3, "20=1I20=", (5, 5, 5)) + _haplotypes("strong", 1, "20=2I20=", (2_147_483_647,)),
+    )
+    consensus = BamRescuer(bam).rescue("K-J", 30)
+    assert consensus is not None
+    assert consensus.inserted == 1
+    assert consensus.supporting_haplotype_records == 3
+
+
+def test_equal_xd_sums_do_not_override_the_record_count_winner(tmp_path: Path) -> None:
+    bam = _write_bam(
+        tmp_path / "equal-xd-sums.bam",
+        _haplotypes("two-record-winner", 2, "20=1I20=", (5, 5))
+        + _haplotypes("one-record-runner-up", 1, "20=2I20=", (10,)),
+    )
+    consensus = BamRescuer(bam).rescue("K-J", 30)
+    assert consensus is not None
+    assert consensus.inserted == 1
+    assert consensus.supporting_haplotype_records == 2
+    assert consensus.supporting_record_minimum_kmer_depths == (5, 5)
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +372,7 @@ def test_distinct_alleles_are_counted(tmp_path: Path) -> None:
 
 def test_one_handle_serves_many_loci(tmp_path: Path) -> None:
     """Re-opening per locus is the cost the design calls out; prove it does not."""
-    bam = _write_bam(tmp_path / "reuse.bam", [(f"r{n}", 10, "20=1I20=") for n in range(6)])
+    bam = _write_bam(tmp_path / "reuse.bam", _haplotypes("variant", 6, "20=1I20="))
     rescuer = BamRescuer(bam)
     for _ in range(5):
         rescuer.rescue("K-J", 30)
@@ -218,7 +384,7 @@ def test_one_handle_serves_many_loci(tmp_path: Path) -> None:
 
 
 def test_an_unknown_contig_is_not_an_error(tmp_path: Path) -> None:
-    bam = _write_bam(tmp_path / "unknown.bam", [("r", 10, "41=")])
+    bam = _write_bam(tmp_path / "unknown.bam", _haplotypes("reference", 1, "41="))
     assert BamRescuer(bam).rescue("NOT-A-PAIR", 30) is None
 
 
@@ -233,11 +399,12 @@ def test_a_missing_bam_is_not_an_error(tmp_path: Path) -> None:
 
 def test_a_tie_yields_no_rescue_at_all(tmp_path: Path) -> None:
     """A tie has no winner. `Counter.most_common` breaks one by BAM order, so
-    whichever read was written first would decide an allele that can override the
-    VCF."""
+    whichever haplotype record was written first would decide an allele that can
+    override the VCF."""
     bam = _write_bam(
         tmp_path / "tied.bam",
-        [(f"a{n}", 10, "20=1I20=") for n in range(3)] + [(f"b{n}", 10, "20=2I20=") for n in range(3)],
+        _haplotypes("one-base", 3, "20=1I20=", (5, 5, 5))
+        + _haplotypes("two-base", 3, "20=2I20=", (8_704, 8_704, 8_704)),
     )
     assert BamRescuer(bam).rescue("K-J", 30) is None
 
@@ -245,15 +412,58 @@ def test_a_tie_yields_no_rescue_at_all(tmp_path: Path) -> None:
 def test_a_clear_winner_over_a_runner_up_is_still_rescued(tmp_path: Path) -> None:
     bam = _write_bam(
         tmp_path / "clear.bam",
-        [(f"a{n}", 10, "20=1I20=") for n in range(5)] + [(f"b{n}", 10, "20=2I20=") for n in range(2)],
+        _haplotypes("one-base", 5, "20=1I20=") + _haplotypes("two-base", 2, "20=2I20="),
     )
     consensus = BamRescuer(bam).rescue("K-J", 30)
     assert consensus is not None
-    assert consensus.support == 5
+    assert consensus.supporting_haplotype_records == 5
 
 
 def test_a_well_supported_consensus_is_not_thin() -> None:
-    assert BamConsensus("delins", 55, 1, 2, support=9, total=20, n_distinct=2).is_thin is False
+    assert (
+        BamConsensus(
+            "delins",
+            55,
+            1,
+            2,
+            supporting_haplotype_records=9,
+            fetched_haplotype_records=20,
+            distinct_edit_count=2,
+            supporting_record_minimum_kmer_depths=(5, 181, 7_416, 8_704, 5, 181, 7_416, 8_704, None),
+        ).is_thin
+        is False
+    )
+
+
+def test_xd_is_equality_and_hash_neutral_and_cannot_change_thinness() -> None:
+    weak = BamConsensus(
+        "delins",
+        55,
+        1,
+        2,
+        2,
+        20,
+        2,
+        supporting_record_minimum_kmer_depths=(5, 5),
+    )
+    extreme = BamConsensus(
+        "delins",
+        55,
+        1,
+        2,
+        2,
+        20,
+        2,
+        supporting_record_minimum_kmer_depths=(2_147_483_647, None),
+    )
+
+    assert weak == extreme
+    assert hash(weak) == hash(extreme)
+    assert weak.is_thin is True
+    assert extreme.is_thin is True
+    assert weak.support == weak.supporting_haplotype_records
+    assert weak.total == weak.fetched_haplotype_records
+    assert weak.n_distinct == weak.distinct_edit_count
 
 
 # ---------------------------------------------------------------------------
@@ -283,9 +493,53 @@ def test_the_bam_supplies_an_allele_the_vcf_had_none_for() -> None:
     assert refined.source == "kestrel_bam"
 
 
+def test_from_bam_marks_thin_haplotype_record_support() -> None:
+    consensus = BamConsensus(
+        "insertion",
+        60,
+        0,
+        1,
+        supporting_haplotype_records=2,
+        fetched_haplotype_records=10,
+        distinct_edit_count=1,
+        bases="A",
+        supporting_record_minimum_kmer_depths=(5, 8_704),
+    )
+    named = from_bam("K-J", consensus)
+    assert named is not None
+    assert FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT in named.flags
+    assert "low-read-support" not in named.flags
+
+
+def test_a_thin_haplotype_consensus_cannot_settle_caller_disagreement() -> None:
+    disagreement = Nomenclature(
+        name=None,
+        event="disagreement",
+        unit="X",
+        tier="C",
+        flags=("caller-disagreement",),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=0,
+        source="reconciled",
+    )
+    thin = _named("58_59insG", "insertion", "kestrel_bam")
+    thin = Nomenclature(
+        name=thin.name,
+        event=thin.event,
+        unit=thin.unit,
+        tier=thin.tier,
+        flags=(FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,),
+        ambiguity=thin.ambiguity,
+        repeat_form=thin.repeat_form,
+        net_length=thin.net_length,
+        source=thin.source,
+    )
+    assert refine(disagreement, thin) is disagreement
+
+
 def test_the_bam_may_not_veto_an_allele_the_vcf_already_has() -> None:
-    """Measured: letting a thin read consensus overrule a VCF name cost more than
-    it gained -- dupA fell from 6 correct to 1, insCCCC from 9 to 3."""
+    """A thin haplotype-record consensus cannot overrule an existing VCF name."""
     vcf = _named("60dupA", "duplication")
     refined = refine(vcf, _named("59delC", "deletion", "kestrel_bam"))
     assert refined.name == "60dupA"
@@ -297,7 +551,7 @@ def test_agreement_leaves_the_call_alone() -> None:
     assert refine(vcf, _named("59dupC", "duplication", "kestrel_bam")) is vcf
 
 
-def test_a_delins_from_the_reads_overrides_a_shape_the_vcf_cannot_hold() -> None:
+def test_a_delins_from_haplotype_records_overrides_a_shape_the_vcf_cannot_hold() -> None:
     """Kestrel's VariantType has SNP, INSERTION and DELETION and nothing else, so
     whatever it wrote for a delins locus is the closest representable shape rather
     than the allele."""
@@ -307,6 +561,6 @@ def test_a_delins_from_the_reads_overrides_a_shape_the_vcf_cannot_hold() -> None
     assert "allele-unrepresentable-in-vcf" in refined.flags
 
 
-def test_silence_from_the_reads_changes_nothing() -> None:
+def test_silence_from_haplotype_records_changes_nothing() -> None:
     vcf = _named("59dupC", "duplication")
     assert refine(vcf, None) is vcf

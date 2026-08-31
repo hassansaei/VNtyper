@@ -62,17 +62,24 @@ import pandas as pd
 # Contract C1: the coverage TSV field names are declared once, by the module that
 # produces them. Re-typing the strings here is how the report silently loses
 # coverage when a column is renamed - `.get(name, 0)` raises nothing.
-from vntyper.scripts import nomenclature
-
-# Contract C1: the coverage TSV field names are declared once, by the module that
-# produces them. Re-typing the strings here is how the report silently loses
-# coverage when a column is renamed - `.get(name, 0)` raises nothing.
 from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS, COVERAGE_COLUMNS, COVERAGE_NULL_TOKEN
 from vntyper.scripts.fastp_cutoffs import (
     FastpJsonPayload,
     calculate_passed_filter_rate_from_sources,
     validated_fastp_fraction,
     validated_fastp_mapping,
+)
+from vntyper.scripts.nomenclature_presentation import (
+    COLUMN_HELP,
+    NOMENCLATURE_FLAG_MEANINGS,
+    NOMENCLATURE_TIERS,
+    tier_reason,
+)
+from vntyper.scripts.nomenclature_presentation import (
+    KESTREL_BAM_SEMANTICS as KESTREL_BAM_SEMANTICS,
+)
+from vntyper.scripts.nomenclature_presentation import (
+    TIER_A_BLOCKERS as TIER_A_BLOCKERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -284,166 +291,6 @@ ADVNTR_CELL_FORMATS: dict[str, str] = {
     "Ambiguity_Interval": FORMAT_TEXT,
     "Repeat_Form": FORMAT_TEXT,
     "Nomenclature_Note": FORMAT_TEXT,
-}
-
-#: What a nomenclature tier means, keyed by the letter the results frame carries.
-#:
-#: The tier is the single most compressed thing either results table says, it is a bare
-#: letter, and until now the report printed it with nothing anywhere saying what it
-#: meant - a reader who did not already know had no way to find out from the artefact in
-#: front of them. Each entry is ``(short label, what it took to earn it)``, and both are
-#: written from :func:`vntyper.scripts.nomenclature.reconcile`'s own conditions rather
-#: than paraphrased: tier A requires two independent sources agreeing after
-#: normalisation, a name present in ``KNOWN_VARIANTS``, support at or above
-#: ``MIN_SUPPORT_FOR_TIER_A``, and none of the context or disagreement flags.
-#:
-#: The wording states what was established, never how much to trust the sample. A tier
-#: is a statement about how far a *name* has been checked.
-NOMENCLATURE_TIERS: dict[str, tuple[str, str]] = {
-    "A": (
-        "corroborated name",
-        "Two independent callers name the same allele, that name matches a MUC1 variant "
-        "described in the literature, read support meets the threshold, and no context or "
-        "disagreement flag is set. Tier A is the only tier that states a bare position.",
-    ),
-    "B": (
-        "qualified name",
-        "A name was computed, but at least one tier-A condition is unmet - a single caller, "
-        "an allele nobody has described before, thin read support, a diverging motif context, "
-        "or the two callers disagreeing. The name is shown so it can be weighed; the flags "
-        "beside it say which condition was missed.",
-    ),
-    "C": (
-        "no position",
-        "No coordinate could be computed. What is stated is the event and its net length "
-        "change, without a position - not a negative, and not a name withheld.",
-    ),
-}
-
-#: Which flag evidences which unmet tier-A condition, in the words
-#: :func:`vntyper.scripts.nomenclature.reconcile` decides them by.
-#:
-#: **This is the question the tier definition alone cannot answer.** A tier-B call is
-#: one where "at least one tier-A condition is unmet", and the report printed the
-#: letter, printed the flags, and left the reader to work out which of five conditions
-#: applied to *this* call. The person who wrote the caller asked the question, which is
-#: the clearest possible evidence that a reader could not answer it from the artefact.
-#:
-#: The keys are the flag constants that :func:`reconcile` tests by name when it decides
-#: tier A, plus :data:`~vntyper.scripts.nomenclature.FLAG_REPRESENTATION_ONLY`, which is
-#: set on exactly the names absent from ``KNOWN_VARIANTS`` - the condition
-#: ``chosen_name in KNOWN_VARIANTS`` fails on. They are imported rather than retyped, so
-#: a renamed flag fails at import instead of silently explaining nothing.
-#:
-#: Two of tier A's conditions leave no flag behind and are therefore deliberately not
-#: inferred here: a single uncorroborated caller, and read support that is *unknown*
-#: rather than low. When the flags evidence no blocker, the report says the tier is B
-#: and does not guess why - which is the honest reading of a call whose reason is not in
-#: the record.
-TIER_A_BLOCKERS: dict[str, str] = {
-    nomenclature.FLAG_MOTIF_CONTEXT_DIVERGES: (
-        "the motif context around the call diverges from the canonical X repeat unit"
-    ),
-    nomenclature.FLAG_SEQUENCE_UNDETERMINED: "the inserted or deleted sequence could not be determined",
-    nomenclature.FLAG_CALLER_DISAGREEMENT: "the two callers did not name the same allele",
-    nomenclature.FLAG_LOW_READ_SUPPORT: (
-        f"read support is below the {nomenclature.MIN_SUPPORT_FOR_TIER_A} reads the corroborated tier requires"
-    ),
-    nomenclature.FLAG_REPRESENTATION_ONLY: "no MUC1 variant described in the literature matches this name",
-}
-
-#: The closed nomenclature flag vocabulary, in words.
-#:
-#: The keys are exactly the kebab-case constants declared in
-#: :mod:`vntyper.scripts.nomenclature`; that module states the vocabulary is closed and
-#: that a consumer may match on it, which is what makes writing the meanings out here
-#: safe. ``length-truncated`` is declared there and not yet set by any path: it is
-#: documented anyway, because a reserved token a reader may one day meet is worth a
-#: sentence, and an unexplained one is the defect this table exists to close.
-NOMENCLATURE_FLAG_MEANINGS: dict[str, str] = {
-    "position-ambiguous": (
-        "The edit can be written at more than one position in the repeat unit. The ambiguity "
-        "interval gives the range over which the placements are indistinguishable."
-    ),
-    "spans-unit-junction": (
-        "The event crosses the boundary between two repeat units, so it cannot be expressed "
-        "as one span on a single unit."
-    ),
-    "motif-context-diverges": (
-        "The sequence around the call in the motif the caller assigned differs from the "
-        "canonical X unit, so the coordinate projected onto X is less certain."
-    ),
-    "allele-unrepresentable-in-vcf": (
-        "The allele cannot be written in the caller's VCF shape. The name comes from the "
-        "reads, which are the better evidence for this locus."
-    ),
-    "low-read-support": "Fewer reads support the call than the corroborated tier requires.",
-    "caller-disagreement": "Kestrel and adVNTR did not name the same allele.",
-    "length-truncated": "The reported length is a lower bound rather than the full extent.",
-    "sequence-undetermined": (
-        "The inserted or deleted sequence itself could not be determined, so no position is given."
-    ),
-    "known-variant": (
-        "The name matches a MUC1 variant described in the literature. The table is used to "
-        "check a name, never to produce one - a match says somebody has described this allele "
-        "before, which is weaker than saying the call is correct."
-    ),
-    "representation-of-caller-call": (
-        "The name represents what the caller reported and matches no described variant. It requires validation."
-    ),
-}
-
-#: One line per results-table heading, shown as the column's own hover text and printed
-#: in the reading key beneath each table.
-#:
-#: Keyed by the *heading*, which is what both frames carry by the time they are rendered
-#: - the Kestrel columns are renamed by :data:`KESTREL_DISPLAY_COLUMNS` and the adVNTR
-#: ones are not, so a shared key would have to be one or the other and could only ever
-#: explain half the report.
-COLUMN_HELP: dict[str, str] = {
-    "Supporting Reads": "Reads adVNTR counted in support of this call.",
-    "Mean Coverage": "Mean read depth adVNTR measured over the locus. Not the region mean above.",
-    "P-value": "adVNTR's significance for the call, to three significant figures.",
-    "Repeat Unit": "The adVNTR repeat unit the call was made in.",
-    "Motif": "The MUC1 repeat motif this variant was annotated onto.",
-    "Motifs": "The raw left-right motif pair Kestrel emitted for the record.",
-    "Variant": "The event class the caller reported.",
-    "Position": "Position within the 120 bp Kestrel motif pair, not a genomic coordinate.",
-    "POS": "Position within the caller's own coordinate frame, not a genomic coordinate.",
-    "REF": "The reference allele at the reported position.",
-    "ALT": "The alternate allele the reads support.",
-    "Depth (Variant)": "Reads Kestrel estimates support the alternate allele.",
-    "Depth (Region)": "Reads Kestrel estimates over the active region around the call.",
-    "Depth Score": (
-        "Variant depth over region depth. It scales with the inverse of the array length, so "
-        "it is comparable within a sample and not between assemblies."
-    ),
-    "Confidence": "Kestrel's own calibrated label for the call.",
-    "Flag": "Whether a configured flagging rule fired on this row, and which one.",
-    "MUC1 Name": "The reconciled MUC1 name for the allele, on the canonical X repeat unit.",
-    "Nomenclature": "The reconciled MUC1 name for the allele, on the canonical X repeat unit.",
-    "Tier": "How far the name beside it has been checked. See the reading key below the table.",
-    "Nomenclature_Tier": "How far the name beside it has been checked. See the reading key below the table.",
-    "Flags": "Closed-vocabulary qualifiers on the name. Each one present is spelled out below the table.",
-    "Nomenclature_Flags": (
-        "Closed-vocabulary qualifiers on the name. Each one present is spelled out below the table."
-    ),
-    "Kestrel Name": "The name derived from Kestrel's record alone, before reconciliation.",
-    "Nomenclature_Kestrel": "The name derived from Kestrel's record alone, before reconciliation.",
-    "adVNTR Name": "The name derived from adVNTR's record alone, before reconciliation.",
-    "Nomenclature_adVNTR": "The name derived from adVNTR's record alone, before reconciliation.",
-    "Ambiguity": "The range of positions over which this edit is indistinguishable.",
-    "Ambiguity_Interval": "The range of positions over which this edit is indistinguishable.",
-    "Repeat Form": "The affected tract before and after the edit, written as a repeat count.",
-    "Repeat_Form": "The affected tract before and after the edit, written as a repeat count.",
-    "Naming Note": "What the name is, and how far it has been checked.",
-    "Nomenclature_Note": "What the name is, and how far it has been checked.",
-    "Motif Sequence": "The 60 bp repeat-unit half named by the Motif column.",
-    "VID": "adVNTR's own variant identifier.",
-    "NumberOfSupportingReads": "Reads adVNTR counted in support of this call.",
-    "MeanCoverage": "Mean read depth adVNTR measured over the locus.",
-    "Pvalue": "adVNTR's significance for the call, to three significant figures.",
-    "RU": "The adVNTR repeat unit the call was made in.",
 }
 
 #: Headings whose values are identifiers, sequences or coordinates rather than prose,
@@ -1289,39 +1136,6 @@ def space_flag_tokens(df: pd.DataFrame) -> pd.DataFrame:
     return spaced
 
 
-def tier_reason(tier: str, flags: Sequence[str]) -> str:
-    """Say which tier-A condition this call actually missed.
-
-    "At least one tier-A condition is unmet" is a definition, not an answer. A reader
-    holding a tier-B call wants to know *which* one, and the flags carry it - but only
-    for somebody who already knows that ``motif-context-diverges`` is one of the five
-    names :func:`~vntyper.scripts.nomenclature.reconcile` tests before it promotes a
-    call. This states the connection the report was leaving to be inferred.
-
-    Only flag-evidenced blockers are named. Two of tier A's conditions leave no flag - a
-    single uncorroborated caller, and read support that is unknown rather than low - so
-    a call held below tier A by one of those returns "" and the report says the tier
-    without inventing a reason for it.
-
-    Args:
-        tier: The tier letter the call carries.
-        flags: Its flags, already split into single tokens.
-
-    Returns:
-        str: The reason clause, or "" for tier A, for tier C - whose whole meaning is
-        that no position could be computed - and for a tier-B call whose blocker left no
-        flag behind.
-    """
-    if tier != "B":
-        return ""
-    reasons = [TIER_A_BLOCKERS[flag] for flag in flags if flag in TIER_A_BLOCKERS]
-    if not reasons:
-        return ""
-    if len(reasons) == 1:
-        return f"Held below the corroborated tier because {reasons[0]}."
-    return "Held below the corroborated tier because " + "; and ".join(reasons) + "."
-
-
 def variant_identity(*frames: pd.DataFrame) -> dict[str, Any] | None:
     """Summarise what the run named, for the top of the report.
 
@@ -1405,7 +1219,7 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
     """Explain every coded nomenclature value this report actually prints.
 
     Only the terms present in these rows are returned. A key listing all three tiers and
-    all ten flags under a table that uses two of them is a wall the reader has to filter
+    all defined flags under a table that uses two of them is a wall the reader has to filter
     themselves, and the terms they do meet are the ones worth the space.
 
     Args:

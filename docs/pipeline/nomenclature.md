@@ -46,7 +46,7 @@ The tier is an **emission rule**, not a label: it decides what may be printed.
 
 | Tier | Condition | What is emitted |
 |---|---|---|
-| **A** | Two independent callers agree after normalisation, the motif context matches the canonical unit, and read support meets the threshold | the name, e.g. `59dupC` |
+| **A** | Two independent callers agree after normalisation, the motif context matches the canonical unit, and each source's evidence support meets the threshold | the name, e.g. `59dupC` |
 | **B** | A name was computed, but something above is missing | the same name, carrying the tier and the flags that say what is missing |
 | **C** | No allele could be determined | `frameshift +1, allele undetermined` — no position at all |
 
@@ -57,17 +57,17 @@ one that was never wrong, discards information a reader can weigh for themselves
 and the flags travel beside the name and say how far it has been checked; they do not
 decide whether the reader may see it.
 
-Read support is **unknown-hostile**: a source whose depth column is blank or non-numeric
-makes the whole agreement's depth unknown, and unknown never clears the threshold. One
-caller's depth is not evidence about another's.
+Evidence support is **unknown-hostile**: a source whose support value is blank or
+non-numeric makes the whole agreement's support unknown, and unknown never clears the
+threshold. One caller's evidence is not evidence about another's.
 
 **No single caller can reach tier A on its own.** On the benchmark, Kestrel places the
 whole `insG` family one position 3′ of truth; those records look perfectly clean in
 isolation. Only a second, independent source separates them.
 
 "Independent" means *a different caller*, not merely a different file. Kestrel's VCF
-and Kestrel's alignment are one caller read twice, so their agreeing is one opinion
-rather than two, and it does not promote anything.
+and Kestrel's resolved haplotype alignment are two artifacts from one caller, so their
+agreement is one opinion rather than two, and it does not promote anything.
 
 Tier C is the point of the whole design. Where a caller's allele is genuinely
 indistinguishable from another, printing a name would be a confident falsehood, and
@@ -77,16 +77,35 @@ indistinguishable from another, printing a name would be a confident falsehood, 
 
 Stable, kebab-case, and matchable:
 
+The table contains all 14 authoritative tokens. Its support terms are source-specific:
+Kestrel VCF support is alternate-allele k-mer-path depth, Kestrel `output.bam` support is
+resolved haplotype-record support, and adVNTR support counts sequencing reads. The
+unchanged `min_support_for_high_confidence` value (5) is applied in each source's own
+unit; it is not a universal read-count threshold.
+
 | Flag | Meaning |
 |---|---|
 | `position-ambiguous` | the variant can shift within a tract; see `Ambiguity_Interval` |
 | `spans-unit-junction` | the span crosses the boundary between two repeat units |
 | `motif-context-diverges` | the assigned motif differs from the canonical unit where the name lands |
-| `allele-unrepresentable-in-vcf` | the reads show something the caller's VCF cannot express |
-| `sequence-undetermined` | a length is known but the inserted bases are not |
-| `low-read-support` | too few reads under the call to promote it |
-| `caller-disagreement` | the sources do not agree |
-| `length-truncated` | the reported length is shorter than the evidence |
+| `allele-unrepresentable-in-vcf` | Kestrel's VCF cannot express the allele shape; the name comes from its resolved haplotype records |
+| `thin-haplotype-record-support` | Kestrel BAM haplotype-record support is below the unchanged thinness threshold |
+| `low-haplotype-record-support` | Kestrel BAM haplotype-record support is below the corroborated tier's source-specific threshold |
+| `low-kmer-path-support` | Kestrel alternate-allele k-mer-path depth is below the corroborated tier's source-specific threshold |
+| `low-read-support` | current adVNTR or legacy scalar sequencing-read support is low; archived pre-Phase-1 Kestrel BAM rows can also carry this token |
+| `low-evidence-support` | support from a source whose evidence unit is undeclared is below the source-specific threshold |
+| `caller-disagreement` | Kestrel and adVNTR do not name the same allele |
+| `length-truncated` | the reported length is a lower bound rather than the full extent |
+| `sequence-undetermined` | a length is known but the inserted or deleted bases are not |
+| `known-variant` | the name matches a MUC1 variant described in the literature; the table checks a name and never produces one |
+| `representation-of-caller-call` | the name represents the caller's report but matches no described variant; it requires validation |
+
+The shipped configuration calls the BAM thinness key
+`bam_thin_haplotype_record_support` (value 3). Complete custom configurations may still
+use the former `bam_thin_support` key as a compatibility fallback; the canonical key wins
+when both are present, and omitting both remains an error. The broader
+`min_support_for_high_confidence` name stays stable for configuration compatibility even
+though its value is interpreted in the evidence unit of each source.
 
 ## The two companion fields
 
@@ -100,26 +119,35 @@ scales: an `insCCCC` reads `53C[11]`, considerably clearer than `56_59dupCCCC`.
 
 Both are empty where they do not apply.
 
-## Where the reads are consulted
+## Where the resolved haplotype records are consulted
 
 Kestrel's VCF can express 1-vs-1, 1-vs-N and N-vs-1 records and nothing else, so a
 delins has no representation in it. Where a call cannot be resolved from the VCF,
-VNtyper walks the CIGARs in `output.bam` (the alignment the report's IGV track already
-shows) and merges adjacent non-matching blocks — which is how a `1X1I` block becomes
-the delins the VCF had no way to write down.
+VNtyper walks the CIGARs in `output.bam` (the resolved haplotype alignment the report's
+IGV track already shows) and merges adjacent non-matching blocks — which is how a `1X1I`
+block becomes the delins the VCF had no way to write down. Each BAM record represents a
+Kestrel-resolved haplotype, not a sequencing read.
 
-The policy is **VCF primary, BAM refines**. The reads may supply an allele the VCF
-lacked, and may override a shape the VCF structurally cannot hold, but they may not
-veto a name the VCF already has: the alignment splits reads across many reference
-records, so a locus often carries only one to three reads, and a thin consensus
-overruling a well-supported record loses more than it gains.
+The policy is **VCF primary, BAM refines**. The resolved haplotype records may supply an
+allele the VCF lacked, and may override a shape the VCF structurally cannot hold, but
+they may not veto a name the VCF already has. Low haplotype-record support remains the
+same thin-consensus check that was previously described as a read-count check.
 
-The BAM is opened only for calls that need it — on the benchmark, about a fifth of
-samples — and never at all for the rest.
+In the 200-sample benchmark, 83/200 samples are eligible for BAM consultation. Of those,
+15 have no Kestrel result row, while 68/200 (34%) produce one BAM row fetch; the BAM is
+not fetched for the other samples. These are measured calls through the unchanged
+eligibility policy, not a new threshold.
+
+The BAM's optional `XD` tag is the minimum k-mer depth of that resolved haplotype. It is
+recorded separately from haplotype-record support and does not weight votes or alter
+names or tiers. Integer values from 1 through 2,147,483,647 are retained exactly, and
+zero is retained as zero. Missing or malformed values are unavailable; negative values
+and unsigned integers above 2,147,483,647 are unavailable. Every resolved haplotype
+record still contributes one unweighted vote in all of these cases.
 
 Two consequences worth stating plainly. A locus where the two callers describe
-*different events* is a conflict, not a gap, so a thin read consensus is not allowed to
-settle it with a number; `allele undetermined` stands. And because an ordinary
+*different events* is a conflict, not a gap, so a thin haplotype-record consensus is not
+allowed to settle it with a number; `allele undetermined` stands. And because an ordinary
 single-caller call is tier B and therefore not a candidate, a run **without** the optional
 adVNTR module rarely opens the BAM at all — so a delins that Kestrel's VCF could not
 express is unlikely to be recovered unless adVNTR also ran.
@@ -128,8 +156,8 @@ express is unlikely to be recovered unless adVNTR also ran.
 
 There is one case where the Kestrel VCF does not have the last word: when **two
 sources spanning two different callers** name the same allele and the VCF names
-another. adVNTR and the reads agreeing is genuine corroboration from evidence Kestrel
-did not produce, and it outvotes Kestrel's placement.
+another. adVNTR and Kestrel's resolved haplotype records agreeing is genuine
+corroboration across two callers, and it outvotes Kestrel's VCF placement.
 
 The independence requirement is doing the work here. Kestrel's VCF agreeing with
 Kestrel's own alignment is *not* two sources, so it never outvotes adVNTR and never
@@ -139,7 +167,7 @@ exactly like the two independent sources tier A asks for.
 Measured over the 200-sample benchmark this recovers 6 samples and loses none —
 `insG` goes from 1 to 5 and `insG_pos54` from 0 to 2, while `dupA` and `dupC` are
 unmoved. The narrowness matters: an earlier attempt that simply preferred
-the reads whenever they disagreed cost `dupA` 6 correct calls out of 10 and `insCCCC`
+the BAM-derived name whenever it disagreed cost `dupA` 6 correct calls out of 10 and `insCCCC`
 6 out of 10. Requiring a second *caller* to agree is what makes the difference.
 
 ## Both callers' names are kept
