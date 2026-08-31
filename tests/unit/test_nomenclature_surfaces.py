@@ -19,6 +19,7 @@ from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNT
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
 from vntyper.scripts.nomenclature import (
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+    FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
     Nomenclature,
     from_advntr,
     from_kestrel,
@@ -281,6 +282,59 @@ def _write_pair_bam(
                 record.set_tag("XD", minimum_kmer_depth)
             handle.write(record)
     pysam.index(str(path))  # type: ignore[attr-defined]
+
+
+def test_annotate_kestrel_frame_uses_record_support_not_xd_for_a_bam_candidate(tmp_path: Path) -> None:
+    """The direct stage path must consult a candidate and keep XD observational."""
+    _write_pair_bam(
+        tmp_path / "output.bam",
+        inserted_at=62,
+        base="C",
+        minimum_kmer_depths=(2_147_483_647, 2_147_483_647),
+    )
+    frame = pd.DataFrame(
+        [
+            {
+                "Motifs": "X-X",
+                "POS": 999,
+                "REF": "G",
+                "ALT": "GG",
+                "Motif_fasta": "X-X",
+                "POS_fasta": 61,
+            }
+        ]
+    )
+    observed: list[tuple[Nomenclature | None, int | None]] = []
+    row_haplotype_call = nomenclature_annotate._row_haplotype_call
+
+    def tracked_row_haplotype_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclature | None, int | None]:
+        result = row_haplotype_call(row, rescuer)
+        observed.append(result)
+        return result
+
+    with mock.patch.object(
+        nomenclature_annotate,
+        "_row_haplotype_call",
+        side_effect=tracked_row_haplotype_call,
+    ):
+        named = annotate_kestrel_frame(frame, tmp_path)
+
+    assert len(observed) == 1, "the tier-C VCF call must remain BAM-eligible"
+    assert observed[0][0] is not None
+    assert observed[0][1] == 2, "the tuple must carry haplotype-record support, not either XD value"
+    assert named.loc[0, "Nomenclature"] == "58_59insG"
+    assert FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT in named.loc[0, "Nomenclature_Flags"]
+
+
+def test_row_verdicts_keep_each_haplotype_call_paired_with_its_vcf_row() -> None:
+    """Compacting a missing first BAM call must not shift row two onto row one."""
+    first_vcf = from_kestrel("X-X", 67, "G", "GG")
+    second_vcf = Nomenclature("55_56insA", "insertion", "X", "B", (), None, None, 1, "kestrel_vcf")
+    second_bam = Nomenclature("55delinsAT", "delins", "X", "B", (), None, None, 1, "kestrel_bam")
+
+    verdicts = nomenclature_annotate._row_verdicts([first_vcf, second_vcf], [None, second_bam])
+
+    assert [call.name if call is not None else None for call in verdicts] == ["59dupC", "55delinsAT"]
 
 
 def test_the_cross_caller_stage_consults_resolved_haplotype_records(tmp_path) -> None:

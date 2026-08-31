@@ -490,7 +490,7 @@ def _haplotype_calls(
         kestrel_dir: Directory holding ``output.bam``.
         vcf_calls: The Kestrel VCF calls.
         advntr_calls: The adVNTR calls.
-        supports: Per-source quantities, updated with haplotype-record support.
+        supports: Per-source quantities, updated in place with haplotype-record support.
 
     Returns:
         list[Nomenclature | None]: One entry per Kestrel row, `None` where the

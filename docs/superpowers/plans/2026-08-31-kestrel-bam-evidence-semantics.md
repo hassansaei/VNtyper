@@ -194,7 +194,7 @@ A realistic surface test must fail if XD replaces support, if candidate filterin
 3. Preserve output column names, `_lesser`, row/candidate order, eligibility predicates, and TSV writing.
 4. Run the RED command and:
 
-   `conda run --no-capture-output -n vntyper python -m pytest tests/unit/test_nomenclature_annotate.py tests/unit/test_nomenclature_surfaces.py tests/unit/test_nomenclature_reconcile.py -q`
+   `conda run --no-capture-output -n vntyper python -m pytest tests/unit/test_nomenclature_kestrel.py tests/unit/test_nomenclature_surfaces.py tests/unit/test_nomenclature_reconcile.py -q`
 
 **Commit**
 
