@@ -1,12 +1,12 @@
-"""Documentation contracts for #233 and the bounded published Phase 1 exception.
+"""Documentation contracts for #233 and the bounded published #295 exceptions.
 
 Three tests were removed when planning documents left the repository. They asserted
 that historical design documents under `docs/superpowers/specs/` and `docs/plans/`
 led with a dated supersession note, so that a reader meeting an old design was told
 its routing policy had been replaced. Those historical documents now live in the
-untracked `.planning/` workspace. Phase 1 of #295 separately publishes exactly its
-reviewed design and implementation plan under `docs/superpowers/`; they are built by
-MkDocs and do not reopen a general planning-docs exception.
+untracked `.planning/` workspace. The #295 program separately publishes its reviewed
+design and implementation plans under `docs/superpowers/`; they are built by MkDocs and
+do not reopen a general planning-docs exception.
 
 What survives here is the half that was always about published output: the changelog
 and the golden-cohort page state the current routing policy, and AGENTS.md states the
@@ -38,12 +38,13 @@ def _section(page: str, start: str, end: str) -> str:
     return page[page.index(start) : page.index(end)]
 
 
-def test_agents_records_the_exact_phase_1_published_planning_exception() -> None:
+def test_agents_records_the_exact_issue_295_published_planning_exceptions() -> None:
     """The exceptional public pages stay exact while ordinary planning stays untracked."""
     page = _read("AGENTS.md")
     normalized = " ".join(page.split())
     assert "docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md" in page
     assert "docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md" in page
+    assert "docs/superpowers/specs/2026-08-31-issue-295-completion-program-design.md" in page
     assert "No other planning artifact under `docs/` is allowed" in normalized
     assert "untracked `.planning/` workspace" in normalized
 

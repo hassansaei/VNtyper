@@ -12,10 +12,10 @@ copyright: Copyright &copy; 2023–2026 Hassan Saei, Bernt Popp
 
 # `docs/` is strictly the published site. Contributor specs, plans and execution prompts
 # normally live in an untracked `.planning/` workspace, which a fresh clone does not have.
-# Phase 1 of #295 has one bounded exception: its exact reviewed design and implementation
-# plan are published under `docs/superpowers/` and registered in `nav` below. No other
-# planning artifact under `docs/` is allowed. The macros plugin Jinja-templates every
-# published page, so the two exceptions are source-tested against raw Jinja openers.
+# The #295 program has one bounded exception: its exact reviewed Phase 1 documents and
+# umbrella design are published under `docs/superpowers/` and registered in `nav` below.
+# No other planning artifact under `docs/` is allowed. The macros plugin Jinja-templates
+# every published page, so the exceptions are source-tested against raw Jinja openers.
 #
 # No `exclude_docs:` key is needed while nothing under `docs/` is unpublished. Adding one
 # back would mean a page is shipping in the source tree but not on the site; put it in
@@ -143,6 +143,7 @@ nav:
     - Mutation Testing: development/mutation-testing.md
     - Kestrel BAM Evidence Semantics Design: superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md
     - Kestrel BAM Evidence Semantics Plan: superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md
+    - Issue 295 Completion Program Design: superpowers/specs/2026-08-31-issue-295-completion-program-design.md
   - About:
     - about/index.md
     - Scientific Background: about/scientific-background.md

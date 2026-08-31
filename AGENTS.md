@@ -759,10 +759,11 @@ summary | release-summary | none | always records success, failure, skipped jobs
   gate artifacts) belong in an untracked `.planning/` workspace, conventionally
   `specs/`, `plans/`, `prompts/` and `milestones/` beneath it. That directory is
   gitignored, so **a fresh clone does not have one** and nothing may depend on its
-  contents. Phase 1 of #295 has one bounded, published exception for these exact paths:
+  contents. The #295 program has one bounded, published exception for these exact paths:
   `docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md` and
-  `docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md`.
-  No other planning artifact under `docs/` is allowed. Both pages are registered in
+  `docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md`, plus the umbrella
+  `docs/superpowers/specs/2026-08-31-issue-295-completion-program-design.md`.
+  No other planning artifact under `docs/` is allowed. All listed pages are registered in
   `mkdocs.yml` and tested against raw Jinja opening delimiters; this exception does not
   restore `exclude_docs:` or permit an unpublished page beneath `docs/`.
 
