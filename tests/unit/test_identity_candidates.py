@@ -594,6 +594,20 @@ def test_malformed_comma_joined_flags_fail_closed(flag: str) -> None:
         _captured([_kestrel_row("S-C", _C + _S, flag=flag)])
 
 
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "Context_Doubt, Not flagged",
+        "Not applicable, Context_Doubt",
+        "Context_Doubt, Context_Doubt",
+    ],
+)
+def test_reserved_or_duplicate_comma_joined_flag_tokens_fail_closed(flag: str) -> None:
+    """Joined flags cannot mix absence placeholders or collapse duplicate evidence."""
+    with pytest.raises(ValueError, match="reserved|duplicate"):
+        _captured([_kestrel_row("S-C", _C + _S, flag=flag)])
+
+
 def test_group_context_divergence_survives_tsv_round_trip() -> None:
     """One divergent equivalent representation persists a conservative group scalar."""
     captured = _captured(
@@ -748,3 +762,88 @@ def test_replay_rejects_impossible_context_divergence_states() -> None:
     divergent_cells[GROUP_CONTEXT_COLUMN] = "false"
     with pytest.raises(ValueError, match="Selected context divergence"):
         parse_selected_candidate_cells(divergent_cells)
+
+
+def test_replay_rejects_unresolved_selected_evidence_with_blocking_gates() -> None:
+    """An unresolved selected observation cannot carry a group-level gate union."""
+    captured = _captured([_kestrel_row("S-C", _C + _S)], _UnresolvedComponent())
+    selected = _overlay_all(captured)
+    cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
+    cells[IDENTITY_SELECTION_COLUMNS[3]] = '["motif_filter_pass"]'
+
+    with pytest.raises(ValueError, match="unresolved selected identity.*blocking"):
+        parse_selected_candidate_cells(cells)
+
+
+def test_replay_rejects_resolved_singleton_evidence_with_blocking_gates() -> None:
+    """A selected singleton passed all gates, so its group cannot report a blocker."""
+    cells = _persisted_cells()
+    cells[IDENTITY_SELECTION_COLUMNS[3]] = '["motif_filter_pass"]'
+
+    with pytest.raises(ValueError, match="singleton.*blocking"):
+        parse_selected_candidate_cells(cells)
+
+
+def test_replay_rejects_resolved_singleton_group_context_mismatch() -> None:
+    """A singleton group has exactly the selected observation's context state."""
+    captured = _captured(
+        [_kestrel_row("S-C", _C + _S)],
+        _MotifSensitiveComponent(equivalent=True),
+    )
+    selected = _overlay_all(captured)
+    cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
+    assert cells[IDENTITY_CAPTURE_COLUMNS[4]] == "false"
+    cells[GROUP_CONTEXT_COLUMN] = "true"
+
+    with pytest.raises(ValueError, match="singleton.*context"):
+        parse_selected_candidate_cells(cells)
+
+
+@pytest.mark.parametrize("unresolved", [False, True])
+def test_selected_candidate_cells_reject_impossible_selected_blockers(unresolved: bool) -> None:
+    """The producer cannot serialize blockers for unresolved or singleton selections."""
+    component = _UnresolvedComponent() if unresolved else REAL_COMPONENT
+    captured = _captured([_kestrel_row("S-C", _C + _S)], component)
+    candidate = replace(
+        captured.candidates[0],
+        blocking_gates=frozenset({"motif_filter_pass"}),
+        eligible=True,
+    )
+    selected = IdentityCandidateSet("kestrel", (candidate,), candidate.observation_ordinal)
+
+    with pytest.raises(ValueError, match="unresolved selected identity|singleton"):
+        selected_candidate_cells(selected)
+
+
+def test_multi_representation_group_may_union_blockers_and_context_divergence() -> None:
+    """Conservative blocker and context unions remain valid for equivalent representations."""
+    captured = _captured(
+        [_kestrel_row("X-5", _FIVE + _X), _kestrel_row("S-C", _C + _S)],
+        _MotifSensitiveComponent(equivalent=True, divergent_motif="S-C"),
+    )
+    evidence = [
+        _row_for_candidate(captured.candidates[0]),
+        _row_for_candidate(captured.candidates[1], motif_filter_pass=False),
+    ]
+    selected = overlay_legacy_projection(with_candidate_evidence(captured, evidence), (0,), 0)
+    cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
+
+    replayed = parse_selected_candidate_cells(cells)
+
+    assert replayed.equivalent_representation_count == 2
+    assert replayed.blocking_gates == frozenset({"motif_filter_pass"})
+    assert replayed.translation.context_diverges is False
+    assert replayed.group_context_diverges is True
+
+
+def test_resolved_singleton_may_retain_nonblocking_flags() -> None:
+    """Flags remain dynamic annotations and do not imply an impossible gate blocker."""
+    captured = _captured([_kestrel_row("S-C", _C + _S, flag="Context_Doubt")])
+    selected = _overlay_all(captured)
+    cells = {**candidate_capture_cells(selected.selected_candidate), **selected_candidate_cells(selected)}
+
+    replayed = parse_selected_candidate_cells(cells)
+
+    assert replayed.equivalent_representation_count == 1
+    assert replayed.blocking_gates == frozenset()
+    assert replayed.flags == frozenset({"Context_Doubt"})

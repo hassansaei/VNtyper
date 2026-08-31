@@ -25,6 +25,7 @@ CandidateSource: TypeAlias = Literal["kestrel", "advntr"]
 RawKeyValues: TypeAlias = tuple[str, int, str, str] | tuple[str, tuple[str, ...], tuple[int, ...]]
 SupportValue: TypeAlias = int | float
 OBSERVATION_ORDINAL_COLUMN = "__Identity_Observation_Ordinal"
+_FLAG_PLACEHOLDERS = frozenset({"Not flagged", "Not applicable"})
 
 LEGACY_GATE_COLUMNS: tuple[str, ...] = (
     "is_frameshift",
@@ -595,13 +596,17 @@ def _is_advntr_key(values: object) -> bool:
 
 def _flags(value: object) -> frozenset[str]:
     """Parse the production comma-delimited flags without losing empty elements."""
-    if value is None or value in {"", "Not flagged", "Not applicable"}:
+    if value is None or value == "" or value in _FLAG_PLACEHOLDERS:
         return frozenset()
     if not isinstance(value, str):
         raise ValueError("Candidate Flag must be a string when present")
     flags = tuple(flag.strip() for flag in value.split(","))
     if any(not flag for flag in flags):
         raise ValueError("Candidate Flag must not contain an empty element")
+    if any(flag in _FLAG_PLACEHOLDERS for flag in flags):
+        raise ValueError("Candidate Flag must not mix a reserved placeholder with flag tokens")
+    if len(set(flags)) != len(flags):
+        raise ValueError("Candidate Flag must not contain a duplicate token")
     return frozenset(flags)
 
 

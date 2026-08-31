@@ -251,6 +251,41 @@ def test_malformed_flag_rules_abort_before_kestrel_can_publish_a_negative(tmp_pa
     assert not (tmp_path / "kestrel_result.tsv").exists()
 
 
+def test_invalid_duplicate_flag_name_aborts_an_empty_postprocessing_frame(tmp_path):
+    """Duplicate flag vocabulary is preflighted even when a sample has no candidate rows."""
+    config = kestrel_config(duplicate_flagging={"enabled": True, "flag_name": "Bad,Flag"})
+
+    with pytest.raises(ValueError, match="duplicate_flagging.flag_name"):
+        kestrel_genotyping.process_kmer_results(pd.DataFrame(), pd.DataFrame(), str(tmp_path), config)
+
+
+def test_duplicate_flag_collision_aborts_before_kestrel_can_publish_a_negative(tmp_path):
+    """The VCF no-call path cannot conceal two configured producers of one flag token."""
+    config = kestrel_config(
+        flagging_rules={
+            "Potential_Duplicate": {
+                "all": [
+                    {
+                        "left": {"column": "Depth_Score"},
+                        "operator": "lt",
+                        "right": {"literal": 0.4},
+                    }
+                ]
+            }
+        },
+        duplicate_flagging={"enabled": True, "flag_name": "Potential_Duplicate"},
+    )
+
+    with (
+        mock.patch.object(kestrel_genotyping, "filter_vcf") as filter_vcf,
+        pytest.raises(ValueError, match="collides with flagging_rules"),
+    ):
+        kestrel_genotyping.process_kestrel_output(str(tmp_path), tmp_path / "output.vcf", "reference.fa", config, {})
+
+    filter_vcf.assert_not_called()
+    assert not (tmp_path / "kestrel_result.tsv").exists()
+
+
 def test_the_pre_result_tsv_is_still_written_before_the_raise(tmp_path):
     """``kestrel_pre_result.tsv`` is the debuggability artefact (AGENTS.md trap 4).
 

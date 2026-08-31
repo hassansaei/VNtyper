@@ -42,6 +42,7 @@ from vntyper.scripts.flagging import (
     add_artifact_gate,
     add_flags,
     compile_flag_rules,
+    validate_duplicate_flagging_config,
 )
 from vntyper.scripts.identity_candidate_persistence import (
     IDENTITY_CAPTURE_COLUMNS,
@@ -562,6 +563,8 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     """
     flagging_rules = kestrel_config.get("flagging_rules", {})
     compiled_flag_rules = compile_flag_rules(flagging_rules, KESTREL_FLAG_COLUMNS)
+    duplicates_config = kestrel_config.get("duplicate_flagging", {})
+    validate_duplicate_flagging_config(duplicates_config, compiled_flag_rules)
     logger.info("Processing Kestrel VCF results...")
 
     # Step 1) Filter the original VCF to extract INDELs
@@ -664,11 +667,8 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     # flags are available before variant selection (fixes #145). Only re-apply
     # here if the Flag column is missing (e.g., process_kmer_results was called
     # without flagging rules configured).
-    if "Flag" not in processed_df.columns:
-        duplicates_config = kestrel_config.get("duplicate_flagging", {})
-
-        if compiled_flag_rules.rules or duplicates_config.get("enabled", False):
-            processed_df = add_flags(processed_df, compiled_flag_rules, duplicates_config=duplicates_config)
+    if "Flag" not in processed_df.columns and (compiled_flag_rules.rules or duplicates_config.get("enabled", False)):
+        processed_df = add_flags(processed_df, compiled_flag_rules, duplicates_config=duplicates_config)
 
     # Name the variants before writing. Doing it here rather than in a later stage is
     # what makes one edit reach every surface: the TSV below, the pipeline summary
@@ -774,6 +774,8 @@ def process_kmer_results(
     """
     if compiled_flag_rules is None:
         compiled_flag_rules = compile_flag_rules(kestrel_config.get("flagging_rules", {}), KESTREL_FLAG_COLUMNS)
+    duplicates_config = kestrel_config.get("duplicate_flagging", {})
+    validate_duplicate_flagging_config(duplicates_config, compiled_flag_rules)
 
     if combined_df.empty:
         return combined_df
@@ -827,7 +829,6 @@ def process_kmer_results(
     # are available after step (6). Moving flagging here fixes #145: previously,
     # a flagged variant could be selected over an unflagged one because
     # select_single_best_variant ran before add_flags.
-    duplicates_config = kestrel_config.get("duplicate_flagging", {})
     if compiled_flag_rules.rules or duplicates_config.get("enabled", False):
         df = add_flags(df, compiled_flag_rules, duplicates_config=duplicates_config)
 

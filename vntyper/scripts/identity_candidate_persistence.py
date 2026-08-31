@@ -103,6 +103,12 @@ def selected_candidate_cells(candidates: IdentityCandidateSet) -> dict[str, str]
         blocking_gates = group.blocking_gates
         flags = group.flags
         group_context_diverges = group.context_diverges
+    _validate_group_invariants(
+        selected.observation.translation,
+        equivalent_count,
+        blocking_gates,
+        group_context_diverges,
+    )
     return {
         IDENTITY_SELECTION_COLUMNS[0]: _serialize_raw_key(selected.row_key),
         IDENTITY_SELECTION_COLUMNS[1]: str(equivalent_count),
@@ -159,8 +165,7 @@ def parse_selected_candidate_cells(row: Mapping[str, object]) -> PersistedIdenti
             raise ValueError("An unresolved selected identity cannot have divergent group context")
     elif equivalent_count < 1 or hypothesis_count < 1:
         raise ValueError("A resolved selected identity requires positive equivalent and hypothesis counts")
-    if translation.context_diverges and not group_context_diverges:
-        raise ValueError("Selected context divergence must be present in its identity group")
+    _validate_group_invariants(translation, equivalent_count, blocking_gates, group_context_diverges)
     return PersistedIdentityCandidate(
         translation=translation,
         selected_row_key=selected_raw_key,
@@ -175,6 +180,26 @@ def parse_selected_candidate_cells(row: Mapping[str, object]) -> PersistedIdenti
 
 def _serialize_raw_key(key: RawRepresentationKey) -> str:
     return json.dumps({"source": key.source, "values": key.values}, separators=(",", ":"), sort_keys=True)
+
+
+def _validate_group_invariants(
+    translation: IdentityTranslation,
+    equivalent_count: int,
+    blocking_gates: frozenset[str],
+    group_context_diverges: bool,
+) -> None:
+    """Reject group evidence that cannot arise from a selected passing observation."""
+    if translation.identity is None:
+        if blocking_gates:
+            raise ValueError("An unresolved selected identity cannot carry blocking gates")
+        return
+    if equivalent_count == 1:
+        if blocking_gates:
+            raise ValueError("A resolved singleton identity group cannot carry blocking gates")
+        if group_context_diverges != translation.context_diverges:
+            raise ValueError("Resolved singleton context must equal Selected context divergence")
+    if translation.context_diverges and not group_context_diverges:
+        raise ValueError("Selected context divergence must be present in its identity group")
 
 
 def _parse_raw_key(value: str) -> RawRepresentationKey:
