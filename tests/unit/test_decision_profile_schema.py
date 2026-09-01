@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 from pathlib import Path
 
 import pytest
@@ -42,9 +43,10 @@ def test_packaged_profile_is_canonical_and_matches_sidecar() -> None:
 
     assert raw == canonical_json_bytes(profile)
     assert raw.endswith(b"\n") and not raw.endswith(b"\n\n")
-    digest = DIGEST_PATH.read_text(encoding="ascii")
-    assert digest.endswith("\n") and len(digest) == 65
-    assert digest.strip() == hashlib.sha256(raw).hexdigest() == canonical_sha256(profile)
+    digest_bytes = DIGEST_PATH.read_bytes()
+    assert re.fullmatch(rb"[0-9a-f]{64}\n", digest_bytes)
+    digest = digest_bytes[:-1].decode("ascii")
+    assert digest == hashlib.sha256(raw).hexdigest() == canonical_sha256(profile)
     validate_complete_inventory(profile)
 
 
@@ -236,6 +238,84 @@ def test_fixed_safety_and_generated_explicit_fields_cannot_drift() -> None:
     generated["inventory"][explicit_pointer]["value"] += "-changed"
     with pytest.raises(ValueError, match="generated profile must copy explicit-custom field"):
         validate_complete_inventory(generated, packaged_profile=packaged)
+
+
+def _different_json_value(value: object) -> object:
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return value + 1
+    if isinstance(value, str):
+        return f"{value}-mutated"
+    raise AssertionError(f"fixed-safety mutation fixture has unsupported value: {value!r}")
+
+
+_FIXED_FIELDS = {
+    pointer: field
+    for pointer, field in _packaged_profile()["inventory"].items()
+    if field["class"] == ValidationClass.FIXED_SAFETY.value
+}
+_FIXED_NUMERIC_SEMANTICS = [
+    (pointer, key)
+    for pointer, field in _FIXED_FIELDS.items()
+    if isinstance(field["value"], (int, float)) and not isinstance(field["value"], bool)
+    for key in ("unit", "comparator", "inclusive")
+]
+
+
+@pytest.mark.parametrize("pointer", sorted(_FIXED_FIELDS))
+def test_every_fixed_safety_value_has_a_failing_mutation(pointer: str) -> None:
+    packaged = _packaged_profile()
+    explicit = copy.deepcopy(packaged)
+    explicit["profile_kind"] = "explicit-custom"
+    explicit["profile_id"] = "unit-test-fixed-value-mutation"
+    field = _field(explicit, pointer)
+    field["value"] = _different_json_value(field["value"])
+
+    with pytest.raises(ValueError, match="immutable fixed-safety field differs|critical fixed-safety field differs"):
+        validate_complete_inventory(explicit, packaged_profile=packaged)
+
+
+@pytest.mark.parametrize(("pointer", "key"), _FIXED_NUMERIC_SEMANTICS)
+def test_every_fixed_numeric_unit_comparator_and_inclusivity_has_a_failing_mutation(pointer: str, key: str) -> None:
+    packaged = _packaged_profile()
+    explicit = copy.deepcopy(packaged)
+    explicit["profile_kind"] = "explicit-custom"
+    explicit["profile_id"] = "unit-test-fixed-semantics-mutation"
+    field = _field(explicit, pointer)
+    field[key] = not field[key] if key == "inclusive" else f"{field[key]}-mutated"
+
+    with pytest.raises(ValueError, match="semantics differ|critical fixed-safety field differs"):
+        validate_complete_inventory(explicit, packaged_profile=packaged)
+
+
+@pytest.mark.parametrize(
+    "pointer",
+    [
+        "/components/advntr/model/path",
+        "/components/advntr/model/sha256",
+        "/components/advntr/model/schema_version",
+        "/components/advntr/model/vid",
+        "/components/advntr/model/genomic_interval",
+        "/components/advntr/model/window_bp",
+        "/components/advntr/model/n_segments",
+        "/components/advntr/model/n_distinct_segments",
+        "/components/advntr/model/max_segment_len",
+        "/components/advntr/model/minimum_compatible_advntr_version",
+        "/components/advntr/model/installed_advntr_version",
+    ],
+)
+def test_every_issue_268_model_and_version_guard_is_rejected_as_an_unknown_key(pointer: str) -> None:
+    packaged = _packaged_profile()
+    explicit = copy.deepcopy(packaged)
+    explicit["profile_kind"] = "explicit-custom"
+    explicit["profile_id"] = "unit-test-excluded-issue-268-guard"
+    inventory = explicit["inventory"]
+    assert isinstance(inventory, dict)
+    inventory[pointer] = {"class": "fixed-safety", "value": "forbidden"}
+
+    with pytest.raises(ValueError, match="inventory fields differ"):
+        validate_complete_inventory(explicit, packaged_profile=packaged)
 
 
 def test_generated_metadata_is_closed_and_mutable_grid_is_bounded() -> None:
