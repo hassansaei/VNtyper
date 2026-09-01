@@ -879,6 +879,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
         logger.info("Concatenating deletions and insertions...")
         advntr_concat = pd.concat([df_del, df_ins], axis=0)
 
+        positive_result = not advntr_concat.empty
         if advntr_concat.empty:
             logger.warning("No pathogenic variant found after filtering. Generating default negative result.")
             advntr_concat = pd.DataFrame(
@@ -901,12 +902,17 @@ def process_advntr_output(output_path, output, output_name, config=None):
                 ]
             )
         else:
+            from vntyper.scripts.identity_candidates import translation_component_from_config
+            from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS
+            from vntyper.scripts.nomenclature import load_nomenclature_config
+
             base_columns = [
                 "VID",
                 "Variant",
                 "NumberOfSupportingReads",
                 "MeanCoverage",
                 "Pvalue",
+                "Net_indel_length",
             ]
             advntr_concat = advntr_concat[base_columns]
             logger.info("Removing duplicates...")
@@ -936,14 +942,16 @@ def process_advntr_output(output_path, output, output_name, config=None):
 
             # Name the variants. Done before the "ensure all columns present" sweep
             # below so the five land as computed values, not as "Not applicable".
-            advntr_concat = annotate_advntr_frame(advntr_concat)
+            identity_component = translation_component_from_config(load_nomenclature_config())
+            advntr_concat = annotate_advntr_frame(advntr_concat, identity_component=identity_component)
 
             # Ensure all final columns are present
             for col in final_columns:
                 if col not in advntr_concat.columns:
                     advntr_concat[col] = "" if col in NOMENCLATURE_COLUMNS else "Not applicable"
 
-        advntr_concat = advntr_concat[final_columns]
+        publication_columns = [*final_columns, *IDENTITY_COLUMNS] if positive_result else final_columns
+        advntr_concat = advntr_concat[publication_columns]
     except Exception as e:
         message = f"Error during processing of deletions and insertions: {e}"
         logger.error(message)

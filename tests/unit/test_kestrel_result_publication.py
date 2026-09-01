@@ -63,6 +63,10 @@ EXPECTED_SCHEMA = [
     "Nomenclature_Note",
     "Nomenclature_Kestrel",
     "Nomenclature_adVNTR",
+    "Molecular_Identity",
+    "Molecular_Identity_Status",
+    "Equivalent_Representation_Count",
+    "Identity_Hypothesis_Count",
 ]
 
 EXPECTED_ROW = {
@@ -102,6 +106,10 @@ EXPECTED_ROW = {
     "Nomenclature_Note": "matches a described MUC1 variant (Kirby et al. 2013, PMID:23396133); requires validation",
     "Nomenclature_Kestrel": "59dupC",
     "Nomenclature_adVNTR": "",
+    "Molecular_Identity": "MUC1-X-60-coding-v1|60|59|-|C",
+    "Molecular_Identity_Status": "unique",
+    "Equivalent_Representation_Count": "1",
+    "Identity_Hypothesis_Count": "1",
 }
 
 
@@ -135,7 +143,7 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
         seen["combined_rows"] = len(combined_df)
         seen["alts"] = list(combined_df["ALT"])
         seen["identity_component"] = identity_component
-        return kestrel_stage_frame("final")
+        return kestrel_stage_frame("named")
 
     real_annotate = kg.annotate_kestrel_frame
 

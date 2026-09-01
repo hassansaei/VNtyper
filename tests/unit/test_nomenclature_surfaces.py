@@ -25,6 +25,7 @@ from vntyper.scripts.molecular_identity import (
     make_molecular_identity,
     serialize_molecular_identity,
 )
+from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS
 from vntyper.scripts.nomenclature import (
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
     FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
@@ -60,7 +61,7 @@ pytestmark = pytest.mark.unit
 
 def test_the_named_stage_is_final_plus_the_nomenclature_columns() -> None:
     added = tuple(column for column in STAGE_COLUMNS["named"] if column not in STAGE_COLUMNS["final"])
-    assert added == NOMENCLATURE_COLUMNS
+    assert added == (*NOMENCLATURE_COLUMNS, *IDENTITY_COLUMNS)
 
 
 def test_the_named_stage_keeps_the_subset_invariant() -> None:

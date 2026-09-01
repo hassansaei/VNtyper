@@ -60,6 +60,10 @@ from vntyper.scripts.kestrel_command import construct_kestrel_command as constru
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
+from vntyper.scripts.molecular_identity_presentation import (
+    IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS,
+    identity_translation_diagnostic_cells,
+)
 from vntyper.scripts.motif_processing import (
     load_additional_motifs,
     load_muc1_reference,
@@ -811,6 +815,12 @@ def process_kmer_results(
         df = df.copy()
         for column in IDENTITY_CAPTURE_COLUMNS:
             df[column] = [cells[column] for cells in capture_rows]
+        diagnostic_rows = [
+            identity_translation_diagnostic_cells(candidate.observation.translation)
+            for candidate in identity_candidates.candidates
+        ]
+        for column in IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS:
+            df[column] = [cells[column] for cells in diagnostic_rows]
 
     # (4.5) Add haplo_count after confidence assignment
     df = add_haplo_count(df)
@@ -856,6 +866,7 @@ def process_kmer_results(
         return df
 
     if evidenced_candidates is not None:
+        df = df.drop(columns=list(IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS))
         selected_ordinal = int(df.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]])
         selected_candidates = overlay_legacy_projection(
             evidenced_candidates,

@@ -29,6 +29,11 @@ from vntyper.scripts.identity_reconciliation import (
     build_identity_reconciliation_observations,
 )
 from vntyper.scripts.molecular_identity import IdentityTranslation
+from vntyper.scripts.molecular_identity_presentation import (
+    IDENTITY_COLUMNS,
+    advntr_identity_result_rows,
+    persisted_identity_result_rows,
+)
 from vntyper.scripts.nomenclature import (
     KNOWN_VARIANTS,
     Nomenclature,
@@ -190,6 +195,9 @@ def annotate_kestrel_frame(
 
     annotated = frame.copy()
     rows = [row for _, row in annotated.iterrows()]
+    result_identity_cells: list[dict[str, str | int]] | None = None
+    if _rows_carry_identity_metadata(rows):
+        result_identity_cells = persisted_identity_result_rows(rows)
     identity_aware = output_dir is not None and _rows_carry_identity_metadata(rows)
     groups = None
     if identity_aware:
@@ -248,6 +256,9 @@ def annotate_kestrel_frame(
 
     for column in NOMENCLATURE_COLUMNS:
         annotated[column] = [cell[column] for cell in cells]
+    if result_identity_cells is not None:
+        for column in IDENTITY_COLUMNS:
+            annotated[column] = [cell[column] for cell in result_identity_cells]
     if replay_artifact is not None:
         write_bam_replay_artifact(output_dir, replay_artifact)  # type: ignore[arg-type]
     return annotated
@@ -605,7 +616,7 @@ def _write_tsv(frame: pd.DataFrame, path: Path, header: list[str]) -> None:
         frame.to_csv(handle, sep="\t", index=False)
 
 
-def annotate_advntr_frame(frame: pd.DataFrame) -> pd.DataFrame:
+def annotate_advntr_frame(frame: pd.DataFrame, *, identity_component: Any = None) -> pd.DataFrame:
     """Add the nomenclature columns to an adVNTR result frame.
 
     Unlike Kestrel, adVNTR may report several events for one sample. Each row is
@@ -614,6 +625,8 @@ def annotate_advntr_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         frame: The processed adVNTR frame, as written to ``output_adVNTR_result.tsv``.
+        identity_component: Current-run complete-context translation component. When
+            supplied, public identity cells are appended to positive rows.
 
     Returns:
         pd.DataFrame: A copy with the five columns appended, empty on the negative
@@ -644,4 +657,8 @@ def annotate_advntr_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
     for column in NOMENCLATURE_COLUMNS:
         annotated[column] = [cell[column] for cell in cells]
+    if identity_component is not None:
+        result_cells = advntr_identity_result_rows(annotated.to_dict("records"), identity_component)
+        for column in IDENTITY_COLUMNS:
+            annotated[column] = [cell[column] for cell in result_cells]
     return annotated
