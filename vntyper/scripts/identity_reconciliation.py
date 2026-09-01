@@ -154,6 +154,21 @@ class IdentityReconciliationObservation:
         """Return whether this observation may back molecular agreement."""
         return self.identity is not None and self.disposition.value == "admissible"
 
+    @property
+    def is_unbound_advntr_row(self) -> bool:
+        """Return whether this is one complete compound adVNTR row observation."""
+        return (
+            self.presentation_call_index is None
+            and self.source == "advntr"
+            and self.display_name is None
+            and self.identity is not None
+            and self.disposition.value == "admissible"
+            and self.known_variant_match is False
+            and self.advntr_sequencing_read_support is not None
+            and self.advntr_mean_coverage is not None
+            and self.kestrel_alternate_kmer_path_depth is None
+        )
+
 
 @dataclass(frozen=True)
 class IdentityReconciliationResult:
@@ -205,6 +220,14 @@ class IdentityReconciliationResult:
             raise ValueError("Caller disagreement must be a boolean")
         if not isinstance(self.event_disagreement, bool):
             raise ValueError("Event disagreement must be a boolean")
+        if self.event_disagreement and not self.caller_disagreement:
+            raise ValueError("Event disagreement requires caller disagreement")
+        if self.decision.tier == "A" and (
+            self.caller_disagreement or self.event_disagreement or self.low_support_sources
+        ):
+            raise ValueError("Tier A cannot carry conflict or low-support metadata")
+        if self.decision.identity is not None and ((self.decision.tier == "C") != self.event_disagreement):
+            raise ValueError("Tier C must match event disagreement for a selected identity")
         if (
             len(set(self.backing_observation_indices)) != len(self.backing_observation_indices)
             or tuple(sorted(self.backing_observation_indices)) != self.backing_observation_indices
@@ -426,7 +449,7 @@ def build_identity_reconciliation_observations(
                     call,
                     IdentityTranslation(None, "unresolved", "reconstruction-mismatch", False),
                     known_variant_names,
-                    disposition=EvidenceDisposition("identity-insufficient"),
+                    disposition=EvidenceDisposition("admissible"),
                     extra_flags=candidate.flags,
                     presentation_call_index=presentation_call_index,
                 )
@@ -500,12 +523,25 @@ def reconcile_identity_observations(
             assert observation.identity is not None
             backing.setdefault(observation.identity, []).append(index)
 
+    corroborated = [identity for identity, indices in backing.items() if len(_callers(observations, indices)) >= 2]
+
     selected_observation = (
         observations[presentation_selected_observation_index]
         if presentation_selected_observation_index is not None
         else None
     )
-    if not backing or (selected_observation is not None and not selected_observation.backs_identity):
+    if len(corroborated) == 1:
+        chosen_identity = corroborated[0]
+        bound_indices = [
+            index for index in backing[chosen_identity] if observations[index].presentation_call_index is not None
+        ]
+        selected_index = (
+            min(bound_indices, key=lambda index: observations[index].presentation_call_index or 0)
+            if bound_indices
+            else backing[chosen_identity][0]
+        )
+        presentation_result_index = selected_index
+    elif not backing or (selected_observation is not None and not selected_observation.backs_identity):
         return IdentityReconciliationResult(
             decision=IdentityDecision(None, "abstained", False, "identity-unresolved"),
             selected_observation_index=None,
@@ -518,13 +554,14 @@ def reconcile_identity_observations(
             presentation_selected_observation_index=presentation_selected_observation_index,
         )
 
-    if selected_observation is not None:
-        chosen_identity = selected_observation.identity
-        assert chosen_identity is not None
+    elif selected_observation is not None:
+        selected_identity = selected_observation.identity
+        assert selected_identity is not None
+        chosen_identity = selected_identity
+        assert presentation_selected_observation_index is not None
         selected_index = presentation_selected_observation_index
-        assert selected_index is not None
+        presentation_result_index = selected_index
     else:
-        corroborated = [identity for identity, indices in backing.items() if len(_callers(observations, indices)) >= 2]
         primary_index = next(
             (
                 index
@@ -533,11 +570,11 @@ def reconcile_identity_observations(
             ),
             next(iter(backing.values()))[0],
         )
-        chosen_identity = observations[primary_index].identity
-        assert chosen_identity is not None
-        if len(corroborated) == 1:
-            chosen_identity = corroborated[0]
+        primary_identity = observations[primary_index].identity
+        assert primary_identity is not None
+        chosen_identity = primary_identity
         selected_index = backing[chosen_identity][0]
+        presentation_result_index = selected_index
 
     backing_indices = tuple(backing[chosen_identity])
     backing_sources = tuple(dict.fromkeys(observations[index].source for index in backing_indices))
@@ -577,7 +614,7 @@ def reconcile_identity_observations(
         caller_disagreement=caller_disagreement,
         event_disagreement=event_disagreement,
         low_support_sources=low_support_sources,
-        presentation_selected_observation_index=presentation_selected_observation_index,
+        presentation_selected_observation_index=presentation_result_index,
     )
 
 

@@ -665,9 +665,14 @@ def reconcile(
         index if implicit_positional_binding else observation.presentation_call_index
         for index, observation in enumerate(identity_observations)
     )
-    bound_call_indices = {index for index in presentation_call_indices if index is not None}
-    if bound_call_indices != set(range(len(calls))):
-        raise ValueError("Typed reconciliation requires one identity observation per call")
+    bound_call_indices = tuple(index for index in presentation_call_indices if index is not None)
+    if tuple(sorted(bound_call_indices)) != tuple(range(len(calls))):
+        raise ValueError("Typed reconciliation requires exactly one identity observation per call")
+    if not implicit_positional_binding and any(
+        observation.presentation_call_index is None and not observation.is_unbound_advntr_row
+        for observation in identity_observations
+    ):
+        raise ValueError("An unbound observation must be a complete adVNTR row")
     if any(
         observation.display_name != call.name
         or observation.source != call.source
@@ -692,15 +697,24 @@ def reconcile(
     relative_selection = select_compatibility_presentation_index(decision_calls)
     if relative_selection is None:  # pragma: no cover - calls was established above
         return _undetermined("unknown", 0, "reconciled", ())
-    presentation_call_index = decision_call_indices[relative_selection]
-    presentation_observation_index = next(
-        index for index, call_index in enumerate(presentation_call_indices) if call_index == presentation_call_index
+    compatibility_call_index = decision_call_indices[relative_selection]
+    compatibility_observation_index = next(
+        index for index, call_index in enumerate(presentation_call_indices) if call_index == compatibility_call_index
     )
-    presentation = _reconcile_legacy(*decision_calls, support=support, supports=supports)
+    compatibility_presentation = _reconcile_legacy(*decision_calls, support=support, supports=supports)
     result = reconcile_identity_observations(
         identity_observations,
         identity_policy,
-        presentation_selected_observation_index=presentation_observation_index,
+        presentation_selected_observation_index=compatibility_observation_index,
+    )
+    selected_observation_index = result.presentation_selected_observation_index
+    if selected_observation_index is None:  # pragma: no cover - calls established a compatibility selection
+        raise ValueError("Typed reconciliation did not select a presentation observation")
+    selected_call_index = presentation_call_indices[selected_observation_index]
+    if selected_call_index is None:
+        raise ValueError("Typed reconciliation selected an unbound row observation for presentation")
+    presentation = (
+        compatibility_presentation if selected_call_index == compatibility_call_index else calls[selected_call_index]
     )
 
     flags = set().union(*(call.flags for call in decision_calls))
@@ -710,6 +724,8 @@ def reconcile(
         flags.add(FLAG_MOTIF_CONTEXT_DIVERGES)
     for source in result.low_support_sources:
         flags.add(low_support_flag_for_source(source))
+    if result.identity is None:
+        flags.update(compatibility_presentation.flags)
     if FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT in presentation.flags:
         flags.add(FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT)
     if presentation.name is not None:

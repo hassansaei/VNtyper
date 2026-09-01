@@ -339,6 +339,16 @@ def test_production_identity_depth_overflow_is_a_controlled_value_error(tmp_path
         reconcile_caller_outputs(kestrel, advntr)
 
 
+def test_legacy_numeric_adapter_accepts_decimal_artifact_parity() -> None:
+    assert nomenclature_annotate._as_int("40.0") == 40
+    assert nomenclature_annotate._as_int(40.0) == 40
+
+
+@pytest.mark.parametrize("value", ["inf", float("inf"), "NaN", float("nan")])
+def test_legacy_numeric_adapter_treats_nonfinite_artifacts_as_unknown(value: object) -> None:
+    assert nomenclature_annotate._as_int(value) is None
+
+
 def _write_disagreeing_outputs(tmp_path) -> tuple[Path, Path]:
     """Kestrel and adVNTR naming different alleles at the same locus.
 

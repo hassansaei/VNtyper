@@ -24,7 +24,7 @@ from vntyper.scripts.molecular_identity import (
     make_molecular_identity,
     serialize_molecular_identity,
 )
-from vntyper.scripts.nomenclature import KNOWN_VARIANTS, Nomenclature, from_advntr, load_nomenclature_config
+from vntyper.scripts.nomenclature import KNOWN_VARIANTS, Nomenclature, from_advntr, load_nomenclature_config, reconcile
 
 pytestmark = pytest.mark.unit
 
@@ -34,6 +34,7 @@ POLICY = IdentityReconciliationPolicy(
 )
 DUPC = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
 DUPA = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
+DUPG = make_molecular_identity((make_coding_edit(60, 59, "", "G"),))
 TRANSLATION_COMPONENT = translation_component_from_config(load_nomenclature_config())
 
 
@@ -49,6 +50,7 @@ def _observation(
     advntr_reads: int | None = None,
     known: bool = True,
     blocking_gates: frozenset[str] = frozenset(),
+    presentation_call_index: int | None = None,
 ) -> IdentityReconciliationObservation:
     translation = (
         IdentityTranslation(identity, "resolved", None, context_diverges)
@@ -67,6 +69,7 @@ def _observation(
         kestrel_alternate_kmer_path_depth=kmer_depth,
         advntr_sequencing_read_support=advntr_reads,
         blocking_gates=blocking_gates,
+        presentation_call_index=presentation_call_index,
     )
 
 
@@ -179,6 +182,27 @@ def test_one_uniquely_corroborated_identity_retains_the_existing_vote() -> None:
 
     assert result.identity == DUPC
     assert result.selected_observation_index == 1
+    assert result.molecular_agreement is True
+    assert result.caller_disagreement is True
+
+
+def test_unique_molecular_winner_precedes_a_competing_legacy_vcf_selection() -> None:
+    observations = (
+        _observation(DUPG, "competing-first", "future_a", presentation_call_index=0),
+        _observation(DUPA, "vcf-a", "kestrel_vcf", kmer_depth=40, presentation_call_index=1),
+        _observation(DUPC, "first-b-display", "future_b", presentation_call_index=2),
+        _observation(DUPC, "second-b-display", "advntr", advntr_reads=40, presentation_call_index=3),
+    )
+
+    result = reconcile_identity_observations(
+        observations,
+        POLICY,
+        presentation_selected_observation_index=1,
+    )
+
+    assert result.identity == DUPC
+    assert result.selected_observation_index == 2
+    assert result.presentation_selected_observation_index == 2
     assert result.molecular_agreement is True
     assert result.caller_disagreement is True
 
@@ -456,6 +480,84 @@ def test_result_rejects_backing_metadata_on_an_abstained_decision() -> None:
         )
 
 
+def test_result_rejects_event_disagreement_without_caller_disagreement() -> None:
+    result = reconcile_identity_observations(
+        (
+            _observation(DUPC, "59dupC", "kestrel_vcf", event="duplication", kmer_depth=40),
+            _observation(DUPC, "59dupC", "advntr", event="insertion", advntr_reads=40),
+        ),
+        POLICY,
+    )
+
+    with pytest.raises(ValueError, match="Event disagreement requires caller disagreement"):
+        replace(result, caller_disagreement=False)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"decision": IdentityDecision(DUPC, "C", True, None)},
+        {
+            "decision": IdentityDecision(DUPC, "B", True, None),
+            "event_disagreement": True,
+            "caller_disagreement": True,
+        },
+    ],
+)
+def test_result_rejects_tier_c_event_disagreement_drift(changes: dict[str, object]) -> None:
+    result = reconcile_identity_observations(
+        (
+            _observation(DUPC, "59dupC", "kestrel_vcf", kmer_depth=40),
+            _observation(DUPC, "59dupC", "advntr", advntr_reads=40),
+        ),
+        POLICY,
+    )
+
+    with pytest.raises(ValueError, match="Tier C must match event disagreement"):
+        replace(result, **changes)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"caller_disagreement": True},
+        {"caller_disagreement": True, "event_disagreement": True},
+        {"low_support_sources": ("kestrel_vcf",)},
+    ],
+)
+def test_result_rejects_tier_a_conflict_or_low_support_metadata(changes: dict[str, object]) -> None:
+    result = reconcile_identity_observations(
+        (
+            _observation(DUPC, "59dupC", "kestrel_vcf", kmer_depth=40),
+            _observation(DUPC, "59dupC", "advntr", advntr_reads=40),
+        ),
+        POLICY,
+    )
+    assert result.tier == "A"
+
+    with pytest.raises(ValueError, match="Tier A cannot carry conflict or low-support metadata"):
+        replace(result, **changes)
+
+
+def test_result_accepts_valid_tier_a_b_and_c_boundaries() -> None:
+    tier_a = reconcile_identity_observations(
+        (
+            _observation(DUPC, "59dupC", "kestrel_vcf", kmer_depth=40),
+            _observation(DUPC, "59dupC", "advntr", advntr_reads=40),
+        ),
+        POLICY,
+    )
+    tier_b = replace(tier_a, decision=IdentityDecision(DUPC, "B", True, None))
+    tier_c = replace(
+        tier_a,
+        decision=IdentityDecision(DUPC, "C", True, None),
+        caller_disagreement=True,
+        event_disagreement=True,
+    )
+
+    assert (tier_a.tier, tier_b.tier, tier_c.tier) == ("A", "B", "C")
+
+
 def test_builder_rejects_canonical_persisted_key_for_a_different_kestrel_row() -> None:
     mismatched = '{"source":"kestrel","values":["X-X",68,"G","GG"]}'
 
@@ -602,10 +704,9 @@ def test_compound_advntr_row_has_one_row_identity_and_presentation_only_componen
     assert row_observations[0].known_variant_match is False
     assert tuple(observation.display_name for observation in component_observations) == component_names
     assert all(observation.identity is None for observation in component_observations)
-    assert all(
-        observation.disposition == EvidenceDisposition("identity-insufficient")
-        for observation in component_observations
-    )
+    assert all(observation.disposition == EvidenceDisposition("admissible") for observation in component_observations)
+    assert all(observation.advntr_sequencing_read_support is None for observation in component_observations)
+    assert all(observation.advntr_mean_coverage is None for observation in component_observations)
     advntr_only = reconcile_identity_observations(tuple(advntr_observations), POLICY)
     assert len(advntr_only.backing_observation_indices) == 1
     assert advntr_only.backing_sources == ("advntr",)
@@ -631,3 +732,43 @@ def test_compound_advntr_row_has_one_row_identity_and_presentation_only_componen
     assert cross_caller.molecular_agreement is True
     assert cross_caller.event_disagreement is False
     assert cross_caller.tier == "B"
+
+
+def test_noncontiguous_compound_keeps_exact_pr_a_legacy_projection_without_component_backing() -> None:
+    state = "I22_2_G_LEN1&I24_2_A_LEN1"
+    kestrel_call = _presentation_call("59dupC", "kestrel_vcf")
+    component_calls = from_advntr(state)
+    observations = _build_observations(
+        _persisted_kestrel_row(),
+        kestrel_call,
+        advntr_row={
+            "Variant": state,
+            "RU": "2,2",
+            "POS": "22,24",
+            "NumberOfSupportingReads": "40",
+            "MeanCoverage": "153.98",
+            "Flag": "Not flagged",
+        },
+        advntr_calls=component_calls,
+    )
+
+    assert observations is not None
+    typed = reconcile(
+        kestrel_call,
+        *component_calls,
+        identity_observations=observations,
+        identity_policy=POLICY,
+    )
+    legacy = reconcile(kestrel_call, *component_calls)
+    advntr_observations = [observation for observation in observations if observation.source == "advntr"]
+
+    assert typed == legacy
+    assert typed.name is None
+    assert typed.event == "unknown"
+    assert typed.tier == "C"
+    assert len([observation for observation in advntr_observations if observation.backs_identity]) == 1
+    assert all(
+        observation.advntr_sequencing_read_support is None
+        for observation in advntr_observations
+        if observation.presentation_call_index is not None
+    )
