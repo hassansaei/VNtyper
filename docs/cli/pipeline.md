@@ -10,6 +10,7 @@ vntyper [global-options] pipeline
     [-o <dir>] [-n <name>] [-s <name>]
     [--reference-assembly <assembly>] [--custom-regions <regions> | --bed-file <file>]
     [--threads <int>] [--fast-mode] [--keep-intermediates] [--delete-intermediates]
+    [--decision-profile <complete-profile.json>]
     [--extra-modules <module> ...]
     [--advntr-max-coverage <int>]
     [--archive-results] [--archive-format <format>]
@@ -60,6 +61,14 @@ genotype result.
 | `--fast-mode` | flag | off | Enable fast mode (skips filtering for unmapped and partially mapped reads) |
 | `--keep-intermediates` | flag | off | Compatibility flag: intermediate files (BAM slices, temporary files) are already kept by default, so this flag changes nothing. Use `--delete-intermediates` to remove them. |
 | `--delete-intermediates` | flag | off | Delete intermediate files after processing (wins when `--keep-intermediates` is also given). |
+| `--decision-profile` | path | packaged profile | Select exactly one complete `explicit-custom` or `generated` decision profile. Partial overlays and a profile whose fixed-safety fields differ from the packaged profile are rejected before pipeline output is created. |
+
+Omitting `--decision-profile` uses the verified packaged profile and preserves the
+package's existing decisions. The option does not merge with `--config-path`: runtime
+paths, tools, references, coverage presentation, and the adVNTR model/version guards
+remain in their existing configuration or code and are not profile fields. A generated
+profile is inert after it is written; it affects a run only when an operator selects its
+complete file with `--decision-profile`.
 
 ## Optional Modules
 
@@ -129,6 +138,13 @@ Run with the adVNTR module and coverage cap:
 ```bash
 vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --extra-modules advntr --advntr-max-coverage 300
+```
+
+Run with one explicitly selected complete decision profile:
+
+```bash
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
+    --decision-profile reviewed-complete-profile.json
 ```
 
 Generate additional summary formats and clean up intermediate files:

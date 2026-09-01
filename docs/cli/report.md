@@ -132,6 +132,16 @@ A report also carries two timestamps — when the pipeline ran, and when this fi
 was rendered. Re-running `vntyper report` over a finished run changes only the
 second.
 
+Current schema-3 runs also record the decision-profile ID, revision, kind, source,
+SHA-256, and a canonical run-local snapshot. `vntyper report` verifies that snapshot
+and displays only its recorded provenance; it never substitutes the profile shipped by
+the currently installed VNtyper. A changed or missing schema-3 snapshot is an error.
+Older summaries instead display `decision profile not recorded by legacy run`.
+
+There is deliberately no `--decision-profile` option on this subcommand. Profile
+selection happens once, at `vntyper pipeline`; regenerating a report cannot change the
+decisions that produced its rows.
+
 ## Auto-Discovery
 
 When `--input-dir` is provided and `--bam-file` or `--bed-file` are not specified, the report command will attempt to auto-discover standard pipeline output files:
