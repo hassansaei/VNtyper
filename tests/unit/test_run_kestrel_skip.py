@@ -83,6 +83,20 @@ def _run(vcf, tmp_path):
     )
 
 
+def _set_kmer_sizes(monkeypatch, sizes: list[int]) -> None:
+    """Replace the resolved runtime sidecar at the compatibility seam."""
+    runtime = {
+        "kestrel_settings": {
+            "java_memory": "12g",
+            "kmer_sizes": sizes,
+            "max_align_states": 30,
+            "max_hap_states": 30,
+            "additional_settings": "",
+        }
+    }
+    monkeypatch.setattr(kg, "resolve_compatibility_runtime_component", lambda *_args, **_kwargs: runtime)
+
+
 def test_a_stale_vcf_does_not_skip_the_kestrel_run(tmp_path, monkeypatch):
     """The regression test #212 asks for: assert Kestrel ran, never that it silently didn't."""
     vcf = tmp_path / "output.vcf"
@@ -192,7 +206,7 @@ def test_the_vcf_a_later_kmer_size_writes_is_not_removed(tmp_path, monkeypatch):
     first k-mer size exits 0 without a VCF and the second writes one; post-processing must
     see that file and it must survive the call.
     """
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    _set_kmer_sizes(monkeypatch, [20, 25])
     vcf = tmp_path / "output.vcf"
     vcf.write_text("stale\n", encoding="utf-8")
     launches = []
@@ -302,7 +316,7 @@ def test_a_headerless_vcf_with_records_does_not_manufacture_a_negative(tmp_path,
     assertion -- this repository has already been bitten once by a RED test that passed for an
     unrelated reason.
     """
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    _set_kmer_sizes(monkeypatch, [20, 25])
     vcf = tmp_path / "output.vcf"
     records = "chr1\t155160000\t.\tC\tCG\t.\t.\tDP=100\n" * 2
 
@@ -332,7 +346,7 @@ def test_every_configured_kmer_size_is_tried_before_giving_up(tmp_path, monkeypa
     pins. Retrying is safe because the terminal raise still catches the case where every
     configured size fails, so no path reaches a manufactured negative either way.
     """
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    _set_kmer_sizes(monkeypatch, [20, 25])
     vcf = tmp_path / "output.vcf"
     launches = []
     post_processing_saw = []
@@ -364,7 +378,7 @@ def test_an_unusable_vcf_is_removed_before_the_next_kmer_size_runs(tmp_path, mon
     against the wrong k-mer size, and if that iteration wrote nothing it would look like a
     result. The pre-loop unlink exists for the same reason.
     """
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    _set_kmer_sizes(monkeypatch, [20, 25])
     vcf = tmp_path / "output.vcf"
     existed_at_launch = []
 
@@ -386,7 +400,7 @@ def test_an_unusable_vcf_is_removed_before_the_next_kmer_size_runs(tmp_path, mon
 
 def test_the_warning_for_an_unusable_vcf_names_the_reason(tmp_path, monkeypatch, caplog):
     """A silent negative had no ERROR at all. Whatever replaces it has to say what happened."""
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20]}})
+    _set_kmer_sizes(monkeypatch, [20])
     vcf = tmp_path / "output.vcf"
 
     def fake_run_command(command, log_file=None, **kwargs):
@@ -412,7 +426,7 @@ def test_a_failed_removal_still_raises_the_terminal_error_type(tmp_path, monkeyp
     filesystem error, skipping the terminal raise entirely and handing the caller an exception
     type it has no reason to expect.
     """
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    _set_kmer_sizes(monkeypatch, [20, 25])
     vcf = tmp_path / "output.vcf"
 
     def fake_run_command(command, log_file=None, **kwargs):
@@ -447,7 +461,7 @@ def test_a_discarded_attempt_leaves_no_sam_for_a_later_one_to_convert(tmp_path, 
     The genotype comes from the VCF and is unaffected either way, which is why this is easy
     to miss. This test pins the isolation, not a claim about how often it matters.
     """
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    _set_kmer_sizes(monkeypatch, [20, 25])
     vcf = tmp_path / "output.vcf"
     sam = tmp_path / "output.sam"
     launches = []
@@ -478,7 +492,7 @@ def test_a_discarded_attempt_leaves_no_sam_for_a_later_one_to_convert(tmp_path, 
 def test_an_absent_sam_is_not_an_error_when_an_attempt_is_discarded(tmp_path, monkeypatch):
     """Kestrel need not have written a SAM at all. Absent is the desired state, so removing
     it must not turn a normal discard into a RuntimeError."""
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    _set_kmer_sizes(monkeypatch, [20, 25])
     vcf = tmp_path / "output.vcf"
     launches = []
 
@@ -563,7 +577,7 @@ def test_an_attempt_that_writes_no_vcf_also_leaves_no_sam(tmp_path, monkeypatch)
     """The second discard path. Kestrel can exit 0 having written no VCF at all, and that
     branch retried without removing anything -- but it may still have written a SAM before
     giving up, and every attempt shares that path."""
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    _set_kmer_sizes(monkeypatch, [20, 25])
     vcf = tmp_path / "output.vcf"
     sam = tmp_path / "output.sam"
     launches = []

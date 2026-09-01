@@ -674,7 +674,7 @@ summary | release-summary | none | always records success, failure, skipped jobs
     builder) took the directory to 40 Python files and `make test-scripts-cov` to
     7,806 of 8,340 measured units, or 93.60%, over 5,665 passing unit tests.
     Adding `scripts/golden_cohort/waiver.py` (#262, the gate's declared-delta waiver
-    policy, extracted out of `compare.py`) took it to all 41 Python files and
+    policy, extracted out of `compare.py`) took it to all 43 Python files and
     `make test-scripts-cov` to 7,869 of 8,392 measured units, or 93.77%, over 6,299
     passing unit tests. Adding `scripts/integration_compatibility_observations.py`
     (#293, the version-selected append-only report-observation policy) took it to all

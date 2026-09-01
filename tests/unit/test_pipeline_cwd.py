@@ -29,6 +29,7 @@ import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import pipeline as pipeline_module
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.unit
 
@@ -177,6 +178,7 @@ def test_kestrel_stage_boundary_preserves_inputs_configuration_and_summary(tmp_p
         sample_name="patient-7",
         log_level=logging.DEBUG,
     )
+    run_configuration = resolve_run_configuration()
 
     assert harness.kwargs("run_kestrel") == {
         "vcf_path": out / "kestrel" / "output.vcf",
@@ -193,6 +195,10 @@ def test_kestrel_stage_boundary_preserves_inputs_configuration_and_summary(tmp_p
         "log_level": logging.DEBUG,
         "cwd": str(run_dir),
         "threads": 4,
+        "resolved_component": run_configuration.kestrel,
+        "nomenclature_component": run_configuration.nomenclature,
+        "runtime_component": run_configuration.kestrel_runtime,
+        "custom_context_active": False,
     }
     summary = json.loads((out / "pipeline_summary.json").read_text(encoding="utf-8"))
     kestrel_steps = [step for step in summary["steps"] if step["step"] == "Kestrel Genotyping"]

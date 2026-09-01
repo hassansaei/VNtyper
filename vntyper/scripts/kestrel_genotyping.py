@@ -330,10 +330,8 @@ def run_kestrel(
     log_level_str = logging.getLevelName(log_level)
 
     additional_settings = kestrel_settings.get("additional_settings", "")
-    # Every new key is read with `.get` and a shipped default: `--config-path` replaces
-    # the whole config rather than merging, so a replacement config legitimately lacks
-    # all of them (trap 2). `kestrel_config` itself is a module global read at import
-    # time, so tests patch the global rather than passing a config (trap 1).
+    # Runtime-only Kestrel settings remain optional for compatibility with older
+    # sidecars. Decision values are resolved separately and never read from this map.
     java_opts_count = kestrel_settings.get("java_opts_count", "")
     java_opts_call = kestrel_settings.get("java_opts_call", "-XX:+UseSerialGC")
     split_counting = kestrel_settings.get("split_counting", True)
