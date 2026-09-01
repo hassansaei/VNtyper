@@ -36,6 +36,7 @@ dependencies = [
     "jinja2>=3.1.0",
     "igv-reports>=1.13.0",
     "plotly>=5.24.0",
+    "rfc8785>=0.1.4,<0.2",
 ]
 
 [project.optional-dependencies]
@@ -169,6 +170,8 @@ version = {attr = "vntyper.version.__version__"}
     # `scripts/calibration.json` is: production never reads either, but an installed copy
     # is what lets an operator see where a shipped constant came from.
     "modules/advntr/advntr_calibration.json",
+    "modules/advntr/advntr_artifact_evidence.json",
+    "modules/advntr/advntr_artifact_evidence.sha256",
 ]
 
 # ===========================

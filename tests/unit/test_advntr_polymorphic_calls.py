@@ -25,13 +25,10 @@ import pandas as pd
 import pytest
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
+from vntyper.modules.advntr.artifact_evidence import load_packaged_artifact_evidence
 from vntyper.scripts.flagging import add_flags
 
 pytestmark = pytest.mark.unit
-
-#: Entries the owner confirmed as established artifacts on #267 (2026-08-24):
-#: "I would recommend keeping D58_2&D59_2 and anything reported in RU7 flagged".
-CONFIRMED = {"D58_2&D59_2"}
 
 #: How many distinct states the list carries after the #267 cleanup: 32 shipped, minus 7
 #: that the pathogenic-frame filter removes before flagging, minus 1 duplicate. Changing
@@ -254,70 +251,13 @@ class TestSatisfiability:
 
 
 class TestProvenance:
-    def test_the_calibration_file_covers_exactly_the_live_list(self, calibration, states):
-        documented = {entry["state"] for entry in calibration["polymorphic_calls"]["entries"]}
+    def test_the_governed_artifact_covers_exactly_the_live_list(self, states):
+        evidence = load_packaged_artifact_evidence()
 
-        assert documented == set(states)
+        assert evidence.active_states == frozenset(states)
 
-    def test_it_documents_every_entry_once(self, calibration):
-        documented = [entry["state"] for entry in calibration["polymorphic_calls"]["entries"]]
-
-        assert len(documented) == len(set(documented)) == EXPECTED_ENTRY_COUNT
-
-    def test_every_entry_declares_a_known_status(self, calibration):
-        allowed = set(calibration["polymorphic_calls"]["statuses"])
-
-        assert allowed, "the guard is vacuous with no statuses declared"
-        for entry in calibration["polymorphic_calls"]["entries"]:
-            assert entry["status"] in allowed, entry
-
-    def test_the_owner_confirmed_entries_are_recorded_as_confirmed(self, calibration):
-        by_state = {entry["state"]: entry for entry in calibration["polymorphic_calls"]["entries"]}
-
-        for state in CONFIRMED:
-            assert by_state[state]["status"] == "confirmed_artifact"
-
-    def test_the_rest_are_recorded_as_awaiting_revalidation(self, calibration):
-        """The owner asked for these to be re-measured against the renome cohort and
-        decided case by case; recording that is the point of the file."""
-        pending = [
-            entry["state"]
-            for entry in calibration["polymorphic_calls"]["entries"]
-            if entry["status"] == "pending_renome_revalidation"
-        ]
-
-        assert len(pending) == EXPECTED_ENTRY_COUNT - len(CONFIRMED)
-
-    def test_the_recorded_delta_is_the_one_the_code_computes(self, calibration):
-        for entry in calibration["polymorphic_calls"]["entries"]:
-            state = entry["state"]
-            computed = advntr.sum_insertion_lengths(state) - state.count("D")
-
-            assert entry["net_indel_delta"] == computed, state
-
-    def test_every_recorded_delta_is_in_the_pathogenic_frame(self, calibration):
-        """The same claim as the reachability test, over the documented data, so a
-        hand-edited calibration file cannot disagree with the list it documents."""
-        for entry in calibration["polymorphic_calls"]["entries"]:
-            assert entry["net_indel_delta"] % 3 == 1, entry
-
-    def test_the_colliding_entries_carry_a_note(self, calibration):
-        """#267's substance: three live entries have the shape of a pathogenic variant the
-        simulation produces, and a State string cannot separate the two. Losing that from
-        the record is how the list became unexplainable in the first place."""
-        by_state = {entry["state"]: entry for entry in calibration["polymorphic_calls"]["entries"]}
-
-        for state in ("I23_6_G_LEN1", "I21_2_T_LEN1", "D17_2&D18_2&D19_2&D20_2&D21_2"):
-            assert by_state[state].get("note"), state
-
-    def test_the_criterion_the_cohort_and_the_limitation_are_recorded(self, calibration):
-        block = calibration["polymorphic_calls"]
-
-        assert block["cohort"] == "renome"
-        assert block["criterion"]
-        assert block["source"]
-        assert block["limitation"]
-        assert block["observation_counts_retained"] is False
+    def test_the_calibration_file_no_longer_duplicates_governed_state_evidence(self, calibration):
+        assert "polymorphic_calls" not in calibration
 
     def test_the_other_two_rules_are_documented_too(self, calibration, config):
         documented = set(calibration["other_rules"])

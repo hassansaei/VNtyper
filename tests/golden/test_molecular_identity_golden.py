@@ -801,6 +801,25 @@ def test_both_roots_and_every_sample_are_loaded(corpus: GoldenCorpus, uut_replay
     assert uut_replay.control_replays == 200
 
 
+def test_pr_a_recurrent_state_collision_baseline_is_literal(corpus: GoldenCorpus) -> None:
+    """Freeze every B1 collision before governed disposition changes any decision."""
+    assert corpus.recurrent_state_collisions == (
+        ("experiment2_atypical/pair_4010/mutated", 0, "I23_6_G_LEN1"),
+        ("experiment2_atypical/pair_4012/mutated", 0, "I21_2_T_LEN1"),
+        ("experiment2_atypical/pair_4012/mutated", 1, "I23_6_G_LEN1"),
+        ("experiment2_atypical/pair_4014/mutated", 0, "I21_2_T_LEN1"),
+        ("experiment2_atypical/pair_4015/mutated", 0, "I21_2_T_LEN1"),
+        ("experiment2_atypical/pair_4015/mutated", 1, "I23_6_G_LEN1"),
+        ("experiment2_atypical/pair_4017/mutated", 0, "I21_2_T_LEN1"),
+        ("experiment2_atypical/pair_4017/mutated", 1, "I23_6_G_LEN1"),
+        ("experiment2_atypical/pair_4083/mutated", 0, "D17_2&D18_2&D19_2&D20_2&D21_2"),
+        ("experiment2_atypical/pair_4087/mutated", 0, "D17_2&D18_2&D19_2&D20_2&D21_2"),
+        ("experiment2_atypical/pair_4088/mutated", 0, "D17_2&D18_2&D19_2&D20_2&D21_2"),
+    )
+    assert len(corpus.recurrent_state_collisions) == 11
+    assert len({key for key, _, _ in corpus.recurrent_state_collisions}) == 8
+
+
 def test_historical_phase1_projection_is_literal_per_sample(corpus: GoldenCorpus) -> None:
     """Aggregate swaps and disappearance of a lower tier must fail on exact sample keys."""
     observed = corpus
