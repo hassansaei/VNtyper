@@ -357,8 +357,18 @@ def _evaluate(profile: ResolvedDecisionProfile, evidence: ExtractedEvidence) -> 
                 Fraction(candidate.selected_identity == candidate.expected_identity),
             )
         )
-    detection = paired_group_bootstrap(detection_pairs, iterations=protocol.bootstrap_iterations, seed=protocol.seed)
-    exact = paired_group_bootstrap(exact_pairs, iterations=protocol.bootstrap_iterations, seed=protocol.seed)
+    detection = paired_group_bootstrap(
+        detection_pairs,
+        required_strata=protocol.required_strata,
+        iterations=protocol.bootstrap_iterations,
+        seed=protocol.seed,
+    )
+    exact = paired_group_bootstrap(
+        exact_pairs,
+        required_strata=protocol.required_strata,
+        iterations=protocol.bootstrap_iterations,
+        seed=protocol.seed,
+    )
     family_p = max(
         detection.one_sided_noninferiority_p_value,
         exact.one_sided_noninferiority_p_value,

@@ -73,6 +73,7 @@ class CurvePoint:
 def paired_group_bootstrap(
     observations: Sequence[PairedObservation],
     *,
+    required_strata: Sequence[str],
     iterations: int,
     seed: int,
 ) -> BootstrapInterval:
@@ -85,21 +86,32 @@ def paired_group_bootstrap(
         raise ValueError("calibration bootstrap requires observations")
     if any(not isinstance(row, PairedObservation) for row in observations):
         raise ValueError("calibration bootstrap rows must be PairedObservation values")
+    if (
+        not isinstance(required_strata, Sequence)
+        or isinstance(required_strata, (str, bytes))
+        or not required_strata
+        or any(not isinstance(stratum, str) or not stratum for stratum in required_strata)
+        or len(required_strata) != len(set(required_strata))
+    ):
+        raise ValueError("calibration bootstrap requires unique non-empty declared strata")
 
     group_strata: dict[str, set[str]] = {}
-    strata: dict[str, dict[str, list[Fraction]]] = {}
+    strata: dict[str, dict[str, list[Fraction]]] = {stratum: {} for stratum in required_strata}
     for row in observations:
+        if row.stratum not in strata:
+            raise ValueError(f"calibration observation uses undeclared bootstrap stratum: {row.stratum}")
         group_strata.setdefault(row.group_id, set()).add(row.stratum)
-        strata.setdefault(row.stratum, {}).setdefault(row.group_id, []).append(row.candidate - row.baseline)
+        strata[row.stratum].setdefault(row.group_id, []).append(row.candidate - row.baseline)
     if any(len(names) != 1 for names in group_strata.values()):
         raise ValueError("connected bootstrap groups must not span strata")
-    if any(not groups for groups in strata.values()):  # pragma: no cover - construction makes this defensive
-        raise ValueError("calibration bootstrap strata must not be empty")
+    empty_strata = tuple(stratum for stratum, groups in strata.items() if not groups)
+    if empty_strata:
+        raise ValueError(f"calibration bootstrap has empty declared bootstrap strata: {list(empty_strata)}")
 
     estimate = _macro_mean(strata)
     rng = random.Random(seed)
     samples: list[Fraction] = []
-    ordered_strata = tuple(sorted(strata))
+    ordered_strata = tuple(required_strata)
     for _ in range(iterations):
         stratum_means: list[Fraction] = []
         for stratum in ordered_strata:

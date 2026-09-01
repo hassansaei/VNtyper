@@ -109,6 +109,26 @@ def test_protocol_digest_and_cross_product_bind_every_predeclared_stratum() -> N
 
 
 @pytest.mark.parametrize(
+    ("assay_classes", "mutation_classes"),
+    [
+        (["capture:short-read"], ["duplication"]),
+        (["capture-short-read"], ["dup:lication"]),
+        (["a", "a:b"], ["b:c", "c"]),
+    ],
+)
+def test_protocol_rejects_ambiguous_stratum_delimiters(
+    assay_classes: list[str],
+    mutation_classes: list[str],
+) -> None:
+    raw = synthetic_protocol()
+    raw["assay_classes"] = assay_classes
+    raw["mutation_classes"] = mutation_classes
+
+    with pytest.raises(ValueError, match="must not contain ':'"):
+        decode_protocol(raw)
+
+
+@pytest.mark.parametrize(
     ("path", "value"),
     [
         (("objective",), "f1"),

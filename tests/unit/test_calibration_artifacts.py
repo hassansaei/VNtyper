@@ -218,7 +218,7 @@ def test_locked_evaluation_refuses_manifest_protocol_mismatched_to_payload(tmp_p
         )
 
 
-def test_fit_keeps_a_declared_but_unobserved_stratum_as_zero_count(tmp_path: Path) -> None:
+def test_fit_rejects_a_declared_but_unobserved_bootstrap_stratum(tmp_path: Path) -> None:
     truth, partitions, runs = _inputs(tmp_path)
     study = load_strict_json_object(partitions.read_bytes())
     protocol = study["protocol"]
@@ -229,7 +229,7 @@ def test_fit_keeps_a_declared_but_unobserved_stratum_as_zero_count(tmp_path: Pat
     evidence.mkdir()
     extract_artifact_bundle(truth, partitions, runs, evidence)
 
-    with pytest.raises(ValueError, match="no admissible candidate"):
+    with pytest.raises(ValueError, match="empty declared bootstrap strata.*genome-short-read:duplication"):
         fit_artifact_bundle(evidence, "lexicographic-safety-v1", tmp_path / "candidate")
 
 

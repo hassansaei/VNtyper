@@ -438,6 +438,8 @@ def _sorted_unique_strings(value: object, label: str) -> tuple[str, ...]:
         or len(value) != len(set(value))
     ):
         raise ValueError(f"{label} must be sorted unique non-empty strings")
+    if any(":" in item for item in value):
+        raise ValueError(f"{label} must not contain ':'")
     return tuple(value)
 
 

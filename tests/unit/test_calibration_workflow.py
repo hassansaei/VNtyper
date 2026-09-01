@@ -198,7 +198,12 @@ def test_fit_applies_holm_to_real_marginal_bootstrap_evidence_across_the_family(
         )
         for index in range(20)
     )
-    interval = paired_group_bootstrap(rows, iterations=10_000, seed=295)
+    interval = paired_group_bootstrap(
+        rows,
+        required_strata=("capture-short-read:duplication",),
+        iterations=10_000,
+        seed=295,
+    )
 
     def marginal(profile) -> CandidateEvaluation:
         evaluation = _evaluate(profile)
