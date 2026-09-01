@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -27,6 +27,7 @@ from vntyper.scripts.identity_candidates import (
     with_candidate_evidence,
 )
 from vntyper.scripts.molecular_identity import (
+    AdvntrRepresentation,
     IdentityTranslation,
     make_coding_edit,
     make_molecular_identity,
@@ -115,7 +116,7 @@ def _kestrel_row(
 
 
 def _captured(
-    rows: list[Mapping[str, object]],
+    rows: Iterable[Mapping[str, object]],
     component: Any = REAL_COMPONENT,
 ) -> IdentityCandidateSet:
     return capture_kestrel_observations(rows, component)
@@ -244,13 +245,16 @@ def test_advntr_positive_states_are_translated_before_reconciliation() -> None:
     ]
 
     candidates = capture_advntr_observations(rows, REAL_COMPONENT)
+    representations = tuple(candidate.observation.representation for candidate in candidates.candidates)
+    assert all(isinstance(representation, AdvntrRepresentation) for representation in representations)
+    advntr_representations = cast(tuple[AdvntrRepresentation, ...], representations)
 
     assert candidates.identity_hypothesis_count == 2
-    assert tuple(candidate.observation.representation.repeat_units for candidate in candidates.candidates) == (
+    assert tuple(representation.repeat_units for representation in advntr_representations) == (
         ("2",),
         ("2",),
     )
-    assert tuple(candidate.observation.representation.positions for candidate in candidates.candidates) == (
+    assert tuple(representation.positions for representation in advntr_representations) == (
         (22,),
         (22,),
     )
@@ -356,7 +360,7 @@ def test_unresolved_selected_row_persists_zero_equivalent_representations() -> N
 
 def test_component_is_built_only_from_explicit_config() -> None:
     """Checked-in motif, RU-map, and rotation values are copied into one component."""
-    config = {
+    config: dict[str, Any] = {
         "motifs": {"X": _X},
         "advntr": {"mappable_repeat_units": {"2": "X"}, "rotation_offset": 39},
     }
@@ -409,7 +413,7 @@ def test_evidence_overlay_requires_all_six_gate_columns() -> None:
 def test_raw_representation_key_rejects_wrong_source_shape() -> None:
     """A malformed serialized key cannot masquerade as a candidate lookup key."""
     with pytest.raises(ValueError, match="Kestrel raw representation"):
-        RawRepresentationKey("kestrel", ("X-5", "67", "G", "GG"))
+        RawRepresentationKey("kestrel", ("X-5", "67", "G", "GG"))  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("rotation", [True, 0, 61])
@@ -501,7 +505,7 @@ def test_evidence_and_projection_reject_incomplete_or_unknown_raw_keys() -> None
 )
 def test_persisted_candidate_codec_rejects_malformed_scalars(column: str, value: object, message: str) -> None:
     """Malformed TSV scalar cells fail closed instead of being reinterpreted."""
-    cells: dict[str, object] = _persisted_cells()
+    cells: dict[str, object] = dict(_persisted_cells())
     cells[column] = value
 
     with pytest.raises(ValueError, match=message):
@@ -711,7 +715,7 @@ def test_replay_rejects_noncanonical_boolean_tokens() -> None:
 )
 def test_replay_rejects_closed_state_and_noncanonical_ordinal_values(column: str, value: object) -> None:
     """Counts, blockers, and ordinals must form a possible canonical selected state."""
-    cells: dict[str, object] = _persisted_cells()
+    cells: dict[str, object] = dict(_persisted_cells())
     cells[column] = value
 
     with pytest.raises(ValueError):

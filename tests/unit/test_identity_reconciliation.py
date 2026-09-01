@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -18,6 +18,7 @@ from vntyper.scripts.identity_reconciliation import (
 )
 from vntyper.scripts.molecular_identity import (
     EvidenceDisposition,
+    EvidenceDispositionValue,
     IdentityDecision,
     IdentityTranslation,
     make_coding_edit,
@@ -44,7 +45,7 @@ def _observation(
     source: str,
     *,
     event: str = "duplication",
-    disposition: str = "admissible",
+    disposition: EvidenceDispositionValue = "admissible",
     context_diverges: bool = False,
     kmer_depth: int | None = None,
     advntr_reads: int | None = None,
@@ -116,7 +117,7 @@ def _build_observations(
     kestrel_call: Nomenclature | None,
     *,
     advntr_row: dict[str, object] | None = None,
-    advntr_calls: list[Nomenclature] | None = None,
+    advntr_calls: Sequence[Nomenclature] | None = None,
 ) -> tuple[IdentityReconciliationObservation, ...] | None:
     return build_identity_reconciliation_observations(
         [kestrel_row],
@@ -455,8 +456,8 @@ def test_policy_retains_two_separately_named_tier_a_thresholds() -> None:
         lambda: replace(_observation(DUPC, "59dupC", "kestrel_vcf"), source=""),
         lambda: replace(_observation(DUPC, "59dupC", "kestrel_vcf"), display_name=""),
         lambda: replace(_observation(DUPC, "59dupC", "kestrel_vcf"), net_length=True),
-        lambda: replace(_observation(DUPC, "59dupC", "kestrel_vcf"), flags=("bad",)),
-        lambda: replace(_observation(DUPC, "59dupC", "kestrel_vcf"), known_variant_match=1),
+        lambda: replace(_observation(DUPC, "59dupC", "kestrel_vcf"), flags=("bad",)),  # type: ignore[arg-type]
+        lambda: replace(_observation(DUPC, "59dupC", "kestrel_vcf"), known_variant_match=1),  # type: ignore[arg-type]
         lambda: replace(
             _observation(DUPC, "59dupC", "kestrel_vcf", kmer_depth=5),
             advntr_sequencing_read_support=5,
@@ -499,7 +500,7 @@ def test_result_rejects_inconsistent_selected_identity_metadata(changes: dict[st
     )
 
     with pytest.raises(ValueError):
-        replace(result, **changes)
+        replace(result, **changes)  # type: ignore[arg-type]
 
 
 def test_result_rejects_backing_metadata_on_an_abstained_decision() -> None:
@@ -550,7 +551,7 @@ def test_result_rejects_tier_c_event_disagreement_drift(changes: dict[str, objec
     )
 
     with pytest.raises(ValueError, match="Tier C must match event disagreement"):
-        replace(result, **changes)
+        replace(result, **changes)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -572,7 +573,7 @@ def test_result_rejects_tier_a_conflict_or_low_support_metadata(changes: dict[st
     assert result.tier == "A"
 
     with pytest.raises(ValueError, match="Tier A cannot carry conflict or low-support metadata"):
-        replace(result, **changes)
+        replace(result, **changes)  # type: ignore[arg-type]
 
 
 def test_result_accepts_valid_tier_a_b_and_c_boundaries() -> None:
@@ -625,7 +626,7 @@ def test_kestrel_alternate_depth_rejects_noncanonical_integer_evidence(value: ob
 
 
 @pytest.mark.parametrize("value", [0, 40, "0", "40"])
-def test_kestrel_alternate_depth_accepts_typed_or_canonical_wire_integers(value: object) -> None:
+def test_kestrel_alternate_depth_accepts_typed_or_canonical_wire_integers(value: int | str) -> None:
     observations = _build_observations(
         _persisted_kestrel_row(alternate_depth=value),
         _presentation_call("59dupC", "kestrel_vcf"),

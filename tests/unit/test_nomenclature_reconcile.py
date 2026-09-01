@@ -18,6 +18,7 @@ from vntyper.scripts.identity_reconciliation import (
 )
 from vntyper.scripts.molecular_identity import (
     EvidenceDisposition,
+    EvidenceDispositionValue,
     IdentityTranslation,
     MolecularIdentity,
     make_coding_edit,
@@ -54,7 +55,7 @@ def _identity_observation(
     *,
     kmer_depth: int | None = None,
     advntr_reads: int | None = None,
-    disposition: str = "admissible",
+    disposition: EvidenceDispositionValue = "admissible",
     presentation_call_index: int | None = None,
 ) -> IdentityReconciliationObservation:
     translation = (
