@@ -29,6 +29,7 @@ dependencies:
   - certifi=2026.7.22
   - igv-reports=1.16.0
   - plotly=6.9.0
+  - rfc8785=0.1.4
   - openjdk=11.0.23
   - bcftools=1.21
   - pysam=0.22.1
