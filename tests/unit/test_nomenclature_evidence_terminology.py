@@ -3,6 +3,8 @@
 import ast
 import inspect
 import re
+import subprocess
+import sys
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
@@ -43,6 +45,19 @@ BANNED_BAM_PROSE = (
     "what the reads say",
     "the reads, as a third source",
 )
+
+
+def test_nomenclature_annotate_imports_in_a_fresh_process() -> None:
+    """The standalone annotation boundary must not depend on pytest collection order."""
+    completed = subprocess.run(
+        [sys.executable, "-c", "from vntyper.scripts import nomenclature_annotate"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def _identifiers(source: str) -> set[str]:

@@ -10,17 +10,11 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from vntyper.modules.advntr.artifact_evidence import (
-    ASSERTION,
-    EVIDENCE_DISPOSITION_COLUMN,
-    ArtifactEvidence,
-    evidence_disposition_for_state,
-    load_packaged_artifact_evidence,
-)
 from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS, advntr_identity_result_rows
 from vntyper.scripts.nomenclature import Nomenclature, confidence_note, from_advntr, reconcile, render
 
 if TYPE_CHECKING:
+    from vntyper.modules.advntr.artifact_evidence import ArtifactEvidence
     from vntyper.scripts.identity_candidates import IdentityTranslator
 
 #: The columns, in this order, on every surface that carries them.
@@ -120,6 +114,13 @@ def annotate_advntr_frame(
         placeholder row. The identity quartet is appended only when a component is
         supplied for a positive result frame.
     """
+    from vntyper.modules.advntr.artifact_evidence import (
+        ASSERTION,
+        EVIDENCE_DISPOSITION_COLUMN,
+        evidence_disposition_for_state,
+        load_packaged_artifact_evidence,
+    )
+
     if frame.empty or "Variant" not in frame.columns:
         return frame
 

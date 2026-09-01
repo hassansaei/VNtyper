@@ -19,17 +19,10 @@ from __future__ import annotations
 import logging
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from vntyper.modules.advntr.artifact_evidence import (
-    ASSERTION,
-    EVIDENCE_DISPOSITION_COLUMN,
-    ArtifactEvidence,
-    evidence_disposition_for_state,
-    load_packaged_artifact_evidence,
-)
 from vntyper.scripts.identity_reconciliation import (
     IdentityReconciliationObservation,
     IdentityReconciliationPolicy,
@@ -89,6 +82,9 @@ from vntyper.scripts.nomenclature_frame_presentation import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from vntyper.modules.advntr.artifact_evidence import ArtifactEvidence
 
 
 def _summarise(calls: list[Nomenclature]) -> str:
@@ -265,6 +261,13 @@ def reconcile_caller_outputs(
     Returns:
         bool: True when both files were read and rewritten.
     """
+    from vntyper.modules.advntr.artifact_evidence import (
+        ASSERTION,
+        EVIDENCE_DISPOSITION_COLUMN,
+        evidence_disposition_for_state,
+        load_packaged_artifact_evidence,
+    )
+
     kestrel_path, advntr_path = Path(kestrel_tsv), Path(advntr_tsv)
     if not kestrel_path.is_file() or not advntr_path.is_file():
         logger.debug("Cross-caller reconciliation skipped; one of the result files is absent.")
