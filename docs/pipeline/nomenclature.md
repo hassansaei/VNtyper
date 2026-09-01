@@ -43,7 +43,9 @@ Sample and cohort HTML, TSV, CSV and JSON surfaces copy these four recorded valu
 schema-1 or schema-2 summary row missing any member of the quartet displays the literal
 `legacy identity not recorded` in all four downstream cells. It is never completed from
 plausible legacy alleles or names. Current negative caller TSVs keep their narrower schemas
-and gain no identity fields.
+and gain no identity fields. In the sample report, the quartet remains in the HTML table
+under the screen column control. It is folded out of the width-limited table on paper and
+printed in exact order as labelled values in the per-row appendix.
 
 ### Why there is no `c.` prefix
 

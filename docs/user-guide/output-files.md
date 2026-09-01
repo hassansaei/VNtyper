@@ -81,7 +81,9 @@ Positive adVNTR result rows append the same four molecular-identity columns in t
 order. Negative adVNTR output retains its existing narrower schema. The per-sample HTML
 report, `pipeline_summary.json`, and cohort HTML/TSV/CSV/JSON exports carry all four
 recorded values; they never infer them from `POS`, `REF`, `ALT`, `Variant` or
-`Nomenclature`.
+`Nomenclature`. In a sample HTML report, use the table's column control to show the
+quartet on screen. The printed table folds these width-heavy fields and the labelled
+per-row appendix prints them in the same order, including the full molecular identity.
 
 For compatibility, a schema-1 or schema-2 summary row missing any one of the four fields
 renders `legacy identity not recorded` in all four downstream identity cells. A complete

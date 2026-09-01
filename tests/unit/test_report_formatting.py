@@ -833,6 +833,35 @@ def test_both_sample_result_tables_expose_the_exact_identity_quartet_in_a6_order
     assert tuple(rf.ADVNTR_CELL_FORMATS)[-4:] == quartet
     assert {rf.KESTREL_CELL_FORMATS[column] for column in quartet} == {rf.FORMAT_TEXT}
     assert {rf.ADVNTR_CELL_FORMATS[column] for column in quartet} == {rf.FORMAT_TEXT}
+    assert set(quartet).isdisjoint(rf.KESTREL_ESSENTIAL_COLUMNS)
+    assert set(quartet).isdisjoint(rf.ADVNTR_ESSENTIAL_COLUMNS)
+
+
+def test_the_identity_quartet_is_folded_in_exact_order_with_escaped_unbroken_content() -> None:
+    """Catch print-width fixes that drop, reorder, or expose an unsafe identity value."""
+    frame = pd.DataFrame(
+        [
+            {
+                "Motif": "5",
+                "Molecular_Identity": "MUC1-X-60-coding-v1|60|59|-|C<script>&tail",
+                "Molecular_Identity_Status": "legacy-selected-among-multiple",
+                "Equivalent_Representation_Count": 2,
+                "Identity_Hypothesis_Count": 3,
+            }
+        ]
+    )
+
+    markup = rf.folded_record_html(frame, rf.KESTREL_ESSENTIAL_COLUMNS, noun="Kestrel")
+
+    assert markup == (
+        '<div class="record-appendix"><div class="record-row"><h3>Kestrel row 1</h3><dl>'
+        "<dt>Molecular_Identity</dt>"
+        "<dd>MUC1-X-60-coding-v1|60|59|-|C&lt;script&gt;&amp;tail</dd>"
+        "<dt>Molecular_Identity_Status</dt><dd>legacy-selected-among-multiple</dd>"
+        "<dt>Equivalent_Representation_Count</dt><dd>2</dd>"
+        "<dt>Identity_Hypothesis_Count</dt><dd>3</dd>"
+        "</dl></div></div>"
+    )
 
 
 def test_nomenclature_columns_are_text_and_the_real_motif_remains_last() -> None:

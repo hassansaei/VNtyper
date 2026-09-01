@@ -335,8 +335,11 @@ MONO_COLUMNS: frozenset[str] = frozenset(
 #: allele (the ambiguity interval, the repeat form, both callers' own names, the naming
 #: note) or is a figure the column beside it derives (``Depth (Region)``, which
 #: ``Depth Score`` is the ratio over) or the 60 bp sequence, which is the widest value
-#: in the document and the least scanned. Nineteen columns measured 1,946px inside a
-#: 1,130px frame; twelve fit.
+#: in the document and the least scanned. The four molecular-identity provenance fields
+#: are also folded: they remain in display order under the screen column control and
+#: print as labelled values in the per-row appendix, where their unbroken serialization
+#: can wrap instead of widening the A4 table. Nineteen columns measured 1,946px inside a
+#: 1,130px frame; twelve fit before the identity quartet was added.
 KESTREL_ESSENTIAL_COLUMNS: frozenset[str] = frozenset(
     {
         "Motif",
@@ -351,7 +354,6 @@ KESTREL_ESSENTIAL_COLUMNS: frozenset[str] = frozenset(
         "MUC1 Name",
         "Tier",
         "Flags",
-        *IDENTITY_COLUMNS,
     }
 )
 
@@ -370,7 +372,6 @@ ADVNTR_ESSENTIAL_COLUMNS: frozenset[str] = frozenset(
         "MUC1 Name",
         "Tier",
         "Flags",
-        *IDENTITY_COLUMNS,
     }
 )
 

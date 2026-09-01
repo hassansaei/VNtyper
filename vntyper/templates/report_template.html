@@ -1207,8 +1207,9 @@
           drive it once it has focus.
         #}
         {% if kestrel_highlight %}
-            <p class="table-key">Molecular identity provenance is printed directly in the four identity columns;
-                legacy rows state that identity was not recorded.</p>
+            <p class="table-key">Molecular identity provenance remains available through the table's column control
+                on screen and is printed with labels in the folded-record appendix. Legacy rows state that identity
+                was not recorded in all four fields.</p>
             <div class="results-toolbar">
                 <p class="table-count">{{ kestrel_row_summary }}</p>
                 <label class="switch" for="highlightFlagged">
@@ -1265,8 +1266,9 @@
           negative branch and says in words that it is not one.
         #}
         {% if advntr_available and advntr_highlight %}
-            <p class="table-key">Molecular identity provenance is printed directly in the four identity columns;
-                legacy rows state that identity was not recorded.</p>
+            <p class="table-key">Molecular identity provenance remains available through the table's column control
+                on screen and is printed with labels in the folded-record appendix. Legacy rows state that identity
+                was not recorded in all four fields.</p>
             {# The same toolbar shape as the Kestrel table above, so the column control
                has the same home in both and a reader learns it once. The
                flagged-value switch is not repeated: one switch styles both tables. #}
