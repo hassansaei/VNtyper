@@ -3,29 +3,39 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from vntyper.scripts.molecular_identity import IdentityTranslation
-from vntyper.scripts.nomenclature import Nomenclature, load_nomenclature_config, reconcile
+from vntyper.scripts.nomenclature import Nomenclature, reconcile
 from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate
 from vntyper.scripts.nomenclature_bam_evidence import (
     BamCandidateBinding,
     BamIdentityLocus,
 )
 from vntyper.scripts.nomenclature_bam_replay import BamReplayArtifact, BamReplayLocus
+from vntyper.scripts.nomenclature_decision_config import decision_config_from_component
+from vntyper.scripts.run_configuration import resolve_compatibility_component
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from vntyper.scripts.nomenclature_decision_config import NomenclatureDecisionConfig
 
-def open_rescuer(output_dir: str | Path | None) -> BamRescuer | None:
+
+def open_rescuer(
+    output_dir: str | Path | None,
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> BamRescuer | None:
     """Build a rescuer for a sample, or ``None`` without haplotype records.
 
     Args:
         output_dir: Kestrel output directory.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         A lazily opened sample rescuer, or ``None`` when ``output.bam`` is absent.
@@ -35,15 +45,26 @@ def open_rescuer(output_dir: str | Path | None) -> BamRescuer | None:
     bam = Path(output_dir) / "output.bam"
     if not bam.is_file():
         return None
-    return BamRescuer(bam)
+    if decision_config is None:
+        return BamRescuer(bam)
+    return BamRescuer(
+        bam,
+        flank=decision_config.bam_flank,
+        thin_haplotype_record_support=decision_config.bam_thin_haplotype_record_support,
+    )
 
 
-def row_haplotype_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclature | None, int | None]:
+def row_haplotype_call(
+    row: pd.Series,
+    rescuer: BamRescuer,
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> tuple[Nomenclature | None, int | None]:
     """Return the legacy BAM call and record support for one Kestrel row.
 
     Args:
         row: One Kestrel result row.
         rescuer: Open sample rescuer.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         ``(call, supporting records)`` or ``(None, None)`` when unavailable.
@@ -55,7 +76,7 @@ def row_haplotype_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclatur
     consensus = rescuer.rescue(contig, position)
     if consensus is None:
         return None, None
-    return from_bam(contig, consensus), consensus.supporting_haplotype_records
+    return from_bam(contig, consensus, decision_config), consensus.supporting_haplotype_records
 
 
 @dataclass(frozen=True)
@@ -141,6 +162,7 @@ def observe_identity_groups(
     eligible_row_indices: frozenset[int],
     rescuer: BamRescuer | None,
     component: Any,
+    decision_config: NomenclatureDecisionConfig | None = None,
 ) -> BamIdentityGroupProjection:
     """Consult each eligible exact group once and project results to source rows.
 
@@ -150,6 +172,7 @@ def observe_identity_groups(
         eligible_row_indices: Rows the legacy path would have consulted/refined.
         rescuer: Shared sample rescuer, or ``None`` when BAM is unavailable.
         component: Stage-bound complete-context translation authority.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         Aligned legacy calls/support/translations and one joint replay locus per
@@ -190,7 +213,7 @@ def observe_identity_groups(
             consensus = rescuer.rescue(contig, position)
             replay.append(BamReplayLocus(ordinals, "unavailable", None))
             if consensus is not None:
-                call = from_bam(contig, consensus)
+                call = from_bam(contig, consensus, decision_config)
                 for candidate in wanted:
                     calls[candidate.row_index] = call
                     supports[candidate.row_index] = consensus.supporting_haplotype_records
@@ -202,7 +225,7 @@ def observe_identity_groups(
         replay.append(BamReplayLocus(ordinals, "observed", evidence))
         if consensus is None:
             continue
-        call = from_bam(contig, consensus)
+        call = from_bam(contig, consensus, decision_config)
         support = consensus.supporting_haplotype_records
         for candidate in wanted:
             calls[candidate.row_index] = call
@@ -229,6 +252,7 @@ def haplotype_calls(
     bam_translations: list[IdentityTranslation | None] | None = None,
     identity_component: Any = None,
     bam_replay_loci: list[BamReplayLocus] | None = None,
+    decision_config: NomenclatureDecisionConfig | None = None,
 ) -> list[Nomenclature | None]:
     """Resolve grouped BAM evidence only where caller evidence leaves a candidate.
 
@@ -241,6 +265,7 @@ def haplotype_calls(
         bam_translations: Optional aligned output for complete-candidate bindings.
         identity_component: Optional stage-bound complete-context translator.
         bam_replay_loci: Optional output with one replay state per exact group.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         One call per Kestrel row for identity-aware input; otherwise the legacy
@@ -251,14 +276,34 @@ def haplotype_calls(
     """
     if bam_replay_loci is not None and bam_translations is None:
         raise ValueError("BAM replay output requires aligned identity translations")
-    consultation_needed = is_candidate(reconcile(*vcf_calls, *advntr_calls, supports=supports))
+    consultation_needed = is_candidate(
+        reconcile(*vcf_calls, *advntr_calls, supports=supports, decision_config=decision_config)
+    )
     if bam_translations is not None:
         groups = group_identity_rows(kestrel_rows)
         if identity_component is None:
             from vntyper.scripts.identity_candidates import translation_component_from_config
 
-            identity_component = translation_component_from_config(load_nomenclature_config())
-        rescuer = open_rescuer(kestrel_dir) if consultation_needed else None
+            if decision_config is None:
+                packaged_component = resolve_compatibility_component(
+                    "nomenclature",
+                    None,
+                    custom_context_active=False,
+                )
+                decision_config = decision_config_from_component(packaged_component)
+                translation_config: Mapping[str, object] = packaged_component
+            else:
+                translation_config = {
+                    "motifs": decision_config.motifs,
+                    "advntr": {
+                        "mappable_repeat_units": {
+                            str(unit): motif for unit, motif in decision_config.mappable_repeat_units.items()
+                        },
+                        "rotation_offset": decision_config.rotation_offset,
+                    },
+                }
+            identity_component = translation_component_from_config(translation_config)
+        rescuer = open_rescuer(kestrel_dir, decision_config) if consultation_needed else None
         try:
             projection = observe_identity_groups(
                 groups,
@@ -266,6 +311,7 @@ def haplotype_calls(
                 frozenset(range(len(kestrel_rows))) if consultation_needed else frozenset(),
                 rescuer,
                 identity_component,
+                decision_config,
             )
         finally:
             if rescuer is not None:
@@ -283,14 +329,14 @@ def haplotype_calls(
 
     if not consultation_needed:
         return []
-    rescuer = open_rescuer(kestrel_dir)
+    rescuer = open_rescuer(kestrel_dir, decision_config)
     if rescuer is None:
         return []
 
     calls: list[Nomenclature | None] = []
     try:
         for row in kestrel_rows:
-            call, support = row_haplotype_call(row, rescuer)
+            call, support = row_haplotype_call(row, rescuer, decision_config)
             calls.append(call)
             if call is None:
                 continue

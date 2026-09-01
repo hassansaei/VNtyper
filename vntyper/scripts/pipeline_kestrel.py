@@ -31,6 +31,7 @@ def run_kestrel_stage(
     runner: Callable[..., None],
     threads: int = 4,
     resolved_component: Mapping[str, object] | None = None,
+    nomenclature_component: Mapping[str, object] | None = None,
     runtime_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
 ) -> None:
@@ -51,6 +52,7 @@ def run_kestrel_stage(
             ``default_values.threads``, so a caller that has not been updated still
             binds.
         resolved_component: Immutable Kestrel decision component for this run.
+        nomenclature_component: Immutable nomenclature component for this run.
         runtime_component: Immutable excluded Kestrel runtime component.
         custom_context_active: Whether an explicit custom profile owns this run.
 
@@ -77,10 +79,20 @@ def run_kestrel_stage(
     #
     from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
 
-    explicit_context = resolved_component is not None or runtime_component is not None or custom_context_active
+    explicit_context = (
+        resolved_component is not None
+        or nomenclature_component is not None
+        or runtime_component is not None
+        or custom_context_active
+    )
     decision = resolve_compatibility_component(
         "kestrel",
         resolved_component,
+        custom_context_active=custom_context_active,
+    )
+    nomenclature_decision = resolve_compatibility_component(
+        "nomenclature",
+        nomenclature_component,
         custom_context_active=custom_context_active,
     )
     runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
@@ -115,6 +127,7 @@ def run_kestrel_stage(
     if explicit_context:
         runner_kwargs.update(
             resolved_component=decision,
+            nomenclature_component=nomenclature_decision,
             runtime_component=runtime,
             custom_context_active=custom_context_active,
         )

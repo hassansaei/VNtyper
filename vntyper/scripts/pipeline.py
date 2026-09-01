@@ -615,6 +615,7 @@ def run_pipeline(
             runner=run_kestrel,
             threads=threads,
             resolved_component=run_configuration.kestrel,
+            nomenclature_component=run_configuration.nomenclature,
             runtime_component=run_configuration.kestrel_runtime,
             custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
         )
@@ -700,6 +701,7 @@ def run_pipeline(
                     config=config,
                     artifact_evidence=advntr_evidence,
                     resolved_component=run_configuration.advntr,
+                    nomenclature_component=run_configuration.nomenclature,
                     custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                 )
                 # Tier A needs two independent callers agreeing, which no single
@@ -709,6 +711,8 @@ def run_pipeline(
                     os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
                     os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
                     artifact_evidence=advntr_evidence,
+                    resolved_component=run_configuration.nomenclature,
+                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                 ):
                     # The Kestrel step was recorded before this ran, so the summary
                     # still holds the pre-reconciliation row -- and the HTML report
@@ -743,7 +747,12 @@ def run_pipeline(
                 if not advntr_records:
                     logger.error("adVNTR genotyping results not found for cross-match.")
                     raise ValueError("adVNTR genotyping results not found for cross-match.")
-                crossmatch_summary = cross_match_variants(kestrel_records, advntr_records, config=config)
+                crossmatch_summary = cross_match_variants(
+                    kestrel_records,
+                    advntr_records,
+                    resolved_component=run_configuration.cross_match,
+                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
+                )
                 cross_match_output = os.path.join(dirs["advntr"], "cross_match_results.tsv")
                 write_results_tsv(crossmatch_summary["matches"], cross_match_output)
                 cross_end = datetime.now(timezone.utc).replace(tzinfo=None)

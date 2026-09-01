@@ -797,6 +797,7 @@ def process_advntr_output(
     *,
     artifact_evidence: ArtifactEvidence | None = None,
     resolved_component: Mapping[str, object] | None = None,
+    nomenclature_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
 ):
     """
@@ -820,6 +821,7 @@ def process_advntr_output(
         config (dict, optional): Main configuration dictionary.
         artifact_evidence: Verified governed State evidence resolved for this run.
         resolved_component: Immutable adVNTR decision component for this run.
+        nomenclature_component: Immutable nomenclature component for this run.
         custom_context_active: Whether an explicit custom profile owns this run.
 
     Raises:
@@ -833,6 +835,11 @@ def process_advntr_output(
     decision = resolve_compatibility_component(
         "advntr",
         resolved_component,
+        custom_context_active=custom_context_active,
+    )
+    nomenclature_decision = resolve_compatibility_component(
+        "nomenclature",
+        nomenclature_component,
         custom_context_active=custom_context_active,
     )
     decision_settings = decision.get("settings")
@@ -952,7 +959,6 @@ def process_advntr_output(
         else:
             from vntyper.scripts.identity_candidates import translation_component_from_config
             from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS
-            from vntyper.scripts.nomenclature import load_nomenclature_config
 
             base_columns = [
                 "VID",
@@ -990,11 +996,14 @@ def process_advntr_output(
 
             # Name the variants. Done before the "ensure all columns present" sweep
             # below so the five land as computed values, not as "Not applicable".
-            identity_component = translation_component_from_config(load_nomenclature_config())
+            identity_component = translation_component_from_config(nomenclature_decision)
+            from vntyper.scripts.nomenclature_decision_config import decision_config_from_component
+
             advntr_concat = annotate_advntr_frame(
                 advntr_concat,
                 identity_component=identity_component,
                 artifact_evidence=artifact_evidence,
+                decision_config=decision_config_from_component(nomenclature_decision),
             )
 
             # Ensure all final columns are present

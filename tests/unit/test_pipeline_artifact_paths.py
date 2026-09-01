@@ -313,7 +313,12 @@ def test_advntr_run_snapshots_and_threads_one_verified_evidence_value(tmp_path: 
     assert command_call["runtime_component"] == run_configuration.advntr_runtime
     assert command_call["custom_context_active"] is False
     assert parsing_call["resolved_component"] == run_configuration.advntr
+    assert parsing_call["nomenclature_component"] == run_configuration.nomenclature
     assert parsing_call["custom_context_active"] is False
+    reconciliation_call = harness.kwargs("reconcile_caller_outputs")
+    assert reconciliation_call["resolved_component"] == run_configuration.nomenclature
+    cross_match_call = harness.kwargs("cross_match_variants")
+    assert cross_match_call["resolved_component"] == run_configuration.cross_match
     harness.stages["load_advntr_config"].assert_not_called()
 
 
@@ -337,7 +342,7 @@ def test_pipeline_snapshots_the_supplied_explicit_context_without_reloading_pack
     run_configuration = resolve_run_configuration(profile_path)
 
     output = tmp_path / "out"
-    harness = run_pipeline_under_harness(output, run_configuration=run_configuration)
+    harness = run_pipeline_under_harness(output, run_configuration=run_configuration, extra_modules=["advntr"])
     recorded = json.loads((output / "pipeline_summary.json").read_text(encoding="utf-8"))
 
     assert (output / "provenance" / "decision_profile.json").read_bytes() == (
@@ -348,8 +353,16 @@ def test_pipeline_snapshots_the_supplied_explicit_context_without_reloading_pack
     assert recorded["decision_profile_sha256"] == run_configuration.decision_profile.digest
     kestrel_call = harness.kwargs("run_kestrel")
     assert kestrel_call["resolved_component"] is run_configuration.kestrel
+    assert kestrel_call["nomenclature_component"] is run_configuration.nomenclature
     assert kestrel_call["runtime_component"] is run_configuration.kestrel_runtime
     assert kestrel_call["custom_context_active"] is True
+    parsing_call = harness.kwargs("process_advntr_output")
+    assert parsing_call["resolved_component"] is run_configuration.advntr
+    assert parsing_call["nomenclature_component"] is run_configuration.nomenclature
+    reconciliation_call = harness.kwargs("reconcile_caller_outputs")
+    assert reconciliation_call["resolved_component"] is run_configuration.nomenclature
+    cross_match_call = harness.kwargs("cross_match_variants")
+    assert cross_match_call["resolved_component"] is run_configuration.cross_match
 
 
 def test_the_fastq_path_hands_every_stage_the_declared_basename(tmp_path: Path) -> None:

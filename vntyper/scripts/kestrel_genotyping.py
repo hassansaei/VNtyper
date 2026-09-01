@@ -73,7 +73,6 @@ from vntyper.scripts.motif_processing import (
     preprocessing_deletion,
     preprocessing_insertion,
 )
-from vntyper.scripts.nomenclature import load_nomenclature_config
 from vntyper.scripts.nomenclature_annotate import annotate_kestrel_frame
 from vntyper.scripts.run_configuration import (
     resolve_compatibility_component,
@@ -267,6 +266,7 @@ def run_kestrel(
     threads=4,
     *,
     resolved_component: Mapping[str, object] | None = None,
+    nomenclature_component: Mapping[str, object] | None = None,
     runtime_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
 ):
@@ -311,6 +311,11 @@ def run_kestrel(
     decision = resolve_compatibility_component(
         "kestrel",
         resolved_component,
+        custom_context_active=custom_context_active,
+    )
+    nomenclature_decision = resolve_compatibility_component(
+        "nomenclature",
+        nomenclature_component,
         custom_context_active=custom_context_active,
     )
     runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
@@ -407,6 +412,7 @@ def run_kestrel(
                     reference_vntr,
                     decision,
                     config,
+                    nomenclature_component=nomenclature_decision,
                     runtime_component=runtime,
                 )
                 completed = True
@@ -564,6 +570,7 @@ def process_kestrel_output(
     kestrel_config,
     config,
     *,
+    nomenclature_component: Mapping[str, object] | None = None,
     runtime_component: Mapping[str, object] | None = None,
 ):
     """
@@ -585,6 +592,7 @@ def process_kestrel_output(
         reference_vntr (str): MUC1 reference file for motif annotation.
         kestrel_config (dict): Contains thresholds for depth, alt coverage, etc.
         config (dict): Main pipeline config (paths, additional references).
+        nomenclature_component: Immutable nomenclature component for this run.
 
     Returns:
         pd.DataFrame or None:
@@ -594,6 +602,11 @@ def process_kestrel_output(
         ValueError: If the configured flag rules are invalid for the Kestrel result schema.
     """
     runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
+    nomenclature_decision = resolve_compatibility_component(
+        "nomenclature",
+        nomenclature_component,
+        custom_context_active=False,
+    )
     flagging_rules = kestrel_config.get("flagging_rules", {})
     compiled_flag_rules = compile_flag_rules(flagging_rules, KESTREL_FLAG_COLUMNS)
     duplicates_config = kestrel_config.get("duplicate_flagging", {})
@@ -680,7 +693,7 @@ def process_kestrel_output(
     merged_motifs = load_additional_motifs(config)
 
     # Perform frame scoring, depth scoring, confidence assignment, etc.
-    identity_component = translation_component_from_config(load_nomenclature_config())
+    identity_component = translation_component_from_config(nomenclature_decision)
     processed_df = process_kmer_results(
         combined_df,
         merged_motifs,
@@ -716,7 +729,12 @@ def process_kestrel_output(
     # Name the variants before writing. Doing it here rather than in a later stage is
     # what makes one edit reach every surface: the TSV below, the pipeline summary
     # built from this same frame, and the HTML report all inherit the columns.
-    processed_df = annotate_kestrel_frame(processed_df, output_dir, identity_component=identity_component)
+    processed_df = annotate_kestrel_frame(
+        processed_df,
+        output_dir,
+        identity_component=identity_component,
+        resolved_component=nomenclature_decision,
+    )
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")

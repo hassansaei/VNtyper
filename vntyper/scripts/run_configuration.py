@@ -113,7 +113,7 @@ def resolve_compatibility_component(
     if resolved_component is not None:
         return resolved_component
     if custom_context_active:
-        display = "adVNTR" if stage == "advntr" else stage.capitalize()
+        display = {"advntr": "adVNTR", "cross_match": "cross-match"}.get(stage, stage.capitalize())
         raise ValueError(f"custom {display} run context requires an explicit resolved component")
     return cast_mapping(getattr(resolve_run_configuration(), stage))
 

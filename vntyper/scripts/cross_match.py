@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from typing import NoReturn
 
 from vntyper.scripts.comparator_rules import adapt_legacy_rule, evaluate_rule, validate_rule
+from vntyper.scripts.run_configuration import resolve_compatibility_component
 
 # These names are matched by exact string comparison against what pipeline.py
 # records. A typo does not fail - it silently drops the cross-match section
@@ -160,7 +161,14 @@ def compute_allele_change(ref, alt, variant_type):
     return ""
 
 
-def cross_match_variants(kestrel_records, advntr_records, config=None):
+def cross_match_variants(
+    kestrel_records,
+    advntr_records,
+    config=None,
+    *,
+    resolved_component: Mapping[str, object] | None = None,
+    custom_context_active: bool = False,
+):
     """
     Cross-match variants from Kestrel and adVNTR outputs using a configurable rule.
 
@@ -174,6 +182,8 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
         advntr_records (list of dict): adVNTR genotyping records.
         config (dict, optional): Main configuration dictionary.
             If provided, the matching rule is read from config["cross_match"]["match_rule"].
+        resolved_component: Immutable cross-match component for this run.
+        custom_context_active: Whether an explicit custom profile owns this run.
 
     Returns:
         dict: A dictionary with keys:
@@ -185,7 +195,22 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
         ValueError: If the configured rule is malformed or cannot be evaluated.
             Validation happens before any input record is modified.
     """
-    configured_rule = _configured_match_rule(config)
+    if config is not None and resolved_component is None and not custom_context_active:
+        configured_rule = _configured_match_rule(config)
+        required_disposition = "admissible"
+    else:
+        component = resolve_compatibility_component(
+            "cross_match",
+            resolved_component,
+            custom_context_active=custom_context_active,
+        )
+        configured_rule = _configured_match_rule({"cross_match": {"match_rule": component["match_rule"]}})
+        raw_required_disposition = component.get("required_advntr_evidence_disposition")
+        if raw_required_disposition not in _EVIDENCE_DISPOSITIONS:
+            _configuration_error(
+                f"cross_match required_advntr_evidence_disposition is unsupported: {raw_required_disposition}"
+            )
+        required_disposition = str(raw_required_disposition)
     compiled_rule = validate_rule(
         configured_rule,
         allowed_columns=CROSS_MATCH_COLUMNS,
@@ -224,7 +249,7 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
                 "Advntr_Variant_Type": a["Variant_Type"],
             }
             structural_match = evaluate_rule(compiled_rule, result, context="cross_match.match_rule")
-            match = structural_match and evidence_disposition == "admissible"
+            match = structural_match and evidence_disposition == required_disposition
             result["Match"] = "Yes" if match else "No"
             if match:
                 overall = True

@@ -17,6 +17,7 @@ Research use only.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -34,11 +35,9 @@ from vntyper.scripts.molecular_identity_presentation import (
     persisted_identity_result_rows,
 )
 from vntyper.scripts.nomenclature import (
-    KNOWN_VARIANTS,
     Nomenclature,
     from_advntr,
     from_kestrel,
-    load_nomenclature_config,
     reconcile,
     render,
 )
@@ -67,6 +66,7 @@ from vntyper.scripts.nomenclature_bam_replay import (
     validate_bam_replay_artifact_ordinals,
     write_bam_replay_artifact,
 )
+from vntyper.scripts.nomenclature_decision_config import NomenclatureDecisionConfig, decision_config_from_component
 from vntyper.scripts.nomenclature_frame_presentation import (
     NOMENCLATURE_COLUMNS,
     append_decision_explanation,
@@ -80,6 +80,7 @@ from vntyper.scripts.nomenclature_frame_presentation import (
 from vntyper.scripts.nomenclature_frame_presentation import (
     nomenclature_result_cells as _cells,
 )
+from vntyper.scripts.run_configuration import resolve_compatibility_component
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,8 @@ def annotate_kestrel_frame(
     output_dir: str | Path | None = None,
     *,
     identity_component: Any = None,
+    resolved_component: Mapping[str, object] | None = None,
+    custom_context_active: bool = False,
 ) -> pd.DataFrame:
     """Add the nomenclature columns to a Kestrel result frame.
 
@@ -124,12 +127,20 @@ def annotate_kestrel_frame(
             against ``output.bam`` -- the rescue path that recovers a delins.
             Omitted, the VCF result stands and no BAM is opened.
         identity_component: Current-run complete-context translation component.
+        resolved_component: Immutable nomenclature component for this run.
+        custom_context_active: Whether an explicit custom profile owns this run.
 
     Returns:
         pd.DataFrame: A copy with the five columns appended. The negative-run frame
         is returned unchanged: it has no variant, and padding it with five empty
         columns would widen a schema that deliberately differs.
     """
+    decision_component = resolve_compatibility_component(
+        "nomenclature",
+        resolved_component,
+        custom_context_active=custom_context_active,
+    )
+    decision_config = decision_config_from_component(decision_component)
     if output_dir is not None:
         invalidate_bam_replay_artifact(output_dir)
     if frame.empty or "Motifs" not in frame.columns:
@@ -148,7 +159,7 @@ def annotate_kestrel_frame(
         if identity_component is None:
             from vntyper.scripts.identity_candidates import translation_component_from_config
 
-            identity_component = translation_component_from_config(load_nomenclature_config())
+            identity_component = translation_component_from_config(decision_component)
 
     merged_calls: list[Nomenclature | None] = []
     eligible_indices: set[int] = set()
@@ -156,13 +167,13 @@ def annotate_kestrel_frame(
         if _is_negative(row):
             merged_calls.append(None)
             continue
-        call = _kestrel_row_call(row)
-        merged = reconcile(call) if call is not None else None
+        call = _kestrel_row_call(row, decision_config)
+        merged = reconcile(call, decision_config=decision_config) if call is not None else None
         merged_calls.append(merged)
         if merged is not None and is_candidate(merged):
             eligible_indices.add(row_index)
 
-    rescuer = _open_rescuer(output_dir)
+    rescuer = _open_rescuer(output_dir, decision_config)
     replay_artifact: BamReplayArtifact | None = None
 
     try:
@@ -173,6 +184,7 @@ def annotate_kestrel_frame(
                 frozenset(eligible_indices),
                 rescuer,
                 identity_component,
+                decision_config,
             )
             bam_calls = list(projection.calls)
             replay_artifact = projection.artifact
@@ -180,7 +192,7 @@ def annotate_kestrel_frame(
             bam_calls = [None] * len(rows)
             if rescuer is not None:
                 for row_index in eligible_indices:
-                    bam_calls[row_index], _ = _row_haplotype_call(rows[row_index], rescuer)
+                    bam_calls[row_index], _ = _row_haplotype_call(rows[row_index], rescuer, decision_config)
 
         cells: list[dict[str, Any]] = []
         for row_index, merged in enumerate(merged_calls):
@@ -191,7 +203,7 @@ def annotate_kestrel_frame(
             merged = refine(merged, bam_call)
             # adVNTR is optional and has not run at this point, so its column is
             # empty; the cross-caller stage fills it in when it does run.
-            cells.append(_cells(merged, kestrel=render(merged)))
+            cells.append(_cells(merged, kestrel=render(merged), decision_config=decision_config))
     finally:
         if rescuer is not None:
             rescuer.close()
@@ -206,11 +218,15 @@ def annotate_kestrel_frame(
     return annotated
 
 
-def _kestrel_row_call(row: pd.Series) -> Nomenclature | None:
+def _kestrel_row_call(
+    row: pd.Series,
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> Nomenclature | None:
     """Translate one Kestrel VCF row, or ``None`` when it cannot be translated.
 
     Args:
         row: One Kestrel result row.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         Nomenclature | None: The named record.
@@ -222,7 +238,13 @@ def _kestrel_row_call(row: pd.Series) -> Nomenclature | None:
         logger.debug("Kestrel row missing a required field; not translatable: %s", dict(row))
         return None
     try:
-        return from_kestrel(str(row["Motifs"]), int(row["POS"]), str(row["REF"]), str(row["ALT"]))
+        return from_kestrel(
+            str(row["Motifs"]),
+            int(row["POS"]),
+            str(row["REF"]),
+            str(row["ALT"]),
+            decision_config,
+        )
     except (TypeError, ValueError):
         logger.debug("Kestrel row not translatable to nomenclature: %s", dict(row))
         return None
@@ -234,6 +256,8 @@ def reconcile_caller_outputs(
     kestrel_dir: str | Path | None = None,
     *,
     artifact_evidence: ArtifactEvidence | None = None,
+    resolved_component: Mapping[str, object] | None = None,
+    custom_context_active: bool = False,
 ) -> bool:
     """Reconcile the two callers' written results and rewrite both in place.
 
@@ -257,10 +281,19 @@ def reconcile_caller_outputs(
             Kestrel TSV sits in, which is where the pipeline writes it.
         artifact_evidence: Verified governed State evidence. The packaged artifact is
             used by this standalone compatibility boundary when omitted.
+        resolved_component: Immutable nomenclature component for this run.
+        custom_context_active: Whether an explicit custom profile owns this run.
 
     Returns:
         bool: True when both files were read and rewritten.
     """
+    decision_component = resolve_compatibility_component(
+        "nomenclature",
+        resolved_component,
+        custom_context_active=custom_context_active,
+    )
+    decision_config = decision_config_from_component(decision_component)
+
     from vntyper.modules.advntr.artifact_evidence import (
         ASSERTION,
         EVIDENCE_DISPOSITION_COLUMN,
@@ -299,7 +332,7 @@ def reconcile_caller_outputs(
     # is what ties a call back to the record it came from, so nothing is compacted.
     vcf_calls: list[Nomenclature | None] = []
     for row in kestrel_rows:
-        call = _kestrel_row_call(row)
+        call = _kestrel_row_call(row, decision_config)
         vcf_calls.append(call)
         if call is None:
             continue
@@ -316,20 +349,18 @@ def reconcile_caller_outputs(
         evidence_disposition_for_state(str(row.get("Variant", "")), resolved_artifact_evidence).value
         for row in positive_advntr_rows
     ]
-    advntr_calls_by_row = _advntr_calls_by_row(advntr, advntr_keep, supports)
+    advntr_calls_by_row = _advntr_calls_by_row(advntr, advntr_keep, supports, decision_config)
     advntr_calls = [call for calls in advntr_calls_by_row for call in calls]
 
     named_vcf = [call for call in vcf_calls if call is not None]
     if not named_vcf and not advntr_calls:
         return False
 
-    identity_config: dict[str, Any] | None = None
     identity_component: Any = None
     if identity_aware:
         from vntyper.scripts.identity_candidates import translation_component_from_config
 
-        identity_config = load_nomenclature_config()
-        identity_component = translation_component_from_config(identity_config)
+        identity_component = translation_component_from_config(decision_component)
     bam_translations: list[IdentityTranslation | None] | None = [] if identity_component is not None else None
     bam_replay_loci: list[BamReplayLocus] | None = [] if identity_component is not None else None
     bam_calls = _haplotype_calls(
@@ -341,6 +372,7 @@ def reconcile_caller_outputs(
         bam_translations=bam_translations,
         identity_component=identity_component,
         bam_replay_loci=bam_replay_loci,
+        decision_config=decision_config,
     )
     named_bam = [call for call in bam_calls if call is not None]
 
@@ -355,12 +387,12 @@ def reconcile_caller_outputs(
         advntr_keep,
         advntr_calls_by_row,
         bam_translations,
-        identity_config=identity_config,
+        decision_config=decision_config,
         translation_component=identity_component,
         artifact_evidence=resolved_artifact_evidence,
     )
     if identity_inputs is None:
-        merged = reconcile(*ordered_calls, supports=supports)
+        merged = reconcile(*ordered_calls, supports=supports, decision_config=decision_config)
     else:
         identity_observations, policy = identity_inputs
         merged = reconcile(
@@ -368,6 +400,7 @@ def reconcile_caller_outputs(
             supports=supports,
             identity_observations=identity_observations,
             identity_policy=policy,
+            decision_config=decision_config,
         )
     for bam_call in named_bam:
         # Still applied after the vote, because it carries one rule the vote cannot:
@@ -378,14 +411,19 @@ def reconcile_caller_outputs(
     # Each row keeps its *own* caller's name. Broadcasting one joined string to every
     # row destroyed row identity: a file reporting two variants said both names on
     # both rows, so neither row described itself any more.
-    kestrel_row_calls = _row_verdicts(vcf_calls, bam_calls)
+    kestrel_row_calls = _row_verdicts(vcf_calls, bam_calls, decision_config)
     kestrel_row_names = [render(call) if call is not None else "" for call in kestrel_row_calls]
     advntr_row_names = [_summarise(calls) for calls in advntr_calls_by_row]
 
     kestrel_summary = _summarise([call for call in kestrel_row_calls if call is not None])
     advntr_summary = _summarise(advntr_calls)
 
-    cells = _cells(merged, kestrel=kestrel_summary, advntr=advntr_summary)
+    cells = _cells(
+        merged,
+        kestrel=kestrel_summary,
+        advntr=advntr_summary,
+        decision_config=decision_config,
+    )
     if "identity-insufficient" in advntr_dispositions:
         cells["Nomenclature_Note"] = append_decision_explanation(cells["Nomenclature_Note"], ASSERTION)
 
@@ -443,7 +481,7 @@ def _production_identity_observations(
     advntr_calls_by_row: list[list[Nomenclature]],
     bam_translations: list[IdentityTranslation | None] | None = None,
     *,
-    identity_config: dict[str, Any] | None = None,
+    decision_config: NomenclatureDecisionConfig,
     translation_component: Any = None,
     artifact_evidence: ArtifactEvidence,
 ) -> tuple[tuple[IdentityReconciliationObservation, ...], IdentityReconciliationPolicy] | None:
@@ -452,35 +490,27 @@ def _production_identity_observations(
         IDENTITY_CAPTURE_COLUMNS,
         IDENTITY_SELECTION_COLUMNS,
     )
-    from vntyper.scripts.identity_candidates import translation_component_from_config
 
     identity_columns = frozenset((*IDENTITY_CAPTURE_COLUMNS, *IDENTITY_SELECTION_COLUMNS))
     if not identity_columns.intersection(column for row in kestrel_rows for column in row.index):
         return None
     positive_advntr_rows = [row for (_, row), keep in zip(advntr.iterrows(), advntr_keep, strict=True) if keep]
-    config = identity_config if identity_config is not None else load_nomenclature_config()
-    component = (
-        translation_component if translation_component is not None else translation_component_from_config(config)
-    )
+    if translation_component is None:
+        raise ValueError("Current-run identity metadata requires an explicit translation component")
     observations = build_identity_reconciliation_observations(
         kestrel_rows,
         vcf_calls,
         bam_calls,
         positive_advntr_rows,
         advntr_calls_by_row,
-        component,
-        frozenset(KNOWN_VARIANTS),
+        translation_component,
+        frozenset(decision_config.known_variants),
         artifact_evidence=artifact_evidence,
         bam_translations=bam_translations,
     )
     if observations is None:  # pragma: no cover - identity columns were established above
         raise ValueError("Current-run identity metadata unexpectedly selected the legacy path")
-    threshold = config["thresholds"]["min_support_for_high_confidence"]
-    policy = IdentityReconciliationPolicy(
-        kestrel_min_alternate_kmer_path_depth=threshold,
-        advntr_min_sequencing_read_support=threshold,
-    )
-    return observations, policy
+    return observations, decision_config.identity_reconciliation
 
 
 def _rows_carry_identity_metadata(rows: list[pd.Series]) -> bool:
@@ -505,6 +535,7 @@ def _lesser(left: int | None, right: int | None) -> int | None:
 def _row_verdicts(
     vcf_calls: list[Nomenclature | None],
     bam_calls: list[Nomenclature | None],
+    decision_config: NomenclatureDecisionConfig | None = None,
 ) -> list[Nomenclature | None]:
     """What Kestrel concludes per row, refined by that row's haplotype records.
 
@@ -515,6 +546,7 @@ def _row_verdicts(
     Args:
         vcf_calls: Per Kestrel row, ``None`` where untranslatable.
         bam_calls: Per Kestrel row, ``None`` where the haplotype records said nothing.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         list: Per Kestrel row, ``None`` where untranslatable.
@@ -525,7 +557,7 @@ def _row_verdicts(
             verdicts.append(None)
             continue
         haplotype_call = bam_calls[index] if index < len(bam_calls) else None
-        verdicts.append(refine(reconcile(call), haplotype_call))
+        verdicts.append(refine(reconcile(call, decision_config=decision_config), haplotype_call))
     return verdicts
 
 
@@ -533,6 +565,7 @@ def _advntr_calls_by_row(
     advntr: pd.DataFrame,
     keep: list[bool],
     supports: dict[str, int | None],
+    decision_config: NomenclatureDecisionConfig | None = None,
 ) -> list[list[Nomenclature]]:
     """Every adVNTR event, grouped by the row that reported it.
 
@@ -545,6 +578,7 @@ def _advntr_calls_by_row(
         advntr: The adVNTR result frame.
         keep: Per row, whether it is a real call rather than a placeholder.
         supports: Per-source depths, updated in place.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         list[list[Nomenclature]]: One inner list per kept row, in row order.
@@ -553,7 +587,7 @@ def _advntr_calls_by_row(
     for (_, row), wanted in zip(advntr.iterrows(), keep, strict=True):
         if not wanted:
             continue
-        parsed = list(from_advntr(str(row.get("Variant", ""))))
+        parsed = list(from_advntr(str(row.get("Variant", "")), decision_config))
         grouped.append(parsed)
         if not parsed:
             continue
