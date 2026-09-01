@@ -118,6 +118,33 @@ def test_a_matching_pair_is_reported_as_a_match():
     assert result["matches"][0]["Match"] == "Yes"
 
 
+def test_identity_insufficient_advntr_pair_is_compared_but_not_reported_as_agreement() -> None:
+    result = cross_match_variants(
+        kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+        advntr_records=[
+            {
+                "REF": "C",
+                "ALT": "CC",
+                "POS": 67,
+                "Evidence_Disposition": "identity-insufficient",
+            }
+        ],
+    )
+
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["Kestrel_Allele_Change"] == result["matches"][0]["Advntr_Allele_Change"] == "C"
+    assert result["matches"][0]["Match"] == "No"
+    assert result["overall_match"] == "No"
+
+
+def test_cross_match_rejects_unknown_advntr_evidence_disposition() -> None:
+    with pytest.raises(ValueError, match="unsupported Evidence_Disposition"):
+        cross_match_variants(
+            kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+            advntr_records=[{"REF": "C", "ALT": "CC", "POS": 67, "Evidence_Disposition": "invented"}],
+        )
+
+
 def test_a_non_matching_pair_is_not_reported_as_a_match():
     result = cross_match_variants(
         kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],

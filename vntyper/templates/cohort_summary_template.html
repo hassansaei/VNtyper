@@ -106,6 +106,17 @@
   <main class="container">
     <h1>Cohort Summary Report</h1>
     <p><strong>Report Date:</strong> {{ report_date }}</p>
+    {% if advntr_evidence_provenance %}
+    <h2>adVNTR artifact-evidence provenance</h2>
+    <ul>
+      {% for item in advntr_evidence_provenance %}
+      <li>
+        <strong>{{ item.sample }}:</strong> {{ item.revision }}
+        {% if item.assertion %} — {{ item.assertion }}{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
     <!-- Custom switch for toggling flagged values, aligned to the left.
          Default state is unchecked (flagged rows hidden).
 

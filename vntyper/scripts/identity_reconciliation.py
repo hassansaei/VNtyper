@@ -16,6 +16,7 @@ from vntyper.scripts.molecular_identity import (
 )
 
 if TYPE_CHECKING:
+    from vntyper.modules.advntr.artifact_evidence import ArtifactEvidence
     from vntyper.scripts.identity_candidates import IdentityTranslator
 
 _CALLER_OF = {"kestrel_vcf": "kestrel", "kestrel_bam": "kestrel", "advntr": "advntr"}
@@ -183,11 +184,14 @@ class IdentityReconciliationResult:
     event_disagreement: bool
     low_support_sources: tuple[str, ...]
     presentation_selected_observation_index: int | None = None
+    evidence_disposition: EvidenceDisposition = _ADMISSIBLE_DISPOSITION
 
     def __post_init__(self) -> None:
         """Validate selection and deterministic reconciliation metadata."""
         if not isinstance(self.decision, IdentityDecision):
             raise ValueError("Reconciliation result decision must be an IdentityDecision")
+        if not isinstance(self.evidence_disposition, EvidenceDisposition):
+            raise ValueError("Reconciliation result evidence disposition must be an EvidenceDisposition")
         if self.selected_observation_index is not None and (
             isinstance(self.selected_observation_index, bool)
             or not isinstance(self.selected_observation_index, int)
@@ -320,6 +324,7 @@ def build_identity_reconciliation_observations(
     translation_component: IdentityTranslator,
     known_variant_names: frozenset[str],
     *,
+    artifact_evidence: ArtifactEvidence,
     bam_translations: Sequence[IdentityTranslation | None] | None = None,
 ) -> tuple[IdentityReconciliationObservation, ...] | None:
     """Adapt current caller rows to typed identity observations without I/O.
@@ -333,6 +338,7 @@ def build_identity_reconciliation_observations(
         translation_component: Explicit checked-in translation authority resolved at
             the stage boundary.
         known_variant_names: Configured known display names used only for tier gating.
+        artifact_evidence: Verified governed adVNTR State evidence for this run.
         bam_translations: Optional complete-candidate bindings for BAM calls. A
             binding remains Kestrel-internal evidence and does not create another
             caller or representation.
@@ -343,6 +349,7 @@ def build_identity_reconciliation_observations(
     Raises:
         ValueError: If current-run internal metadata or caller context is malformed.
     """
+    from vntyper.modules.advntr.artifact_evidence import ArtifactEvidence, evidence_disposition_for_state
     from vntyper.scripts.identity_candidate_persistence import (
         IDENTITY_CAPTURE_COLUMNS,
         IDENTITY_SELECTION_COLUMNS,
@@ -361,6 +368,8 @@ def build_identity_reconciliation_observations(
         raise ValueError("adVNTR identity context is misaligned with its display calls")
     if bam_translations is not None and len(bam_translations) != len(bam_calls):
         raise ValueError("BAM identity bindings are misaligned with BAM display calls")
+    if not isinstance(artifact_evidence, ArtifactEvidence):
+        raise ValueError("Identity reconciliation requires verified adVNTR artifact evidence")
 
     observations: list[IdentityReconciliationObservation] = []
     presentation_call_index = 0
@@ -415,15 +424,18 @@ def build_identity_reconciliation_observations(
             raise ValueError("BAM identity binding requires an aligned BAM display call")
 
     capture_rows: list[dict[str, object]] = []
+    advntr_dispositions: list[EvidenceDisposition] = []
     for row, calls in zip(advntr_rows, advntr_calls_by_row, strict=True):
         support = _strict_nonnegative_integer(
             row.get("NumberOfSupportingReads"),
             "adVNTR sequencing-read support",
         )
         coverage = _strict_nonnegative_number(row.get("MeanCoverage"), "adVNTR MeanCoverage")
+        state = _required_nonempty_string(row.get("Variant"), "adVNTR Variant")
+        advntr_dispositions.append(evidence_disposition_for_state(state, artifact_evidence))
         capture_rows.append(
             {
-                "Variant": str(row.get("Variant", "")),
+                "Variant": state,
                 "RU": str(row.get("RU", "")),
                 "POS": str(row.get("POS", "")),
                 "Net_indel_length": sum(call.net_length for call in calls),
@@ -433,7 +445,13 @@ def build_identity_reconciliation_observations(
             }
         )
     candidates = capture_advntr_observations(capture_rows, translation_component)
-    for row, calls, candidate in zip(advntr_rows, advntr_calls_by_row, candidates.candidates, strict=True):
+    for row, calls, candidate, disposition in zip(
+        advntr_rows,
+        advntr_calls_by_row,
+        candidates.candidates,
+        advntr_dispositions,
+        strict=True,
+    ):
         support = _strict_nonnegative_integer(
             row.get("NumberOfSupportingReads"),
             "adVNTR sequencing-read support",
@@ -447,6 +465,7 @@ def build_identity_reconciliation_observations(
                     known_variant_names,
                     advntr_reads=support,
                     advntr_coverage=coverage,
+                    disposition=disposition,
                     extra_flags=candidate.flags,
                     presentation_call_index=presentation_call_index,
                 )
@@ -459,7 +478,7 @@ def build_identity_reconciliation_observations(
                     call,
                     IdentityTranslation(None, "unresolved", "reconstruction-mismatch", False),
                     known_variant_names,
-                    disposition=EvidenceDisposition("admissible"),
+                    disposition=disposition,
                     extra_flags=candidate.flags,
                     presentation_call_index=presentation_call_index,
                 )
@@ -473,7 +492,7 @@ def build_identity_reconciliation_observations(
                 event=_compound_event(calls),
                 net_length=candidate.observation.frame_consequence.net_length_change,
                 flags=candidate.flags,
-                disposition=EvidenceDisposition("admissible"),
+                disposition=disposition,
                 known_variant_match=False,
                 advntr_sequencing_read_support=support,
                 advntr_mean_coverage=coverage,
@@ -517,6 +536,12 @@ def reconcile_identity_observations(
         or presentation_selected_observation_index >= len(observations)
     ):
         raise ValueError("Presentation-selected observation index must identify an observation")
+
+    evidence_disposition = (
+        EvidenceDisposition("identity-insufficient")
+        if any(observation.disposition.value == "identity-insufficient" for observation in observations)
+        else _ADMISSIBLE_DISPOSITION
+    )
 
     decision_indices = tuple(
         index for index, observation in enumerate(observations) if observation.disposition.value == "admissible"
@@ -562,6 +587,7 @@ def reconcile_identity_observations(
             event_disagreement=event_disagreement,
             low_support_sources=(),
             presentation_selected_observation_index=presentation_selected_observation_index,
+            evidence_disposition=evidence_disposition,
         )
 
     elif selected_observation is not None:
@@ -625,6 +651,7 @@ def reconcile_identity_observations(
         event_disagreement=event_disagreement,
         low_support_sources=low_support_sources,
         presentation_selected_observation_index=presentation_result_index,
+        evidence_disposition=evidence_disposition,
     )
 
 

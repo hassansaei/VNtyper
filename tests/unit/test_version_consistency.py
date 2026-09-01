@@ -292,6 +292,18 @@ def test_conda_versions_satisfy_pyproject_specifiers() -> None:
     )
 
 
+def test_every_runtime_dependency_is_in_the_conda_environment() -> None:
+    """The application image installs VNtyper with ``--no-deps`` onto this environment."""
+    declared = set(pyproject_dependencies())
+    pinned = set(conda_dependencies())
+
+    missing = sorted(declared - pinned)
+    assert not missing, (
+        "pyproject runtime dependencies are absent from conda/environment_vntyper.yml, "
+        f"so the application image cannot import them after pip install --no-deps: {missing}"
+    )
+
+
 def test_removed_core_plotting_stacks_are_not_declared() -> None:
     """The Plotly-only cohort report must not retain unused core dependencies.
 

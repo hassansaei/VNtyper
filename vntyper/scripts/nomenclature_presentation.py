@@ -142,6 +142,14 @@ COLUMN_HELP: dict[str, str] = {
     ),
     "Confidence": "Kestrel's own calibrated label for the call.",
     "Flag": "Whether a configured flagging rule fired on this row, and which one.",
+    "Evidence Disposition": (
+        "Whether this adVNTR State may contribute to molecular-identity agreement. "
+        "Identity-insufficient rows remain visible findings."
+    ),
+    "Evidence_Disposition": (
+        "Whether this adVNTR State may contribute to molecular-identity agreement. "
+        "Identity-insufficient rows remain visible findings."
+    ),
     "MUC1 Name": "The reconciled MUC1 name for the allele, on the canonical X repeat unit.",
     "Nomenclature": "The reconciled MUC1 name for the allele, on the canonical X repeat unit.",
     "Tier": "How far the name beside it has been checked. See the reading key below the table.",

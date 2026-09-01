@@ -614,6 +614,36 @@ def test_an_empty_summary_yields_the_documented_defaults() -> None:
     assert stats == {"runtime": "N/A", "version": "N/A", "assembly": "N/A", "pipeline": "N/A", "coverage": {}}
 
 
+def test_cohort_loader_verifies_recorded_advntr_evidence_from_each_sample_snapshot(tmp_path: Path) -> None:
+    from vntyper.modules.advntr.artifact_evidence import ASSERTION, load_packaged_artifact_evidence
+
+    evidence = load_packaged_artifact_evidence()
+    sample = _write_summary(tmp_path / "sample", {"version": "2.0.6", "advntr_evidence_digest": evidence.digest})
+    snapshot = sample / "provenance" / "advntr_artifact_evidence.json"
+    snapshot.parent.mkdir()
+    snapshot.write_bytes(evidence.canonical_bytes)
+
+    stats = load_pipeline_summary_for_sample(sample)[2]
+
+    assert stats["advntr_evidence_revision"] == evidence.digest
+    assert stats["advntr_evidence_assertion"] == ASSERTION
+
+
+def test_cohort_loader_labels_legacy_advntr_evidence_without_reading_current_package(tmp_path: Path) -> None:
+    sample = _write_summary(tmp_path / "sample", {"version": "2.0.6"})
+
+    stats = load_pipeline_summary_for_sample(sample)[2]
+
+    assert stats["advntr_evidence_revision"] == "artifact-evidence revision not recorded"
+    assert stats["advntr_evidence_assertion"] == ""
+
+
+def test_cohort_loader_rejects_a_recorded_digest_without_its_run_snapshot(tmp_path: Path) -> None:
+    sample = _write_summary(tmp_path / "sample", {"version": "2.0.6", "advntr_evidence_digest": "0" * 64})
+
+    assert load_pipeline_summary_for_sample(sample) == ([], [], {})
+
+
 @pytest.mark.parametrize(
     "start,end",
     [(None, None), ("2026-01-01T00:00:00", None), (None, "2026-01-01T00:01:30"), ("", "")],

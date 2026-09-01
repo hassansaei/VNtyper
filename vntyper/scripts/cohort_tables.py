@@ -91,6 +91,7 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "REF",
     "ALT",
     "Flag",
+    "Evidence_Disposition",
     "Nomenclature",
     "Nomenclature_Tier",
     "Nomenclature_Flags",

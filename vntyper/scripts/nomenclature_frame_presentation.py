@@ -14,6 +14,7 @@ from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS, ad
 from vntyper.scripts.nomenclature import Nomenclature, confidence_note, from_advntr, reconcile, render
 
 if TYPE_CHECKING:
+    from vntyper.modules.advntr.artifact_evidence import ArtifactEvidence
     from vntyper.scripts.identity_candidates import IdentityTranslator
 
 #: The columns, in this order, on every surface that carries them.
@@ -93,6 +94,7 @@ def annotate_advntr_frame(
     frame: pd.DataFrame,
     *,
     identity_component: IdentityTranslator | None = None,
+    artifact_evidence: ArtifactEvidence | None = None,
 ) -> pd.DataFrame:
     """Add nomenclature and optional identity columns to an adVNTR result frame.
 
@@ -104,21 +106,35 @@ def annotate_advntr_frame(
         frame: The processed adVNTR frame, as written to ``output_adVNTR_result.tsv``.
         identity_component: Current-run complete-context translation component. When
             supplied, public identity cells are appended to positive rows.
+        artifact_evidence: Verified governed State evidence. The packaged artifact is
+            used by the standalone compatibility boundary when omitted.
 
     Returns:
         A copy with the nomenclature columns appended, empty on the negative
         placeholder row. The identity quartet is appended only when a component is
         supplied for a positive result frame.
     """
+    from vntyper.modules.advntr.artifact_evidence import (
+        ASSERTION,
+        EVIDENCE_DISPOSITION_COLUMN,
+        evidence_disposition_for_state,
+        load_packaged_artifact_evidence,
+    )
+
     if frame.empty or "Variant" not in frame.columns:
         return frame
 
     annotated = frame.copy()
+    resolved_evidence = artifact_evidence or load_packaged_artifact_evidence()
     cells: list[dict[str, str]] = []
+    dispositions: list[str] = []
+    has_positive_row = False
     for _, row in annotated.iterrows():
         if is_negative_result_row(row):
             cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
+            dispositions.append("")
             continue
+        has_positive_row = True
         support: int | None
         try:
             support = int(float(row.get("NumberOfSupportingReads", "")))
@@ -127,16 +143,34 @@ def annotate_advntr_frame(
         calls = from_advntr(str(row["Variant"]))
         if not calls:
             cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
+            dispositions.append("admissible")
             continue
+        disposition = evidence_disposition_for_state(str(row["Variant"]), resolved_evidence)
         merged = reconcile(*calls, support=support)
         # Kestrel's column is filled by the cross-caller stage, which is the only
         # place that can see it.
-        cells.append(nomenclature_result_cells(merged, advntr=render(merged)))
+        row_cells = nomenclature_result_cells(merged, advntr=render(merged))
+        if disposition.value == "identity-insufficient":
+            row_cells["Nomenclature_Note"] = append_decision_explanation(
+                row_cells["Nomenclature_Note"],
+                ASSERTION,
+            )
+        cells.append(row_cells)
+        dispositions.append(disposition.value)
 
     for column in NOMENCLATURE_COLUMNS:
         annotated[column] = [cell[column] for cell in cells]
+    if has_positive_row:
+        annotated[EVIDENCE_DISPOSITION_COLUMN] = dispositions
     if identity_component is not None:
         result_cells = advntr_identity_result_rows(annotated.to_dict("records"), identity_component)
         for column in IDENTITY_COLUMNS:
             annotated[column] = [cell[column] for cell in result_cells]
     return annotated
+
+
+def append_decision_explanation(note: str, explanation: str) -> str:
+    """Append one governed sentence without duplicating existing text."""
+    if explanation in note:
+        return note
+    return f"{note}; {explanation}" if note else explanation

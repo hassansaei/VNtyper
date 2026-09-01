@@ -67,6 +67,7 @@ PIPELINE_BASENAME = "output"
 #: regardless of :data:`PIPELINE_BASENAME`. That file's schema is frozen by
 #: contract C1 and read by ``generate_report.py``.
 COVERAGE_BASENAME = "coverage"
+ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE = Path("provenance/advntr_artifact_evidence.json")
 
 
 def pipeline_artifact_paths(
@@ -129,6 +130,7 @@ def pipeline_artifact_paths(
         "cross_match": str(advntr_dir / "cross_match_results.tsv"),
         "pipeline_info": str(fastq_dir / "pipeline_info.json"),
         "pipeline_summary": str(root / "pipeline_summary.json"),
+        "advntr_evidence": str(root / ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE),
     }
 
 

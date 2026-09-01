@@ -217,7 +217,7 @@ call visibly, it does not withdraw it.
 |------|-----------|-----------------|
 | `Low_Coverage` | `NumberOfSupportingReads < 10` | Too few supporting reads to be confident. A threshold, not a claim about the state. |
 | `Repeat_Unit_7` | `RU == '7'` | A call in repeat unit 7, an established recurrent artifact. |
-| `Polymorphic_Call` | `Variant in [...24 states...]` | The state string matches one of a list of recurrent events treated as artifacts. |
+| `Polymorphic_Call` | `Variant in [...24 states...]` | The bare State matches governed recurrent evidence and is insufficient for molecular identity. The row remains a finding. |
 
 ### What `Polymorphic_Call` asserts, and where the list came from
 
@@ -228,11 +228,27 @@ The entries were derived by running an older adVNTR — pre-2.0.4 — over the `
 cohort and recording the states that recurred across many samples. **No per-entry
 observation count was retained.**
 
-That provenance now lives in `vntyper/modules/advntr/advntr_calibration.json`, one record
-per entry with a `status` of `confirmed_artifact` or `pending_renome_revalidation`.
-Production code never reads that file; `tests/unit/test_advntr_polymorphic_calls.py`
-asserts it and the live rule agree. It is the same pattern
-`vntyper/scripts/calibration.json` uses for the Kestrel constants.
+That provenance now lives in the canonical governed artifact
+`vntyper/modules/advntr/advntr_artifact_evidence.json`, with its canonical SHA-256 in the
+adjacent `.sha256` file. The artifact is the production source: its 24 distinct active
+entries must equal the reachable live rule inventory. One entry is
+`confirmed_artifact`; the other 23 are `pending_renome_revalidation`.
+
+The approved assertion is deliberately limited and exact:
+
+> A carried-forward recurrent adVNTR State is insufficient for molecular identity.
+
+It does **not** say that a row is benign, non-pathogenic, absent from affected samples,
+or a false positive. It does not assign a cohort frequency or per-State prevalence. The
+unretained count, denominator, frequency, and exact adVNTR revision remain JSON `null`;
+the artifact records only the known exclusive version upper bound `2.0.4`.
+
+Every positive adVNTR row carries `Evidence_Disposition`. An exact match to any active
+governed State is `identity-insufficient`, regardless of whether its evidence status is
+confirmed or pending. The row, `Positive (Flagged)` detection, support, flag, and
+caller-local name remain visible, but that adVNTR observation cannot establish molecular
+agreement, promote a tier-A name, or outvote another molecular identity. A nonmatching
+positive row is `admissible`.
 
 !!! warning "The key cannot separate an artifact from a pathogenic variant"
     adVNTR's State string records the *shape* of an event — the repeat unit, the length,
@@ -247,10 +263,11 @@ asserts it and the live rule agree. It is the same pattern
     either way — @hassansaei's note on #267, and the same ambiguity seen from the sequence
     side.
 
-    Measured on the 400-run simulated benchmark (VNtyper 2.0.22, GRCh38, refs-v2): of the
-    172 carriers adVNTR detects, **8 carry a `Polymorphic_Call` row** — every one of the
-    5 `dupA` carriers it detects, and 3 of 7 `delGCCCA` carriers. No control sample
-    produced any adVNTR call at all.
+    Measured on the fixed 400-run simulated benchmark: **11 `Polymorphic_Call` rows in
+    8 mutated-sample decisions** collide with the governed State key — every one of the
+    5 `dupA` carriers adVNTR detects, and 3 of 7 `delGCCCA` carriers. No control sample
+    produced any adVNTR call at all. This is a collision measurement, not a benignity
+    classification.
 
     Keying the flag on something richer than the state string is
     [#267](https://github.com/hassansaei/VNtyper/issues/267)'s suggestion 4 and is not
@@ -267,8 +284,8 @@ Seven of the 32 shipped entries were in that state, and one was listed twice. Th
 removed in the #267 cleanup with the owner's agreement; replaying both lists over the
 adVNTR output of all 400 simulated samples changes **no** `Flag` value.
 
-`tests/unit/test_advntr_polymorphic_calls.py` runs the production filter arms over the
-live list, so a future unreachable entry fails the build. That matters here because the
+The artifact-evidence tests run the production filter arms over an independent literal
+24-State oracle, so a future unreachable entry fails the build. That matters here because
 the historical failure mode was silent: a missing expression name could disable a rule,
 which is how `Polymorphic_Call` shipped misspelled as `Poylmorhic_Call` until `742b872`,
 and loose expression typing allowed `Repeat_Unit_7` to ship as `RU == 7` — comparing a
@@ -280,5 +297,14 @@ both defects before processing rows.
 23 of the 24 live entries are recorded as `pending_renome_revalidation`. @hassansaei asked
 on #267 for them to be re-measured against the re-analysed renome cohort and decided case
 by case; only `D58_2&D59_2` (and the separate `Repeat_Unit_7` rule) are confirmed. Until
-then they remain flagged exactly as shipped. Acting on that decision is a data edit to
-`advntr_config.json` and `advntr_calibration.json` — no code change.
+then they remain flagged and identity-insufficient exactly as shipped. Changing membership
+requires an owner-approved evidence revision with retained counts, denominators, software
+and model provenance, a new canonical digest, and the matching rule edit.
+
+### Run provenance
+
+An adVNTR-enabled run snapshots the verified canonical artifact at
+`provenance/advntr_artifact_evidence.json` and records its full digest in the additive
+schema-2 `advntr_evidence_digest` field. Standalone reports and cohorts verify that run
+snapshot; they never substitute the artifact shipped by the currently installed package.
+A summary predating this field is shown as `artifact-evidence revision not recorded`.

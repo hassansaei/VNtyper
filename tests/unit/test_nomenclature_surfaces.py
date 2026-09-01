@@ -15,9 +15,11 @@ import pysam
 import pytest
 
 from tests.builders import STAGE_COLUMNS, kestrel_stage_frame
+from vntyper.modules.advntr.artifact_evidence import ASSERTION
 from vntyper.scripts import nomenclature, nomenclature_annotate, nomenclature_bam_adapter
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
+from vntyper.scripts.identity_candidates import translation_component_from_config
 from vntyper.scripts.molecular_identity import (
     IdentityTranslation,
     MolecularIdentity,
@@ -37,6 +39,7 @@ from vntyper.scripts.nomenclature_annotate import (
     NOMENCLATURE_COLUMNS,
     annotate_advntr_frame,
     annotate_kestrel_frame,
+    append_decision_explanation,
     reconcile_caller_outputs,
 )
 from vntyper.scripts.nomenclature_bam import BamRescuer
@@ -227,6 +230,9 @@ def _write_identity_aware_outputs(
     tmp_path: Path,
     kestrel_identity: MolecularIdentity,
     *,
+    advntr_state: str = "I22_2_G_LEN1",
+    advntr_ru: str = "2",
+    advntr_pos: str = "22",
     advntr_flag: str = "Not flagged",
 ) -> tuple[Path, Path]:
     raw_key = '{"source":"kestrel","values":["X-X",67,"G","GG"]}'
@@ -263,11 +269,11 @@ def _write_identity_aware_outputs(
         [
             {
                 "VID": "25561",
-                "Variant": "I22_2_G_LEN1",
+                "Variant": advntr_state,
                 "NumberOfSupportingReads": "40",
                 "MeanCoverage": "100",
-                "RU": "2",
-                "POS": "22",
+                "RU": advntr_ru,
+                "POS": advntr_pos,
                 "Flag": advntr_flag,
                 "Nomenclature": "59dupC",
                 "Nomenclature_Tier": "B",
@@ -372,14 +378,41 @@ def test_production_reconciliation_uses_persisted_kestrel_identity_not_equal_dis
     assert "caller-disagreement" in written.loc[0, "Nomenclature_Flags"]
 
 
-def test_pr_a_polymorphic_advntr_row_remains_admissible_for_identity_agreement(tmp_path) -> None:
+def test_governed_advntr_state_stays_visible_but_cannot_back_tier_a(tmp_path: Path) -> None:
     dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
-    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c, advntr_flag="Polymorphic_Call")
+    kestrel, advntr = _write_identity_aware_outputs(
+        tmp_path,
+        dup_c,
+        advntr_state="I23_6_G_LEN1",
+        advntr_ru="6",
+        advntr_pos="23",
+        advntr_flag="Polymorphic_Call",
+    )
 
     assert reconcile_caller_outputs(kestrel, advntr) is True
 
     written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert ASSERTION in written.loc[0, "Nomenclature_Note"]
+    mirrored = pd.read_csv(advntr, sep="\t", dtype=str)
+    assert mirrored.loc[0, "Flag"] == "Polymorphic_Call"
+    assert mirrored.loc[0, "Nomenclature_adVNTR"] == "59dupC"
+    assert mirrored.loc[0, "Evidence_Disposition"] == "identity-insufficient"
+    assert ASSERTION in mirrored.loc[0, "Nomenclature_Note"]
+
+
+def test_unlisted_advntr_state_retains_tier_a_and_admissible_projection(tmp_path: Path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    mirrored = pd.read_csv(advntr, sep="\t", dtype=str)
     assert written.loc[0, "Nomenclature_Tier"] == "A"
+    assert mirrored.loc[0, "Evidence_Disposition"] == "admissible"
+    assert ASSERTION not in str(written.loc[0, "Nomenclature_Note"])
 
 
 def test_production_identity_policy_is_resolved_from_checked_in_config_at_the_stage_boundary(tmp_path) -> None:
@@ -501,6 +534,45 @@ def test_the_advntr_frame_records_its_own_name_as_the_advntr_column() -> None:
     named = annotate_advntr_frame(frame)
     assert named.loc[0, "Nomenclature_adVNTR"] == "59dupC"
     assert named.loc[0, "Nomenclature_Kestrel"] == ""
+
+
+@pytest.mark.parametrize(
+    ("note", "expected"),
+    [
+        ("", ASSERTION),
+        ("existing", f"existing; {ASSERTION}"),
+        (ASSERTION, ASSERTION),
+    ],
+)
+def test_governed_decision_explanation_is_appended_once(note: str, expected: str) -> None:
+    assert append_decision_explanation(note, ASSERTION) == expected
+
+
+def test_flagged_only_advntr_state_keeps_detection_name_support_and_disposition() -> None:
+    component = translation_component_from_config(nomenclature.load_nomenclature_config())
+    frame = pd.DataFrame(
+        [
+            {
+                "VID": "25561",
+                "Variant": "I23_6_G_LEN1",
+                "NumberOfSupportingReads": 40,
+                "MeanCoverage": 100,
+                "Net_indel_length": 1,
+                "RU": "6",
+                "POS": "23",
+                "Flag": "Polymorphic_Call",
+            }
+        ]
+    )
+
+    named = annotate_advntr_frame(frame, identity_component=component)
+
+    assert named.loc[0, "VID"] == "25561"
+    assert named.loc[0, "NumberOfSupportingReads"] == 40
+    assert named.loc[0, "Flag"] == "Polymorphic_Call"
+    assert named.loc[0, "Nomenclature_adVNTR"] == "59dupC"
+    assert named.loc[0, "Evidence_Disposition"] == "identity-insufficient"
+    assert ASSERTION in named.loc[0, "Nomenclature_Note"]
 
 
 def _write_pair_bam(

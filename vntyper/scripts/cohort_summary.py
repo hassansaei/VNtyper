@@ -134,6 +134,7 @@ def generate_cohort_summary_report(
     config,
     additional_stats_html="",
     sample_names=None,
+    advntr_evidence_provenance=None,
 ):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results along with
@@ -159,6 +160,8 @@ def generate_cohort_summary_report(
     sample_names : sequence of str, optional
         Every sample the report knows about. Direct callers default to the sorted union
         of sample names present in the two result frames.
+    advntr_evidence_provenance : sequence of mapping, optional
+        Per-sample run-recorded evidence revision and assertion values.
 
     Returns
     -------
@@ -257,6 +260,7 @@ def generate_cohort_summary_report(
         "nomenclature_legend": legend,
         "show_kestrel_bam_semantics": any(entry["term"] in bam_evidence_flags for entry in legend),
         "additional_stats": additional_stats_html,
+        "advntr_evidence_provenance": advntr_evidence_provenance or (),
     }
 
     try:
@@ -478,6 +482,14 @@ def aggregate_cohort(
             config=config,
             additional_stats_html=additional_stats_html,
             sample_names=cohort_samples,
+            advntr_evidence_provenance=[
+                {
+                    "sample": stats["Sample"],
+                    "revision": stats["advntr_evidence_revision"],
+                    "assertion": stats["advntr_evidence_assertion"],
+                }
+                for stats in additional_stats_list
+            ],
         )
     finally:
         # In a `finally` because everything above - the config read, the two identity

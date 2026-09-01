@@ -367,7 +367,7 @@ def test_kestrel_missing_cells_render_empty_without_coercing_real_values() -> No
 # ---------------------------------------------------------------------------
 
 
-def test_the_advntr_display_columns_are_the_recorded_twenty_three() -> None:
+def test_the_advntr_display_columns_are_the_recorded_twenty_four() -> None:
     assert ADVNTR_DISPLAY_COLUMNS == (
         "Sample",
         "VID",
@@ -380,6 +380,7 @@ def test_the_advntr_display_columns_are_the_recorded_twenty_three() -> None:
         "REF",
         "ALT",
         "Flag",
+        "Evidence_Disposition",
         "Nomenclature",
         "Nomenclature_Tier",
         "Nomenclature_Flags",
@@ -399,6 +400,13 @@ def test_the_advntr_table_renders_its_columns_in_the_declared_order() -> None:
     frame = pd.DataFrame([{"Flag": "Not flagged", "Sample": "s1", "VID": "25561"}])
 
     assert _headings(advntr_table_html(frame)) == ["Sample", "VID", "Flag"]
+
+
+def test_the_advntr_table_keeps_identity_insufficient_evidence_visible() -> None:
+    frame = pd.DataFrame([{"Sample": "s1", "VID": "25561", "Evidence_Disposition": "identity-insufficient"}])
+
+    assert _headings(advntr_table_html(frame)) == ["Sample", "VID", "Evidence_Disposition"]
+    assert "identity-insufficient" in _cells(advntr_table_html(frame))
 
 
 def test_the_advntr_table_has_no_escaping_exemption_at_all() -> None:

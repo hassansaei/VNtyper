@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from vntyper.modules.advntr.artifact_evidence import load_packaged_artifact_evidence
 from vntyper.scripts.identity_candidates import translation_component_from_config
 from vntyper.scripts.identity_reconciliation import (
     IdentityReconciliationObservation,
@@ -37,6 +38,7 @@ DUPC = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
 DUPA = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
 DUPG = make_molecular_identity((make_coding_edit(60, 59, "", "G"),))
 TRANSLATION_COMPONENT = translation_component_from_config(load_nomenclature_config())
+ARTIFACT_EVIDENCE = load_packaged_artifact_evidence()
 
 
 def _observation(
@@ -127,6 +129,7 @@ def _build_observations(
         [] if advntr_calls is None else [advntr_calls],
         TRANSLATION_COMPONENT,
         frozenset(KNOWN_VARIANTS),
+        artifact_evidence=ARTIFACT_EVIDENCE,
     )
 
 
@@ -328,6 +331,7 @@ def test_bound_bam_translation_stays_kestrel_internal_without_changing_candidate
         [],
         TRANSLATION_COMPONENT,
         frozenset(KNOWN_VARIANTS),
+        artifact_evidence=ARTIFACT_EVIDENCE,
         bam_translations=[IdentityTranslation(DUPC, "resolved", None, False)],
     )
 
@@ -401,6 +405,39 @@ def test_identity_insufficient_disposition_cannot_confer_agreement_or_tier_a() -
     assert result.molecular_agreement is False
     assert result.tier != "A"
     assert result.backing_sources == ("kestrel_vcf",)
+    assert result.evidence_disposition == EvidenceDisposition("identity-insufficient")
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("D58_2&D59_2", "identity-insufficient"),
+        ("I23_6_G_LEN1", "identity-insufficient"),
+        ("I22_2_G_LEN1", "admissible"),
+    ],
+)
+def test_governed_state_disposition_is_threaded_per_advntr_observation(state: str, expected: str) -> None:
+    calls = from_advntr(state)
+    repeat_units = ",".join(component.split("_")[1] for component in state.split("&"))
+    positions = ",".join(component.split("_")[0][1:] for component in state.split("&"))
+    observations = _build_observations(
+        _persisted_kestrel_row(),
+        _presentation_call("59dupC", "kestrel_vcf"),
+        advntr_row={
+            "Variant": state,
+            "RU": repeat_units,
+            "POS": positions,
+            "NumberOfSupportingReads": "40",
+            "MeanCoverage": "153.98",
+            "Flag": "Polymorphic_Call" if expected == "identity-insufficient" else "Not flagged",
+        },
+        advntr_calls=calls,
+    )
+
+    assert observations is not None
+    advntr_observations = [observation for observation in observations if observation.source == "advntr"]
+    assert advntr_observations
+    assert {observation.disposition.value for observation in advntr_observations} == {expected}
 
 
 def test_identity_insufficient_observation_cannot_supply_the_selected_display_row() -> None:
@@ -488,6 +525,7 @@ def test_reconciliation_requires_a_policy_and_typed_observation_tuple() -> None:
         {"backing_callers": ()},
         {"low_support_sources": ("future_caller",)},
         {"decision": IdentityDecision(DUPC, "B", False, None)},
+        {"evidence_disposition": "invalid"},
     ],
 )
 def test_result_rejects_inconsistent_selected_identity_metadata(changes: dict[str, object]) -> None:

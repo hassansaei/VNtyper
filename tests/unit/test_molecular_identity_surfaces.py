@@ -313,11 +313,12 @@ def test_positive_advntr_publication_appends_all_identity_fields(tmp_path: Path)
     advntr_genotyping.process_advntr_output(str(source), str(tmp_path), "output")
 
     result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", keep_default_na=False)
-    assert tuple(result.columns[-4:]) == IDENTITY_COLUMNS
+    assert tuple(result.columns[-5:]) == (*IDENTITY_COLUMNS, "Evidence_Disposition")
     assert result.loc[0, "Molecular_Identity"] == "MUC1-X-60-coding-v1|60|59|-|C"
     assert result.loc[0, "Molecular_Identity_Status"] == "unique"
     assert result.loc[0, "Equivalent_Representation_Count"] == 1
     assert result.loc[0, "Identity_Hypothesis_Count"] == 1
+    assert result.loc[0, "Evidence_Disposition"] == "admissible"
 
 
 def test_positive_advntr_publication_counts_two_distinct_identities_on_both_rows(tmp_path: Path) -> None:
