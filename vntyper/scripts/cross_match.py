@@ -60,6 +60,7 @@ CROSS_MATCH_COLUMNS: frozenset[str] = frozenset(
         "Advntr_Variant_Type",
     }
 )
+_EVIDENCE_DISPOSITIONS = frozenset({"admissible", "identity-insufficient"})
 
 
 def _configuration_error(message: str) -> NoReturn:
@@ -98,6 +99,16 @@ def _configured_match_rule(config: object) -> object:
             context="cross_match.match_logic",
         )
     return DEFAULT_MATCH_RULE
+
+
+def _advntr_evidence_disposition(record: Mapping[str, object]) -> str:
+    """Read the closed additive disposition, defaulting only legacy rows."""
+    value = record.get("Evidence_Disposition", "admissible")
+    if value not in _EVIDENCE_DISPOSITIONS:
+        message = f"adVNTR record has unsupported Evidence_Disposition: {value}"
+        logger.error(message)
+        raise ValueError(message)
+    return str(value)
 
 
 def determine_variant_type(ref, alt):
@@ -183,6 +194,7 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
 
     results = []
     overall = False
+    advntr_dispositions = [_advntr_evidence_disposition(record) for record in advntr_records]
 
     # Precompute allele change for Kestrel records.
     for k in kestrel_records:
@@ -198,7 +210,7 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
 
     # Evaluate each combination.
     for k in kestrel_records:
-        for a in advntr_records:
+        for a, evidence_disposition in zip(advntr_records, advntr_dispositions, strict=True):
             result = {
                 "Kestrel_POS": k.get("POS", ""),
                 "Kestrel_REF": k.get("REF", ""),
@@ -211,7 +223,8 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
                 "Advntr_Allele_Change": a["Allele_Change"],
                 "Advntr_Variant_Type": a["Variant_Type"],
             }
-            match = evaluate_rule(compiled_rule, result, context="cross_match.match_rule")
+            structural_match = evaluate_rule(compiled_rule, result, context="cross_match.match_rule")
+            match = structural_match and evidence_disposition == "admissible"
             result["Match"] = "Yes" if match else "No"
             if match:
                 overall = True

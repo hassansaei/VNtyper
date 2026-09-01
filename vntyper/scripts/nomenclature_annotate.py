@@ -23,6 +23,13 @@ from typing import Any
 
 import pandas as pd
 
+from vntyper.modules.advntr.artifact_evidence import (
+    ASSERTION,
+    EVIDENCE_DISPOSITION_COLUMN,
+    ArtifactEvidence,
+    evidence_disposition_for_state,
+    load_packaged_artifact_evidence,
+)
 from vntyper.scripts.identity_reconciliation import (
     IdentityReconciliationObservation,
     IdentityReconciliationPolicy,
@@ -69,6 +76,7 @@ from vntyper.scripts.nomenclature_bam_replay import (
 )
 from vntyper.scripts.nomenclature_frame_presentation import (
     NOMENCLATURE_COLUMNS,
+    append_decision_explanation,
 )
 from vntyper.scripts.nomenclature_frame_presentation import (
     annotate_advntr_frame as annotate_advntr_frame,
@@ -228,6 +236,8 @@ def reconcile_caller_outputs(
     kestrel_tsv: str | Path,
     advntr_tsv: str | Path,
     kestrel_dir: str | Path | None = None,
+    *,
+    artifact_evidence: ArtifactEvidence | None = None,
 ) -> bool:
     """Reconcile the two callers' written results and rewrite both in place.
 
@@ -249,6 +259,8 @@ def reconcile_caller_outputs(
         advntr_tsv: Path to ``output_adVNTR_result.tsv``.
         kestrel_dir: Directory holding ``output.bam``. Defaults to the directory the
             Kestrel TSV sits in, which is where the pipeline writes it.
+        artifact_evidence: Verified governed State evidence. The packaged artifact is
+            used by this standalone compatibility boundary when omitted.
 
     Returns:
         bool: True when both files were read and rewritten.
@@ -268,6 +280,8 @@ def reconcile_caller_outputs(
 
     if kestrel.empty or advntr.empty or "Motifs" not in kestrel.columns:
         return False
+
+    resolved_artifact_evidence = artifact_evidence or load_packaged_artifact_evidence()
 
     supports: dict[str, int | None] = {}
     kestrel_keep = [not _is_negative(row) for _, row in kestrel.iterrows()]
@@ -294,6 +308,11 @@ def reconcile_caller_outputs(
         supports["kestrel_vcf"] = depth if "kestrel_vcf" not in supports else _lesser(existing, depth)
 
     advntr_keep = [not _is_negative(row) for _, row in advntr.iterrows()]
+    positive_advntr_rows = [row for (_, row), keep in zip(advntr.iterrows(), advntr_keep, strict=True) if keep]
+    advntr_dispositions = [
+        evidence_disposition_for_state(str(row.get("Variant", "")), resolved_artifact_evidence).value
+        for row in positive_advntr_rows
+    ]
     advntr_calls_by_row = _advntr_calls_by_row(advntr, advntr_keep, supports)
     advntr_calls = [call for calls in advntr_calls_by_row for call in calls]
 
@@ -335,6 +354,7 @@ def reconcile_caller_outputs(
         bam_translations,
         identity_config=identity_config,
         translation_component=identity_component,
+        artifact_evidence=resolved_artifact_evidence,
     )
     if identity_inputs is None:
         merged = reconcile(*ordered_calls, supports=supports)
@@ -363,6 +383,8 @@ def reconcile_caller_outputs(
     advntr_summary = _summarise(advntr_calls)
 
     cells = _cells(merged, kestrel=kestrel_summary, advntr=advntr_summary)
+    if "identity-insufficient" in advntr_dispositions:
+        cells["Nomenclature_Note"] = append_decision_explanation(cells["Nomenclature_Note"], ASSERTION)
 
     surfaces: tuple[tuple[pd.DataFrame, Path, list[bool], list[str], str, list[str]], ...] = (
         (kestrel, kestrel_path, kestrel_keep, header, "Nomenclature_Kestrel", kestrel_row_names),
@@ -379,6 +401,10 @@ def reconcile_caller_outputs(
                 updated[column] = ""
             updated.loc[mask, column] = value
         updated.loc[mask, own_column] = own_names
+        if own_column == "Nomenclature_adVNTR":
+            if EVIDENCE_DISPOSITION_COLUMN not in updated.columns:
+                updated[EVIDENCE_DISPOSITION_COLUMN] = ""
+            updated.loc[mask, EVIDENCE_DISPOSITION_COLUMN] = advntr_dispositions
         _write_tsv(updated, path, file_header)
 
     if bam_replay_loci is not None:
@@ -416,6 +442,7 @@ def _production_identity_observations(
     *,
     identity_config: dict[str, Any] | None = None,
     translation_component: Any = None,
+    artifact_evidence: ArtifactEvidence,
 ) -> tuple[tuple[IdentityReconciliationObservation, ...], IdentityReconciliationPolicy] | None:
     """Build current-run identity observations or select the deliberate legacy path."""
     from vntyper.scripts.identity_candidate_persistence import (
@@ -440,6 +467,7 @@ def _production_identity_observations(
         advntr_calls_by_row,
         component,
         frozenset(KNOWN_VARIANTS),
+        artifact_evidence=artifact_evidence,
         bam_translations=bam_translations,
     )
     if observations is None:  # pragma: no cover - identity columns were established above

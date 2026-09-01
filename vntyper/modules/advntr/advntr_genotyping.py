@@ -15,6 +15,7 @@ from vntyper.modules.advntr.advntr_variant_annotations import (
     INSERTION_PATTERN,
     derive_ru_and_pos,
 )
+from vntyper.modules.advntr.artifact_evidence import EVIDENCE_DISPOSITION_COLUMN
 from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.flagging import ADVNTR_FLAG_COLUMNS, compile_flag_rules
 from vntyper.scripts.nomenclature_annotate import NOMENCLATURE_COLUMNS, annotate_advntr_frame
@@ -951,7 +952,9 @@ def process_advntr_output(output_path, output, output_name, config=None):
                 if col not in advntr_concat.columns:
                     advntr_concat[col] = "" if col in NOMENCLATURE_COLUMNS else "Not applicable"
 
-        publication_columns = [*final_columns, *IDENTITY_COLUMNS] if positive_result else final_columns
+        publication_columns = (
+            [*final_columns, *IDENTITY_COLUMNS, EVIDENCE_DISPOSITION_COLUMN] if positive_result else final_columns
+        )
         advntr_concat = advntr_concat[publication_columns]
     except Exception as e:
         message = f"Error during processing of deletions and insertions: {e}"

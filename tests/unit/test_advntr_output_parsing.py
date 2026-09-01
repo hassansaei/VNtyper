@@ -30,6 +30,7 @@ import pytest
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
 from vntyper.modules.advntr.advntr_variant_annotations import derive_ru_and_pos
+from vntyper.modules.advntr.artifact_evidence import ASSERTION
 
 pytestmark = pytest.mark.unit
 
@@ -68,7 +69,7 @@ IDENTITY_COLUMNS = [
     "Identity_Hypothesis_Count",
 ]
 
-POSITIVE_COLUMNS = [*FINAL_COLUMNS, *IDENTITY_COLUMNS]
+POSITIVE_COLUMNS = [*FINAL_COLUMNS, *IDENTITY_COLUMNS, "Evidence_Disposition"]
 
 RESULT_SUFFIX = "_adVNTR_result.tsv"
 
@@ -160,6 +161,7 @@ class TestCanonicalParsing:
         assert row["Variant"] == CANONICAL_VARIANT
         assert row["NumberOfSupportingReads"] == "11"
         assert row["Flag"] == "Not flagged"
+        assert row["Evidence_Disposition"] == "admissible"
 
     def test_the_result_filename_is_built_from_output_name(self, tmp_path):
         """Contract C4: ``pipeline.py`` reconstructs this name rather than consuming it."""
@@ -169,6 +171,22 @@ class TestCanonicalParsing:
 
         assert (tmp_path / f"sample_42{RESULT_SUFFIX}").exists()
         assert not (tmp_path / f"output{RESULT_SUFFIX}").exists()
+
+    def test_governed_state_is_flagged_visible_and_identity_insufficient(self, tmp_path: Path) -> None:
+        source = write_advntr_output(
+            tmp_path,
+            ADVNTR_HEADER + "25561\tI23_6_G_LEN1\t40\t153.98\t0.0001\n",
+        )
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+        row = read_result(tmp_path).iloc[0]
+        assert row["Variant"] == "I23_6_G_LEN1"
+        assert row["Flag"] == "Polymorphic_Call"
+        assert row["Nomenclature_adVNTR"] == "59dupC"
+        assert row["NumberOfSupportingReads"] == "40"
+        assert row["Evidence_Disposition"] == "identity-insufficient"
+        assert ASSERTION in row["Nomenclature_Note"]
 
     def test_the_hash_prefixed_header_is_normalised_in_the_source_file(self, tmp_path):
         """``#VID`` is rewritten to ``VID`` in place, otherwise ``comment='#'`` eats the header."""

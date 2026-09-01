@@ -16,11 +16,13 @@ from vntyper.modules.advntr import artifact_evidence as artifact_evidence_module
 from vntyper.modules.advntr.artifact_evidence import (
     ASSERTION,
     ArtifactEvidence,
+    evidence_disposition_for_state,
     load_artifact_evidence,
     load_packaged_artifact_evidence,
 )
 from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
 from vntyper.scripts.flagging import add_flags
+from vntyper.scripts.molecular_identity import EvidenceDisposition
 
 pytestmark = pytest.mark.unit
 
@@ -147,6 +149,27 @@ class TestTypedEvidence:
             evidence.cohort_name = "invented"  # type: ignore[misc]
         with pytest.raises(FrozenInstanceError):
             evidence.entries[0].state = "invented"  # type: ignore[misc]
+
+    def test_all_active_states_are_identity_insufficient_regardless_of_status(self, evidence: ArtifactEvidence) -> None:
+        assert {entry.status for entry in evidence.entries} == {
+            "confirmed_artifact",
+            "pending_renome_revalidation",
+        }
+        assert {evidence_disposition_for_state(entry.state, evidence) for entry in evidence.entries} == {
+            EvidenceDisposition("identity-insufficient")
+        }
+
+    def test_unlisted_state_is_admissible(self, evidence: ArtifactEvidence) -> None:
+        assert evidence_disposition_for_state("I22_2_G_LEN1", evidence) == EvidenceDisposition("admissible")
+
+    @pytest.mark.parametrize("state", ["", None, 1])
+    def test_disposition_rejects_invalid_state(self, evidence: ArtifactEvidence, state: object) -> None:
+        with pytest.raises(ValueError, match="requires a non-empty State string"):
+            evidence_disposition_for_state(state, evidence)  # type: ignore[arg-type]
+
+    def test_disposition_rejects_unverified_evidence(self) -> None:
+        with pytest.raises(ValueError, match="requires verified ArtifactEvidence"):
+            evidence_disposition_for_state("I22_2_G_LEN1", object())  # type: ignore[arg-type]
 
     def test_file_loader_rejects_a_wrong_expected_digest(self, tmp_path: Path) -> None:
         artifact = tmp_path / "evidence.json"

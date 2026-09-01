@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
+from vntyper.scripts.molecular_identity import EvidenceDisposition
 
 ASSERTION = "A carried-forward recurrent adVNTR State is insufficient for molecular identity."
+EVIDENCE_DISPOSITION_COLUMN = "Evidence_Disposition"
 _MODULE_DIR = Path(__file__).resolve().parent
 _PACKAGED_ARTIFACT = _MODULE_DIR / "advntr_artifact_evidence.json"
 _PACKAGED_DIGEST = _MODULE_DIR / "advntr_artifact_evidence.sha256"
@@ -179,3 +181,25 @@ def load_packaged_artifact_evidence() -> ArtifactEvidence:
     if _SHA256_RE.fullmatch(expected_digest) is None:
         raise ValueError("packaged artifact evidence digest must be 64 lowercase hexadecimal characters")
     return load_artifact_evidence(_PACKAGED_ARTIFACT, expected_digest=expected_digest)
+
+
+def evidence_disposition_for_state(state: str, evidence: ArtifactEvidence) -> EvidenceDisposition:
+    """Classify one exact adVNTR State under verified governed evidence.
+
+    Args:
+        state: Complete adVNTR State string from one positive result row.
+        evidence: Verified governed evidence resolved for the run.
+
+    Returns:
+        Identity-insufficient for an active exact match, otherwise admissible.
+
+    Raises:
+        ValueError: If either input is not a validated value.
+    """
+    if not isinstance(state, str) or not state:
+        raise ValueError("adVNTR evidence disposition requires a non-empty State string")
+    if not isinstance(evidence, ArtifactEvidence):
+        raise ValueError("adVNTR evidence disposition requires verified ArtifactEvidence")
+    if state in evidence.active_states:
+        return EvidenceDisposition("identity-insufficient")
+    return EvidenceDisposition("admissible")
