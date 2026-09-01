@@ -9,6 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from vntyper.scripts.artifact_names import validate_output_name
+from vntyper.scripts.cli_calibrate import handle_calibrate
 from vntyper.scripts.cli_handlers import (
     CommandHandler,
     handle_cohort,
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 #: Subcommand name -> handler. ``main()`` does nothing but resolve this table, so a
 #: change to one subcommand is a change to one function in one module.
 HANDLERS: dict[str, CommandHandler] = {
+    "calibrate": handle_calibrate,
     "install-references": handle_install_references,
     "pipeline": handle_pipeline,
     "report": handle_report,

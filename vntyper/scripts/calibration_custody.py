@@ -61,7 +61,11 @@ def write_precommit(
         "protocol_sha256": protocol,
         "evidence_sha256": evidence,
     }
-    _exclusive_write(path, canonical_json_bytes(payload), "calibration precommit already exists")
+    _exclusive_write(
+        path,
+        canonical_json_bytes(payload),
+        "calibration precommit already exists; the one-use evidence may already be consumed",
+    )
     return Precommit(path, profile, protocol, evidence)
 
 

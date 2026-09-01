@@ -68,6 +68,40 @@ REPORT_IGV_HELP = (
 )
 
 
+def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
+    """Register the closed four-operation calibration command tree.
+
+    Args:
+        subparsers: Top-level VNtyper subparser collection.
+    """
+    calibrate = subparsers.add_parser(
+        "calibrate",
+        help="Extract, fit, validate, or evaluate an opt-in calibration profile.",
+        conflict_handler="resolve",
+    )
+    operations = calibrate.add_subparsers(dest="calibration_operation", required=True)
+
+    extract = operations.add_parser("extract", help="Extract immutable replay evidence.")
+    extract.add_argument("--truth", type=Path, required=True)
+    extract.add_argument("--partitions", type=Path, required=True)
+    extract.add_argument("--runs", type=Path, required=True)
+    extract.add_argument("--output", type=Path, required=True)
+
+    fit = operations.add_parser("fit", help="Fit the frozen safety-first candidate family.")
+    fit.add_argument("--evidence", type=Path, required=True)
+    fit.add_argument("--objective", required=True, choices=["lexicographic-safety-v1"])
+    fit.add_argument("--output", type=Path, required=True)
+
+    for name, help_text in (
+        ("validate", "Validate one fixed profile on validation evidence."),
+        ("evaluate", "Evaluate one fixed profile on locked held-out evidence."),
+    ):
+        operation = operations.add_parser(name, help=help_text)
+        operation.add_argument("--profile", type=Path, required=True)
+        operation.add_argument("--evidence", type=Path, required=True)
+        operation.add_argument("--output", type=Path, required=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """
     Build the VNtyper argument parser.
@@ -78,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     Returns:
         argparse.ArgumentParser: The top-level parser, with the ``pipeline``,
-        ``report``, ``cohort``, ``install-references`` and ``online`` subparsers
+        ``report``, ``cohort``, ``install-references``, ``online`` and ``calibrate`` subparsers
         registered under ``dest="command"``.
     """
     # Parent parser for global arguments
@@ -106,6 +140,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    add_calibrate_subparser(subparsers)
 
     # Subcommand: pipeline
     parser_pipeline = subparsers.add_parser(

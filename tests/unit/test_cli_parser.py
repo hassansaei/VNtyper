@@ -30,7 +30,7 @@ from vntyper.version import __version__ as VERSION
 # Mark all tests in this module as unit tests
 pytestmark = pytest.mark.unit
 
-EXPECTED_SUBCOMMANDS = {"pipeline", "report", "cohort", "install-references", "online"}
+EXPECTED_SUBCOMMANDS = {"pipeline", "report", "cohort", "install-references", "online", "calibrate"}
 
 
 def _subcommand_choices(parser: argparse.ArgumentParser) -> set[str]:
@@ -68,7 +68,7 @@ def test_build_parser_returns_a_fresh_parser_on_every_call():
 
 
 def test_every_subcommand_is_registered():
-    """All five documented subcommands must survive the extraction."""
+    """All six documented subcommands must survive the extraction."""
     choices = _subcommand_choices(build_parser())
     assert choices == EXPECTED_SUBCOMMANDS
 
