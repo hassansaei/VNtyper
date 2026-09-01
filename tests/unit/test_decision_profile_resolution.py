@@ -118,7 +118,7 @@ def test_resolution_rejects_a_governed_rule_evidence_mismatch() -> None:
 
 def test_run_resolution_rejects_non_neutral_generated_dominance_until_it_has_a_consumer(tmp_path: Path) -> None:
     packaged = load_packaged_decision_profile()
-    document = copy.deepcopy(dict(packaged.document))
+    document = json.loads(packaged.canonical_bytes)
     document["profile_id"] = "unit-test-generated-active"
     document["profile_revision"] = "test-1"
     document["profile_kind"] = "generated"
@@ -200,6 +200,19 @@ def test_resolved_components_are_recursively_immutable() -> None:
     assert isinstance(confidence, dict | tuple) is False
     with pytest.raises(TypeError):
         confidence["new"] = True  # type: ignore[index]
+
+
+def test_resolved_profile_document_is_recursively_immutable() -> None:
+    profile = resolve_decision_profile()
+
+    with pytest.raises(TypeError):
+        profile.document["profile_revision"] = "mutated"  # type: ignore[index]
+    inventory = profile.document["inventory"]
+    assert isinstance(inventory, Mapping)
+    field = inventory["/components/kestrel/duplicate_flagging/flag_name"]
+    assert isinstance(field, Mapping)
+    with pytest.raises(TypeError):
+        field["value"] = "mutated"  # type: ignore[index]
 
 
 def test_run_configuration_freezes_excluded_stage_runtime_configuration() -> None:

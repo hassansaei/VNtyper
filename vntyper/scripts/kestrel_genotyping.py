@@ -1045,7 +1045,11 @@ def _resolve_selection(
     if isinstance(selection, KestrelSelection):
         return selection
     if selection is None:
-        component = resolve_compatibility_component("kestrel", None, custom_context_active=False)
+        component = resolve_compatibility_component(
+            "kestrel",
+            None,
+            custom_context_active=custom_context_active,
+        )
         selection = component["selection"]  # type: ignore[assignment]
     if not isinstance(selection, Mapping):
         raise ValueError("Kestrel selection component must be a mapping")

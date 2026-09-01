@@ -46,6 +46,15 @@ def _freeze(value: object) -> object:
     return value
 
 
+def _thaw(value: object) -> object:
+    """Restore immutable resolved JSON containers for schema validation."""
+    if isinstance(value, Mapping):
+        return {cast(str, key): _thaw(child) for key, child in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(child) for child in value]
+    return value
+
+
 def _resolved(
     document: dict[str, object],
     *,
@@ -55,7 +64,10 @@ def _resolved(
     raw_kind = document.get("profile_kind")
     if source == "explicit-cli" and raw_kind == "packaged":
         raise ValueError("an explicit CLI decision profile must be explicit-custom or generated")
-    validate_complete_inventory(document, packaged_profile=packaged_document)
+    mutable_packaged_document = (
+        None if packaged_document is None else cast(Mapping[str, object], _thaw(packaged_document))
+    )
+    validate_complete_inventory(document, packaged_profile=mutable_packaged_document)
     kind = cast(ProfileKind, document["profile_kind"])
     if source == "package" and kind != "packaged":
         raise ValueError("package decision profile must have profile_kind 'packaged'")
@@ -64,7 +76,7 @@ def _resolved(
     canonical = canonical_json_bytes(document)
     components = MappingProxyType(
         {
-            name: _freeze(component_projection(document, name, packaged_profile=packaged_document))
+            name: _freeze(component_projection(document, name, packaged_profile=mutable_packaged_document))
             for name in _COMPONENT_NAMES
         }
     )
@@ -75,7 +87,7 @@ def _resolved(
         source=source,
         digest=hashlib.sha256(canonical).hexdigest(),
         canonical_bytes=canonical,
-        document=document,
+        document=cast(Mapping[str, object], _freeze(document)),
         components=components,
     )
 

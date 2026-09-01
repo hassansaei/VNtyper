@@ -6,11 +6,13 @@ import copy
 import hashlib
 import re
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
+from vntyper.scripts.decision_profile import load_packaged_decision_profile, parse_decision_profile
 from vntyper.scripts.decision_profile_schema import (
     ValidationClass,
     component_projection,
@@ -36,6 +38,20 @@ def _field(profile: dict[str, object], pointer: str) -> dict[str, object]:
     assert isinstance(inventory, dict)
     value = inventory[pointer]
     assert isinstance(value, dict)
+    return value
+
+
+def _resolved_pointer(components: Mapping[str, object], pointer: str) -> object:
+    """Resolve one inventory pointer against immutable runtime components."""
+    tokens = pointer.removeprefix("/").split("/")
+    assert tokens.pop(0) == "components"
+    value: object = components
+    for token in tokens:
+        if isinstance(value, Mapping):
+            value = value[token]
+        else:
+            assert isinstance(value, tuple)
+            value = value[int(token)]
     return value
 
 
@@ -111,16 +127,18 @@ def test_every_inventory_leaf_has_exactly_one_validation_class() -> None:
     }
 
 
-def test_one_complete_explicit_profile_can_change_every_explicit_custom_leaf() -> None:
-    """Every field advertised as operator-editable has a valid non-default value."""
+def test_one_complete_explicit_profile_changes_every_mutable_stage_argument() -> None:
+    """Every field advertised as operator-editable reaches a non-default runtime value."""
     packaged = _packaged_profile()
     explicit = copy.deepcopy(packaged)
     explicit["profile_kind"] = "explicit-custom"
     explicit["profile_id"] = "unit-test-all-explicit-fields"
     inventory = explicit["inventory"]
     assert isinstance(inventory, dict)
-    explicit_pointers = {
-        pointer for pointer, field in inventory.items() if field["class"] == ValidationClass.EXPLICIT_CUSTOM.value
+    mutable_pointers = {
+        pointer
+        for pointer, field in inventory.items()
+        if field["class"] in {ValidationClass.EXPLICIT_CUSTOM.value, ValidationClass.GENERATED_MUTABLE.value}
     }
     column_replacements = {
         "NumberOfSupportingReads": "MeanCoverage",
@@ -139,11 +157,21 @@ def test_one_complete_explicit_profile_can_change_every_explicit_custom_leaf() -
         "POS": "confidence_priority",
     }
     operator_replacements = {"lt": "eq", "eq": "casefold_eq", "casefold_eq": "eq"}
+    dominance_replacements = {
+        "/components/dominance/enabled": True,
+        "/components/dominance/minimum_record_count_margin": 2,
+        "/components/dominance/minimum_record_share": 0.75,
+        "/components/dominance/minimum_record_share_margin": 0.25,
+        "/components/dominance/xd_veto": "missingness",
+        "/components/dominance/abstain_on_inadmissible_advntr": True,
+    }
     changed: set[str] = set()
-    for pointer in sorted(explicit_pointers):
+    for pointer in sorted(mutable_pointers):
         field = inventory[pointer]
         value = field["value"]
-        if pointer.endswith("/operator"):
+        if pointer in dominance_replacements:
+            field["value"] = dominance_replacements[pointer]
+        elif pointer.endswith("/operator"):
             field["value"] = operator_replacements[value]
         elif "/duplicate_flagging/sort_by/" in pointer and pointer.endswith("/column"):
             field["value"] = "POS"
@@ -166,8 +194,17 @@ def test_one_complete_explicit_profile_can_change_every_explicit_custom_leaf() -
         if field["value"] != value:
             changed.add(pointer)
 
-    assert changed == explicit_pointers
+    assert changed == mutable_pointers
     validate_complete_inventory(explicit, packaged_profile=packaged)
+    packaged_resolved = load_packaged_decision_profile()
+    explicit_resolved = parse_decision_profile(
+        canonical_json_bytes(explicit),
+        packaged_document=packaged_resolved.document,
+    )
+    for pointer in mutable_pointers:
+        assert _resolved_pointer(explicit_resolved.components, pointer) != _resolved_pointer(
+            packaged_resolved.components, pointer
+        )
 
 
 def test_packaged_inventory_rejects_an_invalid_fixed_output_format() -> None:

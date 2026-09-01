@@ -224,7 +224,24 @@ def _validate_identity_row(row: Mapping[str, object], *, positive: bool) -> None
         raise ValueError("summary schema 3 legacy-selected-among-multiple identity requires multiple hypotheses")
 
 
-def _validate_schema_three_identity_rows(summary: Mapping[str, object]) -> None:
+def _validate_schema_three_identity_rows(
+    summary: Mapping[str, object],
+    advntr_component: Mapping[str, object],
+    evidence_digest: str | None,
+) -> None:
+    artifact_evidence = advntr_component.get("artifact_evidence")
+    if not isinstance(artifact_evidence, Mapping):
+        raise ValueError("recorded decision profile adVNTR artifact evidence must be an object")
+    active_states_raw = artifact_evidence.get("active_states")
+    if not isinstance(active_states_raw, (list, tuple)) or any(
+        not isinstance(state, str) or not state for state in active_states_raw
+    ):
+        raise ValueError("recorded decision profile adVNTR active states must be non-empty strings")
+    active_states = frozenset(active_states_raw)
+    matching_disposition = artifact_evidence.get("matching_disposition")
+    nonmatching_disposition = artifact_evidence.get("nonmatching_disposition")
+    if matching_disposition not in _EVIDENCE_DISPOSITIONS or nonmatching_disposition not in _EVIDENCE_DISPOSITIONS:
+        raise ValueError("recorded decision profile adVNTR dispositions are unsupported")
     raw_steps = summary.get("steps", [])
     if not isinstance(raw_steps, list):
         raise ValueError("summary schema 3 steps must be an array")
@@ -236,6 +253,8 @@ def _validate_schema_three_identity_rows(summary: Mapping[str, object]) -> None:
         step_name = raw_step.get("step")
         if step_name not in {STEP_KESTREL, STEP_ADVNTR}:
             continue
+        if step_name == STEP_ADVNTR and evidence_digest is None:
+            raise ValueError("summary schema 3 adVNTR caller step requires a non-null evidence digest")
         parsed_result = raw_step.get("parsed_result")
         if not isinstance(parsed_result, Mapping):
             raise ValueError("summary schema 3 caller parsed_result must be an object")
@@ -253,6 +272,14 @@ def _validate_schema_three_identity_rows(summary: Mapping[str, object]) -> None:
                 disposition = raw_row.get("Evidence_Disposition")
                 if disposition not in _EVIDENCE_DISPOSITIONS:
                     raise ValueError("summary schema 3 positive adVNTR row requires a supported Evidence_Disposition")
+                state = raw_row.get("Variant")
+                if not isinstance(state, str) or not state:
+                    raise ValueError("summary schema 3 positive adVNTR row requires a non-empty Variant state")
+                expected_disposition = matching_disposition if state in active_states else nonmatching_disposition
+                if disposition != expected_disposition:
+                    raise ValueError(
+                        "summary schema 3 adVNTR Evidence_Disposition differs from the governed Variant state"
+                    )
             _validate_identity_row(raw_row, positive=positive)
 
 
@@ -261,12 +288,15 @@ def verify_profile_snapshot(
     snapshot_path: str | Path,
     *,
     advntr_evidence_digest: str | None = None,
+    schema_three_summary: Mapping[str, object] | None = None,
 ) -> DecisionProfileProvenance:
     """Verify one recorded snapshot without substituting a current profile.
 
     Args:
         provenance: Complete schema-3 values recorded by the run.
         snapshot_path: Run-local snapshot resolved from its fixed relative path.
+        advntr_evidence_digest: Recorded PR-B evidence digest, or ``None`` when adVNTR did not run.
+        schema_three_summary: Complete summary whose caller rows must be checked against the verified profile.
 
     Returns:
         The same provenance after strict bytes, hash, schema, and metadata checks.
@@ -308,14 +338,16 @@ def verify_profile_snapshot(
         provenance.profile_kind,
     ):
         raise ValueError("recorded decision profile metadata differs from its verified snapshot")
+    if not isinstance(advntr_component, Mapping):
+        raise ValueError("recorded decision profile adVNTR component must be an object")
     if advntr_evidence_digest is not None:
-        if not isinstance(advntr_component, Mapping):
-            raise ValueError("recorded decision profile adVNTR component must be an object")
         artifact_evidence = advntr_component.get("artifact_evidence")
         if not isinstance(artifact_evidence, Mapping):
             raise ValueError("recorded decision profile adVNTR artifact evidence must be an object")
         if artifact_evidence.get("digest") != advntr_evidence_digest:
             raise ValueError("recorded profile adVNTR evidence digest differs from the summary evidence digest")
+    if schema_three_summary is not None:
+        _validate_schema_three_identity_rows(schema_three_summary, advntr_component, advntr_evidence_digest)
     return provenance
 
 
@@ -360,10 +392,10 @@ def resolve_summary_profile(
     _nonempty_string(summary["decision_policy"], field="decision_policy")
 
     provenance = _parse_recorded_provenance(summary)
-    _validate_schema_three_identity_rows(summary)
     assert provenance.snapshot_path is not None
     return verify_profile_snapshot(
         provenance,
         Path(run_root) / provenance.snapshot_path,
         advntr_evidence_digest=evidence_digest,
+        schema_three_summary=summary,
     )

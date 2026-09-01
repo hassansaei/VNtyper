@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 from pathlib import Path
 
@@ -34,7 +33,7 @@ IDENTITY = {
 
 def _explicit_profile() -> ResolvedDecisionProfile:
     packaged = load_packaged_decision_profile()
-    document = copy.deepcopy(dict(packaged.document))
+    document = json.loads(packaged.canonical_bytes)
     document["profile_id"] = "cohort-explicit"
     document["profile_revision"] = "study-7"
     document["profile_kind"] = "explicit-custom"

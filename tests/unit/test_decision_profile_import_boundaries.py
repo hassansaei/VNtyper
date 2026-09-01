@@ -132,6 +132,22 @@ def test_shark_consumers_do_not_reload_the_runtime_sidecar_as_decision_policy() 
     assert violations == []
 
 
+def test_shark_has_no_independent_decision_constant_or_literal_comparison() -> None:
+    """Any new SHARK decision must be inventoried instead of hard-coded beside the empty component."""
+    path = REPOSITORY_ROOT / "vntyper/modules/shark/shark_filtering.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    uppercase_bindings = sorted(name for name in _module_assignments(tree) if name.isupper())
+    comparisons = {ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.Compare)}
+
+    assert uppercase_bindings == []
+    assert comparisons == {
+        "config_path is None",
+        "key in settings",
+        "legacy_key in settings",
+        "resolved is not None",
+    }
+
+
 def test_shark_sidecar_contains_runtime_references_only() -> None:
     """An empty SHARK profile remains complete while its sidecar has paths only."""
     sidecar = json.loads((REPOSITORY_ROOT / "vntyper/modules/shark/shark_config.json").read_text(encoding="utf-8"))

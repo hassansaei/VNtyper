@@ -366,12 +366,6 @@ def validate_complete_inventory(
             if field.validation_class is ValidationClass.FIXED_SAFETY and field.value != baseline.value:
                 raise ValueError(f"immutable fixed-safety field differs: {pointer}")
             if (
-                kind == "explicit-custom"
-                and field.validation_class is ValidationClass.GENERATED_MUTABLE
-                and field.value != baseline.value
-            ):
-                raise ValueError(f"explicit-custom profile must copy generated-mutable field: {pointer}")
-            if (
                 kind == "generated"
                 and field.validation_class is ValidationClass.EXPLICIT_CUSTOM
                 and field.value != baseline.value

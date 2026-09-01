@@ -21,6 +21,13 @@ def test_incomplete_supplied_selection_is_rejected_instead_of_loading_packaged_p
         select_single_best_variant(frame, {"duplicate_flagging": {}}, custom_context_active=True)
 
 
+def test_missing_custom_selection_is_rejected_instead_of_loading_packaged_policy() -> None:
+    frame = pd.DataFrame({"Confidence": ["Negative"], "Flag": ["Not flagged"], "Depth_Score": [0.0], "POS": [1]})
+
+    with pytest.raises(ValueError, match="custom Kestrel run context requires"):
+        select_single_best_variant(frame, None, custom_context_active=True)
+
+
 def test_legacy_direct_selection_can_use_the_packaged_compatibility_fallback() -> None:
     frame = pd.DataFrame(
         {

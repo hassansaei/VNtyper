@@ -5,12 +5,17 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 from vntyper.scripts.canonical_json import canonical_json_bytes
-from vntyper.scripts.decision_profile import load_packaged_decision_profile, parse_decision_profile
+from vntyper.scripts.decision_profile import (
+    ResolvedDecisionProfile,
+    load_packaged_decision_profile,
+    parse_decision_profile,
+)
 from vntyper.scripts.profile_provenance import (
     LEGACY_DECISION_PROFILE_REVISION,
     DecisionProfileProvenance,
@@ -58,6 +63,14 @@ def _snapshot_packaged(tmp_path: Path):
     snapshot = tmp_path / "provenance" / "decision_profile.json"
     snapshot_decision_profile(profile, snapshot)
     return profile, snapshot
+
+
+def _record_advntr_evidence_digest(summary: dict[str, object], profile: ResolvedDecisionProfile) -> None:
+    advntr = profile.components["advntr"]
+    assert isinstance(advntr, Mapping)
+    artifact_evidence = advntr["artifact_evidence"]
+    assert isinstance(artifact_evidence, Mapping)
+    summary["advntr_evidence_digest"] = artifact_evidence["digest"]
 
 
 def test_profile_summary_fields_and_snapshot_are_exact_and_path_free(tmp_path: Path) -> None:
@@ -164,7 +177,7 @@ def test_schema_three_rejects_leaks_mismatches_and_invalid_relationships(
 
 def test_schema_three_rejects_noncanonical_snapshot_bytes(tmp_path: Path) -> None:
     profile, snapshot = _snapshot_packaged(tmp_path)
-    snapshot.write_text(json.dumps(profile.document, indent=2), encoding="utf-8")
+    snapshot.write_text(json.dumps(json.loads(profile.canonical_bytes), indent=2), encoding="utf-8")
 
     with pytest.raises(ValueError, match="canonical"):
         resolve_summary_profile(_schema_three_summary(profile), tmp_path)
@@ -172,7 +185,7 @@ def test_schema_three_rejects_noncanonical_snapshot_bytes(tmp_path: Path) -> Non
 
 def test_package_source_requires_the_checked_in_packaged_hash(tmp_path: Path) -> None:
     profile, snapshot = _snapshot_packaged(tmp_path)
-    document = copy.deepcopy(dict(profile.document))
+    document = json.loads(profile.canonical_bytes)
     inventory = document["inventory"]
     assert isinstance(inventory, dict)
     inventory["/components/kestrel/duplicate_flagging/flag_name"]["value"] = "Forged_Package_Default"
@@ -292,6 +305,8 @@ def test_schema_three_rejects_malformed_caller_step_containers(
     profile, _snapshot = _snapshot_packaged(tmp_path)
     summary = _schema_three_summary(profile)
     summary["steps"] = steps
+    if isinstance(steps, list) and any(isinstance(step, dict) and step.get("step") == STEP_ADVNTR for step in steps):
+        _record_advntr_evidence_digest(summary, profile)
 
     with pytest.raises(ValueError, match=message):
         resolve_summary_profile(summary, tmp_path)
@@ -319,9 +334,54 @@ def test_schema_three_positive_advntr_row_requires_governed_evidence_disposition
     if disposition is not None:
         row["Evidence_Disposition"] = disposition
     summary = _schema_three_summary(profile)
+    _record_advntr_evidence_digest(summary, profile)
     summary["steps"] = [{"step": STEP_ADVNTR, "parsed_result": {"data": [row]}}]
 
     with pytest.raises(ValueError, match="Evidence_Disposition"):
+        resolve_summary_profile(summary, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("state", "disposition"),
+    [
+        ("I10_2_A_LEN1", "admissible"),
+        ("NOT_GOVERNED", "identity-insufficient"),
+    ],
+)
+def test_schema_three_binds_advntr_disposition_to_the_governed_variant_state(
+    tmp_path: Path,
+    state: str,
+    disposition: str,
+) -> None:
+    profile, _snapshot = _snapshot_packaged(tmp_path)
+    summary = _schema_three_summary(profile)
+    _record_advntr_evidence_digest(summary, profile)
+    summary["steps"] = [
+        {
+            "step": STEP_ADVNTR,
+            "parsed_result": {
+                "data": [
+                    {
+                        "VID": "25561",
+                        "Variant": state,
+                        "Evidence_Disposition": disposition,
+                        **GOOD_IDENTITY_ROW,
+                    }
+                ]
+            },
+        }
+    ]
+
+    with pytest.raises(ValueError, match="governed Variant state"):
+        resolve_summary_profile(summary, tmp_path)
+
+
+def test_schema_three_advntr_step_requires_a_non_null_evidence_digest(tmp_path: Path) -> None:
+    profile, _snapshot = _snapshot_packaged(tmp_path)
+    summary = _schema_three_summary(profile)
+    summary["steps"] = [{"step": STEP_ADVNTR, "parsed_result": {"data": []}}]
+
+    with pytest.raises(ValueError, match="non-null evidence digest"):
         resolve_summary_profile(summary, tmp_path)
 
 
@@ -371,6 +431,7 @@ def test_schema_three_rejects_invalid_positive_identity_rows(tmp_path: Path, mut
 def test_schema_three_accepts_unchanged_negative_caller_rows(tmp_path: Path) -> None:
     profile, _snapshot = _snapshot_packaged(tmp_path)
     summary = _schema_three_summary(profile)
+    _record_advntr_evidence_digest(summary, profile)
     summary["steps"] = [
         {
             "step": STEP_KESTREL,
@@ -384,7 +445,7 @@ def test_schema_three_accepts_unchanged_negative_caller_rows(tmp_path: Path) -> 
 
 def test_explicit_profile_summary_records_source_not_operator_path(tmp_path: Path) -> None:
     packaged = load_packaged_decision_profile()
-    document = copy.deepcopy(dict(packaged.document))
+    document = json.loads(packaged.canonical_bytes)
     document["profile_id"] = "unit-test-explicit"
     document["profile_revision"] = "test-1"
     document["profile_kind"] = "explicit-custom"

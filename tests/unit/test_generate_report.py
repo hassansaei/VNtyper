@@ -3841,7 +3841,7 @@ def test_report_prints_the_verified_explicit_cli_profile_without_its_operator_pa
     from vntyper.scripts.profile_provenance import snapshot_decision_profile
 
     packaged = load_packaged_decision_profile()
-    document = copy.deepcopy(dict(packaged.document))
+    document = json.loads(packaged.canonical_bytes)
     document["profile_id"] = "report-explicit"
     document["profile_revision"] = "study-9"
     document["profile_kind"] = "explicit-custom"
