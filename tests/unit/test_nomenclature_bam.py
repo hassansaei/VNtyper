@@ -20,7 +20,14 @@ from typing import Literal
 import pysam
 import pytest
 
-from vntyper.scripts.nomenclature import FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT, Nomenclature
+from vntyper.scripts.identity_candidates import translation_component_from_config
+from vntyper.scripts.molecular_identity import IdentityTranslation, make_coding_edit, make_molecular_identity
+from vntyper.scripts.nomenclature import (
+    FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
+    Nomenclature,
+    load_nomenclature_config,
+    pair_sequence,
+)
 from vntyper.scripts.nomenclature_bam import (
     BamConsensus,
     BamRescuer,
@@ -31,6 +38,7 @@ from vntyper.scripts.nomenclature_bam import (
     refine,
     walk_cigar,
 )
+from vntyper.scripts.nomenclature_bam_evidence import BamCandidateBinding, BamIdentityLocus
 
 pytestmark = pytest.mark.unit
 
@@ -365,6 +373,145 @@ def test_equal_xd_sums_do_not_override_the_record_count_winner(tmp_path: Path) -
     assert consensus.supporting_record_minimum_kmer_depths == (5, 5)
 
 
+def _identity_locus(*identities) -> BamIdentityLocus:
+    pair = pair_sequence("K-J")
+    assert pair is not None
+    return BamIdentityLocus(
+        "K-J",
+        pair,
+        tuple(
+            BamCandidateBinding(index, IdentityTranslation(identity, "resolved", None, False))
+            for index, identity in enumerate(identities)
+        ),
+    )
+
+
+def test_identity_adapter_retains_unweighted_winner_runner_up_and_xd(tmp_path: Path) -> None:
+    one_base = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    two_bases = make_molecular_identity((make_coding_edit(31, 30, "", "TT"),))
+    bam = _write_bam(
+        tmp_path / "identity-winner.bam",
+        _haplotypes("winner", 3, "20=1I20=", (5, None, 0))
+        + _haplotypes("runner-up", 2, "20=2I20=", (8_704, 2_147_483_647)),
+    )
+    rescuer = BamRescuer(bam)
+
+    consensus, evidence = rescuer.rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(one_base, two_bases),
+        translation_component_from_config(load_nomenclature_config()),
+    )
+
+    assert consensus is not None
+    assert consensus.inserted == 1
+    assert consensus.supporting_haplotype_records == 3
+    assert consensus.bound_identity == one_base
+    assert evidence is not None
+    assert evidence.counts == {one_base: 3, two_bases: 2}
+    assert evidence.eligible_record_count == 5
+    assert evidence.xd_by_record == (5, None, 0, 8_704, 2_147_483_647)
+
+
+def test_identity_adapter_retains_tie_when_consensus_abstains(tmp_path: Path) -> None:
+    one_base = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    two_bases = make_molecular_identity((make_coding_edit(31, 30, "", "TT"),))
+    bam = _write_bam(
+        tmp_path / "identity-tie.bam",
+        _haplotypes("weak", 2, "20=1I20=", (5, 5)) + _haplotypes("strong", 2, "20=2I20=", (8_704, 8_704)),
+    )
+
+    consensus, evidence = BamRescuer(bam).rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(one_base, two_bases),
+        translation_component_from_config(load_nomenclature_config()),
+    )
+
+    assert consensus is None
+    assert evidence is not None
+    assert evidence.counts == {one_base: 2, two_bases: 2}
+    assert evidence.winning_identity is None
+    assert evidence.record_identity_sets == ((one_base,), (one_base,), (two_bases,), (two_bases,))
+
+
+def test_identity_count_winner_cannot_bind_a_different_exact_edit_consensus(tmp_path: Path) -> None:
+    runner_up_identity = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    bam = _write_bam(
+        tmp_path / "unbound-exact-winner.bam",
+        _haplotypes("exact-winner", 3, "20=2I20=", (5, 5, 5))
+        + _haplotypes("candidate-runner-up", 2, "20=1I20=", (8_704, 8_704)),
+    )
+
+    consensus, evidence = BamRescuer(bam).rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(runner_up_identity),
+        translation_component_from_config(load_nomenclature_config()),
+    )
+
+    assert consensus is not None
+    assert consensus.inserted == 2
+    assert consensus.supporting_haplotype_records == 3
+    assert evidence is not None
+    assert evidence.counts == {runner_up_identity: 2}
+    assert evidence.winning_identity == runner_up_identity
+    assert consensus.bound_identity is None
+
+
+def test_identity_adapter_keeps_one_record_vote_for_each_cooccurring_candidate(tmp_path: Path) -> None:
+    first = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    second = make_molecular_identity((make_coding_edit(30, 29, "", "T"),))
+    bam = _write_bam(tmp_path / "cooccurring.bam", _haplotypes("both", 1, "20=1I1=1I20=", (181,)))
+
+    _, evidence = BamRescuer(bam).rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(first, second),
+        translation_component_from_config(load_nomenclature_config()),
+    )
+
+    assert evidence is not None
+    assert evidence.counts == {first: 1, second: 1}
+    assert evidence.record_identity_sets == ((first, second),)
+
+
+def test_identity_adapter_does_not_fabricate_pair_4092_delins(tmp_path: Path) -> None:
+    separate_deletion = make_molecular_identity((make_coding_edit(30, 30, "C", ""),))
+    separate_insertion = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    fabricated_delins = make_molecular_identity((make_coding_edit(30, 30, "C", "TT"),))
+    bam = _write_bam(tmp_path / "pair-4092-shape.bam", _haplotypes("delins", 2, "20=1X1I20=", (5, 8_704)))
+
+    consensus, evidence = BamRescuer(bam).rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(separate_deletion, separate_insertion),
+        translation_component_from_config(load_nomenclature_config()),
+    )
+
+    assert consensus is not None
+    assert consensus.kind == "delins"
+    assert consensus.bound_identity is None
+    assert evidence is not None
+    assert fabricated_delins not in evidence.counts
+    assert evidence.counts == {}
+    assert evidence.record_identity_sets == ((), ())
+
+
+def test_identity_adapter_distinguishes_missing_bam_from_zero_evidence(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+
+    consensus, evidence = BamRescuer(tmp_path / "missing.bam").rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(identity),
+        translation_component_from_config(load_nomenclature_config()),
+    )
+
+    assert consensus is None
+    assert evidence is None
+
+
 # ---------------------------------------------------------------------------
 # Handle reuse
 # ---------------------------------------------------------------------------
@@ -455,6 +602,7 @@ def test_xd_is_equality_and_hash_neutral_and_cannot_change_thinness() -> None:
         20,
         2,
         supporting_record_minimum_kmer_depths=(2_147_483_647, None),
+        bound_identity=make_molecular_identity((make_coding_edit(31, 30, "", "T"),)),
     )
 
     assert weak == extreme

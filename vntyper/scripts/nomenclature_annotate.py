@@ -27,6 +27,7 @@ from vntyper.scripts.identity_reconciliation import (
     IdentityReconciliationPolicy,
     build_identity_reconciliation_observations,
 )
+from vntyper.scripts.molecular_identity import IdentityTranslation
 from vntyper.scripts.nomenclature import (
     KNOWN_VARIANTS,
     Nomenclature,
@@ -251,6 +252,57 @@ def _row_haplotype_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclatu
     return from_bam(contig, consensus), consensus.supporting_haplotype_records
 
 
+def _row_haplotype_identity_call(
+    row: pd.Series,
+    rescuer: BamRescuer,
+    component: Any,
+) -> tuple[Nomenclature | None, int | None, IdentityTranslation | None]:
+    """Resolve one row and bind its BAM winner to its existing Kestrel identity.
+
+    Args:
+        row: Current-run Kestrel result row carrying the A3 internal metadata.
+        rescuer: The open rescuer for this sample.
+        component: Stage-bound complete-context translation authority.
+
+    Returns:
+        ``(call, support, translation)``. The translation is present only when
+        the exact BAM winner binds to this row's complete selected candidate.
+    """
+    from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
+    from vntyper.scripts.molecular_identity_translation import bind_bam_translation
+    from vntyper.scripts.nomenclature_bam_evidence import BamCandidateBinding, BamIdentityLocus
+
+    row_locus = _row_locus(row)
+    if row_locus is None:
+        return None, None, None
+    contig, position = row_locus
+    persisted = parse_selected_candidate_cells(row)
+    motifs = str(row.get("Motifs", ""))
+    pair = str(row.get("Motif_sequence", ""))
+    if len(pair) != 120 or not set(pair) <= frozenset("ACGT"):
+        consensus = rescuer.rescue(contig, position)
+        if consensus is None:
+            return None, None, None
+        return from_bam(contig, consensus), consensus.supporting_haplotype_records, None
+    identity_locus = BamIdentityLocus(
+        motifs,
+        pair,
+        (BamCandidateBinding(persisted.selected_observation_ordinal, persisted.translation),),
+    )
+    consensus, _ = rescuer.rescue_with_identity_evidence(
+        contig,
+        position,
+        identity_locus,
+        component,
+    )
+    if consensus is None:
+        return None, None, None
+    bound_translation = None
+    if consensus.bound_identity is not None:
+        bound_translation = bind_bam_translation(persisted.translation, consensus.bound_identity)
+    return from_bam(contig, consensus), consensus.supporting_haplotype_records, bound_translation
+
+
 def _row_locus(row: pd.Series) -> tuple[str, int] | None:
     """The locus a row was called at, taken from the row itself.
 
@@ -351,12 +403,22 @@ def reconcile_caller_outputs(
     if not named_vcf and not advntr_calls:
         return False
 
+    identity_config: dict[str, Any] | None = None
+    identity_component: Any = None
+    if _rows_carry_identity_metadata(kestrel_rows):
+        from vntyper.scripts.identity_candidates import translation_component_from_config
+
+        identity_config = load_nomenclature_config()
+        identity_component = translation_component_from_config(identity_config)
+    bam_translations: list[IdentityTranslation | None] | None = [] if identity_component is not None else None
     bam_calls = _haplotype_calls(
         kestrel_rows,
         kestrel_dir or kestrel_path.parent,
         named_vcf,
         advntr_calls,
         supports,
+        bam_translations=bam_translations,
+        identity_component=identity_component,
     )
     named_bam = [call for call in bam_calls if call is not None]
 
@@ -370,6 +432,9 @@ def reconcile_caller_outputs(
         advntr,
         advntr_keep,
         advntr_calls_by_row,
+        bam_translations,
+        identity_config=identity_config,
+        translation_component=identity_component,
     )
     if identity_inputs is None:
         merged = reconcile(*ordered_calls, supports=supports)
@@ -432,6 +497,10 @@ def _production_identity_observations(
     advntr: pd.DataFrame,
     advntr_keep: list[bool],
     advntr_calls_by_row: list[list[Nomenclature]],
+    bam_translations: list[IdentityTranslation | None] | None = None,
+    *,
+    identity_config: dict[str, Any] | None = None,
+    translation_component: Any = None,
 ) -> tuple[tuple[IdentityReconciliationObservation, ...], IdentityReconciliationPolicy] | None:
     """Build current-run identity observations or select the deliberate legacy path."""
     from vntyper.scripts.identity_candidate_persistence import (
@@ -444,8 +513,10 @@ def _production_identity_observations(
     if not identity_columns.intersection(column for row in kestrel_rows for column in row.index):
         return None
     positive_advntr_rows = [row for (_, row), keep in zip(advntr.iterrows(), advntr_keep, strict=True) if keep]
-    config = load_nomenclature_config()
-    component = translation_component_from_config(config)
+    config = identity_config if identity_config is not None else load_nomenclature_config()
+    component = (
+        translation_component if translation_component is not None else translation_component_from_config(config)
+    )
     observations = build_identity_reconciliation_observations(
         kestrel_rows,
         vcf_calls,
@@ -454,6 +525,7 @@ def _production_identity_observations(
         advntr_calls_by_row,
         component,
         frozenset(KNOWN_VARIANTS),
+        bam_translations=bam_translations,
     )
     if observations is None:  # pragma: no cover - identity columns were established above
         raise ValueError("Current-run identity metadata unexpectedly selected the legacy path")
@@ -463,6 +535,14 @@ def _production_identity_observations(
         advntr_min_sequencing_read_support=threshold,
     )
     return observations, policy
+
+
+def _rows_carry_identity_metadata(rows: list[pd.Series]) -> bool:
+    """Whether result rows contain any current-run internal identity metadata."""
+    from vntyper.scripts.identity_candidate_persistence import IDENTITY_CAPTURE_COLUMNS, IDENTITY_SELECTION_COLUMNS
+
+    identity_columns = frozenset((*IDENTITY_CAPTURE_COLUMNS, *IDENTITY_SELECTION_COLUMNS))
+    return bool(identity_columns.intersection(column for row in rows for column in row.index))
 
 
 def _lesser(left: int | None, right: int | None) -> int | None:
@@ -543,6 +623,9 @@ def _haplotype_calls(
     vcf_calls: list[Nomenclature],
     advntr_calls: list[Nomenclature],
     supports: dict[str, int | None],
+    *,
+    bam_translations: list[IdentityTranslation | None] | None = None,
+    identity_component: Any = None,
 ) -> list[Nomenclature | None]:
     """Resolved haplotype records where the callers leave something open.
 
@@ -556,6 +639,9 @@ def _haplotype_calls(
         vcf_calls: The Kestrel VCF calls.
         advntr_calls: The adVNTR calls.
         supports: Per-source quantities, updated in place with haplotype-record support.
+        bam_translations: Optional aligned output for complete-candidate BAM
+            bindings used by current-run identity reconciliation.
+        identity_component: Optional stage-bound complete-context translator.
 
     Returns:
         list[Nomenclature | None]: One entry per Kestrel row, `None` where the
@@ -567,6 +653,10 @@ def _haplotype_calls(
     rescuer = _open_rescuer(kestrel_dir)
     if rescuer is None:
         return []
+    if bam_translations is not None and identity_component is None:
+        from vntyper.scripts.identity_candidates import translation_component_from_config
+
+        identity_component = translation_component_from_config(load_nomenclature_config())
 
     # One entry per Kestrel row, `None` where the haplotype records said nothing.
     # Positions pair each consensus back to its row; compacting the list would
@@ -574,7 +664,12 @@ def _haplotype_calls(
     calls: list[Nomenclature | None] = []
     try:
         for row in kestrel_rows:
-            call, support = _row_haplotype_call(row, rescuer)
+            if bam_translations is None:
+                call, support = _row_haplotype_call(row, rescuer)
+                bound_translation = None
+            else:
+                call, support, bound_translation = _row_haplotype_identity_call(row, rescuer, identity_component)
+                bam_translations.append(bound_translation)
             calls.append(call)
             if call is None:
                 continue

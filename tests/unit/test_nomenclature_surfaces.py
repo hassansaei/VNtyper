@@ -19,6 +19,7 @@ from vntyper.scripts import nomenclature, nomenclature_annotate
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
 from vntyper.scripts.molecular_identity import (
+    IdentityTranslation,
     MolecularIdentity,
     make_coding_edit,
     make_molecular_identity,
@@ -308,8 +309,9 @@ def test_production_identity_policy_is_resolved_from_checked_in_config_at_the_st
     config = nomenclature.load_nomenclature_config()
     config["thresholds"] = {**config["thresholds"], "min_support_for_high_confidence": 41}
 
-    with mock.patch.object(nomenclature_annotate, "load_nomenclature_config", return_value=config):
+    with mock.patch.object(nomenclature_annotate, "load_nomenclature_config", return_value=config) as loaded:
         assert reconcile_caller_outputs(kestrel, advntr) is True
+    loaded.assert_called_once_with()
 
     written = pd.read_csv(kestrel, sep="\t", dtype=str)
     assert written.loc[0, "Nomenclature_Tier"] == "B"
@@ -707,6 +709,58 @@ def test_candidate_rows_share_one_rescuer_and_keep_fetch_order(tmp_path: Path) -
     assert fetched_loci == [("X-X", 61), ("X-X", 67)]
     assert len(calls) == 2
     assert supports["kestrel_bam"] == 4, "the production mapping must carry the record count, not XD"
+
+
+def test_production_haplotype_path_returns_candidate_bound_identity_without_incrementing_metadata(
+    tmp_path: Path,
+) -> None:
+    identity = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    pair = nomenclature.pair_sequence("X-X")
+    assert pair is not None
+    raw_key = '{"source":"kestrel","values":["X-X",62,"G","GC"]}'
+    row = pd.Series(
+        {
+            "Motifs": "X-X",
+            "POS": "62",
+            "REF": "G",
+            "ALT": "GC",
+            "Motif_sequence": pair,
+            "Motif_fasta": "X-X",
+            "POS_fasta": "61",
+            "__Identity_Raw_Representation_Key": raw_key,
+            "__Identity_Molecular_Identity": serialize_molecular_identity(identity),
+            "__Identity_Translation_Status": "resolved",
+            "__Identity_Translation_Failure": "absent",
+            "__Identity_Context_Diverges": "false",
+            "__Identity_Observation_Ordinal": "0",
+            "__Identity_Selected_Raw_Representation_Key": raw_key,
+            "__Identity_Equivalent_Representation_Count": "1",
+            "__Identity_Hypothesis_Count": "1",
+            "__Identity_Group_Blocking_Gates": "[]",
+            "__Identity_Group_Flags": "[]",
+            "__Identity_Selected_Observation_Ordinal": "0",
+            "__Identity_Group_Context_Diverges": "false",
+        }
+    )
+    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", minimum_kmer_depths=(5, 181, 7_416))
+    bindings: list[IdentityTranslation | None] = []
+    supports: dict[str, int | None] = {"kestrel_vcf": 40, "advntr": 40}
+    disagreeing_advntr = Nomenclature("59delC", "deletion", "X", "B", (), None, None, -1, "advntr")
+
+    calls = nomenclature_annotate._haplotype_calls(
+        [row],
+        tmp_path,
+        [from_kestrel("X-X", 62, "G", "GC")],
+        [disagreeing_advntr],
+        supports,
+        bam_translations=bindings,
+    )
+
+    assert len(calls) == 1
+    assert calls[0] is not None
+    assert [binding.identity if binding is not None else None for binding in bindings] == [identity]
+    assert row["__Identity_Equivalent_Representation_Count"] == "1"
+    assert row["__Identity_Hypothesis_Count"] == "1"
 
 
 def test_a_missing_allele_cell_does_not_become_a_name(tmp_path) -> None:

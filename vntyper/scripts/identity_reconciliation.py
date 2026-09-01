@@ -319,18 +319,23 @@ def build_identity_reconciliation_observations(
     advntr_calls_by_row: Sequence[Sequence[ReconciliationPresentationCall]],
     translation_component: IdentityTranslator,
     known_variant_names: frozenset[str],
+    *,
+    bam_translations: Sequence[IdentityTranslation | None] | None = None,
 ) -> tuple[IdentityReconciliationObservation, ...] | None:
     """Adapt current caller rows to typed identity observations without I/O.
 
     Args:
         kestrel_rows: Positive Kestrel rows retaining A3 internal metadata.
         vcf_calls: Legacy Kestrel VCF display calls aligned with those rows.
-        bam_calls: Optional legacy BAM refinement calls, not identity-bound until A5.
+        bam_calls: Optional legacy BAM refinement calls aligned to Kestrel rows.
         advntr_rows: Complete positive adVNTR rows with State/RU/POS context.
         advntr_calls_by_row: Legacy adVNTR display calls aligned with those rows.
         translation_component: Explicit checked-in translation authority resolved at
             the stage boundary.
         known_variant_names: Configured known display names used only for tier gating.
+        bam_translations: Optional complete-candidate bindings for BAM calls. A
+            binding remains Kestrel-internal evidence and does not create another
+            caller or representation.
 
     Returns:
         Typed observations, or ``None`` for a deliberate pre-A3 legacy artifact.
@@ -354,6 +359,8 @@ def build_identity_reconciliation_observations(
         raise ValueError("Kestrel identity metadata is incomplete or misaligned")
     if len(advntr_rows) != len(advntr_calls_by_row):
         raise ValueError("adVNTR identity context is misaligned with its display calls")
+    if bam_translations is not None and len(bam_translations) != len(bam_calls):
+        raise ValueError("BAM identity bindings are misaligned with BAM display calls")
 
     observations: list[IdentityReconciliationObservation] = []
     presentation_call_index = 0
@@ -392,17 +399,20 @@ def build_identity_reconciliation_observations(
         )
         presentation_call_index += 1
 
-    for call in bam_calls:
+    aligned_bam_translations = bam_translations or tuple(None for _ in bam_calls)
+    for call, bound_translation in zip(bam_calls, aligned_bam_translations, strict=True):
         if call is not None:
             observations.append(
                 _make_observation(
                     call,
-                    IdentityTranslation(None, "unresolved", "missing-motif-context", False),
+                    bound_translation or IdentityTranslation(None, "unresolved", "missing-motif-context", False),
                     known_variant_names,
                     presentation_call_index=presentation_call_index,
                 )
             )
             presentation_call_index += 1
+        elif bound_translation is not None:
+            raise ValueError("BAM identity binding requires an aligned BAM display call")
 
     capture_rows: list[dict[str, object]] = []
     for row, calls in zip(advntr_rows, advntr_calls_by_row, strict=True):

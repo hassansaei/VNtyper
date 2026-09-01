@@ -145,7 +145,7 @@ def test_reconciliation_prose_does_not_turn_haplotype_support_into_reads() -> No
 
 def test_bam_tie_log_names_haplotype_records() -> None:
     """Restoring read-count wording in the abstention log must fail this source contract."""
-    source = inspect.getsource(nomenclature_bam.BamRescuer.rescue)
+    source = inspect.getsource(nomenclature_bam.BamRescuer._compatibility_consensus)
 
     assert re.search(r"alleles tied on %d haplotype records", source)
     assert not re.search(r"alleles tied on %d reads", source)

@@ -310,6 +310,42 @@ def test_kestrel_vcf_and_bam_are_one_caller_not_independent_corroboration() -> N
     assert result.backing_callers == ("kestrel",)
 
 
+def test_bound_bam_translation_stays_kestrel_internal_without_changing_candidate_counts() -> None:
+    row = _persisted_kestrel_row()
+    before = (
+        row["__Identity_Equivalent_Representation_Count"],
+        row["__Identity_Hypothesis_Count"],
+    )
+    vcf_call = _presentation_call("59dupC", "kestrel_vcf")
+    bam_call = _presentation_call("59dupC", "kestrel_bam")
+
+    observations = build_identity_reconciliation_observations(
+        [row],
+        [vcf_call],
+        [bam_call],
+        [],
+        [],
+        TRANSLATION_COMPONENT,
+        frozenset(KNOWN_VARIANTS),
+        bam_translations=[IdentityTranslation(DUPC, "resolved", None, False)],
+    )
+
+    assert observations is not None
+    assert [observation.identity for observation in observations] == [DUPC, DUPC]
+    decision = reconcile_identity_observations(observations, POLICY)
+    assert decision.backing_callers == ("kestrel",)
+    assert decision.molecular_agreement is False
+    assert decision.tier != "A"
+    assert (
+        (
+            row["__Identity_Equivalent_Representation_Count"],
+            row["__Identity_Hypothesis_Count"],
+        )
+        == before
+        == ("1", "1")
+    )
+
+
 @pytest.mark.parametrize(
     ("kmer_depth", "advntr_reads"),
     [(None, 40), (40, None), (4, 40), (40, 4)],

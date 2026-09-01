@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pysam
 
+from vntyper.scripts.molecular_identity import MolecularIdentity
 from vntyper.scripts.nomenclature import (
     FLAG_ALLELE_UNREPRESENTABLE,
     FLAG_CALLER_DISAGREEMENT,
@@ -37,6 +38,14 @@ from vntyper.scripts.nomenclature import (
     nomenclature_config,
     pair_sequence,
     revcomp,
+)
+from vntyper.scripts.nomenclature_bam_evidence import (
+    BamEditObservation,
+    BamIdentityLocus,
+    BamIdentityTranslator,
+    BamLocusEvidence,
+    BamRecordObservation,
+    collect_locus_evidence,
 )
 from vntyper.scripts.nomenclature_evidence import resolve_bam_thin_haplotype_record_support
 
@@ -124,6 +133,9 @@ class BamConsensus:
         bases: Inserted bases on the genomic plus strand.
         supporting_record_minimum_kmer_depths: Optional XD minimum k-mer depth for
             each supporting haplotype record, in encounter order. Observational only.
+        bound_identity: Existing complete Kestrel candidate identity proven for
+            this exact-edit winner, or ``None``. Binding is equality-neutral and
+            creates no representation or caller.
     """
 
     kind: str
@@ -135,6 +147,7 @@ class BamConsensus:
     distinct_edit_count: int
     bases: str = ""
     supporting_record_minimum_kmer_depths: tuple[int | None, ...] = field(kw_only=True, compare=False)
+    bound_identity: MolecularIdentity | None = field(default=None, kw_only=True, compare=False)
 
     @property
     def support(self) -> int:
@@ -155,6 +168,14 @@ class BamConsensus:
     def is_thin(self) -> bool:
         """Whether the consensus rests on too few haplotype records to stand alone."""
         return self.supporting_haplotype_records < THIN_HAPLOTYPE_RECORD_SUPPORT
+
+
+@dataclass(frozen=True)
+class _LocusRecord:
+    """One fetched record's merged edits and observational XD."""
+
+    edits: tuple[Edit, ...]
+    minimum_kmer_depth: int | None
 
 
 def minimum_kmer_depth(record: pysam.AlignedSegment) -> int | None:
@@ -503,33 +524,112 @@ class BamRescuer:
             BamConsensus | None: The winning edit with its evidence, or ``None`` when
             the locus is unreadable or carries no length-changing edit.
         """
+        fetched = self._fetch_locus(contig, position)
+        if fetched is None:
+            return None
+        records, start, end = fetched
+        return self._compatibility_consensus(records, start, end, contig, position)
+
+    def rescue_with_identity_evidence(
+        self,
+        contig: str,
+        position: int,
+        locus: BamIdentityLocus,
+        component: BamIdentityTranslator,
+    ) -> tuple[BamConsensus | None, BamLocusEvidence | None]:
+        """Return the unchanged rescue verdict beside replayable identity evidence.
+
+        This adapter fetches and parses each eligible record once. Its first result
+        is produced by the established exact-edit record vote; its second binds the
+        same records only to existing complete Kestrel candidate representations.
+        A legacy tie can therefore return ``None`` while retaining every tied record
+        for later replay.
+
+        Args:
+            contig: Pair reference name from ``output.bed``.
+            position: One-based locus position.
+            locus: Complete pair context and existing Kestrel candidates.
+            component: Injected complete-context identity translator.
+
+        Returns:
+            ``(consensus, evidence)``. Missing or unreadable BAM evidence returns
+            ``(None, None)`` rather than a fabricated zero-record locus.
+        """
+        fetched = self._fetch_locus(contig, position)
+        if fetched is None:
+            return None, None
+        records, start, end = fetched
+        consensus = self._compatibility_consensus(records, start, end, contig, position)
+        observations = tuple(self._identity_record(record, start, end) for record in records)
+        evidence = collect_locus_evidence(observations, locus, component)
+        if consensus is not None:
+            winning_observation = BamRecordObservation(
+                (BamEditObservation(consensus.start, consensus.ref_span, consensus.inserted, consensus.bases),),
+                None,
+            )
+            winning_evidence = collect_locus_evidence((winning_observation,), locus, component)
+            identities = winning_evidence.record_identity_sets[0]
+            if len(identities) == 1:
+                consensus = replace(consensus, bound_identity=identities[0])
+        return consensus, evidence
+
+    def _fetch_locus(self, contig: str, position: int) -> tuple[tuple[_LocusRecord, ...], int, int] | None:
+        """Fetch and parse one locus through the unchanged handle and window policy."""
         handle = self._open()
         if handle is None:
             return None
 
         start = max(0, position - 1 - self._flank)
         end = position + self._flank
-
         try:
-            records = list(handle.fetch(contig, start, end))
+            fetched = list(handle.fetch(contig, start, end))
         except (KeyError, ValueError) as error:
             logger.debug("BAM rescue skipped; %s:%s unavailable: %s", contig, position, error)
             return None
         self.fetches += 1
 
+        records: list[_LocusRecord] = []
+        for record in fetched:
+            if record.cigartuples is None:
+                records.append(_LocusRecord((), None))
+                continue
+            edits = tuple(merge_edits(walk_cigar(record.reference_start, record.cigartuples, record.query_sequence)))
+            records.append(_LocusRecord(edits, minimum_kmer_depth(record)))
+        return tuple(records), start, end
+
+    @staticmethod
+    def _identity_record(record: _LocusRecord, start: int, end: int) -> BamRecordObservation:
+        """Project one parsed record into the pure identity-evidence boundary."""
+        observations: list[BamEditObservation] = []
+        for edit in record.edits:
+            if not start <= edit.start <= end:
+                continue
+            try:
+                observations.append(BamEditObservation(edit.start, edit.ref_span, edit.inserted, edit.bases))
+            except ValueError:
+                # An absent/incomplete query sequence cannot establish complete
+                # molecular identity, but the eligible record remains in the
+                # denominator with its XD observation.
+                return BamRecordObservation((), record.minimum_kmer_depth)
+        return BamRecordObservation(tuple(observations), record.minimum_kmer_depth)
+
+    @staticmethod
+    def _compatibility_consensus(
+        records: tuple[_LocusRecord, ...],
+        start: int,
+        end: int,
+        contig: str,
+        position: int,
+    ) -> BamConsensus | None:
+        """Apply the established unweighted exact-edit vote to parsed records."""
         votes: Counter[tuple[str, int, int, int, str]] = Counter()
         minimum_kmer_depths: dict[tuple[str, int, int, int, str], list[int | None]] = {}
-        fetched_haplotype_records = 0
         for record in records:
-            fetched_haplotype_records += 1
-            if record.cigartuples is None:
-                continue
-            depth = minimum_kmer_depth(record)
-            for edit in merge_edits(walk_cigar(record.reference_start, record.cigartuples, record.query_sequence)):
+            for edit in record.edits:
                 if edit.changes_length and start <= edit.start <= end:
                     edit_key = (edit.kind, edit.start, edit.ref_span, edit.inserted, edit.bases)
                     votes[edit_key] += 1
-                    minimum_kmer_depths.setdefault(edit_key, []).append(depth)
+                    minimum_kmer_depths.setdefault(edit_key, []).append(record.minimum_kmer_depth)
 
         if not votes:
             return None
@@ -558,7 +658,7 @@ class BamRescuer:
             inserted=inserted,
             bases=bases,
             supporting_haplotype_records=supporting_haplotype_records,
-            fetched_haplotype_records=fetched_haplotype_records,
+            fetched_haplotype_records=len(records),
             distinct_edit_count=len(votes),
             supporting_record_minimum_kmer_depths=tuple(minimum_kmer_depths[winning_edit]),
         )
