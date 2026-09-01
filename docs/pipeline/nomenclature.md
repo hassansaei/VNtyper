@@ -92,6 +92,20 @@ isolation. Only a second, independent source separates them.
 and Kestrel's resolved haplotype alignment are two artifacts from one caller, so their
 agreement is one opinion rather than two, and it does not promote anything.
 
+An adVNTR observation is also not independent molecular evidence merely because it is a
+reported finding. For each positive adVNTR row, `Evidence_Disposition` records whether
+the observation may participate in molecular agreement. The governed assertion is:
+
+> A carried-forward recurrent adVNTR State is insufficient for molecular identity.
+
+An exact match to any of the 24 active governed recurrent States is therefore
+`identity-insufficient`. Its row, `Positive (Flagged)` detection, support, flag,
+caller-local name, and identity quartet remain visible. Only its use as molecular
+corroboration is blocked: it cannot promote tier A or outvote another identity. This is
+not a claim that the finding is benign, non-pathogenic, a false positive, or absent from
+affected samples, and it assigns no frequency. A nonmatching positive adVNTR row is
+`admissible`; negative output keeps its narrower historical schema.
+
 Tier C is the point of the whole design. Where a caller's allele is genuinely
 indistinguishable from another, printing a name would be a confident falsehood, and
 `allele undetermined` is the honest answer.
@@ -207,6 +221,12 @@ in a cohort table that merges the two.
 
 adVNTR is an optional module. When it has not run, `Nomenclature_adVNTR` is empty and
 the Kestrel result stands exactly as its own stage wrote it.
+
+For reproducibility, an adVNTR-enabled run snapshots the canonical governed evidence and
+records its full SHA-256 digest. Sample reports and cohorts verify and display only that
+run-recorded snapshot. A legacy summary is labeled
+`artifact-evidence revision not recorded`; it is never relabeled with the current
+package's digest.
 
 ## A known limitation
 
