@@ -63,6 +63,14 @@ def test_historic_insertion_length_only_parses_a_terminal_len_token() -> None:
     assert differential.historic_insertion_len(states).tolist() == [3, 0, 0]
 
 
+def test_frame_series_comes_from_the_resolved_packaged_decision_profile() -> None:
+    ins_frame, del_frame = differential.accepted_frames()
+
+    assert len(ins_frame) == len(del_frame) == 100
+    assert {"1", "4", "298"} <= ins_frame
+    assert {"2", "5", "299"} <= del_frame
+
+
 def test_signed_survival_keeps_insertion_deletion_and_zero_nets_disjoint() -> None:
     insertion_length = pd.Series([4, 0, 1])
     deletion_length = pd.Series([0, 2, 1])

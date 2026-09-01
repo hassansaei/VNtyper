@@ -98,6 +98,8 @@ from typing import Any
 import pandas as pd
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
+from vntyper.modules.advntr.advntr_decision_config import project_advntr_settings
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 #: A well-formed ``LEN<n>`` token, as the production parser defines one.
 LEN_TOKEN = re.compile(r"LEN(\d+)")
@@ -246,10 +248,10 @@ def accepted_frames() -> tuple[set[str], set[str]]:
     Returns:
         tuple[set[str], set[str]]: ``(ins_frame, del_frame)`` as sets of strings.
     """
-    max_frameshift = advntr.advntr_settings.get("max_frameshift", 100)
-    multiplier = advntr.advntr_settings.get("frameshift_multiplier", 3)
-    ins_frame = {str(step * multiplier + 1) for step in range(max_frameshift)}
-    del_frame = {str(step * multiplier + 2) for step in range(max_frameshift)}
+    run_configuration = resolve_run_configuration()
+    settings = project_advntr_settings(run_configuration.advntr, run_configuration.advntr_runtime)
+    ins_frame = {str(step * settings.frameshift_multiplier + 1) for step in range(settings.max_frameshift)}
+    del_frame = {str(step * settings.frameshift_multiplier + 2) for step in range(settings.max_frameshift)}
     return ins_frame, del_frame
 
 
