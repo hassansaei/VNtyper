@@ -52,6 +52,23 @@ def test_supported_operators(configured: object, row: dict[str, object], expecte
     assert evaluate_rule(compiled, row, context="test.rule") is expected
 
 
+def test_frozen_tuple_arrays_compile_like_json_lists() -> None:
+    """Resolved decision profiles freeze arrays before stage consumers receive them."""
+    configured = {
+        "all": (
+            {
+                "left": {"column": "Value"},
+                "operator": "in",
+                "right": {"literal": ("a", "b")},
+            },
+        )
+    }
+
+    compiled = validate_rule(configured, allowed_columns=["Value"], context="test.rule")
+
+    assert evaluate_rule(compiled, {"Value": "b"}, context="test.rule") is True
+
+
 @pytest.mark.parametrize(
     ("configured", "allowed_columns", "expected_path"),
     [

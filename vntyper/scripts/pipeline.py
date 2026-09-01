@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import timeit
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -627,7 +628,6 @@ def run_pipeline(
             try:
                 from vntyper.modules.advntr.advntr_genotyping import (
                     advntr_output_extension,
-                    load_advntr_config,
                     process_advntr_output,
                     run_advntr,
                 )
@@ -635,8 +635,9 @@ def run_pipeline(
                 logger.error(f"adVNTR module import failed: {exc}")
                 sys.exit(1)
 
-            advntr_config = load_advntr_config()
-            advntr_settings = advntr_config.get("advntr_settings", {})
+            advntr_settings = run_configuration.advntr.get("settings")
+            if not isinstance(advntr_settings, Mapping):
+                raise ValueError("resolved adVNTR settings must be a mapping")
             # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
             # this run's parser. Both supported producer names and the derived result
             # were already invalidated immediately after input-ownership validation.
@@ -681,6 +682,9 @@ def run_pipeline(
                     config=advntr_execution_config,
                     cwd=project_root,
                     pipeline_threads=threads,
+                    resolved_component=run_configuration.advntr,
+                    runtime_component=run_configuration.advntr_runtime,
+                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                 )
                 if advntr_status != 0:
                     msg = (
@@ -695,6 +699,8 @@ def run_pipeline(
                     "output",
                     config=config,
                     artifact_evidence=advntr_evidence,
+                    resolved_component=run_configuration.advntr,
+                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                 )
                 # Tier A needs two independent callers agreeing, which no single
                 # caller stage can see. Without this step production could never

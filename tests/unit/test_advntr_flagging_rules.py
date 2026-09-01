@@ -28,8 +28,17 @@ import pytest
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
 from vntyper.scripts.flagging import add_flags
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.unit
+
+
+def component_with_rules(rules: dict[str, object]) -> dict[str, object]:
+    """Return a complete adVNTR component carrying the supplied rules."""
+    component = dict(resolve_run_configuration().advntr)
+    component["flagging_rules"] = rules
+    return component
+
 
 #: The flag names this module is expected to emit. Pinning them catches a typo in a rule
 #: *key* -- the exact defect that shipped as ``Poylmorhic_Call``.
@@ -394,45 +403,34 @@ class TestTheOtherRules:
         assert result.iloc[0]["Flag"] == "Not flagged"
 
 
-class TestFlaggingReadsTheOriginalConfigGlobal:
-    """
-    H1: ``process_advntr_output`` reads ``advntr_config["flagging_rules"]`` -- the *raw*
-    import-time global -- while the frameshift filter reads the derived ``advntr_settings``.
-    A test that patches the wrong one is a silent no-op.
-    """
+class TestFlaggingReadsTheResolvedComponent:
+    """Flag rules are supplied explicitly with the run's decision component."""
 
-    def test_patching_the_raw_config_global_changes_the_flags(self, tmp_path, monkeypatch, ru_config):
-        monkeypatch.setattr(
-            advntr,
-            "advntr_config",
+    def test_explicit_rules_change_the_flags(self, tmp_path, ru_config):
+        component = component_with_rules(
             {
-                "flagging_rules": {
-                    "Custom_Flag": {
-                        "all": [
-                            {
-                                "left": {"literal": 1},
-                                "operator": "lt",
-                                "right": {"column": "NumberOfSupportingReads"},
-                            }
-                        ]
-                    }
+                "Custom_Flag": {
+                    "all": [
+                        {
+                            "left": {"literal": 1},
+                            "operator": "lt",
+                            "right": {"column": "NumberOfSupportingReads"},
+                        }
+                    ]
                 }
-            },
+            }
         )
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t42\t153.98\t0.0001\n")
 
-        advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
+        advntr.process_advntr_output(
+            str(source), str(tmp_path), "output", config=ru_config, resolved_component=component
+        )
 
         result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
         assert result.iloc[0]["Flag"] == "Custom_Flag"
 
-    def test_patching_the_derived_settings_global_does_not_change_the_flags(self, tmp_path, monkeypatch, ru_config):
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {"flagging_rules": {"Custom_Flag": {"all": [{"invalid": True}]}}},
-        )
+    def test_runtime_settings_do_not_supply_flagging_rules(self, tmp_path, ru_config):
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t42\t153.98\t0.0001\n")
 
@@ -441,92 +439,88 @@ class TestFlaggingReadsTheOriginalConfigGlobal:
         result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
         assert result.iloc[0]["Flag"] == "Not flagged"
 
-    def test_an_empty_rule_set_leaves_the_flag_column_as_not_applicable(self, tmp_path, monkeypatch, ru_config):
-        monkeypatch.setattr(advntr, "advntr_config", {"flagging_rules": {}})
+    def test_an_empty_rule_set_leaves_the_flag_column_as_not_applicable(self, tmp_path, ru_config):
+        component = component_with_rules({})
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t42\t153.98\t0.0001\n")
 
-        advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
+        advntr.process_advntr_output(
+            str(source), str(tmp_path), "output", config=ru_config, resolved_component=component
+        )
 
         result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
         assert result.iloc[0]["Flag"] == "Not applicable"
 
-    def test_malformed_rules_abort_an_empty_vcf_before_negative_publication(self, tmp_path, monkeypatch, ru_config):
-        monkeypatch.setattr(
-            advntr,
-            "advntr_config",
+    def test_malformed_rules_abort_an_empty_vcf_before_negative_publication(self, tmp_path, ru_config):
+        component = component_with_rules(
             {
-                "flagging_rules": {
-                    "Bad": {
-                        "all": [
-                            {
-                                "left": {"column": "Definitely_Missing"},
-                                "operator": "eq",
-                                "right": {"literal": 1},
-                            }
-                        ]
-                    }
+                "Bad": {
+                    "all": [
+                        {
+                            "left": {"column": "Definitely_Missing"},
+                            "operator": "eq",
+                            "right": {"literal": 1},
+                        }
+                    ]
                 }
-            },
+            }
         )
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER)
 
         with pytest.raises(ValueError, match="Definitely_Missing"):
-            advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
+            advntr.process_advntr_output(
+                str(source), str(tmp_path), "output", config=ru_config, resolved_component=component
+            )
 
         assert not (tmp_path / "output_adVNTR_result.tsv").exists()
 
     @pytest.mark.parametrize("operand", ["REF", "ALT"])
-    def test_reference_base_rules_require_a_resolved_ru_fasta(self, tmp_path, monkeypatch, operand):
-        monkeypatch.setattr(
-            advntr,
-            "advntr_config",
+    def test_reference_base_rules_require_a_resolved_ru_fasta(self, tmp_path, operand):
+        component = component_with_rules(
             {
-                "flagging_rules": {
-                    "Reference_Base": {
-                        "all": [
-                            {
-                                "left": {"column": operand},
-                                "operator": "eq",
-                                "right": {"column": operand},
-                            }
-                        ]
-                    }
+                "Reference_Base": {
+                    "all": [
+                        {
+                            "left": {"column": operand},
+                            "operator": "eq",
+                            "right": {"column": operand},
+                        }
+                    ]
                 }
-            },
+            }
         )
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER)
 
         with pytest.raises(ValueError, match=operand):
-            advntr.process_advntr_output(str(source), str(tmp_path), "output", config=None)
+            advntr.process_advntr_output(
+                str(source), str(tmp_path), "output", config=None, resolved_component=component
+            )
 
         assert not (tmp_path / "output_adVNTR_result.tsv").exists()
 
     @pytest.mark.parametrize("operand", ["REF", "ALT"])
-    def test_reference_base_rules_run_when_the_ru_fasta_resolves(self, tmp_path, monkeypatch, ru_config, operand):
-        monkeypatch.setattr(
-            advntr,
-            "advntr_config",
+    def test_reference_base_rules_run_when_the_ru_fasta_resolves(self, tmp_path, ru_config, operand):
+        component = component_with_rules(
             {
-                "flagging_rules": {
-                    "Reference_Base": {
-                        "all": [
-                            {
-                                "left": {"column": operand},
-                                "operator": "eq",
-                                "right": {"column": operand},
-                            }
-                        ]
-                    }
+                "Reference_Base": {
+                    "all": [
+                        {
+                            "left": {"column": operand},
+                            "operator": "eq",
+                            "right": {"column": operand},
+                        }
+                    ]
                 }
-            },
+            }
         )
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER + "25561\tI22_2_G_LEN1\t42\t153.98\t0.0001\n")
 
-        advntr.process_advntr_output(str(source), str(tmp_path), "output", config=ru_config)
+        advntr.process_advntr_output(
+            str(source), str(tmp_path), "output", config=ru_config, resolved_component=component
+        )
 
         result = pd.read_csv(tmp_path / "output_adVNTR_result.tsv", sep="\t", dtype=str)
         assert result.iloc[0]["Flag"] == "Reference_Base"

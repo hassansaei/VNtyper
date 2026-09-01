@@ -304,6 +304,17 @@ def test_advntr_run_snapshots_and_threads_one_verified_evidence_value(tmp_path: 
     reconciliation_evidence = harness.kwargs("reconcile_caller_outputs")["artifact_evidence"]
     assert parsing_evidence is reconciliation_evidence
     assert parsing_evidence.digest == evidence.digest
+    from vntyper.scripts.run_configuration import resolve_run_configuration
+
+    run_configuration = resolve_run_configuration()
+    command_call = harness.kwargs("run_advntr")
+    parsing_call = harness.kwargs("process_advntr_output")
+    assert command_call["resolved_component"] == run_configuration.advntr
+    assert command_call["runtime_component"] == run_configuration.advntr_runtime
+    assert command_call["custom_context_active"] is False
+    assert parsing_call["resolved_component"] == run_configuration.advntr
+    assert parsing_call["custom_context_active"] is False
+    harness.stages["load_advntr_config"].assert_not_called()
 
 
 def test_pipeline_snapshots_the_supplied_explicit_context_without_reloading_package(tmp_path: Path) -> None:
@@ -381,7 +392,7 @@ BAM_RUN_ARTEFACTS: set[str] = {
     "kestrel/kestrel_result.tsv",
     "advntr",
     "advntr/advntr_model.db",
-    "advntr/output_adVNTR.tsv",
+    "advntr/output_adVNTR.vcf",
     "advntr/output_adVNTR_result.tsv",
     "advntr/cross_match_results.tsv",
 }

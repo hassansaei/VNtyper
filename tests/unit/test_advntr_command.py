@@ -19,10 +19,24 @@ from pathlib import Path
 import pytest
 
 from vntyper.modules.advntr import advntr_genotyping as advntr
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.unit
 
 MAIN_CONFIG = {"tools": {"advntr": "mamba run -n envadvntr advntr"}}
+
+
+def decision_component(settings: dict[str, object] | None = None) -> dict[str, object]:
+    """Return a complete adVNTR component with optional decision settings."""
+    component = dict(resolve_run_configuration().advntr)
+    if settings is not None:
+        component["settings"] = settings
+    return component
+
+
+def runtime_component(**settings: object) -> dict[str, object]:
+    """Return excluded command settings for one direct call."""
+    return {"settings": {"additional_commands": "", "threads": None} | settings}
 
 
 @pytest.fixture
@@ -156,17 +170,23 @@ class TestShellInterpolationIsQuoted:
     def test_the_tool_prefix_and_the_flag_list_stay_separate_words(self, inputs, captured_command, monkeypatch):
         """Quoting either would give bash one token where it needs several."""
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(advntr, "advntr_settings", {**advntr.advntr_settings, "additional_commands": "-aln"})
 
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+        advntr.run_advntr(
+            str(db_file),
+            str(sorted_bam),
+            str(output),
+            "output",
+            MAIN_CONFIG,
+            runtime_component=runtime_component(additional_commands="-aln"),
+        )
 
         command = captured_command[0]["command"]
         assert command.startswith("mamba run -n envadvntr advntr genotype ")
         assert command.endswith(" -aln")
 
 
-class TestSettingsComeFromTheDerivedGlobal:
-    """H1 again: ``run_advntr`` reads ``advntr_settings``, never its own ``config`` argument."""
+class TestSettingsComeFromTheResolvedComponents:
+    """Command decisions and excluded runtime settings have explicit owners."""
 
     @pytest.mark.parametrize(
         ("output_format", "expected_extension"),
@@ -176,36 +196,44 @@ class TestSettingsComeFromTheDerivedGlobal:
         self, inputs, captured_command, monkeypatch, output_format, expected_extension
     ):
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(advntr, "advntr_settings", {"output_format": output_format, "threads": 1})
-
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+        component = decision_component(
+            {"frameshift_multiplier": 3, "max_frameshift": 100, "output_format": output_format, "vid": 25561}
+        )
+        advntr.run_advntr(
+            str(db_file),
+            str(sorted_bam),
+            str(output),
+            "output",
+            MAIN_CONFIG,
+            resolved_component=component,
+            runtime_component=runtime_component(threads=1),
+        )
 
         assert f"-o {output}/output_adVNTR{expected_extension}" in captured_command[0]["command"]
 
-    def test_threads_vid_and_extra_arguments_come_from_the_settings_global(self, inputs, captured_command, monkeypatch):
+    def test_threads_vid_and_extra_arguments_come_from_resolved_components(self, inputs, captured_command):
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {"threads": 12, "vid": 999, "additional_commands": "--haploid", "output_format": "tsv"},
+        component = decision_component(
+            {"frameshift_multiplier": 3, "max_frameshift": 100, "output_format": "tsv", "vid": 999}
         )
+        runtime = runtime_component(threads=12, additional_commands="--haploid")
 
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+        advntr.run_advntr(
+            str(db_file),
+            str(sorted_bam),
+            str(output),
+            "output",
+            MAIN_CONFIG,
+            resolved_component=component,
+            runtime_component=runtime,
+        )
 
         command = captured_command[0]["command"]
         assert "-vid 999" in command
         assert "-t 12" in command
         assert command.endswith("--haploid")
 
-    def test_patching_the_raw_config_global_does_not_change_the_command(self, inputs, captured_command, monkeypatch):
-        db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(advntr, "advntr_config", {"advntr_settings": {"vid": 999, "threads": 12}})
-
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
-
-        assert "-vid 25561" in captured_command[0]["command"]
-
-    def test_an_empty_settings_global_raises_rather_than_applying_defaults(self, inputs, captured_command, monkeypatch):
+    def test_an_empty_decision_mapping_raises_rather_than_applying_defaults(self, inputs, captured_command):
         """#247: was ``test_the_defaults_apply_when_the_settings_global_is_empty``.
 
         Those defaults contradicted the shipped configuration -- ``threads`` defaulted to 8
@@ -215,23 +243,33 @@ class TestSettingsComeFromTheDerivedGlobal:
         confidence_assignment.py:108-111, and a partial configuration fails loudly.
         """
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(advntr, "advntr_settings", {})
-
-        with pytest.raises(KeyError, match="threads"):
-            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+        with pytest.raises(KeyError, match="max_frameshift"):
+            advntr.run_advntr(
+                str(db_file),
+                str(sorted_bam),
+                str(output),
+                "output",
+                MAIN_CONFIG,
+                resolved_component=decision_component({}),
+            )
 
         assert captured_command == [], "no command may be emitted with an unconfigured thread count"
 
-    def test_a_missing_output_format_raises_rather_than_flipping_the_extension(
-        self, inputs, captured_command, monkeypatch
-    ):
+    def test_a_missing_output_format_raises_rather_than_flipping_the_extension(self, inputs, captured_command):
         """The second mismatch, which #247 does not name: the fallback was "tsv" while
         advntr_config.json ships "vcf"."""
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(advntr, "advntr_settings", {"threads": 1})
-
         with pytest.raises(KeyError, match="output_format"):
-            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+            advntr.run_advntr(
+                str(db_file),
+                str(sorted_bam),
+                str(output),
+                "output",
+                MAIN_CONFIG,
+                resolved_component=decision_component(
+                    {"frameshift_multiplier": 3, "max_frameshift": 100, "vid": 25561}
+                ),
+            )
 
         assert captured_command == []
 
@@ -269,14 +307,7 @@ class TestOutputExtensionIsDerivedInOnePlace:
         with pytest.raises(KeyError, match="output_format"):
             advntr.advntr_output_extension({})
 
-    def test_it_reads_its_argument_and_not_the_module_global(self, monkeypatch):
-        """The mapping is a parameter on purpose. run_advntr reads the import-time
-        advntr_settings global while pipeline.py calls load_advntr_config() again and derives
-        its own -- two independently loaded states. A helper that read the global would let
-        the two disagree while appearing to share one source of truth.
-        """
-        monkeypatch.setattr(advntr, "advntr_settings", {"output_format": "tsv"})
-
+    def test_it_reads_its_argument_without_hidden_state(self):
         assert advntr.advntr_output_extension({"output_format": "vcf"}) == ".vcf"
 
 
@@ -364,41 +395,47 @@ class TestThreadsInheritThePipelineValue:
     flag now has an effect and the pipeline's value is worth passing through.
     """
 
-    def test_null_threads_inherit_the_pipeline_value(self, inputs, captured_command, monkeypatch):
+    def test_null_threads_inherit_the_pipeline_value(self, inputs, captured_command):
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {"threads": None, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
+        advntr.run_advntr(
+            str(db_file),
+            str(sorted_bam),
+            str(output),
+            "output",
+            MAIN_CONFIG,
+            pipeline_threads=12,
+            runtime_component=runtime_component(threads=None, additional_commands="-aln"),
         )
-
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=12)
 
         assert captured_command[0]["command"].endswith("-t 12 -aln")
 
-    def test_an_explicit_thread_count_overrides_the_pipeline_value(self, inputs, captured_command, monkeypatch):
+    def test_an_explicit_thread_count_overrides_the_pipeline_value(self, inputs, captured_command):
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {"threads": 3, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
+        advntr.run_advntr(
+            str(db_file),
+            str(sorted_bam),
+            str(output),
+            "output",
+            MAIN_CONFIG,
+            pipeline_threads=12,
+            runtime_component=runtime_component(threads=3, additional_commands="-aln"),
         )
-
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=12)
 
         assert captured_command[0]["command"].endswith("-t 3 -aln")
 
-    def test_a_missing_threads_key_still_raises(self, inputs, monkeypatch):
+    def test_a_missing_threads_key_still_raises(self, inputs):
         """``null`` is not the same as absent; a partial mapping is unsupported input."""
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {"output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
-        )
-
         with pytest.raises(KeyError):
-            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=4)
+            advntr.run_advntr(
+                str(db_file),
+                str(sorted_bam),
+                str(output),
+                "output",
+                MAIN_CONFIG,
+                pipeline_threads=4,
+                runtime_component={"settings": {"additional_commands": "-aln"}},
+            )
 
     def test_the_shipped_config_uses_null_so_the_cli_wins(self):
         """If this becomes an integer again, ``--threads`` silently stops reaching adVNTR."""
@@ -406,17 +443,16 @@ class TestThreadsInheritThePipelineValue:
 
         assert config["advntr_settings"]["threads"] is None
 
-    def test_the_default_is_one_so_callers_that_do_not_pass_it_are_unchanged(
-        self, inputs, captured_command, monkeypatch
-    ):
+    def test_the_default_is_one_so_callers_that_do_not_pass_it_are_unchanged(self, inputs, captured_command):
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {"threads": None, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
+        advntr.run_advntr(
+            str(db_file),
+            str(sorted_bam),
+            str(output),
+            "output",
+            MAIN_CONFIG,
+            runtime_component=runtime_component(threads=None, additional_commands="-aln"),
         )
-
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
 
         assert captured_command[0]["command"].endswith("-t 1 -aln")
 
@@ -499,18 +535,17 @@ class TestAdditionalCommandsCannotOverrideAManagedOption:
         ],
         ids=["long", "short", "short-attached", "long-equals", "abbrev-short", "abbrev-long"],
     )
-    def test_every_spelling_of_a_repeated_thread_count_is_refused(
-        self, additional, inputs, captured_command, monkeypatch
-    ):
+    def test_every_spelling_of_a_repeated_thread_count_is_refused(self, additional, inputs, captured_command):
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {"threads": 12, "output_format": "vcf", "additional_commands": additional},
-        )
-
         with pytest.raises(ValueError, match="additional_commands"):
-            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+            advntr.run_advntr(
+                str(db_file),
+                str(sorted_bam),
+                str(output),
+                "output",
+                MAIN_CONFIG,
+                runtime_component=runtime_component(threads=12, additional_commands=additional),
+            )
 
         assert captured_command == [], "no command may be emitted once a managed option is duplicated"
 
@@ -518,18 +553,19 @@ class TestAdditionalCommandsCannotOverrideAManagedOption:
         "additional",
         ["-o /tmp/elsewhere.vcf", "--outfile /tmp/elsewhere.vcf", "-m /tmp/other.db", "--models /tmp/other.db"],
     )
-    def test_redirecting_the_artefact_or_the_model_is_refused(self, additional, inputs, captured_command, monkeypatch):
+    def test_redirecting_the_artefact_or_the_model_is_refused(self, additional, inputs, captured_command):
         """``pipeline.py`` reconstructs the output path independently and reads the file
         back, so an ``-o`` nobody chose is a missing result, not a relocated one."""
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {"threads": 1, "output_format": "vcf", "additional_commands": additional},
-        )
-
         with pytest.raises(ValueError, match="additional_commands"):
-            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+            advntr.run_advntr(
+                str(db_file),
+                str(sorted_bam),
+                str(output),
+                "output",
+                MAIN_CONFIG,
+                runtime_component=runtime_component(threads=1, additional_commands=additional),
+            )
 
         assert captured_command == []
 
@@ -552,17 +588,16 @@ class TestAdditionalCommandsCannotOverrideAManagedOption:
         """
         assert advntr.resolve_additional_commands({"additional_commands": additional}) == additional
 
-    def test_an_explicit_alignment_sidecar_opt_in_reaches_the_command_unchanged(
-        self, inputs, captured_command, monkeypatch
-    ):
+    def test_an_explicit_alignment_sidecar_opt_in_reaches_the_command_unchanged(self, inputs, captured_command):
         db_file, sorted_bam, output = inputs
-        monkeypatch.setattr(
-            advntr,
-            "advntr_settings",
-            {**advntr.advntr_settings, "additional_commands": "-aln"},
+        advntr.run_advntr(
+            str(db_file),
+            str(sorted_bam),
+            str(output),
+            "output",
+            MAIN_CONFIG,
+            runtime_component=runtime_component(additional_commands="-aln"),
         )
-
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
 
         assert captured_command[0]["command"].endswith("-aln")
 

@@ -4,11 +4,13 @@ import logging
 import os
 import re
 import shlex
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from vntyper.modules.advntr.advntr_decision_config import project_advntr_settings
 from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact, publish_advntr_result
 from vntyper.modules.advntr.advntr_variant_annotations import (
     DELETION_PATTERN,
@@ -19,6 +21,10 @@ from vntyper.modules.advntr.artifact_evidence import EVIDENCE_DISPOSITION_COLUMN
 from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.flagging import ADVNTR_FLAG_COLUMNS, compile_flag_rules
 from vntyper.scripts.nomenclature_annotate import NOMENCLATURE_COLUMNS, annotate_advntr_frame
+from vntyper.scripts.run_configuration import (
+    resolve_compatibility_component,
+    resolve_compatibility_runtime_component,
+)
 from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
@@ -80,12 +86,7 @@ def load_advntr_config(config_path=None):
     return load_config(config_path)
 
 
-# Load the adVNTR settings
-advntr_config = load_advntr_config()
-advntr_settings = advntr_config.get("advntr_settings", {})
-
-
-def advntr_output_extension(settings: dict) -> str:
+def advntr_output_extension(settings: Mapping[str, object]) -> str:
     """
     Return the file extension adVNTR writes its results to, for a settings mapping.
 
@@ -100,20 +101,9 @@ def advntr_output_extension(settings: dict) -> str:
             a partial configuration is not supported input. See :func:`run_advntr`.
 
     Note:
-        The mapping is a **parameter, not the module global**, deliberately.
-        :func:`run_advntr` reads the import-time :data:`advntr_settings`, while
-        ``pipeline.py`` calls :func:`load_advntr_config` a second time and derives its own
-        local mapping. Those are two independently loaded states, and this extension is
-        derived by both -- the producer of the output path and its consumer.
-
-        Taking the mapping as a parameter does **not** merge those two states, and this
-        function should not be read as claiming it does. What it removes is the *duplicated
-        derivation*: the rule turning ``output_format`` into an extension existed twice, once
-        here and once inlined in ``pipeline.py``, so the two could drift apart in a way no
-        test would catch. Now there is one rule, applied to whichever mapping the caller
-        actually used, and each caller's mapping is visible at its call site. Both loads read
-        the same packaged file, so they agree in practice; unifying the loads themselves would
-        change which configuration ``pipeline.py`` reads and is a separate change (#247).
+        The mapping is a parameter deliberately. Both command construction and the
+        pipeline's result-path reconstruction receive the same resolved decision
+        component, so the producer and consumer cannot derive different extensions.
     """
     return ".vcf" if settings["output_format"] == "vcf" else ".tsv"
 
@@ -347,9 +337,21 @@ def resolve_additional_commands(settings):
     return additional
 
 
-def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipeline_threads=1):
+def run_advntr(
+    db_file,
+    sorted_bam,
+    output,
+    output_name,
+    config,
+    cwd=None,
+    pipeline_threads=1,
+    *,
+    resolved_component: Mapping[str, object] | None = None,
+    runtime_component: Mapping[str, object] | None = None,
+    custom_context_active: bool = False,
+):
     """
-    Run adVNTR genotyping using the specified database file and BAM file, fetching settings from advntr_config.
+    Run adVNTR genotyping using explicit resolved decision and runtime settings.
 
     Args:
         db_file (str): Path to the adVNTR VNTR database file.
@@ -359,6 +361,9 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
         config (dict): Main configuration dictionary.
         pipeline_threads (int): The pipeline's ``--threads``. Used only when
             ``advntr_settings['threads']`` is ``null``, which means "inherit".
+        resolved_component: Immutable adVNTR decision component for this run.
+        runtime_component: Immutable excluded adVNTR runtime component.
+        custom_context_active: Whether an explicit custom profile owns this run.
 
     Returns:
         int: 0 on success, or 1 for the pre-command input-validation failures.
@@ -376,6 +381,14 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
             mapping surfaces as a traceback rather than a clean exit -- the same shape
             ``output_format`` already had.
     """
+    decision = resolve_compatibility_component(
+        "advntr",
+        resolved_component,
+        custom_context_active=custom_context_active,
+    )
+    runtime = resolve_compatibility_runtime_component("advntr", runtime_component)
+    projected_settings = project_advntr_settings(decision, runtime)
+    settings = projected_settings.command_mapping()
     advntr_path = config["tools"]["advntr"]
 
     # Configuration is authoritative for `threads` and `output_format`. Both used to be read
@@ -407,7 +420,7 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
     #
     # Note `--jobs J` x `-t T` oversubscribes. The golden-cohort runner already models
     # that with a separate `advntr_case_threads` knob, which remains the control.
-    threads = resolve_advntr_threads(advntr_settings, pipeline_threads)
+    threads = resolve_advntr_threads(settings, pipeline_threads)
 
     # Optional operator-supplied flags for adVNTR, refusing any option this function
     # already sets. The shipped and missing-key defaults are empty: VNtyper does not read
@@ -415,13 +428,13 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
     # is complete. Explicit opt-in remains supported through this extension point. See
     # `resolve_additional_commands`: argparse lets the last occurrence win, so an unchecked
     # fragment overrides the thread count validated one line above.
-    additional_commands = resolve_additional_commands(advntr_settings)
+    additional_commands = resolve_additional_commands(settings)
 
     # Determine the output extension. Shared with pipeline.py, which reconstructs this path.
-    output_ext = advntr_output_extension(advntr_settings)
+    output_ext = advntr_output_extension(settings)
 
     # Set the VNTR ID from config file or default to 25561
-    vid = advntr_settings.get("vid", 25561)
+    vid = projected_settings.vid
 
     # ---------------------------------------------------------------------
     # Validate input paths before proceeding
@@ -485,12 +498,10 @@ INSERTION_FRAME_OFFSET = 1
 DELETION_FRAME_OFFSET = 2
 
 
-def accepted_frame_magnitudes(offset: int) -> np.ndarray:
+def accepted_frame_magnitudes(offset: int, settings: Mapping[str, object] | None = None) -> np.ndarray:
     """The ``|Net_indel_length|`` values one arm of the pathogenic-frame filter accepts.
 
-    The series is built from the two settings ``advntr_config.json`` exposes, read from
-    the module-level ``advntr_settings`` global at call time (trap 1 in AGENTS.md: the
-    filter reads the *derived* global, so a test must patch that one):
+    The series is built from the two settings in the resolved adVNTR decision component:
 
     * ``frameshift_multiplier`` (default 3) -- the codon width;
     * ``max_frameshift`` (default 100) -- how many terms of the series are accepted, so
@@ -499,13 +510,25 @@ def accepted_frame_magnitudes(offset: int) -> np.ndarray:
     Args:
         offset (int): :data:`INSERTION_FRAME_OFFSET` for the insertion arm,
             :data:`DELETION_FRAME_OFFSET` for the deletion arm.
+        settings: Explicit resolved adVNTR decision settings. Legacy direct callers
+            may omit this to use the packaged profile.
 
     Returns:
         np.ndarray: The accepted magnitudes as strings, matching the ``str`` dtype of the
             ``frame`` column they are tested against.
     """
-    max_frameshift = advntr_settings.get("max_frameshift", 100)
-    frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
+    if settings is None:
+        component = resolve_compatibility_component("advntr", None, custom_context_active=False)
+        candidate = component.get("settings")
+        if not isinstance(candidate, Mapping):
+            raise ValueError("packaged adVNTR settings must be a mapping")
+        settings = candidate
+    max_frameshift = settings["max_frameshift"]
+    frameshift_multiplier = settings["frameshift_multiplier"]
+    if isinstance(max_frameshift, bool) or not isinstance(max_frameshift, int):
+        raise ValueError("adVNTR max_frameshift must be an integer")
+    if isinstance(frameshift_multiplier, bool) or not isinstance(frameshift_multiplier, int):
+        raise ValueError("adVNTR frameshift_multiplier must be an integer")
     return (np.arange(max_frameshift) * frameshift_multiplier + offset).astype(str)
 
 
@@ -625,7 +648,7 @@ def derive_indel_columns(df: pd.DataFrame) -> pd.DataFrame:
 # a representational limit of the State string, upstream of anything here.
 
 
-def advntr_processing_del(df):
+def advntr_processing_del(df, settings: Mapping[str, object] | None = None):
     """
     Keep the adVNTR calls whose **net** change is a deletion in the pathogenic frame.
 
@@ -636,6 +659,7 @@ def advntr_processing_del(df):
 
     Args:
         df (pd.DataFrame): DataFrame containing adVNTR variant data.
+        settings: Explicit resolved adVNTR decision settings.
 
     Returns:
         pd.DataFrame: Filtered DataFrame containing only those net deletions that enter
@@ -643,14 +667,14 @@ def advntr_processing_del(df):
     """
     logger.debug("Starting deletion processing.")
     df1 = derive_indel_columns(df)
-    del_frame = accepted_frame_magnitudes(DELETION_FRAME_OFFSET)
+    del_frame = accepted_frame_magnitudes(DELETION_FRAME_OFFSET, settings=settings)
     logger.debug(f"Accepted net-deletion magnitudes (first 5): {del_frame[:5].tolist()}")
     df1 = df1[(df1["Net_indel_length"] < 0) & df1["frame"].isin(del_frame)]
     logger.debug(f"Filtered DataFrame shape after deletion processing: {df1.shape}")
     return df1
 
 
-def advntr_processing_ins(df):
+def advntr_processing_ins(df, settings: Mapping[str, object] | None = None):
     """
     Keep the adVNTR calls whose **net** change is an insertion in the pathogenic frame.
 
@@ -661,6 +685,7 @@ def advntr_processing_ins(df):
 
     Args:
         df (pd.DataFrame): DataFrame containing adVNTR variant data.
+        settings: Explicit resolved adVNTR decision settings.
 
     Returns:
         pd.DataFrame: Filtered DataFrame containing only those net insertions that enter
@@ -668,7 +693,7 @@ def advntr_processing_ins(df):
     """
     logger.debug("Starting insertion processing.")
     df1 = derive_indel_columns(df)
-    ins_frame = accepted_frame_magnitudes(INSERTION_FRAME_OFFSET)
+    ins_frame = accepted_frame_magnitudes(INSERTION_FRAME_OFFSET, settings=settings)
     logger.debug(f"Accepted net-insertion magnitudes (first 5): {ins_frame[:5].tolist()}")
     df1 = df1[(df1["Net_indel_length"] > 0) & df1["frame"].isin(ins_frame)]
     logger.debug(f"Filtered DataFrame shape after insertion processing: {df1.shape}")
@@ -765,7 +790,14 @@ def annotate_advntr_variants(variant_series, ru_fasta_path):
 
 
 def process_advntr_output(
-    output_path, output, output_name, config=None, *, artifact_evidence: ArtifactEvidence | None = None
+    output_path,
+    output,
+    output_name,
+    config=None,
+    *,
+    artifact_evidence: ArtifactEvidence | None = None,
+    resolved_component: Mapping[str, object] | None = None,
+    custom_context_active: bool = False,
 ):
     """
     Process the adVNTR output to extract relevant information and generate final results.
@@ -787,6 +819,8 @@ def process_advntr_output(
         output_name (str): Base name for the output files.
         config (dict, optional): Main configuration dictionary.
         artifact_evidence: Verified governed State evidence resolved for this run.
+        resolved_component: Immutable adVNTR decision component for this run.
+        custom_context_active: Whether an explicit custom profile owns this run.
 
     Raises:
         ValueError: If the configured flag rules are invalid for the adVNTR result schema.
@@ -796,12 +830,21 @@ def process_advntr_output(
     output_result_path = Path(output) / f"{output_name}_adVNTR_result.tsv"
     invalidate_advntr_artifact(output_result_path)
 
+    decision = resolve_compatibility_component(
+        "advntr",
+        resolved_component,
+        custom_context_active=custom_context_active,
+    )
+    decision_settings = decision.get("settings")
+    if not isinstance(decision_settings, Mapping):
+        raise ValueError("adVNTR decision settings must be a mapping")
+
     flag_columns = set(ADVNTR_FLAG_COLUMNS)
     if config:
         ru_fasta_path = config.get("reference_data", {}).get("code_adVNTR_RUs")
         if ru_fasta_path and os.path.exists(ru_fasta_path):
             flag_columns.update({"REF", "ALT"})
-    compiled_flag_rules = compile_flag_rules(advntr_config.get("flagging_rules", {}), flag_columns)
+    compiled_flag_rules = compile_flag_rules(decision.get("flagging_rules", {}), flag_columns)
 
     if not os.path.exists(output_path):
         message = f"adVNTR output file {output_path} not found!"
@@ -876,10 +919,10 @@ def process_advntr_output(
 
     try:
         logger.info("Processing deletions...")
-        df_del = advntr_processing_del(df)
+        df_del = advntr_processing_del(df, settings=decision_settings)
 
         logger.info("Processing insertions...")
-        df_ins = advntr_processing_ins(df)
+        df_ins = advntr_processing_ins(df, settings=decision_settings)
 
         logger.info("Concatenating deletions and insertions...")
         advntr_concat = pd.concat([df_del, df_ins], axis=0)
