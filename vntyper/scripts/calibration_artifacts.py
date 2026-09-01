@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 from types import MappingProxyType
@@ -18,6 +17,7 @@ from vntyper.scripts.calibration_artifact_io import (
     write_checksums,
     write_json,
 )
+from vntyper.scripts.calibration_baseline import project_baseline
 from vntyper.scripts.calibration_contract import CandidateMetrics, decode_evidence_manifest, decode_metrics
 from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
 from vntyper.scripts.calibration_manifest import connected_leakage_groups, decode_study_declaration
@@ -29,6 +29,8 @@ from vntyper.scripts.calibration_objective import (
     select_candidate,
 )
 from vntyper.scripts.calibration_reporting import write_evaluation_artifacts
+from vntyper.scripts.calibration_role_inputs import RoleInputs, build_role_inputs
+from vntyper.scripts.calibration_run_extraction import decode_run_hashes
 from vntyper.scripts.calibration_scalar_replay import replay_scalar_dominance
 from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_workflow import (
@@ -44,35 +46,23 @@ from vntyper.scripts.decision_profile import ResolvedDecisionProfile, resolve_de
 _ROLES = ("training", "policy-selection", "validation", "locked-heldout")
 
 
-@dataclass(frozen=True)
-class _RoleInputs:
-    features: dict[str, object]
-    labels: dict[str, object]
-    baseline: dict[str, object]
-    run_hashes: dict[str, str]
-
-
 def extract_artifact_bundle(truth_path: Path, study_path: Path, runs_path: Path, output: Path) -> None:
     """Validate raw study inputs and write role-separated immutable evidence."""
     truth = load_object(truth_path, "calibration truth")
-    if set(truth) != {"schema_version", "features", "labels", "baseline"}:
+    if set(truth) != {"schema_version", "labels"}:
         raise ValueError("calibration truth fields differ from the closed contract")
     if truth["schema_version"] != "calibration-truth-v1":
         raise ValueError("calibration truth schema version is unsupported")
     study_raw = load_object(study_path, "calibration study")
     study = decode_study_declaration(study_raw)
-    features = decode_feature_artifact(truth["features"])
     labels = decode_label_artifact(truth["labels"])
     runs_raw = load_object(runs_path, "calibration runs")
     if set(runs_raw) != {"schema_version", "runs"} or runs_raw["schema_version"] != "calibration-runs-v1":
         raise ValueError("calibration runs fields or schema version differ")
-    raw_paths = runs_raw["runs"]
-    if not isinstance(raw_paths, Mapping):
-        raise ValueError("calibration runs must map manifest keys to run roots")
-    runs = {str(key): Path(value) for key, value in raw_paths.items() if isinstance(value, str)}
-    if len(runs) != len(raw_paths):
-        raise ValueError("calibration run roots must be strings")
-    extracted = extract_evidence(study, features, labels, runs, baseline=_mapping(truth["baseline"], "baseline"))
+    runs = runs_raw["runs"]
+    if not isinstance(runs, Mapping) or any(not isinstance(key, str) for key in runs):
+        raise ValueError("calibration runs must map manifest keys to immutable run declarations")
+    extracted = extract_evidence(study, labels, runs)
 
     write_json(output / "study.json", study_raw)
     write_json(
@@ -82,14 +72,21 @@ def extract_artifact_bundle(truth_path: Path, study_path: Path, runs_path: Path,
             "connected_groups": dict(connected_leakage_groups(study.partitions)),
         },
     )
-    feature_rows = _rows(truth["features"], "calibration features")
+    feature_rows = [
+        {
+            "feature_key": row.feature_key,
+            "manifest_key": row.manifest_key,
+            "features": dict(row.features),
+        }
+        for row in extracted.features.rows
+    ]
     label_rows = _rows(truth["labels"], "calibration labels")
-    baseline = _mapping(truth["baseline"], "calibration baseline")
+    baseline = _mapping(thaw_json(extracted.baseline), "calibration baseline")
     members_by_role = {
         role: tuple(member.key for member in study.partitions.members if member.role == role) for role in _ROLES
     }
     for role, keys in members_by_role.items():
-        role_inputs = _role_inputs(role, keys, feature_rows, label_rows, baseline, extracted.run_hashes)
+        role_inputs = build_role_inputs(keys, feature_rows, label_rows, baseline, extracted.run_hashes)
         role_root = output / "roles" / role
         role_root.mkdir(parents=True)
         write_json(role_root / "features.json", role_inputs.features)
@@ -263,8 +260,9 @@ def _load_roles(root: Path, roles: tuple[str, ...]) -> ExtractedEvidence:
     study = decode_study_declaration(study_raw)
     feature_rows: list[object] = []
     label_rows: list[object] = []
-    baseline_rows: list[object] = []
-    run_hashes: dict[str, str] = {}
+    expected_baseline_rows: list[object] = []
+    observed_baseline_rows: list[object] = []
+    run_hashes: dict[str, dict[str, str]] = {}
     for role in roles:
         if role not in _ROLES:
             raise ValueError(f"unsupported calibration evidence role: {role}")
@@ -276,15 +274,17 @@ def _load_roles(root: Path, roles: tuple[str, ...]) -> ExtractedEvidence:
         role_label_rows = _rows(labels_document, "labels")
         baseline = load_object(role_root / "baseline.json", "baseline")
         expected = _mapping(baseline.get("expected"), "baseline expected")
-        role_baseline_rows = _sequence(expected.get("rows"), "baseline rows")
+        observed = _mapping(baseline.get("observed"), "baseline observed")
+        role_expected_rows = _sequence(expected.get("rows"), "baseline expected rows")
+        role_observed_rows = _sequence(observed.get("rows"), "baseline observed rows")
         run_document = load_object(role_root / "run_hashes.json", "run hashes")
         if set(run_document) != {"schema_version", "run_hashes"} or run_document["schema_version"] != (
             "calibration-run-hashes-v1"
         ):
             raise ValueError("calibration role run-hash fields or schema version differ")
         raw_hashes = _mapping(run_document.get("run_hashes"), "run hashes")
-        role_run_hashes = {str(key): str(value) for key, value in raw_hashes.items()}
-        inputs = _RoleInputs(features_document, labels_document, baseline, role_run_hashes)
+        role_run_hashes = decode_run_hashes(raw_hashes)
+        inputs = RoleInputs(features_document, labels_document, baseline, role_run_hashes)
         observed_manifest = load_object(role_root / "manifest.json", "calibration role bundle manifest")
         if observed_manifest != _role_manifest(study, role, inputs, study.sha256):
             raise ValueError(f"calibration {role} role bundle does not match its study and artifacts")
@@ -299,25 +299,37 @@ def _load_roles(root: Path, roles: tuple[str, ...]) -> ExtractedEvidence:
             raise ValueError(f"calibration {role} role bundle members do not match the partition declaration")
         feature_rows.extend(role_feature_rows)
         label_rows.extend(role_label_rows)
-        baseline_rows.extend(role_baseline_rows)
+        expected_baseline_rows.extend(role_expected_rows)
+        observed_baseline_rows.extend(role_observed_rows)
         run_hashes.update(role_run_hashes)
     feature_rows.sort(key=lambda row: str(_mapping(row, "feature row")["manifest_key"]))
     label_rows.sort(key=lambda row: str(_mapping(row, "label row")["manifest_key"]))
-    baseline_rows.sort(key=lambda row: _integer(_mapping(row, "baseline row")["order"], "baseline order"))
+    expected_baseline_rows.sort(key=lambda row: str(_mapping(row, "baseline row")["manifest_key"]))
+    observed_baseline_rows.sort(key=lambda row: str(_mapping(row, "baseline row")["manifest_key"]))
     features_raw = {"schema_version": "calibration-features-v1", "rows": feature_rows}
     labels_raw = {"schema_version": "calibration-labels-v1", "rows": label_rows}
     features = decode_feature_artifact(features_raw)
     labels = decode_label_artifact(labels_raw)
-    baseline = _projection_baseline(baseline_rows, labels.rows)
+    baseline = project_baseline(
+        expected_baseline_rows,
+        observed_baseline_rows,
+        {row.manifest_key: row for row in labels.rows},
+    )
     dataset = canonical_sha256(
-        {"features_sha256": features.sha256, "labels_sha256": labels.sha256, "run_hashes": run_hashes}
+        {
+            "study_sha256": study.sha256,
+            "features_sha256": features.sha256,
+            "labels_sha256": labels.sha256,
+            "baseline_sha256": canonical_sha256(baseline),
+            "run_artifact_sha256": run_hashes,
+        }
     )
     return ExtractedEvidence(
         study,
         features,
         labels,
         cast(Mapping[str, object], freeze_json(baseline)),
-        MappingProxyType(dict(sorted(run_hashes.items()))),
+        MappingProxyType({key: MappingProxyType(dict(value)) for key, value in sorted(run_hashes.items())}),
         study.sha256,
         dataset,
     )
@@ -400,8 +412,10 @@ def _observations(
         selected = decision.selected_identity
         abstained = decision.abstention_reason is not None
         applicable = decision.applicable
-        displayed = baseline.get("name") if selected is not None else None
-        tier = baseline.get("tier") if selected is not None else None
+        baseline_identity = baseline.get("canonical_identity")
+        projected = selected is not None and selected == baseline_identity
+        displayed = baseline.get("name") if projected else None
+        tier = baseline.get("tier") if projected else None
         assay = feature.features.get("assay_class")
         if not isinstance(assay, str) or not assay:
             raise ValueError("calibration feature row requires assay_class")
@@ -424,12 +438,7 @@ def _observations(
             )
         )
         baseline_name = baseline.get("name")
-        baseline_selected = None
-        if isinstance(baseline_name, str):
-            canonical_identity = feature.features.get("canonical_identity")
-            if not isinstance(canonical_identity, str) or not canonical_identity:
-                raise ValueError("calibration baseline selection requires a canonical identity feature")
-            baseline_selected = canonical_identity
+        baseline_selected = baseline_identity if isinstance(baseline_identity, str) else None
         baseline_rows.append(
             OutcomeObservation(
                 feature.manifest_key,
@@ -455,7 +464,7 @@ def _observations(
     return tuple(candidate_rows), tuple(baseline_rows)
 
 
-def _write_locked_payload(role_root: Path, study_raw: Mapping[str, object], study, inputs: _RoleInputs) -> None:
+def _write_locked_payload(role_root: Path, study_raw: Mapping[str, object], study, inputs: RoleInputs) -> None:
     payload = {
         "schema_version": "calibration-locked-payload-v1",
         "study": dict(study_raw),
@@ -487,85 +496,29 @@ def _decode_locked_payload(raw: bytes) -> ExtractedEvidence:
     study = decode_study_declaration(payload["study"])
     features = decode_feature_artifact(payload["features"])
     labels = decode_label_artifact(payload["labels"])
-    hashes = {str(key): str(value) for key, value in _mapping(payload["run_hashes"], "run hashes").items()}
+    hashes = decode_run_hashes(_mapping(payload["run_hashes"], "run hashes"))
+    baseline = dict(_mapping(payload["baseline"], "baseline"))
     dataset = canonical_sha256(
-        {"features_sha256": features.sha256, "labels_sha256": labels.sha256, "run_hashes": hashes}
+        {
+            "study_sha256": study.sha256,
+            "features_sha256": features.sha256,
+            "labels_sha256": labels.sha256,
+            "baseline_sha256": canonical_sha256(baseline),
+            "run_artifact_sha256": hashes,
+        }
     )
     return ExtractedEvidence(
         study,
         features,
         labels,
-        cast(Mapping[str, object], freeze_json(dict(_mapping(payload["baseline"], "baseline")))),
-        MappingProxyType(hashes),
+        cast(Mapping[str, object], freeze_json(baseline)),
+        MappingProxyType({key: MappingProxyType(dict(value)) for key, value in hashes.items()}),
         study.sha256,
         dataset,
     )
 
 
-def _role_inputs(
-    role: str,
-    keys: tuple[str, ...],
-    feature_rows: Sequence[object],
-    label_rows: Sequence[object],
-    baseline: Mapping[str, object],
-    run_hashes: Mapping[str, str],
-) -> _RoleInputs:
-    key_set = set(keys)
-    features: dict[str, object] = {
-        "schema_version": "calibration-features-v1",
-        "rows": [row for row in feature_rows if _mapping(row, "feature row").get("manifest_key") in key_set],
-    }
-    labels: dict[str, object] = {
-        "schema_version": "calibration-labels-v1",
-        "rows": [row for row in label_rows if _mapping(row, "label row").get("manifest_key") in key_set],
-    }
-    decoded_labels = decode_label_artifact(labels)
-    all_expected = _mapping(baseline.get("expected"), "baseline expected")
-    all_rows = _sequence(all_expected.get("rows"), "baseline rows")
-    selected_rows = [
-        row
-        for index, row in enumerate(all_rows)
-        if _mapping(feature_rows[index], "feature row").get("manifest_key") in key_set
-    ]
-    role_baseline = _projection_baseline(selected_rows, decoded_labels.rows)
-    return _RoleInputs(
-        features,
-        labels,
-        role_baseline,
-        {key: run_hashes[key] for key in keys},
-    )
-
-
-def _projection_baseline(rows: Sequence[object], labels: Sequence) -> dict[str, object]:
-    if len(rows) != len(labels):
-        raise ValueError("calibration baseline projection must align with labels")
-    displayed = exact = wrong = controls = 0
-    per_tier: dict[str, dict[str, int]] = {}
-    for raw, label in zip(rows, labels, strict=True):
-        row = _mapping(raw, "baseline row")
-        name = row.get("name")
-        tier = row.get("tier")
-        if isinstance(name, str):
-            displayed += 1
-            if label.truth_status == "control":
-                controls += 1
-            elif name == label.expected_display_name:
-                exact += 1
-            else:
-                wrong += 1
-            if isinstance(tier, str):
-                counts = per_tier.setdefault(tier, {"displayed": 0, "exact": 0, "wrong": 0})
-                counts["displayed"] += 1
-                counts["exact" if name == label.expected_display_name else "wrong"] += 1
-    projection = {
-        "aggregate": {"displayed": displayed, "exact": exact, "wrong": wrong, "control_findings": controls},
-        "per_tier": per_tier,
-        "rows": list(rows),
-    }
-    return {"schema_version": "calibration-baseline-replay-v1", "expected": projection, "observed": projection}
-
-
-def _role_manifest(study, role: str, inputs: _RoleInputs, study_sha256: str) -> dict[str, object]:
+def _role_manifest(study, role: str, inputs: RoleInputs, study_sha256: str) -> dict[str, object]:
     return {
         "schema_version": "calibration-role-bundle-v1",
         "role": role,

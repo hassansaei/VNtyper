@@ -60,6 +60,15 @@ class PersistedIdentityCandidate:
     group_context_diverges: bool
 
 
+@dataclass(frozen=True)
+class PersistedIdentityCapture:
+    """One complete identity capture decoded from a pre-result TSV row."""
+
+    translation: IdentityTranslation
+    row_key: RawRepresentationKey
+    observation_ordinal: int
+
+
 def candidate_capture_cells(candidate: IdentityCandidate) -> dict[str, str]:
     """Serialize one captured translation into internal scalar columns.
 
@@ -175,6 +184,37 @@ def parse_selected_candidate_cells(row: Mapping[str, object]) -> PersistedIdenti
         blocking_gates=blocking_gates,
         flags=_parse_strings(_required_string(row, IDENTITY_SELECTION_COLUMNS[4])),
         group_context_diverges=group_context_diverges,
+    )
+
+
+def parse_candidate_capture_cells(row: Mapping[str, object]) -> PersistedIdentityCapture:
+    """Decode one pre-selection identity capture after a TSV round trip.
+
+    Args:
+        row: Mapping containing every internal identity-capture column.
+
+    Returns:
+        Validated raw-key, translation, and stable observation ordinal.
+
+    Raises:
+        KeyError: If a required internal column is absent.
+        ValueError: If serialized values are inconsistent or malformed.
+    """
+    raw_key = _parse_raw_key(_required_string(row, IDENTITY_CAPTURE_COLUMNS[0]))
+    identity_text = _required_string(row, IDENTITY_CAPTURE_COLUMNS[1])
+    failure_text = _required_string(row, IDENTITY_CAPTURE_COLUMNS[3])
+    identity = None if identity_text == ABSENT_TOKEN else parse_molecular_identity(identity_text)
+    failure = None if failure_text == ABSENT_TOKEN else cast(TranslationFailure, failure_text)
+    translation = IdentityTranslation(
+        identity,
+        cast(TranslationStatus, _required_string(row, IDENTITY_CAPTURE_COLUMNS[2])),
+        failure,
+        _parse_bool(row[IDENTITY_CAPTURE_COLUMNS[4]]),
+    )
+    return PersistedIdentityCapture(
+        translation,
+        raw_key,
+        _nonnegative_int(row, IDENTITY_CAPTURE_COLUMNS[5]),
     )
 
 

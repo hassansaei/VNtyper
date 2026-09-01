@@ -42,6 +42,7 @@ class PartitionMember:
     key: str
     role: CalibrationRole
     provenance: EvidenceProvenance
+    assay_class: str
     groups: Mapping[str, tuple[str, ...]]
 
 
@@ -72,6 +73,9 @@ def decode_study_declaration(value: object) -> StudyDeclaration:
     roles = {member.role for member in partitions.members}
     if roles != set(_ROLES):
         raise ValueError("calibration study declaration must contain all four partition roles")
+    undeclared_assays = sorted({member.assay_class for member in partitions.members} - set(protocol.assay_classes))
+    if undeclared_assays:
+        raise ValueError(f"calibration partition assay classes are not declared by the protocol: {undeclared_assays}")
     return StudyDeclaration(protocol, partitions, canonical_sha256(root))
 
 
@@ -152,7 +156,11 @@ def require_operation_roles(
 
 
 def _decode_member(value: object) -> PartitionMember:
-    raw = _exact_object(value, {"key", "role", "provenance", "groups"}, "calibration partition member")
+    raw = _exact_object(
+        value,
+        {"key", "role", "provenance", "assay_class", "groups"},
+        "calibration partition member",
+    )
     key = raw["key"]
     if not isinstance(key, str) or not key:
         raise ValueError("calibration partition member key must be a non-empty string")
@@ -164,12 +172,16 @@ def _decode_member(value: object) -> PartitionMember:
         raise ValueError(f"unsupported calibration partition provenance: {provenance!r}")
     if role == "locked-heldout" and provenance != "external-custodian":
         raise ValueError("locked held-out partition members require external custodian provenance")
+    assay_class = raw["assay_class"]
+    if not isinstance(assay_class, str) or not assay_class:
+        raise ValueError("calibration partition assay class must be a non-empty string")
     raw_groups = _exact_object(raw["groups"], set(GROUP_NAMESPACES), "calibration member groups")
     groups = {namespace: _group_values(raw_groups[namespace], namespace) for namespace in GROUP_NAMESPACES}
     return PartitionMember(
         key,
         cast(CalibrationRole, role),
         cast(EvidenceProvenance, provenance),
+        assay_class,
         MappingProxyType(groups),
     )
 

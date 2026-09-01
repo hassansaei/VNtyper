@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import cast
 
+from vntyper.scripts.calibration_baseline import build_baseline
 from vntyper.scripts.calibration_contract import EvidenceManifest
 from vntyper.scripts.calibration_custody import (
     ConsumptionReceipt,
@@ -19,23 +19,20 @@ from vntyper.scripts.calibration_custody import (
 from vntyper.scripts.calibration_features import (
     FeatureArtifact,
     LabelArtifact,
+    decode_feature_artifact,
     validate_artifact_alignment,
 )
 from vntyper.scripts.calibration_manifest import StudyDeclaration, require_operation_roles
 from vntyper.scripts.calibration_objective import CandidateEvaluation, count_free_parameters, select_candidate
 from vntyper.scripts.calibration_profiles import build_generated_profile, validate_generated_allowlist
-from vntyper.scripts.calibration_statistics import holm_adjust
-from vntyper.scripts.canonical_json import canonical_sha256, load_strict_json_object
-from vntyper.scripts.decision_profile import ResolvedDecisionProfile, load_packaged_decision_profile
-from vntyper.scripts.identity_candidate_persistence import IDENTITY_CAPTURE_COLUMNS
-from vntyper.scripts.nomenclature_bam_replay import decode_bam_replay_artifact
-from vntyper.version import __version__
-
-_REQUIRED_RUN_ARTIFACTS = (
-    Path("pipeline_summary.json"),
-    Path("kestrel/kestrel_pre_result.tsv"),
-    Path("kestrel/bam_identity_replay.v1.json"),
+from vntyper.scripts.calibration_run_extraction import (
+    decode_run_artifact_declaration,
+    extract_completed_run,
 )
+from vntyper.scripts.calibration_statistics import holm_adjust
+from vntyper.scripts.canonical_json import canonical_sha256
+from vntyper.scripts.decision_profile import ResolvedDecisionProfile, load_packaged_decision_profile
+from vntyper.version import __version__
 
 
 @dataclass(frozen=True)
@@ -46,7 +43,7 @@ class ExtractedEvidence:
     features: FeatureArtifact
     labels: LabelArtifact
     baseline: Mapping[str, object]
-    run_hashes: Mapping[str, str]
+    run_hashes: Mapping[str, Mapping[str, str]]
     study_sha256: str
     dataset_sha256: str
 
@@ -84,32 +81,51 @@ class LockedEvaluation:
 
 def extract_evidence(
     study: StudyDeclaration,
-    features: FeatureArtifact,
     labels: LabelArtifact,
-    runs: Mapping[str, Path],
-    *,
-    baseline: Mapping[str, object],
+    runs: Mapping[str, object],
 ) -> ExtractedEvidence:
-    """Hash complete replay artifacts without opening BAMs or rerunning callers."""
+    """Derive features and shipped replay from complete immutable run artifacts."""
     if not isinstance(study, StudyDeclaration):
         raise ValueError("calibration extraction requires a StudyDeclaration")
-    validate_artifact_alignment(features, labels, study.partitions)
     if not isinstance(runs, Mapping) or set(runs) != {member.key for member in study.partitions.members}:
         raise ValueError("calibration run roots must match the complete partition manifest")
-    if not isinstance(baseline, Mapping) or not baseline:
-        raise ValueError("calibration extraction requires the shipped decision projection baseline")
-    run_hashes: dict[str, str] = {}
+    if not isinstance(labels, LabelArtifact):
+        raise ValueError("calibration extraction requires a decoded label artifact")
+    label_keys = tuple(row.manifest_key for row in labels.rows)
+    manifest_keys = tuple(member.key for member in study.partitions.members)
+    if label_keys != manifest_keys:
+        raise ValueError("calibration label rows must align exactly with the partition manifest")
+    extractions = []
+    run_hashes: dict[str, Mapping[str, str]] = {}
+    members = {member.key: member for member in study.partitions.members}
     for key in sorted(runs):
-        root = runs[key]
-        if not isinstance(root, Path):
-            raise ValueError("calibration run roots must be Path values")
-        run_hashes[key] = _hash_replay_run(root)
-    baseline_copy = cast(Mapping[str, object], _freeze(dict(baseline)))
+        declaration = decode_run_artifact_declaration(runs[key])
+        extracted = extract_completed_run(key, members[key].assay_class, declaration)
+        extractions.append(extracted)
+        run_hashes[key] = extracted.artifact_sha256
+    features = decode_feature_artifact(
+        {
+            "schema_version": "calibration-features-v1",
+            "rows": [
+                {
+                    "feature_key": f"run-{extraction.manifest_key}",
+                    "manifest_key": extraction.manifest_key,
+                    "features": dict(extraction.features),
+                }
+                for extraction in extractions
+            ],
+        }
+    )
+    validate_artifact_alignment(features, labels, study.partitions)
+    baseline = build_baseline(extractions, {row.manifest_key: row for row in labels.rows})
+    baseline_copy = cast(Mapping[str, object], _freeze(baseline))
     dataset_sha256 = canonical_sha256(
         {
+            "study_sha256": study.sha256,
             "features_sha256": features.sha256,
             "labels_sha256": labels.sha256,
-            "run_hashes": run_hashes,
+            "baseline_sha256": canonical_sha256(baseline),
+            "run_artifact_sha256": {key: dict(value) for key, value in run_hashes.items()},
         }
     )
     return ExtractedEvidence(
@@ -117,7 +133,7 @@ def extract_evidence(
         features,
         labels,
         baseline_copy,
-        MappingProxyType(run_hashes),
+        MappingProxyType({key: MappingProxyType(dict(value)) for key, value in run_hashes.items()}),
         study.sha256,
         dataset_sha256,
     )
@@ -214,29 +230,6 @@ def evaluate_locked_candidate(
     return LockedEvaluation(evidence.role, result, profile.digest, evidence.features_sha256, opened.receipt)
 
 
-def _hash_replay_run(root: Path) -> str:
-    artifact_hashes: dict[str, str] = {}
-    for relative in _REQUIRED_RUN_ARTIFACTS:
-        path = root / relative
-        try:
-            raw = path.read_bytes()
-        except OSError as error:
-            raise ValueError(f"calibration replay artifact is missing or unreadable: {path}") from error
-        artifact_hashes[relative.as_posix()] = hashlib.sha256(raw).hexdigest()
-    summary = load_strict_json_object((root / _REQUIRED_RUN_ARTIFACTS[0]).read_bytes())
-    if summary.get("schema_version") != 3:
-        raise ValueError("calibration replay requires pipeline summary schema 3")
-    pre_result_lines = (root / _REQUIRED_RUN_ARTIFACTS[1]).read_text(encoding="utf-8").splitlines()
-    if not pre_result_lines:
-        raise ValueError("calibration replay pre-result is empty")
-    pre_result_header = pre_result_lines[0].split("\t")
-    if IDENTITY_CAPTURE_COLUMNS[5] not in pre_result_header:
-        raise ValueError("calibration replay pre-result lacks complete PR-A identity artifacts")
-    replay = load_strict_json_object((root / _REQUIRED_RUN_ARTIFACTS[2]).read_bytes())
-    decode_bam_replay_artifact(replay)
-    return canonical_sha256(artifact_hashes)
-
-
 def _validate_baseline_replay(value: Mapping[str, object]) -> None:
     if set(value) != {"schema_version", "expected", "observed"}:
         raise ValueError("calibration baseline replay fields differ from the closed contract")
@@ -254,7 +247,18 @@ def _validate_baseline_replay(value: Mapping[str, object]) -> None:
     rows = expected["rows"]
     if not isinstance(rows, tuple) or not rows:
         raise ValueError("calibration baseline replay rows must be a non-empty immutable sequence")
-    row_fields = {"order", "name", "confidence", "flag", "tier", "support", "tie", "abstention"}
+    row_fields = {
+        "manifest_key",
+        "order",
+        "canonical_identity",
+        "name",
+        "confidence",
+        "flag",
+        "tier",
+        "support",
+        "tie",
+        "abstention",
+    }
     if any(not isinstance(row, Mapping) or set(row) != row_fields for row in rows):
         raise ValueError("calibration baseline replay rows lack required decision fields")
 

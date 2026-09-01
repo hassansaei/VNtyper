@@ -138,7 +138,15 @@ def test_feature_and_label_rows_align_by_manifest_but_use_separate_key_namespace
     manifest = decode_partition_manifest(
         {
             "schema_version": "calibration-partitions-v1",
-            "members": [{"key": "sample-1", "role": "training", "provenance": "development", "groups": groups}],
+            "members": [
+                {
+                    "key": "sample-1",
+                    "role": "training",
+                    "provenance": "development",
+                    "assay_class": "capture-short-read",
+                    "groups": groups,
+                }
+            ],
         }
     )
     features = decode_feature_artifact(_features())

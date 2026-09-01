@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.calibration_run_fixture import IDENTITY, OTHER_IDENTITY, write_schema_three_run
 from vntyper.scripts.calibration_artifacts import (
     evaluate_artifact_bundle,
     extract_artifact_bundle,
@@ -48,6 +49,9 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
     assert load_strict_json_object((evidence / "checksums.json").read_bytes())["schema_version"] == (
         "calibration-checksums-v1"
     )
+    declared_runs = load_strict_json_object(runs.read_bytes())["runs"]
+    training_hashes = load_strict_json_object((evidence / "roles" / "training" / "run_hashes.json").read_bytes())
+    assert training_hashes["run_hashes"]["train"] == declared_runs["train"]["artifacts"]
 
     candidate = tmp_path / "candidate"
     _run_cli(
@@ -236,15 +240,13 @@ def test_fit_rejects_a_declared_but_unobserved_bootstrap_stratum(tmp_path: Path)
 def test_fit_does_not_infer_canonical_identity_correctness_from_display_name(tmp_path: Path) -> None:
     truth, partitions, runs = _inputs(tmp_path)
     truth_document = load_strict_json_object(truth.read_bytes())
-    features = truth_document["features"]
-    assert isinstance(features, dict)
-    rows = features["rows"]
+    labels = truth_document["labels"]
+    assert isinstance(labels, dict)
+    rows = labels["rows"]
     assert isinstance(rows, list)
     for raw in rows:
         assert isinstance(raw, dict)
-        feature_values = raw["features"]
-        assert isinstance(feature_values, dict)
-        feature_values["canonical_identity"] = f"wrong-{raw['manifest_key']}"
+        raw["expected_identity"] = OTHER_IDENTITY
     truth.write_bytes(canonical_json_bytes(truth_document))
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -255,6 +257,17 @@ def test_fit_does_not_infer_canonical_identity_correctness_from_display_name(tmp
     metrics = load_strict_json_object((candidate / "metrics.json").read_bytes())
     assert metrics["macro_exact_recovery"] == "0"
     assert metrics["wrong_displayed_names_all_tiers"] == 0
+
+
+@pytest.mark.parametrize("forbidden", ["features", "baseline"])
+def test_extract_truth_is_strictly_labels_only(tmp_path: Path, forbidden: str) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    document = load_strict_json_object(truth.read_bytes())
+    document[forbidden] = {"attacker_authored": True}
+    truth.write_bytes(canonical_json_bytes(document))
+
+    with pytest.raises(ValueError, match="truth.*closed contract|labels.only"):
+        extract_artifact_bundle(truth, partitions, runs, tmp_path / "evidence")
 
 
 def test_candidate_p_value_is_the_conservative_maximum_of_both_required_endpoints(tmp_path: Path) -> None:
@@ -276,50 +289,18 @@ def test_candidate_p_value_is_the_conservative_maximum_of_both_required_endpoint
 def _inputs(root: Path) -> tuple[Path, Path, Path]:
     keys = ("held", "select", "train", "validate")
     roles = ("locked-heldout", "policy-selection", "training", "validation")
-    features = []
     labels = []
-    rows = []
     members = []
-    run_paths: dict[str, str] = {}
-    for order, (key, role) in enumerate(zip(keys, roles, strict=True)):
-        identity = f"identity-{key}"
-        features.append(
-            {
-                "feature_key": f"f-{key}",
-                "manifest_key": key,
-                "features": {
-                    "canonical_identity": identity,
-                    "assay_class": "capture-short-read",
-                    "haplotype_record_count": 2,
-                    "haplotype_record_count_margin": 2,
-                    "haplotype_record_share": 1.0,
-                    "haplotype_record_share_margin": 1.0,
-                    "haplotype_record_tie": False,
-                    "xd_availability_fraction": 1.0,
-                    "advntr_evidence_disposition": "admissible",
-                },
-            }
-        )
+    run_paths: dict[str, object] = {}
+    for key, role in zip(keys, roles, strict=True):
         labels.append(
             {
                 "label_key": f"l-{key}",
                 "manifest_key": key,
                 "truth_status": "mutated",
-                "expected_identity": identity,
+                "expected_identity": IDENTITY,
                 "expected_display_name": "59dupC",
                 "mutation_class": "duplication",
-            }
-        )
-        rows.append(
-            {
-                "order": order,
-                "name": "59dupC",
-                "confidence": "High_Precision",
-                "flag": "Not flagged",
-                "tier": "A",
-                "support": 10,
-                "tie": False,
-                "abstention": None,
             }
         )
         members.append(
@@ -327,6 +308,7 @@ def _inputs(root: Path) -> tuple[Path, Path, Path]:
                 "key": key,
                 "role": role,
                 "provenance": "external-custodian" if role == "locked-heldout" else "development",
+                "assay_class": "capture-short-read",
                 "groups": {
                     namespace: [f"{namespace}:{key}"]
                     for namespace in (
@@ -342,28 +324,11 @@ def _inputs(root: Path) -> tuple[Path, Path, Path]:
             }
         )
         run = root / "runs" / key
-        (run / "kestrel").mkdir(parents=True)
-        (run / "pipeline_summary.json").write_bytes(canonical_json_bytes({"schema_version": 3}))
-        (run / "kestrel" / "kestrel_pre_result.tsv").write_text("__Identity_Observation_Ordinal\n0\n", encoding="utf-8")
-        (run / "kestrel" / "bam_identity_replay.v1.json").write_bytes(
-            canonical_json_bytes({"schema_version": "bam-identity-replay-v1", "loci": []})
-        )
-        run_paths[key] = str(run)
+        run_paths[key] = write_schema_three_run(run, key)
 
-    expected = {
-        "aggregate": {"displayed": 4, "exact": 4, "wrong": 0, "control_findings": 0},
-        "per_tier": {"A": {"displayed": 4, "exact": 4, "wrong": 0}},
-        "rows": rows,
-    }
     truth_value = {
         "schema_version": "calibration-truth-v1",
-        "features": {"schema_version": "calibration-features-v1", "rows": features},
         "labels": {"schema_version": "calibration-labels-v1", "rows": labels},
-        "baseline": {
-            "schema_version": "calibration-baseline-replay-v1",
-            "expected": expected,
-            "observed": expected,
-        },
     }
     study_value = {
         "schema_version": "calibration-study-v1",
