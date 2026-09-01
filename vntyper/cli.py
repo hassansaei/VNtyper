@@ -20,6 +20,7 @@ from vntyper.scripts.cli_logging_safety import validate_pipeline_log_destination
 from vntyper.scripts.cli_parser import build_parser
 from vntyper.scripts.cli_report import handle_report
 from vntyper.scripts.fastp_cutoffs import preserve_exact_fastp_thresholds
+from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.scripts.utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,17 @@ def main(argv: list[str] | None = None) -> None:
     if args.command is None:
         parser.print_help()
         sys.exit(0)
+
+    # Resolve the complete profile before loading stage configuration and, most
+    # importantly, before creating the output directory or opening a log file. Only
+    # `pipeline` executes genotyping decisions; standalone report/cohort commands
+    # verify the snapshot recorded by an existing run and never infer current defaults.
+    if args.command == "pipeline":
+        try:
+            args.run_configuration = resolve_run_configuration(args.decision_profile)
+        except ValueError as exc:
+            logger.critical(str(exc))
+            sys.exit(1)
 
     # Load the main configuration based on the provided config path
     try:

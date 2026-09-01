@@ -85,6 +85,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "bed_file": (("--bed-file",), "_StoreAction", "Path", None, False, None, None),
         "cram": (("--cram",), "_StoreAction", "str", None, False, None, None),
         "custom_regions": (("--custom-regions",), "_StoreAction", "str", None, False, None, None),
+        "decision_profile": (("--decision-profile",), "_StoreAction", "Path", None, False, None, None),
         "delete_intermediates": (("--delete-intermediates",), "_StoreTrueAction", None, False, False, None, 0),
         "extra_modules": (("--extra-modules",), "_AppendAction", None, [], False, None, None),
         "fast_mode": (("--fast-mode",), "_StoreTrueAction", None, False, False, None, 0),

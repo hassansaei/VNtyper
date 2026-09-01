@@ -1,0 +1,156 @@
+"""Strict one-profile resolution and frozen run-context contracts."""
+
+from __future__ import annotations
+
+import copy
+import json
+from pathlib import Path
+
+import pytest
+
+from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
+from vntyper.scripts.decision_profile import (
+    load_packaged_decision_profile,
+    parse_decision_profile,
+    resolve_decision_profile,
+)
+from vntyper.scripts.run_configuration import resolve_run_configuration
+
+pytestmark = pytest.mark.unit
+
+PROFILE_PATH = Path(__file__).parents[2] / "vntyper" / "profiles" / "decision_profile.json"
+
+
+def _custom_document() -> dict[str, object]:
+    document = load_strict_json_object(PROFILE_PATH.read_bytes())
+    document["profile_id"] = "unit-test-explicit"
+    document["profile_revision"] = "test-1"
+    document["profile_kind"] = "explicit-custom"
+    inventory = document["inventory"]
+    assert isinstance(inventory, dict)
+    pointer = "/components/kestrel/duplicate_flagging/flag_name"
+    inventory[pointer]["value"] = "Unit_Test_Duplicate"
+    return document
+
+
+def test_no_argument_resolves_verified_packaged_profile() -> None:
+    resolved = resolve_decision_profile()
+
+    assert resolved.source == "package"
+    assert resolved.profile_kind == "packaged"
+    assert resolved.canonical_bytes == PROFILE_PATH.read_bytes()
+    assert len(resolved.digest) == 64
+    assert resolved.components["shark"] == {}
+
+
+def test_explicit_profile_is_complete_canonicalized_and_never_overlaid(tmp_path: Path) -> None:
+    document = _custom_document()
+    path = tmp_path / "custom.json"
+    path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+
+    resolved = resolve_decision_profile(path)
+
+    assert resolved.source == "explicit-cli"
+    assert resolved.profile_kind == "explicit-custom"
+    assert resolved.canonical_bytes == canonical_json_bytes(document)
+    assert resolved.components["kestrel"]["duplicate_flagging"]["flag_name"] == "Unit_Test_Duplicate"
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ('{"schema_version":1,"schema_version":1}', "duplicate JSON object key"),
+        ('{"value":NaN}', "non-finite JSON constant"),
+        ("[]", "top-level JSON value must be an object"),
+    ],
+)
+def test_parser_rejects_ambiguous_or_nonstandard_json(raw: str, message: str) -> None:
+    packaged = load_packaged_decision_profile()
+
+    with pytest.raises(ValueError, match=message):
+        parse_decision_profile(raw, packaged_document=packaged.document)
+
+
+@pytest.mark.parametrize("kind", ["packaged", "unsupported"])
+def test_explicit_path_cannot_select_packaged_or_unknown_kind(tmp_path: Path, kind: str) -> None:
+    document = _custom_document()
+    document["profile_kind"] = kind
+    path = tmp_path / "bad-kind.json"
+    path.write_bytes(canonical_json_bytes(document))
+
+    with pytest.raises(ValueError, match="profile_kind|profile kind|explicit CLI"):
+        resolve_decision_profile(path)
+
+
+def test_missing_unknown_and_immutable_fields_fail_without_fallback(tmp_path: Path) -> None:
+    packaged = load_packaged_decision_profile()
+    for _label, mutate, message in (
+        (
+            "missing",
+            lambda inventory: inventory.pop("/components/cross_match/required_advntr_evidence_disposition"),
+            "inventory fields differ",
+        ),
+        (
+            "unknown",
+            lambda inventory: inventory.__setitem__(
+                "/components/cross_match/unknown", {"class": "explicit-custom", "value": True}
+            ),
+            "inventory fields differ",
+        ),
+        (
+            "immutable",
+            lambda inventory: inventory["/components/nomenclature/thresholds/bam_flank"].__setitem__("value", 9),
+            "fixed-safety field",
+        ),
+    ):
+        document = _custom_document()
+        inventory = document["inventory"]
+        assert isinstance(inventory, dict)
+        mutate(inventory)
+        with pytest.raises(ValueError, match=message, check=lambda error: bool(str(error))):
+            parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+
+
+@pytest.mark.parametrize("name", ["missing.json", "directory"])
+def test_unreadable_explicit_path_fails_instead_of_falling_back(tmp_path: Path, name: str) -> None:
+    path = tmp_path / name
+    if name == "directory":
+        path.mkdir()
+
+    with pytest.raises(ValueError, match="cannot read explicit decision profile"):
+        resolve_decision_profile(path)
+
+
+def test_resolved_components_are_recursively_immutable() -> None:
+    run = resolve_run_configuration()
+
+    with pytest.raises(TypeError):
+        run.kestrel["new"] = True  # type: ignore[index]
+    confidence = run.kestrel["confidence_assignment"]
+    assert isinstance(confidence, dict | tuple) is False
+    with pytest.raises(TypeError):
+        confidence["new"] = True  # type: ignore[index]
+
+
+def test_generated_profile_requires_exact_closed_metadata() -> None:
+    packaged = load_packaged_decision_profile()
+    document = load_strict_json_object(PROFILE_PATH.read_bytes())
+    document["profile_id"] = "unit-test-generated"
+    document["profile_revision"] = "test-1"
+    document["profile_kind"] = "generated"
+    document["generated_metadata"] = {
+        "packaged_base_hash": packaged.digest,
+        "generator_name": "unit-test",
+        "generator_version": "1",
+        "objective": "lexicographic-safety-v1",
+        "dataset_manifest_hash": "a" * 64,
+        "partition_manifest_hash": "b" * 64,
+        "seed": 295,
+    }
+    baseline = copy.deepcopy(document)
+    parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+
+    document["generated_metadata"]["extra"] = True
+    with pytest.raises(ValueError, match="generated_metadata fields differ"):
+        parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+    assert baseline != document

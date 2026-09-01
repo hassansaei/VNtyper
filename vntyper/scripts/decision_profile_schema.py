@@ -427,12 +427,18 @@ def _projection_from_fields(fields: Mapping[str, DecisionField]) -> dict[str, ob
     return components
 
 
-def component_projection(profile: Mapping[str, object], component: str) -> object:
+def component_projection(
+    profile: Mapping[str, object],
+    component: str,
+    *,
+    packaged_profile: Mapping[str, object] | None = None,
+) -> object:
     """Return one reconstructed immutable decision component.
 
     Args:
         profile: Validated or packaged complete decision profile.
         component: Closed component name.
+        packaged_profile: Verified packaged baseline for a custom profile.
 
     Returns:
         The component's JSON-compatible decision mapping.
@@ -442,5 +448,5 @@ def component_projection(profile: Mapping[str, object], component: str) -> objec
     """
     if component not in _COMPONENTS:
         raise ValueError(f"unsupported decision component: {component}")
-    fields = {field.pointer: field for field in validate_complete_inventory(profile)}
+    fields = {field.pointer: field for field in validate_complete_inventory(profile, packaged_profile=packaged_profile)}
     return _projection_from_fields(fields)[component]
