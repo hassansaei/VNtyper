@@ -244,6 +244,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "vntyper/scripts/decision_profile_semantics.py": (
         "tests/unit/test_decision_profile_resolution.py",
         "tests/unit/test_decision_profile_schema.py",
+        "tests/unit/test_decision_profile_semantics.py",
         "tests/unit/test_kestrel_decision_threading.py",
         "tests/unit/test_nomenclature_decision_threading.py",
     ),

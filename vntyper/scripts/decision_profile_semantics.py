@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from vntyper.scripts.comparator_rules import validate_rule
 from vntyper.scripts.cross_match import CROSS_MATCH_COLUMNS
@@ -85,7 +86,7 @@ def _validate_kestrel(component: Mapping[str, object]) -> None:
     if set(selection.confidence_priority) != _CONFIDENCE_LABELS:
         raise ValueError("kestrel selection confidence_priority labels differ from the closed result vocabulary")
     ranks = tuple(selection.confidence_priority.values())
-    if any(isinstance(rank, bool) or not isinstance(rank, int) or rank < 0 for rank in ranks):
+    if any(rank < 0 for rank in ranks):
         raise ValueError("kestrel selection confidence_priority values must be non-negative integers")
     if len(set(ranks)) != len(ranks):
         raise ValueError("kestrel selection confidence_priority values must be distinct")
@@ -111,8 +112,8 @@ def _validate_advntr(component: Mapping[str, object]) -> None:
     if len(active_states) != len(active_statuses):
         raise ValueError("adVNTR artifact evidence active state and status arrays must have equal length")
     polymorphic = _mapping(flagging.get("Polymorphic_Call"), "adVNTR Polymorphic_Call")
-    all_nodes = polymorphic.get("all")
-    if not isinstance(all_nodes, Sequence) or isinstance(all_nodes, str) or len(all_nodes) != 1:
+    all_nodes = cast(Sequence[object], polymorphic.get("all"))
+    if len(all_nodes) != 1:
         raise ValueError("adVNTR Polymorphic_Call must contain exactly one governed predicate")
     predicate = _mapping(all_nodes[0], "adVNTR Polymorphic_Call predicate")
     right = _mapping(predicate.get("right"), "adVNTR Polymorphic_Call right operand")
