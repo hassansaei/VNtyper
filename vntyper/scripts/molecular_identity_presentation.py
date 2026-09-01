@@ -5,10 +5,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from vntyper.scripts.molecular_identity import IdentityTranslation, serialize_molecular_identity
+from vntyper.scripts.molecular_identity import (
+    AdvntrRepresentation,
+    IdentityTranslation,
+    serialize_molecular_identity,
+)
 
 if TYPE_CHECKING:
     from vntyper.scripts.identity_candidate_persistence import PersistedIdentityCandidate
+    from vntyper.scripts.identity_candidates import IdentityTranslator
 
 IDENTITY_COLUMNS: tuple[str, ...] = (
     "Molecular_Identity",
@@ -121,7 +126,7 @@ def persisted_identity_result_rows(rows: Iterable[Mapping[str, object]]) -> list
 
 def advntr_identity_result_rows(
     rows: Iterable[Mapping[str, object]],
-    identity_component: Any,
+    identity_component: IdentityTranslator,
 ) -> list[dict[str, str | int]]:
     """Translate and project the complete emitted adVNTR positive set.
 
@@ -134,11 +139,27 @@ def advntr_identity_result_rows(
     """
     from vntyper.scripts.identity_candidates import capture_advntr_observations
 
-    candidates = capture_advntr_observations(rows, identity_component).candidates
-    translations = tuple(candidate.observation.translation for candidate in candidates)
+    translations: list[IdentityTranslation] = []
+    for row in rows:
+        repeat_units = row["RU"]
+        positions = row["POS"]
+        repeat_units_absent = repeat_units == "."
+        positions_absent = positions == "."
+        if repeat_units_absent != positions_absent:
+            raise ValueError("adVNTR RU and POS must both use the absent-context sentinel or neither use it")
+        if repeat_units_absent:
+            state_values = [row[column] for column in ("State", "Variant") if column in row]
+            if len(state_values) != 1 or not isinstance(state_values[0], str) or not state_values[0]:
+                raise ValueError("adVNTR row must contain exactly one non-empty State or Variant field")
+            representation = AdvntrRepresentation(state_values[0], None, None)
+            translations.append(identity_component.translate_advntr(representation))
+            continue
+        candidate = capture_advntr_observations((row,), identity_component).candidates[0]
+        translations.append(candidate.observation.translation)
+    translation_tuple = tuple(translations)
     return [
-        identity_result_cells(selected, *(translations[:index] + translations[index + 1 :]))
-        for index, selected in enumerate(translations)
+        identity_result_cells(selected, *(translation_tuple[:index] + translation_tuple[index + 1 :]))
+        for index, selected in enumerate(translation_tuple)
     ]
 
 

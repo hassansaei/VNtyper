@@ -771,8 +771,9 @@ def process_advntr_output(output_path, output, output_name, config=None):
     string. When configuration includes a valid 'reference_data.code_adVNTR_RUs' FASTA,
     the function also annotates REF and ALT values.
 
-    The final output always contains the columns:
-      "VID, Variant, NumberOfSupportingReads, MeanCoverage, Pvalue, RU, POS, REF, ALT, Flag".
+    Every final output retains the legacy caller and nomenclature columns. Positive
+    results additionally append the four molecular-identity publication columns;
+    the negative placeholder retains its unchanged pre-identity schema.
 
     If the VCF data is empty, a negative result is generated immediately with
     'VID' set to "Negative" and all other columns set to "None", and further processing is skipped.
