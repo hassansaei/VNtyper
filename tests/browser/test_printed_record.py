@@ -562,6 +562,28 @@ def test_the_record_survives_a_reader_with_scripting_off(printable_report: Path,
     assert SAMPLE_NAME in squashed
     assert _squashed(LOG_POINTER) in squashed
     assert _squashed(DEBUG_LOG_LINE) not in squashed
+    for label in (
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    ):
+        exact_label = re.escape(label) + (r"(?!_Status)" if label == "Molecular_Identity" else "")
+        assert len(re.findall(exact_label, squashed)) == 3, (
+            f"the no-script PDF prints {label!r} somewhere other than the three labelled row appendices"
+        )
+    for identity, status, equivalent_count, hypothesis_count in (
+        ("MUC1-X-60-coding-v1|60|59|-|C", "legacy-selected-among-multiple", 2, 3),
+        ("MUC1-X-60-coding-v1|59|59|C|-", "unique", 1, 2),
+        ("", "unresolved", 0, 2),
+    ):
+        record = _squashed(
+            f"Molecular_Identity {identity} Molecular_Identity_Status {status} "
+            f"Equivalent_Representation_Count {equivalent_count} Identity_Hypothesis_Count {hypothesis_count}"
+        )
+        assert squashed.count(record) == 1, (
+            f"the no-script PDF omits or duplicates the labelled identity record ending in {hypothesis_count!r}"
+        )
 
 
 def test_the_printed_record_carries_the_coverage_verdict(printable_report: Path, browser: Browser) -> None:

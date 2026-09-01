@@ -921,6 +921,20 @@ def test_the_report_has_a_print_stylesheet(template: Path) -> None:
     assert _at_rule_body(_markup(template), "@media print"), f"{template.name}'s @media print block is empty"
 
 
+def test_print_hides_optional_table_cells_without_a_script_added_class() -> None:
+    """Catch a PDF that duplicates folded values when JavaScript never initialises the table."""
+    print_stylesheet = f"<style>{_print_block()}</style>"
+    optional_rules = [(selector, body) for selector, body in _rules(print_stylesheet) if ".col-optional" in selector]
+
+    assert optional_rules == [
+        (
+            ".table td.col-optional,\n  .table th.col-optional",
+            "display: none !important;",
+        )
+    ]
+    assert ".essential-columns" not in optional_rules[0][0]
+
+
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
 def test_each_template_reaches_the_token_layer_by_include(template: Path) -> None:
     """The composition mechanism, pinned where a later change would notice.

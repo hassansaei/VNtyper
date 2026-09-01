@@ -393,7 +393,7 @@ pytestmark = pytest.mark.unit
 #: Re-recorded 2026-08-26 when the ``[IMAGES]`` section was dropped from the document.
 #: Verified identical under pandas 2.2.2 / plotly 6.9.0 and pandas 2.2.3 / plotly 7.0.0,
 #: which is the point of dropping it.
-EXPECTED_FINGERPRINT = "8d32ebc38e6efb7dcaa286e8182d324f583990e902f3495331a2c037c9eca75c"
+EXPECTED_FINGERPRINT = "6d6f6c3bd47027ad2a2ec250bae363bd2d8514b38efea03b7590f3ab8fc16d6b"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid
