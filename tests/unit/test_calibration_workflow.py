@@ -189,6 +189,14 @@ def test_extract_rejects_a_cross_member_run_root_swap(tmp_path: Path) -> None:
         extract_evidence(_study(), _labels(), runs)
 
 
+def test_extract_rejects_a_complete_cross_member_declaration_swap(tmp_path: Path) -> None:
+    runs = _runs(tmp_path)
+    runs["held"], runs["train"] = runs["train"], runs["held"]
+
+    with pytest.raises(ValueError, match="member key|manifest key"):
+        extract_evidence(_study(), _labels(), runs)
+
+
 def test_extract_rejects_a_stale_final_result_even_when_its_declared_hash_is_updated(tmp_path: Path) -> None:
     runs = _runs(tmp_path)
     train = runs["train"]
@@ -229,8 +237,112 @@ def test_extract_retains_a_no_finding_member_without_fabricating_a_baseline_call
         "support": None,
         "tie": False,
         "abstention": None,
+        "identity_projection": {},
     }
     assert evidence.baseline["expected"]["aggregate"]["control_findings"] == 0
+
+
+def test_extract_accepts_replay_for_only_the_retained_final_candidate(tmp_path: Path) -> None:
+    runs = _runs(tmp_path)
+    runs["train"] = write_schema_three_run(tmp_path / "two-pre-one-final", "train", extra_pre_result=True)
+
+    evidence = extract_evidence(_study(), _labels(), runs)
+
+    train = next(row for row in evidence.features.rows if row.manifest_key == "train")
+    assert train.features["canonical_identity"] == IDENTITY
+    assert train.features["cooccurring_identity_count"] == 2
+
+
+def test_extract_rejects_replay_for_a_stale_nonretained_pre_result_ordinal(tmp_path: Path) -> None:
+    runs = _runs(tmp_path)
+    runs["train"] = write_schema_three_run(tmp_path / "two-pre-one-final", "train", extra_pre_result=True)
+    train = runs["train"]
+    assert isinstance(train, dict)
+    replay = Path(str(train["root"])) / "kestrel" / "bam_identity_replay.v1.json"
+    stale = replay.read_bytes().replace(
+        b'"candidate_observation_ordinals":[0]', b'"candidate_observation_ordinals":[1]'
+    )
+    replay.write_bytes(
+        stale.replace(b'"candidate_observation_ordinals":[[0]]', b'"candidate_observation_ordinals":[[1]]')
+    )
+    refresh_run_hashes(train)
+
+    with pytest.raises(ValueError, match="BAM replay.*ordinals|cover.*ordinals"):
+        extract_evidence(_study(), _labels(), runs)
+
+
+def test_extract_uses_advntr_when_kestrel_is_the_exact_negative_placeholder(tmp_path: Path) -> None:
+    runs = _runs(tmp_path)
+    runs["train"] = write_schema_three_run(
+        tmp_path / "advntr-only",
+        "train",
+        with_advntr=True,
+        no_kestrel_finding=True,
+        advntr_identity=OTHER_IDENTITY,
+        advntr_name="58dupG",
+        selected_name="58dupG",
+        reconciled_identity=OTHER_IDENTITY,
+    )
+
+    evidence = extract_evidence(_study(), _labels(), runs)
+
+    row = next(row for row in evidence.baseline["expected"]["rows"] if row["manifest_key"] == "train")
+    assert row["canonical_identity"] == OTHER_IDENTITY
+    assert row["name"] == "58dupG"
+    assert row["support"] == 7
+
+
+def test_extract_uses_the_reconciled_advntr_selected_whole_locus_verdict(tmp_path: Path) -> None:
+    runs = _runs(tmp_path)
+    runs["train"] = write_schema_three_run(
+        tmp_path / "advntr-selected",
+        "train",
+        with_advntr=True,
+        advntr_identity=OTHER_IDENTITY,
+        advntr_name="58dupG",
+        selected_name="58dupG",
+        reconciled_identity=OTHER_IDENTITY,
+    )
+
+    evidence = extract_evidence(_study(), _labels(), runs)
+
+    row = next(row for row in evidence.baseline["expected"]["rows"] if row["manifest_key"] == "train")
+    assert row["canonical_identity"] == OTHER_IDENTITY
+    assert row["name"] == "58dupG"
+    assert row["identity_projection"] == {
+        IDENTITY: {"name": "59dupC", "tier": "A"},
+        OTHER_IDENTITY: {"name": "58dupG", "tier": "A"},
+    }
+
+
+def test_extract_never_selects_identity_from_equal_display_names(tmp_path: Path) -> None:
+    runs = _runs(tmp_path)
+    runs["train"] = write_schema_three_run(
+        tmp_path / "same-display-different-identity",
+        "train",
+        with_advntr=True,
+        advntr_identity=OTHER_IDENTITY,
+        advntr_name="59dupC",
+        reconciled_identity=OTHER_IDENTITY,
+    )
+
+    evidence = extract_evidence(_study(), _labels(), runs)
+
+    row = next(row for row in evidence.baseline["expected"]["rows"] if row["manifest_key"] == "train")
+    assert row["canonical_identity"] == OTHER_IDENTITY
+    assert row["name"] == "59dupC"
+
+
+def test_extract_binds_raw_profile_bytes_to_the_summary_digest(tmp_path: Path) -> None:
+    runs = _runs(tmp_path)
+    train = runs["train"]
+    assert isinstance(train, dict)
+    profile = Path(str(train["root"])) / "provenance" / "decision_profile.json"
+    profile.write_bytes(profile.read_bytes() + b" \n")
+    refresh_run_hashes(train)
+
+    with pytest.raises(ValueError, match="profile.*SHA-256|SHA-256.*profile"):
+        extract_evidence(_study(), _labels(), runs)
 
 
 def test_extract_rejects_pre_result_diagnostics_that_disagree_with_identity_capture(tmp_path: Path) -> None:

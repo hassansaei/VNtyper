@@ -26,7 +26,23 @@ def build_role_inputs(
     baseline: Mapping[str, object],
     run_hashes: Mapping[str, Mapping[str, str]],
 ) -> RoleInputs:
-    """Project the exact inputs belonging to a predeclared calibration role."""
+    """Project the exact inputs belonging to a predeclared calibration role.
+
+    Args:
+        keys: Canonically ordered member keys assigned to the role.
+        feature_rows: Complete study feature rows.
+        label_rows: Complete independently authored label rows.
+        baseline: Complete independently derived baseline replay.
+        run_hashes: Structured exact artifact hashes for every study member.
+
+    Returns:
+        Closed role-scoped features, labels, baseline, and run hashes.
+
+    Raises:
+        ValueError: If source artifacts are malformed or selected row keys do not
+            align exactly across role inputs.
+        KeyError: If a predeclared role member has no run hash declaration.
+    """
     key_set = set(keys)
     features: dict[str, object] = {
         "schema_version": "calibration-features-v1",

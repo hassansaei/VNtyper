@@ -13,6 +13,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from vntyper.modules.advntr.artifact_evidence import load_artifact_evidence
+from vntyper.scripts.calibration_run_projection import build_shipped_projection, retained_kestrel_ordinals
 from vntyper.scripts.canonical_json import load_strict_json_object
 from vntyper.scripts.identity_candidate_persistence import (
     IDENTITY_CAPTURE_COLUMNS,
@@ -47,6 +48,7 @@ _SHA256_HEX = frozenset("0123456789abcdef")
 class RunArtifactDeclaration:
     """One precommitted run root and its exact fixed-relative artifact hashes."""
 
+    member_key: str
     root: Path
     artifact_sha256: Mapping[str, str]
 
@@ -72,7 +74,10 @@ def decode_run_artifact_declaration(value: object) -> RunArtifactDeclaration:
     Raises:
         ValueError: If fields, paths, artifact membership, or hashes are invalid.
     """
-    raw = _exact_mapping(value, {"root", "artifacts"}, "calibration run declaration")
+    raw = _exact_mapping(value, {"member_key", "root", "artifacts"}, "calibration run declaration")
+    member_key = raw["member_key"]
+    if not isinstance(member_key, str) or not member_key:
+        raise ValueError("calibration run declaration member key must be a non-empty string")
     root = raw["root"]
     if not isinstance(root, str) or not root:
         raise ValueError("calibration run root must be a non-empty string")
@@ -80,11 +85,21 @@ def decode_run_artifact_declaration(value: object) -> RunArtifactDeclaration:
     if not isinstance(artifact_values, Mapping):
         raise ValueError("calibration run artifacts must be a structured SHA-256 object")
     artifact_sha256 = validate_run_artifact_hashes(artifact_values)
-    return RunArtifactDeclaration(Path(root), MappingProxyType(artifact_sha256))
+    return RunArtifactDeclaration(member_key, Path(root), MappingProxyType(artifact_sha256))
 
 
 def validate_run_artifact_hashes(value: Mapping[object, object]) -> dict[str, str]:
-    """Validate the exact fixed-relative artifact hash map for one current run."""
+    """Validate the exact fixed-relative artifact hash map for one current run.
+
+    Args:
+        value: Candidate relative paths mapped to lowercase SHA-256 digests.
+
+    Returns:
+        Deterministically ordered validated artifact map.
+
+    Raises:
+        ValueError: If a path, digest, or exact artifact membership is invalid.
+    """
     artifact_sha256: dict[str, str] = {}
     for relative, digest in value.items():
         if not isinstance(relative, str) or not relative:
@@ -102,7 +117,17 @@ def validate_run_artifact_hashes(value: Mapping[object, object]) -> dict[str, st
 
 
 def decode_run_hashes(value: Mapping[str, object]) -> dict[str, dict[str, str]]:
-    """Decode member keys mapped to exact structured current-run artifact hashes."""
+    """Decode member keys mapped to exact structured current-run artifact hashes.
+
+    Args:
+        value: Role-bundle member keys mapped to artifact hash objects.
+
+    Returns:
+        Validated structured artifact hashes keyed by member.
+
+    Raises:
+        ValueError: If a member key or its artifact contract is invalid.
+    """
     hashes: dict[str, dict[str, str]] = {}
     for key, raw_artifacts in value.items():
         if not isinstance(key, str) or not key or not isinstance(raw_artifacts, Mapping):
@@ -133,8 +158,13 @@ def extract_completed_run(
         raise ValueError("calibration run assay class must be a non-empty string")
     if not isinstance(declaration, RunArtifactDeclaration):
         raise ValueError("calibration run extraction requires a RunArtifactDeclaration")
+    if declaration.member_key != manifest_key:
+        raise ValueError("calibration run declaration member key differs from its manifest key")
     artifacts = _read_precommitted_artifacts(declaration)
     summary = load_strict_json_object(artifacts["pipeline_summary.json"])
+    declared_profile_sha256 = declaration.artifact_sha256["provenance/decision_profile.json"]
+    if summary.get("decision_profile_sha256") != declared_profile_sha256:
+        raise ValueError("calibration declared profile SHA-256 differs from the verified summary digest")
     profile = resolve_summary_profile(summary, declaration.root)
 
     steps = _caller_steps(summary)
@@ -148,10 +178,15 @@ def extract_completed_run(
     if has_advntr:
         if not isinstance(evidence_digest, str):
             raise ValueError("calibration adVNTR stage requires a governed evidence digest")
-        load_artifact_evidence(
+        loaded_evidence = load_artifact_evidence(
             declaration.root / ADVNTR_RUN_ARTIFACTS[0],
             expected_digest=evidence_digest,
         )
+        declared_evidence_sha256 = declaration.artifact_sha256[ADVNTR_RUN_ARTIFACTS[0]]
+        if loaded_evidence.digest != declared_evidence_sha256:
+            raise ValueError("calibration declared adVNTR evidence SHA-256 differs from the verified summary digest")
+        if loaded_evidence.canonical_bytes != artifacts[ADVNTR_RUN_ARTIFACTS[0]]:
+            raise ValueError("calibration governed adVNTR evidence bytes changed during verification")
     elif evidence_digest is not None:
         raise ValueError("calibration run without an adVNTR step cannot record governed adVNTR evidence")
 
@@ -167,9 +202,13 @@ def extract_completed_run(
     pre_result = _parse_tsv(artifacts["kestrel/kestrel_pre_result.tsv"], "Kestrel pre-result")
     pre_rows = _rows(pre_result, "Kestrel pre-result", allow_empty=True)
     pre_by_ordinal = _validate_pre_result(pre_rows)
+    expected_ordinals = retained_kestrel_ordinals(expected_rows)
+    observed_ordinals = retained_kestrel_ordinals(observed_rows)
+    if expected_ordinals != observed_ordinals:
+        raise ValueError("calibration summary retained Kestrel ordinals differ from the fixed final result")
     expected_persisted: PersistedIdentityCandidate | None = None
     observed_persisted: PersistedIdentityCandidate | None = None
-    if expected_rows:
+    if expected_ordinals:
         expected_persisted = parse_selected_candidate_cells(expected_rows[0])
         observed_persisted = parse_selected_candidate_cells(observed_rows[0])
         if expected_persisted != observed_persisted:
@@ -181,21 +220,25 @@ def extract_completed_run(
 
     replay_value = load_strict_json_object(artifacts["kestrel/bam_identity_replay.v1.json"])
     replay = decode_bam_replay_artifact(replay_value)
-    validate_bam_replay_artifact_ordinals(replay, tuple(pre_by_ordinal))
+    validate_bam_replay_artifact_ordinals(replay, observed_ordinals)
     _crosscheck_bam_identity_bindings(replay, pre_by_ordinal)
     bam_features = _bam_features(replay)
 
     expected_advntr: dict[str, object] | None = None
     observed_advntr: dict[str, object] | None = None
+    expected_advntr_rows: list[Mapping[str, object]] = []
+    observed_advntr_rows: list[Mapping[str, object]] = []
     if has_advntr:
         advntr_bytes = artifacts["advntr/output_adVNTR_result.tsv"]
         expected_advntr = _summary_tsv(steps[STEP_ADVNTR], advntr_bytes, STEP_ADVNTR)
         observed_advntr = _parse_tsv(advntr_bytes, "adVNTR final result")
         if expected_advntr != observed_advntr:
             raise ValueError("calibration summary parsed result differs from the fixed final adVNTR result")
+        expected_advntr_rows = _rows(expected_advntr, "summary adVNTR result", allow_empty=True)
+        observed_advntr_rows = _rows(observed_advntr, "fixed adVNTR result", allow_empty=True)
 
-    expected_row = _baseline_row(manifest_key, expected_rows[0] if expected_rows else None)
-    observed_row = _baseline_row(manifest_key, observed_rows[0] if observed_rows else None)
+    expected_row = build_shipped_projection(manifest_key, expected_rows, expected_advntr_rows)
+    observed_row = build_shipped_projection(manifest_key, observed_rows, observed_advntr_rows)
     features = _runtime_features(
         assay_class,
         summary,
@@ -516,37 +559,7 @@ def _advntr_support_features(document: Mapping[str, object] | None, selected_ide
             row.get("NumberOfSupportingReads"), "adVNTR sequencing-read support"
         ),
         "advntr_p_value": _nonnegative_number(row.get("Pvalue"), "adVNTR p-value"),
-        "advntr_coverage": _nonnegative_number(row.get("Coverage"), "adVNTR coverage"),
-    }
-
-
-def _baseline_row(manifest_key: str, row: Mapping[str, object] | None) -> dict[str, object]:
-    if row is None:
-        return {
-            "manifest_key": manifest_key,
-            "order": 0,
-            "canonical_identity": None,
-            "name": None,
-            "confidence": None,
-            "flag": None,
-            "tier": None,
-            "support": None,
-            "tie": False,
-            "abstention": None,
-        }
-    persisted = parse_selected_candidate_cells(row)
-    identity = persisted.translation.identity
-    return {
-        "manifest_key": manifest_key,
-        "order": 0,
-        "canonical_identity": serialize_molecular_identity(identity) if identity is not None else None,
-        "name": _optional_nonempty(row.get("Nomenclature")),
-        "confidence": _optional_nonempty(row.get("Confidence")),
-        "flag": _optional_nonempty(row.get("Flag")),
-        "tier": _optional_nonempty(row.get("Nomenclature_Tier")),
-        "support": _nonnegative_number(row.get("Estimated_Depth_AlternateVariant"), "Kestrel baseline support"),
-        "tie": False,
-        "abstention": None,
+        "advntr_coverage": _nonnegative_number(row.get("MeanCoverage"), "adVNTR mean coverage"),
     }
 
 
@@ -571,10 +584,6 @@ def _nonempty(value: object, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"calibration {label} must be a non-empty string")
     return value
-
-
-def _optional_nonempty(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
 
 
 def _is_sha256(value: object) -> bool:

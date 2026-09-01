@@ -61,6 +61,7 @@ from vntyper.scripts.kestrel_command import construct_kestrel_command as constru
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_decision_config import KestrelSelection, project_kestrel_selection
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
+from vntyper.scripts.kestrel_result_artifacts import write_empty_kestrel_artifacts
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.molecular_identity_presentation import (
     IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS,
@@ -718,6 +719,7 @@ def process_kestrel_output(
             output_dir,
             header,
             note=_subthreshold_note(output_dir, note_config, selection.final_filter_columns),
+            preserve_pre_result=True,
         )
         return None
 
@@ -748,7 +750,7 @@ def process_kestrel_output(
     return processed_df
 
 
-def output_empty_result(output_dir, header, note=None):
+def output_empty_result(output_dir, header, note=None, preserve_pre_result=False):
     """
     Creates an empty result file with correct headers and a
     placeholder 'Negative' variant row to indicate no variants
@@ -762,32 +764,17 @@ def output_empty_result(output_dir, header, note=None):
             and never a row, so the 10-column placeholder schema below is unchanged and
             no consumer that reads the table can mistake it for a call -- `parse_tsv`
             routes `#` lines into `comments`, and `data` never sees them.
+        preserve_pre_result (bool, optional): Keep the scored pre-result on the
+            post-filter no-call branch. Earlier branches replace stale state.
     """
-    final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
-
-    empty_result_data = {
-        "Motif": ["None"],
-        "Variant": ["None"],
-        "POS": ["None"],
-        "REF": ["None"],
-        "ALT": ["None"],
-        "Motif_sequence": ["None"],
-        "Estimated_Depth_AlternateVariant": ["None"],
-        "Estimated_Depth_Variant_ActiveRegion": ["None"],
-        "Depth_Score": ["None"],
-        "Confidence": ["Negative"],
-    }
-    empty_df = pd.DataFrame(empty_result_data)
-
-    banner = list(header)
     if note:
-        banner.append(f"## {note}")
         logger.info("Recording a below-reporting-floor note on an otherwise empty result.")
-
-    with open(final_output_path, "w") as f:
-        f.write("\n".join(banner) + "\n")
-        empty_df.to_csv(f, sep="\t", index=False)
-
+    final_output_path = write_empty_kestrel_artifacts(
+        output_dir,
+        header,
+        note=note,
+        preserve_pre_result=preserve_pre_result,
+    )
     logger.info(f"Empty result file with placeholder saved at {final_output_path}")
 
 

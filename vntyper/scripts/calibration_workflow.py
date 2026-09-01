@@ -84,7 +84,20 @@ def extract_evidence(
     labels: LabelArtifact,
     runs: Mapping[str, object],
 ) -> ExtractedEvidence:
-    """Derive features and shipped replay from complete immutable run artifacts."""
+    """Derive features and shipped replay from complete immutable run artifacts.
+
+    Args:
+        study: Validated study protocol and partition declaration.
+        labels: Independent labels-only truth artifact.
+        runs: Every manifest key mapped to its bound immutable run declaration.
+
+    Returns:
+        Frozen runtime features, baseline projections, and structured run hashes.
+
+    Raises:
+        ValueError: If study, labels, declarations, artifacts, or canonical row
+            alignment violate the closed extraction contract.
+    """
     if not isinstance(study, StudyDeclaration):
         raise ValueError("calibration extraction requires a StudyDeclaration")
     if not isinstance(runs, Mapping) or set(runs) != {member.key for member in study.partitions.members}:
@@ -258,6 +271,7 @@ def _validate_baseline_replay(value: Mapping[str, object]) -> None:
         "support",
         "tie",
         "abstention",
+        "identity_projection",
     }
     if any(not isinstance(row, Mapping) or set(row) != row_fields for row in rows):
         raise ValueError("calibration baseline replay rows lack required decision fields")

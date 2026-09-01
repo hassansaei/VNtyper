@@ -37,6 +37,11 @@ def write_schema_three_run(
     with_advntr: bool = False,
     no_kestrel_finding: bool = False,
     retain_pre_result: bool = False,
+    extra_pre_result: bool = False,
+    advntr_identity: str | None = None,
+    advntr_name: str | None = None,
+    selected_name: str | None = None,
+    reconciled_identity: str | None = None,
 ) -> dict[str, object]:
     """Write one complete current-run artifact set and its immutable declaration."""
     kestrel = root / "kestrel"
@@ -83,6 +88,26 @@ def write_schema_three_run(
         **capture,
     }
     pre_rows = [pre_row] if not no_kestrel_finding or retain_pre_result else []
+    if extra_pre_result:
+        extra = dict(pre_row)
+        extra_raw_key = json.dumps(
+            {"source": "kestrel", "values": ["X-Y", 68, "C", "CG"]},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        extra.update(
+            {
+                "Motifs": "X-Y",
+                "POS": "68",
+                "REF": "C",
+                "ALT": "CG",
+                "Molecular_Identity": OTHER_IDENTITY,
+                "__Identity_Raw_Representation_Key": extra_raw_key,
+                "__Identity_Molecular_Identity": OTHER_IDENTITY,
+                "__Identity_Observation_Ordinal": "1",
+            }
+        )
+        pre_rows.append(extra)
     _write_tsv(kestrel / "kestrel_pre_result.tsv", pre_rows, list(pre_row))
 
     selection = {
@@ -105,7 +130,7 @@ def write_schema_three_run(
         "Depth_Score": "0.01",
         "Confidence": "High_Precision",
         "Flag": "Not flagged",
-        "Nomenclature": name,
+        "Nomenclature": selected_name or name,
         "Nomenclature_Tier": "A",
         "Nomenclature_Flags": "",
         "Nomenclature_Kestrel": name,
@@ -117,9 +142,23 @@ def write_schema_three_run(
         **capture,
         **selection,
     }
+    if with_advntr:
+        final_row["__Reconciled_Molecular_Identity"] = reconciled_identity or identity
     result = kestrel / "kestrel_result.tsv"
-    final_rows = [] if no_kestrel_finding else [final_row]
-    _write_tsv(result, final_rows, list(final_row))
+    negative_row = {
+        "Motif": "None",
+        "Variant": "None",
+        "POS": "None",
+        "REF": "None",
+        "ALT": "None",
+        "Motif_sequence": "None",
+        "Estimated_Depth_AlternateVariant": "None",
+        "Estimated_Depth_Variant_ActiveRegion": "None",
+        "Depth_Score": "None",
+        "Confidence": "Negative",
+    }
+    final_rows = [negative_row] if no_kestrel_finding else [final_row]
+    _write_tsv(result, final_rows, list(negative_row) if no_kestrel_finding else list(final_row))
 
     replay = {
         "schema_version": "bam-identity-replay-v1",
@@ -141,7 +180,7 @@ def write_schema_three_run(
                 },
             }
         ]
-        if pre_rows
+        if pre_rows and not no_kestrel_finding
         else [],
     }
     (kestrel / "bam_identity_replay.v1.json").write_bytes(canonical_json_bytes(replay))
@@ -154,19 +193,24 @@ def write_schema_three_run(
         evidence = load_packaged_artifact_evidence()
         evidence_path = provenance / "advntr_artifact_evidence.json"
         evidence_path.write_bytes(evidence.canonical_bytes)
+        caller_identity = advntr_identity or identity
+        caller_name = advntr_name or name
         advntr_row = {
             "VID": "25561",
             "Variant": "NOT_GOVERNED",
             "NumberOfSupportingReads": "7",
             "Pvalue": "0.001",
-            "Coverage": "42",
+            "MeanCoverage": "42",
+            "Flag": "Not flagged",
             "Evidence_Disposition": "admissible",
-            "Nomenclature": name,
+            "Nomenclature": selected_name or name,
             "Nomenclature_Tier": "A",
-            "Molecular_Identity": identity,
+            "Nomenclature_adVNTR": caller_name,
+            "Molecular_Identity": caller_identity,
             "Molecular_Identity_Status": "unique",
             "Equivalent_Representation_Count": "1",
             "Identity_Hypothesis_Count": "1",
+            "__Reconciled_Molecular_Identity": reconciled_identity or identity,
         }
         advntr_result = root / "advntr" / "output_adVNTR_result.tsv"
         advntr_result.parent.mkdir()
@@ -204,7 +248,7 @@ def write_schema_three_run(
     }
     (root / "pipeline_summary.json").write_bytes(canonical_json_bytes(summary))
     hashes = {relative: hashlib.sha256((root / relative).read_bytes()).hexdigest() for relative in artifact_names}
-    return {"root": str(root), "artifacts": hashes}
+    return {"member_key": key, "root": str(root), "artifacts": hashes}
 
 
 def refresh_run_hashes(entry: dict[str, object]) -> None:

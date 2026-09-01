@@ -41,6 +41,7 @@ from vntyper.scripts.nomenclature import (
     render,
 )
 from vntyper.scripts.nomenclature_bam import refine
+from vntyper.scripts.nomenclature_identity_projection import reconcile_identity_aware_nomenclature
 
 pytestmark = pytest.mark.unit
 
@@ -95,6 +96,24 @@ def test_typed_adapter_rejects_equal_display_names_with_different_identities() -
     assert merged.name == "59dupC", "the packaged legacy display row remains primary"
     assert merged.tier == "B"
     assert FLAG_CALLER_DISAGREEMENT in merged.flags
+
+
+def test_identity_aware_result_preserves_typed_selection_separately_from_equal_display() -> None:
+    kestrel = _kestrel_dupc()
+    advntr = _advntr_dupc()
+
+    result = reconcile_identity_aware_nomenclature(
+        kestrel,
+        advntr,
+        identity_observations=(
+            _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40),
+            _identity_observation(_DUPA_IDENTITY, advntr, advntr_reads=40),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert result.call.name == kestrel.name == advntr.name
+    assert result.selected_identity == _DUPC_IDENTITY
 
 
 def test_typed_adapter_agrees_by_identity_without_replacing_the_legacy_display_row() -> None:

@@ -10,13 +10,19 @@ import pytest
 
 from tests.calibration_run_fixture import IDENTITY, OTHER_IDENTITY, write_schema_three_run
 from vntyper.scripts.calibration_artifacts import (
+    _observations,
     evaluate_artifact_bundle,
     extract_artifact_bundle,
     fit_artifact_bundle,
     validate_artifact_bundle,
 )
 from vntyper.scripts.calibration_contract import decode_attestation
+from vntyper.scripts.calibration_features import decode_label_artifact
+from vntyper.scripts.calibration_manifest import decode_study_declaration
+from vntyper.scripts.calibration_objective import calculate_metrics
+from vntyper.scripts.calibration_profiles import build_generated_profile
 from vntyper.scripts.calibration_statistics import BootstrapInterval
+from vntyper.scripts.calibration_workflow import extract_evidence
 from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
 from vntyper.scripts.cli_calibrate import handle_calibrate
 from vntyper.scripts.cli_parser import build_parser
@@ -257,6 +263,57 @@ def test_fit_does_not_infer_canonical_identity_correctness_from_display_name(tmp
     metrics = load_strict_json_object((candidate / "metrics.json").read_bytes())
     assert metrics["macro_exact_recovery"] == "0"
     assert metrics["wrong_displayed_names_all_tiers"] == 0
+
+
+def test_candidate_a_to_b_is_counted_as_a_wrong_tier_a_displayed_name(tmp_path: Path) -> None:
+    truth, partitions, runs_path = _inputs(tmp_path)
+    runs_document = load_strict_json_object(runs_path.read_bytes())
+    run_values = runs_document["runs"]
+    assert isinstance(run_values, dict)
+    for key in tuple(run_values):
+        run_values[key] = write_schema_three_run(
+            tmp_path / "wrong-selection-runs" / key,
+            key,
+            identity=OTHER_IDENTITY,
+            name="58dupG",
+            with_advntr=True,
+            advntr_identity=IDENTITY,
+            advntr_name="59dupC",
+            selected_name="59dupC",
+            reconciled_identity=IDENTITY,
+        )
+    study = decode_study_declaration(load_strict_json_object(partitions.read_bytes()))
+    labels_document = load_strict_json_object(truth.read_bytes())["labels"]
+    labels = decode_label_artifact(labels_document)
+    evidence = extract_evidence(study, labels, run_values)
+
+    profile = build_generated_profile(
+        {
+            "enabled": True,
+            "minimum_record_count_margin": 1,
+            "minimum_record_share": 0.5,
+            "minimum_record_share_margin": 0.0,
+            "xd_veto": "disabled",
+            "abstain_on_inadmissible_advntr": False,
+        },
+        dataset_manifest_hash="b" * 64,
+        partition_manifest_hash="c" * 64,
+        seed=295,
+        objective="lexicographic-safety-v1",
+        generator_version="test",
+    )
+    observations, _ = _observations(profile, evidence)
+    summary = calculate_metrics(
+        observations,
+        profile_sha256="a" * 64,
+        free_parameter_count=0,
+        required_strata=("capture-short-read:duplication",),
+    )
+
+    assert {row.displayed_name for row in observations} == {"58dupG"}
+    assert {row.tier for row in observations} == {"A"}
+    assert summary.metrics.wrong_displayed_names_all_tiers == 3
+    assert summary.metrics.wrong_tier_a_displayed_names == 3
 
 
 @pytest.mark.parametrize("forbidden", ["features", "baseline"])

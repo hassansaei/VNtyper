@@ -1352,6 +1352,7 @@ def test_identity_aware_reconciliation_writes_not_consulted_replay_state(tmp_pat
     assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact((BamReplayLocus((0,), "not-consulted", None),))
     written = pd.read_csv(kestrel, sep="\t", dtype=str)
     assert BAM_REPLAY_FILENAME not in written.columns
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == serialize_molecular_identity(identity)
 
 
 def test_identity_aware_reconciliation_writes_unavailable_replay_state(tmp_path: Path) -> None:

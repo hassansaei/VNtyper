@@ -413,9 +413,7 @@ def _observations(
         abstained = decision.abstention_reason is not None
         applicable = decision.applicable
         baseline_identity = baseline.get("canonical_identity")
-        projected = selected is not None and selected == baseline_identity
-        displayed = baseline.get("name") if projected else None
-        tier = baseline.get("tier") if projected else None
+        displayed, tier = _rendered_identity_projection(baseline, selected)
         assay = feature.features.get("assay_class")
         if not isinstance(assay, str) or not assay:
             raise ValueError("calibration feature row requires assay_class")
@@ -462,6 +460,34 @@ def _observations(
         if members[feature.manifest_key].role not in {"policy-selection", "validation", "locked-heldout"}:
             raise ValueError("calibration metrics cannot be calculated from training-role outcomes")
     return tuple(candidate_rows), tuple(baseline_rows)
+
+
+def _rendered_identity_projection(
+    baseline: Mapping[str, object], selected_identity: str | None
+) -> tuple[str | None, str | None]:
+    """Look up a selected identity in the closed non-feature rendering map."""
+    projection = _mapping(baseline.get("identity_projection"), "baseline identity projection")
+    for identity, raw in projection.items():
+        if not isinstance(identity, str) or not identity:
+            raise ValueError("calibration baseline identity projection keys must be non-empty strings")
+        value = _mapping(raw, "baseline identity rendering")
+        if set(value) != {"name", "tier"}:
+            raise ValueError("calibration baseline identity rendering fields differ")
+        if not isinstance(value["name"], str) or not value["name"]:
+            raise ValueError("calibration baseline identity rendering name must be non-empty")
+        if value["tier"] is not None and (not isinstance(value["tier"], str) or not value["tier"]):
+            raise ValueError("calibration baseline identity rendering tier must be non-empty or null")
+    if selected_identity is None:
+        return None, None
+    selected = projection.get(selected_identity)
+    if selected is None:
+        raise ValueError("calibration selected identity is absent from the closed baseline rendering projection")
+    value = _mapping(selected, "selected baseline identity rendering")
+    name = value["name"]
+    tier = value["tier"]
+    assert isinstance(name, str)
+    assert tier is None or isinstance(tier, str)
+    return name, tier
 
 
 def _write_locked_payload(role_root: Path, study_raw: Mapping[str, object], study, inputs: RoleInputs) -> None:

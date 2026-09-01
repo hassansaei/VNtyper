@@ -25,7 +25,18 @@ class BaselineExtraction(Protocol):
 def build_baseline(
     extractions: Sequence[BaselineExtraction], labels_by_key: Mapping[str, LabelRow]
 ) -> dict[str, object]:
-    """Build independently aggregated expected and observed shipped projections."""
+    """Build independently aggregated expected and observed shipped projections.
+
+    Args:
+        extractions: Completed run extractions in canonical member order.
+        labels_by_key: Independently decoded truth labels in the same order.
+
+    Returns:
+        Closed expected/observed baseline replay document.
+
+    Raises:
+        ValueError: If rows, keys, labels, or independent projections differ.
+    """
     expected_rows = [dict(_mapping(extraction.expected_row, "expected extraction row")) for extraction in extractions]
     observed_rows = [dict(_mapping(extraction.observed_row, "observed extraction row")) for extraction in extractions]
     return project_baseline(expected_rows, observed_rows, labels_by_key, require_equal=True)
@@ -38,12 +49,42 @@ def project_baseline(
     *,
     require_equal: bool = False,
 ) -> dict[str, object]:
-    """Aggregate independently decoded expected and observed decision rows."""
-    expected = _projection([dict(_mapping(row, "expected baseline row")) for row in expected_rows], labels_by_key)
-    observed = _projection([dict(_mapping(row, "observed baseline row")) for row in observed_rows], labels_by_key)
+    """Aggregate independently decoded expected and observed decision rows.
+
+    Args:
+        expected_rows: Summary-derived baseline rows.
+        observed_rows: Fixed-result-file-derived baseline rows.
+        labels_by_key: Independently decoded labels in canonical row order.
+        require_equal: Whether all derived aggregate and row values must match.
+
+    Returns:
+        Closed expected/observed baseline replay document.
+
+    Raises:
+        ValueError: If row keys do not align uniquely and exactly, or required
+            independent projections differ.
+    """
+    expected_values = [dict(_mapping(row, "expected baseline row")) for row in expected_rows]
+    observed_values = [dict(_mapping(row, "observed baseline row")) for row in observed_rows]
+    expected_keys = _row_keys(expected_values, "expected")
+    observed_keys = _row_keys(observed_values, "observed")
+    label_keys = tuple(labels_by_key)
+    if expected_keys != observed_keys or expected_keys != label_keys:
+        raise ValueError("calibration baseline expected, observed, and label row keys must align exactly")
+    expected = _projection(expected_values, labels_by_key)
+    observed = _projection(observed_values, labels_by_key)
     if expected != observed and require_equal:
         raise ValueError("calibration extraction did not reproduce the shipped decision projection baseline")
     return {"schema_version": "calibration-baseline-replay-v1", "expected": expected, "observed": observed}
+
+
+def _row_keys(rows: Sequence[Mapping[str, object]], source: str) -> tuple[str, ...]:
+    keys = tuple(row.get("manifest_key") for row in rows)
+    if any(not isinstance(key, str) or not key for key in keys):
+        raise ValueError(f"calibration {source} baseline row keys must be non-empty strings")
+    if len(keys) != len(set(keys)):
+        raise ValueError(f"calibration {source} baseline row keys must not contain duplicates")
+    return keys  # type: ignore[return-value]
 
 
 def _projection(rows: list[dict[str, object]], labels_by_key: Mapping[str, LabelRow]) -> dict[str, object]:

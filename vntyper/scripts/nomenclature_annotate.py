@@ -80,6 +80,11 @@ from vntyper.scripts.nomenclature_frame_presentation import (
 from vntyper.scripts.nomenclature_frame_presentation import (
     nomenclature_result_cells as _cells,
 )
+from vntyper.scripts.nomenclature_identity_projection import reconcile_identity_aware_nomenclature
+from vntyper.scripts.reconciled_identity_persistence import (
+    RECONCILED_IDENTITY_COLUMN,
+    encode_reconciled_identity,
+)
 from vntyper.scripts.run_configuration import resolve_compatibility_component
 
 logger = logging.getLogger(__name__)
@@ -393,15 +398,18 @@ def reconcile_caller_outputs(
     )
     if identity_inputs is None:
         merged = reconcile(*ordered_calls, supports=supports, decision_config=decision_config)
+        reconciled_identity = None
     else:
         identity_observations, policy = identity_inputs
-        merged = reconcile(
+        identity_aware_result = reconcile_identity_aware_nomenclature(
             *ordered_calls,
             supports=supports,
             identity_observations=identity_observations,
             identity_policy=policy,
             decision_config=decision_config,
         )
+        merged = identity_aware_result.call
+        reconciled_identity = identity_aware_result.selected_identity
     for bam_call in named_bam:
         # Still applied after the vote, because it carries one rule the vote cannot:
         # A delins is unrepresentable in Kestrel's VCF, so one seen in the
@@ -424,6 +432,8 @@ def reconcile_caller_outputs(
         advntr=advntr_summary,
         decision_config=decision_config,
     )
+    if identity_inputs is not None:
+        cells[RECONCILED_IDENTITY_COLUMN] = encode_reconciled_identity(reconciled_identity)
     if "identity-insufficient" in advntr_dispositions:
         cells["Nomenclature_Note"] = append_decision_explanation(cells["Nomenclature_Note"], ASSERTION)
 
