@@ -204,6 +204,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "tests/unit/test_identity_reconciliation.py",
         "tests/unit/test_nomenclature_reconcile.py",
     ),
+    "vntyper/scripts/nomenclature_dominance.py": ("tests/unit/test_nomenclature_dominance.py",),
     # Registered by the 2026-08-27 test-hardening pass after two of this module's
     # mutants survived the entire unit tier: a collapsed confidence-priority ladder
     # and an emptied final to_csv publication. It is NOT a pure-decision module -- it
