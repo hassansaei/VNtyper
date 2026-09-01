@@ -6,6 +6,7 @@ from those same frames, and the HTML report all inherit them together.
 Research use only.
 """
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -241,6 +242,44 @@ def _write_identity_aware_outputs(
     return kestrel, advntr
 
 
+def _attach_kestrel_identity_metadata(
+    kestrel: Path,
+    identity: MolecularIdentity | None,
+) -> None:
+    frame = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    row = frame.loc[0]
+    raw_key = json.dumps(
+        {"source": "kestrel", "values": [row["Motifs"], int(row["POS"]), row["REF"], row["ALT"]]},
+        separators=(",", ":"),
+    )
+    resolved = identity is not None
+    frame["__Identity_Raw_Representation_Key"] = raw_key
+    frame["__Identity_Molecular_Identity"] = (
+        serialize_molecular_identity(identity) if identity is not None else "absent"
+    )
+    frame["__Identity_Translation_Status"] = "resolved" if resolved else "unresolved"
+    frame["__Identity_Translation_Failure"] = "absent" if resolved else "missing-motif-context"
+    frame["__Identity_Context_Diverges"] = "false"
+    frame["__Identity_Observation_Ordinal"] = "0"
+    frame["__Identity_Selected_Raw_Representation_Key"] = raw_key
+    frame["__Identity_Equivalent_Representation_Count"] = "1" if resolved else "0"
+    frame["__Identity_Hypothesis_Count"] = "1" if resolved else "0"
+    frame["__Identity_Group_Blocking_Gates"] = "[]"
+    frame["__Identity_Group_Flags"] = "[]"
+    frame["__Identity_Selected_Observation_Ordinal"] = "0"
+    frame["__Identity_Group_Context_Diverges"] = "false"
+    frame.to_csv(kestrel, sep="\t", index=False)
+
+
+def _attach_advntr_identity_context(advntr: Path) -> None:
+    frame = pd.read_csv(advntr, sep="\t", dtype=str)
+    frame["MeanCoverage"] = "100"
+    frame["RU"] = "2"
+    frame["POS"] = "23"
+    frame["Flag"] = "Not flagged"
+    frame.to_csv(advntr, sep="\t", index=False)
+
+
 def test_production_reconciliation_uses_persisted_kestrel_identity_not_equal_display(tmp_path) -> None:
     dup_a = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
     kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_a)
@@ -286,6 +325,17 @@ def test_production_reconciliation_fails_closed_on_malformed_internal_identity_m
     frame.to_csv(kestrel, sep="\t", index=False)
 
     with pytest.raises(ValueError):
+        reconcile_caller_outputs(kestrel, advntr)
+
+
+def test_production_identity_depth_overflow_is_a_controlled_value_error(tmp_path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
+    frame = pd.read_csv(kestrel, sep="\t", dtype=str)
+    frame.loc[0, "Estimated_Depth_AlternateVariant"] = "inf"
+    frame.to_csv(kestrel, sep="\t", index=False)
+
+    with pytest.raises(ValueError, match="alternate k-mer-path depth"):
         reconcile_caller_outputs(kestrel, advntr)
 
 
@@ -467,6 +517,37 @@ def test_the_cross_caller_stage_consults_resolved_haplotype_records(tmp_path) ->
     assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
     assert FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT in written.loc[0, "Nomenclature_Flags"]
     assert written.loc[0, "Nomenclature_Tier"] == "B", "four records, not XD, set the support boundary"
+
+
+def test_identity_aware_stage_retains_advntr_plus_bam_insg_recovery_without_bam_identity(tmp_path) -> None:
+    kestrel, advntr = _write_disagreeing_outputs(tmp_path)
+    vcf_identity = make_molecular_identity((make_coding_edit(60, 59, "", "G"),))
+    _attach_kestrel_identity_metadata(kestrel, vcf_identity)
+    _attach_advntr_identity_context(advntr)
+    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", minimum_kmer_depths=(5, 181, 7_416, 8_704))
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "58_59insG"
+    assert written.loc[0, "Nomenclature_Kestrel"] == "59_60insG"
+    assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert "low-haplotype-record-support" in written.loc[0, "Nomenclature_Flags"]
+
+
+def test_identity_aware_unresolved_vcf_retains_vcf_primary_presentation(tmp_path) -> None:
+    kestrel, advntr = _write_disagreeing_outputs(tmp_path)
+    _attach_kestrel_identity_metadata(kestrel, None)
+    _attach_advntr_identity_context(advntr)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "59_60insG"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert written.loc[0, "Nomenclature_Kestrel"] == "59_60insG"
+    assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
 
 
 def test_the_haplotype_records_alone_do_not_outvote_the_vcf(tmp_path) -> None:

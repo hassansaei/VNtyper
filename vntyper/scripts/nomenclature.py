@@ -37,6 +37,7 @@ from vntyper.scripts.identity_reconciliation import (
     IdentityReconciliationObservation,
     IdentityReconciliationPolicy,
     reconcile_identity_observations,
+    select_compatibility_presentation_index,
 )
 from vntyper.scripts.nomenclature_evidence import (
     FLAG_LOW_EVIDENCE_SUPPORT,
@@ -654,48 +655,79 @@ def reconcile(
         return _reconcile_legacy(*calls, support=support, supports=supports)
     if identity_policy is None:
         raise ValueError("Typed identity observations require an explicit identity policy")
-    if len(identity_observations) != len(calls):
+    if not calls:
+        return _undetermined("unknown", 0, "reconciled", ())
+
+    implicit_positional_binding = len(identity_observations) == len(calls) and all(
+        observation.presentation_call_index is None for observation in identity_observations
+    )
+    presentation_call_indices = tuple(
+        index if implicit_positional_binding else observation.presentation_call_index
+        for index, observation in enumerate(identity_observations)
+    )
+    bound_call_indices = {index for index in presentation_call_indices if index is not None}
+    if bound_call_indices != set(range(len(calls))):
         raise ValueError("Typed reconciliation requires one identity observation per call")
     if any(
         observation.display_name != call.name
         or observation.source != call.source
         or observation.event != call.event
         or observation.net_length != call.net_length
-        for call, observation in zip(calls, identity_observations, strict=True)
+        for observation, call_index in zip(identity_observations, presentation_call_indices, strict=True)
+        if call_index is not None
+        for call in (calls[call_index],)
     ):
         raise ValueError("Typed identity observations must match their presentation calls")
-    result = reconcile_identity_observations(identity_observations, identity_policy)
-    if not calls:
-        return _undetermined("unknown", 0, "reconciled", ())
 
-    primary_index = next((index for index, call in enumerate(calls) if call.source == "kestrel_vcf"), 0)
-    selected_index = (
-        result.selected_observation_index if result.selected_observation_index is not None else primary_index
+    admissible_call_indices = tuple(
+        index
+        for index in range(len(calls))
+        if any(
+            call_index == index and observation.disposition.value == "admissible"
+            for observation, call_index in zip(identity_observations, presentation_call_indices, strict=True)
+        )
     )
-    selected = calls[selected_index]
-    flags = set().union(*(call.flags for call in calls))
-    if result.caller_disagreement:
+    decision_call_indices = admissible_call_indices or tuple(range(len(calls)))
+    decision_calls = tuple(calls[index] for index in decision_call_indices)
+    relative_selection = select_compatibility_presentation_index(decision_calls)
+    if relative_selection is None:  # pragma: no cover - calls was established above
+        return _undetermined("unknown", 0, "reconciled", ())
+    presentation_call_index = decision_call_indices[relative_selection]
+    presentation_observation_index = next(
+        index for index, call_index in enumerate(presentation_call_indices) if call_index == presentation_call_index
+    )
+    presentation = _reconcile_legacy(*decision_calls, support=support, supports=supports)
+    result = reconcile_identity_observations(
+        identity_observations,
+        identity_policy,
+        presentation_selected_observation_index=presentation_observation_index,
+    )
+
+    flags = set().union(*(call.flags for call in decision_calls))
+    if result.caller_disagreement or (result.identity is None and FLAG_CALLER_DISAGREEMENT in presentation.flags):
         flags.add(FLAG_CALLER_DISAGREEMENT)
     if any(identity_observations[index].translation.context_diverges for index in result.backing_observation_indices):
         flags.add(FLAG_MOTIF_CONTEXT_DIVERGES)
     for source in result.low_support_sources:
         flags.add(low_support_flag_for_source(source))
-    if selected.name is not None:
-        flags.add(FLAG_KNOWN_VARIANT if selected.name in KNOWN_VARIANTS else FLAG_REPRESENTATION_ONLY)
+    if FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT in presentation.flags:
+        flags.add(FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT)
+    if presentation.name is not None:
+        flags.add(FLAG_KNOWN_VARIANT if presentation.name in KNOWN_VARIANTS else FLAG_REPRESENTATION_ONLY)
 
-    if result.event_disagreement:
-        return _undetermined("unknown", selected.net_length, "reconciled", tuple(sorted(flags)))
+    if result.event_disagreement or presentation.name is None:
+        return _undetermined("unknown", presentation.net_length, "reconciled", tuple(sorted(flags)))
     tier = "B" if result.tier == "abstained" else result.tier
     return Nomenclature(
-        name=selected.name,
-        event=selected.event,
-        unit=selected.unit,
+        name=presentation.name,
+        event=presentation.event,
+        unit=presentation.unit,
         tier=tier,
         flags=tuple(sorted(flags)),
-        ambiguity=selected.ambiguity,
-        repeat_form=selected.repeat_form,
-        net_length=selected.net_length,
-        source="reconciled" if len(result.backing_sources) > 1 else selected.source,
+        ambiguity=presentation.ambiguity,
+        repeat_form=presentation.repeat_form,
+        net_length=presentation.net_length,
+        source="reconciled" if len(result.backing_sources) > 1 else presentation.source,
     )
 
 
@@ -736,6 +768,8 @@ def _reconcile_legacy(
         return _undetermined("unknown", 0, "reconciled", ())
 
     primary = next((call for call in usable if call.source == "kestrel_vcf"), usable[0])
+    selected_index = select_compatibility_presentation_index(usable)
+    assert selected_index is not None
     flags = set(primary.flags)
     for call in usable:
         flags.update(call.flags)
@@ -762,21 +796,10 @@ def _reconcile_legacy(
     if len(backing) > 1:
         flags.add(FLAG_CALLER_DISAGREEMENT)
 
-    # An allele two independent callers name outvotes one that only a single caller
-    # does. Measured on the benchmark this is what recovers the `insG` families:
-    # Kestrel's VCF places them one base 3' of truth, while adVNTR and Kestrel's
-    # resolved haplotype records agree on the right position (129 -> 135 of 200,
-    # no name lost).
-    #
-    # Only an unambiguous majority decides. Two corroborated alleles are a genuine
-    # conflict rather than a vote to settle, and zero leaves the existing order
-    # intact -- which is what keeps "VCF primary" true whenever nothing outvotes it.
-    corroborated = [name for name, sources in backing.items() if _is_corroborated(sources)]
-    winner = corroborated[0] if len(corroborated) == 1 else None
-
-    chosen = next((call for call in named if call.name == winner), None) if winner is not None else None
-    if chosen is None:
-        chosen = named[0] if named else None
+    # The pure compatibility selector owns the legacy majority/VCF-primary choice so
+    # the typed adapter and direct legacy callers cannot drift apart.
+    selected = usable[selected_index]
+    chosen = selected if selected.name is not None else None
     chosen_name = chosen.name if chosen is not None else None
 
     # Independence is judged on the chosen allele's own backing, not on every name

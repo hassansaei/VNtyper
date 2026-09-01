@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
@@ -17,6 +19,9 @@ if TYPE_CHECKING:
     from vntyper.scripts.identity_candidates import IdentityTranslator
 
 _CALLER_OF = {"kestrel_vcf": "kestrel", "kestrel_bam": "kestrel", "advntr": "advntr"}
+_CANONICAL_NONNEGATIVE_INTEGER = re.compile(r"(?:0|[1-9][0-9]*)\Z")
+_CANONICAL_NONNEGATIVE_NUMBER = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z")
+_ADMISSIBLE_DISPOSITION = EvidenceDisposition("admissible")
 _TIER_A_BLOCKING_FLAGS = frozenset({"motif-context-diverges", "sequence-undetermined", "caller-disagreement"})
 _LEGACY_GATE_NAMES = frozenset(
     {
@@ -92,7 +97,9 @@ class IdentityReconciliationObservation:
     known_variant_match: bool
     kestrel_alternate_kmer_path_depth: int | None = None
     advntr_sequencing_read_support: int | None = None
+    advntr_mean_coverage: int | float | None = None
     blocking_gates: frozenset[str] = frozenset()
+    presentation_call_index: int | None = None
 
     def __post_init__(self) -> None:
         """Reject malformed or cross-wired source evidence."""
@@ -122,13 +129,19 @@ class IdentityReconciliationObservation:
             self.advntr_sequencing_read_support,
             "adVNTR sequencing-read support",
         )
+        _optional_nonnegative_number(self.advntr_mean_coverage, "adVNTR MeanCoverage")
+        _optional_nonnegative_integer(self.presentation_call_index, "Presentation call index")
         if self.source == "kestrel_vcf":
-            if self.advntr_sequencing_read_support is not None:
-                raise ValueError("Kestrel VCF observations cannot carry adVNTR sequencing-read support")
+            if self.advntr_sequencing_read_support is not None or self.advntr_mean_coverage is not None:
+                raise ValueError("Kestrel VCF observations cannot carry adVNTR evidence")
         elif self.source == "advntr":
             if self.kestrel_alternate_kmer_path_depth is not None:
                 raise ValueError("adVNTR observations cannot carry Kestrel alternate k-mer-path depth")
-        elif self.kestrel_alternate_kmer_path_depth is not None or self.advntr_sequencing_read_support is not None:
+        elif (
+            self.kestrel_alternate_kmer_path_depth is not None
+            or self.advntr_sequencing_read_support is not None
+            or self.advntr_mean_coverage is not None
+        ):
             raise ValueError("Only the owning caller source may carry a named Tier-A evidence quantity")
 
     @property
@@ -154,6 +167,7 @@ class IdentityReconciliationResult:
     caller_disagreement: bool
     event_disagreement: bool
     low_support_sources: tuple[str, ...]
+    presentation_selected_observation_index: int | None = None
 
     def __post_init__(self) -> None:
         """Validate selection and deterministic reconciliation metadata."""
@@ -165,6 +179,10 @@ class IdentityReconciliationResult:
             or self.selected_observation_index < 0
         ):
             raise ValueError("Selected reconciliation observation index must be non-negative")
+        _optional_nonnegative_integer(
+            self.presentation_selected_observation_index,
+            "Presentation-selected observation index",
+        )
         for values, name in (
             (self.backing_observation_indices, "Backing observation indices"),
             (self.backing_sources, "Backing sources"),
@@ -219,6 +237,11 @@ class IdentityReconciliationResult:
             raise ValueError("Low-support sources must back the selected identity")
         if self.decision.molecular_agreement != (len(self.backing_callers) >= 2):
             raise ValueError("Molecular agreement must match independent backing callers")
+        if (
+            self.presentation_selected_observation_index is not None
+            and self.selected_observation_index != self.presentation_selected_observation_index
+        ):
+            raise ValueError("Selected identity metadata must align with the presentation-selected observation")
 
     @property
     def identity(self) -> MolecularIdentity | None:
@@ -234,6 +257,35 @@ class IdentityReconciliationResult:
     def molecular_agreement(self) -> bool:
         """Return whether independent callers back the selected identity."""
         return self.decision.molecular_agreement
+
+
+def select_compatibility_presentation_index(
+    calls: Sequence[ReconciliationPresentationCall],
+) -> int | None:
+    """Select the exact legacy display row without making a molecular claim.
+
+    Args:
+        calls: Presentation calls in the existing VCF, BAM, adVNTR order.
+
+    Returns:
+        The selected call index, or ``None`` when no call was supplied.
+    """
+    if not calls:
+        return None
+    primary_index = next((index for index, call in enumerate(calls) if call.source == "kestrel_vcf"), 0)
+    if len({call.event for call in calls}) > 1:
+        return primary_index
+
+    backing: dict[str, list[int]] = {}
+    for index, call in enumerate(calls):
+        if call.name is not None:
+            backing.setdefault(call.name, []).append(index)
+    corroborated = [
+        name for name, indices in backing.items() if len({_caller(calls[index].source) for index in indices}) >= 2
+    ]
+    if len(corroborated) == 1:
+        return backing[corroborated[0]][0]
+    return next((index for index, call in enumerate(calls) if call.name is not None), primary_index)
 
 
 def build_identity_reconciliation_observations(
@@ -268,7 +320,7 @@ def build_identity_reconciliation_observations(
         IDENTITY_SELECTION_COLUMNS,
         parse_selected_candidate_cells,
     )
-    from vntyper.scripts.identity_candidates import capture_advntr_observations
+    from vntyper.scripts.identity_candidates import RawRepresentationKey, capture_advntr_observations
 
     identity_columns = frozenset((*IDENTITY_CAPTURE_COLUMNS, *IDENTITY_SELECTION_COLUMNS))
     observed_columns = frozenset().union(*(frozenset(row.keys()) for row in kestrel_rows))
@@ -281,10 +333,26 @@ def build_identity_reconciliation_observations(
         raise ValueError("adVNTR identity context is misaligned with its display calls")
 
     observations: list[IdentityReconciliationObservation] = []
+    presentation_call_index = 0
     for row, call in zip(kestrel_rows, vcf_calls, strict=True):
+        persisted = parse_selected_candidate_cells(row)
+        row_key = RawRepresentationKey(
+            "kestrel",
+            (
+                _required_nonempty_string(row.get("Motifs"), "Kestrel Motifs"),
+                _strict_positive_integer(row.get("POS"), "Kestrel POS"),
+                _required_nonempty_string(row.get("REF"), "Kestrel REF"),
+                _required_nonempty_string(row.get("ALT"), "Kestrel ALT"),
+            ),
+        )
+        if persisted.selected_row_key != row_key:
+            raise ValueError("Kestrel persisted selected key does not match the actual result row")
+        kmer_depth = _strict_nonnegative_integer(
+            row.get("Estimated_Depth_AlternateVariant"),
+            "Kestrel alternate k-mer-path depth",
+        )
         if call is None:
             continue
-        persisted = parse_selected_candidate_cells(row)
         translation = persisted.translation
         if translation.identity is not None and translation.context_diverges != persisted.group_context_diverges:
             translation = IdentityTranslation(translation.identity, "resolved", None, persisted.group_context_diverges)
@@ -293,28 +361,33 @@ def build_identity_reconciliation_observations(
                 call,
                 translation,
                 known_variant_names,
-                kmer_depth=_optional_integer_cell(row.get("Estimated_Depth_AlternateVariant")),
+                kmer_depth=kmer_depth,
                 extra_flags=persisted.flags,
                 blocking_gates=persisted.blocking_gates,
+                presentation_call_index=presentation_call_index,
             )
         )
+        presentation_call_index += 1
 
-    observations.extend(
-        _make_observation(
-            call,
-            IdentityTranslation(None, "unresolved", "missing-motif-context", False),
-            known_variant_names,
-        )
-        for call in bam_calls
-        if call is not None
-    )
+    for call in bam_calls:
+        if call is not None:
+            observations.append(
+                _make_observation(
+                    call,
+                    IdentityTranslation(None, "unresolved", "missing-motif-context", False),
+                    known_variant_names,
+                    presentation_call_index=presentation_call_index,
+                )
+            )
+            presentation_call_index += 1
 
     capture_rows: list[dict[str, object]] = []
     for row, calls in zip(advntr_rows, advntr_calls_by_row, strict=True):
-        support = _optional_integer_cell(row.get("NumberOfSupportingReads"))
-        coverage = _optional_integer_cell(row.get("MeanCoverage"))
-        if support is None or coverage is None:
-            raise ValueError("Current adVNTR identity reconciliation requires numeric support and coverage")
+        support = _strict_nonnegative_integer(
+            row.get("NumberOfSupportingReads"),
+            "adVNTR sequencing-read support",
+        )
+        coverage = _strict_nonnegative_number(row.get("MeanCoverage"), "adVNTR MeanCoverage")
         capture_rows.append(
             {
                 "Variant": str(row.get("Variant", "")),
@@ -328,15 +401,50 @@ def build_identity_reconciliation_observations(
         )
     candidates = capture_advntr_observations(capture_rows, translation_component)
     for row, calls, candidate in zip(advntr_rows, advntr_calls_by_row, candidates.candidates, strict=True):
-        observations.extend(
-            _make_observation(
-                call,
-                candidate.observation.translation,
-                known_variant_names,
-                advntr_reads=_optional_integer_cell(row.get("NumberOfSupportingReads")),
-                extra_flags=candidate.flags,
+        support = _strict_nonnegative_integer(
+            row.get("NumberOfSupportingReads"),
+            "adVNTR sequencing-read support",
+        )
+        coverage = _strict_nonnegative_number(row.get("MeanCoverage"), "adVNTR MeanCoverage")
+        if len(calls) == 1:
+            observations.append(
+                _make_observation(
+                    calls[0],
+                    candidate.observation.translation,
+                    known_variant_names,
+                    advntr_reads=support,
+                    advntr_coverage=coverage,
+                    extra_flags=candidate.flags,
+                    presentation_call_index=presentation_call_index,
+                )
             )
-            for call in calls
+            presentation_call_index += 1
+            continue
+        for call in calls:
+            observations.append(
+                _make_observation(
+                    call,
+                    IdentityTranslation(None, "unresolved", "reconstruction-mismatch", False),
+                    known_variant_names,
+                    disposition=EvidenceDisposition("identity-insufficient"),
+                    extra_flags=candidate.flags,
+                    presentation_call_index=presentation_call_index,
+                )
+            )
+            presentation_call_index += 1
+        observations.append(
+            IdentityReconciliationObservation(
+                translation=candidate.observation.translation,
+                display_name=None,
+                source="advntr",
+                event=_compound_event(calls),
+                net_length=candidate.observation.frame_consequence.net_length_change,
+                flags=candidate.flags,
+                disposition=EvidenceDisposition("admissible"),
+                known_variant_match=False,
+                advntr_sequencing_read_support=support,
+                advntr_mean_coverage=coverage,
+            )
         )
     return tuple(observations)
 
@@ -344,6 +452,8 @@ def build_identity_reconciliation_observations(
 def reconcile_identity_observations(
     observations: tuple[IdentityReconciliationObservation, ...],
     policy: IdentityReconciliationPolicy,
+    *,
+    presentation_selected_observation_index: int | None = None,
 ) -> IdentityReconciliationResult:
     """Reconcile caller evidence by resolved canonical identity.
 
@@ -351,6 +461,9 @@ def reconcile_identity_observations(
         observations: Legacy-ordered observations. Kestrel VCF remains the explicit
             primary presentation when no unique corroborated identity outvotes it.
         policy: Separately named thresholds in each caller's evidence unit.
+        presentation_selected_observation_index: Explicit observation selected by
+            the unchanged presentation vote. An unresolved or inadmissible selection
+            remains visible but produces an abstained identity decision.
 
     Returns:
         The typed identity decision and exact selection/backing metadata.
@@ -364,41 +477,68 @@ def reconcile_identity_observations(
         raise ValueError("Identity reconciliation requires an explicit policy")
     if any(not isinstance(observation, IdentityReconciliationObservation) for observation in observations):
         raise ValueError("Identity reconciliation inputs must be typed observations")
+    if presentation_selected_observation_index is not None and (
+        isinstance(presentation_selected_observation_index, bool)
+        or not isinstance(presentation_selected_observation_index, int)
+        or presentation_selected_observation_index < 0
+        or presentation_selected_observation_index >= len(observations)
+    ):
+        raise ValueError("Presentation-selected observation index must identify an observation")
 
-    event_disagreement = len({observation.event for observation in observations}) > 1
+    decision_indices = tuple(
+        index for index, observation in enumerate(observations) if observation.disposition.value == "admissible"
+    )
+    presentation_event_indices = tuple(
+        index for index in decision_indices if observations[index].presentation_call_index is not None
+    )
+    event_indices = presentation_event_indices or decision_indices
+    event_disagreement = len({observations[index].event for index in event_indices}) > 1
     backing: dict[MolecularIdentity, list[int]] = {}
-    for index, observation in enumerate(observations):
+    for index in decision_indices:
+        observation = observations[index]
         if observation.backs_identity:
             assert observation.identity is not None
             backing.setdefault(observation.identity, []).append(index)
 
-    if not backing:
+    selected_observation = (
+        observations[presentation_selected_observation_index]
+        if presentation_selected_observation_index is not None
+        else None
+    )
+    if not backing or (selected_observation is not None and not selected_observation.backs_identity):
         return IdentityReconciliationResult(
             decision=IdentityDecision(None, "abstained", False, "identity-unresolved"),
             selected_observation_index=None,
             backing_observation_indices=(),
             backing_sources=(),
             backing_callers=(),
-            caller_disagreement=event_disagreement,
+            caller_disagreement=len(backing) > 1 or event_disagreement,
             event_disagreement=event_disagreement,
             low_support_sources=(),
+            presentation_selected_observation_index=presentation_selected_observation_index,
         )
 
-    corroborated = [identity for identity, indices in backing.items() if len(_callers(observations, indices)) >= 2]
-    primary_index = next(
-        (
-            index
-            for index, observation in enumerate(observations)
-            if observation.source == "kestrel_vcf" and observation.backs_identity
-        ),
-        next(iter(backing.values()))[0],
-    )
-    chosen_identity = observations[primary_index].identity
-    assert chosen_identity is not None
-    if len(corroborated) == 1:
-        chosen_identity = corroborated[0]
+    if selected_observation is not None:
+        chosen_identity = selected_observation.identity
+        assert chosen_identity is not None
+        selected_index = presentation_selected_observation_index
+        assert selected_index is not None
+    else:
+        corroborated = [identity for identity, indices in backing.items() if len(_callers(observations, indices)) >= 2]
+        primary_index = next(
+            (
+                index
+                for index, observation in enumerate(observations)
+                if observation.source == "kestrel_vcf" and observation.backs_identity
+            ),
+            next(iter(backing.values()))[0],
+        )
+        chosen_identity = observations[primary_index].identity
+        assert chosen_identity is not None
+        if len(corroborated) == 1:
+            chosen_identity = corroborated[0]
+        selected_index = backing[chosen_identity][0]
 
-    selected_index = backing[chosen_identity][0]
     backing_indices = tuple(backing[chosen_identity])
     backing_sources = tuple(dict.fromkeys(observations[index].source for index in backing_indices))
     backing_callers = tuple(dict.fromkeys(_caller(source) for source in backing_sources))
@@ -411,7 +551,7 @@ def reconcile_identity_observations(
     )
 
     chosen = observations[selected_index]
-    flags = frozenset().union(*(observation.flags for observation in observations))
+    flags = frozenset().union(*(observations[index].flags for index in decision_indices))
     if caller_disagreement:
         flags |= {"caller-disagreement"}
     context_diverges = any(observations[index].translation.context_diverges for index in backing_indices)
@@ -437,6 +577,7 @@ def reconcile_identity_observations(
         caller_disagreement=caller_disagreement,
         event_disagreement=event_disagreement,
         low_support_sources=low_support_sources,
+        presentation_selected_observation_index=presentation_selected_observation_index,
     )
 
 
@@ -477,8 +618,11 @@ def _make_observation(
     *,
     kmer_depth: int | None = None,
     advntr_reads: int | None = None,
+    advntr_coverage: int | float | None = None,
+    disposition: EvidenceDisposition = _ADMISSIBLE_DISPOSITION,
     extra_flags: frozenset[str] = frozenset(),
     blocking_gates: frozenset[str] = frozenset(),
+    presentation_call_index: int | None = None,
 ) -> IdentityReconciliationObservation:
     return IdentityReconciliationObservation(
         translation=translation,
@@ -487,19 +631,58 @@ def _make_observation(
         event=call.event,
         net_length=call.net_length,
         flags=frozenset(call.flags) | extra_flags,
-        disposition=EvidenceDisposition("admissible"),
+        disposition=disposition,
         known_variant_match=call.name in known_variant_names,
         kestrel_alternate_kmer_path_depth=kmer_depth,
         advntr_sequencing_read_support=advntr_reads,
+        advntr_mean_coverage=advntr_coverage,
         blocking_gates=blocking_gates,
+        presentation_call_index=presentation_call_index,
     )
 
 
-def _optional_integer_cell(value: object) -> int | None:
-    try:
-        return int(float(str(value)))
-    except (TypeError, ValueError):
-        return None
+def _strict_nonnegative_integer(value: object, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a canonical finite non-negative integer")
+    if isinstance(value, int):
+        if value >= 0:
+            return value
+        raise ValueError(f"{name} must be a canonical finite non-negative integer")
+    if isinstance(value, str) and _CANONICAL_NONNEGATIVE_INTEGER.fullmatch(value):
+        return int(value)
+    raise ValueError(f"{name} must be a canonical finite non-negative integer")
+
+
+def _strict_positive_integer(value: object, name: str) -> int:
+    parsed = _strict_nonnegative_integer(value, name)
+    if parsed < 1:
+        raise ValueError(f"{name} must be a canonical positive integer")
+    return parsed
+
+
+def _strict_nonnegative_number(value: object, name: str) -> int | float:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a finite non-negative number")
+    if isinstance(value, (int, float)):
+        if math.isfinite(value) and value >= 0:
+            return value
+        raise ValueError(f"{name} must be a finite non-negative number")
+    if isinstance(value, str) and _CANONICAL_NONNEGATIVE_NUMBER.fullmatch(value):
+        parsed = float(value) if "." in value else int(value)
+        if math.isfinite(parsed):
+            return parsed
+    raise ValueError(f"{name} must be a finite non-negative number")
+
+
+def _required_nonempty_string(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _compound_event(calls: Sequence[ReconciliationPresentationCall]) -> str:
+    events = {call.event for call in calls}
+    return next(iter(events)) if len(events) == 1 else "compound"
 
 
 def _callers(
@@ -521,3 +704,10 @@ def _positive_integer(value: object, name: str) -> None:
 def _optional_nonnegative_integer(value: object, name: str) -> None:
     if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
         raise ValueError(f"{name} must be a non-negative integer or None")
+
+
+def _optional_nonnegative_number(value: object, name: str) -> None:
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0
+    ):
+        raise ValueError(f"{name} must be a finite non-negative number or None")

@@ -589,10 +589,15 @@ def _haplotype_calls(
 
 def _as_int(value: object) -> int | None:
     """Read a depth cell as an integer, or ``None`` when it is not one."""
-    try:
-        return int(float(str(value)))
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+        return None
+    if value != "0" and value.startswith("0"):
+        return None
+    return int(value)
 
 
 def _write_tsv(frame: pd.DataFrame, path: Path, header: list[str]) -> None:

@@ -8,10 +8,12 @@ from typing import Any
 
 import pytest
 
+from vntyper.scripts.identity_candidates import translation_component_from_config
 from vntyper.scripts.identity_reconciliation import (
     IdentityReconciliationObservation,
     IdentityReconciliationPolicy,
     IdentityReconciliationResult,
+    build_identity_reconciliation_observations,
     reconcile_identity_observations,
 )
 from vntyper.scripts.molecular_identity import (
@@ -20,7 +22,9 @@ from vntyper.scripts.molecular_identity import (
     IdentityTranslation,
     make_coding_edit,
     make_molecular_identity,
+    serialize_molecular_identity,
 )
+from vntyper.scripts.nomenclature import KNOWN_VARIANTS, Nomenclature, from_advntr, load_nomenclature_config
 
 pytestmark = pytest.mark.unit
 
@@ -30,6 +34,7 @@ POLICY = IdentityReconciliationPolicy(
 )
 DUPC = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
 DUPA = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
+TRANSLATION_COMPONENT = translation_component_from_config(load_nomenclature_config())
 
 
 def _observation(
@@ -62,6 +67,62 @@ def _observation(
         kestrel_alternate_kmer_path_depth=kmer_depth,
         advntr_sequencing_read_support=advntr_reads,
         blocking_gates=blocking_gates,
+    )
+
+
+def _presentation_call(
+    name: str,
+    source: str,
+    *,
+    event: str = "duplication",
+    net_length: int = 1,
+) -> Nomenclature:
+    return Nomenclature(name, event, "X", "B", (), None, None, net_length, source)
+
+
+def _persisted_kestrel_row(
+    *,
+    identity: Any = DUPC,
+    selected_raw_key: str = '{"source":"kestrel","values":["X-X",67,"G","GG"]}',
+    alternate_depth: object = "40",
+) -> dict[str, object]:
+    return {
+        "Motifs": "X-X",
+        "POS": "67",
+        "REF": "G",
+        "ALT": "GG",
+        "Estimated_Depth_AlternateVariant": alternate_depth,
+        "__Identity_Raw_Representation_Key": selected_raw_key,
+        "__Identity_Molecular_Identity": serialize_molecular_identity(identity),
+        "__Identity_Translation_Status": "resolved",
+        "__Identity_Translation_Failure": "absent",
+        "__Identity_Context_Diverges": "false",
+        "__Identity_Observation_Ordinal": "0",
+        "__Identity_Selected_Raw_Representation_Key": selected_raw_key,
+        "__Identity_Equivalent_Representation_Count": "1",
+        "__Identity_Hypothesis_Count": "1",
+        "__Identity_Group_Blocking_Gates": "[]",
+        "__Identity_Group_Flags": "[]",
+        "__Identity_Selected_Observation_Ordinal": "0",
+        "__Identity_Group_Context_Diverges": "false",
+    }
+
+
+def _build_observations(
+    kestrel_row: dict[str, object],
+    kestrel_call: Nomenclature | None,
+    *,
+    advntr_row: dict[str, object] | None = None,
+    advntr_calls: list[Nomenclature] | None = None,
+) -> tuple[IdentityReconciliationObservation, ...] | None:
+    return build_identity_reconciliation_observations(
+        [kestrel_row],
+        [kestrel_call],
+        [],
+        [] if advntr_row is None else [advntr_row],
+        [] if advntr_calls is None else [advntr_calls],
+        TRANSLATION_COMPONENT,
+        frozenset(KNOWN_VARIANTS),
     )
 
 
@@ -137,6 +198,45 @@ def test_two_corroborated_identities_are_conflict_with_vcf_primary_projection() 
     assert result.molecular_agreement is True
     assert result.caller_disagreement is True
     assert result.tier != "A"
+
+
+def test_explicit_compatibility_selection_keeps_later_vcf_in_a_corroborated_tie() -> None:
+    observations = (
+        _observation(DUPA, "60dupA", "future_one"),
+        _observation(DUPC, "59dupC", "kestrel_vcf", kmer_depth=40),
+        _observation(DUPA, "60dupA", "future_two"),
+        _observation(DUPC, "different-display", "advntr", advntr_reads=40),
+    )
+
+    result = reconcile_identity_observations(
+        observations,
+        POLICY,
+        presentation_selected_observation_index=1,
+    )
+
+    assert result.identity == DUPC
+    assert result.selected_observation_index == 1
+    assert result.caller_disagreement is True
+    assert result.tier == "B"
+
+
+def test_unbound_bam_presentation_cannot_hide_a_different_selected_identity() -> None:
+    observations = (
+        _observation(DUPC, "59_60insG", "kestrel_vcf", event="insertion", kmer_depth=40),
+        _observation(None, "58_59insG", "kestrel_bam", event="insertion"),
+        _observation(DUPA, "58_59insG", "advntr", event="insertion", advntr_reads=40),
+    )
+
+    result = reconcile_identity_observations(
+        observations,
+        POLICY,
+        presentation_selected_observation_index=1,
+    )
+
+    assert result.identity is None
+    assert result.tier == "abstained"
+    assert result.selected_observation_index is None
+    assert result.presentation_selected_observation_index == 1
 
 
 def test_context_divergent_evidence_is_retained_but_blocks_tier_a() -> None:
@@ -354,3 +454,180 @@ def test_result_rejects_backing_metadata_on_an_abstained_decision() -> None:
             event_disagreement=False,
             low_support_sources=(),
         )
+
+
+def test_builder_rejects_canonical_persisted_key_for_a_different_kestrel_row() -> None:
+    mismatched = '{"source":"kestrel","values":["X-X",68,"G","GG"]}'
+
+    with pytest.raises(ValueError, match="persisted selected key does not match"):
+        _build_observations(
+            _persisted_kestrel_row(selected_raw_key=mismatched),
+            _presentation_call("59dupC", "kestrel_vcf"),
+        )
+
+
+def test_builder_parses_malformed_kestrel_metadata_even_without_a_presentation_call() -> None:
+    malformed = _persisted_kestrel_row()
+    malformed["__Identity_Selected_Raw_Representation_Key"] = '{"source":"kestrel","values":[]}'
+
+    with pytest.raises(ValueError, match="Kestrel raw representation key"):
+        _build_observations(malformed, None)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [True, 1.5, "1.0", "1e2", "01", " 1", "1 ", "NaN", "inf", "-1"],
+)
+def test_kestrel_alternate_depth_rejects_noncanonical_integer_evidence(value: object) -> None:
+    with pytest.raises(ValueError, match="alternate k-mer-path depth"):
+        _build_observations(
+            _persisted_kestrel_row(alternate_depth=value),
+            _presentation_call("59dupC", "kestrel_vcf"),
+        )
+
+
+@pytest.mark.parametrize("value", [0, 40, "0", "40"])
+def test_kestrel_alternate_depth_accepts_typed_or_canonical_wire_integers(value: object) -> None:
+    observations = _build_observations(
+        _persisted_kestrel_row(alternate_depth=value),
+        _presentation_call("59dupC", "kestrel_vcf"),
+    )
+
+    assert observations is not None
+    assert observations[0].kestrel_alternate_kmer_path_depth == int(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [True, 1.5, "1.0", "1e2", "01", " 1", "1 ", "NaN", "inf", "-1"],
+)
+def test_advntr_read_support_rejects_noncanonical_integer_evidence(value: object) -> None:
+    state = "I22_2_G_LEN1"
+    with pytest.raises(ValueError, match="sequencing-read support"):
+        _build_observations(
+            _persisted_kestrel_row(),
+            _presentation_call("59dupC", "kestrel_vcf"),
+            advntr_row={
+                "Variant": state,
+                "RU": "2",
+                "POS": "22",
+                "NumberOfSupportingReads": value,
+                "MeanCoverage": "153.98",
+                "Flag": "Not flagged",
+            },
+            advntr_calls=from_advntr(state),
+        )
+
+
+@pytest.mark.parametrize("value", [True, -1, -1.0, float("nan"), float("inf"), "NaN", "inf", "-1"])
+def test_advntr_mean_coverage_rejects_nonfinite_or_negative_numeric_evidence(value: object) -> None:
+    state = "I22_2_G_LEN1"
+    with pytest.raises(ValueError, match="MeanCoverage"):
+        _build_observations(
+            _persisted_kestrel_row(),
+            _presentation_call("59dupC", "kestrel_vcf"),
+            advntr_row={
+                "Variant": state,
+                "RU": "2",
+                "POS": "22",
+                "NumberOfSupportingReads": "40",
+                "MeanCoverage": value,
+                "Flag": "Not flagged",
+            },
+            advntr_calls=from_advntr(state),
+        )
+
+
+def test_fractional_advntr_mean_coverage_survives_the_capture_boundary() -> None:
+    state = "I22_2_G_LEN1"
+    observations = _build_observations(
+        _persisted_kestrel_row(),
+        _presentation_call("59dupC", "kestrel_vcf"),
+        advntr_row={
+            "Variant": state,
+            "RU": "2",
+            "POS": "22",
+            "NumberOfSupportingReads": "40",
+            "MeanCoverage": "153.98",
+            "Flag": "Not flagged",
+        },
+        advntr_calls=from_advntr(state),
+    )
+
+    assert observations is not None
+    advntr_observation = next(observation for observation in observations if observation.source == "advntr")
+    assert advntr_observation.advntr_mean_coverage == 153.98
+
+
+@pytest.mark.parametrize(
+    ("state", "positions", "component_names"),
+    [
+        ("I22_2_G_LEN1&I23_2_A_LEN1", "22,23", ("59dupC", "58_59insT")),
+        ("I22_2_G_LEN1&I24_2_A_LEN1", "22,24", ("59dupC", "57_58insT")),
+    ],
+)
+def test_compound_advntr_row_has_one_row_identity_and_presentation_only_components(
+    state: str,
+    positions: str,
+    component_names: tuple[str, str],
+) -> None:
+    calls = from_advntr(state)
+    observations = _build_observations(
+        _persisted_kestrel_row(),
+        _presentation_call("59dupC", "kestrel_vcf"),
+        advntr_row={
+            "Variant": state,
+            "RU": "2,2",
+            "POS": positions,
+            "NumberOfSupportingReads": "40",
+            "MeanCoverage": "153.98",
+            "Flag": "Not flagged",
+        },
+        advntr_calls=calls,
+    )
+
+    assert observations is not None
+    advntr_observations = [observation for observation in observations if observation.source == "advntr"]
+    row_observations = [
+        observation for observation in advntr_observations if observation.presentation_call_index is None
+    ]
+    component_observations = [
+        observation for observation in advntr_observations if observation.presentation_call_index is not None
+    ]
+    assert len(row_observations) == 1
+    assert row_observations[0].identity is not None
+    assert len(row_observations[0].identity.edits) == 2
+    assert sum(len(edit.inserted) - len(edit.deleted) for edit in row_observations[0].identity.edits) == 2
+    assert row_observations[0].disposition == EvidenceDisposition("admissible")
+    assert row_observations[0].known_variant_match is False
+    assert tuple(observation.display_name for observation in component_observations) == component_names
+    assert all(observation.identity is None for observation in component_observations)
+    assert all(
+        observation.disposition == EvidenceDisposition("identity-insufficient")
+        for observation in component_observations
+    )
+    advntr_only = reconcile_identity_observations(tuple(advntr_observations), POLICY)
+    assert len(advntr_only.backing_observation_indices) == 1
+    assert advntr_only.backing_sources == ("advntr",)
+    assert advntr_only.backing_callers == ("advntr",)
+    assert advntr_only.molecular_agreement is False
+
+    kestrel_complete = replace(
+        _observation(
+            row_observations[0].identity,
+            "complete-kestrel-projection",
+            "kestrel_vcf",
+            event="insertion",
+            kmer_depth=40,
+            known=False,
+        ),
+        presentation_call_index=0,
+    )
+    cross_caller = reconcile_identity_observations(
+        (kestrel_complete, row_observations[0]),
+        POLICY,
+        presentation_selected_observation_index=0,
+    )
+    assert cross_caller.molecular_agreement is True
+    assert cross_caller.event_disagreement is False
+    assert cross_caller.tier == "B"

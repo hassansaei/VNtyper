@@ -52,6 +52,7 @@ def _identity_observation(
     *,
     kmer_depth: int | None = None,
     advntr_reads: int | None = None,
+    disposition: str = "admissible",
 ) -> IdentityReconciliationObservation:
     return IdentityReconciliationObservation(
         translation=IdentityTranslation(identity, "resolved", None, False),
@@ -60,7 +61,7 @@ def _identity_observation(
         event=call.event,
         net_length=call.net_length,
         flags=frozenset(call.flags),
-        disposition=EvidenceDisposition("admissible"),
+        disposition=EvidenceDisposition(disposition),
         known_variant_match=call.name in KNOWN_VARIANTS,
         kestrel_alternate_kmer_path_depth=kmer_depth,
         advntr_sequencing_read_support=advntr_reads,
@@ -109,6 +110,31 @@ def test_typed_adapter_rejects_call_observation_cardinality_drift() -> None:
     kestrel = _kestrel_dupc()
     with pytest.raises(ValueError, match="one identity observation per call"):
         reconcile(kestrel, identity_observations=(), identity_policy=IDENTITY_POLICY)
+
+
+def test_identity_insufficient_different_event_cannot_withdraw_the_admissible_kestrel_presentation() -> None:
+    kestrel = _kestrel_dupc()
+    advntr = Nomenclature("58_59insG", "insertion", "X", "B", (), None, None, 1, "advntr")
+
+    merged = reconcile(
+        kestrel,
+        advntr,
+        identity_observations=(
+            _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40),
+            _identity_observation(
+                _DUPA_IDENTITY,
+                advntr,
+                advntr_reads=400,
+                disposition="identity-insufficient",
+            ),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert merged.name == "59dupC"
+    assert merged.event == "duplication"
+    assert merged.tier == "B"
+    assert FLAG_CALLER_DISAGREEMENT not in merged.flags
 
 
 def _kestrel_dupc() -> Nomenclature:
