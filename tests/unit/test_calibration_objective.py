@@ -413,6 +413,12 @@ def test_candidate_evaluation_rejects_tier_a_errors_missing_from_all_tier_count(
         _evaluation(inconsistent)
 
 
+def test_candidate_evaluation_accepts_zero_members_for_predeclared_stratum() -> None:
+    evaluation = _evaluation(_metrics(), stratum_counts=(0,))
+
+    assert evaluation.stratum_counts == (0,)
+
+
 @pytest.mark.parametrize("field", ["key", "assay_class", "mutation_class"])
 @pytest.mark.parametrize("value", ["", 1])
 def test_outcome_rejects_invalid_required_text(field: str, value: object) -> None:
@@ -512,9 +518,28 @@ def test_tier_a_reachability_is_required_only_when_the_baseline_requires_it() ->
         free_parameter_count=0,
         required_strata=("assay-a:duplication",),
     )
+    demoted_baseline_a = calculate_metrics(
+        (_outcome(tier="B"),),
+        profile_sha256="a" * 64,
+        free_parameter_count=0,
+        required_strata=("assay-a:duplication",),
+    )
 
     assert without_baseline_a.metrics.tier_a_reachable
     assert not lost_baseline_a.metrics.tier_a_reachable
+    assert not demoted_baseline_a.metrics.tier_a_reachable
+
+
+def test_exact_recovery_counts_equality_and_empty_predeclared_stratum_as_zero() -> None:
+    summary = calculate_metrics(
+        (_outcome(),),
+        profile_sha256="a" * 64,
+        free_parameter_count=0,
+        required_strata=("assay-a:duplication", "assay-b:deletion"),
+    )
+
+    assert summary.metrics.macro_exact_recovery == Fraction(1, 2)
+    assert summary.stratum_counts == (1, 0)
 
 
 def test_lexicographic_key_and_selection_reject_invalid_types_and_empty_family() -> None:
