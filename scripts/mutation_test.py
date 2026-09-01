@@ -280,7 +280,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
 #: Known high-signal mutant that the scoring unit tests must kill. The harness refuses
 #: a measurement unless this exact identity produces its exact assertion failure and no
 #: infrastructure/plugin error while pytest exits exactly 1.
-CANARY_KEY = ("vntyper/scripts/scoring.py", 74, "/", "*")
+CANARY_KEY = ("vntyper/scripts/scoring.py", 75, "/", "*")
 CANARY_EXPECTED_NODE = "tests/unit/test_scoring.py::test_split_depth_and_calculate_frame_score_no_frameshift"
 CANARY_EXPECTED_ASSERTION = "E       AssertionError: Frame_Score should be 1.0"
 CANARY_INFRASTRUCTURE_MARKERS = (

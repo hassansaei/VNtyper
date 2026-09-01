@@ -18,7 +18,7 @@ import mutation_test
 pytestmark = pytest.mark.unit
 
 _SOURCE = "def f(value):\n    return value >= 1 and value\n"
-_CANARY_SOURCE = "\n" * 73 + "VALUE = 6 / 3\n"
+_CANARY_SOURCE = "\n" * 74 + "VALUE = 6 / 3\n"
 _CANARY_NODE = "tests/unit/test_scoring.py::test_split_depth_and_calculate_frame_score_no_frameshift"
 _CANARY_ASSERTION = "E       AssertionError: Frame_Score should be 1.0"
 _CANARY_FAILURE = f"FAILED {_CANARY_NODE}\n{_CANARY_ASSERTION}\n1 failed in 0.01s\n"

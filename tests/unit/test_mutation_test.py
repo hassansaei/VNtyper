@@ -407,7 +407,7 @@ def test_canary_requires_the_exact_mutant_to_be_killed(
 ) -> None:
     target = tmp_path / "vntyper/scripts/scoring.py"
     target.parent.mkdir(parents=True)
-    original = ("\n" * 73 + "VALUE = 6 / 3\n").encode()
+    original = ("\n" * 74 + "VALUE = 6 / 3\n").encode()
     target.write_bytes(original)
     unrelated = target.parent / "overlay.txt"
     unrelated.write_bytes(b"keep-overlay")
@@ -458,10 +458,18 @@ def test_canary_refuses_when_the_exact_identity_is_missing(tmp_path: Path, monke
     assert target.read_bytes() == original
 
 
+def test_canary_key_matches_the_live_scoring_source() -> None:
+    path = mutation_test.REAL_REPO_ROOT / mutation_test.CANARY_KEY[0]
+
+    mutants = mutation_test.generate_mutants(path, repo_root=mutation_test.REAL_REPO_ROOT)
+
+    assert mutation_test.CANARY_KEY in {mutant.key for mutant in mutants}
+
+
 def test_canary_restores_the_target_when_pytest_cannot_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "vntyper/scripts/scoring.py"
     target.parent.mkdir(parents=True)
-    original = ("\n" * 73 + "VALUE = 6 / 3\n").encode()
+    original = ("\n" * 74 + "VALUE = 6 / 3\n").encode()
     target.write_bytes(original)
     monkeypatch.setattr(
         mutation_test,
