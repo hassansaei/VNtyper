@@ -9,7 +9,11 @@ from pathlib import Path
 from vntyper.scripts.alignment_preflight import run_preflight
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.archive_safety import create_safe_archive
-from vntyper.scripts.artifact_names import ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE, select_best_vcf_file
+from vntyper.scripts.artifact_names import (
+    ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE,
+    DECISION_PROFILE_SNAPSHOT_RELATIVE,
+    select_best_vcf_file,
+)
 from vntyper.scripts.cross_match import (
     cross_match_variants,
     extract_results_from_pipeline_summary,
@@ -47,10 +51,12 @@ from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
+from vntyper.scripts.profile_provenance import snapshot_decision_profile
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
+from vntyper.scripts.run_configuration import RunConfiguration, resolve_run_configuration
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)
 from vntyper.scripts.summary import (
@@ -111,6 +117,7 @@ def run_pipeline(
     log_file=None,
     summary_formats=None,  # New parameter: list of additional summary output formats (e.g., ['csv', 'tsv'])
     report_igv=DEFAULT_REPORT_IGV,
+    run_configuration=None,
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -158,12 +165,19 @@ def run_pipeline(
             `--report-igv` on the `pipeline` subcommand, because an ordinary run
             reaches `generate_summary_report` here rather than through
             `vntyper report` (#242).
+        run_configuration: Immutable decision profile and stage components resolved
+            before the run. Direct compatibility callers load the packaged profile.
 
     Raises:
         ValueError: Various input validation errors.
         FileNotFoundError: If the specified BED file is not found.
         RuntimeError: If alignment fails due to missing indexes.
     """
+    if run_configuration is None:
+        run_configuration = resolve_run_configuration()
+    elif not isinstance(run_configuration, RunConfiguration):
+        raise ValueError("pipeline run_configuration must be a resolved RunConfiguration")
+
     if log_file is not None:
         early_advntr_preflight = plan_valid_advntr_preflight(
             config,
@@ -292,6 +306,11 @@ def run_pipeline(
         dirs = create_output_directories(output_dir)
         logger.info(f"Created output directories in: {output_dir}")
 
+        snapshot_decision_profile(
+            run_configuration.decision_profile,
+            Path(output_dir) / DECISION_PROFILE_SNAPSHOT_RELATIVE,
+        )
+
         advntr_evidence = None
         if needs_advntr:
             from vntyper.modules.advntr.artifact_evidence import (
@@ -353,6 +372,7 @@ def run_pipeline(
             reference_path=reference_provenance.path,
             reference_source_effective=reference_provenance.source_effective,
             advntr_evidence_digest=advntr_evidence.digest if advntr_evidence is not None else None,
+            decision_profile=run_configuration.decision_profile,
         )
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         if input_type in ["BAM", "CRAM"]:

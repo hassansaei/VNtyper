@@ -86,6 +86,25 @@ def test_the_default_output_name_runs_the_pipeline(tmp_path: Path) -> None:
     assert stub.call_count == 1
 
 
+def test_resolved_run_configuration_is_forwarded_unchanged(tmp_path: Path) -> None:
+    """The handler must not discard or re-resolve the CLI's one profile context."""
+    parser = build_parser()
+    args = parser.parse_args(["pipeline", "-o", str(tmp_path), "--bam", "in.bam"])
+    sentinel = object()
+    args.run_configuration = sentinel
+
+    with mock.patch.object(cli_handlers, "run_pipeline", autospec=True) as stub:
+        cli_handlers.handle_pipeline(
+            args,
+            config=MINIMAL_CONFIG,
+            parser=parser,
+            log_level_value=logging.INFO,
+            log_file_str=None,
+        )
+
+    assert stub.call_args.kwargs["run_configuration"] is sentinel
+
+
 def test_reference_fasta_is_forwarded_to_the_pipeline(tmp_path: Path) -> None:
     """The explicit CRAM reference must survive the parser/handler boundary.
 

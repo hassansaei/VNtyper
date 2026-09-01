@@ -102,6 +102,7 @@ BASENAME_INDEPENDENT: set[str] = {
     "advntr/advntr_model.db",
     "advntr/cross_match_results.tsv",
     "provenance/advntr_artifact_evidence.json",
+    "provenance/decision_profile.json",
 }
 
 # --------------------------------------------------------------------------------------
@@ -283,20 +284,57 @@ def test_the_bam_path_hands_every_stage_the_declared_basename(tmp_path: Path) ->
 
 def test_advntr_run_snapshots_and_threads_one_verified_evidence_value(tmp_path: Path) -> None:
     from vntyper.modules.advntr.artifact_evidence import load_packaged_artifact_evidence
+    from vntyper.scripts.decision_profile import load_packaged_decision_profile
 
     output = tmp_path / "out"
     harness = run_pipeline_under_harness(output, extra_modules=["advntr"])
     evidence = load_packaged_artifact_evidence()
+    profile = load_packaged_decision_profile()
     snapshot = output / "provenance" / "advntr_artifact_evidence.json"
+    profile_snapshot = output / "provenance" / "decision_profile.json"
     recorded = json.loads((output / "pipeline_summary.json").read_text(encoding="utf-8"))
 
     assert snapshot.read_bytes() == evidence.canonical_bytes
-    assert recorded["schema_version"] == 2
+    assert profile_snapshot.read_bytes() == profile.canonical_bytes
+    assert recorded["schema_version"] == 3
     assert recorded["advntr_evidence_digest"] == evidence.digest
+    assert recorded["decision_profile_sha256"] == profile.digest
+    assert recorded["decision_profile_snapshot"] == "provenance/decision_profile.json"
     parsing_evidence = harness.kwargs("process_advntr_output")["artifact_evidence"]
     reconciliation_evidence = harness.kwargs("reconcile_caller_outputs")["artifact_evidence"]
     assert parsing_evidence is reconciliation_evidence
     assert parsing_evidence.digest == evidence.digest
+
+
+def test_pipeline_snapshots_the_supplied_explicit_context_without_reloading_package(tmp_path: Path) -> None:
+    """A custom CLI context must remain the one profile named by run provenance."""
+    import copy
+
+    from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
+    from vntyper.scripts.run_configuration import resolve_run_configuration
+
+    packaged_path = Path(__file__).parents[2] / "vntyper" / "profiles" / "decision_profile.json"
+    document = copy.deepcopy(load_strict_json_object(packaged_path.read_bytes()))
+    document["profile_id"] = "pipeline-explicit-test"
+    document["profile_revision"] = "test-1"
+    document["profile_kind"] = "explicit-custom"
+    inventory = document["inventory"]
+    assert isinstance(inventory, dict)
+    inventory["/components/kestrel/duplicate_flagging/flag_name"]["value"] = "Pipeline_Test_Duplicate"
+    profile_path = tmp_path / "explicit.json"
+    profile_path.write_bytes(canonical_json_bytes(document))
+    run_configuration = resolve_run_configuration(profile_path)
+
+    output = tmp_path / "out"
+    run_pipeline_under_harness(output, run_configuration=run_configuration)
+    recorded = json.loads((output / "pipeline_summary.json").read_text(encoding="utf-8"))
+
+    assert (output / "provenance" / "decision_profile.json").read_bytes() == (
+        run_configuration.decision_profile.canonical_bytes
+    )
+    assert recorded["decision_profile_id"] == "pipeline-explicit-test"
+    assert recorded["decision_profile_source"] == "explicit-cli"
+    assert recorded["decision_profile_sha256"] == run_configuration.decision_profile.digest
 
 
 def test_the_fastq_path_hands_every_stage_the_declared_basename(tmp_path: Path) -> None:
@@ -483,6 +521,7 @@ def test_every_declared_path_moves_together_under_a_custom_basename(tmp_path: Pa
         "pipeline_info",
         "pipeline_summary",
         "advntr_evidence",
+        "decision_profile",
     }, f"these did not move with the basename: {sorted(unmoved)}"
 
 

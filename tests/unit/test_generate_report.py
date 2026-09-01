@@ -3804,20 +3804,28 @@ def test_the_summary_schema_version_is_shown(tmp_path) -> None:
     assert _labeled_value(render(tmp_path), "Summary schema version") == "1"
 
 
-def test_current_summary_provenance_keeps_schema_two_and_records_the_default_decision_policy(tmp_path) -> None:
-    """Catch an early schema-3 bump or omission/substitution of the packaged policy literal."""
-    current = summary.start_summary(version="9.9.9")
+def test_current_summary_provenance_uses_schema_three_and_records_the_default_profile(tmp_path) -> None:
+    """Catch an omitted profile identity or substitution of the packaged policy literal."""
+    from vntyper.scripts.decision_profile import load_packaged_decision_profile
+    from vntyper.scripts.profile_provenance import snapshot_decision_profile
+
+    profile = load_packaged_decision_profile()
+    current = summary.start_summary(version="9.9.9", decision_profile=profile)
     summary.write_summary(current, tmp_path / "pipeline_summary.json")
+    snapshot_decision_profile(profile, tmp_path / "provenance" / "decision_profile.json")
 
     on_disk = json.loads((tmp_path / "pipeline_summary.json").read_text(encoding="utf-8"))
     block = _provenance_block(render(tmp_path))
 
-    assert summary.SUMMARY_SCHEMA_VERSION == 2
-    assert on_disk["schema_version"] == 2
+    assert summary.SUMMARY_SCHEMA_VERSION == 3
+    assert on_disk["schema_version"] == 3
     assert on_disk["decision_policy"] == "legacy-selection-v1"
     assert on_disk["advntr_evidence_digest"] is None
+    assert on_disk["decision_profile_sha256"] == profile.digest
+    assert on_disk["decision_profile_source"] == "package"
+    assert on_disk["decision_profile_snapshot"] == "provenance/decision_profile.json"
     assert _labeled_value(block, "Decision policy") == "legacy-selection-v1"
-    assert "schema 3" not in block.lower()
+    assert _labeled_value(block, "Summary schema version") == "3"
 
 
 @pytest.mark.parametrize("digest", ["", "0" * 63, "G" * 64, 1])

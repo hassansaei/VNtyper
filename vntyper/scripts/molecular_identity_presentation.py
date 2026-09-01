@@ -49,9 +49,8 @@ def identity_compatibility_cells(
     Schema 1 and schema 2 introduced no required identity container. Field presence,
     rather than allele-shaped legacy cells, is therefore the only compatibility
     discriminator. A complete quartet is copied exactly; any absent member makes all
-    four cells explicit legacy text. ``schema_version`` is accepted at this boundary so
-    the later schema-3 validator can strengthen the same contract without changing its
-    callers. A7 deliberately adds no schema-3 requirement.
+    four cells explicit legacy text. Schema 3 instead requires the complete quartet;
+    rendering a malformed current row as legacy would hide a broken run artifact.
 
     Args:
         row: One caller-positive result row read from a pipeline summary.
@@ -61,9 +60,10 @@ def identity_compatibility_cells(
     Returns:
         The exact four compatibility cells in public column order.
     """
-    del schema_version
     if all(column in row for column in IDENTITY_COLUMNS):
         return {column: row[column] for column in IDENTITY_COLUMNS}
+    if schema_version == 3:
+        raise ValueError("summary schema 3 positive row requires the complete molecular identity quartet")
     return dict.fromkeys(IDENTITY_COLUMNS, LEGACY_IDENTITY_NOT_RECORDED)
 
 
