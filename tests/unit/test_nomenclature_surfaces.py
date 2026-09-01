@@ -39,6 +39,14 @@ from vntyper.scripts.nomenclature_annotate import (
     reconcile_caller_outputs,
 )
 from vntyper.scripts.nomenclature_bam import BamRescuer
+from vntyper.scripts.nomenclature_bam_evidence import BamIdentityEvidence, BamLocusEvidence
+from vntyper.scripts.nomenclature_bam_replay import (
+    BAM_REPLAY_FILENAME,
+    BamReplayArtifact,
+    BamReplayLocus,
+    read_bam_replay_artifact,
+    write_bam_replay_artifact,
+)
 from vntyper.scripts.report_formatting import ADVNTR_DISPLAY_COLUMNS, KESTREL_DISPLAY_COLUMNS
 from vntyper.scripts.summary import parse_tsv
 
@@ -761,6 +769,111 @@ def test_production_haplotype_path_returns_candidate_bound_identity_without_incr
     assert [binding.identity if binding is not None else None for binding in bindings] == [identity]
     assert row["__Identity_Equivalent_Representation_Count"] == "1"
     assert row["__Identity_Hypothesis_Count"] == "1"
+
+
+def _identity_aware_candidate_outputs(tmp_path: Path) -> tuple[Path, Path, MolecularIdentity]:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I23_2_C_LEN1", "24")
+    _attach_kestrel_identity_metadata(kestrel, identity)
+    _attach_advntr_identity_context(advntr)
+    frame = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    pair = nomenclature.pair_sequence("X-X")
+    assert pair is not None
+    frame["Motif_sequence"] = pair
+    frame["Motif_fasta"] = "X-X"
+    frame["POS_fasta"] = "61"
+    frame.to_csv(kestrel, sep="\t", index=False)
+    return kestrel, advntr, identity
+
+
+def test_identity_aware_reconciliation_writes_not_consulted_replay_state(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, identity)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact((BamReplayLocus(0, "not-consulted", None),))
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert BAM_REPLAY_FILENAME not in written.columns
+
+
+def test_identity_aware_reconciliation_writes_unavailable_replay_state(tmp_path: Path) -> None:
+    kestrel, advntr, _ = _identity_aware_candidate_outputs(tmp_path)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact((BamReplayLocus(0, "unavailable", None),))
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        BamLocusEvidence((), 0, {}),
+        BamLocusEvidence(
+            (
+                BamIdentityEvidence(
+                    (make_molecular_identity((make_coding_edit(60, 59, "", "C"),)),),
+                    ((0,),),
+                    5,
+                ),
+                BamIdentityEvidence(
+                    (make_molecular_identity((make_coding_edit(60, 59, "", "A"),)),),
+                    ((1,),),
+                    8_704,
+                ),
+            ),
+            2,
+            {
+                make_molecular_identity((make_coding_edit(60, 59, "", "C"),)): 1,
+                make_molecular_identity((make_coding_edit(60, 59, "", "A"),)): 1,
+            },
+        ),
+    ],
+    ids=["empty-observed-locus", "tied-runner-ups"],
+)
+def test_identity_aware_reconciliation_writes_complete_observed_replay_evidence(
+    tmp_path: Path,
+    evidence: BamLocusEvidence,
+) -> None:
+    kestrel, advntr, _ = _identity_aware_candidate_outputs(tmp_path)
+
+    class ReplayRescuer:
+        def rescue_with_identity_evidence(self, *_args):
+            return None, evidence
+
+        def close(self) -> None:
+            return None
+
+    with mock.patch.object(nomenclature_annotate, "_open_rescuer", return_value=ReplayRescuer()):
+        assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    artifact = read_bam_replay_artifact(tmp_path)
+    assert artifact == BamReplayArtifact((BamReplayLocus(0, "observed", evidence),))
+    assert artifact.loci[0].evidence is not None
+    assert artifact.loci[0].evidence.records == evidence.records
+    assert artifact.loci[0].evidence.counts == evidence.counts
+
+
+def test_legacy_reconciliation_does_not_manufacture_a_pr_a_replay_artifact(tmp_path: Path) -> None:
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "24")
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert not (tmp_path / BAM_REPLAY_FILENAME).exists()
+
+
+def test_incomplete_identity_aware_reconciliation_cannot_leave_stale_replay_evidence(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, identity)
+    write_bam_replay_artifact(tmp_path, BamReplayArtifact((BamReplayLocus(0, "not-consulted", None),)))
+    frame = pd.read_csv(kestrel, sep="\t", dtype=str)
+    frame.loc[0, "__Identity_Selected_Raw_Representation_Key"] = '{"source":"kestrel","values":[]}'
+    frame.to_csv(kestrel, sep="\t", index=False)
+
+    with pytest.raises(ValueError):
+        reconcile_caller_outputs(kestrel, advntr)
+
+    assert not (tmp_path / BAM_REPLAY_FILENAME).exists()
 
 
 def test_a_missing_allele_cell_does_not_become_a_name(tmp_path) -> None:

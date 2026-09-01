@@ -256,6 +256,101 @@ def collect_locus_evidence(
     return BamLocusEvidence(retained_records, len(retained_records), _record_counts(retained_records))
 
 
+def project_record_observation(
+    edits: Iterable[tuple[int, int, int, str]],
+    minimum_kmer_depth: int | None,
+    window_start: int,
+    window_end: int,
+) -> BamRecordObservation:
+    """Project raw parsed edits into one complete fail-closed locus record.
+
+    Args:
+        edits: Parsed ``(start, ref span, inserted span, bases)`` tuples.
+        minimum_kmer_depth: Optional typed XD retained for the denominator record.
+        window_start: Inclusive zero-based locus-window start.
+        window_end: Inclusive zero-based locus-window end.
+
+    Returns:
+        Complete in-window edit observations, or an empty identity context if any
+        consulted edit is incomplete.
+
+    Raises:
+        ValueError: If window boundaries or XD are invalid.
+    """
+    _nonnegative_integer(window_start, "BAM record projection window start")
+    _nonnegative_integer(window_end, "BAM record projection window end")
+    if window_end < window_start:
+        raise ValueError("BAM record projection window end must not precede its start")
+    observations: list[BamEditObservation] = []
+    for raw_edit in edits:
+        if not isinstance(raw_edit, tuple) or len(raw_edit) != 4:
+            return BamRecordObservation((), minimum_kmer_depth)
+        try:
+            observation = BamEditObservation(*raw_edit)
+        except (TypeError, ValueError):
+            return BamRecordObservation((), minimum_kmer_depth)
+        if window_start <= observation.start <= window_end:
+            observations.append(observation)
+    return BamRecordObservation(tuple(observations), minimum_kmer_depth)
+
+
+def bind_complete_winner_identity(
+    records: tuple[BamRecordObservation, ...],
+    evidence: BamLocusEvidence,
+    winning_edit: BamEditObservation,
+    locus: BamIdentityLocus,
+    component: BamIdentityTranslator,
+    supporting_record_count: int,
+) -> MolecularIdentity | None:
+    """Bind one exact winner only when every complete supporting record proves it.
+
+    Args:
+        records: Complete observed records aligned with ``evidence``.
+        evidence: Candidate-bound identity sets for those same records.
+        winning_edit: Exact legacy winning edit.
+        locus: Complete pair context and existing Kestrel candidates.
+        component: Injected complete-context identity translation authority.
+        supporting_record_count: Legacy unweighted support for ``winning_edit``.
+
+    Returns:
+        The sole common exact candidate identity, or ``None`` on unresolved,
+        ambiguous, inconsistent, or non-matching evidence.
+
+    Raises:
+        ValueError: If boundary values are not validated evidence types.
+    """
+    if not isinstance(records, tuple) or any(not isinstance(record, BamRecordObservation) for record in records):
+        raise ValueError("BAM winner record observations must be a tuple of BamRecordObservation values")
+    if not isinstance(evidence, BamLocusEvidence):
+        raise ValueError("BAM winner locus evidence must be a BamLocusEvidence")
+    if len(records) != len(evidence.records):
+        raise ValueError("BAM winner record observations and locus evidence must be aligned")
+    if not isinstance(winning_edit, BamEditObservation):
+        raise ValueError("BAM winning edit must be a BamEditObservation")
+    if not isinstance(locus, BamIdentityLocus):
+        raise ValueError("BAM winner identity locus must be a BamIdentityLocus")
+    _nonnegative_integer(supporting_record_count, "BAM supporting record count")
+
+    supporting_sets = [
+        set(bound.identities)
+        for record, bound in zip(records, evidence.records, strict=True)
+        if winning_edit in record.edits
+    ]
+    if len(supporting_sets) != supporting_record_count or not supporting_sets:
+        return None
+    common_identities = set.intersection(*supporting_sets)
+    if len(common_identities) != 1:
+        return None
+    common_identity = next(iter(common_identities))
+    isolated_evidence = collect_locus_evidence(
+        (BamRecordObservation((winning_edit,), None),),
+        locus,
+        component,
+    )
+    exact_winner_identities = isolated_evidence.record_identity_sets[0]
+    return common_identity if exact_winner_identities == (common_identity,) else None
+
+
 def _bind_record(
     record: BamRecordObservation,
     locus: BamIdentityLocus,

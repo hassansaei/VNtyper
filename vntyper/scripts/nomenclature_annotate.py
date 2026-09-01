@@ -38,7 +38,23 @@ from vntyper.scripts.nomenclature import (
     reconcile,
     render,
 )
-from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate, refine
+from vntyper.scripts.nomenclature_bam import is_candidate, refine
+from vntyper.scripts.nomenclature_bam_adapter import (
+    open_rescuer as _open_rescuer,
+)
+from vntyper.scripts.nomenclature_bam_adapter import (
+    row_haplotype_call as _row_haplotype_call,
+)
+from vntyper.scripts.nomenclature_bam_adapter import (
+    row_haplotype_identity_call as _row_haplotype_identity_call,
+)
+from vntyper.scripts.nomenclature_bam_evidence import BamLocusEvidence
+from vntyper.scripts.nomenclature_bam_replay import (
+    BamReplayArtifact,
+    BamReplayLocus,
+    invalidate_bam_replay_artifact,
+    write_bam_replay_artifact,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,25 +204,6 @@ def annotate_kestrel_frame(frame: pd.DataFrame, output_dir: str | Path | None = 
     return annotated
 
 
-def _open_rescuer(output_dir: str | Path | None) -> BamRescuer | None:
-    """Build a rescuer for a sample, or ``None`` without haplotype records.
-
-    Args:
-        output_dir: The Kestrel output directory.
-
-    Returns:
-        BamRescuer | None: A rescuer owning one handle for the whole frame. The
-        handle is opened lazily on first use, so building this costs nothing when no
-        row turns out to be a candidate.
-    """
-    if output_dir is None:
-        return None
-    bam = Path(output_dir) / "output.bam"
-    if not bam.is_file():
-        return None
-    return BamRescuer(bam)
-
-
 def _kestrel_row_call(row: pd.Series) -> Nomenclature | None:
     """Translate one Kestrel VCF row, or ``None`` when it cannot be translated.
 
@@ -226,108 +223,6 @@ def _kestrel_row_call(row: pd.Series) -> Nomenclature | None:
         return from_kestrel(str(row["Motifs"]), int(row["POS"]), str(row["REF"]), str(row["ALT"]))
     except (TypeError, ValueError):
         logger.debug("Kestrel row not translatable to nomenclature: %s", dict(row))
-        return None
-
-
-def _row_haplotype_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclature | None, int | None]:
-    """What the resolved haplotype records say at one Kestrel row's locus.
-
-    Args:
-        row: One Kestrel result row.
-        rescuer: The open rescuer for this sample.
-
-    Returns:
-        tuple: ``(call, supporting haplotype records)``; ``(None, None)`` when the
-        locus is unavailable or the records carry no length-changing edit. The
-        record count is returned alongside because the tier gate must weigh an
-        agreement by its own evidence, not an unrelated source's depth.
-    """
-    locus = _row_locus(row)
-    if locus is None:
-        return None, None
-    contig, position = locus
-    consensus = rescuer.rescue(contig, position)
-    if consensus is None:
-        return None, None
-    return from_bam(contig, consensus), consensus.supporting_haplotype_records
-
-
-def _row_haplotype_identity_call(
-    row: pd.Series,
-    rescuer: BamRescuer,
-    component: Any,
-) -> tuple[Nomenclature | None, int | None, IdentityTranslation | None]:
-    """Resolve one row and bind its BAM winner to its existing Kestrel identity.
-
-    Args:
-        row: Current-run Kestrel result row carrying the A3 internal metadata.
-        rescuer: The open rescuer for this sample.
-        component: Stage-bound complete-context translation authority.
-
-    Returns:
-        ``(call, support, translation)``. The translation is present only when
-        the exact BAM winner binds to this row's complete selected candidate.
-    """
-    from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
-    from vntyper.scripts.molecular_identity_translation import bind_bam_translation
-    from vntyper.scripts.nomenclature_bam_evidence import BamCandidateBinding, BamIdentityLocus
-
-    row_locus = _row_locus(row)
-    if row_locus is None:
-        return None, None, None
-    contig, position = row_locus
-    persisted = parse_selected_candidate_cells(row)
-    motifs = str(row.get("Motifs", ""))
-    pair = str(row.get("Motif_sequence", ""))
-    if len(pair) != 120 or not set(pair) <= frozenset("ACGT"):
-        consensus = rescuer.rescue(contig, position)
-        if consensus is None:
-            return None, None, None
-        return from_bam(contig, consensus), consensus.supporting_haplotype_records, None
-    identity_locus = BamIdentityLocus(
-        motifs,
-        pair,
-        (BamCandidateBinding(persisted.selected_observation_ordinal, persisted.translation),),
-    )
-    consensus, _ = rescuer.rescue_with_identity_evidence(
-        contig,
-        position,
-        identity_locus,
-        component,
-    )
-    if consensus is None:
-        return None, None, None
-    bound_translation = None
-    if consensus.bound_identity is not None:
-        bound_translation = bind_bam_translation(persisted.translation, consensus.bound_identity)
-    return from_bam(contig, consensus), consensus.supporting_haplotype_records, bound_translation
-
-
-def _row_locus(row: pd.Series) -> tuple[str, int] | None:
-    """The locus a row was called at, taken from the row itself.
-
-    Deliberately not read from ``output.bed``. That file carries one record per
-    frame row, so a single parse of it names the *first* row's locus for every row;
-    and its start column is ``POS_fasta - 1`` because BED is half-open, which read
-    as a 1-based position shifts the rescue window one base left. ``Motif_fasta``
-    and ``POS_fasta`` are what the BED is written from, so taking them directly is
-    both correct per row and immune to that off-by-one.
-
-    Args:
-        row: One Kestrel result row.
-
-    Returns:
-        tuple[str, int] | None: ``(pair name, 1-based position)``, or ``None`` when
-        the row does not carry them.
-    """
-    contig = row.get("Motif_fasta")
-    position = row.get("POS_fasta")
-    if contig is None or position is None:
-        return None
-    try:
-        return str(contig), int(position)
-    except (TypeError, ValueError):
-        logger.debug("row carried a non-numeric POS_fasta: %r", position)
         return None
 
 
@@ -379,6 +274,9 @@ def reconcile_caller_outputs(
     supports: dict[str, int | None] = {}
     kestrel_keep = [not _is_negative(row) for _, row in kestrel.iterrows()]
     kestrel_rows = [row for (_, row), keep in zip(kestrel.iterrows(), kestrel_keep, strict=True) if keep]
+    identity_aware = _rows_carry_identity_metadata(kestrel_rows)
+    if identity_aware:
+        invalidate_bam_replay_artifact(kestrel_dir or kestrel_path.parent)
 
     # Aligned to `kestrel_rows`, `None` where a row could not be translated. Position
     # is what ties a call back to the record it came from, so nothing is compacted.
@@ -405,12 +303,13 @@ def reconcile_caller_outputs(
 
     identity_config: dict[str, Any] | None = None
     identity_component: Any = None
-    if _rows_carry_identity_metadata(kestrel_rows):
+    if identity_aware:
         from vntyper.scripts.identity_candidates import translation_component_from_config
 
         identity_config = load_nomenclature_config()
         identity_component = translation_component_from_config(identity_config)
     bam_translations: list[IdentityTranslation | None] | None = [] if identity_component is not None else None
+    bam_replay_loci: list[BamReplayLocus] | None = [] if identity_component is not None else None
     bam_calls = _haplotype_calls(
         kestrel_rows,
         kestrel_dir or kestrel_path.parent,
@@ -419,6 +318,7 @@ def reconcile_caller_outputs(
         supports,
         bam_translations=bam_translations,
         identity_component=identity_component,
+        bam_replay_loci=bam_replay_loci,
     )
     named_bam = [call for call in bam_calls if call is not None]
 
@@ -480,6 +380,10 @@ def reconcile_caller_outputs(
             updated.loc[mask, column] = value
         updated.loc[mask, own_column] = own_names
         _write_tsv(updated, path, file_header)
+
+    if bam_replay_loci is not None:
+        ordered_replay = tuple(sorted(bam_replay_loci, key=lambda locus: locus.observation_ordinal))
+        write_bam_replay_artifact(kestrel_dir or kestrel_path.parent, BamReplayArtifact(ordered_replay))
 
     logger.info(
         "Cross-caller nomenclature reconciled: tier %s (kestrel=%r advntr=%r).",
@@ -626,6 +530,7 @@ def _haplotype_calls(
     *,
     bam_translations: list[IdentityTranslation | None] | None = None,
     identity_component: Any = None,
+    bam_replay_loci: list[BamReplayLocus] | None = None,
 ) -> list[Nomenclature | None]:
     """Resolved haplotype records where the callers leave something open.
 
@@ -642,16 +547,36 @@ def _haplotype_calls(
         bam_translations: Optional aligned output for complete-candidate BAM
             bindings used by current-run identity reconciliation.
         identity_component: Optional stage-bound complete-context translator.
+        bam_replay_loci: Optional output retaining one closed replay state per
+            persisted selected Kestrel observation ordinal.
 
     Returns:
         list[Nomenclature | None]: One entry per Kestrel row, `None` where the
         haplotype records said nothing.
     """
+    if bam_replay_loci is not None and bam_translations is None:
+        raise ValueError("BAM replay output requires aligned identity translations")
+
+    def retain_replay(
+        rows: list[pd.Series],
+        state: str,
+        evidence: BamLocusEvidence | None = None,
+    ) -> None:
+        if bam_replay_loci is None:
+            return
+        from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
+
+        for replay_row in rows:
+            ordinal = parse_selected_candidate_cells(replay_row).selected_observation_ordinal
+            bam_replay_loci.append(BamReplayLocus(ordinal, state, evidence))  # type: ignore[arg-type]
+
     if not is_candidate(reconcile(*vcf_calls, *advntr_calls, supports=supports)):
+        retain_replay(kestrel_rows, "not-consulted")
         return []
 
     rescuer = _open_rescuer(kestrel_dir)
     if rescuer is None:
+        retain_replay(kestrel_rows, "unavailable")
         return []
     if bam_translations is not None and identity_component is None:
         from vntyper.scripts.identity_candidates import translation_component_from_config
@@ -668,8 +593,11 @@ def _haplotype_calls(
                 call, support = _row_haplotype_call(row, rescuer)
                 bound_translation = None
             else:
-                call, support, bound_translation = _row_haplotype_identity_call(row, rescuer, identity_component)
+                call, support, bound_translation, evidence = _row_haplotype_identity_call(
+                    row, rescuer, identity_component
+                )
                 bam_translations.append(bound_translation)
+                retain_replay([row], "observed" if evidence is not None else "unavailable", evidence)
             calls.append(call)
             if call is None:
                 continue

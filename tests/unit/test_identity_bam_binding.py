@@ -15,7 +15,9 @@ from vntyper.scripts.nomenclature_bam_evidence import (
     BamIdentityLocus,
     BamLocusEvidence,
     BamRecordObservation,
+    bind_complete_winner_identity,
     collect_locus_evidence,
+    project_record_observation,
 )
 
 pytestmark = pytest.mark.unit
@@ -194,6 +196,20 @@ def test_identity_evidence_is_frozen_and_validates_aligned_bindings() -> None:
         BamIdentityEvidence((), (), -1)
 
 
+@pytest.mark.parametrize("value", [True, 1.5, 2_147_483_648])
+def test_record_and_bound_evidence_reject_invalid_xd_values(value: object) -> None:
+    with pytest.raises(ValueError, match="minimum k-mer depth"):
+        BamRecordObservation((), value)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="minimum k-mer depth"):
+        BamIdentityEvidence((), (), value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [0, 2_147_483_647])
+def test_record_and_bound_evidence_accept_xd_boundaries(value: int) -> None:
+    assert BamRecordObservation((), value).minimum_kmer_depth == value
+    assert BamIdentityEvidence((), (), value).minimum_kmer_depth == value
+
+
 def test_locus_evidence_rejects_counts_inconsistent_with_records() -> None:
     record = BamIdentityEvidence((_DUPC,), ((4,),), None)
 
@@ -239,6 +255,71 @@ def test_unresolved_record_edit_closes_the_complete_record_binding() -> None:
 
     assert evidence.counts == {}
     assert evidence.record_identity_sets == ((),)
+
+
+def test_complete_winner_binding_requires_one_common_exact_identity_from_every_supporter() -> None:
+    complete_records = (
+        _record(_DUPC_EDIT, _DUPA_EDIT),
+        _record(_DUPC_EDIT, _DUPA_EDIT),
+    )
+    complete_evidence = collect_locus_evidence(complete_records, _locus(_DUPC, _DUPA), _COMPONENT)
+    one_unresolved = (
+        BamIdentityEvidence((_DUPC,), ((0,),), None),
+        BamIdentityEvidence((), (), None),
+    )
+
+    assert (
+        bind_complete_winner_identity(
+            complete_records,
+            BamLocusEvidence(one_unresolved, 2, {_DUPC: 1}),
+            _DUPC_EDIT,
+            _locus(_DUPC),
+            _COMPONENT,
+            2,
+        )
+        is None
+    )
+    assert (
+        bind_complete_winner_identity(
+            complete_records, complete_evidence, _DUPC_EDIT, _locus(_DUPC, _DUPA), _COMPONENT, 2
+        )
+        is None
+    )
+
+    sole_records = (_record(_DUPC_EDIT), _record(_DUPC_EDIT))
+    sole_evidence = collect_locus_evidence(sole_records, _locus(_DUPC), _COMPONENT)
+    assert bind_complete_winner_identity(sole_records, sole_evidence, _DUPC_EDIT, _locus(_DUPC), _COMPONENT, 2) == _DUPC
+    assert bind_complete_winner_identity(sole_records, sole_evidence, _DUPC_EDIT, _locus(_DUPA), _COMPONENT, 2) is None
+    assert bind_complete_winner_identity(sole_records, sole_evidence, _DUPC_EDIT, _locus(_DUPC), _COMPONENT, 3) is None
+
+
+def test_complete_winner_binding_rejects_unvalidated_boundaries() -> None:
+    evidence = collect_locus_evidence((), _locus(_DUPC), _COMPONENT)
+    with pytest.raises(ValueError, match="record observations"):
+        bind_complete_winner_identity([], evidence, _DUPC_EDIT, _locus(_DUPC), _COMPONENT, 0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="locus evidence"):
+        bind_complete_winner_identity((), object(), _DUPC_EDIT, _locus(_DUPC), _COMPONENT, 0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="winning edit"):
+        bind_complete_winner_identity((), evidence, object(), _locus(_DUPC), _COMPONENT, 0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="identity locus"):
+        bind_complete_winner_identity((), evidence, _DUPC_EDIT, object(), _COMPONENT, 0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="supporting record count"):
+        bind_complete_winner_identity((), evidence, _DUPC_EDIT, _locus(_DUPC), _COMPONENT, True)
+
+
+def test_record_projection_retains_complete_window_edits_and_fails_closed() -> None:
+    projected = project_record_observation(((30, 0, 1, "T"), (50, 0, 1, "A")), 181, 20, 40)
+    incomplete = project_record_observation(((30, 0, 1, ""),), 181, 20, 40)
+
+    assert projected == BamRecordObservation((BamEditObservation(30, 0, 1, "T"),), 181)
+    assert incomplete == BamRecordObservation((), 181)
+
+
+def test_record_projection_rejects_invalid_window_boundaries() -> None:
+    with pytest.raises(ValueError, match="window"):
+        project_record_observation((), None, True, 40)
+    with pytest.raises(ValueError, match="window"):
+        project_record_observation((), None, 40, 20)
 
 
 def test_collection_rejects_unvalidated_boundary_values() -> None:

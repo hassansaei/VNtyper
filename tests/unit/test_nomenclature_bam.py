@@ -459,6 +459,115 @@ def test_identity_count_winner_cannot_bind_a_different_exact_edit_consensus(tmp_
     assert consensus.bound_identity is None
 
 
+def test_exact_winner_cannot_bind_when_every_complete_supporting_record_is_unresolved(tmp_path: Path) -> None:
+    winner_identity = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    bam = _write_bam(tmp_path / "unresolved-context.bam", _haplotypes("winner", 3, "20=1I1=1X20="))
+    delegate = translation_component_from_config(load_nomenclature_config())
+
+    class UnresolvedCoeditComponent:
+        def translate_kestrel(self, representation):
+            if len(representation.reference_allele) == len(representation.alternate_allele):
+                return IdentityTranslation(None, "unresolved", "motif-anchor-mismatch", False)
+            return delegate.translate_kestrel(representation)
+
+    consensus, evidence = BamRescuer(bam).rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(winner_identity),
+        UnresolvedCoeditComponent(),
+    )
+
+    assert consensus is not None
+    assert consensus.inserted == 1
+    assert consensus.supporting_haplotype_records == 3
+    assert evidence is not None
+    assert evidence.eligible_record_count == 3
+    assert evidence.record_identity_sets == ((), (), ())
+    assert evidence.counts == {}
+    assert consensus.bound_identity is None
+
+
+def test_one_unresolved_complete_winner_record_prevents_partial_binding(tmp_path: Path) -> None:
+    winner_identity = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    bam = _write_bam(
+        tmp_path / "mixed-winner-context.bam",
+        _haplotypes("resolved", 2, "20=1I20=") + _haplotypes("unresolved", 1, "20=1I1=1X20="),
+    )
+    delegate = translation_component_from_config(load_nomenclature_config())
+
+    class MixedComponent:
+        def translate_kestrel(self, representation):
+            if len(representation.reference_allele) == len(representation.alternate_allele):
+                return IdentityTranslation(None, "unresolved", "motif-anchor-mismatch", False)
+            return delegate.translate_kestrel(representation)
+
+    consensus, evidence = BamRescuer(bam).rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(winner_identity),
+        MixedComponent(),
+    )
+
+    assert consensus is not None
+    assert evidence is not None
+    assert evidence.counts == {winner_identity: 2}
+    assert evidence.record_identity_sets == ((winner_identity,), (winner_identity,), ())
+    assert consensus.bound_identity is None
+
+
+def test_multiple_common_identities_across_complete_winner_records_are_ambiguous(tmp_path: Path) -> None:
+    winner_identity = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    coedit_identity = make_molecular_identity((make_coding_edit(30, 30, "C", "A"),))
+    bam = _write_bam(tmp_path / "ambiguous-context.bam", _haplotypes("winner", 3, "20=1I1=1X20="))
+
+    class AmbiguousComponent:
+        def translate_kestrel(self, representation):
+            identity = (
+                coedit_identity
+                if len(representation.reference_allele) == len(representation.alternate_allele)
+                else winner_identity
+            )
+            return IdentityTranslation(identity, "resolved", None, False)
+
+    consensus, evidence = BamRescuer(bam).rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(winner_identity, coedit_identity),
+        AmbiguousComponent(),
+    )
+
+    assert consensus is not None
+    assert evidence is not None
+    assert evidence.counts == {winner_identity: 3, coedit_identity: 3}
+    assert evidence.record_identity_sets == (
+        (winner_identity, coedit_identity),
+        (winner_identity, coedit_identity),
+        (winner_identity, coedit_identity),
+    )
+    assert consensus.bound_identity is None
+
+
+def test_identity_adapter_retains_xd_from_a_denominator_record_without_cigar() -> None:
+    identity = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
+    handle = type("Handle", (), {"fetch": lambda *_args: [_tagged_record(181)]})()
+    rescuer = BamRescuer("unused.bam")
+    rescuer._open = lambda: handle  # type: ignore[method-assign]
+
+    consensus, evidence = rescuer.rescue_with_identity_evidence(
+        "K-J",
+        30,
+        _identity_locus(identity),
+        translation_component_from_config(load_nomenclature_config()),
+    )
+
+    assert consensus is None
+    assert evidence is not None
+    assert evidence.eligible_record_count == 1
+    assert evidence.record_identity_sets == ((),)
+    assert evidence.xd_by_record == (181,)
+    assert rescuer.fetches == 1
+
+
 def test_identity_adapter_keeps_one_record_vote_for_each_cooccurring_candidate(tmp_path: Path) -> None:
     first = make_molecular_identity((make_coding_edit(31, 30, "", "T"),))
     second = make_molecular_identity((make_coding_edit(30, 29, "", "T"),))

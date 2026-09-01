@@ -44,8 +44,9 @@ from vntyper.scripts.nomenclature_bam_evidence import (
     BamIdentityLocus,
     BamIdentityTranslator,
     BamLocusEvidence,
-    BamRecordObservation,
+    bind_complete_winner_identity,
     collect_locus_evidence,
+    project_record_observation,
 )
 from vntyper.scripts.nomenclature_evidence import resolve_bam_thin_haplotype_record_support
 
@@ -560,17 +561,33 @@ class BamRescuer:
             return None, None
         records, start, end = fetched
         consensus = self._compatibility_consensus(records, start, end, contig, position)
-        observations = tuple(self._identity_record(record, start, end) for record in records)
+        observations = tuple(
+            project_record_observation(
+                tuple((edit.start, edit.ref_span, edit.inserted, edit.bases) for edit in record.edits),
+                record.minimum_kmer_depth,
+                start,
+                end,
+            )
+            for record in records
+        )
         evidence = collect_locus_evidence(observations, locus, component)
         if consensus is not None:
-            winning_observation = BamRecordObservation(
-                (BamEditObservation(consensus.start, consensus.ref_span, consensus.inserted, consensus.bases),),
-                None,
+            winning_observation = BamEditObservation(
+                consensus.start,
+                consensus.ref_span,
+                consensus.inserted,
+                consensus.bases,
             )
-            winning_evidence = collect_locus_evidence((winning_observation,), locus, component)
-            identities = winning_evidence.record_identity_sets[0]
-            if len(identities) == 1:
-                consensus = replace(consensus, bound_identity=identities[0])
+            bound_identity = bind_complete_winner_identity(
+                observations,
+                evidence,
+                winning_observation,
+                locus,
+                component,
+                consensus.supporting_haplotype_records,
+            )
+            if bound_identity is not None:
+                consensus = replace(consensus, bound_identity=bound_identity)
         return consensus, evidence
 
     def _fetch_locus(self, contig: str, position: int) -> tuple[tuple[_LocusRecord, ...], int, int] | None:
@@ -590,28 +607,13 @@ class BamRescuer:
 
         records: list[_LocusRecord] = []
         for record in fetched:
+            depth = minimum_kmer_depth(record)
             if record.cigartuples is None:
-                records.append(_LocusRecord((), None))
+                records.append(_LocusRecord((), depth))
                 continue
             edits = tuple(merge_edits(walk_cigar(record.reference_start, record.cigartuples, record.query_sequence)))
-            records.append(_LocusRecord(edits, minimum_kmer_depth(record)))
+            records.append(_LocusRecord(edits, depth))
         return tuple(records), start, end
-
-    @staticmethod
-    def _identity_record(record: _LocusRecord, start: int, end: int) -> BamRecordObservation:
-        """Project one parsed record into the pure identity-evidence boundary."""
-        observations: list[BamEditObservation] = []
-        for edit in record.edits:
-            if not start <= edit.start <= end:
-                continue
-            try:
-                observations.append(BamEditObservation(edit.start, edit.ref_span, edit.inserted, edit.bases))
-            except ValueError:
-                # An absent/incomplete query sequence cannot establish complete
-                # molecular identity, but the eligible record remains in the
-                # denominator with its XD observation.
-                return BamRecordObservation((), record.minimum_kmer_depth)
-        return BamRecordObservation(tuple(observations), record.minimum_kmer_depth)
 
     @staticmethod
     def _compatibility_consensus(
