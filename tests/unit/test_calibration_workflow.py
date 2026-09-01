@@ -3,6 +3,7 @@
 from fractions import Fraction
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from tests.calibration_run_fixture import (
@@ -20,6 +21,8 @@ from vntyper.scripts.calibration_manifest import decode_study_declaration
 from vntyper.scripts.calibration_objective import CandidateEvaluation, count_free_parameters
 from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_workflow import extract_evidence, fit_candidate, validate_candidate
+from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.unit
 
@@ -416,6 +419,38 @@ def test_fit_reads_only_training_and_policy_selection_and_requires_baseline_repl
     )
     with pytest.raises(ValueError, match="baseline"):
         fit_candidate(failed, objective="lexicographic-safety-v1", evaluator=_evaluate)
+
+
+def test_fitted_profile_resolves_and_drives_production_whole_locus_reconciliation(tmp_path: Path) -> None:
+    """Mutation caught: a fitted generated dominance component has no production consumer."""
+    runs = _runs(tmp_path / "runs")
+    evidence = extract_evidence(_study(), _labels(), runs)
+    candidate = fit_candidate(evidence, objective="lexicographic-safety-v1", evaluator=_evaluate)
+    profile_path = tmp_path / "fitted-profile.json"
+    profile_path.write_bytes(candidate.profile.canonical_bytes)
+
+    resolved = resolve_run_configuration(profile_path)
+    train = runs["train"]
+    assert isinstance(train, dict)
+    root = Path(str(train["root"]))
+    kestrel = root / "kestrel" / "kestrel_result.tsv"
+
+    assert resolved.dominance["enabled"] is True
+    assert (
+        reconcile_caller_outputs(
+            kestrel,
+            None,
+            resolved_component=resolved.nomenclature,
+            dominance_component=resolved.dominance,
+            custom_context_active=True,
+        )
+        is True
+    )
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == IDENTITY
+    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert written.loc[0, "__Dominance_Abstention_Reason"] == ""
 
 
 def test_fit_objective_must_match_snapshotted_protocol(tmp_path: Path) -> None:

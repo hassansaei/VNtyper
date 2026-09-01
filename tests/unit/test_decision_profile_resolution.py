@@ -116,7 +116,7 @@ def test_resolution_rejects_a_governed_rule_evidence_mismatch() -> None:
         parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
 
 
-def test_run_resolution_rejects_non_neutral_generated_dominance_until_it_has_a_consumer(tmp_path: Path) -> None:
+def test_run_resolution_accepts_explicit_non_neutral_generated_dominance(tmp_path: Path) -> None:
     packaged = load_packaged_decision_profile()
     document = json.loads(packaged.canonical_bytes)
     document["profile_id"] = "unit-test-generated-active"
@@ -137,8 +137,11 @@ def test_run_resolution_rejects_non_neutral_generated_dominance_until_it_has_a_c
     path = tmp_path / "generated.json"
     path.write_bytes(canonical_json_bytes(document))
 
-    with pytest.raises(ValueError, match="dominance.*not active|neutral"):
-        resolve_run_configuration(path)
+    resolved = resolve_run_configuration(path)
+
+    assert resolved.decision_profile.profile_kind == "generated"
+    assert resolved.decision_profile.source == "explicit-cli"
+    assert resolved.dominance["enabled"] is True
 
 
 @pytest.mark.parametrize("kind", ["packaged", "unsupported"])

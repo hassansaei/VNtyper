@@ -622,6 +622,18 @@ def run_pipeline(
         logger.info(
             "Kestrel genotyping completed."
         )  # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
+        if (
+            "advntr" not in extra_modules
+            and run_configuration.dominance.get("enabled") is True
+            and reconcile_caller_outputs(
+                os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
+                None,
+                resolved_component=run_configuration.nomenclature,
+                dominance_component=run_configuration.dominance,
+                custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
+            )
+        ):
+            refresh_step(summary, STEP_KESTREL, write_summary_path=summary_file_path)
         if "advntr" in extra_modules:
             logger.info("adVNTR module included. Starting adVNTR genotyping.")
             if advntr_context is None:
@@ -712,6 +724,7 @@ def run_pipeline(
                     os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
                     artifact_evidence=advntr_evidence,
                     resolved_component=run_configuration.nomenclature,
+                    dominance_component=run_configuration.dominance,
                     custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                 ):
                     # The Kestrel step was recorded before this ran, so the summary

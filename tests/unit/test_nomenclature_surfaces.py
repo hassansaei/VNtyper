@@ -44,7 +44,7 @@ from vntyper.scripts.nomenclature_annotate import (
     reconcile_caller_outputs,
 )
 from vntyper.scripts.nomenclature_bam import BamRescuer
-from vntyper.scripts.nomenclature_bam_evidence import BamLocusEvidence
+from vntyper.scripts.nomenclature_bam_evidence import BamIdentityEvidence, BamLocusEvidence
 from vntyper.scripts.nomenclature_bam_replay import (
     BAM_REPLAY_FILENAME,
     BamReplayArtifact,
@@ -416,6 +416,135 @@ def test_unlisted_advntr_state_retains_tier_a_and_admissible_projection(tmp_path
     assert written.loc[0, "Nomenclature_Tier"] == "A"
     assert mirrored.loc[0, "Evidence_Disposition"] == "admissible"
     assert ASSERTION not in str(written.loc[0, "Nomenclature_Note"])
+
+
+def _write_retained_identity_votes(path: Path, identity: MolecularIdentity, count: int = 2) -> None:
+    records = tuple(BamIdentityEvidence((identity,), ((0,),), 10) for _ in range(count))
+    evidence = BamLocusEvidence(records, count, {identity: count})
+    write_bam_replay_artifact(path, BamReplayArtifact((BamReplayLocus((0,), "observed", evidence),)))
+
+
+def _active_dominance(**changes: object) -> dict[str, object]:
+    component = dict(resolve_run_configuration().dominance)
+    component.update(
+        {
+            "enabled": True,
+            "minimum_record_count_margin": 1,
+            "minimum_record_share": 0.5,
+            "minimum_record_share_margin": 0.0,
+            "xd_veto": "disabled",
+            "abstain_on_inadmissible_advntr": False,
+            **changes,
+        }
+    )
+    return component
+
+
+def test_kestrel_only_generated_dominance_consumes_retained_votes_once(tmp_path: Path) -> None:
+    """Mutation caught: the optional adVNTR branch is the only runtime consumer."""
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, _advntr = _write_identity_aware_outputs(tmp_path, identity)
+    _write_retained_identity_votes(tmp_path, identity)
+
+    assert reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance()) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == serialize_molecular_identity(identity)
+    assert written.loc[0, "__Dominance_Abstention_Reason"] == ""
+
+
+def test_generated_dominance_abstention_clears_only_the_whole_locus_projection(tmp_path: Path) -> None:
+    """Mutation caught: insufficient dominance preserves a selected global name."""
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, _advntr = _write_identity_aware_outputs(tmp_path, identity)
+    _write_retained_identity_votes(tmp_path, identity)
+
+    assert (
+        reconcile_caller_outputs(
+            kestrel,
+            None,
+            dominance_component=_active_dominance(minimum_record_count_margin=3),
+        )
+        is True
+    )
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "Nomenclature"] == ""
+    assert written.loc[0, "Nomenclature_Tier"] == ""
+    assert written.loc[0, "Nomenclature_Kestrel"] == "59dupC"
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == ""
+    assert written.loc[0, "__Dominance_Abstention_Reason"] == "insufficient-dominance"
+    assert written.loc[0, "Nomenclature_Note"] == "Whole-locus dominance abstention: insufficient-dominance."
+
+
+def test_generated_advntr_veto_abstains_instead_of_falling_through(tmp_path: Path) -> None:
+    """Mutation caught: a governed adVNTR veto is ignored after a BAM winner exists."""
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(
+        tmp_path,
+        identity,
+        advntr_state="I23_6_G_LEN1",
+        advntr_ru="6",
+        advntr_pos="23",
+        advntr_flag="Polymorphic_Call",
+    )
+    _write_retained_identity_votes(tmp_path, identity)
+
+    assert (
+        reconcile_caller_outputs(
+            kestrel,
+            advntr,
+            dominance_component=_active_dominance(abstain_on_inadmissible_advntr=True),
+        )
+        is True
+    )
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "Nomenclature"] == ""
+    assert written.loc[0, "__Dominance_Abstention_Reason"] == "inadmissible-advntr"
+
+
+def test_generated_dominance_can_select_a_distinct_typed_advntr_candidate(tmp_path: Path) -> None:
+    """Mutation caught: production candidates are incorrectly limited to Kestrel rows."""
+    kestrel_identity = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
+    advntr_identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, kestrel_identity)
+    _write_retained_identity_votes(tmp_path, advntr_identity)
+
+    assert reconcile_caller_outputs(kestrel, advntr, dominance_component=_active_dominance()) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == serialize_molecular_identity(advntr_identity)
+    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert written.loc[0, "__Dominance_Abstention_Reason"] == ""
+
+
+def test_packaged_neutral_dominance_preserves_result_and_replay_bytes(tmp_path: Path) -> None:
+    """Mutation caught: merely threading the neutral component changes an artifact byte."""
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    legacy = tmp_path / "legacy"
+    explicit = tmp_path / "explicit"
+    legacy.mkdir()
+    explicit.mkdir()
+    legacy_kestrel, legacy_advntr = _write_identity_aware_outputs(legacy, identity)
+    explicit_kestrel, explicit_advntr = _write_identity_aware_outputs(explicit, identity)
+
+    assert reconcile_caller_outputs(legacy_kestrel, legacy_advntr) is True
+    assert (
+        reconcile_caller_outputs(
+            explicit_kestrel,
+            explicit_advntr,
+            dominance_component=resolve_run_configuration().dominance,
+        )
+        is True
+    )
+
+    assert explicit_kestrel.read_bytes() == legacy_kestrel.read_bytes()
+    assert explicit_advntr.read_bytes() == legacy_advntr.read_bytes()
+    assert (explicit / BAM_REPLAY_FILENAME).read_bytes() == (legacy / BAM_REPLAY_FILENAME).read_bytes()
 
 
 def test_production_identity_policy_is_resolved_from_checked_in_config_at_the_stage_boundary(tmp_path) -> None:
