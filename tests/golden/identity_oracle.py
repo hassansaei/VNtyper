@@ -112,6 +112,9 @@ class GoldenCorpus:
     identity_contract_violations: tuple[str, ...]
     identity_projection_by_sample: dict[str, tuple[tuple[str, ...], ...]]
     selected_projection_by_sample: dict[str, tuple[tuple[str, ...], ...]]
+    policy_stable_projection_by_sample: dict[str, tuple[tuple[tuple[str, str], ...], ...]]
+    unaffected_public_projection_by_sample: dict[str, tuple[tuple[tuple[str, str], ...], ...]]
+    policy_explanation_by_sample: dict[str, tuple[tuple[str, str, str, str], ...]]
     complete_bam_evidence_keys: frozenset[str]
     bam_truth_match_keys: frozenset[str]
     public_truth_identity_keys: frozenset[str]
@@ -173,6 +176,8 @@ RECURRENT_STATE_EVIDENCE = frozenset(
         "I21_2_T_LEN1",
     }
 )
+GOVERNED_ASSERTION = "A carried-forward recurrent adVNTR State is insufficient for molecular identity."
+_POLICY_EXPLANATION_COLUMNS = frozenset({"Nomenclature_Flags", "Nomenclature_Note", "Evidence_Disposition"})
 
 
 def assert_independent_import_closure(entrypoint: Path, repository_root: Path) -> tuple[Path, ...]:
@@ -321,6 +326,9 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
     violations: list[str] = []
     identity_projection: dict[str, tuple[tuple[str, ...], ...]] = {}
     selected_projection: dict[str, tuple[tuple[str, ...], ...]] = {}
+    policy_stable_projection: dict[str, tuple[tuple[tuple[str, str], ...], ...]] = {}
+    unaffected_public_projection: dict[str, tuple[tuple[tuple[str, str], ...], ...]] = {}
+    policy_explanation: dict[str, tuple[tuple[str, str, str, str], ...]] = {}
     complete_bam_evidence_keys: set[str] = set()
     bam_truth_match_keys: set[str] = set()
     public_truth_identity_keys: set[str] = set()
@@ -331,6 +339,14 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         public_rows = _public_rows(advntr, experiment, pair_id, "mutated")
         recurrent_state_collisions.extend(_recurrent_state_collisions(key, "mutated", public_rows))
         _record_identity_projection(identity_projection, key, "mutated", public_rows)
+        _record_policy_projections(
+            policy_stable_projection,
+            unaffected_public_projection,
+            policy_explanation,
+            key,
+            "mutated",
+            public_rows,
+        )
         row_violations, row_identity_counts = _identity_observations(
             key,
             "mutated",
@@ -385,6 +401,14 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         public_rows = _public_rows(advntr, experiment, pair_id, "normal")
         recurrent_state_collisions.extend(_recurrent_state_collisions(key, "normal", public_rows))
         _record_identity_projection(identity_projection, key, "normal", public_rows)
+        _record_policy_projections(
+            policy_stable_projection,
+            unaffected_public_projection,
+            policy_explanation,
+            key,
+            "normal",
+            public_rows,
+        )
         row_violations, _ = _identity_observations(key, "normal", public_rows, None)
         violations.extend(row_violations)
         control_findings += int(bool(_displayed_verdicts(public_rows)))
@@ -413,6 +437,9 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         identity_contract_violations=tuple(violations),
         identity_projection_by_sample=identity_projection,
         selected_projection_by_sample=selected_projection,
+        policy_stable_projection_by_sample=policy_stable_projection,
+        unaffected_public_projection_by_sample=unaffected_public_projection,
+        policy_explanation_by_sample=policy_explanation,
         complete_bam_evidence_keys=frozenset(complete_bam_evidence_keys),
         bam_truth_match_keys=frozenset(bam_truth_match_keys),
         public_truth_identity_keys=frozenset(public_truth_identity_keys),
@@ -440,6 +467,12 @@ def selected_projection_fingerprint(projection: Mapping[str, tuple[tuple[str, ..
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def public_projection_fingerprint(projection: Mapping[str, object]) -> str:
+    """Return a deterministic fingerprint for a nested public-row projection."""
+    payload = json.dumps(projection, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def sample_sets_fingerprint(sample_sets: dict[str, frozenset[str]]) -> str:
     """Return a deterministic fingerprint of named literal sample-key sets."""
     payload = json.dumps(
@@ -459,6 +492,42 @@ def _record_identity_projection(
     for caller, rows in public_rows.items():
         projection[f"{key}/{condition}/{caller}"] = tuple(
             tuple(row.get(column, "<missing>") for column in IDENTITY_COLUMNS) for row in rows
+        )
+
+
+def _record_policy_projections(
+    stable: dict[str, tuple[tuple[tuple[str, str], ...], ...]],
+    unaffected: dict[str, tuple[tuple[tuple[str, str], ...], ...]],
+    explanations: dict[str, tuple[tuple[str, str, str, str], ...]],
+    key: str,
+    condition: str,
+    public_rows: dict[str, tuple[dict[str, str], ...]],
+) -> None:
+    """Record B1-stable cells and independently scoped B2 explanation cells."""
+    decision_key = f"{key}/{condition}"
+    collision = any((row.get("Variant") or "").strip() in RECURRENT_STATE_EVIDENCE for row in public_rows["advntr"])
+    for caller, rows in public_rows.items():
+        projection_key = f"{decision_key}/{caller}"
+        stable[projection_key] = tuple(
+            tuple(sorted((column, value) for column, value in row.items() if column not in _POLICY_EXPLANATION_COLUMNS))
+            for row in rows
+        )
+        unaffected[projection_key] = tuple(
+            tuple(sorted((column, value) for column, value in row.items() if column != "Evidence_Disposition"))
+            for row in rows
+            if not (
+                (caller == "advntr" and (row.get("Variant") or "").strip() in RECURRENT_STATE_EVIDENCE)
+                or (caller == "kestrel" and collision)
+            )
+        )
+        explanations[projection_key] = tuple(
+            (
+                (row.get("Variant") or "").strip(),
+                (row.get("Nomenclature_Flags") or "").strip(),
+                (row.get("Nomenclature_Note") or "").strip(),
+                row.get("Evidence_Disposition", "<missing>").strip(),
+            )
+            for row in rows
         )
 
 

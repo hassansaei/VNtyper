@@ -297,6 +297,33 @@ PRA_BAM_ELIGIBLE_FINGERPRINT = "0baf09e74569ed1e51710c8a2f844baab5ed015a96e32751
 PRA_BAM_FETCH_FINGERPRINT = "ec9f859ab3c2ad78399ee373a708a15d8aa8b4c09b8a0f134a6f2420947fa72f"
 PRA_COMPLETE_BAM_FINGERPRINT = "a90dcdf5fa13873f29f272d30b7c7de3fe9b4ac39f9f0dad8b29e1dbf5d12839"
 PRA_PUBLIC_IDENTITY_QUARTET_FINGERPRINT = "960fe7316a7f5f1d4de684f6f5c4ef5510a965e63face10d504b4a2ac9d33e32"
+PRB_POLICY_STABLE_PUBLIC_FINGERPRINT = "0dd25343376d388aafd772bd0ec4a3a0653f0f2dbecbda2fdc1589ca95c3d048"
+PRB_UNAFFECTED_PUBLIC_FINGERPRINT = "abd3404291407cbd0d95cf534f75443c79ae6721be417190e233d2cfa1d2da5f"
+PRB_EXPECTED_EXPLANATION_FLAGS = {
+    "experiment2_atypical/pair_4010/mutated": "known-variant",
+    "experiment2_atypical/pair_4012/mutated": (
+        "known-variant;low-haplotype-record-support;thin-haplotype-record-support"
+    ),
+    "experiment2_atypical/pair_4014/mutated": (
+        "known-variant;low-haplotype-record-support;motif-context-diverges;"
+        "position-ambiguous;thin-haplotype-record-support"
+    ),
+    "experiment2_atypical/pair_4015/mutated": (
+        "known-variant;low-haplotype-record-support;motif-context-diverges;thin-haplotype-record-support"
+    ),
+    "experiment2_atypical/pair_4017/mutated": (
+        "known-variant;low-haplotype-record-support;thin-haplotype-record-support"
+    ),
+    "experiment2_atypical/pair_4083/mutated": "known-variant;position-ambiguous",
+    "experiment2_atypical/pair_4087/mutated": (
+        "low-haplotype-record-support;motif-context-diverges;position-ambiguous;"
+        "representation-of-caller-call;spans-unit-junction;thin-haplotype-record-support"
+    ),
+    "experiment2_atypical/pair_4088/mutated": (
+        "low-haplotype-record-support;motif-context-diverges;position-ambiguous;"
+        "representation-of-caller-call;spans-unit-junction;thin-haplotype-record-support"
+    ),
+}
 PRA_BAM_TRUTH_MATCH_KEYS = frozenset(
     {
         "experiment2_atypical/pair_4033",
@@ -818,6 +845,52 @@ def test_pr_a_recurrent_state_collision_baseline_is_literal(corpus: GoldenCorpus
     )
     assert len(corpus.recurrent_state_collisions) == 11
     assert len({key for key, _, _ in corpus.recurrent_state_collisions}) == 8
+
+
+def test_pr_b_changes_only_governed_explanations_while_every_public_finding_stays_fixed(
+    corpus: GoldenCorpus,
+    uut_replay: UutReplay,
+) -> None:
+    """Compare against the measured B1 replay, never expectations derived from B2."""
+    observed = uut_replay.corpus
+
+    assert identity_oracle.public_projection_fingerprint(observed.policy_stable_projection_by_sample) == (
+        PRB_POLICY_STABLE_PUBLIC_FINGERPRINT
+    )
+    assert identity_oracle.public_projection_fingerprint(observed.unaffected_public_projection_by_sample) == (
+        PRB_UNAFFECTED_PUBLIC_FINGERPRINT
+    )
+
+    collision_rows = 0
+    admissible_rows = 0
+    affected_decisions: set[str] = set()
+    for projection_key, after_rows in observed.policy_explanation_by_sample.items():
+        decision_key, caller = projection_key.rsplit("/", maxsplit=1)
+        expected_flags = PRB_EXPECTED_EXPLANATION_FLAGS.get(decision_key)
+
+        for variant, flags, note, disposition in after_rows:
+            governed = caller == "advntr" and variant in identity_oracle.RECURRENT_STATE_EVIDENCE
+            affected = governed or (caller == "kestrel" and expected_flags is not None)
+            if not affected:
+                if caller == "advntr":
+                    assert disposition == "admissible"
+                    admissible_rows += 1
+                else:
+                    assert disposition == "<missing>"
+                continue
+
+            affected_decisions.add(decision_key)
+            if governed:
+                collision_rows += 1
+                assert disposition == "identity-insufficient"
+            else:
+                assert disposition == "<missing>"
+            assert flags == expected_flags
+            assert note.endswith(f"; {identity_oracle.GOVERNED_ASSERTION}")
+
+    assert collision_rows == 11
+    assert admissible_rows == 185
+    assert affected_decisions == frozenset(PRB_EXPECTED_EXPLANATION_FLAGS)
 
 
 def test_historical_phase1_projection_is_literal_per_sample(corpus: GoldenCorpus) -> None:
