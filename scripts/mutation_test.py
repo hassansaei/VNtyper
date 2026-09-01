@@ -237,12 +237,51 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "tests/unit/test_subthreshold.py",
         "tests/unit/test_template_escaping.py",
     ),
+    "vntyper/scripts/decision_profile_schema.py": (
+        "tests/unit/test_decision_profile_schema.py",
+        "tests/unit/test_render_decision_profile.py",
+    ),
+    "vntyper/scripts/decision_profile_semantics.py": (
+        "tests/unit/test_decision_profile_resolution.py",
+        "tests/unit/test_decision_profile_schema.py",
+        "tests/unit/test_decision_profile_semantics.py",
+        "tests/unit/test_kestrel_decision_threading.py",
+        "tests/unit/test_nomenclature_decision_threading.py",
+    ),
+    "vntyper/scripts/decision_profile.py": (
+        "tests/unit/test_cohort_profile_provenance.py",
+        "tests/unit/test_decision_profile_resolution.py",
+        "tests/unit/test_decision_profile_schema.py",
+        "tests/unit/test_generate_report.py",
+        "tests/unit/test_pipeline_artifact_paths.py",
+        "tests/unit/test_profile_provenance.py",
+        "tests/unit/test_render_decision_profile.py",
+    ),
+    "vntyper/scripts/run_configuration.py": (
+        "tests/unit/test_advntr_command.py",
+        "tests/unit/test_advntr_decision_threading.py",
+        "tests/unit/test_advntr_flagging_rules.py",
+        "tests/unit/test_decision_profile_resolution.py",
+        "tests/unit/test_kestrel_decision_threading.py",
+        "tests/unit/test_kestrel_result_publication.py",
+        "tests/unit/test_nomenclature_decision_threading.py",
+        "tests/unit/test_nomenclature_surfaces.py",
+        "tests/unit/test_pipeline_artifact_paths.py",
+        "tests/unit/test_pipeline_cwd.py",
+        "tests/unit/test_pipeline_kestrel.py",
+        "tests/unit/test_pipeline_shark_step.py",
+    ),
+    "vntyper/scripts/profile_provenance.py": (
+        "tests/unit/test_cohort_profile_provenance.py",
+        "tests/unit/test_generate_report.py",
+        "tests/unit/test_profile_provenance.py",
+    ),
 }
 
 #: Known high-signal mutant that the scoring unit tests must kill. The harness refuses
 #: a measurement unless this exact identity produces its exact assertion failure and no
 #: infrastructure/plugin error while pytest exits exactly 1.
-CANARY_KEY = ("vntyper/scripts/scoring.py", 74, "/", "*")
+CANARY_KEY = ("vntyper/scripts/scoring.py", 75, "/", "*")
 CANARY_EXPECTED_NODE = "tests/unit/test_scoring.py::test_split_depth_and_calculate_frame_score_no_frameshift"
 CANARY_EXPECTED_ASSERTION = "E       AssertionError: Frame_Score should be 1.0"
 CANARY_INFRASTRUCTURE_MARKERS = (

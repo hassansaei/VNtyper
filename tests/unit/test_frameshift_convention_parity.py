@@ -264,5 +264,5 @@ def test_the_shipped_advntr_config_uses_the_multiplier_the_convention_requires()
     ``tests/unit/test_advntr_frameshift_filter.py::TestSettingsComeFromTheDerivedGlobal``
     for that distinction).
     """
-    config = advntr_genotyping.advntr_config["advntr_settings"]
+    config = advntr_genotyping.load_advntr_config()["advntr_settings"]
     assert config["frameshift_multiplier"] == FRAMESHIFT_MULTIPLIER

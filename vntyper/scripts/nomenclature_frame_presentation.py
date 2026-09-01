@@ -16,6 +16,7 @@ from vntyper.scripts.nomenclature import Nomenclature, confidence_note, from_adv
 if TYPE_CHECKING:
     from vntyper.modules.advntr.artifact_evidence import ArtifactEvidence
     from vntyper.scripts.identity_candidates import IdentityTranslator
+    from vntyper.scripts.nomenclature_decision_config import NomenclatureDecisionConfig
 
 #: The columns, in this order, on every surface that carries them.
 #:
@@ -57,7 +58,12 @@ def is_negative_result_row(row: pd.Series) -> bool:
     return str(row.get("Motif", "")) == "None" and "Motifs" not in row.index
 
 
-def nomenclature_result_cells(call: Nomenclature, kestrel: str = "", advntr: str = "") -> dict[str, str]:
+def nomenclature_result_cells(
+    call: Nomenclature,
+    kestrel: str = "",
+    advntr: str = "",
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> dict[str, str]:
     """Project a call onto the nomenclature columns.
 
     The displayed name comes from :func:`render`, never from ``call.name``: the tier
@@ -69,6 +75,7 @@ def nomenclature_result_cells(call: Nomenclature, kestrel: str = "", advntr: str
         kestrel: What Kestrel reported, or ``""`` when it reported nothing.
         advntr: What adVNTR reported, or ``""`` when it did not run or reported
             nothing. adVNTR is an optional module, so empty is the ordinary case.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         The nomenclature column values.
@@ -84,7 +91,7 @@ def nomenclature_result_cells(call: Nomenclature, kestrel: str = "", advntr: str
         "Nomenclature_Flags": ";".join(call.flags),
         "Ambiguity_Interval": interval,
         "Repeat_Form": call.repeat_form or "",
-        "Nomenclature_Note": confidence_note(call),
+        "Nomenclature_Note": confidence_note(call, decision_config),
         "Nomenclature_Kestrel": kestrel,
         "Nomenclature_adVNTR": advntr,
     }
@@ -95,6 +102,7 @@ def annotate_advntr_frame(
     *,
     identity_component: IdentityTranslator | None = None,
     artifact_evidence: ArtifactEvidence | None = None,
+    decision_config: NomenclatureDecisionConfig | None = None,
 ) -> pd.DataFrame:
     """Add nomenclature and optional identity columns to an adVNTR result frame.
 
@@ -108,6 +116,7 @@ def annotate_advntr_frame(
             supplied, public identity cells are appended to positive rows.
         artifact_evidence: Verified governed State evidence. The packaged artifact is
             used by the standalone compatibility boundary when omitted.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         A copy with the nomenclature columns appended, empty on the negative
@@ -140,16 +149,16 @@ def annotate_advntr_frame(
             support = int(float(row.get("NumberOfSupportingReads", "")))
         except (TypeError, ValueError):
             support = None
-        calls = from_advntr(str(row["Variant"]))
+        calls = from_advntr(str(row["Variant"]), decision_config)
         if not calls:
             cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
             dispositions.append("admissible")
             continue
         disposition = evidence_disposition_for_state(str(row["Variant"]), resolved_evidence)
-        merged = reconcile(*calls, support=support)
+        merged = reconcile(*calls, support=support, decision_config=decision_config)
         # Kestrel's column is filled by the cross-caller stage, which is the only
         # place that can see it.
-        row_cells = nomenclature_result_cells(merged, advntr=render(merged))
+        row_cells = nomenclature_result_cells(merged, advntr=render(merged), decision_config=decision_config)
         if disposition.value == "identity-insufficient":
             row_cells["Nomenclature_Note"] = append_decision_explanation(
                 row_cells["Nomenclature_Note"],

@@ -146,7 +146,7 @@ rather than back in the file it came from.
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
-  The reviewed BLE001 policy is 95 normal/102 including suppressions; its executable
+  The reviewed BLE001 policy is 94 normal/101 including suppressions; its executable
   inventory is `scripts/ble001_policy.json` and the policy tests. Not every broad
   handler is a process boundary, so do not globally select or mechanically narrow it.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
@@ -678,12 +678,12 @@ summary | release-summary | none | always records success, failure, skipped jobs
     `make test-scripts-cov` to 7,869 of 8,392 measured units, or 93.77%, over 6,299
     passing unit tests. Adding `scripts/integration_compatibility_observations.py`
     (#293, the version-selected append-only report-observation policy) took it to all
-    42 Python files and `make test-scripts-cov` to 94.00% over 8,138 collected unit
+    43 Python files and `make test-scripts-cov` to 94.00% over 8,138 collected unit
     tests. **A new file under `scripts/` must update this sentence** -
     `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
     counts root `scripts/**/*.py` and fails until it does, which is the tripwire working,
     not a flaky test. Package modules under `vntyper/scripts/` do not change that root-only
-    count; adding `vntyper/scripts/reference_download.py` therefore leaves it at 42.
+    count; adding `vntyper/scripts/reference_download.py` therefore leaves it at 43.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:

@@ -228,6 +228,21 @@ run-recorded snapshot. A legacy summary is labeled
 `artifact-evidence revision not recorded`; it is never relabeled with the current
 package's digest.
 
+The nomenclature and reconciliation rules are also part of the run's complete decision
+profile. A normal run uses the verified packaged profile, preserving the rules and
+thresholds described above. `pipeline --decision-profile` may select one complete
+`explicit-custom` or `generated` file; it is never a partial overlay, and generated
+output never activates itself. The resolved canonical file and SHA-256 are recorded in
+schema-3 provenance, then verified by sample reports and cohorts. A legacy run is labeled
+`decision profile not recorded by legacy run` rather than being assigned today's package
+profile.
+
+Fixed safety remains fixed across every profile kind: BAM flank `8`, thin
+resolved-haplotype-record support `3`, Kestrel tier-A alternate k-mer-path depth `5`,
+adVNTR tier-A sequencing-read support `5`, and the packaged Kestrel reporting boundaries
+cannot change. The adVNTR model/window and binary-version compatibility guards from
+Issue 268 are not profile fields, so profile selection cannot waive them.
+
 ## A known limitation
 
 Every name is anchored on the canonical unit, even where the motif the caller

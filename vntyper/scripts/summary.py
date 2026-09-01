@@ -13,6 +13,8 @@ These conversion functions now flatten nested data structures (e.g. parsed_resul
 so that all available data is expanded into individual columns.
 """
 
+from __future__ import annotations
+
 import csv
 import hashlib
 import json
@@ -20,6 +22,9 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
+
+from vntyper.scripts.decision_profile import ResolvedDecisionProfile, load_packaged_decision_profile
+from vntyper.scripts.profile_provenance import profile_summary_fields
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +40,11 @@ logger = logging.getLogger(__name__)
 #: which cannot distinguish the operator's ``--sample-name`` from a name the CLI
 #: derived from an input path - and the report has to, because the second is a
 #: ``Path.stem`` it must finish deriving while the first is a name to print verbatim.
-SUMMARY_SCHEMA_VERSION = 2
+#: Schema 3 requires the complete molecular-identity quartet on positive caller rows
+#: and records the exact run-local decision-profile snapshot identity.
+SUMMARY_SCHEMA_VERSION = 3
 
-#: Packaged caller-selection policy recorded by current schema-2 summaries. Identity
-#: provenance is additive in work package A; schema 3 remains reserved for the later
-#: governed decision-profile contract.
+#: Packaged caller-selection policy recorded by current summaries.
 DEFAULT_DECISION_POLICY = "legacy-selection-v1"
 
 
@@ -53,6 +58,7 @@ def start_summary(
     reference_path=None,
     reference_source_effective=None,
     advntr_evidence_digest=None,
+    decision_profile: ResolvedDecisionProfile | None = None,
 ):
     """
     Initializes a new pipeline summary.
@@ -114,6 +120,8 @@ def start_summary(
             For BAM and CRAM, the alignment plan's own source label instead.
         advntr_evidence_digest (str, optional): Full canonical digest of the
             run-snapshotted governed adVNTR evidence, or None when adVNTR was not used.
+        decision_profile: Profile resolved for this run. Direct compatibility callers
+            that have no run context load the packaged profile.
 
     Returns:
         dict: A summary dictionary with its schema version, decision policy, pipeline
@@ -127,10 +135,16 @@ def start_summary(
         message = "adVNTR evidence digest must be 64 lowercase hexadecimal characters or None"
         logger.error(message)
         raise ValueError(message)
+    resolved_profile = decision_profile if decision_profile is not None else load_packaged_decision_profile()
+    if not isinstance(resolved_profile, ResolvedDecisionProfile):
+        message = "summary decision profile must be a resolved decision profile"
+        logger.error(message)
+        raise ValueError(message)
     return {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "decision_policy": DEFAULT_DECISION_POLICY,
         "advntr_evidence_digest": advntr_evidence_digest,
+        **profile_summary_fields(resolved_profile),
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},

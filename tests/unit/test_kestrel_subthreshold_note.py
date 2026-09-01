@@ -172,7 +172,7 @@ class TestTheNoteHelper:
         """The template that actually ships must be renderable; a `{typo}` in it would
         silently disable the feature."""
         signal = st.SubthresholdSignal(events=1, rows=1, best_depth_score=0.0031, floor=0.00469)
-        template = kg.kestrel_config["subthreshold_note"]["template"]
+        template = kg.load_kestrel_config()["subthreshold_note"]["template"]
 
         note = st.format_note(signal, template)
 
@@ -182,11 +182,11 @@ class TestTheNoteHelper:
         assert "NOT a call" in note
 
     def test_the_shipped_config_enables_the_feature(self):
-        assert kg.kestrel_config["subthreshold_note"]["enabled"] is True
+        assert kg.load_kestrel_config()["subthreshold_note"]["enabled"] is True
 
     def test_the_documented_banner_quote_matches_the_shipped_evidence_units(self):
         """A truthful docs quote cannot conceal stale config-driven read-count prose."""
-        template = kg.kestrel_config["subthreshold_note"]["template"]
+        template = kg.load_kestrel_config()["subthreshold_note"]["template"]
         depth_sentence = template[template.index("Depth_Score is") :]
         docs = Path("docs/pipeline/kestrel.md").read_text(encoding="utf-8")
         documented_quote = " ".join(
@@ -265,7 +265,9 @@ class TestTheScoredEmptyBranch:
             config,
             compiled_flag_rules=None,
             identity_component=None,
+            custom_context_active=False,
         ):
+            assert custom_context_active is False
             row = {} if eligible else {st.DEPTH_GATE: True}
             pre_result(Path(output_dir) / "kestrel_pre_result.tsv", [row])
             return pd.DataFrame()

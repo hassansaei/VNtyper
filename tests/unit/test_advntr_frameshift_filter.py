@@ -424,42 +424,28 @@ class TestMixedIndelsAreJudgedOnTheSignedNetChange:
 
 
 # ---------------------------------------------------------------------------
-# H1 -- which module global the filter actually reads
+# Explicit resolved settings
 # ---------------------------------------------------------------------------
 
 
-class TestSettingsComeFromTheDerivedGlobal:
-    """
-    ``advntr_genotyping`` builds two globals at import: ``advntr_config`` (the whole JSON)
-    and ``advntr_settings`` (its ``advntr_settings`` sub-dict). The frameshift filter reads
-    the **derived** one. Patching ``advntr_config`` after import is a silent no-op, so a
-    test that patches it proves nothing.
-    """
+class TestSettingsComeFromTheResolvedComponent:
+    """The frame filter consumes the explicit decision settings it receives."""
 
-    def test_patching_the_derived_settings_changes_the_accepted_frames(self, monkeypatch):
+    def test_explicit_settings_change_the_accepted_frames(self):
         # multiplier 1 makes the deletion series {2, 3, 4, ...}, so a 3 bp deletion starts
         # passing. The sign test is unaffected -- Delta = -3 is still a net deletion.
-        monkeypatch.setattr(advntr, "advntr_settings", {"max_frameshift": 100, "frameshift_multiplier": 1})
+        settings = {"max_frameshift": 100, "frameshift_multiplier": 1}
 
-        assert len(advntr.advntr_processing_del(variant_frame(pure_deletion(3)))) == 1
+        assert len(advntr.advntr_processing_del(variant_frame(pure_deletion(3)), settings=settings)) == 1
 
-    def test_patching_the_raw_config_global_has_no_effect(self, monkeypatch):
-        monkeypatch.setattr(
-            advntr,
-            "advntr_config",
-            {"advntr_settings": {"max_frameshift": 100, "frameshift_multiplier": 1}},
-        )
-
-        assert len(advntr.advntr_processing_del(variant_frame(pure_deletion(3)))) == 0
-
-    def test_max_frameshift_bounds_the_accepted_series(self, monkeypatch):
-        monkeypatch.setattr(advntr, "advntr_settings", {"max_frameshift": 1, "frameshift_multiplier": 3})
+    def test_max_frameshift_bounds_the_accepted_series(self):
+        settings = {"max_frameshift": 1, "frameshift_multiplier": 3}
 
         # With max_frameshift 1 the only accepted deletion magnitude is 2.
-        assert len(advntr.advntr_processing_del(variant_frame(pure_deletion(2)))) == 1
-        assert len(advntr.advntr_processing_del(variant_frame(pure_deletion(5)))) == 0
+        assert len(advntr.advntr_processing_del(variant_frame(pure_deletion(2)), settings=settings)) == 1
+        assert len(advntr.advntr_processing_del(variant_frame(pure_deletion(5)), settings=settings)) == 0
 
-    def test_the_settings_still_govern_the_series_after_the_sign_test_was_added(self, monkeypatch):
+    def test_the_settings_still_govern_the_series_after_the_sign_test_was_added(self):
         """The sign test must not have hardcoded what stayed configurable.
 
         A multiplier of 1 makes the insertion series ``{1, 2, 3, ...}`` and the deletion
@@ -475,13 +461,17 @@ class TestSettingsComeFromTheDerivedGlobal:
         assert surviving_rows(net_insertion) == 0
         assert surviving_rows(net_deletion) == 0
 
-        monkeypatch.setattr(advntr, "advntr_settings", {"max_frameshift": 100, "frameshift_multiplier": 1})
+        settings = {"max_frameshift": 100, "frameshift_multiplier": 1}
 
-        assert len(advntr.advntr_processing_ins(variant_frame(net_insertion))) == 1
-        assert len(advntr.advntr_processing_del(variant_frame(net_insertion))) == 0, "a net insertion, either way"
+        assert len(advntr.advntr_processing_ins(variant_frame(net_insertion), settings=settings)) == 1
+        assert len(advntr.advntr_processing_del(variant_frame(net_insertion), settings=settings)) == 0, (
+            "a net insertion, either way"
+        )
 
-        assert len(advntr.advntr_processing_del(variant_frame(net_deletion))) == 1
-        assert len(advntr.advntr_processing_ins(variant_frame(net_deletion))) == 0, "a net deletion, either way"
+        assert len(advntr.advntr_processing_del(variant_frame(net_deletion), settings=settings)) == 1
+        assert len(advntr.advntr_processing_ins(variant_frame(net_deletion), settings=settings)) == 0, (
+            "a net deletion, either way"
+        )
 
     def test_the_two_offsets_are_the_ones_the_convention_names(self):
         """The insertion arm is the ``3n+1`` series and the deletion arm the ``3n+2`` one."""

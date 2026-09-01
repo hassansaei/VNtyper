@@ -95,7 +95,6 @@ def _stub_postprocessing(monkeypatch):
 
 def test_counting_runs_first_and_kestrel_is_handed_the_ikc(tmp_path, monkeypatch):
     """The ordering is the contract: Kestrel cannot adopt a file that is not there yet."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, commands = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
@@ -110,7 +109,6 @@ def test_counting_runs_first_and_kestrel_is_handed_the_ikc(tmp_path, monkeypatch
 
 def test_kestrel_is_no_longer_given_the_fastq_operands(tmp_path, monkeypatch):
     """A supplied IKC must be the sample's sole source, or preModuleRun will not adopt it."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, commands = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
@@ -124,7 +122,6 @@ def test_kestrel_is_no_longer_given_the_fastq_operands(tmp_path, monkeypatch):
 
 def test_the_thread_budget_reaches_the_count_command(tmp_path, monkeypatch):
     """--threads 8 allocates -d4 -l2 -t2; the call step stays single-threaded."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, commands = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
@@ -141,7 +138,6 @@ def test_the_call_step_takes_serial_gc_and_the_count_step_does_not(tmp_path, mon
     call step is single-threaded, where G1 spawns a GC worker per core against one
     application thread.
     """
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, commands = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
@@ -154,7 +150,6 @@ def test_the_call_step_takes_serial_gc_and_the_count_step_does_not(tmp_path, mon
 
 def test_the_two_steps_log_to_different_files(tmp_path, monkeypatch):
     """run_command opens its log with "w", so one file would erase the count diagnostics."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     logs: list[str] = []
 
     def fake_run_command(command, log_file=None, **kwargs):
@@ -180,7 +175,6 @@ def test_the_two_steps_log_to_different_files(tmp_path, monkeypatch):
 
 def test_the_attempt_directory_is_removed_after_a_successful_run(tmp_path, monkeypatch):
     """Kestrel never deletes an IKC it was handed, so nothing else will."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, _ = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
@@ -192,7 +186,6 @@ def test_the_attempt_directory_is_removed_after_a_successful_run(tmp_path, monke
 
 def test_a_partial_ikc_from_a_failed_count_is_removed(tmp_path, monkeypatch):
     """A half-written IKC must never be offered to a later attempt or a later run."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, _ = _recorder(tmp_path, count_ok=False)
     monkeypatch.setattr(kg, "run_command", run_command)
 
@@ -204,7 +197,6 @@ def test_a_partial_ikc_from_a_failed_count_is_removed(tmp_path, monkeypatch):
 
 def test_the_ikc_is_removed_when_the_call_step_fails(tmp_path, monkeypatch):
     """The failing path matters most: nothing else runs to clean up after it."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, _ = _recorder(tmp_path, call_ok=False)
     monkeypatch.setattr(kg, "run_command", run_command)
 
@@ -216,7 +208,6 @@ def test_the_ikc_is_removed_when_the_call_step_fails(tmp_path, monkeypatch):
 
 def test_the_offloaded_segment_files_go_with_it(tmp_path, monkeypatch):
     """Removing the directory takes KAnalyze's segments too, whatever it names them."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, _ = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
@@ -228,7 +219,6 @@ def test_the_offloaded_segment_files_go_with_it(tmp_path, monkeypatch):
 
 def test_a_failed_count_reports_the_count_failure_not_a_cleanup_failure(tmp_path, monkeypatch):
     """The operator must see why counting failed, not why a temporary file survived."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, _ = _recorder(tmp_path, count_ok=False)
     monkeypatch.setattr(kg, "run_command", run_command)
 
@@ -248,7 +238,6 @@ def test_a_failed_count_never_falls_back_to_stock_kestrel(tmp_path, monkeypatch)
     the failure mode this codebase is least able to notice. The kill switch is
     operator-selected and nothing selects it automatically.
     """
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     run_command, commands = _recorder(tmp_path, count_ok=False)
     monkeypatch.setattr(kg, "run_command", run_command)
 
@@ -265,12 +254,11 @@ def test_a_failed_count_never_falls_back_to_stock_kestrel(tmp_path, monkeypatch)
 
 def test_split_counting_can_be_disabled_by_an_operator(tmp_path, monkeypatch):
     """The legacy single-command path, restored exactly."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings(split_counting=False))
     run_command, commands = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
 
-    _run_kestrel(tmp_path)
+    _run_kestrel(tmp_path, runtime_component=_settings(split_counting=False))
 
     assert len(commands) == 1
     assert " count " not in commands[0]
@@ -286,7 +274,6 @@ def test_an_existing_attempt_directory_is_refused_rather_than_adopted(tmp_path, 
     beside the outputs is the same hazard. Refusing is fail-closed, and the directory
     must survive the refusal.
     """
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     retained = attempt_directory(tmp_path, 20)
     retained.mkdir(parents=True)
     (retained / "notes.txt").write_text("keep me", encoding="utf-8")
@@ -302,24 +289,26 @@ def test_an_existing_attempt_directory_is_refused_rather_than_adopted(tmp_path, 
 
 def test_keep_ikc_retains_the_attempt_directory_for_diagnosis(tmp_path, monkeypatch):
     """A successful run deletes the IKC that would be needed to diagnose a bad result."""
-    monkeypatch.setattr(kg, "kestrel_config", _settings(keep_ikc=True))
     run_command, _ = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
 
-    _run_kestrel(tmp_path)
+    _run_kestrel(tmp_path, runtime_component=_settings(keep_ikc=True))
 
     assert ikc_path(tmp_path, 20).is_file()
 
 
 def test_a_replacement_config_without_any_of_the_new_keys_still_runs(tmp_path, monkeypatch):
     """--config-path replaces the whole config (trap 2), so every key needs a default."""
-    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {}})
     run_command, commands = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
 
-    _run_kestrel(tmp_path, config={"tools": {"java_path": "java", "samtools": "samtools"}})
+    _run_kestrel(
+        tmp_path,
+        config={"tools": {"java_path": "java", "samtools": "samtools"}},
+        runtime_component={"kestrel_settings": {}},
+    )
 
     assert len(commands) == 2, "the shipped default is split counting"
     assert "kanalyze.jar" in commands[0], "the kanalyze path needs a shipped default too"
@@ -484,7 +473,6 @@ def test_the_kestrel_stage_records_which_counting_path_produced_the_result(tmp_p
     """A result must be attributable to the code that produced it."""
     from vntyper.scripts import pipeline_kestrel
 
-    monkeypatch.setattr(kg, "kestrel_config", _settings())
     monkeypatch.setattr(pipeline_kestrel, "record_step", lambda *a, **k: None)
     summary: dict = {"steps": []}
 
@@ -507,7 +495,6 @@ def test_the_recorded_mode_follows_the_kill_switch(tmp_path, monkeypatch):
     """Otherwise the provenance would say "split" for a run that did not split."""
     from vntyper.scripts import pipeline_kestrel
 
-    monkeypatch.setattr(kg, "kestrel_config", _settings(split_counting=False))
     monkeypatch.setattr(pipeline_kestrel, "record_step", lambda *a, **k: None)
     summary: dict = {"steps": []}
 
@@ -521,6 +508,7 @@ def test_the_recorded_mode_follows_the_kill_switch(tmp_path, monkeypatch):
         summary=summary,
         summary_file_path=str(tmp_path / "summary.json"),
         runner=lambda **kwargs: None,
+        runtime_component=_settings(split_counting=False),
     )
 
     assert summary["kestrel_counting_mode"] == "internal"

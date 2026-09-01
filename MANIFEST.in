@@ -4,6 +4,9 @@ include LICENSE
 
 # Include the main config file
 include vntyper/config.json
+include vntyper/profiles/decision_profile.json
+include vntyper/profiles/decision_profile.sha256
+include vntyper/profiles/decision_projection.json
 
 # Include the templates. `_report_base.html` is the shared token layer both of the
 # other two `{% include %}`, so a distribution without it renders neither report:

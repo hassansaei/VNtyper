@@ -68,6 +68,7 @@ PIPELINE_BASENAME = "output"
 #: contract C1 and read by ``generate_report.py``.
 COVERAGE_BASENAME = "coverage"
 ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE = Path("provenance/advntr_artifact_evidence.json")
+DECISION_PROFILE_SNAPSHOT_RELATIVE = Path("provenance/decision_profile.json")
 
 
 def pipeline_artifact_paths(
@@ -131,6 +132,7 @@ def pipeline_artifact_paths(
         "pipeline_info": str(fastq_dir / "pipeline_info.json"),
         "pipeline_summary": str(root / "pipeline_summary.json"),
         "advntr_evidence": str(root / ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE),
+        "decision_profile": str(root / DECISION_PROFILE_SNAPSHOT_RELATIVE),
     }
 
 

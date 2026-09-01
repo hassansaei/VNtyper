@@ -641,7 +641,8 @@ def test_cohort_loader_labels_legacy_advntr_evidence_without_reading_current_pac
 def test_cohort_loader_rejects_a_recorded_digest_without_its_run_snapshot(tmp_path: Path) -> None:
     sample = _write_summary(tmp_path / "sample", {"version": "2.0.6", "advntr_evidence_digest": "0" * 64})
 
-    assert load_pipeline_summary_for_sample(sample) == ([], [], {})
+    with pytest.raises(ValueError, match="Invalid decision profile or evidence provenance"):
+        load_pipeline_summary_for_sample(sample)
 
 
 @pytest.mark.parametrize(
@@ -723,6 +724,9 @@ def test_a_sample_directory_is_read_from_its_summary_file(tmp_path) -> None:
             "Molecular_Identity_Status": "legacy identity not recorded",
             "Equivalent_Representation_Count": "legacy identity not recorded",
             "Identity_Hypothesis_Count": "legacy identity not recorded",
+            "Decision_Profile_ID": "decision profile not recorded by legacy run",
+            "Decision_Profile_Revision": "decision profile not recorded by legacy run",
+            "Decision_Profile_SHA256": "decision profile not recorded by legacy run",
         }
     ]
     assert advntr == []

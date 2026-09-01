@@ -53,6 +53,8 @@ from vntyper.scripts.nomenclature_evidence import resolve_bam_thin_haplotype_rec
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Iterable
 
+    from vntyper.scripts.nomenclature_decision_config import NomenclatureDecisionConfig
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -149,6 +151,11 @@ class BamConsensus:
     bases: str = ""
     supporting_record_minimum_kmer_depths: tuple[int | None, ...] = field(kw_only=True, compare=False)
     bound_identity: MolecularIdentity | None = field(default=None, kw_only=True, compare=False)
+    thin_haplotype_record_support: int = field(
+        default=THIN_HAPLOTYPE_RECORD_SUPPORT,
+        kw_only=True,
+        compare=False,
+    )
 
     @property
     def support(self) -> int:
@@ -168,7 +175,7 @@ class BamConsensus:
     @property
     def is_thin(self) -> bool:
         """Whether the consensus rests on too few haplotype records to stand alone."""
-        return self.supporting_haplotype_records < THIN_HAPLOTYPE_RECORD_SUPPORT
+        return self.supporting_haplotype_records < self.thin_haplotype_record_support
 
 
 @dataclass(frozen=True)
@@ -219,7 +226,11 @@ def minimum_kmer_depth(record: pysam.AlignedSegment) -> int | None:
     return value
 
 
-def from_bam(motifs: str, consensus: BamConsensus) -> Nomenclature | None:
+def from_bam(
+    motifs: str,
+    consensus: BamConsensus,
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> Nomenclature | None:
     """Name the allele a resolved haplotype-record consensus describes.
 
     The consensus arrives in plus-strand pair coordinates, exactly like a Kestrel
@@ -230,6 +241,7 @@ def from_bam(motifs: str, consensus: BamConsensus) -> Nomenclature | None:
     Args:
         motifs: The pair label from ``output.bed``, e.g. ``K-J``.
         consensus: The winning length-changing edit at the locus.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         Nomenclature | None: The named allele, or ``None`` when the pair is unknown.
@@ -237,7 +249,7 @@ def from_bam(motifs: str, consensus: BamConsensus) -> Nomenclature | None:
         ``thin-haplotype-record-support``; it is never silently accepted or
         promoted on its own.
     """
-    pair = pair_sequence(motifs)
+    pair = pair_sequence(motifs, decision_config)
     if pair is None:
         return None
 
@@ -266,6 +278,7 @@ def from_bam(motifs: str, consensus: BamConsensus) -> Nomenclature | None:
         revcomp(consensus.bases),
         net,
         "kestrel_bam",
+        decision_config,
     )
 
     if consensus.is_thin:
@@ -461,17 +474,35 @@ class BamRescuer:
     design puts on this path is only meaningful if it is measured.
     """
 
-    def __init__(self, bam_path: str | Path, flank: int = DEFAULT_FLANK) -> None:
+    def __init__(
+        self,
+        bam_path: str | Path,
+        flank: int = DEFAULT_FLANK,
+        thin_haplotype_record_support: int = THIN_HAPLOTYPE_RECORD_SUPPORT,
+    ) -> None:
         """
         Args:
             bam_path: Path to ``output.bam``.
             flank: Window either side of the locus, in bases.
+            thin_haplotype_record_support: Resolved record-count threshold below
+                which the consensus is flagged as thin.
         """
         self._path = Path(bam_path)
         self._flank = flank
+        self._thin_haplotype_record_support = thin_haplotype_record_support
         self._handle: pysam.AlignmentFile | None = None
         self.opens = 0
         self.fetches = 0
+
+    @property
+    def flank(self) -> int:
+        """Return the resolved fetch flank in bases per side."""
+        return self._flank
+
+    @property
+    def thin_haplotype_record_support(self) -> int:
+        """Return the resolved thin-consensus record threshold."""
+        return self._thin_haplotype_record_support
 
     @property
     def opened(self) -> bool:
@@ -615,8 +646,8 @@ class BamRescuer:
             records.append(_LocusRecord(edits, depth))
         return tuple(records), start, end
 
-    @staticmethod
     def _compatibility_consensus(
+        self,
         records: tuple[_LocusRecord, ...],
         start: int,
         end: int,
@@ -663,4 +694,5 @@ class BamRescuer:
             fetched_haplotype_records=len(records),
             distinct_edit_count=len(votes),
             supporting_record_minimum_kmer_depths=tuple(minimum_kmer_depths[winning_edit]),
+            thin_haplotype_record_support=self._thin_haplotype_record_support,
         )

@@ -67,6 +67,15 @@ def test_removing_any_one_recorded_field_makes_the_entire_quartet_legacy(missing
     assert projected == dict.fromkeys(presentation.IDENTITY_COLUMNS, "legacy identity not recorded")
 
 
+@pytest.mark.parametrize("missing", presentation.IDENTITY_COLUMNS)
+def test_schema_three_rejects_any_missing_identity_field(missing: str) -> None:
+    """Schema 3 cannot silently render a current malformed row as legacy."""
+    partial = {key: value for key, value in IDENTITY_VALUES.items() if key != missing}
+
+    with pytest.raises(ValueError, match="schema 3.*complete molecular identity quartet"):
+        presentation.identity_compatibility_cells(partial, schema_version=3)
+
+
 def test_downstream_projection_appends_the_exact_quartet_and_leaves_source_unchanged() -> None:
     """Catch an omitted label, reordered label, or in-place mutation of summary data."""
     row = {"Sample": "s1", "POS": 67, **IDENTITY_VALUES}

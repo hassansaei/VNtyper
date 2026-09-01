@@ -118,6 +118,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output directory for the results.",
     )
+    parser_pipeline.add_argument(
+        "--decision-profile",
+        type=Path,
+        default=None,
+        help=(
+            "Path to one complete explicit decision profile. Omit it to use the verified packaged profile; "
+            "profiles are never overlaid, discovered, or selected automatically."
+        ),
+    )
     # Changed here (#57): allow --extra-modules multiple times
     parser_pipeline.add_argument(
         "--extra-modules",

@@ -172,6 +172,9 @@ version = {attr = "vntyper.version.__version__"}
     "modules/advntr/advntr_calibration.json",
     "modules/advntr/advntr_artifact_evidence.json",
     "modules/advntr/advntr_artifact_evidence.sha256",
+    "profiles/decision_profile.json",
+    "profiles/decision_profile.sha256",
+    "profiles/decision_projection.json",
 ]
 
 # ===========================

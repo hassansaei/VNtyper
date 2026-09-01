@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol
 
 from vntyper.scripts.molecular_identity import (
@@ -71,6 +72,19 @@ class IdentityReconciliationPolicy:
 
     kestrel_min_alternate_kmer_path_depth: int
     advntr_min_sequencing_read_support: int
+    source_evidence_units: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType(
+            {
+                "kestrel_vcf": "alternate-kmer-path-depth",
+                "kestrel_bam": "resolved-haplotype-records",
+                "advntr": "sequencing-reads",
+            }
+        )
+    )
+    independent_callers_required: int = 2
+    admissible_disposition: str = "admissible"
+    caller_of: Mapping[str, str] = field(default_factory=lambda: MappingProxyType(dict(_CALLER_OF)))
+    tier_a_blocking_flags: frozenset[str] = _TIER_A_BLOCKING_FLAGS
 
     def __post_init__(self) -> None:
         """Require positive integer thresholds without conflating their units."""
@@ -81,6 +95,72 @@ class IdentityReconciliationPolicy:
         _positive_integer(
             self.advntr_min_sequencing_read_support,
             "adVNTR minimum sequencing-read support",
+        )
+        expected_sources = {"kestrel_vcf", "kestrel_bam", "advntr"}
+        if (
+            not isinstance(self.source_evidence_units, Mapping)
+            or set(self.source_evidence_units) != expected_sources
+            or any(not isinstance(value, str) or not value for value in self.source_evidence_units.values())
+        ):
+            raise ValueError("Identity reconciliation evidence units must name every source")
+        _positive_integer(self.independent_callers_required, "Independent callers required")
+        if self.admissible_disposition not in {"admissible", "identity-insufficient"}:
+            raise ValueError("Identity reconciliation admissible disposition is unsupported")
+        if (
+            not isinstance(self.caller_of, Mapping)
+            or set(self.caller_of) != expected_sources
+            or any(not isinstance(value, str) or not value for value in self.caller_of.values())
+        ):
+            raise ValueError("Identity reconciliation caller map must name every source")
+        if not isinstance(self.tier_a_blocking_flags, frozenset) or any(
+            not isinstance(value, str) or not value for value in self.tier_a_blocking_flags
+        ):
+            raise ValueError("Identity reconciliation tier-A blockers must be non-empty strings")
+
+    @classmethod
+    def from_component(
+        cls,
+        component: Mapping[str, object],
+        *,
+        caller_of: Mapping[str, str] | None = None,
+    ) -> IdentityReconciliationPolicy:
+        """Build the policy from the complete profile component.
+
+        Args:
+            component: Resolved ``identity_reconciliation`` mapping.
+            caller_of: Resolved source-to-caller ownership mapping.
+
+        Returns:
+            Validated immutable reconciliation policy.
+
+        Raises:
+            ValueError: If the mapping is incomplete or malformed.
+        """
+        expected = {
+            "admissible_disposition",
+            "advntr_min_sequencing_read_support",
+            "independent_callers_required",
+            "kestrel_min_alternate_kmer_path_depth",
+            "source_evidence_units",
+            "tier_a_blocking_flags",
+        }
+        if set(component) != expected:
+            raise ValueError("identity reconciliation component fields differ")
+        units = component["source_evidence_units"]
+        blockers = component["tier_a_blocking_flags"]
+        if not isinstance(units, Mapping):
+            raise ValueError("identity reconciliation source_evidence_units must be a mapping")
+        if not isinstance(blockers, Sequence) or isinstance(blockers, (str, bytes)):
+            raise ValueError("identity reconciliation tier_a_blocking_flags must be an array")
+        resolved_callers = _CALLER_OF if caller_of is None else caller_of
+        return cls(
+            kestrel_min_alternate_kmer_path_depth=component["kestrel_min_alternate_kmer_path_depth"],  # type: ignore[arg-type]
+            advntr_min_sequencing_read_support=component["advntr_min_sequencing_read_support"],  # type: ignore[arg-type]
+            source_evidence_units=MappingProxyType(dict(units)),  # type: ignore[arg-type]
+            independent_callers_required=component["independent_callers_required"],  # type: ignore[arg-type]
+            admissible_disposition=component["admissible_disposition"],  # type: ignore[arg-type]
+            caller_of=MappingProxyType(dict(resolved_callers)),
+            tier_a_blocking_flags=frozenset(blockers),
         )
 
 
@@ -544,7 +624,9 @@ def reconcile_identity_observations(
     )
 
     decision_indices = tuple(
-        index for index, observation in enumerate(observations) if observation.disposition.value == "admissible"
+        index
+        for index, observation in enumerate(observations)
+        if observation.disposition.value == policy.admissible_disposition
     )
     presentation_event_indices = tuple(
         index for index in decision_indices if observations[index].presentation_call_index is not None
@@ -558,7 +640,11 @@ def reconcile_identity_observations(
             assert observation.identity is not None
             backing.setdefault(observation.identity, []).append(index)
 
-    corroborated = [identity for identity, indices in backing.items() if len(_callers(observations, indices)) >= 2]
+    corroborated = [
+        identity
+        for identity, indices in backing.items()
+        if len(_callers(observations, indices, policy.caller_of)) >= policy.independent_callers_required
+    ]
 
     selected_observation = (
         observations[presentation_selected_observation_index]
@@ -614,8 +700,8 @@ def reconcile_identity_observations(
 
     backing_indices = tuple(backing[chosen_identity])
     backing_sources = tuple(dict.fromkeys(observations[index].source for index in backing_indices))
-    backing_callers = tuple(dict.fromkeys(_caller(source) for source in backing_sources))
-    molecular_agreement = len(backing_callers) >= 2
+    backing_callers = tuple(dict.fromkeys(_caller(source, policy.caller_of) for source in backing_sources))
+    molecular_agreement = len(backing_callers) >= policy.independent_callers_required
     caller_disagreement = len(backing) > 1 or event_disagreement
     low_support_sources, source_support_sufficient = _source_support(
         observations,
@@ -637,7 +723,7 @@ def reconcile_identity_observations(
         and source_support_sufficient
         and not context_diverges
         and not blocking_gates
-        and not (_TIER_A_BLOCKING_FLAGS & flags)
+        and not (policy.tier_a_blocking_flags & flags)
     ):
         tier = "A"
 
@@ -762,12 +848,13 @@ def _compound_event(calls: Sequence[ReconciliationPresentationCall]) -> str:
 def _callers(
     observations: tuple[IdentityReconciliationObservation, ...],
     indices: list[int],
+    caller_of: Mapping[str, str] = _CALLER_OF,
 ) -> set[str]:
-    return {_caller(observations[index].source) for index in indices}
+    return {_caller(observations[index].source, caller_of) for index in indices}
 
 
-def _caller(source: str) -> str:
-    return _CALLER_OF.get(source, source)
+def _caller(source: str, caller_of: Mapping[str, str] = _CALLER_OF) -> str:
+    return caller_of.get(source, source)
 
 
 def _positive_integer(value: object, name: str) -> None:

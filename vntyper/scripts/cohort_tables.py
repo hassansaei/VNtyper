@@ -29,6 +29,7 @@ from typing import Any
 
 import pandas as pd
 
+from vntyper.scripts.cohort_profiles import PROFILE_EXPORT_COLUMNS
 from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS
 from vntyper.scripts.report_formatting import confidence_html, escaped_table_html, is_empty_result_row
 
@@ -56,6 +57,7 @@ TABLE_CLASSES = "table table-striped sortable"
 #: columns the sample-level reduction writes, most of all - are dropped.
 KESTREL_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Sample",
+    *PROFILE_EXPORT_COLUMNS,
     "Motif",
     "Variant",
     "POS",
@@ -81,6 +83,7 @@ KESTREL_DISPLAY_COLUMNS: tuple[str, ...] = (
 #: adVNTR result columns, in display order.
 ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Sample",
+    *PROFILE_EXPORT_COLUMNS,
     "VID",
     "Variant",
     "NumberOfSupportingReads",

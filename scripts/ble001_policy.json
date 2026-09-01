@@ -1,13 +1,13 @@
 {
   "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 95,
-    "ignore_noqa": 102,
-    "identities": 73,
+    "normal": 94,
+    "ignore_noqa": 101,
+    "identities": 72,
     "categories": {
       "A": 28,
       "B": 16,
-      "C": 29
+      "C": 28
     }
   },
   "handlers": [
@@ -388,14 +388,6 @@
       "rationale": "vntyper/scripts/generate_report.py::load_pipeline_log: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_pipeline_log_failure_returns_failure_message and failure remains observable via ERROR log and failure text"
     },
     {
-      "path": "vntyper/scripts/generate_report.py",
-      "symbol": "load_pipeline_summary",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "C",
-      "rationale": "vntyper/scripts/generate_report.py::load_pipeline_summary: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_pipeline_summary_failure_returns_empty_mapping and failure remains observable via ERROR log"
-    },
-    {
       "path": "vntyper/scripts/install_references.py",
       "symbol": "calculate_md5",
       "normal_count": 1,
@@ -722,15 +714,6 @@
       "rationale": "The report keeps rendering while explicitly distinguishing a log read failure from an empty log.",
       "behavior_test": "tests/unit/test_generate_report.py::test_pipeline_log_failure_returns_failure_message",
       "observable_via": "ERROR log and failure text"
-    },
-    {
-      "path": "vntyper/scripts/generate_report.py",
-      "symbol": "load_pipeline_summary",
-      "disposition": "preserved-contract",
-      "outcome": "Returns an empty mapping for an unreadable pipeline summary.",
-      "rationale": "Report generation retains its established unavailable-summary state without fabricating result fields.",
-      "behavior_test": "tests/unit/test_generate_report.py::test_pipeline_summary_failure_returns_empty_mapping",
-      "observable_via": "ERROR log"
     },
     {
       "path": "vntyper/scripts/install_references.py",

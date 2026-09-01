@@ -50,6 +50,7 @@ from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs,
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
 from vntyper.scripts.output_paths import contained_output_path
+from vntyper.scripts.profile_provenance import resolve_summary_profile
 from vntyper.scripts.report_formatting import (
     ADVNTR_CELL_FORMATS,
     ADVNTR_DISPLAY_CELL_FORMATS,
@@ -169,7 +170,10 @@ def load_pipeline_summary(summary_file_path):
         summary_file_path (str or Path): Path to the pipeline summary file.
 
     Returns:
-        dict: The loaded summary dictionary or an empty dict if load fails.
+        dict: The loaded summary dictionary, or an empty dictionary only when absent.
+
+    Raises:
+        ValueError: If a present summary cannot be read or parsed.
     """
     logger.info("Loading pipeline summary from %s", summary_file_path)
     if not os.path.exists(summary_file_path):
@@ -181,8 +185,9 @@ def load_pipeline_summary(summary_file_path):
         logger.debug("Pipeline summary loaded successfully.")
         return summary
     except Exception as e:
-        logger.error("Failed to load pipeline summary: %s", e)
-        return {}
+        message = f"Failed to load pipeline summary: {e}"
+        logger.error(message)
+        raise ValueError(message) from e
 
 
 def load_fastp_output(fastp_file):
@@ -446,6 +451,7 @@ def generate_summary_report(
     # Load the pipeline summary JSON.
     summary_file_path = Path(output_dir) / "pipeline_summary.json"
     pipeline_summary = load_pipeline_summary(summary_file_path)
+    recorded_decision_profile = resolve_summary_profile(pipeline_summary, output_dir)
     from vntyper.modules.advntr.artifact_evidence import resolve_recorded_artifact_evidence
 
     recorded_advntr_evidence = resolve_recorded_artifact_evidence(
@@ -975,6 +981,11 @@ def generate_summary_report(
         # phrase itself exists in exactly one place (`report_identity.NOT_RECORDED`).
         "not_recorded": NOT_RECORDED,
         "decision_policy": recorded_or_not(pipeline_summary.get("decision_policy")),
+        "decision_profile_id": recorded_or_not(recorded_decision_profile.profile_id),
+        "decision_profile_revision": recorded_decision_profile.revision,
+        "decision_profile_kind": recorded_or_not(recorded_decision_profile.profile_kind),
+        "decision_profile_source": recorded_or_not(recorded_decision_profile.source),
+        "decision_profile_sha256": recorded_or_not(recorded_decision_profile.sha256),
         "advntr_evidence_revision": recorded_advntr_evidence.revision,
         "advntr_evidence_assertion": recorded_advntr_evidence.assertion,
         "assembly_declared": assembly_declared_text,

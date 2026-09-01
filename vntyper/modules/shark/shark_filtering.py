@@ -7,6 +7,7 @@ from pathlib import Path
 
 from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.pipeline_read_routing import count_fastq_records
+from vntyper.scripts.run_configuration import resolve_compatibility_component
 from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
@@ -22,11 +23,6 @@ def load_shark_config(config_path=None):
         # Default path to shark_config.json
         config_path = os.path.join(os.path.dirname(__file__), "shark_config.json")
     return load_config(config_path)
-
-
-# Load the shark settings (if needed globally)
-shark_config = load_shark_config()
-shark_settings = shark_config.get("shark_settings", {})
 
 
 def select_muc1_region_fasta(config: dict, main_config: dict, reference_assembly: str) -> str:
@@ -94,6 +90,9 @@ def run_shark_filter(
     sample_name,
     reference_assembly="hg19",
     threads=4,
+    *,
+    resolved_component=None,
+    custom_context_active=False,
 ):
     """
     Run SHARK filtering on FASTQ files.
@@ -110,6 +109,8 @@ def run_shark_filter(
             FASTA (hg19- or hg38-coordinate) SHARK filters against -- see
             `select_muc1_region_fasta`. See issue #152.
         threads (int): Number of threads to use for SHARK.
+        resolved_component: Explicit empty SHARK decision component for this run.
+        custom_context_active: Whether an explicit custom profile owns this run.
 
     Returns:
         tuple: (filtered_fastq_1, filtered_fastq_2)
@@ -119,6 +120,12 @@ def run_shark_filter(
             `select_muc1_region_fasta`.
         RuntimeError: If SHARK filtering fails.
     """
+    resolve_compatibility_component(
+        "shark",
+        resolved_component,
+        custom_context_active=custom_context_active,
+    )
+
     # shark_path should come from the main config since it contains the tool paths.
     shark_path = main_config.get("tools", {}).get("shark", "shark")
 

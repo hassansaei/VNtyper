@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,7 +43,6 @@ from vntyper.scripts.kestrel_genotyping import (
     FILTER_COLUMNS,
     add_artifact_gate,
     filter_final_dataframe,
-    kestrel_config,
 )
 from vntyper.scripts.molecular_identity_presentation import (
     IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS,
@@ -49,6 +50,7 @@ from vntyper.scripts.molecular_identity_presentation import (
 )
 from vntyper.scripts.nomenclature import Nomenclature
 from vntyper.scripts.nomenclature_bam import BamConsensus, BamRescuer
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.golden
 
@@ -59,6 +61,10 @@ if not _SIM_ROOT or not _ADVNTR_ROOT:
 
 SIM_ROOT = Path(_SIM_ROOT)
 ADVNTR_ROOT = Path(_ADVNTR_ROOT)
+
+PACKAGE_PROFILES = Path(__file__).parents[2] / "vntyper" / "profiles"
+PR_B_DECISION_PROJECTION_SHA256 = "338fe05d010f623e794dcf93393904fa13bd8713e2d074c8a5b6c72d6efd96fd"
+PACKAGED_DECISION_PROFILE_SHA256 = "be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718"
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,15 @@ class UutReplay:
     eligible_keys: frozenset[str]
     fetches_by_key: dict[str, int]
     bam_input_symlinks: int
+
+
+def _plain_json(value: object) -> object:
+    """Round-trip a recursively immutable component into plain JSON containers."""
+    if isinstance(value, Mapping):
+        return {str(key): _plain_json(child) for key, child in value.items()}
+    if isinstance(value, tuple):
+        return [_plain_json(child) for child in value]
+    return value
 
 
 EXPECTED_CLASS_IDENTITIES = {
@@ -358,9 +373,15 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
     bam_input_symlinks: list[Path] = []
     active_key = ""
     replay_phase = ""
+    run_configuration = resolve_run_configuration()
+    kestrel_component = run_configuration.kestrel
+    artifact_flags = kestrel_component["artifact_flags"]
+    selection = kestrel_component["selection"]
+    assert isinstance(artifact_flags, tuple)
+    assert isinstance(selection, Mapping)
     original_is_candidate = nomenclature_bam_adapter.is_candidate
     original_rescue = BamRescuer.rescue_with_identity_evidence
-    identity_component = translation_component_from_config(nomenclature_annotate.load_nomenclature_config())
+    identity_component = translation_component_from_config(run_configuration.nomenclature)
 
     def counted_is_candidate(call: Nomenclature) -> bool:
         nonlocal eligible
@@ -398,7 +419,7 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
             dtype={"Motif_fasta": str, "POS_fasta": str, "Motif": str},
             keep_default_na=False,
         )
-        pre_result = add_artifact_gate(pre_result, kestrel_config.get("artifact_flags", []))
+        pre_result = add_artifact_gate(pre_result, artifact_flags)
         records = pre_result.to_dict("records")
         for record in records:
             record["Motif_sequence"] = str(record["Motif_sequence"])
@@ -415,7 +436,7 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
         evidenced = with_candidate_evidence(candidates, pre_result.to_dict("records"))
         passing_mask = pre_result[list(FILTER_COLUMNS)].all(axis=1)
         passing_ordinals = tuple(int(value) for value in pre_result.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]])
-        selected = filter_final_dataframe(pre_result, str(output_dir))
+        selected = filter_final_dataframe(pre_result, str(output_dir), selection=selection)
 
         if selected.empty:
             shutil.copyfile(source_result, output_dir / "kestrel_result.tsv")
@@ -1045,3 +1066,41 @@ def test_bam_positive_controls_pin_eligibility_fetch_evidence_resolution_and_tru
         assert key in observed.public_truth_identity_keys
         assert key in observed.identity_outcome_keys["unresolved"]
         assert observed.expected_by_sample[key].mutation == "insCCCC"
+
+
+def test_packaged_profile_provenance_and_pr_b_projection_are_frozen(corpus: GoldenCorpus) -> None:
+    """Pin the complete packaged policy independently of its renderer and schema code."""
+    assert len(corpus.mutated_keys) == 200
+    assert len(corpus.control_keys) == 200
+
+    profile_bytes = (PACKAGE_PROFILES / "decision_profile.json").read_bytes()
+    projection_bytes = (PACKAGE_PROFILES / "decision_projection.json").read_bytes()
+    sidecar_bytes = (PACKAGE_PROFILES / "decision_profile.sha256").read_bytes()
+    assert hashlib.sha256(profile_bytes).hexdigest() == PACKAGED_DECISION_PROFILE_SHA256
+    assert hashlib.sha256(projection_bytes).hexdigest() == PR_B_DECISION_PROJECTION_SHA256
+    assert sidecar_bytes == f"{PACKAGED_DECISION_PROFILE_SHA256}\n".encode("ascii")
+
+    projection = json.loads(projection_bytes)
+    run = resolve_run_configuration()
+    resolved = run.decision_profile
+    assert (
+        resolved.profile_id,
+        resolved.profile_revision,
+        resolved.profile_kind,
+        resolved.source,
+        resolved.digest,
+    ) == (
+        "vntyper-packaged-default",
+        "1",
+        "packaged",
+        "package",
+        PACKAGED_DECISION_PROFILE_SHA256,
+    )
+    assert {
+        "advntr": _plain_json(run.advntr),
+        "cross_match": _plain_json(run.cross_match),
+        "dominance": _plain_json(run.dominance),
+        "kestrel": _plain_json(run.kestrel),
+        "nomenclature": _plain_json(run.nomenclature),
+        "shark": _plain_json(run.shark),
+    } == projection

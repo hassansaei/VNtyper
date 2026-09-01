@@ -393,7 +393,12 @@ pytestmark = pytest.mark.unit
 #: Re-recorded 2026-08-26 when the ``[IMAGES]`` section was dropped from the document.
 #: Verified identical under pandas 2.2.2 / plotly 6.9.0 and pandas 2.2.3 / plotly 7.0.0,
 #: which is the point of dropping it.
-EXPECTED_FINGERPRINT = "f3e421cc7d79928412fc49546b7ce5864ed6785065604a83b93605670f9517b8"
+# Work package C adds conditional decision-profile grouping markup. This direct-render
+# fixture supplies no provenance, so its cells and chart data remain unchanged; the
+# skeleton moves only because the new false Jinja branches contribute surrounding
+# whitespace. Mixed-profile content is pinned separately in
+# ``test_cohort_profile_provenance.py``.
+EXPECTED_FINGERPRINT = "1310197cbd932002cd03fec807b786ebaceb0f1908e8dc5ade54d3b609e52e3e"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid
@@ -1397,8 +1402,16 @@ def test_an_export_written_after_the_report_carries_no_internal_columns(tmp_path
         "Equivalent_Representation_Count",
         "Identity_Hypothesis_Count",
     ]
-    assert kestrel_header.split(",") == ["Motif", "Confidence", "Flag", *identity_quartet, "Sample"]
-    assert advntr_header.split(",") == ["VID", "Flag", *identity_quartet, "Sample"]
+    profile_columns = ["Decision_Profile_ID", "Decision_Profile_Revision", "Decision_Profile_SHA256"]
+    assert kestrel_header.split(",") == [
+        "Motif",
+        "Confidence",
+        "Flag",
+        *identity_quartet,
+        *profile_columns,
+        "Sample",
+    ]
+    assert advntr_header.split(",") == ["VID", "Flag", *identity_quartet, *profile_columns, "Sample"]
 
 
 def test_the_html_reading_key_does_not_change_nomenclature_export_columns(tmp_path) -> None:
@@ -1436,6 +1449,9 @@ def test_the_html_reading_key_does_not_change_nomenclature_export_columns(tmp_pa
         "Molecular_Identity_Status",
         "Equivalent_Representation_Count",
         "Identity_Hypothesis_Count",
+        "Decision_Profile_ID",
+        "Decision_Profile_Revision",
+        "Decision_Profile_SHA256",
         "Sample",
     ]
     assert pd.read_csv(output_dir / "cohort_kestrel.csv").columns.tolist() == expected

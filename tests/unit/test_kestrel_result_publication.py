@@ -9,6 +9,7 @@ drives the real ``process_kestrel_output`` through the non-empty path and assert
 values parsed back from the written file with the repo's own reader.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +19,7 @@ import pytest
 from tests.builders import kestrel_stage_frame
 from vntyper.scripts import kestrel_genotyping as kg
 from vntyper.scripts.identity_candidates import IdentityTranslationComponent
+from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.scripts.summary import parse_tsv
 
 pytestmark = pytest.mark.unit
@@ -127,10 +129,7 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
     vcf = tmp_path / "output.vcf"
     vcf.write_text(META + HEADER + RECORD, encoding="utf-8")
     seen: dict[str, object] = {}
-    runtime_identity_config = {
-        "motifs": {"runtime-X": "A"},
-        "advntr": {"mappable_repeat_units": {"runtime-2": "runtime-X"}, "rotation_offset": 17},
-    }
+    run = resolve_run_configuration()
 
     def fake_process_kmer_results(
         combined_df,
@@ -139,7 +138,9 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
         config,
         compiled_flag_rules=None,
         identity_component=None,
+        custom_context_active=False,
     ):
+        assert custom_context_active is False
         seen["combined_rows"] = len(combined_df)
         seen["alts"] = list(combined_df["ALT"])
         seen["identity_component"] = identity_component
@@ -147,9 +148,15 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
 
     real_annotate = kg.annotate_kestrel_frame
 
-    def tracked_annotate(frame, output_dir, *, identity_component=None):
+    def tracked_annotate(frame, output_dir, *, identity_component=None, resolved_component=None):
         seen["annotation_identity_component"] = identity_component
-        return real_annotate(frame, output_dir, identity_component=identity_component)
+        seen["annotation_nomenclature_component"] = resolved_component
+        return real_annotate(
+            frame,
+            output_dir,
+            identity_component=identity_component,
+            resolved_component=resolved_component,
+        )
 
     with (
         mock.patch.object(kg, "_try_compress_vcf_with_bcftools", lambda *args: None),
@@ -161,21 +168,24 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
         mock.patch.object(kg, "load_additional_motifs", return_value=pd.DataFrame()),
         mock.patch.object(kg, "process_kmer_results", side_effect=fake_process_kmer_results),
         mock.patch.object(kg, "annotate_kestrel_frame", side_effect=tracked_annotate),
-        mock.patch.object(
-            kg,
-            "load_nomenclature_config",
-            return_value=runtime_identity_config,
-            create=True,
-        ) as load_identity_config,
     ):
-        returned = kg.process_kestrel_output(str(tmp_path), vcf, "ref.fa", {}, {})
+        returned = kg.process_kestrel_output(
+            str(tmp_path),
+            vcf,
+            "ref.fa",
+            {},
+            {},
+            nomenclature_component=run.nomenclature,
+        )
 
     assert seen["combined_rows"] == 1 and seen["alts"] == ["CC"], "the real VCF record must reach the scoring seam"
     assert isinstance(seen["identity_component"], IdentityTranslationComponent)
     assert seen["annotation_identity_component"] is seen["identity_component"]
-    load_identity_config.assert_called_once_with()
-    assert seen["identity_component"].kestrel_motifs == {"runtime-X": "A"}
-    assert seen["identity_component"].advntr_rotation_offset == 17
+    assert seen["annotation_nomenclature_component"] is run.nomenclature
+    assert seen["identity_component"].kestrel_motifs == run.nomenclature["motifs"]
+    advntr_nomenclature = run.nomenclature["advntr"]
+    assert isinstance(advntr_nomenclature, Mapping)
+    assert seen["identity_component"].advntr_rotation_offset == advntr_nomenclature["rotation_offset"]
     assert returned is not None and len(returned) == 1
 
     parsed = parse_tsv(str(tmp_path / "kestrel_result.tsv"))

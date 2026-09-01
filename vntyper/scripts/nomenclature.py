@@ -39,6 +39,7 @@ from vntyper.scripts.identity_reconciliation import (
     reconcile_identity_observations,
     select_compatibility_presentation_index,
 )
+from vntyper.scripts.nomenclature_decision_config import NomenclatureDecisionConfig, decision_config_from_component
 from vntyper.scripts.nomenclature_evidence import (
     FLAG_LOW_EVIDENCE_SUPPORT,
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
@@ -76,6 +77,7 @@ __all__ = [
     "UNIT_LENGTH",
     "Nomenclature",
     "ambiguity_interval",
+    "decision_config_from_component",
     "from_advntr",
     "name_coding_pair_edit",
     "from_kestrel",
@@ -193,7 +195,7 @@ FLAG_REPRESENTATION_ONLY = "representation-of-caller-call"
 _COMPLEMENT = str.maketrans("ACGTacgtNn", "TGCAtgcaNn")
 
 
-def pair_sequence(motifs: str) -> str | None:
+def pair_sequence(motifs: str, decision_config: NomenclatureDecisionConfig | None = None) -> str | None:
     """Build the 120 bp Kestrel pair reference for a ``<L>-<R>`` label.
 
     A pair record holds ``seq(R) ++ seq(L)`` -- reverse-complementing it therefore
@@ -202,6 +204,7 @@ def pair_sequence(motifs: str) -> str | None:
 
     Args:
         motifs: The ``Motifs`` field, e.g. ``S-C``.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         str | None: The 120 bp plus-strand sequence, or ``None`` when the label is
@@ -210,7 +213,8 @@ def pair_sequence(motifs: str) -> str | None:
     left, _, right = motifs.partition("-")
     if not _:
         return None
-    left_seq, right_seq = MOTIFS.get(left), MOTIFS.get(right)
+    motif_table = decision_config.motifs if decision_config is not None else MOTIFS
+    left_seq, right_seq = motif_table.get(left), motif_table.get(right)
     if left_seq is None or right_seq is None:
         return None
     return right_seq + left_seq
@@ -603,7 +607,11 @@ def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ..
     )
 
 
-def _is_corroborated(sources: set[str]) -> bool:
+def _is_corroborated(
+    sources: set[str],
+    caller_of: Mapping[str, str] = CALLER_OF,
+    independent_callers_required: int = 2,
+) -> bool:
     """Do these sources amount to independent corroboration?
 
     The test is on *callers*, not sources: ``kestrel_vcf`` and ``kestrel_bam`` are two
@@ -623,7 +631,7 @@ def _is_corroborated(sources: set[str]) -> bool:
     # An unrecognised source is assumed to be its own caller: a new source added
     # without a config entry is treated as independent rather than silently folded
     # into an existing caller, which would hide a disagreement.
-    return len({CALLER_OF.get(source, source) for source in sources}) >= 2
+    return len({caller_of.get(source, source) for source in sources}) >= independent_callers_required
 
 
 def reconcile(
@@ -632,6 +640,7 @@ def reconcile(
     supports: Mapping[str, int | None] | None = None,
     identity_observations: tuple[IdentityReconciliationObservation, ...] | None = None,
     identity_policy: IdentityReconciliationPolicy | None = None,
+    decision_config: NomenclatureDecisionConfig | None = None,
 ) -> Nomenclature:
     """Combine caller calls through legacy or explicitly supplied identity evidence.
 
@@ -641,6 +650,7 @@ def reconcile(
         supports: Legacy support keyed by source.
         identity_observations: Typed observations aligned one-for-one with ``calls``.
         identity_policy: Explicit source-unit thresholds for typed reconciliation.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         The unchanged legacy projection when identity metadata is absent, or the
@@ -652,7 +662,7 @@ def reconcile(
     if identity_observations is None:
         if identity_policy is not None:
             raise ValueError("An identity policy requires typed identity observations")
-        return _reconcile_legacy(*calls, support=support, supports=supports)
+        return _reconcile_legacy(*calls, support=support, supports=supports, decision_config=decision_config)
     if identity_policy is None:
         raise ValueError("Typed identity observations require an explicit identity policy")
     if not calls:
@@ -688,7 +698,7 @@ def reconcile(
         index
         for index in range(len(calls))
         if any(
-            call_index == index and observation.disposition.value == "admissible"
+            call_index == index and observation.disposition.value == identity_policy.admissible_disposition
             for observation, call_index in zip(identity_observations, presentation_call_indices, strict=True)
         )
     )
@@ -701,7 +711,12 @@ def reconcile(
     compatibility_observation_index = next(
         index for index, call_index in enumerate(presentation_call_indices) if call_index == compatibility_call_index
     )
-    compatibility_presentation = _reconcile_legacy(*decision_calls, support=support, supports=supports)
+    compatibility_presentation = _reconcile_legacy(
+        *decision_calls,
+        support=support,
+        supports=supports,
+        decision_config=decision_config,
+    )
     result = reconcile_identity_observations(
         identity_observations,
         identity_policy,
@@ -728,8 +743,9 @@ def reconcile(
         flags.update(compatibility_presentation.flags)
     if FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT in presentation.flags:
         flags.add(FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT)
+    known_variants = decision_config.known_variants if decision_config is not None else KNOWN_VARIANTS
     if presentation.name is not None:
-        flags.add(FLAG_KNOWN_VARIANT if presentation.name in KNOWN_VARIANTS else FLAG_REPRESENTATION_ONLY)
+        flags.add(FLAG_KNOWN_VARIANT if presentation.name in known_variants else FLAG_REPRESENTATION_ONLY)
 
     if result.event_disagreement or presentation.name is None:
         return _undetermined("unknown", presentation.net_length, "reconciled", tuple(sorted(flags)))
@@ -751,6 +767,7 @@ def _reconcile_legacy(
     *calls: Nomenclature,
     support: int | None = None,
     supports: Mapping[str, int | None] | None = None,
+    decision_config: NomenclatureDecisionConfig | None = None,
 ) -> Nomenclature:
     """Combine independent callers into one result, and decide its tier.
 
@@ -774,6 +791,7 @@ def _reconcile_legacy(
             evidence it came from, so an unrelated well-supported observation cannot
             lend support to a thin agreement. The agreement is taken to be as strong
             as its weakest contributing source.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         Nomenclature: The reconciled call. Tier C when nothing was supplied or the
@@ -821,7 +839,22 @@ def _reconcile_legacy(
     # Independence is judged on the chosen allele's own backing, not on every name
     # seen. A dissenting source is not part of the agreement it dissents from.
     backing_sources = backing.get(str(chosen_name), set()) if chosen_name is not None else set()
-    agree = _is_corroborated(backing_sources)
+    identity_policy = decision_config.identity_reconciliation if decision_config is not None else None
+    caller_of = decision_config.caller_of if decision_config is not None else CALLER_OF
+    independent_callers_required = identity_policy.independent_callers_required if identity_policy is not None else 2
+    agree = _is_corroborated(backing_sources, caller_of, independent_callers_required)
+    source_thresholds = {
+        "kestrel_vcf": (
+            identity_policy.kestrel_min_alternate_kmer_path_depth
+            if identity_policy is not None
+            else MIN_SUPPORT_FOR_TIER_A
+        ),
+        "advntr": (
+            identity_policy.advntr_min_sequencing_read_support
+            if identity_policy is not None
+            else MIN_SUPPORT_FOR_TIER_A
+        ),
+    }
 
     # Support must belong to the agreeing evidence. A sample-wide maximum would let a
     # well-covered but unrelated observation lend its depth to a thin agreement.
@@ -836,27 +869,37 @@ def _reconcile_legacy(
         known = [value for value in relevant if value is not None]
         effective_support = None if len(known) != len(relevant) or not known else min(known)
 
-        if effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
+        if effective_support is not None:
             for source in backing_sources:
                 source_support = supports.get(source)
-                if source_support is not None and source_support < MIN_SUPPORT_FOR_TIER_A:
+                threshold = source_thresholds.get(source, MIN_SUPPORT_FOR_TIER_A)
+                if source_support is not None and source_support < threshold:
                     flags.add(low_support_flag_for_source(source))
-    elif effective_support is not None and effective_support < MIN_SUPPORT_FOR_TIER_A:
+    elif effective_support is not None and effective_support < source_thresholds["advntr"]:
         flags.add(FLAG_LOW_READ_SUPPORT)
 
     # Known variants are used to *check* a name, never to make one. Matching the
     # literature says somebody has described this allele before -- a weaker and
     # different claim than "this is correct" -- so it raises confidence rather than
     # conferring it.
+    known_variants = decision_config.known_variants if decision_config is not None else KNOWN_VARIANTS
     if chosen_name is not None:
-        flags.add(FLAG_KNOWN_VARIANT if chosen_name in KNOWN_VARIANTS else FLAG_REPRESENTATION_ONLY)
+        flags.add(FLAG_KNOWN_VARIANT if chosen_name in known_variants else FLAG_REPRESENTATION_ONLY)
 
     tier = "B"
     if (
         agree
-        and chosen_name in KNOWN_VARIANTS
+        and chosen_name in known_variants
         and effective_support is not None
-        and effective_support >= MIN_SUPPORT_FOR_TIER_A
+        and (
+            all(
+                value is not None and value >= source_thresholds.get(source, MIN_SUPPORT_FOR_TIER_A)
+                for source in backing_sources
+                for value in (supports.get(source),)
+            )
+            if supports is not None
+            else effective_support >= source_thresholds["advntr"]
+        )
         and FLAG_MOTIF_CONTEXT_DIVERGES not in flags
         and FLAG_SEQUENCE_UNDETERMINED not in flags
         and FLAG_CALLER_DISAGREEMENT not in flags
@@ -879,7 +922,10 @@ def _reconcile_legacy(
     )
 
 
-def confidence_note(call: Nomenclature) -> str:
+def confidence_note(
+    call: Nomenclature,
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> str:
     """One sentence saying what the name is and how far it has been checked.
 
     The honest position, in the output rather than only in the docs: a name is
@@ -888,13 +934,15 @@ def confidence_note(call: Nomenclature) -> str:
 
     Args:
         call: The reconciled call.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         str: The note, or ``""`` when there is no name to qualify.
     """
     if not call.name:
         return ""
-    citation = KNOWN_VARIANTS.get(call.name)
+    known_variants = decision_config.known_variants if decision_config is not None else KNOWN_VARIANTS
+    citation = known_variants.get(call.name)
     if citation is not None:
         return f"matches a described MUC1 variant ({citation}); requires validation"
     return "representation of the caller's call, not a described variant; requires validation"
@@ -1013,11 +1061,15 @@ def _group_components(components: list[_Component]) -> list[list[_Component]]:
     return groups
 
 
-def _name_advntr_group(group: list[_Component]) -> Nomenclature:
+def _name_advntr_group(
+    group: list[_Component],
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> Nomenclature:
     """Name one grouped adVNTR event.
 
     Args:
         group: Components belonging to a single event.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         Nomenclature: The named event, tier C when it cannot be placed.
@@ -1035,7 +1087,11 @@ def _name_advntr_group(group: list[_Component]) -> Nomenclature:
     else:
         event = "deletion"
 
-    symbol = MAPPABLE_RUS.get(ru)
+    mappable_rus = decision_config.mappable_repeat_units if decision_config is not None else MAPPABLE_RUS
+    rotation_offset = decision_config.rotation_offset if decision_config is not None else _RU_ROTATION
+    unit_length = decision_config.unit_length if decision_config is not None else UNIT_LENGTH
+    canonical_unit = decision_config.canonical_unit if decision_config is not None else CANONICAL_UNIT
+    symbol = mappable_rus.get(ru)
     if symbol is None:
         return _undetermined(event, net, "advntr", ())
 
@@ -1050,12 +1106,12 @@ def _name_advntr_group(group: list[_Component]) -> Nomenclature:
 
     if insertions:
         component = insertions[0]
-        plus = ((_RU_ROTATION - 1 + component.pos) % UNIT_LENGTH) + 1
+        plus = ((rotation_offset - 1 + component.pos) % unit_length) + 1
         # adVNTR anchors an insertion in the gap *after* the plus-strand position, and
         # reverse complement swaps which side of that gap it sits on, so the coding
         # base immediately 5' of it is `UNIT_LENGTH - plus`. Treating the anchor as a
         # base instead yields 60 for the canonical duplication rather than 59.
-        left = UNIT_LENGTH - plus
+        left = unit_length - plus
         start, end = left + 1, left
         inserted = revcomp(component.base)
         if deletions:
@@ -1066,9 +1122,11 @@ def _name_advntr_group(group: list[_Component]) -> Nomenclature:
             # so that gap is equally "after position 60 of the preceding unit", and
             # naming it there turns a meaningless `0_1insA` into the `60dupA` it is.
             # `from_kestrel` already did this; adVNTR states reach the same boundary.
-            start, end = UNIT_LENGTH + 1, UNIT_LENGTH
+            start, end = unit_length + 1, unit_length
     else:
-        positions = sorted(UNIT_LENGTH + 1 - (((_RU_ROTATION - 1 + item.pos) % UNIT_LENGTH) + 1) for item in deletions)
+        positions = sorted(
+            unit_length + 1 - (((rotation_offset - 1 + item.pos) % unit_length) + 1) for item in deletions
+        )
         # Consecutive positions in adVNTR's rotated unit are not necessarily
         # consecutive in the coding unit: the rotation puts a seam inside the unit, so
         # `D21_2&D22_2` projects to coding 1 and 60 -- opposite ends. Spanning
@@ -1080,16 +1138,16 @@ def _name_advntr_group(group: list[_Component]) -> Nomenclature:
         start, end = positions[0], positions[-1]
         inserted = ""
 
-    if not 1 <= start <= UNIT_LENGTH + 1 or end > UNIT_LENGTH:
+    if not 1 <= start <= unit_length + 1 or end > unit_length:
         return _undetermined(event, net, "advntr", tuple(flags))
 
-    name = name_edit(CANONICAL_UNIT, start, end, inserted)
-    window = ambiguity_interval(CANONICAL_UNIT, start, end, inserted)
-    tract = repeat_form(CANONICAL_UNIT, start, end, inserted)
+    name = name_edit(canonical_unit, start, end, inserted)
+    window = ambiguity_interval(canonical_unit, start, end, inserted)
+    tract = repeat_form(canonical_unit, start, end, inserted)
     if window is not None:
         flags.append(FLAG_POSITION_AMBIGUOUS)
 
-    norm = normalise(CANONICAL_UNIT, start, end, inserted)
+    norm = normalise(canonical_unit, start, end, inserted)
     resolved = _event_of(*norm)
     if resolved == "insertion" and "dup" in name:
         resolved = "duplication"
@@ -1107,13 +1165,17 @@ def _name_advntr_group(group: list[_Component]) -> Nomenclature:
     )
 
 
-def from_advntr(state: str) -> tuple[Nomenclature, ...]:
+def from_advntr(
+    state: str,
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> tuple[Nomenclature, ...]:
     """Translate one adVNTR state field into MUC1 nomenclature.
 
     Args:
         state: The ``Variant`` field, e.g. ``I22_2_G_LEN1`` or
             ``D27_2&I27_2_A_LEN2``. Non-states such as ``Not applicable`` yield
             an empty tuple.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         tuple[Nomenclature, ...]: One entry per distinct event. Usually length 1;
@@ -1122,10 +1184,16 @@ def from_advntr(state: str) -> tuple[Nomenclature, ...]:
     components = _parse_components(state)
     if not components:
         return ()
-    return tuple(_name_advntr_group(group) for group in _group_components(components))
+    return tuple(_name_advntr_group(group, decision_config) for group in _group_components(components))
 
 
-def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
+def from_kestrel(
+    motifs: str,
+    pos: int,
+    ref: str,
+    alt: str,
+    decision_config: NomenclatureDecisionConfig | None = None,
+) -> Nomenclature:
     """Translate one Kestrel VCF record into MUC1 nomenclature.
 
     Kestrel reports on a 120 bp merged pair ``<L>-<R>`` whose sequence is
@@ -1144,13 +1212,14 @@ def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
         pos: 1-based position on the 120 bp pair.
         ref: Reference allele.
         alt: Alternate allele.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         Nomenclature: The named record; tier C when the record cannot be placed.
     """
     net = len(alt) - len(ref)
 
-    pair = pair_sequence(motifs)
+    pair = pair_sequence(motifs, decision_config)
     if pair is None or not 1 <= pos <= len(pair) or not _is_dna(ref) or not _is_dna(alt):
         return _undetermined("insertion" if net > 0 else "deletion", net, "kestrel_vcf", ())
 
@@ -1179,7 +1248,16 @@ def from_kestrel(motifs: str, pos: int, ref: str, alt: str) -> Nomenclature:
         coding_end = pair_length + 1 - pos
         inserted = revcomp(alt)
 
-    return name_coding_pair_edit(motifs, pair, coding_start, coding_end, inserted, net, "kestrel_vcf")
+    return name_coding_pair_edit(
+        motifs,
+        pair,
+        coding_start,
+        coding_end,
+        inserted,
+        net,
+        "kestrel_vcf",
+        decision_config,
+    )
 
 
 def name_coding_pair_edit(
@@ -1190,6 +1268,7 @@ def name_coding_pair_edit(
     inserted: str,
     net: int,
     source: str,
+    decision_config: NomenclatureDecisionConfig | None = None,
 ) -> Nomenclature:
     """Name an edit already expressed in coding-frame pair coordinates.
 
@@ -1205,11 +1284,15 @@ def name_coding_pair_edit(
         inserted: Inserted bases, already in the coding frame.
         net: Change in length.
         source: The caller this came from.
+        decision_config: Explicit resolved nomenclature values for a run.
 
     Returns:
         Nomenclature: The named record; tier C when it cannot be placed.
     """
     pair_length = len(pair)
+    unit_length = decision_config.unit_length if decision_config is not None else UNIT_LENGTH
+    motif_table = decision_config.motifs if decision_config is not None else MOTIFS
+    canonical_unit = decision_config.canonical_unit if decision_config is not None else CANONICAL_UNIT
 
     if not 1 <= coding_start <= pair_length + 1:
         return _undetermined("insertion" if net > 0 else "deletion", net, source, ())
@@ -1225,15 +1308,15 @@ def name_coding_pair_edit(
     # The coding pair reads coding(L) ++ coding(R): reverse-complementing
     # seq(R) ++ seq(L) swaps the halves as well as the strand.
     junction_flags: tuple[str, ...] = ()
-    if coding_start <= UNIT_LENGTH < coding_end:
+    if coding_start <= unit_length < coding_end:
         junction_flags = (FLAG_SPANS_UNIT_JUNCTION,)
 
     left, right = motifs.split("-", 1)[0], motifs.split("-", 1)[-1]
 
-    if coding_start > UNIT_LENGTH:
+    if coding_start > unit_length:
         symbol = right
-        start = coding_start - UNIT_LENGTH
-        end = coding_end - UNIT_LENGTH
+        start = coding_start - unit_length
+        end = coding_end - unit_length
     else:
         symbol = left
         start, end = coding_start, coding_end
@@ -1243,12 +1326,12 @@ def name_coding_pair_edit(
     # of it" -- and naming it there is what turns a meaningless `0_1insA` into the
     # `60dupA` the allele actually is. A coordinate of 0 is never emitted.
     if end < start and start == 1:
-        start, end = UNIT_LENGTH + 1, UNIT_LENGTH
-        symbol = left if coding_start > UNIT_LENGTH else right
+        start, end = unit_length + 1, unit_length
+        symbol = left if coding_start > unit_length else right
 
-    assigned = MOTIFS.get(symbol)
+    assigned = motif_table.get(symbol)
 
-    upper = UNIT_LENGTH + 1 if end < start else UNIT_LENGTH
+    upper = unit_length + 1 if end < start else unit_length
     if not 1 <= start <= upper:
         return _undetermined("insertion" if net > 0 else "deletion", net, source, junction_flags)
 
@@ -1274,7 +1357,7 @@ def name_coding_pair_edit(
         context = coding_pair
         start, end = coding_start, coding_end
     else:
-        context = CANONICAL_UNIT
+        context = canonical_unit
 
     name = name_edit(context, start, end, inserted)
     window = ambiguity_interval(context, start, end, inserted)
@@ -1296,8 +1379,8 @@ def name_coding_pair_edit(
     else:
         coding_assigned = revcomp(assigned)
         lo = max(1, span_lo - 1)
-        hi = min(UNIT_LENGTH, span_hi + 1)
-        if coding_assigned[lo - 1 : hi] != CANONICAL_UNIT[lo - 1 : hi]:
+        hi = min(unit_length, span_hi + 1)
+        if coding_assigned[lo - 1 : hi] != canonical_unit[lo - 1 : hi]:
             flags.append(FLAG_MOTIF_CONTEXT_DIVERGES)
 
     # A single caller never reaches tier A. Tier A requires agreement between two

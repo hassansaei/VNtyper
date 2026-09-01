@@ -1,14 +1,51 @@
 # Configuration
 
-VNtyper 2 uses two configuration files. To override the default configuration:
+VNtyper 2 separates runtime configuration from decision profiles. To override the main
+runtime configuration:
 
 ```bash
 vntyper --config-path /path/to/custom/config.json pipeline \
     --bam inputs/sample.bam -o results/sample/
 ```
 
-!!! warning "Modifying Thresholds"
-    The depth score and confidence thresholds in `kestrel_config.json` are empirically validated values from Saei et al., iScience 26, 107171 (2023). Changing them may affect genotyping accuracy.
+`--config-path` replaces the main `config.json`; it does not select or overlay a decision
+profile. The Kestrel and optional-module sidecars retain excluded runtime values such as
+memory, executable arguments, and reference paths.
+
+## Decision Profiles
+
+Every pipeline run resolves one complete profile. With no option, VNtyper verifies and
+uses its packaged `vntyper/profiles/decision_profile.json`; this keeps all package
+defaults unchanged. To select another profile:
+
+```bash
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
+    --decision-profile /path/to/complete-profile.json
+```
+
+An explicit profile is a complete standalone file, not a patch. It must contain every
+packaged decision leaf and use `profile_kind: "explicit-custom"` or
+`profile_kind: "generated"`. Missing or unknown keys, altered field types or comparison
+semantics, and any change to a `fixed-safety` field fail before stage artifacts are
+written. This includes the `0.00469` reporting floor and independent GG gate, `0.00515`,
+alternate k-mer-path boundaries `20`, `21`, and `100`, active-region boundary `200`, BAM
+flank `8`, thin haplotype-record support `3`, and both source-specific tier-A support
+values `5`.
+
+Generated profiles do not auto-activate. Creating or placing one in an output directory
+changes no run; an operator must pass that exact complete file to `--decision-profile`.
+The adVNTR model identity, fetch-window compatibility, and minimum binary version from
+Issue 268 are deliberately outside the profile and cannot be bypassed by one. Runtime
+paths, references, coverage presentation, input routing, and report wording are excluded
+for the same reason.
+
+The resolved canonical bytes are snapshotted under `provenance/`, and schema-3
+`pipeline_summary.json` records their ID, revision, kind, source, and SHA-256. Reports
+and cohorts verify that run-local snapshot rather than inferring policy from the package
+installed later.
+
+!!! warning "Fixed safety thresholds"
+    The shipped depth score and confidence boundaries are empirically validated values from Saei et al., iScience 26, 107171 (2023). They are recorded in the complete profile for reproducibility but cannot be changed by an explicit or generated profile.
 
 ## Main Configuration (config.json)
 
@@ -89,9 +126,11 @@ Missing keys, strings, booleans, non-finite values, or fractions outside 0--1 ar
 logged and raise `ValueError` while rendering rather than silently substituting a
 default cutoff.
 
-## Kestrel Configuration (kestrel_config.json)
+## Packaged Kestrel decision projection
 
-Controls Kestrel execution and the entire postprocessing pipeline (scoring, confidence, motif filtering, flagging).
+The packaged profile projects the following Kestrel decisions. `kestrel_config.json`
+retains excluded Kestrel runtime settings; pipeline decision consumers use the one
+resolved profile instead of reading mutable module globals.
 
 ```json
 {

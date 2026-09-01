@@ -26,6 +26,21 @@ vntyper [global-options] cohort
 
 One of `-i/--input-dirs` or `--input-file` is required.
 
+## Decision-profile grouping
+
+For schema-3 inputs, the cohort command verifies each run-local decision-profile
+snapshot and exports `Decision_Profile_ID`, `Decision_Profile_Revision`, and
+`Decision_Profile_SHA256` with every caller row. Samples are grouped by the exact
+profile hash. When more than one hash is present, pooled decision-performance plots are
+suppressed and rendered separately for each profile group, with the member samples
+listed. This prevents unlike policies from being summarized as though they made one set
+of decisions.
+
+Legacy inputs remain readable and are labeled `decision profile not recorded by legacy
+run`; the cohort never assigns them the currently installed package profile. A malformed
+or tampered schema-3 profile snapshot is rejected. Like `report`, this command has no
+profile-selection option: it describes the profiles already used by its input runs.
+
 ## Pseudonymization
 
 The `--pseudonymize-samples` flag supports two modes. In both, the pseudonym is the prefix followed by the first 12 hex characters of the SHA-256 digest of the original sample name, so it is stable across runs and machines:

@@ -138,9 +138,12 @@ def test_a_non_string_is_returned_unchanged(value: object) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_kestrel_display_columns_are_the_recorded_twenty_four() -> None:
+def test_the_kestrel_display_columns_include_profile_provenance() -> None:
     assert KESTREL_DISPLAY_COLUMNS == (
         "Sample",
+        "Decision_Profile_ID",
+        "Decision_Profile_Revision",
+        "Decision_Profile_SHA256",
         "Motif",
         "Variant",
         "POS",
@@ -367,9 +370,12 @@ def test_kestrel_missing_cells_render_empty_without_coercing_real_values() -> No
 # ---------------------------------------------------------------------------
 
 
-def test_the_advntr_display_columns_are_the_recorded_twenty_four() -> None:
+def test_the_advntr_display_columns_include_profile_provenance() -> None:
     assert ADVNTR_DISPLAY_COLUMNS == (
         "Sample",
+        "Decision_Profile_ID",
+        "Decision_Profile_Revision",
+        "Decision_Profile_SHA256",
         "VID",
         "Variant",
         "NumberOfSupportingReads",

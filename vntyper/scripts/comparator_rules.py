@@ -104,7 +104,7 @@ def _validate_scalar(value: object, *, path: str) -> JsonScalar:
 
 
 def _validate_literal(value: object, *, path: str) -> JsonScalar | tuple[JsonScalar, ...]:
-    if not isinstance(value, list):
+    if not isinstance(value, (list, tuple)):
         return _validate_scalar(value, path=path)
     if not value:
         _invalid(f"{path} must be a non-empty homogeneous JSON-scalar list")
@@ -116,7 +116,7 @@ def _validate_literal(value: object, *, path: str) -> JsonScalar | tuple[JsonSca
 
 
 def _validate_operand(value: object, *, allowed_columns: frozenset[str], path: str) -> Operand:
-    if not isinstance(value, dict) or set(value) not in ({"column"}, {"literal"}):
+    if not isinstance(value, Mapping) or set(value) not in ({"column"}, {"literal"}):
         _invalid(f"{path} must contain exactly one of 'column' or 'literal'")
     if "column" in value:
         name = value["column"]
@@ -225,7 +225,7 @@ def _validate_node(
         return NotNode(child=child)
 
     child_path = f"{path}.{key}"
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, (list, tuple)) or not value:
         _invalid(f"{child_path} must be a non-empty list")
     children = tuple(
         _validate_node(

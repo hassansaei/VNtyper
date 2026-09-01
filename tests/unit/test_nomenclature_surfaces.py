@@ -7,6 +7,7 @@ Research use only.
 """
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from unittest import mock
 
@@ -51,7 +52,9 @@ from vntyper.scripts.nomenclature_bam_replay import (
     read_bam_replay_artifact,
     write_bam_replay_artifact,
 )
+from vntyper.scripts.nomenclature_decision_config import NomenclatureDecisionConfig
 from vntyper.scripts.report_formatting import ADVNTR_DISPLAY_COLUMNS, KESTREL_DISPLAY_COLUMNS
+from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.scripts.summary import parse_tsv
 
 pytestmark = pytest.mark.unit
@@ -418,17 +421,19 @@ def test_unlisted_advntr_state_retains_tier_a_and_admissible_projection(tmp_path
 def test_production_identity_policy_is_resolved_from_checked_in_config_at_the_stage_boundary(tmp_path) -> None:
     dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
     kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
-    config = nomenclature.load_nomenclature_config()
-    config["thresholds"] = {**config["thresholds"], "min_support_for_high_confidence": 41}
+    component = dict(resolve_run_configuration().nomenclature)
+    identity_component = component["identity_reconciliation"]
+    assert isinstance(identity_component, Mapping)
+    identity = dict(identity_component)
+    identity["kestrel_min_alternate_kmer_path_depth"] = 41
+    component["identity_reconciliation"] = identity
 
-    with mock.patch.object(nomenclature_annotate, "load_nomenclature_config", return_value=config) as loaded:
-        assert reconcile_caller_outputs(kestrel, advntr) is True
-    loaded.assert_called_once_with()
+    assert reconcile_caller_outputs(kestrel, advntr, resolved_component=component) is True
 
     written = pd.read_csv(kestrel, sep="\t", dtype=str)
     assert written.loc[0, "Nomenclature_Tier"] == "B"
     assert "low-kmer-path-support" in written.loc[0, "Nomenclature_Flags"]
-    assert "low-read-support" in written.loc[0, "Nomenclature_Flags"]
+    assert "low-read-support" not in written.loc[0, "Nomenclature_Flags"]
 
 
 def test_production_reconciliation_fails_closed_on_malformed_internal_identity_metadata(tmp_path) -> None:
@@ -663,8 +668,12 @@ def test_annotate_kestrel_frame_uses_record_support_not_xd_for_a_bam_candidate(t
     observed: list[tuple[Nomenclature | None, int | None]] = []
     row_haplotype_call = nomenclature_annotate._row_haplotype_call
 
-    def tracked_row_haplotype_call(row: pd.Series, rescuer: BamRescuer) -> tuple[Nomenclature | None, int | None]:
-        result = row_haplotype_call(row, rescuer)
+    def tracked_row_haplotype_call(
+        row: pd.Series,
+        rescuer: BamRescuer,
+        decision_config: NomenclatureDecisionConfig | None = None,
+    ) -> tuple[Nomenclature | None, int | None]:
+        result = row_haplotype_call(row, rescuer, decision_config)
         observed.append(result)
         return result
 
@@ -714,14 +723,15 @@ def test_identity_aware_kestrel_stage_uses_the_injected_run_component(tmp_path: 
             )
         ]
     )
-    component = translation_component_from_config(nomenclature.load_nomenclature_config())
+    resolved = resolve_run_configuration().nomenclature
+    component = translation_component_from_config(resolved)
 
-    with mock.patch.object(
-        nomenclature_annotate,
-        "load_nomenclature_config",
-        side_effect=AssertionError("must not reload the run config"),
-    ):
-        annotate_kestrel_frame(frame, tmp_path, identity_component=component)
+    annotate_kestrel_frame(
+        frame,
+        tmp_path,
+        identity_component=component,
+        resolved_component=resolved,
+    )
 
     assert read_bam_replay_artifact(tmp_path).loci[0].state == "not-consulted"
 
@@ -767,8 +777,11 @@ def test_identity_aware_kestrel_stage_records_a_real_tie_once_for_the_joint_grou
     rescuers: list[BamRescuer] = []
     open_rescuer = nomenclature_annotate._open_rescuer
 
-    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
-        rescuer = open_rescuer(output_dir)
+    def tracked_open(
+        output_dir: str | Path | None,
+        decision_config: NomenclatureDecisionConfig | None = None,
+    ) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir, decision_config)
         assert rescuer is not None
         rescuers.append(rescuer)
         return rescuer
@@ -809,8 +822,11 @@ def test_joint_resolved_candidates_reconcile_a_real_two_by_two_tie_with_one_fetc
     rescuers: list[BamRescuer] = []
     open_rescuer = nomenclature_bam_adapter.open_rescuer
 
-    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
-        rescuer = open_rescuer(output_dir)
+    def tracked_open(
+        output_dir: str | Path | None,
+        decision_config: NomenclatureDecisionConfig | None = None,
+    ) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir, decision_config)
         assert rescuer is not None
         rescuers.append(rescuer)
         return rescuer
@@ -859,8 +875,11 @@ def test_joint_candidate_group_counts_both_cooccurring_identities_from_one_real_
     rescuers: list[BamRescuer] = []
     open_rescuer = nomenclature_bam_adapter.open_rescuer
 
-    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
-        rescuer = open_rescuer(output_dir)
+    def tracked_open(
+        output_dir: str | Path | None,
+        decision_config: NomenclatureDecisionConfig | None = None,
+    ) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir, decision_config)
         assert rescuer is not None
         rescuers.append(rescuer)
         return rescuer
@@ -927,8 +946,11 @@ def test_joint_candidate_groups_fetch_once_per_locus_and_preserve_row_order(tmp_
     rescuers: list[BamRescuer] = []
     open_rescuer = nomenclature_bam_adapter.open_rescuer
 
-    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
-        rescuer = open_rescuer(output_dir)
+    def tracked_open(
+        output_dir: str | Path | None,
+        decision_config: NomenclatureDecisionConfig | None = None,
+    ) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir, decision_config)
         assert rescuer is not None
         rescuers.append(rescuer)
         return rescuer
@@ -1123,8 +1145,11 @@ def test_xd_cannot_change_production_nomenclature_decisions(
     rescuers: list[BamRescuer] = []
     open_rescuer = nomenclature_bam_adapter.open_rescuer
 
-    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
-        rescuer = open_rescuer(output_dir)
+    def tracked_open(
+        output_dir: str | Path | None,
+        decision_config: NomenclatureDecisionConfig | None = None,
+    ) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir, decision_config)
         if rescuer is not None:
             rescuers.append(rescuer)
         return rescuer
@@ -1218,8 +1243,11 @@ def test_candidate_rows_share_one_rescuer_and_keep_fetch_order(tmp_path: Path) -
     rescuers: list[BamRescuer] = []
     open_rescuer = nomenclature_bam_adapter.open_rescuer
 
-    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
-        rescuer = open_rescuer(output_dir)
+    def tracked_open(
+        output_dir: str | Path | None,
+        decision_config: NomenclatureDecisionConfig | None = None,
+    ) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir, decision_config)
         assert rescuer is not None
         original_rescue = rescuer.rescue
 
