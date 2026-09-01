@@ -17,6 +17,12 @@ from tests.builders import STAGE_COLUMNS, kestrel_stage_frame
 from vntyper.scripts import nomenclature, nomenclature_annotate
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
+from vntyper.scripts.molecular_identity import (
+    MolecularIdentity,
+    make_coding_edit,
+    make_molecular_identity,
+    serialize_molecular_identity,
+)
 from vntyper.scripts.nomenclature import (
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
     FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
@@ -176,6 +182,111 @@ def _write_caller_outputs(tmp_path, advntr_state: str, support: str) -> tuple[Pa
         f"25561\t{advntr_state}\t{support}\tduplication, position-ambiguous\tB\t\t53_59\t53C[7]>53C[8]\n"
     )
     return kestrel, advntr
+
+
+def _write_identity_aware_outputs(
+    tmp_path: Path,
+    kestrel_identity: MolecularIdentity,
+    *,
+    advntr_flag: str = "Not flagged",
+) -> tuple[Path, Path]:
+    raw_key = '{"source":"kestrel","values":["X-X",67,"G","GG"]}'
+    kestrel_row = {
+        "Motifs": "X-X",
+        "POS": "67",
+        "REF": "G",
+        "ALT": "GG",
+        "Confidence": "High_Precision",
+        "Estimated_Depth_AlternateVariant": "40",
+        "Nomenclature": "59dupC",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "",
+        "Ambiguity_Interval": "53_59",
+        "Repeat_Form": "53C[7]>53C[8]",
+        "__Identity_Raw_Representation_Key": raw_key,
+        "__Identity_Molecular_Identity": serialize_molecular_identity(kestrel_identity),
+        "__Identity_Translation_Status": "resolved",
+        "__Identity_Translation_Failure": "absent",
+        "__Identity_Context_Diverges": "false",
+        "__Identity_Observation_Ordinal": "0",
+        "__Identity_Selected_Raw_Representation_Key": raw_key,
+        "__Identity_Equivalent_Representation_Count": "1",
+        "__Identity_Hypothesis_Count": "1",
+        "__Identity_Group_Blocking_Gates": "[]",
+        "__Identity_Group_Flags": "[]",
+        "__Identity_Selected_Observation_Ordinal": "0",
+        "__Identity_Group_Context_Diverges": "false",
+    }
+    kestrel = tmp_path / "kestrel_result.tsv"
+    pd.DataFrame([kestrel_row]).to_csv(kestrel, sep="\t", index=False)
+    advntr = tmp_path / "output_adVNTR_result.tsv"
+    pd.DataFrame(
+        [
+            {
+                "VID": "25561",
+                "Variant": "I22_2_G_LEN1",
+                "NumberOfSupportingReads": "40",
+                "MeanCoverage": "100",
+                "RU": "2",
+                "POS": "22",
+                "Flag": advntr_flag,
+                "Nomenclature": "59dupC",
+                "Nomenclature_Tier": "B",
+                "Nomenclature_Flags": "",
+                "Ambiguity_Interval": "53_59",
+                "Repeat_Form": "53C[7]>53C[8]",
+            }
+        ]
+    ).to_csv(advntr, sep="\t", index=False)
+    return kestrel, advntr
+
+
+def test_production_reconciliation_uses_persisted_kestrel_identity_not_equal_display(tmp_path) -> None:
+    dup_a = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_a)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert "caller-disagreement" in written.loc[0, "Nomenclature_Flags"]
+
+
+def test_pr_a_polymorphic_advntr_row_remains_admissible_for_identity_agreement(tmp_path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c, advntr_flag="Polymorphic_Call")
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature_Tier"] == "A"
+
+
+def test_production_identity_policy_is_resolved_from_checked_in_config_at_the_stage_boundary(tmp_path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
+    config = nomenclature.load_nomenclature_config()
+    config["thresholds"] = {**config["thresholds"], "min_support_for_high_confidence": 41}
+
+    with mock.patch.object(nomenclature_annotate, "load_nomenclature_config", return_value=config):
+        assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert "low-kmer-path-support" in written.loc[0, "Nomenclature_Flags"]
+    assert "low-read-support" in written.loc[0, "Nomenclature_Flags"]
+
+
+def test_production_reconciliation_fails_closed_on_malformed_internal_identity_metadata(tmp_path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
+    frame = pd.read_csv(kestrel, sep="\t", dtype=str)
+    frame.loc[0, "__Identity_Selected_Raw_Representation_Key"] = '{"source": "kestrel", "values": []}'
+    frame.to_csv(kestrel, sep="\t", index=False)
+
+    with pytest.raises(ValueError):
+        reconcile_caller_outputs(kestrel, advntr)
 
 
 def _write_disagreeing_outputs(tmp_path) -> tuple[Path, Path]:

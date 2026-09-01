@@ -33,6 +33,11 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
+from vntyper.scripts.identity_reconciliation import (
+    IdentityReconciliationObservation,
+    IdentityReconciliationPolicy,
+    reconcile_identity_observations,
+)
 from vntyper.scripts.nomenclature_evidence import (
     FLAG_LOW_EVIDENCE_SUPPORT,
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
@@ -621,6 +626,80 @@ def _is_corroborated(sources: set[str]) -> bool:
 
 
 def reconcile(
+    *calls: Nomenclature,
+    support: int | None = None,
+    supports: Mapping[str, int | None] | None = None,
+    identity_observations: tuple[IdentityReconciliationObservation, ...] | None = None,
+    identity_policy: IdentityReconciliationPolicy | None = None,
+) -> Nomenclature:
+    """Combine caller calls through legacy or explicitly supplied identity evidence.
+
+    Args:
+        *calls: Legacy presentation calls in their existing order.
+        support: Legacy scalar support for compatibility-only callers.
+        supports: Legacy support keyed by source.
+        identity_observations: Typed observations aligned one-for-one with ``calls``.
+        identity_policy: Explicit source-unit thresholds for typed reconciliation.
+
+    Returns:
+        The unchanged legacy projection when identity metadata is absent, or the
+        identity-keyed decision projected onto the existing ``Nomenclature`` shape.
+
+    Raises:
+        ValueError: If typed observations and their explicit policy are inconsistent.
+    """
+    if identity_observations is None:
+        if identity_policy is not None:
+            raise ValueError("An identity policy requires typed identity observations")
+        return _reconcile_legacy(*calls, support=support, supports=supports)
+    if identity_policy is None:
+        raise ValueError("Typed identity observations require an explicit identity policy")
+    if len(identity_observations) != len(calls):
+        raise ValueError("Typed reconciliation requires one identity observation per call")
+    if any(
+        observation.display_name != call.name
+        or observation.source != call.source
+        or observation.event != call.event
+        or observation.net_length != call.net_length
+        for call, observation in zip(calls, identity_observations, strict=True)
+    ):
+        raise ValueError("Typed identity observations must match their presentation calls")
+    result = reconcile_identity_observations(identity_observations, identity_policy)
+    if not calls:
+        return _undetermined("unknown", 0, "reconciled", ())
+
+    primary_index = next((index for index, call in enumerate(calls) if call.source == "kestrel_vcf"), 0)
+    selected_index = (
+        result.selected_observation_index if result.selected_observation_index is not None else primary_index
+    )
+    selected = calls[selected_index]
+    flags = set().union(*(call.flags for call in calls))
+    if result.caller_disagreement:
+        flags.add(FLAG_CALLER_DISAGREEMENT)
+    if any(identity_observations[index].translation.context_diverges for index in result.backing_observation_indices):
+        flags.add(FLAG_MOTIF_CONTEXT_DIVERGES)
+    for source in result.low_support_sources:
+        flags.add(low_support_flag_for_source(source))
+    if selected.name is not None:
+        flags.add(FLAG_KNOWN_VARIANT if selected.name in KNOWN_VARIANTS else FLAG_REPRESENTATION_ONLY)
+
+    if result.event_disagreement:
+        return _undetermined("unknown", selected.net_length, "reconciled", tuple(sorted(flags)))
+    tier = "B" if result.tier == "abstained" else result.tier
+    return Nomenclature(
+        name=selected.name,
+        event=selected.event,
+        unit=selected.unit,
+        tier=tier,
+        flags=tuple(sorted(flags)),
+        ambiguity=selected.ambiguity,
+        repeat_form=selected.repeat_form,
+        net_length=selected.net_length,
+        source="reconciled" if len(result.backing_sources) > 1 else selected.source,
+    )
+
+
+def _reconcile_legacy(
     *calls: Nomenclature,
     support: int | None = None,
     supports: Mapping[str, int | None] | None = None,

@@ -22,11 +22,18 @@ from typing import Any
 
 import pandas as pd
 
+from vntyper.scripts.identity_reconciliation import (
+    IdentityReconciliationObservation,
+    IdentityReconciliationPolicy,
+    build_identity_reconciliation_observations,
+)
 from vntyper.scripts.nomenclature import (
+    KNOWN_VARIANTS,
     Nomenclature,
     confidence_note,
     from_advntr,
     from_kestrel,
+    load_nomenclature_config,
     reconcile,
     render,
 )
@@ -355,7 +362,25 @@ def reconcile_caller_outputs(
 
     # Order matters: the Kestrel VCF is offered first so that whenever nothing
     # outvotes it, it is the call that stands. adVNTR is optional; Kestrel is not.
-    merged = reconcile(*named_vcf, *named_bam, *advntr_calls, supports=supports)
+    ordered_calls = (*named_vcf, *named_bam, *advntr_calls)
+    identity_inputs = _production_identity_observations(
+        kestrel_rows,
+        vcf_calls,
+        bam_calls,
+        advntr,
+        advntr_keep,
+        advntr_calls_by_row,
+    )
+    if identity_inputs is None:
+        merged = reconcile(*ordered_calls, supports=supports)
+    else:
+        identity_observations, policy = identity_inputs
+        merged = reconcile(
+            *ordered_calls,
+            supports=supports,
+            identity_observations=identity_observations,
+            identity_policy=policy,
+        )
     for bam_call in named_bam:
         # Still applied after the vote, because it carries one rule the vote cannot:
         # A delins is unrepresentable in Kestrel's VCF, so one seen in the
@@ -398,6 +423,46 @@ def reconcile_caller_outputs(
         advntr_summary,
     )
     return True
+
+
+def _production_identity_observations(
+    kestrel_rows: list[pd.Series],
+    vcf_calls: list[Nomenclature | None],
+    bam_calls: list[Nomenclature | None],
+    advntr: pd.DataFrame,
+    advntr_keep: list[bool],
+    advntr_calls_by_row: list[list[Nomenclature]],
+) -> tuple[tuple[IdentityReconciliationObservation, ...], IdentityReconciliationPolicy] | None:
+    """Build current-run identity observations or select the deliberate legacy path."""
+    from vntyper.scripts.identity_candidate_persistence import (
+        IDENTITY_CAPTURE_COLUMNS,
+        IDENTITY_SELECTION_COLUMNS,
+    )
+    from vntyper.scripts.identity_candidates import translation_component_from_config
+
+    identity_columns = frozenset((*IDENTITY_CAPTURE_COLUMNS, *IDENTITY_SELECTION_COLUMNS))
+    if not identity_columns.intersection(column for row in kestrel_rows for column in row.index):
+        return None
+    positive_advntr_rows = [row for (_, row), keep in zip(advntr.iterrows(), advntr_keep, strict=True) if keep]
+    config = load_nomenclature_config()
+    component = translation_component_from_config(config)
+    observations = build_identity_reconciliation_observations(
+        kestrel_rows,
+        vcf_calls,
+        bam_calls,
+        positive_advntr_rows,
+        advntr_calls_by_row,
+        component,
+        frozenset(KNOWN_VARIANTS),
+    )
+    if observations is None:  # pragma: no cover - identity columns were established above
+        raise ValueError("Current-run identity metadata unexpectedly selected the legacy path")
+    threshold = config["thresholds"]["min_support_for_high_confidence"]
+    policy = IdentityReconciliationPolicy(
+        kestrel_min_alternate_kmer_path_depth=threshold,
+        advntr_min_sequencing_read_support=threshold,
+    )
+    return observations, policy
 
 
 def _lesser(left: int | None, right: int | None) -> int | None:
