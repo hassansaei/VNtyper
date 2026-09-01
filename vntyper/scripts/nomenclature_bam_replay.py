@@ -1,8 +1,8 @@
 """Closed JSON codec and atomic I/O for Kestrel BAM replay evidence.
 
 Current identity-aware runs write ``bam_identity_replay.v1.json`` with schema
-``bam-identity-replay-v1``. Each increasing selected-observation ordinal records
-exactly one ``not-consulted``, ``unavailable``, or complete ``observed`` locus.
+``bam-identity-replay-v1``. Each deterministic candidate group records exactly one
+``not-consulted``, ``unavailable``, or complete ``observed`` locus.
 """
 
 from __future__ import annotations
@@ -25,26 +25,41 @@ _REPLAY_STATES = frozenset({"not-consulted", "unavailable", "observed"})
 
 @dataclass(frozen=True)
 class BamReplayLocus:
-    """Replay state for one persisted selected Kestrel observation ordinal.
+    """Replay state for one exact persisted Kestrel candidate group.
 
     Attributes:
-        observation_ordinal: Stable persisted A3 observation ordinal.
+        candidate_observation_ordinals: Stable persisted A3 observation ordinals
+            sharing the exact BAM locus and complete pair context.
         state: Whether BAM was skipped, unavailable, or observed.
         evidence: Complete evidence for ``observed`` only, including zero records.
     """
 
-    observation_ordinal: int
+    candidate_observation_ordinals: tuple[int, ...]
     state: BamReplayState
     evidence: BamLocusEvidence | None
 
     def __post_init__(self) -> None:
         """Validate the closed state/evidence pairing."""
-        _nonnegative_integer(self.observation_ordinal, "BAM replay observation ordinal")
+        ordinals = self.candidate_observation_ordinals
+        if not isinstance(ordinals, tuple) or not ordinals:
+            raise ValueError("BAM replay candidate observation ordinals must be a nonempty tuple")
+        for ordinal in ordinals:
+            _nonnegative_integer(ordinal, "BAM replay candidate observation ordinal")
+        if ordinals != tuple(sorted(ordinals)) or len(ordinals) != len(set(ordinals)):
+            raise ValueError("BAM replay candidate observation ordinals must be unique and increasing")
         if self.state not in _REPLAY_STATES:
             raise ValueError(f"Unsupported BAM replay state: {self.state}")
         if self.state == "observed":
             if not isinstance(self.evidence, BamLocusEvidence):
                 raise ValueError("Observed BAM replay loci require BamLocusEvidence")
+            bound_ordinals = {
+                ordinal
+                for record in self.evidence.records
+                for bindings in record.candidate_observation_ordinals
+                for ordinal in bindings
+            }
+            if not bound_ordinals <= set(ordinals):
+                raise ValueError("BAM replay evidence bindings must belong to its candidate group")
         elif self.evidence is not None:
             raise ValueError("Unobserved BAM replay loci require null evidence")
 
@@ -54,18 +69,82 @@ class BamReplayArtifact:
     """Versioned replay loci in unique deterministic ordinal order.
 
     Attributes:
-        loci: One locus per persisted selected Kestrel observation ordinal.
+        loci: One locus per exact persisted Kestrel candidate group.
     """
 
     loci: tuple[BamReplayLocus, ...]
 
     def __post_init__(self) -> None:
-        """Validate immutable, unique, increasing locus ordinals."""
+        """Validate immutable, unique, deterministic candidate groups."""
         if not isinstance(self.loci, tuple) or any(not isinstance(locus, BamReplayLocus) for locus in self.loci):
             raise ValueError("BAM replay loci must be a tuple of BamReplayLocus values")
-        ordinals = tuple(locus.observation_ordinal for locus in self.loci)
-        if ordinals != tuple(sorted(ordinals)) or len(ordinals) != len(set(ordinals)):
-            raise ValueError("BAM replay locus ordinals must be unique and deterministically increasing")
+        groups = tuple(locus.candidate_observation_ordinals for locus in self.loci)
+        if groups != tuple(sorted(groups)):
+            raise ValueError("BAM replay candidate groups must be deterministically increasing")
+        ordinals = tuple(ordinal for group in groups for ordinal in group)
+        if len(ordinals) != len(set(ordinals)):
+            raise ValueError("BAM replay candidate groups must not overlap")
+
+
+def validate_bam_replay_artifact_ordinals(
+    artifact: BamReplayArtifact,
+    expected_candidate_observation_ordinals: tuple[int, ...],
+) -> None:
+    """Require every persisted candidate ordinal to occur in exactly one group.
+
+    Args:
+        artifact: Validated grouped replay artifact.
+        expected_candidate_observation_ordinals: Complete increasing persisted set.
+
+    Raises:
+        ValueError: If the expected ordinals are malformed or coverage differs.
+    """
+    if not isinstance(artifact, BamReplayArtifact):
+        raise ValueError("BAM replay artifact must be a BamReplayArtifact")
+    expected = expected_candidate_observation_ordinals
+    if not isinstance(expected, tuple) or any(
+        isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0 for ordinal in expected
+    ):
+        raise ValueError("Expected BAM replay candidate ordinals must be a tuple of non-negative integers")
+    if expected != tuple(sorted(expected)) or len(expected) != len(set(expected)):
+        raise ValueError("Expected BAM replay candidate ordinals must be unique and increasing")
+    retained = tuple(sorted(ordinal for locus in artifact.loci for ordinal in locus.candidate_observation_ordinals))
+    if retained != expected:
+        raise ValueError("BAM replay groups must cover persisted candidate ordinals exactly")
+
+
+def merge_bam_replay_artifacts(
+    existing: BamReplayArtifact,
+    current: BamReplayArtifact,
+) -> BamReplayArtifact:
+    """Merge a later lifecycle observation without downgrading prior evidence.
+
+    Args:
+        existing: Earlier Kestrel-stage replay artifact.
+        current: Later reconciliation-stage artifact for the exact same groups.
+
+    Returns:
+        Merged artifact using ``observed > unavailable > not-consulted``. A new
+        observed result replaces prior evidence for the same validated group.
+
+    Raises:
+        ValueError: If artifacts do not carry the exact same candidate partition.
+    """
+    if not isinstance(existing, BamReplayArtifact) or not isinstance(current, BamReplayArtifact):
+        raise ValueError("BAM replay merge inputs must be BamReplayArtifact values")
+    existing_groups = tuple(locus.candidate_observation_ordinals for locus in existing.loci)
+    current_groups = tuple(locus.candidate_observation_ordinals for locus in current.loci)
+    if existing_groups != current_groups:
+        raise ValueError("BAM replay merge requires identical candidate groups")
+    merged: list[BamReplayLocus] = []
+    for previous, later in zip(existing.loci, current.loci, strict=True):
+        if later.state == "observed" or previous.state == "not-consulted":
+            merged.append(later)
+        elif previous.state == "observed" or later.state == "not-consulted":
+            merged.append(previous)
+        else:
+            merged.append(later)
+    return BamReplayArtifact(tuple(merged))
 
 
 def encode_bam_replay_artifact(artifact: BamReplayArtifact) -> dict[str, object]:
@@ -177,7 +256,7 @@ def invalidate_bam_replay_artifact(directory: str | Path) -> None:
 
 def _encode_locus(locus: BamReplayLocus) -> dict[str, object]:
     return {
-        "observation_ordinal": locus.observation_ordinal,
+        "candidate_observation_ordinals": list(locus.candidate_observation_ordinals),
         "state": locus.state,
         "evidence": _encode_evidence(locus.evidence) if locus.evidence is not None else None,
     }
@@ -204,14 +283,16 @@ def _encode_evidence(evidence: BamLocusEvidence) -> dict[str, object]:
 
 
 def _decode_locus(value: object) -> BamReplayLocus:
-    raw = _exact_object(value, {"observation_ordinal", "state", "evidence"}, "BAM replay locus")
-    ordinal = raw["observation_ordinal"]
-    _nonnegative_integer(ordinal, "BAM replay observation ordinal")
+    raw = _exact_object(value, {"candidate_observation_ordinals", "state", "evidence"}, "BAM replay locus")
+    raw_ordinals = raw["candidate_observation_ordinals"]
+    if not isinstance(raw_ordinals, list):
+        raise ValueError("BAM replay candidate observation ordinals must be a list")
+    ordinals = tuple(raw_ordinals)
     state = raw["state"]
     if not isinstance(state, str):
         raise ValueError("BAM replay state must be a string")
     evidence = None if raw["evidence"] is None else _decode_evidence(raw["evidence"])
-    return BamReplayLocus(cast(int, ordinal), cast(BamReplayState, state), evidence)
+    return BamReplayLocus(cast(tuple[int, ...], ordinals), cast(BamReplayState, state), evidence)
 
 
 def _decode_evidence(value: object) -> BamLocusEvidence:

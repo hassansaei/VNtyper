@@ -308,11 +308,13 @@ def test_complete_winner_binding_rejects_unvalidated_boundaries() -> None:
 
 
 def test_record_projection_retains_complete_window_edits_and_fails_closed() -> None:
-    projected = project_record_observation(((30, 0, 1, "T"), (50, 0, 1, "A")), 181, 20, 40)
-    incomplete = project_record_observation(((30, 0, 1, ""),), 181, 20, 40)
+    projected = project_record_observation(((30, 0, 1, "T"), (50, 0, 1, "")), 181, 20, 40)
+    invalid_in_window = project_record_observation(((30, 0, 1, "T"), (35, 0, 1, "")), 181, 20, 40)
+    unclassifiable = project_record_observation(((30, 0, 1, "T"), ("bad", 0, 1, "A")), 181, 20, 40)  # type: ignore[arg-type]
 
     assert projected == BamRecordObservation((BamEditObservation(30, 0, 1, "T"),), 181)
-    assert incomplete == BamRecordObservation((), 181)
+    assert invalid_in_window == BamRecordObservation((), 181)
+    assert unclassifiable == BamRecordObservation((), 181)
 
 
 def test_record_projection_rejects_invalid_window_boundaries() -> None:

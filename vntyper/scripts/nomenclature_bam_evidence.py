@@ -285,12 +285,16 @@ def project_record_observation(
     for raw_edit in edits:
         if not isinstance(raw_edit, tuple) or len(raw_edit) != 4:
             return BamRecordObservation((), minimum_kmer_depth)
+        raw_start = raw_edit[0]
+        if isinstance(raw_start, bool) or not isinstance(raw_start, int) or raw_start < 0:
+            return BamRecordObservation((), minimum_kmer_depth)
+        if not window_start <= raw_start <= window_end:
+            continue
         try:
             observation = BamEditObservation(*raw_edit)
         except (TypeError, ValueError):
             return BamRecordObservation((), minimum_kmer_depth)
-        if window_start <= observation.start <= window_end:
-            observations.append(observation)
+        observations.append(observation)
     return BamRecordObservation(tuple(observations), minimum_kmer_depth)
 
 

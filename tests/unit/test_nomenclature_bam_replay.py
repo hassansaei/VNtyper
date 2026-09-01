@@ -20,7 +20,9 @@ from vntyper.scripts.nomenclature_bam_replay import (
     decode_bam_replay_artifact,
     encode_bam_replay_artifact,
     invalidate_bam_replay_artifact,
+    merge_bam_replay_artifacts,
     read_bam_replay_artifact,
+    validate_bam_replay_artifact_ordinals,
     write_bam_replay_artifact,
 )
 
@@ -30,30 +32,30 @@ _DUPC = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
 _DUPA = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
 
 
-def _winner_runner_up() -> BamLocusEvidence:
+def _winner_runner_up(first: int = 2, second: int = 7) -> BamLocusEvidence:
     records = (
-        BamIdentityEvidence((_DUPC,), ((2,),), 5),
-        BamIdentityEvidence((_DUPC, _DUPA), ((2,), (7,)), None),
-        BamIdentityEvidence((_DUPA,), ((7,),), 2_147_483_647),
+        BamIdentityEvidence((_DUPC,), ((first,),), 5),
+        BamIdentityEvidence((_DUPC, _DUPA), ((first,), (second,)), None),
+        BamIdentityEvidence((_DUPA,), ((second,),), 2_147_483_647),
         BamIdentityEvidence((), (), 0),
-        BamIdentityEvidence((_DUPC,), ((2,),), 181),
+        BamIdentityEvidence((_DUPC,), ((first,),), 181),
     )
     return BamLocusEvidence(records, 5, {_DUPC: 3, _DUPA: 2})
 
 
-def _tie() -> BamLocusEvidence:
-    records = _winner_runner_up().records[:-1]
+def _tie(first: int = 11, second: int = 13) -> BamLocusEvidence:
+    records = _winner_runner_up(first, second).records[:-1]
     return BamLocusEvidence(records, 4, {_DUPC: 2, _DUPA: 2})
 
 
 def _artifact() -> BamReplayArtifact:
     return BamReplayArtifact(
         (
-            BamReplayLocus(2, "observed", _winner_runner_up()),
-            BamReplayLocus(7, "observed", _tie()),
-            BamReplayLocus(11, "observed", BamLocusEvidence((), 0, {})),
-            BamReplayLocus(13, "unavailable", None),
-            BamReplayLocus(17, "not-consulted", None),
+            BamReplayLocus((2, 7), "observed", _winner_runner_up()),
+            BamReplayLocus((11, 13), "observed", _tie()),
+            BamReplayLocus((17,), "observed", BamLocusEvidence((), 0, {})),
+            BamReplayLocus((19,), "unavailable", None),
+            BamReplayLocus((23,), "not-consulted", None),
         )
     )
 
@@ -65,7 +67,7 @@ def test_replay_codec_uses_closed_canonical_primitive_schema() -> None:
         "schema_version": "bam-identity-replay-v1",
         "loci": [
             {
-                "observation_ordinal": 2,
+                "candidate_observation_ordinals": [2, 7],
                 "state": "observed",
                 "evidence": {
                     "eligible_record_count": 5,
@@ -106,14 +108,14 @@ def test_replay_codec_uses_closed_canonical_primitive_schema() -> None:
                 },
             },
             {
-                "observation_ordinal": 7,
+                "candidate_observation_ordinals": [11, 13],
                 "state": "observed",
                 "evidence": {
                     "eligible_record_count": 4,
                     "records": [
                         {
                             "identities": [serialize_molecular_identity(_DUPC)],
-                            "candidate_observation_ordinals": [[2]],
+                            "candidate_observation_ordinals": [[11]],
                             "minimum_kmer_depth": 5,
                         },
                         {
@@ -121,12 +123,12 @@ def test_replay_codec_uses_closed_canonical_primitive_schema() -> None:
                                 serialize_molecular_identity(_DUPC),
                                 serialize_molecular_identity(_DUPA),
                             ],
-                            "candidate_observation_ordinals": [[2], [7]],
+                            "candidate_observation_ordinals": [[11], [13]],
                             "minimum_kmer_depth": None,
                         },
                         {
                             "identities": [serialize_molecular_identity(_DUPA)],
-                            "candidate_observation_ordinals": [[7]],
+                            "candidate_observation_ordinals": [[13]],
                             "minimum_kmer_depth": 2_147_483_647,
                         },
                         {
@@ -142,12 +144,12 @@ def test_replay_codec_uses_closed_canonical_primitive_schema() -> None:
                 },
             },
             {
-                "observation_ordinal": 11,
+                "candidate_observation_ordinals": [17],
                 "state": "observed",
                 "evidence": {"eligible_record_count": 0, "records": [], "counts": []},
             },
-            {"observation_ordinal": 13, "state": "unavailable", "evidence": None},
-            {"observation_ordinal": 17, "state": "not-consulted", "evidence": None},
+            {"candidate_observation_ordinals": [19], "state": "unavailable", "evidence": None},
+            {"candidate_observation_ordinals": [23], "state": "not-consulted", "evidence": None},
         ],
     }
     assert BAM_REPLAY_SCHEMA_VERSION == "bam-identity-replay-v1"
@@ -179,13 +181,21 @@ def test_replay_codec_round_trips_empty_winner_runner_up_tie_and_states() -> Non
 @pytest.mark.parametrize(
     "factory",
     [
-        lambda: BamReplayLocus(True, "not-consulted", None),
-        lambda: BamReplayLocus(0, "unknown", None),  # type: ignore[arg-type]
-        lambda: BamReplayLocus(0, "observed", None),
-        lambda: BamReplayLocus(0, "unavailable", BamLocusEvidence((), 0, {})),
+        lambda: BamReplayLocus(True, "not-consulted", None),  # type: ignore[arg-type]
+        lambda: BamReplayLocus((), "not-consulted", None),
+        lambda: BamReplayLocus((2, 1), "not-consulted", None),
+        lambda: BamReplayLocus((2, 2), "not-consulted", None),
+        lambda: BamReplayLocus((0,), "unknown", None),  # type: ignore[arg-type]
+        lambda: BamReplayLocus((0,), "observed", None),
+        lambda: BamReplayLocus((0,), "unavailable", BamLocusEvidence((), 0, {})),
+        lambda: BamReplayLocus((0,), "observed", _winner_runner_up()),
         lambda: BamReplayArtifact([]),  # type: ignore[arg-type]
-        lambda: BamReplayArtifact((BamReplayLocus(2, "unavailable", None), BamReplayLocus(1, "unavailable", None))),
-        lambda: BamReplayArtifact((BamReplayLocus(2, "unavailable", None), BamReplayLocus(2, "unavailable", None))),
+        lambda: BamReplayArtifact(
+            (BamReplayLocus((2,), "unavailable", None), BamReplayLocus((1,), "unavailable", None))
+        ),
+        lambda: BamReplayArtifact(
+            (BamReplayLocus((2, 3), "unavailable", None), BamReplayLocus((3,), "unavailable", None))
+        ),
     ],
 )
 def test_replay_values_reject_invalid_state_pairing_and_ordinals(factory) -> None:
@@ -224,6 +234,65 @@ def test_replay_decoder_rejects_noncanonical_identity_and_count_order() -> None:
     reordered["loci"][0]["evidence"]["counts"].reverse()
     with pytest.raises(ValueError, match="canonical"):
         decode_bam_replay_artifact(reordered)
+
+
+def test_replay_artifact_validates_complete_global_candidate_ordinal_coverage() -> None:
+    artifact = _artifact()
+
+    validate_bam_replay_artifact_ordinals(artifact, (2, 7, 11, 13, 17, 19, 23))
+
+    with pytest.raises(ValueError, match="exactly"):
+        validate_bam_replay_artifact_ordinals(artifact, (2, 7, 11, 13, 17, 19))
+    with pytest.raises(ValueError, match="unique"):
+        validate_bam_replay_artifact_ordinals(artifact, (2, 7, 7, 11, 13, 17, 19, 23))
+
+
+def test_replay_merge_preserves_stronger_attempt_state_and_replaces_valid_observed_group() -> None:
+    original_evidence = _winner_runner_up()
+    replacement_evidence = _tie(2, 7)
+    existing = BamReplayArtifact(
+        (
+            BamReplayLocus((2, 7), "observed", original_evidence),
+            BamReplayLocus((11,), "unavailable", None),
+            BamReplayLocus((13,), "not-consulted", None),
+        )
+    )
+    weaker = BamReplayArtifact(
+        (
+            BamReplayLocus((2, 7), "unavailable", None),
+            BamReplayLocus((11,), "not-consulted", None),
+            BamReplayLocus((13,), "unavailable", None),
+        )
+    )
+
+    merged = merge_bam_replay_artifacts(existing, weaker)
+
+    assert merged.loci == (
+        BamReplayLocus((2, 7), "observed", original_evidence),
+        BamReplayLocus((11,), "unavailable", None),
+        BamReplayLocus((13,), "unavailable", None),
+    )
+    replacement = merge_bam_replay_artifacts(
+        merged,
+        BamReplayArtifact(
+            (
+                BamReplayLocus((2, 7), "observed", replacement_evidence),
+                BamReplayLocus((11,), "unavailable", None),
+                BamReplayLocus((13,), "not-consulted", None),
+            )
+        ),
+    )
+    assert replacement.loci[0].evidence == replacement_evidence
+
+
+def test_replay_merge_rejects_a_changed_candidate_group_partition() -> None:
+    existing = BamReplayArtifact((BamReplayLocus((2, 7), "not-consulted", None),))
+    regrouped = BamReplayArtifact(
+        (BamReplayLocus((2,), "not-consulted", None), BamReplayLocus((7,), "not-consulted", None))
+    )
+
+    with pytest.raises(ValueError, match="groups"):
+        merge_bam_replay_artifacts(existing, regrouped)
 
 
 def test_atomic_replay_write_round_trips_and_uses_sibling_replace(tmp_path: Path) -> None:

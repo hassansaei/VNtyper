@@ -137,6 +137,12 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
         seen["identity_component"] = identity_component
         return kestrel_stage_frame("final")
 
+    real_annotate = kg.annotate_kestrel_frame
+
+    def tracked_annotate(frame, output_dir, *, identity_component=None):
+        seen["annotation_identity_component"] = identity_component
+        return real_annotate(frame, output_dir, identity_component=identity_component)
+
     with (
         mock.patch.object(kg, "_try_compress_vcf_with_bcftools", lambda *args: None),
         mock.patch.object(
@@ -146,6 +152,7 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
         ),
         mock.patch.object(kg, "load_additional_motifs", return_value=pd.DataFrame()),
         mock.patch.object(kg, "process_kmer_results", side_effect=fake_process_kmer_results),
+        mock.patch.object(kg, "annotate_kestrel_frame", side_effect=tracked_annotate),
         mock.patch.object(
             kg,
             "load_nomenclature_config",
@@ -157,6 +164,7 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
 
     assert seen["combined_rows"] == 1 and seen["alts"] == ["CC"], "the real VCF record must reach the scoring seam"
     assert isinstance(seen["identity_component"], IdentityTranslationComponent)
+    assert seen["annotation_identity_component"] is seen["identity_component"]
     load_identity_config.assert_called_once_with()
     assert seen["identity_component"].kestrel_motifs == {"runtime-X": "A"}
     assert seen["identity_component"].advntr_rotation_offset == 17

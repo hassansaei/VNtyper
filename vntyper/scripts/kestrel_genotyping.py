@@ -647,13 +647,14 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     merged_motifs = load_additional_motifs(config)
 
     # Perform frame scoring, depth scoring, confidence assignment, etc.
+    identity_component = translation_component_from_config(load_nomenclature_config())
     processed_df = process_kmer_results(
         combined_df,
         merged_motifs,
         output_dir,
         kestrel_config,
         compiled_flag_rules=compiled_flag_rules,
-        identity_component=translation_component_from_config(load_nomenclature_config()),
+        identity_component=identity_component,
     )
 
     if processed_df.empty:
@@ -673,7 +674,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     # Name the variants before writing. Doing it here rather than in a later stage is
     # what makes one edit reach every surface: the TSV below, the pipeline summary
     # built from this same frame, and the HTML report all inherit the columns.
-    processed_df = annotate_kestrel_frame(processed_df, output_dir)
+    processed_df = annotate_kestrel_frame(processed_df, output_dir, identity_component=identity_component)
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
