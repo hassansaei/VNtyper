@@ -189,6 +189,24 @@ def test_bootstrap_reports_literal_estimate_and_percentile_bounds() -> None:
     assert interval.resampling_unit_count == 4
 
 
+def test_bootstrap_reports_finite_corrected_one_sided_noninferiority_p_value() -> None:
+    rows = tuple(
+        PairedObservation(
+            f"group-{index:02d}",
+            "assay-a:dup",
+            Fraction(index >= 13),
+            Fraction(index < 13),
+        )
+        for index in range(20)
+    )
+
+    interval = paired_group_bootstrap(rows, iterations=10_000, seed=295)
+
+    assert interval.one_sided_lower == Fraction(0)
+    assert interval.one_sided_noninferiority_p_value == Fraction(497, 10_001)
+    assert interval.one_sided_noninferiority_p_value != Fraction(0)
+
+
 def test_bootstrap_accepts_seed_zero_and_calls_the_three_literal_percentiles() -> None:
     rows = (PairedObservation("group", "assay:dup", Fraction(0), Fraction(1)),)
 

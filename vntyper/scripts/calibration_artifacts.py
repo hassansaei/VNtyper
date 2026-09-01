@@ -325,15 +325,13 @@ def _load_roles(root: Path, roles: tuple[str, ...]) -> ExtractedEvidence:
 
 def _evaluate(profile: ResolvedDecisionProfile, evidence: ExtractedEvidence) -> CandidateEvaluation:
     observations, baseline_observations = _observations(profile, evidence)
-    strata = tuple(
-        sorted({f"{row.assay_class}:{row.mutation_class}" for row in observations if row.expected_identity is not None})
-    )
+    protocol = evidence.study.protocol
     component = _mapping(profile.components["dominance"], "dominance component")
     summary = calculate_metrics(
         observations,
         profile_sha256=profile.digest,
         free_parameter_count=count_free_parameters(component),
-        required_strata=strata,
+        required_strata=protocol.required_strata,
     )
     groups = connected_leakage_groups(evidence.study.partitions)
     detection_pairs = []
@@ -359,10 +357,12 @@ def _evaluate(profile: ResolvedDecisionProfile, evidence: ExtractedEvidence) -> 
                 Fraction(candidate.selected_identity == candidate.expected_identity),
             )
         )
-    protocol = evidence.study.protocol
     detection = paired_group_bootstrap(detection_pairs, iterations=protocol.bootstrap_iterations, seed=protocol.seed)
     exact = paired_group_bootstrap(exact_pairs, iterations=protocol.bootstrap_iterations, seed=protocol.seed)
-    family_p = Fraction(0) if detection.one_sided_lower >= 0 and exact.one_sided_lower >= 0 else Fraction(1)
+    family_p = max(
+        detection.one_sided_noninferiority_p_value,
+        exact.one_sided_noninferiority_p_value,
+    )
     return CandidateEvaluation(
         summary.metrics,
         detection.one_sided_lower,
@@ -416,11 +416,10 @@ def _observations(
         baseline_name = baseline.get("name")
         baseline_selected = None
         if isinstance(baseline_name, str):
-            baseline_selected = (
-                label.expected_identity
-                if baseline_name == label.expected_display_name
-                else f"wrong:{feature.manifest_key}"
-            )
+            canonical_identity = feature.features.get("canonical_identity")
+            if not isinstance(canonical_identity, str) or not canonical_identity:
+                raise ValueError("calibration baseline selection requires a canonical identity feature")
+            baseline_selected = canonical_identity
         baseline_rows.append(
             OutcomeObservation(
                 feature.manifest_key,

@@ -39,6 +39,7 @@ class BootstrapInterval:
     one_sided_lower: Fraction
     two_sided_lower: Fraction
     two_sided_upper: Fraction
+    one_sided_noninferiority_p_value: Fraction
     iterations: int
     resampling_unit_count: int
 
@@ -110,12 +111,13 @@ def paired_group_bootstrap(
         samples.append(sum(stratum_means, start=Fraction(0)) / len(stratum_means))
     samples.sort()
     return BootstrapInterval(
-        estimate,
-        _percentile(samples, Fraction(5, 100)),
-        _percentile(samples, Fraction(25, 1000)),
-        _percentile(samples, Fraction(975, 1000)),
-        iterations,
-        len(group_strata),
+        estimate=estimate,
+        one_sided_lower=_percentile(samples, Fraction(5, 100)),
+        two_sided_lower=_percentile(samples, Fraction(25, 1000)),
+        two_sided_upper=_percentile(samples, Fraction(975, 1000)),
+        one_sided_noninferiority_p_value=Fraction(1 + sum(sample < 0 for sample in samples), iterations + 1),
+        iterations=iterations,
+        resampling_unit_count=len(group_strata),
     )
 
 

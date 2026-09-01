@@ -47,7 +47,7 @@ def _evaluation(metrics: CandidateMetrics, **changes: object) -> CandidateEvalua
         "metrics": metrics,
         "detection_lower_bound": Fraction(0),
         "macro_exact_lower_bound": Fraction(0),
-        "stratum_counts": (2, 2),
+        "stratum_counts": (2,),
         "holm_adjusted_p_value": Fraction(1, 100),
     }
     values.update(changes)
@@ -130,6 +130,7 @@ def test_noninferiority_bounds_and_minimum_stratum_count_are_hard_constraints() 
         _evaluation(metrics, detection_lower_bound=Fraction(-1, 100)),
         _evaluation(metrics, macro_exact_lower_bound=Fraction(-1, 100)),
         _evaluation(metrics, stratum_counts=(2, 1)),
+        _evaluation(metrics, stratum_counts=(2, 2)),
         _evaluation(metrics, holm_adjusted_p_value=Fraction(6, 100)),
     ):
         assert select_candidate((evaluation,), protocol) is None
@@ -541,6 +542,36 @@ def test_exact_recovery_counts_equality_and_empty_predeclared_stratum_as_zero() 
 
     assert summary.metrics.macro_exact_recovery == Fraction(1, 2)
     assert summary.stratum_counts == (1, 0)
+
+
+def test_protocol_cross_product_keeps_an_unobserved_declared_cell_inadmissible() -> None:
+    raw = synthetic_protocol()
+    raw["assay_classes"] = ["capture-short-read", "genome-short-read"]
+    protocol = decode_protocol(raw)
+    summary = calculate_metrics(
+        (_outcome(assay_class="capture-short-read"),),
+        profile_sha256="a" * 64,
+        free_parameter_count=0,
+        required_strata=protocol.required_strata,
+    )
+    evaluation = _evaluation(summary.metrics, stratum_counts=summary.stratum_counts)
+
+    assert protocol.required_strata == (
+        "capture-short-read:duplication",
+        "genome-short-read:duplication",
+    )
+    assert summary.stratum_counts == (1, 0)
+    assert select_candidate((evaluation,), protocol) is None
+
+
+def test_objective_rejects_observed_strata_outside_the_frozen_protocol_vector() -> None:
+    with pytest.raises(ValueError, match="undeclared strata"):
+        calculate_metrics(
+            (_outcome(assay_class="genome-short-read"),),
+            profile_sha256="a" * 64,
+            free_parameter_count=0,
+            required_strata=("capture-short-read:duplication",),
+        )
 
 
 def test_lexicographic_key_and_selection_reject_invalid_types_and_empty_family() -> None:

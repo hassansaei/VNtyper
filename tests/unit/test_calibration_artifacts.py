@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+from fractions import Fraction
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ from vntyper.scripts.calibration_artifacts import (
     validate_artifact_bundle,
 )
 from vntyper.scripts.calibration_contract import decode_attestation
+from vntyper.scripts.calibration_statistics import BootstrapInterval
 from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
 from vntyper.scripts.cli_calibrate import handle_calibrate
 from vntyper.scripts.cli_parser import build_parser
@@ -216,6 +218,61 @@ def test_locked_evaluation_refuses_manifest_protocol_mismatched_to_payload(tmp_p
         )
 
 
+def test_fit_keeps_a_declared_but_unobserved_stratum_as_zero_count(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    study = load_strict_json_object(partitions.read_bytes())
+    protocol = study["protocol"]
+    assert isinstance(protocol, dict)
+    protocol["assay_classes"] = ["capture-short-read", "genome-short-read"]
+    partitions.write_bytes(canonical_json_bytes(study))
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+
+    with pytest.raises(ValueError, match="no admissible candidate"):
+        fit_artifact_bundle(evidence, "lexicographic-safety-v1", tmp_path / "candidate")
+
+
+def test_fit_does_not_infer_canonical_identity_correctness_from_display_name(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    truth_document = load_strict_json_object(truth.read_bytes())
+    features = truth_document["features"]
+    assert isinstance(features, dict)
+    rows = features["rows"]
+    assert isinstance(rows, list)
+    for raw in rows:
+        assert isinstance(raw, dict)
+        feature_values = raw["features"]
+        assert isinstance(feature_values, dict)
+        feature_values["canonical_identity"] = f"wrong-{raw['manifest_key']}"
+    truth.write_bytes(canonical_json_bytes(truth_document))
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+
+    metrics = load_strict_json_object((candidate / "metrics.json").read_bytes())
+    assert metrics["macro_exact_recovery"] == "0"
+    assert metrics["wrong_displayed_names_all_tiers"] == 0
+
+
+def test_candidate_p_value_is_the_conservative_maximum_of_both_required_endpoints(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    detection = BootstrapInterval(Fraction(0), Fraction(0), Fraction(0), Fraction(0), Fraction(1, 100), 10_000, 1)
+    exact = BootstrapInterval(Fraction(0), Fraction(0), Fraction(0), Fraction(0), Fraction(1, 25), 10_000, 1)
+
+    with patch("vntyper.scripts.calibration_artifacts.paired_group_bootstrap", side_effect=(detection, exact)):
+        fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+
+    evaluation = load_strict_json_object((candidate / "evaluation.json").read_bytes())
+    assert evaluation["holm_adjusted_p_value"] == "1/25"
+
+
 def _inputs(root: Path) -> tuple[Path, Path, Path]:
     keys = ("held", "select", "train", "validate")
     roles = ("locked-heldout", "policy-selection", "training", "validation")
@@ -319,6 +376,8 @@ def _inputs(root: Path) -> tuple[Path, Path, Path]:
             "maximum_free_parameters": 4,
             "minimum_stratum_count": 1,
             "maximum_abstention_fraction": 0.25,
+            "assay_classes": ["capture-short-read"],
+            "mutation_classes": ["duplication"],
             "candidate_grid": {
                 "minimum_record_count_margin": [1],
                 "minimum_record_share": [0.5],

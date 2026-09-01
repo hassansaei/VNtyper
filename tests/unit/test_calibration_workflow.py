@@ -11,6 +11,7 @@ from vntyper.scripts.calibration_contract import CandidateMetrics
 from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
 from vntyper.scripts.calibration_manifest import decode_study_declaration
 from vntyper.scripts.calibration_objective import CandidateEvaluation, count_free_parameters
+from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_workflow import extract_evidence, fit_candidate, validate_candidate
 
 pytestmark = pytest.mark.unit
@@ -136,7 +137,7 @@ def _evaluate(profile) -> CandidateEvaluation:
         True,
         "a" * 64,
     )
-    return CandidateEvaluation(metrics, Fraction(0), Fraction(0), (2, 2), Fraction(1, 1000))
+    return CandidateEvaluation(metrics, Fraction(0), Fraction(0), (2,), Fraction(1, 1000))
 
 
 def test_extract_snapshots_complete_study_features_labels_baseline_and_run_hashes(tmp_path: Path) -> None:
@@ -184,6 +185,34 @@ def test_fit_objective_must_match_snapshotted_protocol(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="objective"):
         fit_candidate(evidence, objective="f1", evaluator=_evaluate)
+
+
+def test_fit_applies_holm_to_real_marginal_bootstrap_evidence_across_the_family(tmp_path: Path) -> None:
+    evidence = extract_evidence(_study(), _features(), _labels(), _runs(tmp_path), baseline=_baseline())
+    rows = tuple(
+        PairedObservation(
+            f"group-{index:02d}",
+            "capture-short-read:duplication",
+            Fraction(index >= 13),
+            Fraction(index < 13),
+        )
+        for index in range(20)
+    )
+    interval = paired_group_bootstrap(rows, iterations=10_000, seed=295)
+
+    def marginal(profile) -> CandidateEvaluation:
+        evaluation = _evaluate(profile)
+        return CandidateEvaluation(
+            evaluation.metrics,
+            interval.one_sided_lower,
+            interval.one_sided_lower,
+            evaluation.stratum_counts,
+            interval.one_sided_noninferiority_p_value,
+        )
+
+    assert interval.one_sided_noninferiority_p_value <= Fraction(1, 20)
+    with pytest.raises(ValueError, match="no admissible candidate"):
+        fit_candidate(evidence, objective="lexicographic-safety-v1", evaluator=marginal)
 
 
 def test_validate_cannot_select_another_profile_or_open_heldout(tmp_path: Path) -> None:
