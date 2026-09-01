@@ -6,6 +6,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -13,12 +14,37 @@ import pytest
 from tests.golden import identity_oracle
 from tests.golden.identity_oracle import (
     IDENTITY_COLUMNS,
+    SELECTED_PROJECTION_COLUMNS,
+    DisplayCounts,
     ExpectedIdentity,
     GoldenCorpus,
+    IdentityCounts,
     assert_independent_import_closure,
     load_golden_corpus,
 )
-from vntyper.scripts import nomenclature_annotate
+from vntyper.modules.advntr.advntr_genotyping import process_advntr_output
+from vntyper.scripts import nomenclature_annotate, nomenclature_bam_adapter
+from vntyper.scripts.identity_candidate_persistence import (
+    IDENTITY_CAPTURE_COLUMNS,
+    candidate_capture_cells,
+    selected_candidate_cells,
+)
+from vntyper.scripts.identity_candidates import (
+    capture_kestrel_observations,
+    overlay_legacy_projection,
+    translation_component_from_config,
+    with_candidate_evidence,
+)
+from vntyper.scripts.kestrel_genotyping import (
+    FILTER_COLUMNS,
+    add_artifact_gate,
+    filter_final_dataframe,
+    kestrel_config,
+)
+from vntyper.scripts.molecular_identity_presentation import (
+    IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS,
+    identity_translation_diagnostic_cells,
+)
 from vntyper.scripts.nomenclature import Nomenclature
 from vntyper.scripts.nomenclature_bam import BamConsensus, BamRescuer
 
@@ -37,6 +63,9 @@ class UutReplay:
     bam_fetches: int
     mutated_replays: int
     control_replays: int
+    eligible_keys: frozenset[str]
+    fetches_by_key: dict[str, int]
+    bam_input_symlinks: int
 
 
 EXPECTED_CLASS_IDENTITIES = {
@@ -220,6 +249,61 @@ PHASE1_TIER_B_KEYS = frozenset(
     }
 )
 
+PHASE1_SELECTED_PROJECTION_FINGERPRINT = "1289888132922e697c6083d164721da87086db0bfcdf85bea68e597820b4b05c"
+DELINS_TRUTH_KEYS = frozenset(
+    {
+        "experiment2_atypical/pair_4020",
+        "experiment2_atypical/pair_4021",
+        "experiment2_atypical/pair_4022",
+        "experiment2_atypical/pair_4023",
+        "experiment2_atypical/pair_4024",
+        "experiment2_atypical/pair_4025",
+        "experiment2_atypical/pair_4026",
+        "experiment2_atypical/pair_4027",
+        "experiment2_atypical/pair_4028",
+        "experiment2_atypical/pair_4029",
+    }
+)
+DELINS_SELECTED_REPRESENTATION_KEYS = frozenset(
+    {
+        "experiment2_atypical/pair_4020",
+        "experiment2_atypical/pair_4022",
+        "experiment2_atypical/pair_4023",
+        "experiment2_atypical/pair_4024",
+        "experiment2_atypical/pair_4026",
+        "experiment2_atypical/pair_4028",
+        "experiment2_atypical/pair_4029",
+    }
+)
+DELINS_NO_KESTREL_RESULT_KEYS = frozenset(
+    {
+        "experiment2_atypical/pair_4021",
+        "experiment2_atypical/pair_4025",
+        "experiment2_atypical/pair_4027",
+    }
+)
+PAIR_4092_KEY = "experiment2_atypical/pair_4092"
+PRA_CURRENT_TIER_FINGERPRINT = "a5271e8eed5a69cc391e4f95dc276c6827b8f25d47601890b54d99c2035939ef"
+PRA_IDENTITY_OUTCOME_FINGERPRINT = "0b9b54eb0cf48a03b302a56c5170344228a471deaee628e1c48eac16a51cc9a3"
+PRA_PUBLIC_TRUTH_IDENTITY_FINGERPRINT = "bd8f8b56cf8d5516affcff6116b6509213ecfdd4e32d5bdaa7efed0c35369ce9"
+PRA_BAM_ELIGIBLE_FINGERPRINT = "0baf09e74569ed1e51710c8a2f844baab5ed015a96e32751a3f0a14d5f53b4b5"
+PRA_BAM_FETCH_FINGERPRINT = "ec9f859ab3c2ad78399ee373a708a15d8aa8b4c09b8a0f134a6f2420947fa72f"
+PRA_COMPLETE_BAM_FINGERPRINT = "a90dcdf5fa13873f29f272d30b7c7de3fe9b4ac39f9f0dad8b29e1dbf5d12839"
+PRA_BAM_TRUTH_MATCH_KEYS = frozenset(
+    {
+        "experiment2_atypical/pair_4033",
+        "experiment2_atypical/pair_4035",
+        "experiment2_atypical/pair_4038",
+        "experiment2_atypical/pair_4039",
+    }
+)
+PRA_BAM_POSITIVE_CONTROL_KEYS = frozenset(
+    {
+        "experiment2_atypical/pair_4033",
+        "experiment2_atypical/pair_4035",
+    }
+)
+
 
 @pytest.fixture(scope="module")
 def corpus() -> GoldenCorpus:
@@ -233,25 +317,103 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
     output_root = tmp_path_factory.mktemp("molecular_identity_replay")
     eligible = 0
     bam_fetches = 0
-    count_eligibility_outcome = False
-    original_is_candidate = nomenclature_annotate.is_candidate
-    original_rescue = BamRescuer.rescue
+    eligible_keys: set[str] = set()
+    fetches_by_key: dict[str, int] = {}
+    source_bam_stats: dict[Path, tuple[int, int]] = {}
+    bam_input_symlinks: list[Path] = []
+    active_key = ""
+    replay_phase = ""
+    original_is_candidate = nomenclature_bam_adapter.is_candidate
+    original_rescue = BamRescuer.rescue_with_identity_evidence
+    identity_component = translation_component_from_config(nomenclature_annotate.load_nomenclature_config())
 
     def counted_is_candidate(call: Nomenclature) -> bool:
         nonlocal eligible
         result = original_is_candidate(call)
-        if count_eligibility_outcome:
-            eligible += int(result)
+        if replay_phase == "eligibility-probe" and result:
+            eligible += 1
+            eligible_keys.add(active_key)
         return result
 
-    def counted_rescue(self: BamRescuer, contig: str, position: int) -> BamConsensus | None:
+    def counted_rescue(
+        self: BamRescuer,
+        contig: str,
+        position: int,
+        locus: Any,
+        component: Any,
+    ) -> tuple[BamConsensus | None, Any]:
         nonlocal bam_fetches
-        bam_fetches += 1
-        return original_rescue(self, contig, position)
+        if replay_phase == "reconcile":
+            bam_fetches += 1
+            fetches_by_key[active_key] = fetches_by_key.get(active_key, 0) + 1
+        return original_rescue(self, contig, position, locus, component)
+
+    def rebuild_kestrel_result(source_dir: Path, output_dir: Path) -> None:
+        """Replay current capture/selection/publication from the frozen pre-result."""
+        source_result = source_dir / "kestrel_result.tsv"
+        raw_pre_result = pd.read_csv(
+            source_dir / "kestrel_pre_result.tsv",
+            sep="\t",
+            dtype=str,
+            keep_default_na=False,
+        )
+        pre_result = pd.read_csv(
+            source_dir / "kestrel_pre_result.tsv",
+            sep="\t",
+            dtype={"Motif_fasta": str, "POS_fasta": str, "Motif": str},
+            keep_default_na=False,
+        )
+        pre_result = add_artifact_gate(pre_result, kestrel_config.get("artifact_flags", []))
+        records = pre_result.to_dict("records")
+        for record in records:
+            record["Motif_sequence"] = str(record["Motif_sequence"])
+        candidates = capture_kestrel_observations(records, identity_component)
+        capture_rows = [candidate_capture_cells(candidate) for candidate in candidates.candidates]
+        diagnostic_rows = [
+            identity_translation_diagnostic_cells(candidate.observation.translation)
+            for candidate in candidates.candidates
+        ]
+        for column in IDENTITY_CAPTURE_COLUMNS:
+            pre_result[column] = [cells[column] for cells in capture_rows]
+        for column in IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS:
+            pre_result[column] = [cells[column] for cells in diagnostic_rows]
+        evidenced = with_candidate_evidence(candidates, pre_result.to_dict("records"))
+        passing_mask = pre_result[list(FILTER_COLUMNS)].all(axis=1)
+        passing_ordinals = tuple(int(value) for value in pre_result.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]])
+        selected = filter_final_dataframe(pre_result, str(output_dir))
+
+        if selected.empty:
+            shutil.copyfile(source_result, output_dir / "kestrel_result.tsv")
+            return
+
+        selected = selected.drop(columns=list(IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS))
+        selected_ordinal = int(selected.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]])
+        selected_candidates = overlay_legacy_projection(evidenced, passing_ordinals, selected_ordinal)
+        for column, value in selected_candidate_cells(selected_candidates).items():
+            selected[column] = value
+        for column in SELECTED_PROJECTION_COLUMNS:
+            selected[column] = raw_pre_result.iloc[selected_ordinal][column]
+        annotated = nomenclature_annotate.annotate_kestrel_frame(
+            selected,
+            output_dir,
+            identity_component=identity_component,
+        )
+        header = [line for line in source_result.read_text(encoding="utf-8").splitlines() if line.startswith("##")]
+        with (output_dir / "kestrel_result.tsv").open("w", encoding="utf-8") as handle:
+            if header:
+                handle.write("\n".join(header) + "\n")
+            annotated.to_csv(handle, sep="\t", index=False)
+
+    def rebuild_advntr_result(source_dir: Path, output_dir: Path) -> Path:
+        """Replay the current adVNTR processor from its frozen raw caller VCF."""
+        raw = output_dir / "input_adVNTR.vcf"
+        shutil.copyfile(source_dir / "output_adVNTR.vcf", raw)
+        process_advntr_output(str(raw), str(output_dir), "output", None)
+        return output_dir / "output_adVNTR_result.tsv"
 
     def probe_candidate(kestrel_path: Path, advntr_path: Path) -> None:
-        """Exercise the production candidate seam even across later I/O early returns."""
-        nonlocal count_eligibility_outcome
+        """Observe unchanged BAM eligibility before later production early returns."""
+        nonlocal replay_phase
         kestrel = pd.read_csv(kestrel_path, sep="\t", comment="#", dtype=str)
         advntr = pd.read_csv(advntr_path, sep="\t", dtype=str)
         supports: dict[str, int | None] = {}
@@ -270,57 +432,73 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
         advntr_keep = [not nomenclature_annotate._is_negative(row) for _, row in advntr.iterrows()]
         advntr_calls_by_row = nomenclature_annotate._advntr_calls_by_row(advntr, advntr_keep, supports)
         advntr_calls = [call for calls in advntr_calls_by_row for call in calls]
-        count_eligibility_outcome = True
+        replay_phase = "eligibility-probe"
         try:
-            nomenclature_annotate._haplotype_calls(
-                kestrel_rows,
-                output_root / "eligibility-probe-without-bam",
-                vcf_calls,
-                advntr_calls,
-                supports,
+            nomenclature_bam_adapter.is_candidate(
+                nomenclature_annotate.reconcile(*vcf_calls, *advntr_calls, supports=supports)
             )
         finally:
-            count_eligibility_outcome = False
+            replay_phase = ""
 
     def copy_and_reconcile(key: str, condition: str) -> None:
+        nonlocal active_key, replay_phase
         experiment, pair_id = key.split("/", maxsplit=1)
         source_kestrel = SIM_ROOT / experiment / "vntyper" / pair_id / condition / "kestrel"
         source_advntr = ADVNTR_ROOT / experiment / pair_id / condition / "advntr"
         output_sample = output_root / experiment / pair_id / condition
-        source_and_relative_paths = (
-            (source_kestrel / "kestrel_result.tsv", Path("kestrel/kestrel_result.tsv")),
-            (source_advntr / "output_adVNTR_result.tsv", Path("advntr/output_adVNTR_result.tsv")),
-        )
-        for source, relative_path in source_and_relative_paths:
-            destination = output_sample / relative_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
-        kestrel_output = output_sample / source_and_relative_paths[0][1]
-        advntr_output = output_sample / source_and_relative_paths[1][1]
+        output_kestrel = output_sample / "kestrel"
+        output_advntr = output_sample / "advntr"
+        output_kestrel.mkdir(parents=True)
+        output_advntr.mkdir(parents=True)
+        for source_name in ("output.bam", "output.bam.bai"):
+            source = source_kestrel / source_name
+            if source.is_file():
+                resolved_source = source.resolve()
+                stat = resolved_source.stat()
+                source_bam_stats[resolved_source] = (stat.st_size, stat.st_mtime_ns)
+                link = output_kestrel / source_name
+                link.symlink_to(resolved_source)
+                bam_input_symlinks.append(link)
+
+        active_key = key
+        replay_phase = "kestrel"
+        rebuild_kestrel_result(source_kestrel, output_kestrel)
+        advntr_output = rebuild_advntr_result(source_advntr, output_advntr)
+        kestrel_output = output_kestrel / "kestrel_result.tsv"
         if condition == "mutated":
             probe_candidate(kestrel_output, advntr_output)
+        replay_phase = "reconcile"
         nomenclature_annotate.reconcile_caller_outputs(
             kestrel_output,
             advntr_output,
-            source_kestrel,
+            output_kestrel,
         )
+        replay_phase = ""
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(nomenclature_annotate, "is_candidate", counted_is_candidate)
-        patch.setattr(BamRescuer, "rescue", counted_rescue)
+        patch.setattr(nomenclature_bam_adapter, "is_candidate", counted_is_candidate)
+        patch.setattr(BamRescuer, "rescue_with_identity_evidence", counted_rescue)
         for key in sorted(corpus.mutated_keys):
             copy_and_reconcile(key, "mutated")
-
-    for key in sorted(corpus.control_keys):
-        copy_and_reconcile(key, "normal")
+        for key in sorted(corpus.control_keys):
+            copy_and_reconcile(key, "normal")
 
     observed = load_golden_corpus(SIM_ROOT, output_root)
+    for link in bam_input_symlinks:
+        resolved_source = link.resolve(strict=True)
+        stat = resolved_source.stat()
+        assert link.is_symlink()
+        assert not resolved_source.is_relative_to(output_root)
+        assert (stat.st_size, stat.st_mtime_ns) == source_bam_stats[resolved_source]
     return UutReplay(
         corpus=observed,
         eligible=eligible,
         bam_fetches=bam_fetches,
         mutated_replays=len(corpus.mutated_keys),
         control_replays=len(corpus.control_keys),
+        eligible_keys=frozenset(eligible_keys),
+        fetches_by_key=fetches_by_key,
+        bam_input_symlinks=len(bam_input_symlinks),
     )
 
 
@@ -401,9 +579,9 @@ def test_both_roots_and_every_sample_are_loaded(corpus: GoldenCorpus, uut_replay
     assert uut_replay.control_replays == 200
 
 
-def test_historical_phase1_projection_is_literal_per_sample(uut_replay) -> None:
+def test_historical_phase1_projection_is_literal_per_sample(corpus: GoldenCorpus) -> None:
     """Aggregate swaps and disappearance of a lower tier must fail on exact sample keys."""
-    observed = uut_replay.corpus
+    observed = corpus
     assert observed.tier_keys == {
         "A": PHASE1_TIER_A_KEYS,
         "B": PHASE1_TIER_B_KEYS,
@@ -424,11 +602,51 @@ def test_historical_phase1_projection_is_literal_per_sample(uut_replay) -> None:
     assert observed.control_findings == 0
 
 
-def test_historical_bam_consultation_and_canonical_dupc_are_literal(uut_replay) -> None:
+def test_historical_bam_consultation_and_canonical_dupc_are_literal(
+    corpus: GoldenCorpus,
+    uut_replay: UutReplay,
+) -> None:
     """Eligibility, fetch cardinality, or canonical dupC naming drift must fail."""
     assert uut_replay.eligible == 83
     assert uut_replay.bam_fetches == 68
-    assert uut_replay.corpus.dupc_vcf_names == ("59dupC",) * 96
+    assert corpus.dupc_vcf_names == ("59dupC",) * 96
+
+
+def test_selected_kestrel_projection_is_exact_and_ordered(corpus: GoldenCorpus, uut_replay: UutReplay) -> None:
+    """Every selected raw row, empty result, and deterministic tie winner is frozen."""
+    historical = corpus.selected_projection_by_sample
+    current = uut_replay.corpus.selected_projection_by_sample
+    assert identity_oracle.selected_projection_fingerprint(historical) == PHASE1_SELECTED_PROJECTION_FINGERPRINT
+    assert len(historical) == 400
+    assert sum(bool(rows) for rows in historical.values()) == 178
+    mismatches = {
+        key: {"expected": historical[key], "observed": current.get(key)}
+        for key in historical
+        if current.get(key) != historical[key]
+    }
+    assert mismatches == {}
+
+
+def test_structural_delins_and_pair_4092_are_never_fabricated(
+    corpus: GoldenCorpus,
+    uut_replay: UutReplay,
+) -> None:
+    """Absent complete candidate representations cannot be synthesized from fragments."""
+    truth_delins = frozenset(
+        key for key, expectation in corpus.expected_by_sample.items() if expectation.mutation == "delinsAT"
+    )
+    assert truth_delins == DELINS_TRUTH_KEYS
+    assert DELINS_SELECTED_REPRESENTATION_KEYS | DELINS_NO_KESTREL_RESULT_KEYS == DELINS_TRUTH_KEYS
+    historical_projection = corpus.selected_projection_by_sample
+    assert all(historical_projection[f"{key}/mutated"] for key in DELINS_SELECTED_REPRESENTATION_KEYS)
+    assert all(not historical_projection[f"{key}/mutated"] for key in DELINS_NO_KESTREL_RESULT_KEYS)
+
+    observed = uut_replay.corpus
+    protected = DELINS_SELECTED_REPRESENTATION_KEYS | {PAIR_4092_KEY}
+    fabricated = (observed.public_truth_identity_keys & protected) - observed.bam_truth_match_keys
+    assert fabricated == frozenset()
+    assert not (observed.public_truth_identity_keys & DELINS_TRUTH_KEYS)
+    assert PAIR_4092_KEY not in observed.public_truth_identity_keys
 
 
 def test_positive_caller_rows_publish_the_complete_identity_quartet(uut_replay) -> None:
@@ -441,3 +659,75 @@ def test_positive_caller_rows_publish_the_complete_identity_quartet(uut_replay) 
     identity_counts = observed.identity_on_truth_exact_names
     assert identity_counts.wrong == 0
     assert identity_counts.exact == identity_counts.resolved
+
+
+def test_pr_a_measured_identity_policy_baseline_is_literal(
+    corpus: GoldenCorpus,
+    uut_replay: UutReplay,
+) -> None:
+    """Pin policy deltas separately from the frozen Phase-1 caller projection."""
+    observed = uut_replay.corpus
+    expected_total = DisplayCounts(displayed=154, exact=136, wrong=18)
+    assert observed.total == corpus.total == expected_total
+    assert observed.by_tier == {
+        "A": DisplayCounts(0, 0, 0),
+        "B": expected_total,
+        "C": DisplayCounts(0, 0, 0),
+    }
+    assert {tier: len(keys) for tier, keys in observed.tier_keys.items()} == {"A": 0, "B": 154, "C": 0}
+    assert identity_oracle.sample_sets_fingerprint(observed.tier_keys) == PRA_CURRENT_TIER_FINGERPRINT
+    assert frozenset().union(*observed.tier_keys.values()) == frozenset().union(*corpus.tier_keys.values())
+    assert observed.control_findings == corpus.control_findings == 0
+
+    assert observed.identity_on_truth_exact_names == IdentityCounts(resolved=241, exact=241, wrong=0)
+    assert observed.identity_on_truth_exact_names_by_tier == {
+        "A": IdentityCounts(0, 0, 0),
+        "B": IdentityCounts(230, 230, 0),
+        "C": IdentityCounts(11, 11, 0),
+    }
+    assert {outcome: len(keys) for outcome, keys in observed.identity_outcome_keys.items()} == {
+        "agreement": 98,
+        "disagreement": 26,
+        "unresolved": 76,
+    }
+    assert identity_oracle.sample_sets_fingerprint(observed.identity_outcome_keys) == PRA_IDENTITY_OUTCOME_FINGERPRINT
+    assert corpus.identity_outcome_keys == {
+        "agreement": frozenset(),
+        "disagreement": frozenset(),
+        "unresolved": corpus.mutated_keys,
+    }
+    assert len(observed.public_truth_identity_keys) == 148
+    assert (
+        identity_oracle.sample_sets_fingerprint({"truth": observed.public_truth_identity_keys})
+        == PRA_PUBLIC_TRUTH_IDENTITY_FINGERPRINT
+    )
+
+
+def test_bam_positive_controls_pin_eligibility_fetch_evidence_resolution_and_truth(
+    uut_replay: UutReplay,
+) -> None:
+    """Two literal controls prove a fetch is credited only through complete truth evidence."""
+    observed = uut_replay.corpus
+    fetch_keys = frozenset(uut_replay.fetches_by_key)
+    assert len(uut_replay.eligible_keys) == 83
+    assert (
+        identity_oracle.sample_sets_fingerprint({"eligible": uut_replay.eligible_keys}) == PRA_BAM_ELIGIBLE_FINGERPRINT
+    )
+    assert len(fetch_keys) == uut_replay.bam_fetches == 68
+    assert identity_oracle.sample_sets_fingerprint({"fetch": fetch_keys}) == PRA_BAM_FETCH_FINGERPRINT
+    assert len(observed.complete_bam_evidence_keys) == 68
+    assert (
+        identity_oracle.sample_sets_fingerprint({"complete": observed.complete_bam_evidence_keys})
+        == PRA_COMPLETE_BAM_FINGERPRINT
+    )
+    assert observed.bam_truth_match_keys == PRA_BAM_TRUTH_MATCH_KEYS
+    assert uut_replay.bam_input_symlinks == 800
+
+    for key in PRA_BAM_POSITIVE_CONTROL_KEYS:
+        assert key in uut_replay.eligible_keys
+        assert uut_replay.fetches_by_key[key] == 1
+        assert key in observed.complete_bam_evidence_keys
+        assert key in observed.bam_truth_match_keys
+        assert key in observed.public_truth_identity_keys
+        assert key in observed.identity_outcome_keys["unresolved"]
+        assert observed.expected_by_sample[key].mutation == "insCCCC"

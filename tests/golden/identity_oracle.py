@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ast
 import csv
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +22,35 @@ IDENTITY_COLUMNS = (
     "Molecular_Identity_Status",
     "Equivalent_Representation_Count",
     "Identity_Hypothesis_Count",
+)
+SELECTED_PROJECTION_COLUMNS = (
+    "Motifs",
+    "POS",
+    "REF",
+    "ALT",
+    "Sample",
+    "Motif_sequence",
+    "Variant",
+    "Del",
+    "Estimated_Depth_AlternateVariant",
+    "Estimated_Depth_Variant_ActiveRegion",
+    "ref_len",
+    "alt_len",
+    "Frame_Score",
+    "is_frameshift",
+    "direction",
+    "frameshift_amount",
+    "is_valid_frameshift",
+    "Depth_Score",
+    "Confidence",
+    "depth_confidence_pass",
+    "haplo_count",
+    "alt_filter_pass",
+    "motif_filter_pass",
+    "Motif_fasta",
+    "POS_fasta",
+    "Motif",
+    "Flag",
 )
 
 
@@ -75,7 +106,13 @@ class GoldenCorpus:
     control_findings: int
     dupc_vcf_names: tuple[str, ...]
     identity_on_truth_exact_names: IdentityCounts
+    identity_on_truth_exact_names_by_tier: dict[str, IdentityCounts]
+    identity_outcome_keys: dict[str, frozenset[str]]
     identity_contract_violations: tuple[str, ...]
+    selected_projection_by_sample: dict[str, tuple[tuple[str, ...], ...]]
+    complete_bam_evidence_keys: frozenset[str]
+    bam_truth_match_keys: frozenset[str]
+    public_truth_identity_keys: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -223,7 +260,15 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
     control_findings = 0
     dupc_vcf_names: list[str] = []
     identity_counts = [0, 0, 0]
+    identity_counts_by_tier = {tier: [0, 0, 0] for tier in tier_keys}
+    identity_outcome_keys: dict[str, set[str]] = {
+        outcome: set() for outcome in ("agreement", "disagreement", "unresolved")
+    }
     violations: list[str] = []
+    selected_projection: dict[str, tuple[tuple[str, ...], ...]] = {}
+    complete_bam_evidence_keys: set[str] = set()
+    bam_truth_match_keys: set[str] = set()
+    public_truth_identity_keys: set[str] = set()
 
     for key, expectation in sorted(expected_by_sample.items()):
         experiment, pair_id = key.split("/", maxsplit=1)
@@ -238,6 +283,21 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         identity_counts[0] += row_identity_counts.resolved
         identity_counts[1] += row_identity_counts.exact
         identity_counts[2] += row_identity_counts.wrong
+        for tier, counts in _identity_counts_by_tier(public_rows, expectation.expected).items():
+            identity_counts_by_tier[tier][0] += counts.resolved
+            identity_counts_by_tier[tier][1] += counts.exact
+            identity_counts_by_tier[tier][2] += counts.wrong
+        identity_outcome_keys[_identity_outcome(public_rows)].add(key)
+        if _public_has_identity(public_rows, expectation.expected.identity):
+            public_truth_identity_keys.add(key)
+        complete_bam, bam_truth_match = _bam_replay_observation(
+            advntr / experiment / pair_id / "mutated" / "kestrel",
+            expectation.expected.identity,
+        )
+        if complete_bam:
+            complete_bam_evidence_keys.add(key)
+        if bam_truth_match:
+            bam_truth_match_keys.add(key)
         verdicts = _displayed_verdicts(public_rows)
         if len(verdicts) > 1:
             raise AssertionError(f"conflicting public verdicts for {key}: {sorted(verdicts)}")
@@ -255,6 +315,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
             tier_keys[tier].add(key)
 
         _simulation_kestrel_rows(sim, experiment, pair_id, "mutated")
+        selected_projection[f"{key}/mutated"] = _selected_projection(public_rows["kestrel"])
         if expectation.mutation == "dupC":
             for row in public_rows["kestrel"]:
                 name = (row.get("Nomenclature_Kestrel") or "").strip()
@@ -268,6 +329,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         violations.extend(row_violations)
         control_findings += int(bool(_displayed_verdicts(public_rows)))
         _simulation_kestrel_rows(sim, experiment, pair_id, "normal")
+        selected_projection[f"{key}/normal"] = _selected_projection(public_rows["kestrel"])
 
     return GoldenCorpus(
         sim_root=sim,
@@ -284,8 +346,32 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         control_findings=control_findings,
         dupc_vcf_names=tuple(dupc_vcf_names),
         identity_on_truth_exact_names=IdentityCounts(*identity_counts),
+        identity_on_truth_exact_names_by_tier={
+            tier: IdentityCounts(*counts) for tier, counts in identity_counts_by_tier.items()
+        },
+        identity_outcome_keys={outcome: frozenset(keys) for outcome, keys in identity_outcome_keys.items()},
         identity_contract_violations=tuple(violations),
+        selected_projection_by_sample=selected_projection,
+        complete_bam_evidence_keys=frozenset(complete_bam_evidence_keys),
+        bam_truth_match_keys=frozenset(bam_truth_match_keys),
+        public_truth_identity_keys=frozenset(public_truth_identity_keys),
     )
+
+
+def selected_projection_fingerprint(projection: dict[str, tuple[tuple[str, ...], ...]]) -> str:
+    """Return a deterministic fingerprint of every literal selected-row cell."""
+    payload = json.dumps(projection, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def sample_sets_fingerprint(sample_sets: dict[str, frozenset[str]]) -> str:
+    """Return a deterministic fingerprint of named literal sample-key sets."""
+    payload = json.dumps(
+        {name: sorted(keys) for name, keys in sample_sets.items()},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _resolve_local_imports(source: Path, root: Path, module: str, level: int) -> tuple[Path, ...]:
@@ -487,3 +573,100 @@ def _identity_observations(
             else:
                 violations.append(f"{row_key}: unknown identity status {status!r}")
     return violations, IdentityCounts(resolved, exact_count, wrong)
+
+
+def _identity_counts_by_tier(
+    public_rows: dict[str, tuple[dict[str, str], ...]],
+    expected: ExpectedIdentity,
+) -> dict[str, IdentityCounts]:
+    counts = {tier: [0, 0, 0] for tier in ("A", "B", "C")}
+    for caller, rows in public_rows.items():
+        caller_column = "Nomenclature_Kestrel" if caller == "kestrel" else "Nomenclature_adVNTR"
+        for row in rows:
+            if any(column not in row for column in IDENTITY_COLUMNS):
+                continue
+            identity = (row.get("Molecular_Identity") or "").strip()
+            status = (row.get("Molecular_Identity_Status") or "").strip()
+            caller_name = (row.get(caller_column) or "").strip()
+            tier = (row.get("Nomenclature_Tier") or "").strip()
+            if tier not in counts or status not in {"unique", "legacy-selected-among-multiple"}:
+                continue
+            if caller_name != expected.name or not identity:
+                continue
+            exact = identity == expected.identity
+            counts[tier][0] += 1
+            counts[tier][1] += int(exact)
+            counts[tier][2] += int(not exact)
+    return {tier: IdentityCounts(*values) for tier, values in counts.items()}
+
+
+def _identity_outcome(public_rows: dict[str, tuple[dict[str, str], ...]]) -> str:
+    identities: dict[str, set[str]] = {}
+    for caller, rows in public_rows.items():
+        identities[caller] = {
+            (row.get("Molecular_Identity") or "").strip()
+            for row in rows
+            if (row.get("Molecular_Identity_Status") or "").strip() in {"unique", "legacy-selected-among-multiple"}
+            and (row.get("Molecular_Identity") or "").strip()
+        }
+    if not identities["kestrel"] or not identities["advntr"]:
+        return "unresolved"
+    if identities["kestrel"].intersection(identities["advntr"]):
+        return "agreement"
+    return "disagreement"
+
+
+def _public_has_identity(public_rows: dict[str, tuple[dict[str, str], ...]], identity: str) -> bool:
+    return any(
+        (row.get("Molecular_Identity") or "").strip() == identity for rows in public_rows.values() for row in rows
+    )
+
+
+def _selected_projection(rows: tuple[dict[str, str], ...]) -> tuple[tuple[str, ...], ...]:
+    projection: list[tuple[str, ...]] = []
+    for row in rows:
+        missing = tuple(column for column in SELECTED_PROJECTION_COLUMNS if column not in row)
+        if missing:
+            raise AssertionError(f"selected Kestrel row missing frozen projection columns: {missing}")
+        projection.append(tuple(row[column] for column in SELECTED_PROJECTION_COLUMNS))
+    return tuple(projection)
+
+
+def _bam_replay_observation(sample_dir: Path, expected_identity: str) -> tuple[bool, bool]:
+    path = sample_dir / "bam_identity_replay.v1.json"
+    if not path.is_file():
+        return False, False
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise AssertionError(f"invalid BAM replay artifact for golden oracle: {path}") from error
+    if not isinstance(value, dict) or value.get("schema_version") != "bam-identity-replay-v1":
+        raise AssertionError(f"unexpected BAM replay schema for golden oracle: {path}")
+    loci = value.get("loci")
+    if not isinstance(loci, list):
+        raise AssertionError(f"BAM replay loci are not a list: {path}")
+    complete = False
+    truth_match = False
+    for locus in loci:
+        if not isinstance(locus, dict) or locus.get("state") != "observed":
+            continue
+        evidence = locus.get("evidence")
+        if not isinstance(evidence, dict):
+            raise AssertionError(f"observed BAM replay locus has no complete evidence: {path}")
+        complete = True
+        raw_counts = evidence.get("counts")
+        if not isinstance(raw_counts, list):
+            raise AssertionError(f"BAM replay counts are not a list: {path}")
+        counts: dict[str, int] = {}
+        for entry in raw_counts:
+            if not isinstance(entry, dict) or set(entry) != {"identity", "record_count"}:
+                raise AssertionError(f"malformed BAM replay count: {path}")
+            identity, count = entry["identity"], entry["record_count"]
+            if not isinstance(identity, str) or isinstance(count, bool) or not isinstance(count, int) or count < 1:
+                raise AssertionError(f"malformed BAM replay identity/count: {path}")
+            counts[identity] = count
+        if counts:
+            maximum = max(counts.values())
+            winners = tuple(identity for identity, count in counts.items() if count == maximum)
+            truth_match |= winners == (expected_identity,)
+    return complete, truth_match
