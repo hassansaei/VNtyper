@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -371,13 +372,11 @@ _STRICT_KESTREL_FIELDS = frozenset(
 )
 
 _LEGACY_REPORT_PRESENTATION = {
-    "At least one match was found between Kestrel and adVNTR results.": (
-        '<span class="chip-label">Concordance</span>',
-        '<span class="chip-value">Match</span>',
+    "At least one match was found between Kestrel and adVNTR results.": re.compile(
+        r'<span class="chip-label">Concordance</span>\s*<span class="chip-value">Match</span>'
     ),
-    "No matches were found between Kestrel and adVNTR results.": (
-        '<span class="chip-label">Concordance</span>',
-        '<span class="chip-value">No match</span>',
+    "No matches were found between Kestrel and adVNTR results.": re.compile(
+        r'<span class="chip-label">Concordance</span>\s*<span class="chip-value">No match</span>'
     ),
 }
 
@@ -531,11 +530,15 @@ def _assert_report_values(test_case: dict[str, Any], output_dir: Path) -> None:
         # changing, dropping, or reordering any segment still fails the oracle.
         cursor = 0
         for segment in fragment.split("<br>"):
-            rendered_segments = _LEGACY_REPORT_PRESENTATION.get(segment, (segment,))
-            for rendered_segment in rendered_segments:
-                position = report.find(rendered_segment, cursor)
-                assert position >= 0, f"Summary report is missing declared text: {segment}"
-                cursor = position + len(rendered_segment)
+            legacy_presentation = _LEGACY_REPORT_PRESENTATION.get(segment)
+            if legacy_presentation is not None:
+                match = legacy_presentation.search(report, cursor)
+                assert match is not None, f"Summary report is missing declared text: {segment}"
+                cursor = match.end()
+                continue
+            position = report.find(segment, cursor)
+            assert position >= 0, f"Summary report is missing declared text: {segment}"
+            cursor = position + len(segment)
 
 
 def validate_strict_fastq_success(test_case: dict[str, Any], output_dir: Path) -> None:

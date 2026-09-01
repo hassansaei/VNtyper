@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from vntyper.scripts.summary import md5sum, parse_csv, parse_json_file, parse_tsv
@@ -103,6 +104,14 @@ def test_parse_tsv_decodes_writer_quoted_json_cells(tmp_path: Path) -> None:
     )
 
     assert parse_tsv(path)["data"] == [{"Name": "call", "Metadata": '{"source":"kestrel","values":[67,"G"]}'}]
+
+
+def test_parse_tsv_round_trips_a_pandas_quoted_multiline_cell(tmp_path: Path) -> None:
+    """A logical TSV record may span physical lines when pandas quotes a cell."""
+    path = tmp_path / "multiline.tsv"
+    pd.DataFrame([{"Name": "call", "Note": "line one\nline two"}]).to_csv(path, sep="\t", index=False)
+
+    assert parse_tsv(str(path))["data"] == [{"Name": "call", "Note": "line one\nline two"}]
 
 
 # --- ragged rows: the behaviour this module pins -----------------------------

@@ -31,6 +31,7 @@ EXPECTED_BAM_ROUTING = {
 }
 
 LEGACY_CROSS_MATCH_MESSAGE = "At least one match was found between Kestrel and adVNTR results."
+LEGACY_NO_MATCH_MESSAGE = "No matches were found between Kestrel and adVNTR results."
 
 
 def _negative_case() -> dict[str, Any]:
@@ -145,14 +146,37 @@ def test_legacy_cross_match_report_assertion_accepts_the_semantic_chip(tmp_path:
 
 
 def test_legacy_cross_match_report_assertion_rejects_the_wrong_semantic_chip(tmp_path: Path) -> None:
-    """The compatibility bridge must still detect a changed cross-caller verdict."""
+    """An unrelated later Match chip cannot repair a wrong Concordance verdict."""
     (tmp_path / "summary_report.html").write_text(
-        '<span class="chip-label">Concordance</span><span class="chip-value">No match</span>',
+        '<span class="chip-label">Concordance</span><span class="chip-value">No match</span>'
+        '<span class="chip-label">Another status</span><span class="chip-value">Match</span>',
         encoding="utf-8",
     )
 
     with pytest.raises(AssertionError, match="missing declared text"):
         orchestration._assert_report_values({"report_assertions": [LEGACY_CROSS_MATCH_MESSAGE]}, tmp_path)
+
+
+def test_legacy_cross_match_report_assertion_accepts_the_no_match_semantic_chip(tmp_path: Path) -> None:
+    """The historical negative sentence follows the adjacent negative chip."""
+    (tmp_path / "summary_report.html").write_text(
+        '<span class="chip-label">Concordance</span>\n  <span class="chip-value">No match</span>',
+        encoding="utf-8",
+    )
+
+    orchestration._assert_report_values({"report_assertions": [LEGACY_NO_MATCH_MESSAGE]}, tmp_path)
+
+
+def test_legacy_cross_match_report_assertion_rejects_an_unrelated_no_match_chip(tmp_path: Path) -> None:
+    """An unrelated later No match chip cannot repair a positive Concordance verdict."""
+    (tmp_path / "summary_report.html").write_text(
+        '<span class="chip-label">Concordance</span><span class="chip-value">Match</span>'
+        '<span class="chip-label">Another status</span><span class="chip-value">No match</span>',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AssertionError, match="missing declared text"):
+        orchestration._assert_report_values({"report_assertions": [LEGACY_NO_MATCH_MESSAGE]}, tmp_path)
 
 
 def test_compact_cram_contract_config_disables_genome_coordinate_array_metrics(tmp_path: Path) -> None:

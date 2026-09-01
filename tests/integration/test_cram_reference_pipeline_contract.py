@@ -40,7 +40,7 @@ def _local_config(tmp_path: Path) -> Path:
     payload["cram"]["local_ref_path"] = str(tmp_path / "local-ref" / "%2s" / "%2s" / "%s")
     assembly = payload["bam_processing"]["assemblies"]["GRCh37"]
     assembly["vntr_region_coords"] = "1-10000"
-    assembly.pop("vntr_array_coords", None)
+    assembly.pop("vntr_array_coords")
     config = tmp_path / "config.json"
     config.write_text(json.dumps(payload), encoding="utf-8")
     return config

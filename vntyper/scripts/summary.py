@@ -185,27 +185,20 @@ def parse_tsv(file_path):
     header = None
 
     try:
-        with open(file_path, encoding="utf-8") as f:
-            for line_number, raw_line in enumerate(f, start=1):
-                # Strip the line ending only. `.strip()` also removes the trailing
-                # tab of a row whose last column is empty, which makes a well-formed
-                # row arrive one field short and be discarded as ragged below --
-                # silently, since nothing about the row is actually wrong. Every
-                # nullable column is the empty string by contract, so whenever one is
-                # last that dropped real data.
-                line = raw_line.rstrip("\r\n")
-                if not line.strip():
+        with open(file_path, encoding="utf-8", newline="") as f:
+            reader = csv.reader(f, delimiter="\t")
+            next_physical_line = 1
+            for row_values in reader:
+                # csv.reader yields logical records, so a quoted cell may span more
+                # than one physical line. Keep the first physical line for diagnostics
+                # before advancing past every line this logical record consumed.
+                line_number = next_physical_line
+                next_physical_line = reader.line_num + 1
+                if not row_values or (len(row_values) == 1 and not row_values[0].strip()):
                     continue
-                if line.startswith("#"):
-                    comments.append(line.lstrip("#").strip())
+                if row_values[0].startswith("#"):
+                    comments.append("\t".join(row_values).lstrip("#").strip())
                     continue
-                # pandas uses RFC-style CSV quoting when a TSV cell contains JSON
-                # quotes. Splitting on tabs preserves those transport quotes and
-                # doubled inner quotes as data, so summaries no longer match the
-                # result table they represent. Parse each physical row with the same
-                # delimiter/quoting rules as the writer while retaining the existing
-                # comment and blank-line handling above.
-                row_values = next(csv.reader([line], delimiter="\t"))
                 if header is None:
                     header = row_values
                     continue
