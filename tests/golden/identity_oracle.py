@@ -11,6 +11,7 @@ import ast
 import csv
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -109,6 +110,7 @@ class GoldenCorpus:
     identity_on_truth_exact_names_by_tier: dict[str, IdentityCounts]
     identity_outcome_keys: dict[str, frozenset[str]]
     identity_contract_violations: tuple[str, ...]
+    identity_projection_by_sample: dict[str, tuple[tuple[str, ...], ...]]
     selected_projection_by_sample: dict[str, tuple[tuple[str, ...], ...]]
     complete_bam_evidence_keys: frozenset[str]
     bam_truth_match_keys: frozenset[str]
@@ -171,6 +173,20 @@ def assert_independent_import_closure(entrypoint: Path, repository_root: Path) -
             raise AssertionError(f"oracle import-closure source escapes repository root: {source}") from error
         scanned.add(source)
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        importlib_aliases = {
+            alias.asname or alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+            if alias.name == "importlib"
+        }
+        import_module_aliases = {
+            alias.asname or alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "importlib"
+            for alias in node.names
+            if alias.name == "import_module"
+        }
 
         for node in ast.walk(tree):
             modules: list[tuple[str, int]] = []
@@ -184,7 +200,7 @@ def assert_independent_import_closure(entrypoint: Path, repository_root: Path) -
                     if alias.name != "*"
                 )
             elif isinstance(node, ast.Call):
-                dynamic_module = _literal_dynamic_import(node)
+                dynamic_module = _literal_dynamic_import(node, importlib_aliases, import_module_aliases)
                 if dynamic_module is not None:
                     modules.append((dynamic_module, 0))
             else:
@@ -203,17 +219,23 @@ def assert_independent_import_closure(entrypoint: Path, repository_root: Path) -
     return tuple(sorted(scanned))
 
 
-def _literal_dynamic_import(node: ast.Call) -> str | None:
+def _literal_dynamic_import(
+    node: ast.Call,
+    importlib_aliases: set[str],
+    import_module_aliases: set[str],
+) -> str | None:
     """Return the literal target of a supported dynamic-import spelling."""
     if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
         return None
     if isinstance(node.func, ast.Name) and node.func.id == "__import__":
         return node.args[0].value
+    if isinstance(node.func, ast.Name) and node.func.id in import_module_aliases:
+        return node.args[0].value
     if (
         isinstance(node.func, ast.Attribute)
         and node.func.attr == "import_module"
         and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "importlib"
+        and node.func.value.id in importlib_aliases
     ):
         return node.args[0].value
     return None
@@ -265,6 +287,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         outcome: set() for outcome in ("agreement", "disagreement", "unresolved")
     }
     violations: list[str] = []
+    identity_projection: dict[str, tuple[tuple[str, ...], ...]] = {}
     selected_projection: dict[str, tuple[tuple[str, ...], ...]] = {}
     complete_bam_evidence_keys: set[str] = set()
     bam_truth_match_keys: set[str] = set()
@@ -273,6 +296,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
     for key, expectation in sorted(expected_by_sample.items()):
         experiment, pair_id = key.split("/", maxsplit=1)
         public_rows = _public_rows(advntr, experiment, pair_id, "mutated")
+        _record_identity_projection(identity_projection, key, "mutated", public_rows)
         row_violations, row_identity_counts = _identity_observations(
             key,
             "mutated",
@@ -325,6 +349,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
     for key in sorted(normal_keys):
         experiment, pair_id = key.split("/", maxsplit=1)
         public_rows = _public_rows(advntr, experiment, pair_id, "normal")
+        _record_identity_projection(identity_projection, key, "normal", public_rows)
         row_violations, _ = _identity_observations(key, "normal", public_rows, None)
         violations.extend(row_violations)
         control_findings += int(bool(_displayed_verdicts(public_rows)))
@@ -351,6 +376,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         },
         identity_outcome_keys={outcome: frozenset(keys) for outcome, keys in identity_outcome_keys.items()},
         identity_contract_violations=tuple(violations),
+        identity_projection_by_sample=identity_projection,
         selected_projection_by_sample=selected_projection,
         complete_bam_evidence_keys=frozenset(complete_bam_evidence_keys),
         bam_truth_match_keys=frozenset(bam_truth_match_keys),
@@ -358,7 +384,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
     )
 
 
-def selected_projection_fingerprint(projection: dict[str, tuple[tuple[str, ...], ...]]) -> str:
+def selected_projection_fingerprint(projection: Mapping[str, tuple[tuple[str, ...], ...]]) -> str:
     """Return a deterministic fingerprint of every literal selected-row cell."""
     payload = json.dumps(projection, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -372,6 +398,18 @@ def sample_sets_fingerprint(sample_sets: dict[str, frozenset[str]]) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _record_identity_projection(
+    projection: dict[str, tuple[tuple[str, ...], ...]],
+    key: str,
+    condition: str,
+    public_rows: dict[str, tuple[dict[str, str], ...]],
+) -> None:
+    for caller, rows in public_rows.items():
+        projection[f"{key}/{condition}/{caller}"] = tuple(
+            tuple(row.get(column, "<missing>") for column in IDENTITY_COLUMNS) for row in rows
+        )
 
 
 def _resolve_local_imports(source: Path, root: Path, module: str, level: int) -> tuple[Path, ...]:
@@ -459,6 +497,109 @@ def _span(start: int, end: int) -> str:
     return str(start) if start == end else f"{start}_{end}"
 
 
+def _parse_canonical_identity(value: object) -> tuple[tuple[int, int, str, str], ...]:
+    if not isinstance(value, str):
+        raise AssertionError("molecular identity must be a string")
+    reference, separator, encoded_edits = value.partition("|")
+    if reference != REFERENCE or not separator or not encoded_edits:
+        raise AssertionError("molecular identity requires the exact versioned reference")
+    edits: list[tuple[int, int, str, str]] = []
+    for encoded_edit in encoded_edits.split(";"):
+        fields = encoded_edit.split("|")
+        if len(fields) != 4 or any(not field for field in fields):
+            raise AssertionError("molecular identity edit requires four nonempty fields")
+        start_text, end_text, deleted_text, inserted_text = fields
+        start = _canonical_coordinate(start_text)
+        end = _canonical_coordinate(end_text, allow_zero=True)
+        deleted = _canonical_allele(deleted_text)
+        inserted = _canonical_allele(inserted_text)
+        if not 1 <= start <= len(CANONICAL_X):
+            raise AssertionError("molecular identity start is outside the canonical repeat")
+        if not deleted:
+            if end != start - 1 or not inserted:
+                raise AssertionError("molecular identity insertion coordinates are inconsistent")
+        else:
+            if not start <= end <= len(CANONICAL_X) or len(deleted) != end - start + 1:
+                raise AssertionError("molecular identity deletion interval is inconsistent")
+            if CANONICAL_X[start - 1 : end] != deleted:
+                raise AssertionError("molecular identity deletion does not match the canonical repeat")
+        if not deleted and not inserted:
+            raise AssertionError("molecular identity edit cannot be empty")
+        canonical = _canonical_edit(start, end, deleted, inserted)
+        if canonical != (start, end, deleted, inserted):
+            raise AssertionError("molecular identity edit is not minimal and 3-prime-most")
+        edits.append(canonical)
+    if edits != sorted(edits, key=lambda edit: (edit[0], edit[1])):
+        raise AssertionError("molecular identity edits are not in canonical order")
+    for previous, current in zip(edits, edits[1:], strict=False):
+        if _identity_edits_collide(previous, current):
+            raise AssertionError("molecular identity edits overlap")
+    serialized = ";".join(
+        f"{start}|{end}|{deleted or '-'}|{inserted or '-'}" for start, end, deleted, inserted in edits
+    )
+    if value != f"{REFERENCE}|{serialized}":
+        raise AssertionError("molecular identity is not canonically serialized")
+    return tuple(edits)
+
+
+def _canonical_coordinate(value: str, *, allow_zero: bool = False) -> int:
+    if not value.isascii() or not value.isdecimal() or (len(value) > 1 and value.startswith("0")):
+        raise AssertionError("molecular identity coordinate is not a canonical decimal")
+    coordinate = int(value)
+    if coordinate < int(not allow_zero):
+        raise AssertionError("molecular identity coordinate is outside the canonical repeat")
+    return coordinate
+
+
+def _canonical_allele(value: str) -> str:
+    if value == "-":
+        return ""
+    if not value or any(base not in "ACGT" for base in value):
+        raise AssertionError("molecular identity allele is not canonical uppercase DNA")
+    return value
+
+
+def _canonical_edit(start: int, end: int, deleted: str, inserted: str) -> tuple[int, int, str, str]:
+    if not deleted:
+        normalized_start, normalized_inserted = _normalize_insertion(start, inserted)
+        return normalized_start, normalized_start - 1, "", normalized_inserted
+    alternate = CANONICAL_X[: start - 1] + inserted + CANONICAL_X[end:]
+    prefix = 0
+    while prefix < len(CANONICAL_X) and prefix < len(alternate) and CANONICAL_X[prefix] == alternate[prefix]:
+        prefix += 1
+    reference_end = len(CANONICAL_X)
+    alternate_end = len(alternate)
+    while (
+        reference_end > prefix
+        and alternate_end > prefix
+        and CANONICAL_X[reference_end - 1] == alternate[alternate_end - 1]
+    ):
+        reference_end -= 1
+        alternate_end -= 1
+    canonical_deleted = CANONICAL_X[prefix:reference_end]
+    canonical_inserted = alternate[prefix:alternate_end]
+    if not canonical_deleted and not canonical_inserted:
+        raise AssertionError("molecular identity edit does not change the canonical repeat")
+    canonical_start = prefix + 1
+    canonical_end = reference_end if canonical_deleted else canonical_start - 1
+    return canonical_start, canonical_end, canonical_deleted, canonical_inserted
+
+
+def _identity_edits_collide(
+    previous: tuple[int, int, str, str],
+    current: tuple[int, int, str, str],
+) -> bool:
+    previous_start, previous_end, previous_deleted, _ = previous
+    current_start, _, current_deleted, _ = current
+    if not previous_deleted and not current_deleted:
+        return previous_start == current_start
+    if not previous_deleted:
+        return current_start <= previous_start
+    if not current_deleted:
+        return current_start <= previous_end + 1
+    return current_start <= previous_end
+
+
 def _require_directory(path: Path, label: str) -> Path:
     resolved = path.resolve()
     if not resolved.is_dir():
@@ -535,6 +676,7 @@ def _identity_observations(
     exact_count = 0
     wrong = 0
     for caller, rows in public_rows.items():
+        parsed_rows: list[tuple[str, str, str, int, int]] = []
         for index, row in enumerate(rows):
             row_key = f"{key}/{condition}/{caller}[{index}]"
             missing = tuple(column for column in IDENTITY_COLUMNS if column not in row)
@@ -544,19 +686,26 @@ def _identity_observations(
 
             identity = (row["Molecular_Identity"] or "").strip()
             status = (row["Molecular_Identity_Status"] or "").strip()
-            try:
-                representations = int(row["Equivalent_Representation_Count"])
-                hypotheses = int(row["Identity_Hypothesis_Count"])
-            except (TypeError, ValueError):
+            representations = _canonical_nonnegative_decimal(row["Equivalent_Representation_Count"])
+            hypotheses = _canonical_nonnegative_decimal(row["Identity_Hypothesis_Count"])
+            if representations is None or hypotheses is None:
                 violations.append(f"{row_key}: identity counts are not integers")
                 continue
 
             if status == "unresolved":
-                if identity or representations != 0 or hypotheses < 0:
+                if identity or representations != 0:
                     violations.append(f"{row_key}: inconsistent unresolved identity quartet")
             elif status in {"unique", "legacy-selected-among-multiple"}:
                 if not identity or representations < 1 or hypotheses < 1:
                     violations.append(f"{row_key}: inconsistent resolved identity quartet")
+                elif not _is_canonical_identity(identity):
+                    violations.append(f"{row_key}: noncanonical molecular identity {identity!r}")
+                elif status == "unique" and hypotheses != 1:
+                    violations.append(f"{row_key}: unique status requires identity hypothesis count 1")
+                elif status == "legacy-selected-among-multiple" and hypotheses <= 1:
+                    violations.append(
+                        f"{row_key}: legacy-selected-among-multiple status requires identity hypothesis count > 1"
+                    )
                 elif expected is not None:
                     caller_name_column = "Nomenclature_Kestrel" if caller == "kestrel" else "Nomenclature_adVNTR"
                     caller_name = (row.get(caller_name_column) or "").strip()
@@ -572,7 +721,50 @@ def _identity_observations(
                             )
             else:
                 violations.append(f"{row_key}: unknown identity status {status!r}")
+            parsed_rows.append((row_key, identity, status, representations, hypotheses))
+
+        hypothesis_counts = {hypotheses for _, _, _, _, hypotheses in parsed_rows}
+        if len(hypothesis_counts) > 1:
+            violations.append(f"{key}/{condition}/{caller}: inconsistent caller-wide hypothesis count")
+        resolved_identities = {
+            identity
+            for _, identity, status, _, _ in parsed_rows
+            if identity and status in {"unique", "legacy-selected-among-multiple"} and _is_canonical_identity(identity)
+        }
+        for row_key, identity, _status, representations, hypotheses in parsed_rows:
+            if caller == "advntr":
+                if hypotheses != len(resolved_identities):
+                    violations.append(f"{row_key}: identity hypothesis count does not match emitted adVNTR identities")
+                expected_representations = sum(other_identity == identity for _, other_identity, _, _, _ in parsed_rows)
+                if identity and representations != expected_representations:
+                    violations.append(f"{row_key}: equivalent representation count does not match emitted adVNTR rows")
+            else:
+                if hypotheses < len(resolved_identities):
+                    violations.append(f"{row_key}: identity hypothesis count is below emitted Kestrel identities")
+                observable_representations = sum(
+                    other_identity == identity for _, other_identity, _, _, _ in parsed_rows
+                )
+                if identity and representations < observable_representations:
+                    violations.append(
+                        f"{row_key}: equivalent representation count is below emitted Kestrel representations"
+                    )
     return violations, IdentityCounts(resolved, exact_count, wrong)
+
+
+def _canonical_nonnegative_decimal(value: object) -> int | None:
+    if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+        return None
+    if len(value) > 1 and value.startswith("0"):
+        return None
+    return int(value)
+
+
+def _is_canonical_identity(value: str) -> bool:
+    try:
+        _parse_canonical_identity(value)
+    except AssertionError:
+        return False
+    return True
 
 
 def _identity_counts_by_tier(
@@ -637,36 +829,156 @@ def _bam_replay_observation(sample_dir: Path, expected_identity: str) -> tuple[b
     if not path.is_file():
         return False, False
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
     except (OSError, json.JSONDecodeError) as error:
         raise AssertionError(f"invalid BAM replay artifact for golden oracle: {path}") from error
-    if not isinstance(value, dict) or value.get("schema_version") != "bam-identity-replay-v1":
+    root = _exact_json_object(value, {"schema_version", "loci"}, "BAM replay root", path)
+    if root["schema_version"] != "bam-identity-replay-v1":
         raise AssertionError(f"unexpected BAM replay schema for golden oracle: {path}")
-    loci = value.get("loci")
+    loci = root["loci"]
     if not isinstance(loci, list):
         raise AssertionError(f"BAM replay loci are not a list: {path}")
     complete = False
     truth_match = False
-    for locus in loci:
-        if not isinstance(locus, dict) or locus.get("state") != "observed":
+    previous_group: tuple[int, ...] | None = None
+    retained_ordinals: set[int] = set()
+    for raw_locus in loci:
+        locus = _exact_json_object(
+            raw_locus,
+            {"candidate_observation_ordinals", "state", "evidence"},
+            "BAM replay locus",
+            path,
+        )
+        group = _strict_ordinal_group(locus["candidate_observation_ordinals"], "candidate group", path)
+        if previous_group is not None and group <= previous_group:
+            raise AssertionError(f"BAM replay candidate groups are not deterministically increasing: {path}")
+        if retained_ordinals.intersection(group):
+            raise AssertionError(f"BAM replay candidate groups overlap: {path}")
+        retained_ordinals.update(group)
+        previous_group = group
+        state = locus["state"]
+        if state not in {"not-consulted", "unavailable", "observed"}:
+            raise AssertionError(f"BAM replay state is invalid: {path}")
+        if state != "observed":
+            if locus["evidence"] is not None:
+                raise AssertionError(f"unobserved BAM replay locus has evidence: {path}")
             continue
-        evidence = locus.get("evidence")
-        if not isinstance(evidence, dict):
+        if locus["evidence"] is None:
             raise AssertionError(f"observed BAM replay locus has no complete evidence: {path}")
+        evidence = _exact_json_object(
+            locus["evidence"],
+            {"eligible_record_count", "records", "counts"},
+            "BAM replay evidence",
+            path,
+        )
         complete = True
-        raw_counts = evidence.get("counts")
-        if not isinstance(raw_counts, list):
-            raise AssertionError(f"BAM replay counts are not a list: {path}")
-        counts: dict[str, int] = {}
-        for entry in raw_counts:
-            if not isinstance(entry, dict) or set(entry) != {"identity", "record_count"}:
-                raise AssertionError(f"malformed BAM replay count: {path}")
-            identity, count = entry["identity"], entry["record_count"]
-            if not isinstance(identity, str) or isinstance(count, bool) or not isinstance(count, int) or count < 1:
-                raise AssertionError(f"malformed BAM replay identity/count: {path}")
-            counts[identity] = count
-        if counts:
-            maximum = max(counts.values())
-            winners = tuple(identity for identity, count in counts.items() if count == maximum)
+        derived_counts = _strict_bam_evidence(evidence, group, path)
+        if derived_counts:
+            maximum = max(derived_counts.values())
+            winners = tuple(identity for identity, count in derived_counts.items() if count == maximum)
             truth_match |= winners == (expected_identity,)
     return complete, truth_match
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise AssertionError(f"BAM replay JSON contains duplicate key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise AssertionError(f"BAM replay JSON contains non-standard constant: {value}")
+
+
+def _exact_json_object(value: object, keys: set[str], name: str, path: Path) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise AssertionError(f"{name} must contain exactly {sorted(keys)}: {path}")
+    return value
+
+
+def _strict_nonnegative_integer(value: object, name: str, path: Path) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AssertionError(f"{name} must be a non-negative integer: {path}")
+    return value
+
+
+def _strict_ordinal_group(value: object, name: str, path: Path) -> tuple[int, ...]:
+    if not isinstance(value, list) or not value:
+        raise AssertionError(f"BAM replay {name} must be a nonempty list: {path}")
+    group = tuple(_strict_nonnegative_integer(ordinal, f"BAM replay {name} ordinal", path) for ordinal in value)
+    if group != tuple(sorted(group)) or len(group) != len(set(group)):
+        raise AssertionError(f"BAM replay {name} must be unique and increasing: {path}")
+    return group
+
+
+def _strict_bam_evidence(evidence: dict[str, object], group: tuple[int, ...], path: Path) -> dict[str, int]:
+    records = evidence["records"]
+    raw_counts = evidence["counts"]
+    eligible_record_count = _strict_nonnegative_integer(
+        evidence["eligible_record_count"], "BAM eligible record count", path
+    )
+    if not isinstance(records, list):
+        raise AssertionError(f"BAM replay records are not a list: {path}")
+    if eligible_record_count != len(records):
+        raise AssertionError(f"BAM eligible record count does not equal retained records: {path}")
+    derived_counts: dict[str, int] = {}
+    for raw_record in records:
+        record = _exact_json_object(
+            raw_record,
+            {"identities", "candidate_observation_ordinals", "minimum_kmer_depth"},
+            "BAM replay record",
+            path,
+        )
+        identities = record["identities"]
+        raw_bindings = record["candidate_observation_ordinals"]
+        if not isinstance(identities, list) or not isinstance(raw_bindings, list):
+            raise AssertionError(f"BAM replay identities and bindings must be lists: {path}")
+        if len(identities) != len(raw_bindings):
+            raise AssertionError(f"BAM replay identity/binding cardinality differs: {path}")
+        parsed_identities: list[str] = []
+        for identity in identities:
+            _parse_canonical_identity(identity)
+            parsed_identities.append(identity)  # type: ignore[arg-type]
+        if len(parsed_identities) != len(set(parsed_identities)):
+            raise AssertionError(f"BAM replay record identities are not unique: {path}")
+        bindings = tuple(_strict_ordinal_group(binding, "record identity binding", path) for binding in raw_bindings)
+        bound_ordinals = tuple(ordinal for binding in bindings for ordinal in binding)
+        if len(bound_ordinals) != len(set(bound_ordinals)) or not set(bound_ordinals) <= set(group):
+            raise AssertionError(f"BAM replay record bindings do not belong uniquely to the locus group: {path}")
+        if bindings != tuple(sorted(bindings)):
+            raise AssertionError(f"BAM replay identity/binding pairs are not canonically ordered: {path}")
+        minimum_depth = record["minimum_kmer_depth"]
+        if minimum_depth is not None:
+            depth = _strict_nonnegative_integer(minimum_depth, "BAM minimum k-mer depth", path)
+            if depth > 2_147_483_647:
+                raise AssertionError(f"BAM minimum k-mer depth exceeds the signed Java range: {path}")
+        for identity in parsed_identities:
+            derived_counts[identity] = derived_counts.get(identity, 0) + 1
+
+    if not isinstance(raw_counts, list):
+        raise AssertionError(f"BAM replay counts are not a list: {path}")
+    serialized_counts: dict[str, int] = {}
+    serialized_order: list[str] = []
+    for raw_count in raw_counts:
+        entry = _exact_json_object(raw_count, {"identity", "record_count"}, "BAM replay count", path)
+        identity = entry["identity"]
+        _parse_canonical_identity(identity)
+        if identity in serialized_counts:
+            raise AssertionError(f"BAM replay counts contain duplicate identities: {path}")
+        count = _strict_nonnegative_integer(entry["record_count"], "BAM identity record count", path)
+        if count < 1:
+            raise AssertionError(f"BAM identity record count must be positive: {path}")
+        serialized_counts[identity] = count  # type: ignore[index]
+        serialized_order.append(identity)  # type: ignore[arg-type]
+    if serialized_order != list(derived_counts):
+        raise AssertionError(f"BAM replay counts are not in deterministic derived order: {path}")
+    if serialized_counts != derived_counts:
+        raise AssertionError(f"BAM replay serialized counts do not equal derived record counts: {path}")
+    return derived_counts

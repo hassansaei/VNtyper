@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -289,6 +291,7 @@ PRA_PUBLIC_TRUTH_IDENTITY_FINGERPRINT = "bd8f8b56cf8d5516affcff6116b6509213ecfdd
 PRA_BAM_ELIGIBLE_FINGERPRINT = "0baf09e74569ed1e51710c8a2f844baab5ed015a96e32751a3f0a14d5f53b4b5"
 PRA_BAM_FETCH_FINGERPRINT = "ec9f859ab3c2ad78399ee373a708a15d8aa8b4c09b8a0f134a6f2420947fa72f"
 PRA_COMPLETE_BAM_FINGERPRINT = "a90dcdf5fa13873f29f272d30b7c7de3fe9b4ac39f9f0dad8b29e1dbf5d12839"
+PRA_PUBLIC_IDENTITY_QUARTET_FINGERPRINT = "960fe7316a7f5f1d4de684f6f5c4ef5510a965e63face10d504b4a2ac9d33e32"
 PRA_BAM_TRUTH_MATCH_KEYS = frozenset(
     {
         "experiment2_atypical/pair_4033",
@@ -524,6 +527,8 @@ def test_recursive_guard_rejects_nested_production_import(tmp_path: Path) -> Non
     "source",
     [
         "import importlib\nvalue = importlib.import_module('vntyper.scripts.nomenclature')\n",
+        "from importlib import import_module\nvalue = import_module('vntyper.scripts.nomenclature')\n",
+        "import importlib as il\nvalue = il.import_module('vntyper.scripts.nomenclature')\n",
         "value = __import__('vntyper.scripts.nomenclature')\n",
     ],
 )
@@ -566,6 +571,218 @@ def test_oracle_rejects_wrong_identity_under_a_truth_exact_caller_name() -> None
     assert counts == identity_oracle.IdentityCounts(resolved=1, exact=0, wrong=1)
     assert len(violations) == 1
     assert f"expected {expected.identity!r}" in violations[0]
+
+
+@pytest.mark.parametrize(
+    ("status", "hypotheses"),
+    [
+        ("unique", "2"),
+        ("legacy-selected-among-multiple", "1"),
+    ],
+)
+def test_oracle_rejects_statuses_inconsistent_with_hypothesis_count(status: str, hypotheses: str) -> None:
+    """Resolved status must encode whether the caller had one or multiple identities."""
+    identity = EXPECTED_CLASS_IDENTITIES["dupC"].identity
+    public_rows = {
+        "kestrel": (
+            {
+                "Molecular_Identity": identity,
+                "Molecular_Identity_Status": status,
+                "Equivalent_Representation_Count": "1",
+                "Identity_Hypothesis_Count": hypotheses,
+            },
+        ),
+        "advntr": (),
+    }
+
+    violations, _ = identity_oracle._identity_observations("sample", "mutated", public_rows, None)
+
+    assert len(violations) == 1
+    assert "hypothesis count" in violations[0]
+
+
+def test_oracle_rejects_inconsistent_caller_wide_and_advntr_quartet_counts() -> None:
+    """All caller rows share hypotheses and adVNTR equivalence is exactly observable."""
+    identity = EXPECTED_CLASS_IDENTITIES["dupC"].identity
+    rows = (
+        {
+            "Molecular_Identity": identity,
+            "Molecular_Identity_Status": "unique",
+            "Equivalent_Representation_Count": "1",
+            "Identity_Hypothesis_Count": "1",
+        },
+        {
+            "Molecular_Identity": identity,
+            "Molecular_Identity_Status": "legacy-selected-among-multiple",
+            "Equivalent_Representation_Count": "1",
+            "Identity_Hypothesis_Count": "2",
+        },
+    )
+
+    violations, _ = identity_oracle._identity_observations(
+        "sample",
+        "mutated",
+        {"kestrel": (), "advntr": rows},
+        None,
+    )
+
+    assert any("caller-wide hypothesis count" in violation for violation in violations)
+    assert any("equivalent representation count" in violation for violation in violations)
+
+
+def _valid_bam_replay_payload() -> dict[str, Any]:
+    dupc = EXPECTED_CLASS_IDENTITIES["dupC"].identity
+    dupa = EXPECTED_CLASS_IDENTITIES["dupA"].identity
+    return {
+        "schema_version": "bam-identity-replay-v1",
+        "loci": [
+            {
+                "candidate_observation_ordinals": [2, 7],
+                "state": "observed",
+                "evidence": {
+                    "eligible_record_count": 3,
+                    "records": [
+                        {
+                            "identities": [dupc],
+                            "candidate_observation_ordinals": [[2]],
+                            "minimum_kmer_depth": 5,
+                        },
+                        {
+                            "identities": [dupc, dupa],
+                            "candidate_observation_ordinals": [[2], [7]],
+                            "minimum_kmer_depth": None,
+                        },
+                        {
+                            "identities": [dupc],
+                            "candidate_observation_ordinals": [[2]],
+                            "minimum_kmer_depth": 0,
+                        },
+                    ],
+                    "counts": [
+                        {"identity": dupc, "record_count": 3},
+                        {"identity": dupa, "record_count": 1},
+                    ],
+                },
+            },
+            {"candidate_observation_ordinals": [11], "state": "unavailable", "evidence": None},
+        ],
+    }
+
+
+def _write_bam_replay(tmp_path: Path, payload: object) -> Path:
+    sample = tmp_path / "kestrel"
+    sample.mkdir()
+    (sample / "bam_identity_replay.v1.json").write_text(json.dumps(payload), encoding="utf-8")
+    return sample
+
+
+def test_bam_oracle_derives_counts_and_rejects_a_fabricated_serialized_winner(tmp_path: Path) -> None:
+    """Serialized count claims cannot override independently counted record identities."""
+    payload = _valid_bam_replay_payload()
+    evidence = payload["loci"][0]["evidence"]
+    evidence["counts"][0]["record_count"] = 99
+    sample = _write_bam_replay(tmp_path, payload)
+
+    with pytest.raises(AssertionError, match="derived record counts"):
+        identity_oracle._bam_replay_observation(sample, EXPECTED_CLASS_IDENTITIES["dupC"].identity)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "unknown-root-key",
+        "unknown-locus-key",
+        "unknown-evidence-key",
+        "unknown-record-key",
+        "unknown-count-key",
+        "overlapping-group",
+        "invalid-state-pairing",
+        "eligible-record-mismatch",
+        "identity-binding-cardinality",
+        "out-of-group-binding",
+        "noncanonical-binding-order",
+        "invalid-identity",
+        "duplicate-record-identity",
+        "noncanonical-count-order",
+        "zero-count",
+    ],
+)
+def test_bam_oracle_rejects_closed_schema_binding_and_identity_defects(tmp_path: Path, defect: str) -> None:
+    """Unknown keys, malformed bindings, and noncanonical identities fail closed."""
+    payload = copy.deepcopy(_valid_bam_replay_payload())
+    if defect == "unknown-root-key":
+        payload["extra"] = True
+    elif defect == "unknown-locus-key":
+        payload["loci"][0]["extra"] = True
+    elif defect == "unknown-evidence-key":
+        payload["loci"][0]["evidence"]["extra"] = True
+    elif defect == "unknown-record-key":
+        payload["loci"][0]["evidence"]["records"][0]["extra"] = True
+    elif defect == "unknown-count-key":
+        payload["loci"][0]["evidence"]["counts"][0]["extra"] = True
+    elif defect == "overlapping-group":
+        payload["loci"][1]["candidate_observation_ordinals"] = [7]
+    elif defect == "invalid-state-pairing":
+        payload["loci"][0]["state"] = "unavailable"
+    elif defect == "eligible-record-mismatch":
+        payload["loci"][0]["evidence"]["eligible_record_count"] = 2
+    elif defect == "identity-binding-cardinality":
+        payload["loci"][0]["evidence"]["records"][0]["candidate_observation_ordinals"] = []
+    elif defect == "out-of-group-binding":
+        payload["loci"][0]["evidence"]["records"][0]["candidate_observation_ordinals"] = [[99]]
+    elif defect == "noncanonical-binding-order":
+        payload["loci"][0]["evidence"]["records"][1]["candidate_observation_ordinals"] = [[7], [2]]
+    elif defect == "invalid-identity":
+        payload["loci"][0]["evidence"]["records"][0]["identities"] = ["59dupC"]
+    elif defect == "duplicate-record-identity":
+        record = payload["loci"][0]["evidence"]["records"][1]
+        record["identities"] = [record["identities"][0], record["identities"][0]]
+    elif defect == "noncanonical-count-order":
+        payload["loci"][0]["evidence"]["counts"].reverse()
+    else:
+        payload["loci"][0]["evidence"]["counts"][0]["record_count"] = 0
+    sample = _write_bam_replay(tmp_path, payload)
+
+    with pytest.raises(AssertionError):
+        identity_oracle._bam_replay_observation(sample, EXPECTED_CLASS_IDENTITIES["dupC"].identity)
+
+
+def test_bam_oracle_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    """Duplicate object keys cannot be hidden by the standard decoder's last-key rule."""
+    payload = json.dumps(_valid_bam_replay_payload())
+    payload = payload.replace(
+        '"schema_version": "bam-identity-replay-v1",',
+        '"schema_version": "bam-identity-replay-v1", "schema_version": "bam-identity-replay-v1",',
+        1,
+    )
+    sample = tmp_path / "kestrel"
+    sample.mkdir()
+    (sample / "bam_identity_replay.v1.json").write_text(payload, encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="duplicate"):
+        identity_oracle._bam_replay_observation(sample, EXPECTED_CLASS_IDENTITIES["dupC"].identity)
+
+
+def test_identity_quartet_fingerprint_changes_for_one_cell() -> None:
+    """One public quartet-cell drift must change its literal compatibility digest."""
+    projection = {"sample/kestrel": (("identity", "unique", "1", "1"),)}
+    changed = {"sample/kestrel": (("identity", "unique", "1", "2"),)}
+
+    assert identity_oracle.selected_projection_fingerprint(projection) == (
+        "55bec88299f6d83eb5b3e36e9bf970d6d8a077201a8750f8a44c3f69c4458238"
+    )
+    assert identity_oracle.selected_projection_fingerprint(changed) != identity_oracle.selected_projection_fingerprint(
+        projection
+    )
+
+
+def test_complete_public_identity_quartet_projection_is_literal(uut_replay: UutReplay) -> None:
+    """Every public identity/status/representation/hypothesis cell is compatibility-locked."""
+    projection = getattr(uut_replay.corpus, "identity_projection_by_sample", {})
+    assert len(projection) == 800
+    assert sum(len(rows) for rows in projection.values()) == 374
+    assert all(len(cells) == len(IDENTITY_COLUMNS) for rows in projection.values() for cells in rows)
+    assert identity_oracle.selected_projection_fingerprint(projection) == PRA_PUBLIC_IDENTITY_QUARTET_FINGERPRINT
 
 
 def test_both_roots_and_every_sample_are_loaded(corpus: GoldenCorpus, uut_replay: UutReplay) -> None:
