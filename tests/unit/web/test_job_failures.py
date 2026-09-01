@@ -82,7 +82,9 @@ def test_reader_rejects_every_non_single_link_regular_artifact_without_blocking(
     tmp_path: Path, entry_kind: str
 ) -> None:
     """Special files and aliases cannot block the worker or expose another inode."""
-    output = tmp_path / "output"
+    # Keep the socket pathname below Linux's AF_UNIX limit even when xdist adds
+    # its worker directory to pytest's temporary path.
+    output = tmp_path / "o"
     output.mkdir()
     artifact = output / "preflight_error.json"
     protected = tmp_path / "protected.json"
