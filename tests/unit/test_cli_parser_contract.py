@@ -77,6 +77,7 @@ ASSEMBLY_CHOICES = ("GRCh37", "GRCh38", "hg19", "hg19_ensembl", "hg19_ncbi", "hg
 REPORT_IGV_CHOICES = ("embedded", "sidecar", "off")
 
 SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
+    "calibrate": {},
     "pipeline": {
         "advntr_max_coverage": (("--advntr-max-coverage",), "_StoreAction", "int", None, False, None, None),
         "archive_format": (("--archive-format",), "_StoreAction", "str", None, False, ("zip", "tar.gz"), None),
@@ -170,6 +171,16 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
 #: Smallest argv that parses, per subcommand - the prefix an "unknown argument" test
 #: has to satisfy before argparse gets as far as complaining about the unknown one.
 MINIMAL_ARGV: dict[str, list[str]] = {
+    "calibrate": [
+        "calibrate",
+        "fit",
+        "--evidence",
+        "evidence",
+        "--objective",
+        "lexicographic-safety-v1",
+        "--output",
+        "candidate",
+    ],
     "pipeline": ["pipeline"],
     "report": ["report", "-o", "results"],
     "cohort": ["cohort", "-i", "a", "-o", "results"],

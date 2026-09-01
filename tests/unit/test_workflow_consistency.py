@@ -207,11 +207,13 @@ def test_makefile_base_inputs_mirror_every_hash_input() -> None:
 
 def test_unit_coverage_matrix_and_patch_coverage_version_are_fixed() -> None:
     workflow = (WORKFLOWS / "ci-tests.yml").read_text(encoding="utf-8")
+    parsed = yaml.safe_load(workflow)
     assert "python-version: ['3.10', '3.11', '3.12', '3.13']" in workflow
     assert "run: make test-unit-cov" in workflow
     assert "matrix.python-version == '3.12'" in workflow
     assert "PATCH_COVERAGE_BASE" in workflow
     assert "`mypy vntyper/ docker/app/ scripts/`" in workflow
+    assert parsed["jobs"]["test-unit"]["timeout-minutes"] == 20
 
 
 def _compatibility_step() -> dict[str, object]:

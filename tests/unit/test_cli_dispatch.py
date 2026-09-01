@@ -26,7 +26,7 @@ import logging
 import pytest
 
 from vntyper import cli
-from vntyper.scripts import cli_handlers, cli_report
+from vntyper.scripts import cli_calibrate, cli_handlers, cli_report
 from vntyper.scripts.cli_parser import build_parser
 
 pytestmark = pytest.mark.unit
@@ -69,6 +69,16 @@ MINIMAL_ARGV: dict[str, list[str]] = {
     "cohort": ["cohort", "-i", "{tmp}", "-o", "{tmp}"],
     "install-references": ["install-references", "-d", "{tmp}"],
     "online": ["online", "--bam", "{tmp}/in.bam", "-o", "{tmp}"],
+    "calibrate": [
+        "calibrate",
+        "fit",
+        "--evidence",
+        "{tmp}/evidence",
+        "--objective",
+        "lexicographic-safety-v1",
+        "--output",
+        "{tmp}/candidate",
+    ],
 }
 
 EXPECTED_HANDLERS = {
@@ -77,6 +87,7 @@ EXPECTED_HANDLERS = {
     "cohort": cli_handlers.handle_cohort,
     "install-references": cli_handlers.handle_install_references,
     "online": cli_handlers.handle_online,
+    "calibrate": cli_calibrate.handle_calibrate,
 }
 
 
@@ -258,7 +269,7 @@ def test_no_handler_module_configures_logging() -> None:
     """Handlers must not re-run ``setup_logging``; ``cli.py`` owns it (AGENTS.md)."""
     assert "setup_logging" in _called_function_names(cli), "cli.py stopped configuring logging; nothing else may"
 
-    for module in (cli_handlers, cli_report):
+    for module in (cli_handlers, cli_report, cli_calibrate):
         called = _called_function_names(module)
         assert called, f"parsed no calls out of {module.__name__}; this assertion would be vacuous"
         assert "setup_logging" not in called, f"{module.__name__} configures logging; only cli.py may"

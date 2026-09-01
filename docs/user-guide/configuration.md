@@ -44,6 +44,13 @@ The resolved canonical bytes are snapshotted under `provenance/`, and schema-3
 and cohorts verify that run-local snapshot rather than inferring policy from the package
 installed later.
 
+The optional [`vntyper calibrate`](../cli/calibrate.md) workflow can generate such a
+profile from role-bound retained evidence. It changes only six declared dominance and
+whole-locus-abstention leaves; it does not change any shipped cutoff or default. Its
+output remains inactive until explicitly supplied to `pipeline --decision-profile`.
+The available simulations are development evidence, not independent external validation,
+so Issue #295 remains blocked. Reporting an interval is not a clinical safety claim.
+
 !!! warning "Fixed safety thresholds"
     The shipped depth score and confidence boundaries are empirically validated values from Saei et al., iScience 26, 107171 (2023). They are recorded in the complete profile for reproducibility but cannot be changed by an explicit or generated profile.
 

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VNtyper calibration evidence — {{ report.phase }}</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; line-height: 1.45; }
+    body { margin: 0 auto; max-width: 1100px; padding: 2rem; color: #17202a; }
+    h1, h2 { color: #17365d; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0 2rem; }
+    th, td { border: 1px solid #aeb6bf; padding: .45rem .6rem; text-align: left; }
+    th { background: #eaf2f8; }
+    code { overflow-wrap: anywhere; }
+    .warning { border-left: .35rem solid #b03a2e; background: #fdedec; padding: .8rem 1rem; }
+    .grid { display: grid; grid-template-columns: minmax(12rem, 1fr) 3fr; gap: .35rem 1rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>VNtyper calibration evidence: {{ report.phase }}</h1>
+    <p>This report keeps fitted versus validation versus held-out results visibly separate.</p>
+    <div class="grid" aria-label="artifact hashes">
+      <strong>Profile SHA-256</strong><code>{{ report.profile_sha256 }}</code>
+      <strong>Protocol SHA-256</strong><code>{{ report.protocol_sha256 }}</code>
+      <strong>Evidence SHA-256</strong><code>{{ report.evidence_sha256 }}</code>
+      <strong>Objective</strong><code>{{ report.objective }}</code>
+    </div>
+
+    <h2>Per-tier displayed, exact, and wrong counts</h2>
+    <table>
+      <thead><tr><th>Tier</th><th>Displayed</th><th>Exact</th><th>Wrong</th></tr></thead>
+      <tbody>
+      {% for row in report.tier_metrics %}
+        <tr><th scope="row">{{ row.tier }}</th><td>{{ row.displayed }}</td><td>{{ row.exact }}</td><td>{{ row.wrong }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Whole-locus abstentions</h2>
+    <p>XD means optional minimum k-mer depth; it is not a read, molecule, or allele-length count.</p>
+    <table>
+      <thead><tr><th>Split</th><th>Reason</th><th>Count</th><th>Rate</th></tr></thead>
+      <tbody>
+      {% for row in report.abstentions %}
+        <tr><td>{{ row.split }}</td><td>{{ row.reason }}</td><td>{{ row.count }}</td><td>{{ row.rate }}</td></tr>
+      {% else %}
+        <tr><td colspan="4">No abstentions recorded.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Study provenance and boundary coverage</h2>
+    {% for heading, values in report.provenance.items() %}
+      <h3>{{ heading.replace('_', ' ').title() }}</h3>
+      <ul>{% for value in values %}<li>{{ value }}</li>{% else %}<li>Not recorded.</li>{% endfor %}</ul>
+    {% endfor %}
+
+    <h2>Intervals, curves, and joint surface</h2>
+    {% for heading, values in report.statistics.items() %}
+      <h3>{{ heading.replace('_', ' ').title() }}</h3>
+      <ul>{% for value in values %}<li><code>{{ value }}</code></li>{% else %}<li>Not available.</li>{% endfor %}</ul>
+    {% endfor %}
+
+    <h2>Limitations</h2>
+    <div class="warning">
+      <ul>{% for limitation in report.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>
+    </div>
+  </main>
+</body>
+</html>

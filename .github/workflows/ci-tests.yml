@@ -154,7 +154,10 @@ jobs:
     # Pinned rather than ubuntu-latest so a runner-image rollover cannot change the
     # toolchain underneath a green build without a commit.
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Branch-inclusive coverage over the complete unit matrix exceeded the old
+    # 10-minute ceiling after the schema-3/profile suites landed. The timeout is a
+    # dead-run guard, not a performance target; keep enough room for the patch gate.
+    timeout-minutes: 20
     permissions:
       contents: read
     strategy:
