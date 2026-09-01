@@ -37,6 +37,7 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
     )
 
     assert (evidence / "study.json").is_file()
+    assert (evidence / "groups.json").is_file()
     assert (evidence / "roles" / "policy-selection" / "features.json").is_file()
     assert (evidence / "roles" / "locked-heldout" / "locked_payload.json").is_file()
     assert load_strict_json_object((evidence / "checksums.json").read_bytes())["schema_version"] == (
@@ -58,6 +59,9 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
     )
     profile = candidate / "decision_profile.json"
     assert profile.is_file()
+    for name in ("report.html", "grid.json", "intervals.json", "roc.tsv", "pr.tsv", "joint_surface.tsv", "abstentions.tsv"):
+        assert (candidate / name).is_file(), name
+    assert "optional minimum k-mer depth" in (candidate / "report.html").read_text(encoding="utf-8")
     assert load_strict_json_object((candidate / "fit_attestation.json").read_bytes())["accessed_roles"] == [
         "training",
         "policy-selection",
@@ -78,6 +82,8 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
     )
     validation_attestation = decode_attestation(load_strict_json_object((validation / "attestation.json").read_bytes()))
     assert validation_attestation.role == "validation"
+    assert (validation / "report.html").is_file()
+    assert (validation / "intervals.json").is_file()
 
     heldout = tmp_path / "heldout"
     _run_cli(
@@ -94,6 +100,8 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
     )
     heldout_attestation = load_strict_json_object((heldout / "attestation.json").read_bytes())
     assert decode_attestation(heldout_attestation).role == "locked-heldout"
+    assert (heldout / "report.html").is_file()
+    assert (heldout / "abstentions.tsv").is_file()
     limitations = load_strict_json_object((heldout / "custody_limitations.json").read_bytes())
     assert limitations["local_custody_is_independent_proof"] is False
 

@@ -31,6 +31,8 @@ from vntyper.scripts.calibration_objective import (
     count_free_parameters,
     select_candidate,
 )
+from vntyper.scripts.calibration_reporting import write_evaluation_artifacts
+from vntyper.scripts.calibration_scalar_replay import replay_scalar_dominance
 from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_workflow import (
     ExtractedEvidence,
@@ -76,6 +78,13 @@ def extract_artifact_bundle(truth_path: Path, study_path: Path, runs_path: Path,
     extracted = extract_evidence(study, features, labels, runs, baseline=_mapping(truth["baseline"], "baseline"))
 
     _write_json(output / "study.json", study_raw)
+    _write_json(
+        output / "groups.json",
+        {
+            "schema_version": "calibration-groups-v1",
+            "connected_groups": dict(connected_leakage_groups(study.partitions)),
+        },
+    )
     feature_rows = _rows(truth["features"], "calibration features")
     label_rows = _rows(truth["labels"], "calibration labels")
     baseline = _mapping(truth["baseline"], "calibration baseline")
@@ -124,6 +133,14 @@ def fit_artifact_bundle(evidence_path: Path, objective: str, output: Path) -> No
             "accessed_roles": list(fitted.accessed_roles),
         },
     )
+    write_evaluation_artifacts(
+        output,
+        phase="fitted",
+        profile=fitted.profile,
+        evidence=evidence,
+        evaluation=fitted.evaluation,
+        accessed_roles=fitted.accessed_roles,
+    )
     _write_checksums(output)
 
 
@@ -150,6 +167,14 @@ def validate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
         output / "access.json",
         {"schema_version": "calibration-access-v1", "accessed_roles": list(workflow.accessed_roles)},
     )
+    write_evaluation_artifacts(
+        output,
+        phase="validation",
+        profile=profile,
+        evidence=evidence,
+        evaluation=evaluation,
+        accessed_roles=workflow.accessed_roles,
+    )
     _write_checksums(output)
 
 
@@ -163,6 +188,14 @@ def evaluate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
     def evaluator(raw: bytes) -> dict[str, object]:
         evidence = _decode_locked_payload(raw)
         evaluation = _evaluate(profile, evidence)
+        write_evaluation_artifacts(
+            output,
+            phase="held-out",
+            profile=profile,
+            evidence=evidence,
+            evaluation=evaluation,
+            accessed_roles=("locked-heldout",),
+        )
         return {
             "metrics": _encode_metrics(evaluation.metrics),
             "evidence_sha256": evidence.dataset_sha256,
@@ -325,7 +358,10 @@ def _observations(
     for feature, baseline_raw in zip(evidence.features.rows, rows, strict=True):
         label = labels[feature.manifest_key]
         baseline = _mapping(baseline_raw, "baseline row")
-        selected, abstained, applicable = _select_scalar(feature.features, component)
+        decision = replay_scalar_dominance(feature.features, component)
+        selected = decision.selected_identity
+        abstained = decision.abstention_reason is not None
+        applicable = decision.applicable
         displayed = baseline.get("name") if selected is not None else None
         tier = baseline.get("tier") if selected is not None else None
         assay = feature.features.get("assay_class")
@@ -380,44 +416,6 @@ def _observations(
         if members[feature.manifest_key].role not in {"policy-selection", "validation", "locked-heldout"}:
             raise ValueError("calibration metrics cannot be calculated from training-role outcomes")
     return tuple(candidate_rows), tuple(baseline_rows)
-
-
-def _select_scalar(features: Mapping[str, object], component: Mapping[str, object]) -> tuple[str | None, bool, bool]:
-    identity = features.get("canonical_identity")
-    if not isinstance(identity, str) or not identity:
-        return None, False, False
-    if component["enabled"] is not True:
-        return None, False, True
-    required = (
-        "haplotype_record_count_margin",
-        "haplotype_record_share",
-        "haplotype_record_share_margin",
-        "haplotype_record_tie",
-    )
-    if any(name not in features for name in required):
-        return None, False, False
-    if features["haplotype_record_tie"] is True:
-        return None, True, True
-    if (
-        _number(features["haplotype_record_count_margin"], "record count margin")
-        < _integer(component["minimum_record_count_margin"], "minimum record count margin")
-        or _number(features["haplotype_record_share"], "record share")
-        < _number(component["minimum_record_share"], "minimum record share")
-        or _number(features["haplotype_record_share_margin"], "record share margin")
-        < _number(component["minimum_record_share_margin"], "minimum record share margin")
-    ):
-        return None, True, True
-    veto = component["xd_veto"]
-    if veto == "missingness" and _number(features.get("xd_availability_fraction", 0), "XD availability") < 1:
-        return None, True, True
-    if veto in {"concentration", "discordance"}:
-        raise ValueError(f"calibration scalar evidence cannot evaluate the {veto} XD veto")
-    if (
-        component["abstain_on_inadmissible_advntr"] is True
-        and features.get("advntr_evidence_disposition") != "admissible"
-    ):
-        return None, True, True
-    return identity, False, True
 
 
 def _write_locked_payload(role_root: Path, study_raw: Mapping[str, object], study, inputs: _RoleInputs) -> None:
@@ -628,12 +626,6 @@ def _integer(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"calibration {label} must be an integer")
     return value
-
-
-def _number(value: object, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"calibration {label} must be numeric")
-    return float(value)
 
 
 def _freeze(value: object):

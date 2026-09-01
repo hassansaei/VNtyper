@@ -18,6 +18,7 @@ include vntyper/templates/_report_base.html
 include vntyper/templates/report_template.html
 include vntyper/templates/cohort_summary_template.html
 include vntyper/templates/igv_report_template.html
+include vntyper/templates/calibration_report.html
 
 # Include the vendored igv.js and its provenance/licence notice. The report embeds
 # the gzip and prints its SHA-256; a distribution without it cannot render an

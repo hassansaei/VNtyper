@@ -158,6 +158,7 @@ version = {attr = "vntyper.version.__version__"}
     "templates/report_template.html",
     "templates/cohort_summary_template.html",
     "templates/igv_report_template.html",
+    "templates/calibration_report.html",
     # The vendored igv.js, gzipped, and the notice recording where it came from,
     # under what licence, and with which digests. Named one by one for the same
     # reason the templates are.
