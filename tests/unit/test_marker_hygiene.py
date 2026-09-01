@@ -18,6 +18,7 @@ unmarked or has no tests, and we distinguish those by source inspection.
 """
 
 import re
+import runpy
 from pathlib import Path
 
 import pytest
@@ -104,6 +105,18 @@ def test_no_test_modules_outside_the_known_tiers() -> None:
         f"These test modules live outside tests/{{{','.join(sorted(allowed))}}}: {stray}. "
         "Move real tests into a tier; rename helpers so they do not start with 'test_'."
     )
+
+
+def test_molecular_identity_golden_module_skips_when_benchmark_roots_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-golden tier collection cannot require out-of-band benchmark roots."""
+    monkeypatch.delenv("VNTYPER_SIM_ROOT", raising=False)
+    monkeypatch.delenv("VNTYPER_ADVNTR_ROOT", raising=False)
+    module = UNIT_DIR.parent / "golden" / "test_molecular_identity_golden.py"
+
+    with pytest.raises(pytest.skip.Exception, match="benchmark roots are unset"):
+        runpy.run_path(str(module), run_name="__golden_collection_probe__")
 
 
 def test_every_browser_file_declares_the_browser_marker() -> None:

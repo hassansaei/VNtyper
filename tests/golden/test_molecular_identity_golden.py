@@ -52,8 +52,13 @@ from vntyper.scripts.nomenclature_bam import BamConsensus, BamRescuer
 
 pytestmark = pytest.mark.golden
 
-SIM_ROOT = Path(os.environ["VNTYPER_SIM_ROOT"])
-ADVNTR_ROOT = Path(os.environ["VNTYPER_ADVNTR_ROOT"])
+_SIM_ROOT = os.environ.get("VNTYPER_SIM_ROOT")
+_ADVNTR_ROOT = os.environ.get("VNTYPER_ADVNTR_ROOT")
+if not _SIM_ROOT or not _ADVNTR_ROOT:
+    pytest.skip("VNTYPER_SIM_ROOT and VNTYPER_ADVNTR_ROOT benchmark roots are unset", allow_module_level=True)
+
+SIM_ROOT = Path(_SIM_ROOT)
+ADVNTR_ROOT = Path(_ADVNTR_ROOT)
 
 
 @dataclass(frozen=True)
