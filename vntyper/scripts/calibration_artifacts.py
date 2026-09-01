@@ -8,18 +8,15 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 from types import MappingProxyType
+from typing import cast
 
 from vntyper.scripts.calibration_artifact_io import (
-    load_object as _load_object,
-)
-from vntyper.scripts.calibration_artifact_io import (
-    verify_checksums as _verify_checksums,
-)
-from vntyper.scripts.calibration_artifact_io import (
-    write_checksums as _write_checksums,
-)
-from vntyper.scripts.calibration_artifact_io import (
-    write_json as _write_json,
+    freeze_json,
+    load_object,
+    thaw_json,
+    verify_checksums,
+    write_checksums,
+    write_json,
 )
 from vntyper.scripts.calibration_contract import CandidateMetrics, decode_evidence_manifest, decode_metrics
 from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
@@ -57,16 +54,16 @@ class _RoleInputs:
 
 def extract_artifact_bundle(truth_path: Path, study_path: Path, runs_path: Path, output: Path) -> None:
     """Validate raw study inputs and write role-separated immutable evidence."""
-    truth = _load_object(truth_path, "calibration truth")
+    truth = load_object(truth_path, "calibration truth")
     if set(truth) != {"schema_version", "features", "labels", "baseline"}:
         raise ValueError("calibration truth fields differ from the closed contract")
     if truth["schema_version"] != "calibration-truth-v1":
         raise ValueError("calibration truth schema version is unsupported")
-    study_raw = _load_object(study_path, "calibration study")
+    study_raw = load_object(study_path, "calibration study")
     study = decode_study_declaration(study_raw)
     features = decode_feature_artifact(truth["features"])
     labels = decode_label_artifact(truth["labels"])
-    runs_raw = _load_object(runs_path, "calibration runs")
+    runs_raw = load_object(runs_path, "calibration runs")
     if set(runs_raw) != {"schema_version", "runs"} or runs_raw["schema_version"] != "calibration-runs-v1":
         raise ValueError("calibration runs fields or schema version differ")
     raw_paths = runs_raw["runs"]
@@ -77,8 +74,8 @@ def extract_artifact_bundle(truth_path: Path, study_path: Path, runs_path: Path,
         raise ValueError("calibration run roots must be strings")
     extracted = extract_evidence(study, features, labels, runs, baseline=_mapping(truth["baseline"], "baseline"))
 
-    _write_json(output / "study.json", study_raw)
-    _write_json(
+    write_json(output / "study.json", study_raw)
+    write_json(
         output / "groups.json",
         {
             "schema_version": "calibration-groups-v1",
@@ -95,21 +92,21 @@ def extract_artifact_bundle(truth_path: Path, study_path: Path, runs_path: Path,
         role_inputs = _role_inputs(role, keys, feature_rows, label_rows, baseline, extracted.run_hashes)
         role_root = output / "roles" / role
         role_root.mkdir(parents=True)
-        _write_json(role_root / "features.json", role_inputs.features)
-        _write_json(role_root / "labels.json", role_inputs.labels)
-        _write_json(role_root / "baseline.json", role_inputs.baseline)
-        _write_json(
+        write_json(role_root / "features.json", role_inputs.features)
+        write_json(role_root / "labels.json", role_inputs.labels)
+        write_json(role_root / "baseline.json", role_inputs.baseline)
+        write_json(
             role_root / "run_hashes.json",
             {"schema_version": "calibration-run-hashes-v1", "run_hashes": role_inputs.run_hashes},
         )
-        _write_json(
+        write_json(
             role_root / "manifest.json",
             _role_manifest(study, role, role_inputs, extracted.study_sha256),
         )
         if role == "locked-heldout":
             _write_locked_payload(role_root, study_raw, study, role_inputs)
-        _write_checksums(role_root)
-    _write_checksums(output)
+        write_checksums(role_root)
+    write_checksums(output)
 
 
 def fit_artifact_bundle(evidence_path: Path, objective: str, output: Path) -> None:
@@ -120,9 +117,9 @@ def fit_artifact_bundle(evidence_path: Path, objective: str, output: Path) -> No
     fitted = fit_candidate(evidence, objective=objective, evaluator=lambda profile: _evaluate(profile, evidence))
     output.mkdir(parents=True, exist_ok=True)
     (output / "decision_profile.json").write_bytes(fitted.profile.canonical_bytes)
-    _write_json(output / "metrics.json", _encode_metrics(fitted.evaluation.metrics))
-    _write_json(output / "evaluation.json", _encode_evaluation(fitted.evaluation))
-    _write_json(
+    write_json(output / "metrics.json", _encode_metrics(fitted.evaluation.metrics))
+    write_json(output / "evaluation.json", _encode_evaluation(fitted.evaluation))
+    write_json(
         output / "fit_attestation.json",
         {
             "schema_version": "calibration-fit-attestation-v1",
@@ -141,7 +138,7 @@ def fit_artifact_bundle(evidence_path: Path, objective: str, output: Path) -> No
         evaluation=fitted.evaluation,
         accessed_roles=fitted.accessed_roles,
     )
-    _write_checksums(output)
+    write_checksums(output)
 
 
 def validate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Path) -> None:
@@ -152,8 +149,8 @@ def validate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
     evaluation = _evaluate(profile, evidence)
     output.mkdir(parents=True, exist_ok=True)
     metrics_raw = _encode_metrics(evaluation.metrics)
-    _write_json(output / "metrics.json", metrics_raw)
-    _write_json(
+    write_json(output / "metrics.json", metrics_raw)
+    write_json(
         output / "attestation.json",
         _attestation(
             "validation",
@@ -163,7 +160,7 @@ def validate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
             select_candidate((evaluation,), evidence.study.protocol) is not None,
         ),
     )
-    _write_json(
+    write_json(
         output / "access.json",
         {"schema_version": "calibration-access-v1", "accessed_roles": list(workflow.accessed_roles)},
     )
@@ -175,18 +172,26 @@ def validate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
         evaluation=evaluation,
         accessed_roles=workflow.accessed_roles,
     )
-    _write_checksums(output)
+    write_checksums(output)
 
 
 def evaluate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Path) -> None:
     """Evaluate one fixed profile after one-use locked-payload precommit."""
     profile = resolve_decision_profile(profile_path)
     role_root = evidence_path / "roles" / "locked-heldout"
-    manifest = decode_evidence_manifest(_load_object(role_root / "evidence_manifest.json", "locked evidence manifest"))
+    manifest = decode_evidence_manifest(load_object(role_root / "evidence_manifest.json", "locked evidence manifest"))
     custody = evidence_path.parent / f".{evidence_path.name}.calibration-custody"
 
     def evaluator(raw: bytes) -> dict[str, object]:
         evidence = _decode_locked_payload(raw)
+        if evidence.study.protocol.sha256 != manifest.protocol_sha256:
+            raise ValueError("locked calibration protocol hash differs from its payload")
+        if evidence.study.partitions.sha256 != manifest.partition_manifest_sha256:
+            raise ValueError("locked calibration partition hash differs from its payload")
+        if evidence.labels.sha256 != manifest.labels_sha256:
+            raise ValueError("locked calibration labels hash differs from its payload")
+        if canonical_sha256(thaw_json(evidence.baseline)) != manifest.baseline_sha256:
+            raise ValueError("locked calibration baseline hash differs from its payload")
         evaluation = _evaluate(profile, evidence)
         write_evaluation_artifacts(
             output,
@@ -223,7 +228,7 @@ def evaluate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
     if not isinstance(passed, bool):
         raise ValueError("locked calibration evaluator omitted its validation status")
     output.mkdir(parents=True, exist_ok=True)
-    _write_json(output / "metrics.json", dict(metrics_raw))
+    write_json(output / "metrics.json", dict(metrics_raw))
     attestation = _attestation_raw(
         "locked-heldout",
         profile.digest,
@@ -232,8 +237,8 @@ def evaluate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
         metrics.sha256,
         passed,
     )
-    _write_json(output / "attestation.json", attestation)
-    _write_json(
+    write_json(output / "attestation.json", attestation)
+    write_json(
         output / "custody_limitations.json",
         {
             "schema_version": "calibration-custody-limitations-v1",
@@ -244,17 +249,17 @@ def evaluate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
             ),
         },
     )
-    _write_json(
+    write_json(
         output / "access.json",
         {"schema_version": "calibration-access-v1", "accessed_roles": ["locked-heldout"]},
     )
-    _write_json(output / "custody_receipt.json", _load_object(locked.receipt.path, "custody receipt"))
-    _write_checksums(output)
+    write_json(output / "custody_receipt.json", load_object(locked.receipt.path, "custody receipt"))
+    write_checksums(output)
 
 
 def _load_roles(root: Path, roles: tuple[str, ...]) -> ExtractedEvidence:
-    _verify_checksums(root)
-    study_raw = _load_object(root / "study.json", "calibration study")
+    verify_checksums(root)
+    study_raw = load_object(root / "study.json", "calibration study")
     study = decode_study_declaration(study_raw)
     feature_rows: list[object] = []
     label_rows: list[object] = []
@@ -264,15 +269,38 @@ def _load_roles(root: Path, roles: tuple[str, ...]) -> ExtractedEvidence:
         if role not in _ROLES:
             raise ValueError(f"unsupported calibration evidence role: {role}")
         role_root = root / "roles" / role
-        _verify_checksums(role_root)
-        feature_rows.extend(_rows(_load_object(role_root / "features.json", "features"), "features"))
-        label_rows.extend(_rows(_load_object(role_root / "labels.json", "labels"), "labels"))
-        baseline = _load_object(role_root / "baseline.json", "baseline")
+        verify_checksums(role_root)
+        features_document = load_object(role_root / "features.json", "features")
+        labels_document = load_object(role_root / "labels.json", "labels")
+        role_feature_rows = _rows(features_document, "features")
+        role_label_rows = _rows(labels_document, "labels")
+        baseline = load_object(role_root / "baseline.json", "baseline")
         expected = _mapping(baseline.get("expected"), "baseline expected")
-        baseline_rows.extend(_sequence(expected.get("rows"), "baseline rows"))
-        run_document = _load_object(role_root / "run_hashes.json", "run hashes")
+        role_baseline_rows = _sequence(expected.get("rows"), "baseline rows")
+        run_document = load_object(role_root / "run_hashes.json", "run hashes")
+        if set(run_document) != {"schema_version", "run_hashes"} or run_document["schema_version"] != (
+            "calibration-run-hashes-v1"
+        ):
+            raise ValueError("calibration role run-hash fields or schema version differ")
         raw_hashes = _mapping(run_document.get("run_hashes"), "run hashes")
-        run_hashes.update({str(key): str(value) for key, value in raw_hashes.items()})
+        role_run_hashes = {str(key): str(value) for key, value in raw_hashes.items()}
+        inputs = _RoleInputs(features_document, labels_document, baseline, role_run_hashes)
+        observed_manifest = load_object(role_root / "manifest.json", "calibration role bundle manifest")
+        if observed_manifest != _role_manifest(study, role, inputs, study.sha256):
+            raise ValueError(f"calibration {role} role bundle does not match its study and artifacts")
+        expected_keys = tuple(member.key for member in study.partitions.members if member.role == role)
+        feature_keys = tuple(str(_mapping(row, "feature row")["manifest_key"]) for row in role_feature_rows)
+        label_keys = tuple(str(_mapping(row, "label row")["manifest_key"]) for row in role_label_rows)
+        if (
+            feature_keys != expected_keys
+            or label_keys != expected_keys
+            or tuple(sorted(role_run_hashes)) != expected_keys
+        ):
+            raise ValueError(f"calibration {role} role bundle members do not match the partition declaration")
+        feature_rows.extend(role_feature_rows)
+        label_rows.extend(role_label_rows)
+        baseline_rows.extend(role_baseline_rows)
+        run_hashes.update(role_run_hashes)
     feature_rows.sort(key=lambda row: str(_mapping(row, "feature row")["manifest_key"]))
     label_rows.sort(key=lambda row: str(_mapping(row, "label row")["manifest_key"]))
     baseline_rows.sort(key=lambda row: _integer(_mapping(row, "baseline row")["order"], "baseline order"))
@@ -288,7 +316,7 @@ def _load_roles(root: Path, roles: tuple[str, ...]) -> ExtractedEvidence:
         study,
         features,
         labels,
-        _freeze(baseline),
+        cast(Mapping[str, object], freeze_json(baseline)),
         MappingProxyType(dict(sorted(run_hashes.items()))),
         study.sha256,
         dataset,
@@ -439,7 +467,7 @@ def _write_locked_payload(role_root: Path, study_raw: Mapping[str, object], stud
         "labels_sha256": canonical_sha256(inputs.labels),
         "baseline_sha256": canonical_sha256(inputs.baseline),
     }
-    _write_json(role_root / "evidence_manifest.json", evidence)
+    write_json(role_root / "evidence_manifest.json", evidence)
 
 
 def _decode_locked_payload(raw: bytes) -> ExtractedEvidence:
@@ -458,7 +486,7 @@ def _decode_locked_payload(raw: bytes) -> ExtractedEvidence:
         study,
         features,
         labels,
-        _freeze(dict(_mapping(payload["baseline"], "baseline"))),
+        cast(Mapping[str, object], freeze_json(dict(_mapping(payload["baseline"], "baseline")))),
         MappingProxyType(hashes),
         study.sha256,
         dataset,
@@ -625,12 +653,4 @@ def _rows(value: object, label: str) -> Sequence[object]:
 def _integer(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"calibration {label} must be an integer")
-    return value
-
-
-def _freeze(value: object):
-    if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(child) for key, child in value.items()})
-    if isinstance(value, list):
-        return tuple(_freeze(child) for child in value)
     return value

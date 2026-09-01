@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
 
@@ -53,3 +54,21 @@ def verify_checksums(root: Path) -> None:
             raise ValueError(f"calibration checksummed artifact is unreadable: {relative}") from error
         if observed != expected:
             raise ValueError(f"calibration artifact checksum differs: {relative}")
+
+
+def freeze_json(value: object) -> object:
+    """Recursively make decoded JSON mappings and arrays immutable."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): freeze_json(child) for key, child in value.items()})
+    if isinstance(value, list):
+        return tuple(freeze_json(child) for child in value)
+    return value
+
+
+def thaw_json(value: object) -> object:
+    """Return plain canonicalizable mappings and arrays from frozen JSON."""
+    if isinstance(value, Mapping):
+        return {str(key): thaw_json(child) for key, child in value.items()}
+    if isinstance(value, tuple):
+        return [thaw_json(child) for child in value]
+    return value

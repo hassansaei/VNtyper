@@ -1,14 +1,17 @@
 """Filesystem codecs and end-to-end calibration operation artifacts."""
 
 import logging
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from vntyper.scripts.calibration_artifacts import (
+    evaluate_artifact_bundle,
     extract_artifact_bundle,
     fit_artifact_bundle,
+    validate_artifact_bundle,
 )
 from vntyper.scripts.calibration_contract import decode_attestation
 from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
@@ -59,7 +62,15 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
     )
     profile = candidate / "decision_profile.json"
     assert profile.is_file()
-    for name in ("report.html", "grid.json", "intervals.json", "roc.tsv", "pr.tsv", "joint_surface.tsv", "abstentions.tsv"):
+    for name in (
+        "report.html",
+        "grid.json",
+        "intervals.json",
+        "roc.tsv",
+        "pr.tsv",
+        "joint_surface.tsv",
+        "abstentions.tsv",
+    ):
         assert (candidate / name).is_file(), name
     assert "optional minimum k-mer depth" in (candidate / "report.html").read_text(encoding="utf-8")
     assert load_strict_json_object((candidate / "fit_attestation.json").read_bytes())["accessed_roles"] == [
@@ -162,6 +173,47 @@ def test_fit_refuses_tampered_policy_selection_artifacts(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="checksum"):
         fit_artifact_bundle(evidence, "lexicographic-safety-v1", tmp_path / "candidate")
+
+
+def test_validation_refuses_a_self_checksummed_role_directory_swap(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation_role = evidence / "roles" / "validation"
+    shutil.rmtree(validation_role)
+    shutil.copytree(evidence / "roles" / "policy-selection", validation_role)
+
+    with pytest.raises(ValueError, match="role bundle|validation"):
+        validate_artifact_bundle(
+            candidate / "decision_profile.json",
+            evidence,
+            tmp_path / "validation-attestation",
+        )
+
+
+def test_locked_evaluation_refuses_manifest_protocol_mismatched_to_payload(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    manifest_path = evidence / "roles" / "locked-heldout" / "evidence_manifest.json"
+    manifest = load_strict_json_object(manifest_path.read_bytes())
+    manifest["protocol_sha256"] = "a" * 64
+    manifest_path.write_bytes(canonical_json_bytes(manifest))
+
+    with pytest.raises(ValueError, match="protocol"):
+        evaluate_artifact_bundle(
+            candidate / "decision_profile.json",
+            evidence,
+            tmp_path / "heldout-attestation",
+        )
 
 
 def _inputs(root: Path) -> tuple[Path, Path, Path]:
