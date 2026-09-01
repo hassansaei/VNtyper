@@ -393,7 +393,7 @@ pytestmark = pytest.mark.unit
 #: Re-recorded 2026-08-26 when the ``[IMAGES]`` section was dropped from the document.
 #: Verified identical under pandas 2.2.2 / plotly 6.9.0 and pandas 2.2.3 / plotly 7.0.0,
 #: which is the point of dropping it.
-EXPECTED_FINGERPRINT = "6d6f6c3bd47027ad2a2ec250bae363bd2d8514b38efea03b7590f3ab8fc16d6b"
+EXPECTED_FINGERPRINT = "f3e421cc7d79928412fc49546b7ce5864ed6785065604a83b93605670f9517b8"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid
@@ -1062,6 +1062,42 @@ def test_a_cohort_run_writes_the_report_and_every_requested_export(tmp_path) -> 
         "cohort_stats.tsv",
         "cohort_stats.json",
     }
+
+
+def test_cohort_preserves_each_samples_own_advntr_evidence_revision(tmp_path) -> None:
+    from vntyper.modules.advntr.artifact_evidence import ASSERTION, load_packaged_artifact_evidence
+
+    cohort_root = _cohort_on_disk(tmp_path / "cohort")
+    current_sample = cohort_root / "sample_one"
+    summary_path = current_sample / "pipeline_summary.json"
+    summary_document = json.loads(summary_path.read_text(encoding="utf-8"))
+    evidence = load_packaged_artifact_evidence()
+    summary_document["advntr_evidence_digest"] = evidence.digest
+    summary_path.write_text(json.dumps(summary_document), encoding="utf-8")
+    snapshot = current_sample / "provenance" / "advntr_artifact_evidence.json"
+    snapshot.parent.mkdir()
+    snapshot.write_bytes(evidence.canonical_bytes)
+    output_dir = tmp_path / "out"
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(cohort_root)],
+        output_dir=str(output_dir),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        additional_formats="csv",
+    )
+
+    report = (output_dir / "cohort_summary.html").read_text(encoding="utf-8")
+    stats = pd.read_csv(output_dir / "cohort_stats.csv", keep_default_na=False)
+
+    assert evidence.digest in report
+    assert ASSERTION in report
+    assert "artifact-evidence revision not recorded" in report
+    assert stats["advntr_evidence_revision"].tolist() == [
+        evidence.digest,
+        "artifact-evidence revision not recorded",
+    ]
+    assert stats["advntr_evidence_assertion"].tolist() == [ASSERTION, ""]
 
 
 def test_an_unreadable_discovered_sample_remains_in_both_denominators(tmp_path) -> None:

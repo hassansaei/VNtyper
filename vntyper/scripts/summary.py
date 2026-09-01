@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ def start_summary(
     reference_key_used=None,
     reference_path=None,
     reference_source_effective=None,
+    advntr_evidence_digest=None,
 ):
     """
     Initializes a new pipeline summary.
@@ -110,6 +112,8 @@ def start_summary(
             ("ucsc", "ncbi" or "ensembl") the run actually used, which can differ from
             the requested assembly's own source when a UCSC-family fallback was taken.
             For BAM and CRAM, the alignment plan's own source label instead.
+        advntr_evidence_digest (str, optional): Full canonical digest of the
+            run-snapshotted governed adVNTR evidence, or None when adVNTR was not used.
 
     Returns:
         dict: A summary dictionary with its schema version, decision policy, pipeline
@@ -117,9 +121,16 @@ def start_summary(
         from, the effective reference selection,
         a placeholder for the region the run resolves later, and an empty steps list.
     """
+    if advntr_evidence_digest is not None and (
+        not isinstance(advntr_evidence_digest, str) or re.fullmatch(r"[0-9a-f]{64}", advntr_evidence_digest) is None
+    ):
+        message = "adVNTR evidence digest must be 64 lowercase hexadecimal characters or None"
+        logger.error(message)
+        raise ValueError(message)
     return {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "decision_policy": DEFAULT_DECISION_POLICY,
+        "advntr_evidence_digest": advntr_evidence_digest,
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},

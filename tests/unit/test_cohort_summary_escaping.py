@@ -42,7 +42,13 @@ def _normalized_visible_text(document: str) -> str:
     return " ".join(html_module.unescape(re.sub(r"<[^>]+>", " ", document)).split())
 
 
-def _render(tmp_path: Path, kestrel_df=None, advntr_df=None, additional_stats_html="") -> str:
+def _render(
+    tmp_path: Path,
+    kestrel_df=None,
+    advntr_df=None,
+    additional_stats_html="",
+    advntr_evidence_provenance=None,
+) -> str:
     """Render the cohort report into ``tmp_path`` and return the HTML."""
     cohort_summary.generate_cohort_summary_report(
         output_dir=str(tmp_path),
@@ -51,8 +57,30 @@ def _render(tmp_path: Path, kestrel_df=None, advntr_df=None, additional_stats_ht
         summary_file="cohort_summary.html",
         config=load_config(None),
         additional_stats_html=additional_stats_html,
+        advntr_evidence_provenance=advntr_evidence_provenance,
     )
     return (tmp_path / "cohort_summary.html").read_text(encoding="utf-8")
+
+
+def test_recorded_advntr_evidence_provenance_is_visible_and_escaped(tmp_path: Path) -> None:
+    from vntyper.modules.advntr.artifact_evidence import ASSERTION
+
+    digest = "8bb68bd5fba539feee6feb240f113aaa24fc65b5a1e55776c58cea83db5654b0"
+
+    document = _render(
+        tmp_path,
+        advntr_evidence_provenance=[
+            {"sample": INJECTION, "revision": digest, "assertion": ASSERTION},
+            {"sample": "hostile", "revision": digest, "assertion": INJECTION},
+            {"sample": "legacy", "revision": "artifact-evidence revision not recorded", "assertion": ""},
+        ],
+    )
+
+    assert digest in document
+    assert ASSERTION in document
+    assert "artifact-evidence revision not recorded" in document
+    assert INJECTION not in document
+    assert document.count(ESCAPED) == 2
 
 
 def test_a_sample_name_is_not_rendered_as_markup_in_the_kestrel_table(tmp_path) -> None:

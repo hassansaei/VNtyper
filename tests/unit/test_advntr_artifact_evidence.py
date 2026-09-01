@@ -115,6 +115,65 @@ class TestPackagedArtifact:
         assert '"modules/advntr/advntr_artifact_evidence.json"' in pyproject
         assert '"modules/advntr/advntr_artifact_evidence.sha256"' in pyproject
 
+    def test_snapshot_is_an_atomic_byte_exact_copy(self, tmp_path: Path, evidence: ArtifactEvidence) -> None:
+        destination = tmp_path / "provenance" / "advntr_artifact_evidence.json"
+
+        artifact_evidence_module.snapshot_artifact_evidence(evidence, destination)
+
+        assert destination.read_bytes() == evidence.canonical_bytes == ARTIFACT_PATH.read_bytes()
+        assert list(destination.parent.iterdir()) == [destination]
+
+    def test_snapshot_rejects_an_unverified_value(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="requires verified ArtifactEvidence"):
+            artifact_evidence_module.snapshot_artifact_evidence(object(), tmp_path / "evidence.json")  # type: ignore[arg-type]
+
+    def test_failed_snapshot_install_removes_the_candidate(
+        self, tmp_path: Path, evidence: ArtifactEvidence, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        destination = tmp_path / "provenance" / "advntr_artifact_evidence.json"
+
+        def fail_replace(*_args: object) -> None:
+            raise OSError("blocked")
+
+        monkeypatch.setattr(artifact_evidence_module.os, "replace", fail_replace)
+
+        with pytest.raises(RuntimeError, match="Failed to snapshot adVNTR artifact evidence"):
+            artifact_evidence_module.snapshot_artifact_evidence(evidence, destination)
+
+        assert not destination.exists()
+        assert list(destination.parent.iterdir()) == []
+
+    def test_recorded_provenance_verifies_the_run_snapshot(self, tmp_path: Path, evidence: ArtifactEvidence) -> None:
+        snapshot = tmp_path / "advntr_artifact_evidence.json"
+        snapshot.write_bytes(evidence.canonical_bytes)
+
+        recorded = artifact_evidence_module.resolve_recorded_artifact_evidence(evidence.digest, snapshot)
+
+        assert recorded.digest == EXPECTED_ARTIFACT_DIGEST
+        assert recorded.revision == EXPECTED_ARTIFACT_DIGEST
+        assert recorded.assertion == ASSERTION
+
+    def test_legacy_provenance_never_reads_a_current_snapshot(self, tmp_path: Path) -> None:
+        recorded = artifact_evidence_module.resolve_recorded_artifact_evidence(None, tmp_path / "missing.json")
+
+        assert recorded.digest is None
+        assert recorded.revision == "artifact-evidence revision not recorded"
+        assert recorded.assertion is None
+
+    @pytest.mark.parametrize("digest", ["", "0" * 63, "G" * 64, 1])
+    def test_recorded_provenance_rejects_malformed_digest(self, tmp_path: Path, digest: object) -> None:
+        with pytest.raises(ValueError, match="recorded adVNTR evidence digest"):
+            artifact_evidence_module.resolve_recorded_artifact_evidence(digest, tmp_path / "missing.json")
+
+    def test_recorded_provenance_rejects_snapshot_digest_drift(
+        self, tmp_path: Path, evidence: ArtifactEvidence
+    ) -> None:
+        snapshot = tmp_path / "advntr_artifact_evidence.json"
+        snapshot.write_bytes(evidence.canonical_bytes)
+
+        with pytest.raises(ValueError, match="artifact evidence digest mismatch"):
+            artifact_evidence_module.resolve_recorded_artifact_evidence("0" * 64, snapshot)
+
 
 class TestTypedEvidence:
     def test_exact_governed_scope_and_limited_assertion(self, evidence: ArtifactEvidence) -> None:

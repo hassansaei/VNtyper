@@ -15,7 +15,7 @@ from vntyper.modules.advntr.advntr_variant_annotations import (
     INSERTION_PATTERN,
     derive_ru_and_pos,
 )
-from vntyper.modules.advntr.artifact_evidence import EVIDENCE_DISPOSITION_COLUMN
+from vntyper.modules.advntr.artifact_evidence import EVIDENCE_DISPOSITION_COLUMN, ArtifactEvidence
 from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.flagging import ADVNTR_FLAG_COLUMNS, compile_flag_rules
 from vntyper.scripts.nomenclature_annotate import NOMENCLATURE_COLUMNS, annotate_advntr_frame
@@ -764,7 +764,9 @@ def annotate_advntr_variants(variant_series, ru_fasta_path):
     return ru_annotations, pos_annotations, ref_annotations, alt_annotations
 
 
-def process_advntr_output(output_path, output, output_name, config=None):
+def process_advntr_output(
+    output_path, output, output_name, config=None, *, artifact_evidence: ArtifactEvidence | None = None
+):
     """
     Process the adVNTR output to extract relevant information and generate final results.
 
@@ -784,6 +786,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
         output (str): Directory where the final results will be saved.
         output_name (str): Base name for the output files.
         config (dict, optional): Main configuration dictionary.
+        artifact_evidence: Verified governed State evidence resolved for this run.
 
     Raises:
         ValueError: If the configured flag rules are invalid for the adVNTR result schema.
@@ -945,7 +948,11 @@ def process_advntr_output(output_path, output, output_name, config=None):
             # Name the variants. Done before the "ensure all columns present" sweep
             # below so the five land as computed values, not as "Not applicable".
             identity_component = translation_component_from_config(load_nomenclature_config())
-            advntr_concat = annotate_advntr_frame(advntr_concat, identity_component=identity_component)
+            advntr_concat = annotate_advntr_frame(
+                advntr_concat,
+                identity_component=identity_component,
+                artifact_evidence=artifact_evidence,
+            )
 
             # Ensure all final columns are present
             for col in final_columns:

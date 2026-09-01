@@ -140,6 +140,7 @@ PIPELINE_STAGE_ATTRS = (
     "parse_header_pipeline_info",
     "calculate_vntr_coverage",
     "run_kestrel",
+    "reconcile_caller_outputs",
     "generate_summary_report",
     "cross_match_variants",
     "extract_results_from_pipeline_summary",

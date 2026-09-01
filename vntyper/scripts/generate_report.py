@@ -43,6 +43,7 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from vntyper.scripts import report_assets
+from vntyper.scripts.artifact_names import ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
 from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs, build_fastp_measurement
@@ -445,6 +446,12 @@ def generate_summary_report(
     # Load the pipeline summary JSON.
     summary_file_path = Path(output_dir) / "pipeline_summary.json"
     pipeline_summary = load_pipeline_summary(summary_file_path)
+    from vntyper.modules.advntr.artifact_evidence import resolve_recorded_artifact_evidence
+
+    recorded_advntr_evidence = resolve_recorded_artifact_evidence(
+        pipeline_summary.get("advntr_evidence_digest"),
+        Path(output_dir) / ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE,
+    )
 
     # Extract input_files and pipeline_version from the summary.
     input_files = pipeline_summary.get("input_files", {})
@@ -968,6 +975,8 @@ def generate_summary_report(
         # phrase itself exists in exactly one place (`report_identity.NOT_RECORDED`).
         "not_recorded": NOT_RECORDED,
         "decision_policy": recorded_or_not(pipeline_summary.get("decision_policy")),
+        "advntr_evidence_revision": recorded_advntr_evidence.revision,
+        "advntr_evidence_assertion": recorded_advntr_evidence.assertion,
         "assembly_declared": assembly_declared_text,
         "assembly_detected": recorded_or_not(assembly_text),
         "region_resolved": format_region(pipeline_summary.get("region_resolved")),

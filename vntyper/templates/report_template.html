@@ -1674,6 +1674,10 @@
             <p><strong>Region analysed:</strong> {{ region_resolved }}</p>
             <p><strong>Summary schema version:</strong> {{ summary_schema_version }}</p>
             <p><strong>Decision policy:</strong> {{ decision_policy }}</p>
+            <p><strong>adVNTR artifact evidence revision:</strong> {{ advntr_evidence_revision }}</p>
+            {% if advntr_evidence_assertion %}
+            <p><strong>adVNTR artifact evidence assertion:</strong> {{ advntr_evidence_assertion }}</p>
+            {% endif %}
             {#
               What carries the alignment browser, and which one. The digest is over the
               *decompressed* library - the exact source this document evaluates - and is

@@ -101,6 +101,7 @@ BASENAME_INDEPENDENT: set[str] = {
     "kestrel/kestrel_result.tsv",
     "advntr/advntr_model.db",
     "advntr/cross_match_results.tsv",
+    "provenance/advntr_artifact_evidence.json",
 }
 
 # --------------------------------------------------------------------------------------
@@ -278,6 +279,24 @@ def test_the_bam_path_hands_every_stage_the_declared_basename(tmp_path: Path) ->
     """
     harness = run_pipeline_under_harness(tmp_path / "out", extra_modules=["advntr"])
     _assert_basenames(harness, PARAMETERISED_ON_THE_BAM_PATH)
+
+
+def test_advntr_run_snapshots_and_threads_one_verified_evidence_value(tmp_path: Path) -> None:
+    from vntyper.modules.advntr.artifact_evidence import load_packaged_artifact_evidence
+
+    output = tmp_path / "out"
+    harness = run_pipeline_under_harness(output, extra_modules=["advntr"])
+    evidence = load_packaged_artifact_evidence()
+    snapshot = output / "provenance" / "advntr_artifact_evidence.json"
+    recorded = json.loads((output / "pipeline_summary.json").read_text(encoding="utf-8"))
+
+    assert snapshot.read_bytes() == evidence.canonical_bytes
+    assert recorded["schema_version"] == 2
+    assert recorded["advntr_evidence_digest"] == evidence.digest
+    parsing_evidence = harness.kwargs("process_advntr_output")["artifact_evidence"]
+    reconciliation_evidence = harness.kwargs("reconcile_caller_outputs")["artifact_evidence"]
+    assert parsing_evidence is reconciliation_evidence
+    assert parsing_evidence.digest == evidence.digest
 
 
 def test_the_fastq_path_hands_every_stage_the_declared_basename(tmp_path: Path) -> None:
@@ -463,6 +482,7 @@ def test_every_declared_path_moves_together_under_a_custom_basename(tmp_path: Pa
         "cross_match",
         "pipeline_info",
         "pipeline_summary",
+        "advntr_evidence",
     }, f"these did not move with the basename: {sorted(unmoved)}"
 
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from vntyper.scripts.alignment_preflight import run_preflight
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.archive_safety import create_safe_archive
-from vntyper.scripts.artifact_names import select_best_vcf_file
+from vntyper.scripts.artifact_names import ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE, select_best_vcf_file
 from vntyper.scripts.cross_match import (
     cross_match_variants,
     extract_results_from_pipeline_summary,
@@ -292,6 +292,19 @@ def run_pipeline(
         dirs = create_output_directories(output_dir)
         logger.info(f"Created output directories in: {output_dir}")
 
+        advntr_evidence = None
+        if needs_advntr:
+            from vntyper.modules.advntr.artifact_evidence import (
+                load_packaged_artifact_evidence,
+                snapshot_artifact_evidence,
+            )
+
+            advntr_evidence = load_packaged_artifact_evidence()
+            snapshot_artifact_evidence(
+                advntr_evidence,
+                Path(output_dir) / ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE,
+            )
+
         # Probing every configured tool shelled out to adVNTR (315 ms) and SHARK (36 ms)
         # on every Kestrel-only run for a value that is only logged. The set is derived
         # from the input type as well as the modules: fastp and BWA belong to the FASTQ
@@ -339,6 +352,7 @@ def run_pipeline(
             reference_key_used=reference_provenance.key_used,
             reference_path=reference_provenance.path,
             reference_source_effective=reference_provenance.source_effective,
+            advntr_evidence_digest=advntr_evidence.digest if advntr_evidence is not None else None,
         )
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         if input_type in ["BAM", "CRAM"]:
@@ -652,13 +666,20 @@ def run_pipeline(
                     logger.error(msg)
                     raise RuntimeError(msg)
                 output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
-                process_advntr_output(output_path, dirs["advntr"], "output", config=config)
+                process_advntr_output(
+                    output_path,
+                    dirs["advntr"],
+                    "output",
+                    config=config,
+                    artifact_evidence=advntr_evidence,
+                )
                 # Tier A needs two independent callers agreeing, which no single
                 # caller stage can see. Without this step production could never
                 # emit a tier-A name however well the two agreed (#nomenclature).
                 if reconcile_caller_outputs(
                     os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
                     os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
+                    artifact_evidence=advntr_evidence,
                 ):
                     # The Kestrel step was recorded before this ran, so the summary
                     # still holds the pre-reconciliation row -- and the HTML report

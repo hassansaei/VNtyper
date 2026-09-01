@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -10,8 +13,11 @@ from typing import Any, Literal, cast
 from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
 from vntyper.scripts.molecular_identity import EvidenceDisposition
 
+logger = logging.getLogger(__name__)
+
 ASSERTION = "A carried-forward recurrent adVNTR State is insufficient for molecular identity."
 EVIDENCE_DISPOSITION_COLUMN = "Evidence_Disposition"
+LEGACY_ARTIFACT_EVIDENCE_REVISION = "artifact-evidence revision not recorded"
 _MODULE_DIR = Path(__file__).resolve().parent
 _PACKAGED_ARTIFACT = _MODULE_DIR / "advntr_artifact_evidence.json"
 _PACKAGED_DIGEST = _MODULE_DIR / "advntr_artifact_evidence.sha256"
@@ -59,6 +65,19 @@ class ArtifactEvidence:
     def active_states(self) -> frozenset[str]:
         """Return the exact State strings whose governed evidence is active."""
         return frozenset(entry.state for entry in self.entries if entry.active)
+
+
+@dataclass(frozen=True)
+class RecordedArtifactEvidence:
+    """Run-recorded evidence provenance after snapshot verification."""
+
+    digest: str | None
+    assertion: str | None
+
+    @property
+    def revision(self) -> str:
+        """Return the full digest or the explicit legacy compatibility text."""
+        return self.digest or LEGACY_ARTIFACT_EVIDENCE_REVISION
 
 
 def _require_exact_fields(value: dict[str, Any], expected: set[str], *, label: str) -> None:
@@ -203,3 +222,74 @@ def evidence_disposition_for_state(state: str, evidence: ArtifactEvidence) -> Ev
     if state in evidence.active_states:
         return EvidenceDisposition("identity-insufficient")
     return EvidenceDisposition("admissible")
+
+
+def snapshot_artifact_evidence(evidence: ArtifactEvidence, destination: str | Path) -> None:
+    """Atomically snapshot verified canonical evidence into one run directory.
+
+    Args:
+        evidence: Verified immutable evidence to snapshot.
+        destination: Run-local final JSON path.
+
+    Raises:
+        ValueError: If evidence is not a verified typed value.
+        RuntimeError: If the canonical candidate cannot be written or installed.
+    """
+    if not isinstance(evidence, ArtifactEvidence):
+        raise ValueError("Artifact evidence snapshot requires verified ArtifactEvidence")
+    destination_path = Path(destination)
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    installed = False
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination_path.parent,
+            prefix=f".{destination_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as candidate:
+            temporary_path = Path(candidate.name)
+            os.fchmod(candidate.fileno(), 0o644)
+            candidate.write(evidence.canonical_bytes)
+            candidate.flush()
+            os.fsync(candidate.fileno())
+        os.replace(temporary_path, destination_path)
+        installed = True
+    except Exception as error:
+        message = f"Failed to snapshot adVNTR artifact evidence at {destination_path}: {error}"
+        logger.error(message)
+        raise RuntimeError(message) from error
+    finally:
+        if temporary_path is not None and not installed:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                logger.error(
+                    f"Failed to remove incomplete artifact evidence snapshot {temporary_path}: {cleanup_error}"
+                )
+
+
+def resolve_recorded_artifact_evidence(
+    recorded_digest: object,
+    snapshot_path: str | Path,
+) -> RecordedArtifactEvidence:
+    """Resolve only provenance recorded by a run, never the current package.
+
+    Args:
+        recorded_digest: Full digest from that run's summary, or None for legacy.
+        snapshot_path: That run's canonical evidence snapshot path.
+
+    Returns:
+        Verified provenance, or explicit legacy provenance without file access.
+
+    Raises:
+        OSError: If a recorded snapshot cannot be read.
+        ValueError: If the recorded digest or snapshot is invalid or inconsistent.
+    """
+    if recorded_digest is None:
+        return RecordedArtifactEvidence(None, None)
+    if not isinstance(recorded_digest, str) or _SHA256_RE.fullmatch(recorded_digest) is None:
+        raise ValueError("recorded adVNTR evidence digest must be 64 lowercase hexadecimal characters")
+    evidence = load_artifact_evidence(snapshot_path, expected_digest=recorded_digest)
+    return RecordedArtifactEvidence(evidence.digest, evidence.assertion)

@@ -3815,8 +3815,47 @@ def test_current_summary_provenance_keeps_schema_two_and_records_the_default_dec
     assert summary.SUMMARY_SCHEMA_VERSION == 2
     assert on_disk["schema_version"] == 2
     assert on_disk["decision_policy"] == "legacy-selection-v1"
+    assert on_disk["advntr_evidence_digest"] is None
     assert _labeled_value(block, "Decision policy") == "legacy-selection-v1"
     assert "schema 3" not in block.lower()
+
+
+@pytest.mark.parametrize("digest", ["", "0" * 63, "G" * 64, 1])
+def test_current_summary_rejects_a_malformed_advntr_evidence_digest(digest: object) -> None:
+    with pytest.raises(ValueError, match="adVNTR evidence digest"):
+        summary.start_summary(advntr_evidence_digest=digest)
+
+
+def test_current_report_verifies_and_prints_full_recorded_advntr_evidence_provenance(tmp_path: Path) -> None:
+    from vntyper.modules.advntr.artifact_evidence import ASSERTION, load_packaged_artifact_evidence
+
+    evidence = load_packaged_artifact_evidence()
+    snapshot = tmp_path / "provenance" / "advntr_artifact_evidence.json"
+    snapshot.parent.mkdir()
+    snapshot.write_bytes(evidence.canonical_bytes)
+    write_summary(tmp_path, schema_version=2, advntr_evidence_digest=evidence.digest)
+
+    block = _provenance_block(render(tmp_path))
+
+    assert _labeled_value(block, "adVNTR artifact evidence revision") == evidence.digest
+    assert _labeled_value(block, "adVNTR artifact evidence assertion") == ASSERTION
+    assert evidence.digest in block
+
+
+def test_legacy_report_never_substitutes_the_current_advntr_evidence_revision(tmp_path: Path) -> None:
+    write_summary(tmp_path, schema_version=2)
+
+    block = _provenance_block(render(tmp_path))
+
+    assert _labeled_value(block, "adVNTR artifact evidence revision") == ("artifact-evidence revision not recorded")
+    assert "adVNTR artifact evidence assertion" not in block
+
+
+def test_standalone_report_fails_closed_when_recorded_advntr_snapshot_is_missing(tmp_path: Path) -> None:
+    write_summary(tmp_path, schema_version=2, advntr_evidence_digest="0" * 64)
+
+    with pytest.raises(OSError):
+        render(tmp_path)
 
 
 def test_sample_tsv_and_summary_json_preserve_the_complete_identity_quartet_order_and_values(tmp_path) -> None:

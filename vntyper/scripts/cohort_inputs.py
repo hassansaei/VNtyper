@@ -65,6 +65,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from vntyper.scripts.artifact_names import ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE
 from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
 from vntyper.scripts.report_formatting import is_empty_result_row
 from vntyper.scripts.summary_steps import (
@@ -634,6 +635,8 @@ def load_pipeline_summary_for_sample(
           - assembly: assembly text from BAM Header Parsing
           - pipeline: alignment pipeline from BAM Header Parsing
           - coverage: coverage metrics dict (mean, median, stdev, min, max)
+          - advntr_evidence_revision: verified run digest or explicit legacy text
+          - advntr_evidence_assertion: approved assertion, or empty for a legacy run
     """
     sample_dir = Path(sample_dir)
     summary_path = sample_dir / PIPELINE_SUMMARY_FILENAME
@@ -643,7 +646,16 @@ def load_pipeline_summary_for_sample(
     try:
         with open(summary_path) as f:
             summary = json.load(f)
-        return parse_pipeline_summary(summary)
+        kestrel, advntr, stats = parse_pipeline_summary(summary)
+        from vntyper.modules.advntr.artifact_evidence import resolve_recorded_artifact_evidence
+
+        recorded_evidence = resolve_recorded_artifact_evidence(
+            summary.get("advntr_evidence_digest"),
+            sample_dir / ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE,
+        )
+        stats["advntr_evidence_revision"] = recorded_evidence.revision
+        stats["advntr_evidence_assertion"] = recorded_evidence.assertion or ""
+        return kestrel, advntr, stats
     except Exception as e:
         logger.error(f"Error loading pipeline summary from {sample_dir}: {e}")
         return [], [], {}
