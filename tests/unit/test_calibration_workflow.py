@@ -172,6 +172,7 @@ def test_fit_reads_only_training_and_policy_selection_and_requires_baseline_repl
     assert candidate.profile.profile_kind == "generated"
     assert candidate.accessed_roles == ("training", "policy-selection")
     assert candidate.baseline_reproduced
+    assert candidate.evaluation.holm_adjusted_p_value == Fraction(3, 250)
 
     failed = extract_evidence(_study(), _features(), _labels(), _runs(tmp_path), baseline=_baseline(reproduced=False))
     with pytest.raises(ValueError, match="baseline"):
