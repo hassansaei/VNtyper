@@ -30,6 +30,11 @@ shipped aggregate, per-tier, and ordered row projection before evaluating the fr
 The emitted `decision_profile.json` is complete, generated, and hash-bound to the base
 profile, protocol, dataset, partitions, seed, objective, and generator version.
 
+Calibration-v1 grids accept only `disabled` and `missingness` XD vetoes. Concentration
+and discordance remain valid runtime profile modes, but their per-record decisions cannot
+be reproduced losslessly from the retained scalar evidence, so a study that declares
+either mode fails before evidence extraction.
+
 `validate` evaluates one fixed profile on validation evidence without selecting another.
 `evaluate` accepts only externally attributed, locked-held-out evidence. It writes a
 durable precommit before opening the payload and consumes an evidence hash once, including

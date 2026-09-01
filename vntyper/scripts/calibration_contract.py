@@ -374,7 +374,7 @@ def _decode_grid(value: object) -> dict[str, tuple[object, ...]]:
         "minimum_record_share_margin": tuple(
             _unit_fraction(item, "candidate record-share margin") for item in share_margins
         ),
-        "xd_veto": tuple(_xd_veto(item) for item in xd_vetoes),
+        "xd_veto": tuple(_calibration_xd_veto(item) for item in xd_vetoes),
     }
 
 
@@ -448,6 +448,13 @@ def _xd_veto(value: object) -> str:
     if value not in {"disabled", "missingness", "concentration", "discordance"}:
         raise ValueError(f"candidate dominance XD veto is unsupported: {value!r}")
     return cast(str, value)
+
+
+def _calibration_xd_veto(value: object) -> str:
+    parsed = _xd_veto(value)
+    if parsed not in {"disabled", "missingness"}:
+        raise ValueError(f"candidate XD veto cannot be replayed from calibration-v1 scalar evidence: {parsed}")
+    return parsed
 
 
 def _boolean(value: object, label: str) -> bool:

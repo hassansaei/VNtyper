@@ -64,6 +64,8 @@ def test_protocol_decodes_exact_finite_grid_and_hash() -> None:
         (("maximum_abstention_fraction",), 1.1),
         (("candidate_grid", "minimum_record_share"), []),
         (("candidate_grid", "xd_veto"), ["winner"]),
+        (("candidate_grid", "xd_veto"), ["concentration"]),
+        (("candidate_grid", "xd_veto"), ["discordance"]),
     ],
 )
 def test_protocol_rejects_values_outside_closed_v1_contract(path: tuple[str, ...], value: object) -> None:
