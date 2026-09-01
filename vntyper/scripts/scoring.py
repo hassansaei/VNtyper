@@ -25,6 +25,7 @@ References:
 """
 
 import logging
+from collections.abc import Mapping
 
 import numpy as np
 import pandas as pd
@@ -32,7 +33,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
+def split_depth_and_calculate_frame_score(df: pd.DataFrame, modulus: int = 3) -> pd.DataFrame:
     """
     Splits the 'Sample' column to obtain alternate/depth coverage,
     then calculates a 'Frame_Score' = (alt_len - ref_len) / 3.
@@ -71,17 +72,17 @@ def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     # Step 2) Compute lengths and frame score
     df["ref_len"] = df["REF"].str.len()
     df["alt_len"] = df["ALT"].str.len()
-    df["Frame_Score"] = (df["alt_len"] - df["ref_len"]) / 3
+    df["Frame_Score"] = (df["alt_len"] - df["ref_len"]) / modulus
 
     # Step 3) Mark frameshift in a new boolean column
-    df["is_frameshift"] = (df["alt_len"] - df["ref_len"]) % 3 != 0
+    df["is_frameshift"] = (df["alt_len"] - df["ref_len"]) % modulus != 0
 
     logger.debug("Exiting split_depth_and_calculate_frame_score")
     logger.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
     return df
 
 
-def split_frame_score(df: pd.DataFrame) -> pd.DataFrame:
+def split_frame_score(df: pd.DataFrame, modulus: int = 3) -> pd.DataFrame:
     """
     Splits 'Frame_Score' into 'direction' and 'frameshift_amount'
     for further logic (3n+1 vs. 3n+2, etc.).
@@ -111,14 +112,14 @@ def split_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     df["direction"] = np.sign(df["alt_len"] - df["ref_len"])
 
     # Step 2) Calculate frameshift_amount
-    df["frameshift_amount"] = (df["alt_len"] - df["ref_len"]).abs() % 3
+    df["frameshift_amount"] = (df["alt_len"] - df["ref_len"]).abs() % modulus
 
     logger.debug("Exiting split_frame_score")
     logger.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
     return df
 
 
-def extract_frameshifts(df: pd.DataFrame) -> pd.DataFrame:
+def extract_frameshifts(df: pd.DataFrame, frameshift: Mapping[str, int] | None = None) -> pd.DataFrame:
     """
     Extracts frameshift variants that follow known insertion/deletion patterns.
 
@@ -155,9 +156,12 @@ def extract_frameshifts(df: pd.DataFrame) -> pd.DataFrame:
         logger.debug("DataFrame is empty. Exiting extract_frameshifts.")
         return df
 
+    insertion_remainder = 1 if frameshift is None else frameshift["insertion_remainder"]
+    deletion_remainder = 2 if frameshift is None else frameshift["deletion_remainder"]
+
     # Identify insertion vs deletion frameshifts
-    condition_insertion = (df["direction"] > 0) & (df["frameshift_amount"] == 1)
-    condition_deletion = (df["direction"] < 0) & (df["frameshift_amount"] == 2)
+    condition_insertion = (df["direction"] > 0) & (df["frameshift_amount"] == insertion_remainder)
+    condition_deletion = (df["direction"] < 0) & (df["frameshift_amount"] == deletion_remainder)
 
     df["is_valid_frameshift"] = condition_insertion | condition_deletion
 

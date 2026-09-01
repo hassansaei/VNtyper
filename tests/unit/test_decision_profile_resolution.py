@@ -14,7 +14,7 @@ from vntyper.scripts.decision_profile import (
     parse_decision_profile,
     resolve_decision_profile,
 )
-from vntyper.scripts.run_configuration import resolve_run_configuration
+from vntyper.scripts.run_configuration import resolve_compatibility_component, resolve_run_configuration
 
 pytestmark = pytest.mark.unit
 
@@ -130,6 +130,27 @@ def test_resolved_components_are_recursively_immutable() -> None:
     assert isinstance(confidence, dict | tuple) is False
     with pytest.raises(TypeError):
         confidence["new"] = True  # type: ignore[index]
+
+
+def test_run_configuration_freezes_excluded_stage_runtime_configuration() -> None:
+    run = resolve_run_configuration()
+
+    assert run.kestrel_runtime["kestrel_settings"]["java_memory"] == "12g"  # type: ignore[index]
+    assert run.advntr_runtime["settings"] == {"additional_commands": "", "threads": None}
+    assert run.shark_runtime["shark_settings"]["muc1_region_fasta_hg19"]  # type: ignore[index]
+    with pytest.raises(TypeError):
+        run.advntr_runtime["settings"]["threads"] = 8  # type: ignore[index]
+
+
+def test_custom_context_cannot_implicitly_load_a_packaged_component() -> None:
+    with pytest.raises(ValueError, match="custom Kestrel run context requires an explicit resolved component"):
+        resolve_compatibility_component("kestrel", None, custom_context_active=True)
+
+
+def test_legacy_context_can_resolve_the_packaged_component() -> None:
+    resolved = resolve_compatibility_component("kestrel", None, custom_context_active=False)
+
+    assert resolved == resolve_run_configuration().kestrel
 
 
 def test_generated_profile_requires_exact_closed_metadata() -> None:

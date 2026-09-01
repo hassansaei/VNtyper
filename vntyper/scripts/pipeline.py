@@ -613,6 +613,9 @@ def run_pipeline(
             summary_file_path=summary_file_path,
             runner=run_kestrel,
             threads=threads,
+            resolved_component=run_configuration.kestrel,
+            runtime_component=run_configuration.kestrel_runtime,
+            custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
         )
         logger.info(
             "Kestrel genotyping completed."

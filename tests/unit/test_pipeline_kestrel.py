@@ -9,6 +9,7 @@ import pytest
 
 from vntyper.scripts import pipeline_kestrel
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.unit
 
@@ -60,6 +61,39 @@ def test_stage_forwards_the_complete_tuple_and_records_the_exact_summary(tmp_pat
         "run_kestrel(...)",
     )
     assert record.call_args.kwargs == {"write_summary_path": str(tmp_path / "pipeline_summary.json")}
+
+
+def test_stage_forwards_one_explicit_decision_and_runtime_context(tmp_path: Path, monkeypatch) -> None:
+    kwargs = _kwargs(tmp_path)
+    run = resolve_run_configuration()
+    kwargs.update(
+        resolved_component=run.kestrel,
+        runtime_component=run.kestrel_runtime,
+        custom_context_active=True,
+    )
+    monkeypatch.setattr(pipeline_kestrel, "record_step", mock.Mock())
+
+    run_kestrel_stage(**kwargs)
+
+    runner = kwargs["runner"]
+    assert isinstance(runner, mock.Mock)
+    assert runner.call_args.kwargs["resolved_component"] is run.kestrel
+    assert runner.call_args.kwargs["runtime_component"] is run.kestrel_runtime
+    assert runner.call_args.kwargs["custom_context_active"] is True
+    assert kwargs["summary"]["kestrel_counting_mode"] == "split"
+
+
+def test_custom_stage_cannot_fall_back_to_packaged_decisions(tmp_path: Path, monkeypatch) -> None:
+    kwargs = _kwargs(tmp_path)
+    kwargs["custom_context_active"] = True
+    monkeypatch.setattr(pipeline_kestrel, "record_step", mock.Mock())
+
+    with pytest.raises(ValueError, match="custom Kestrel run context requires an explicit resolved component"):
+        run_kestrel_stage(**kwargs)
+
+    runner = kwargs["runner"]
+    assert isinstance(runner, mock.Mock)
+    runner.assert_not_called()
 
 
 def test_stage_summary_annotation_matches_the_real_pipeline_payload() -> None:
@@ -163,4 +197,5 @@ def test_threads_is_appended_after_every_existing_run_kestrel_parameter() -> Non
 
     names = list(inspect.signature(kestrel_genotyping.run_kestrel).parameters)
 
-    assert names[-3:] == ["log_level", "cwd", "threads"]
+    assert names[-6:-3] == ["log_level", "cwd", "threads"]
+    assert names[-3:] == ["resolved_component", "runtime_component", "custom_context_active"]

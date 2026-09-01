@@ -326,7 +326,7 @@ def test_pipeline_snapshots_the_supplied_explicit_context_without_reloading_pack
     run_configuration = resolve_run_configuration(profile_path)
 
     output = tmp_path / "out"
-    run_pipeline_under_harness(output, run_configuration=run_configuration)
+    harness = run_pipeline_under_harness(output, run_configuration=run_configuration)
     recorded = json.loads((output / "pipeline_summary.json").read_text(encoding="utf-8"))
 
     assert (output / "provenance" / "decision_profile.json").read_bytes() == (
@@ -335,6 +335,10 @@ def test_pipeline_snapshots_the_supplied_explicit_context_without_reloading_pack
     assert recorded["decision_profile_id"] == "pipeline-explicit-test"
     assert recorded["decision_profile_source"] == "explicit-cli"
     assert recorded["decision_profile_sha256"] == run_configuration.decision_profile.digest
+    kestrel_call = harness.kwargs("run_kestrel")
+    assert kestrel_call["resolved_component"] is run_configuration.kestrel
+    assert kestrel_call["runtime_component"] is run_configuration.kestrel_runtime
+    assert kestrel_call["custom_context_active"] is True
 
 
 def test_the_fastq_path_hands_every_stage_the_declared_basename(tmp_path: Path) -> None:

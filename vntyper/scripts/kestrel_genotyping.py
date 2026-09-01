@@ -26,6 +26,7 @@ from Saei et al., iScience 26, 107171 (2023).
 import logging
 import os
 import shutil
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,6 +59,7 @@ from vntyper.scripts.identity_candidates import (
 )
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
+from vntyper.scripts.kestrel_decision_config import KestrelSelection, project_kestrel_selection
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.molecular_identity_presentation import (
@@ -73,6 +75,10 @@ from vntyper.scripts.motif_processing import (
 )
 from vntyper.scripts.nomenclature import load_nomenclature_config
 from vntyper.scripts.nomenclature_annotate import annotate_kestrel_frame
+from vntyper.scripts.run_configuration import (
+    resolve_compatibility_component,
+    resolve_compatibility_runtime_component,
+)
 from vntyper.scripts.scoring import (
     extract_frameshifts,
     split_depth_and_calculate_frame_score,
@@ -111,11 +117,6 @@ def load_kestrel_config(config_path=None):
         # Default path to kestrel_config.json
         config_path = os.path.join(os.path.dirname(__file__), "kestrel_config.json")
     return load_config(config_path)
-
-
-# Load the Kestrel configuration globally so it can be used
-# by run_kestrel() and subsequent steps
-kestrel_config = load_kestrel_config()
 
 
 #: The boolean gate columns :func:`filter_final_dataframe` requires and ANDs, in order.
@@ -264,6 +265,10 @@ def run_kestrel(
     log_level=logging.INFO,
     cwd=None,
     threads=4,
+    *,
+    resolved_component: Mapping[str, object] | None = None,
+    runtime_component: Mapping[str, object] | None = None,
+    custom_context_active: bool = False,
 ):
     """
     Main entry point to run the Kestrel jar for MUC1 genotyping, then
@@ -303,7 +308,15 @@ def run_kestrel(
     Returns:
         None
     """
-    kestrel_settings = kestrel_config.get("kestrel_settings", {})
+    decision = resolve_compatibility_component(
+        "kestrel",
+        resolved_component,
+        custom_context_active=custom_context_active,
+    )
+    runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
+    kestrel_settings = runtime.get("kestrel_settings", {})
+    if not isinstance(kestrel_settings, Mapping):
+        raise ValueError("Kestrel runtime kestrel_settings must be a mapping")
     java_path = config["tools"]["java_path"]
     java_memory = kestrel_settings.get("java_memory", "12g")
     kmer_sizes = kestrel_settings.get("kmer_sizes", [20])
@@ -388,7 +401,14 @@ def run_kestrel(
                 )
 
                 # Postprocess final output
-                process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
+                process_kestrel_output(
+                    output_dir,
+                    vcf_path,
+                    reference_vntr,
+                    decision,
+                    config,
+                    runtime_component=runtime,
+                )
                 completed = True
                 break  # Stop after the first successful k-mer size
 
@@ -489,7 +509,7 @@ def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
     return True
 
 
-def _subthreshold_note(output_dir, config):
+def _subthreshold_note(output_dir, config, filter_columns=FILTER_COLUMNS):
     """The #266 banner line for a sample that called nothing, or None.
 
     Emitted only on the no-call path, and only from the one `output_empty_result` branch
@@ -531,13 +551,21 @@ def _subthreshold_note(output_dir, config):
             "no subthreshold note will be written."
         )
         return None
-    signal = detect_from_file(os.path.join(output_dir, "kestrel_pre_result.tsv"), FILTER_COLUMNS, floor)
+    signal = detect_from_file(os.path.join(output_dir, "kestrel_pre_result.tsv"), filter_columns, floor)
     if signal is None:
         return None
     return format_note(signal, template)
 
 
-def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config):
+def process_kestrel_output(
+    output_dir,
+    vcf_path,
+    reference_vntr,
+    kestrel_config,
+    config,
+    *,
+    runtime_component: Mapping[str, object] | None = None,
+):
     """
     Processes the Kestrel output VCF files after Kestrel finishes.
 
@@ -565,6 +593,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     Raises:
         ValueError: If the configured flag rules are invalid for the Kestrel result schema.
     """
+    runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
     flagging_rules = kestrel_config.get("flagging_rules", {})
     compiled_flag_rules = compile_flag_rules(flagging_rules, KESTREL_FLAG_COLUMNS)
     duplicates_config = kestrel_config.get("duplicate_flagging", {})
@@ -663,9 +692,18 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
 
     if processed_df.empty:
         logger.warning("Final processed DataFrame is empty. Writing empty result.")
+        selection = _resolve_selection(kestrel_config)
         # #266: the one empty-result branch with a scored frame behind it, and therefore the
         # only one that can say anything about what was suppressed.
-        output_empty_result(output_dir, header, note=_subthreshold_note(output_dir, kestrel_config))
+        note_config = {
+            "confidence_assignment": kestrel_config["confidence_assignment"],
+            "subthreshold_note": runtime["subthreshold_note"],
+        }
+        output_empty_result(
+            output_dir,
+            header,
+            note=_subthreshold_note(output_dir, note_config, selection.final_filter_columns),
+        )
         return None
 
     # Flagging is now applied inside process_kmer_results() (step 6.5) so that
@@ -777,6 +815,7 @@ def process_kmer_results(
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
     """
+    selection = _resolve_selection(kestrel_config)
     if compiled_flag_rules is None:
         compiled_flag_rules = compile_flag_rules(kestrel_config.get("flagging_rules", {}), KESTREL_FLAG_COLUMNS)
     duplicates_config = kestrel_config.get("duplicate_flagging", {})
@@ -786,17 +825,23 @@ def process_kmer_results(
         return combined_df
 
     # (1) Split depth fields & calculate initial frame score
-    df = split_depth_and_calculate_frame_score(combined_df)
+    df = split_depth_and_calculate_frame_score(combined_df, modulus=selection.modulus)
     if df.empty:
         return df
 
     # (2) Split frame score into numeric 'direction'/'frameshift_amount'
-    df = split_frame_score(df)
+    df = split_frame_score(df, modulus=selection.modulus)
     if df.empty:
         return df
 
     # (3) Extract frameshifts by analyzing the pattern of 3n+1 or 3n+2
-    df = extract_frameshifts(df)
+    df = extract_frameshifts(
+        df,
+        frameshift={
+            "insertion_remainder": selection.insertion_remainder,
+            "deletion_remainder": selection.deletion_remainder,
+        },
+    )
     if df.empty:
         return df
 
@@ -854,13 +899,13 @@ def process_kmer_results(
     passing_identity_ordinals: tuple[int, ...] = ()
     if identity_candidates is not None:
         evidenced_candidates = with_candidate_evidence(identity_candidates, df.to_dict("records"))
-        passing_mask = df[list(FILTER_COLUMNS)].all(axis=1)
+        passing_mask = df[list(selection.final_filter_columns)].all(axis=1)
         passing_identity_ordinals = tuple(
             int(serialized) for serialized in df.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]]
         )
 
     # (7) Final Filter
-    df = filter_final_dataframe(df, output_dir)
+    df = filter_final_dataframe(df, output_dir, selection=selection)
     if df.empty:
         logger.info("All rows failed one or more filter criteria. Returning empty.")
         return df
@@ -968,7 +1013,30 @@ def add_haplo_count(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
+def _resolve_selection(selection: Mapping[str, object] | KestrelSelection | None) -> KestrelSelection:
+    """Resolve a typed Kestrel selection for production and direct compatibility calls."""
+    if isinstance(selection, KestrelSelection):
+        return selection
+    if selection is None:
+        component = resolve_compatibility_component("kestrel", None, custom_context_active=False)
+        selection = component["selection"]  # type: ignore[assignment]
+    if not isinstance(selection, Mapping):
+        raise ValueError("Kestrel selection component must be a mapping")
+    nested = selection.get("selection")
+    if isinstance(nested, Mapping):
+        selection = nested
+    elif "confidence_priority" not in selection:
+        component = resolve_compatibility_component("kestrel", None, custom_context_active=False)
+        selection = component["selection"]  # type: ignore[assignment]
+        if not isinstance(selection, Mapping):
+            raise ValueError("packaged Kestrel selection component must be a mapping")
+    return project_kestrel_selection(selection)
+
+
+def select_single_best_variant(
+    df: pd.DataFrame,
+    selection: Mapping[str, object] | KestrelSelection | None = None,
+) -> pd.DataFrame:
     """
     Select the single best variant (Hassan's requirement: "one representative variant").
 
@@ -1010,16 +1078,10 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Define Confidence priority mapping
-    confidence_priority = {
-        "High_Precision*": 3,
-        "High_Precision": 2,
-        "Low_Precision": 1,
-        "Negative": 0,
-    }
+    resolved_selection = _resolve_selection(selection)
 
     df = df.copy()
-    df["_priority"] = df["Confidence"].map(confidence_priority).fillna(0)
+    df["_priority"] = df["Confidence"].map(resolved_selection.confidence_priority).fillna(0)
 
     # Ensure numeric types for sorting (create missing columns with default 0)
     if "haplo_count" not in df.columns:
@@ -1040,16 +1102,15 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
     # Deprioritize flagged variants: unflagged (1) sorts before flagged (0).
     # If Flag column is absent, all variants are treated as unflagged.
     if "Flag" in df.columns:
-        df["_is_unflagged"] = (df["Flag"] == "Not flagged").astype(int)
+        df["_is_unflagged"] = (df["Flag"] == resolved_selection.unflagged_value).astype(int)
     else:
         df["_is_unflagged"] = 1
 
     # Multi-key sort (deterministic tie-breaking)
     # Priority: Confidence DESC, unflagged DESC, Depth_Score DESC, haplo_count DESC, POS ASC
-    df = df.sort_values(
-        ["_priority", "_is_unflagged", "Depth_Score", "haplo_count", "POS"],
-        ascending=[False, False, False, False, True],
-    )
+    internal_columns = {"confidence_priority": "_priority", "is_unflagged": "_is_unflagged"}
+    sort_columns = [internal_columns.get(field.column, field.column) for field in resolved_selection.sort_order]
+    df = df.sort_values(sort_columns, ascending=[field.ascending for field in resolved_selection.sort_order])
 
     # Keep only the best variant
     result = df.head(1).drop(columns=["_priority", "_is_unflagged"])
@@ -1065,7 +1126,11 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
+def filter_final_dataframe(
+    df: pd.DataFrame,
+    output_dir: str,
+    selection: Mapping[str, object] | KestrelSelection | None = None,
+) -> pd.DataFrame:
     """
     Final step: filter the DataFrame based on the boolean columns introduced
     by earlier steps ('is_frameshift', 'is_valid_frameshift',
@@ -1122,8 +1187,10 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
         logger.info("Empty DataFrame reached the final filter; returning it unchanged.")
         return df
 
+    resolved_selection = _resolve_selection(selection)
+
     # Columns every non-empty frame is required to carry
-    filter_cols = FILTER_COLUMNS
+    filter_cols = resolved_selection.final_filter_columns
 
     # Build a mask requiring all existing boolean filters == True
     final_mask = pd.Series(True, index=df.index)
@@ -1160,7 +1227,7 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
 
     # Select single best variant using multi-key priority sorting
     if len(filtered_df) > 1:
-        filtered_df = select_single_best_variant(filtered_df)
+        filtered_df = select_single_best_variant(filtered_df, selection=resolved_selection)
         logger.info("Selected 1 best variant from %d candidates using priority sorting.", len(df[final_mask]))
     elif len(filtered_df) == 1:
         logger.info("Only 1 variant passed all filters (no selection needed).")
