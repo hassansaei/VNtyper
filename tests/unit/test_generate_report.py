@@ -28,6 +28,7 @@ import pytest
 from jinja2 import DictLoader
 
 import vntyper
+from tests.support import orchestration
 from vntyper.cli import load_config
 from vntyper.scripts import (
     generate_report,
@@ -1938,6 +1939,10 @@ def test_a_cross_match_hit_reaches_the_concordance_chip(tmp_path) -> None:
     )
 
     assert chip_value(render(tmp_path), "Concordance") == "Match"
+    orchestration._assert_report_values(
+        {"report_assertions": ["At least one match was found between Kestrel and adVNTR results."]},
+        tmp_path,
+    )
 
 
 def test_the_coverage_gate_is_chipped_as_unevaluated_rather_than_passing(tmp_path) -> None:

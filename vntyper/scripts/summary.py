@@ -194,11 +194,14 @@ def parse_tsv(file_path):
                 # before advancing past every line this logical record consumed.
                 line_number = next_physical_line
                 next_physical_line = reader.line_num + 1
-                if not row_values or (len(row_values) == 1 and not row_values[0].strip()):
+                if not row_values or not any(value.strip() for value in row_values):
                     continue
                 if row_values[0].startswith("#"):
                     comments.append("\t".join(row_values).lstrip("#").strip())
                     continue
+                # These are writer-controlled result files. Standard CSV semantics
+                # deliberately make an unclosed quote consume later physical lines;
+                # the field-count check below then rejects the malformed logical row.
                 if header is None:
                     header = row_values
                     continue

@@ -526,8 +526,9 @@ def _assert_report_values(test_case: dict[str, Any], output_dir: Path) -> None:
         # The compatibility fixtures predate the semantic report template and retain
         # report_config.json's historical ``<br>``-joined message. The template now
         # renders the same author-owned segments as separate paragraphs. Compare the
-        # exact words in their declared order, while allowing markup between them;
-        # changing, dropping, or reordering any segment still fails the oracle.
+        # exact words in their declared order; the two retired concordance sentences
+        # instead require the real label/value spans to be adjacent, with only template
+        # whitespace between them. Changing, dropping, or reordering still fails.
         cursor = 0
         for segment in fragment.split("<br>"):
             legacy_presentation = _LEGACY_REPORT_PRESENTATION.get(segment)
