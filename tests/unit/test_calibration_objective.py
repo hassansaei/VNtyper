@@ -374,7 +374,7 @@ def test_objective_value_objects_are_frozen() -> None:
 
     for value in (evaluation, outcome, summary):
         with pytest.raises(AttributeError):
-            value.stratum_counts = ()  # type: ignore[attr-defined]
+            setattr(value, "stratum_counts", ())
 
 
 @pytest.mark.parametrize(
