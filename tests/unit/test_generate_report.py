@@ -3826,6 +3826,68 @@ def test_current_summary_provenance_uses_schema_three_and_records_the_default_pr
     assert on_disk["decision_profile_snapshot"] == "provenance/decision_profile.json"
     assert _labeled_value(block, "Decision policy") == "legacy-selection-v1"
     assert _labeled_value(block, "Summary schema version") == "3"
+    assert _labeled_value(block, "Decision profile ID") == profile.profile_id
+    assert _labeled_value(block, "Decision profile revision") == profile.profile_revision
+    assert _labeled_value(block, "Decision profile kind") == "packaged"
+    assert _labeled_value(block, "Decision profile source") == "package"
+    assert _labeled_value(block, "Decision profile SHA-256") == profile.digest
+
+
+def test_report_prints_the_verified_explicit_cli_profile_without_its_operator_path(tmp_path: Path) -> None:
+    """Catch replacing an explicit run's snapshot with packaged provenance."""
+    from vntyper.scripts.canonical_json import canonical_json_bytes
+    from vntyper.scripts.decision_profile import load_packaged_decision_profile, parse_decision_profile
+    from vntyper.scripts.profile_provenance import snapshot_decision_profile
+
+    packaged = load_packaged_decision_profile()
+    document = copy.deepcopy(dict(packaged.document))
+    document["profile_id"] = "report-explicit"
+    document["profile_revision"] = "study-9"
+    document["profile_kind"] = "explicit-custom"
+    inventory = document["inventory"]
+    assert isinstance(inventory, dict)
+    inventory["/components/kestrel/duplicate_flagging/flag_name"]["value"] = "Report_Duplicate"
+    explicit = parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+    current = summary.start_summary(version="9.9.9", decision_profile=explicit)
+    summary.write_summary(current, tmp_path / "pipeline_summary.json")
+    snapshot_decision_profile(explicit, tmp_path / "provenance" / "decision_profile.json")
+
+    block = _provenance_block(render(tmp_path))
+
+    assert _labeled_value(block, "Decision profile ID") == "report-explicit"
+    assert _labeled_value(block, "Decision profile revision") == "study-9"
+    assert _labeled_value(block, "Decision profile kind") == "explicit-custom"
+    assert _labeled_value(block, "Decision profile source") == "explicit-cli"
+    assert _labeled_value(block, "Decision profile SHA-256") == explicit.digest
+    assert str(tmp_path) not in block
+
+
+def test_legacy_report_states_that_the_decision_profile_was_not_recorded(tmp_path: Path) -> None:
+    """Catch standalone report substituting the package profile for a legacy run."""
+    write_summary(tmp_path, schema_version=2)
+
+    block = _provenance_block(render(tmp_path))
+
+    assert _labeled_value(block, "Decision profile revision") == ("decision profile not recorded by legacy run")
+    from vntyper.scripts.decision_profile import load_packaged_decision_profile
+
+    assert load_packaged_decision_profile().digest not in block
+
+
+def test_standalone_report_rejects_a_tampered_recorded_profile_snapshot(tmp_path: Path) -> None:
+    """Catch rendering schema 3 after its run-local decision authority changed."""
+    from vntyper.scripts.decision_profile import load_packaged_decision_profile
+    from vntyper.scripts.profile_provenance import snapshot_decision_profile
+
+    profile = load_packaged_decision_profile()
+    current = summary.start_summary(decision_profile=profile)
+    summary.write_summary(current, tmp_path / "pipeline_summary.json")
+    snapshot = tmp_path / "provenance" / "decision_profile.json"
+    snapshot_decision_profile(profile, snapshot)
+    snapshot.write_bytes(profile.canonical_bytes.replace(b'"profile_revision":"1"', b'"profile_revision":"9"'))
+
+    with pytest.raises(ValueError, match="canonical|digest mismatch|metadata"):
+        render(tmp_path)
 
 
 @pytest.mark.parametrize("digest", ["", "0" * 63, "G" * 64, 1])
@@ -3974,6 +4036,9 @@ def test_the_pipeline_puts_the_resolved_region_on_disk_before_the_report_reads_i
     report_dir = tmp_path / "rendered"
     report_dir.mkdir()
     (report_dir / "pipeline_summary.json").write_text(captured["summary"], encoding="utf-8")
+    snapshot = report_dir / "provenance" / "decision_profile.json"
+    snapshot.parent.mkdir()
+    snapshot.write_bytes((run_dir / "provenance" / "decision_profile.json").read_bytes())
 
     html = render(report_dir)
 
@@ -4014,6 +4079,9 @@ def test_the_operators_sample_name_survives_the_run_into_the_report(tmp_path) ->
     report_dir = tmp_path / "rendered"
     report_dir.mkdir()
     (report_dir / "pipeline_summary.json").write_text(captured["summary"], encoding="utf-8")
+    snapshot = report_dir / "provenance" / "decision_profile.json"
+    snapshot.parent.mkdir()
+    snapshot.write_bytes((run_dir / "provenance" / "decision_profile.json").read_bytes())
 
     assert "<title>MUC1 VNTR report — PATIENT_042</title>" in render(report_dir)
 
