@@ -372,9 +372,10 @@ def test_objective_value_objects_are_frozen() -> None:
         (outcome,), profile_sha256="a" * 64, free_parameter_count=0, required_strata=("assay-a:duplication",)
     )
 
+    attribute = "stratum_counts"
     for value in (evaluation, outcome, summary):
         with pytest.raises(AttributeError):
-            setattr(value, "stratum_counts", ())
+            setattr(value, attribute, ())
 
 
 @pytest.mark.parametrize(
