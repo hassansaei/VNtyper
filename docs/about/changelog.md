@@ -4,6 +4,21 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+### Opt-in calibration and dominance evaluation
+
+- Added four atomic `vntyper calibrate` operations for role-bound extraction, finite-grid
+  safety-first fitting, fixed-profile validation, and one-use locked held-out evaluation.
+  Generated profiles never auto-activate and cannot change shipped cutoffs or defaults.
+- Added whole-locus record-dominance selection and closed abstention reasons. Haplotype
+  records remain unweighted votes; XD remains optional minimum k-mer depth and can only
+  veto a locus under a predeclared rule.
+- Added static offline calibration reports, strict hashes, exact denominators, grouped
+  bootstrap bounds, multiplicity correction, and local append-only custody receipts.
+  Local receipts are not proof of external custody.
+- The 200-mutated/200-control simulations reproduce the exact 154/136/18 shipped
+  projection but remain previously examined development evidence. They are not external
+  validation; Issue #295 stays open. Reporting an interval is not a clinical safety claim.
+
 ### Kestrel BAM evidence semantics
 
 - **Phase 1 corrects the public ontology of Kestrel `output.bam` (Refs #295).** Its
@@ -27,7 +42,9 @@ All notable changes to VNtyper 2 are documented on this page.
   candidate selection, allele names, ties, and tiers are unchanged.
 - **This is not the full #295 policy change.** Molecular identity (#270), adVNTR artifact
   reliability (#267), threshold calibration and a calibrate command (#269), XD
-  weighting, and new dominance or abstention rules remain out of scope.
+  weighting, and new dominance or abstention rules remain out of scope for Phase 1.
+  Later unreleased work addresses the in-repository parts, but independent externally
+  custodied validation is still missing.
 
 ## 2.0.26 (Current)
 

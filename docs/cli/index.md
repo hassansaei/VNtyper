@@ -24,3 +24,4 @@ Global options must be placed **before** the subcommand.
 | [`report`](report.md) | Generate HTML summary report |
 | [`cohort`](cohort.md) | Aggregate multi-sample results |
 | [`online`](online.md) | Submit analysis to vntyper.org |
+| [`calibrate`](calibrate.md) | Generate and evaluate explicit opt-in dominance profiles |

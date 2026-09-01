@@ -23,7 +23,7 @@ def _report() -> dict[str, object]:
         "objective": "lexicographic-safety-v1",
         "tier_metrics": [
             {"tier": tier, "displayed": 4 - index, "exact": 3 - index, "wrong": 1}
-            for index, tier in enumerate(("A", "B", "C", "D"))
+            for index, tier in enumerate(("A", "B", "C"))
         ],
         "abstentions": [
             {"split": "locked-heldout", "reason": "record-tie", "count": 2, "rate": "1/10"},
@@ -63,7 +63,7 @@ def _report() -> dict[str, object]:
 def test_static_report_contains_complete_metrics_provenance_statistics_and_limitations() -> None:
     html = render_calibration_report(decode_calibration_report(_report()))
 
-    for tier in ("A", "B", "C", "D"):
+    for tier in ("A", "B", "C"):
         assert f">{tier}<" in html
     for text in (
         "record-tie",

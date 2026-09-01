@@ -96,7 +96,7 @@ def _analyse(profile: ResolvedDecisionProfile, evidence: ExtractedEvidence) -> d
     if not isinstance(rows, tuple) or len(rows) != len(evidence.features.rows):
         raise ValueError("calibration reporting rows must align with features")
     tiers: dict[str, dict[str, object]] = {
-        tier: {"tier": tier, "displayed": 0, "exact": 0, "wrong": 0} for tier in ("A", "B", "C", "D")
+        tier: {"tier": tier, "displayed": 0, "exact": 0, "wrong": 0} for tier in ("A", "B", "C")
     }
     reasons: Counter[str] = Counter()
     scores: list[tuple[Fraction, bool]] = []

@@ -19,7 +19,7 @@ def test_calibration_report_is_complete_without_javascript(browser: Browser, tmp
             "protocol_sha256": "b" * 64,
             "evidence_sha256": "c" * 64,
             "objective": "lexicographic-safety-v1",
-            "tier_metrics": [{"tier": tier, "displayed": 1, "exact": 1, "wrong": 0} for tier in ("A", "B", "C", "D")],
+            "tier_metrics": [{"tier": tier, "displayed": 1, "exact": 1, "wrong": 0} for tier in ("A", "B", "C")],
             "abstentions": [{"split": "locked-heldout", "reason": "record-tie", "count": 1, "rate": "1/10"}],
             "provenance": {
                 "software_versions": ["VNtyper test"],
