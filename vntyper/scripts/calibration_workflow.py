@@ -9,6 +9,13 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import cast
 
+from vntyper.scripts.calibration_contract import EvidenceManifest
+from vntyper.scripts.calibration_custody import (
+    ConsumptionReceipt,
+    open_locked_payload,
+    retire_candidate,
+    write_precommit,
+)
 from vntyper.scripts.calibration_features import (
     FeatureArtifact,
     LabelArtifact,
@@ -62,6 +69,17 @@ class WorkflowAttestation:
     profile_sha256: str
     evidence_sha256: str
     accessed_roles: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LockedEvaluation:
+    """One profile-bound evaluation performed on externally held evidence."""
+
+    role: str
+    result: object
+    profile_sha256: str
+    evidence_sha256: str
+    receipt: ConsumptionReceipt
 
 
 def extract_evidence(
@@ -162,6 +180,38 @@ def validate_candidate(profile: ResolvedDecisionProfile, evidence: ExtractedEvid
     validate_generated_allowlist(profile, packaged)
     accessed = require_operation_roles(evidence.study.partitions, "validate")
     return WorkflowAttestation("validation", profile.digest, evidence.dataset_sha256, accessed)
+
+
+def evaluate_locked_candidate(
+    profile: ResolvedDecisionProfile,
+    payload_path: Path,
+    evidence: EvidenceManifest,
+    custody_dir: Path,
+    *,
+    evaluator: Callable[[bytes], object],
+) -> LockedEvaluation:
+    """Precommit and consume externally held-out evidence exactly once."""
+    if not isinstance(evidence, EvidenceManifest):
+        raise ValueError("locked calibration evaluation requires an EvidenceManifest")
+    if evidence.role != "locked-heldout" or evidence.provenance != "external-custodian":
+        raise ValueError("locked held-out evaluation requires external custodian evidence")
+    if not callable(evaluator):
+        raise ValueError("locked calibration evaluation requires an evaluator")
+    packaged = load_packaged_decision_profile()
+    validate_generated_allowlist(profile, packaged)
+    precommit = write_precommit(
+        custody_dir,
+        profile.digest,
+        evidence.protocol_sha256,
+        evidence.features_sha256,
+    )
+    try:
+        opened = open_locked_payload(payload_path, precommit, custody_dir)
+        result = evaluator(opened.payload)
+    except Exception as error:
+        retire_candidate(custody_dir, profile.digest, evidence.features_sha256, str(error) or type(error).__name__)
+        raise
+    return LockedEvaluation(evidence.role, result, profile.digest, evidence.features_sha256, opened.receipt)
 
 
 def _hash_replay_run(root: Path) -> str:
