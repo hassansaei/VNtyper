@@ -199,10 +199,16 @@ def parse_tsv(file_path):
                 if line.startswith("#"):
                     comments.append(line.lstrip("#").strip())
                     continue
+                # pandas uses RFC-style CSV quoting when a TSV cell contains JSON
+                # quotes. Splitting on tabs preserves those transport quotes and
+                # doubled inner quotes as data, so summaries no longer match the
+                # result table they represent. Parse each physical row with the same
+                # delimiter/quoting rules as the writer while retaining the existing
+                # comment and blank-line handling above.
+                row_values = next(csv.reader([line], delimiter="\t"))
                 if header is None:
-                    header = line.split("\t")
+                    header = row_values
                     continue
-                row_values = line.split("\t")
                 # Validate the field count per row rather than letting zip() silently
                 # truncate to the shorter sequence: a ragged row means a malformed or
                 # truncated file, and dropping columns without a word turns corruption

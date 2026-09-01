@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -293,6 +294,34 @@ def test_raw_key_excludes_support_flags_and_display_name() -> None:
 
     assert left.row_key == right.row_key
     assert left.row_key.values == ("X-5", 67, "G", "GG")
+
+
+@pytest.mark.parametrize("position", [67, np.int64(67), "67"])
+def test_kestrel_capture_normalizes_dataframe_scalar_forms(position: object) -> None:
+    """DataFrame-backed Kestrel rows retain strict built-in numeric value types."""
+    row = _kestrel_row("X-5", _FIVE + _X)
+    row["POS"] = position
+    row["Estimated_Depth_AlternateVariant"] = np.int64(4)
+    row["Estimated_Depth_Variant_ActiveRegion"] = np.float64(400.0)
+
+    candidate = _captured([row]).candidates[0]
+
+    assert candidate.row_key.values == ("X-5", 67, "G", "GG")
+    assert type(candidate.row_key.values[1]) is int
+    assert candidate.support == 4
+    assert type(candidate.support) is int
+    assert candidate.depth == 400.0
+    assert type(candidate.depth) is float
+
+
+@pytest.mark.parametrize("position", ["067", "+67", "67.0", " 67", "67 ", "", "A"])
+def test_kestrel_capture_rejects_noncanonical_position_strings(position: str) -> None:
+    """Only the unsigned decimal spelling emitted by the VCF dataframe is accepted."""
+    row = _kestrel_row("X-5", _FIVE + _X)
+    row["POS"] = position
+
+    with pytest.raises(ValueError, match="POS must be an integer"):
+        _captured([row])
 
 
 def test_selected_row_alone_supplies_depth_as_well_as_support() -> None:

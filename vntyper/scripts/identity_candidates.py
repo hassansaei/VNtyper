@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import numbers
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -478,7 +479,7 @@ def _validated_string_map(value: Mapping[str, str], name: str) -> dict[str, str]
 
 def _validate_support(value: object, name: str) -> None:
     """Require finite non-negative numeric evidence."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+    if isinstance(value, bool) or not isinstance(value, numbers.Real) or not math.isfinite(value) or value < 0:
         raise ValueError(f"{name} must be a finite non-negative number")
 
 
@@ -486,7 +487,9 @@ def _required_support(row: Mapping[str, object], column: str) -> SupportValue:
     """Read and validate one numeric evidence cell."""
     value = row[column]
     _validate_support(value, column)
-    return cast(SupportValue, value)
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    return float(cast(numbers.Real, value))
 
 
 def _required_string(row: Mapping[str, object], column: str, *, allow_empty: bool = False) -> str:
@@ -500,9 +503,13 @@ def _required_string(row: Mapping[str, object], column: str, *, allow_empty: boo
 def _required_int(row: Mapping[str, object], column: str) -> int:
     """Read one strict integer cell."""
     value = row[column]
-    if isinstance(value, bool) or not isinstance(value, int):
+    if isinstance(value, str):
+        if not value.isascii() or not value.isdecimal() or (len(value) > 1 and value.startswith("0")):
+            raise ValueError(f"{column} must be an integer")
+        return int(value)
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
         raise ValueError(f"{column} must be an integer")
-    return value
+    return int(value)
 
 
 def _state(row: Mapping[str, object]) -> str:

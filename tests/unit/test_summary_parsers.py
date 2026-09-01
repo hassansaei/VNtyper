@@ -95,6 +95,16 @@ def test_parse_tsv_keeps_a_row_that_is_empty_but_for_its_first_column(tmp_path: 
     assert parse_tsv(path)["data"] == [{"A": "1", "B": "", "C": ""}]
 
 
+def test_parse_tsv_decodes_writer_quoted_json_cells(tmp_path: Path) -> None:
+    """TSV quoting added by pandas must not become part of a summary cell."""
+    path = _write(
+        tmp_path / "quoted.tsv",
+        'Name\tMetadata\ncall\t"{""source"":""kestrel"",""values"":[67,""G""]}"\n',
+    )
+
+    assert parse_tsv(path)["data"] == [{"Name": "call", "Metadata": '{"source":"kestrel","values":[67,"G"]}'}]
+
+
 # --- ragged rows: the behaviour this module pins -----------------------------
 
 
