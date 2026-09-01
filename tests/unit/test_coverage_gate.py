@@ -288,10 +288,10 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert "three untested lines moved it 0.03" not in agents
     assert "dedicated ratchet change" in normalized_agents
     assert "sustained by the Python 3.10–3.13 matrix" in normalized_agents
-    # `docs/` is strictly the published site. Phase 1 of #295 directly requires exactly
-    # these two reviewed pages; every other planning artifact remains in the untracked
-    # `.planning/` workspace. Equality is deliberate: a directory-wide exception would
-    # let an unrelated third page ship without review.
+    # `docs/` is strictly the published site. The #295 program directly requires exactly
+    # these reviewed Phase 1 pages and the umbrella design; every other planning artifact
+    # remains in the untracked `.planning/` workspace. Equality is deliberate: a
+    # directory-wide exception would let an unrelated page ship without review.
     assert not any(line.startswith("exclude_docs:") for line in mkdocs.splitlines()), (
         "docs/ must contain nothing that is excluded from the site"
     )
@@ -305,6 +305,14 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
         "docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md": (
             "Kestrel BAM Evidence Semantics Plan",
             "superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md",
+        ),
+        "docs/superpowers/specs/2026-08-31-issue-295-completion-program-design.md": (
+            "Issue 295 Completion Program Design",
+            "superpowers/specs/2026-08-31-issue-295-completion-program-design.md",
+        ),
+        "docs/superpowers/plans/2026-08-31-issue-295-completion-program.md": (
+            "Issue 295 Completion Program Plan",
+            "superpowers/plans/2026-08-31-issue-295-completion-program.md",
         ),
     }
     published_planning_pages = {

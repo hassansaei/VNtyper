@@ -244,6 +244,75 @@ def test_unsafe_flag_names_are_rejected(flag_name: object) -> None:
         add_flags(pd.DataFrame({"Depth_Score": [0.3]}), {flag_name: LOW_DEPTH})
 
 
+@pytest.mark.parametrize("flag_name", ["", 7, "Comma,Flag", "Not flagged", "Not applicable"])
+def test_unsafe_duplicate_flag_names_are_rejected_before_row_evaluation(
+    monkeypatch: pytest.MonkeyPatch, flag_name: object
+) -> None:
+    """Duplicate-producer names use the same nonempty, comma-free, nonreserved vocabulary."""
+    frame = pd.DataFrame({"Depth_Score": [0.3], "REF": ["C"], "ALT": ["CG"]})
+
+    def unexpected_apply(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("duplicate flag configuration must validate before row evaluation")
+
+    monkeypatch.setattr(pd.DataFrame, "apply", unexpected_apply)
+    with pytest.raises(ValueError, match="duplicate_flagging.flag_name"):
+        add_flags(
+            frame,
+            {"Low_Depth": LOW_DEPTH},
+            duplicates_config={"enabled": True, "flag_name": flag_name},
+        )
+    assert "Flag" not in frame.columns
+
+
+def test_nonmapping_duplicate_flagging_config_is_rejected_before_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A malformed duplicate section fails as configuration, before sample data is copied."""
+    frame = pd.DataFrame({"Depth_Score": [0.3]})
+
+    def unexpected_copy(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("duplicate flag configuration must validate before copying rows")
+
+    monkeypatch.setattr(pd.DataFrame, "copy", unexpected_copy)
+    with pytest.raises(ValueError, match="duplicate_flagging must be a mapping"):
+        add_flags(frame, {"Low_Depth": LOW_DEPTH}, duplicates_config=cast(dict, []))
+
+
+def test_duplicate_flag_name_cannot_collide_with_an_ordinary_rule_before_row_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One row cannot receive the same configured token from both producers."""
+    frame = pd.DataFrame({"Depth_Score": [0.3], "REF": ["C"], "ALT": ["CG"]})
+
+    def unexpected_apply(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("duplicate flag collision must validate before row evaluation")
+
+    monkeypatch.setattr(pd.DataFrame, "apply", unexpected_apply)
+    with pytest.raises(ValueError, match="collides with flagging_rules"):
+        add_flags(
+            frame,
+            {"Potential_Duplicate": LOW_DEPTH},
+            duplicates_config={"enabled": True, "flag_name": "Potential_Duplicate"},
+        )
+    assert "Flag" not in frame.columns
+
+
+def test_distinct_valid_rule_and_duplicate_names_emit_each_token_once() -> None:
+    """The validated two-producer boundary preserves ordinary duplicate-flag behavior."""
+    frame = pd.DataFrame(
+        {
+            "Depth_Score": [0.3, 0.2],
+            "REF": ["C", "C"],
+            "ALT": ["CG", "CG"],
+        }
+    )
+    result = add_flags(
+        frame,
+        {"Low_Depth": LOW_DEPTH},
+        duplicates_config=_dup_config(sort_by=[{"column": "Depth_Score", "ascending": False}]),
+    )
+
+    assert result["Flag"].tolist() == ["Low_Depth", "Low_Depth, Potential_Duplicate"]
+
+
 @pytest.mark.parametrize(("flag_name", "legacy"), LEGACY_FLAG_RULES.items())
 def test_each_exact_legacy_flag_rule_is_migrated_for_its_own_name(flag_name: str, legacy: str) -> None:
     rows = {

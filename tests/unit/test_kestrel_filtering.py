@@ -31,11 +31,18 @@ import pytest
 from tests.builders import kestrel_config, kestrel_stage_frame
 from tests.support.pipeline_harness import run_pipeline_under_harness
 from vntyper.scripts import kestrel_genotyping
+from vntyper.scripts.identity_candidate_persistence import (
+    IDENTITY_CAPTURE_COLUMNS,
+    IDENTITY_SELECTION_COLUMNS,
+    parse_selected_candidate_cells,
+)
+from vntyper.scripts.identity_candidates import translation_component_from_config
 from vntyper.scripts.kestrel_genotyping import (
     construct_kestrel_command,
     filter_final_dataframe,
     select_single_best_variant,
 )
+from vntyper.scripts.nomenclature import nomenclature_config
 
 pytestmark = pytest.mark.unit
 
@@ -237,6 +244,41 @@ def test_malformed_flag_rules_abort_before_kestrel_can_publish_a_negative(tmp_pa
     with (
         mock.patch.object(kestrel_genotyping, "filter_vcf") as filter_vcf,
         pytest.raises(ValueError, match="Definitely_Missing"),
+    ):
+        kestrel_genotyping.process_kestrel_output(str(tmp_path), tmp_path / "output.vcf", "reference.fa", config, {})
+
+    filter_vcf.assert_not_called()
+    assert not (tmp_path / "kestrel_result.tsv").exists()
+
+
+def test_invalid_duplicate_flag_name_aborts_an_empty_postprocessing_frame(tmp_path):
+    """Duplicate flag vocabulary is preflighted even when a sample has no candidate rows."""
+    config = kestrel_config(duplicate_flagging={"enabled": True, "flag_name": "Bad,Flag"})
+
+    with pytest.raises(ValueError, match="duplicate_flagging.flag_name"):
+        kestrel_genotyping.process_kmer_results(pd.DataFrame(), pd.DataFrame(), str(tmp_path), config)
+
+
+def test_duplicate_flag_collision_aborts_before_kestrel_can_publish_a_negative(tmp_path):
+    """The VCF no-call path cannot conceal two configured producers of one flag token."""
+    config = kestrel_config(
+        flagging_rules={
+            "Potential_Duplicate": {
+                "all": [
+                    {
+                        "left": {"column": "Depth_Score"},
+                        "operator": "lt",
+                        "right": {"literal": 0.4},
+                    }
+                ]
+            }
+        },
+        duplicate_flagging={"enabled": True, "flag_name": "Potential_Duplicate"},
+    )
+
+    with (
+        mock.patch.object(kestrel_genotyping, "filter_vcf") as filter_vcf,
+        pytest.raises(ValueError, match="collides with flagging_rules"),
     ):
         kestrel_genotyping.process_kestrel_output(str(tmp_path), tmp_path / "output.vcf", "reference.fa", config, {})
 
@@ -539,6 +581,145 @@ def test_filter_final_dataframe_does_not_leak_sort_keys_into_the_result(tmp_path
     pre_result = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t")
     assert "_priority" not in pre_result.columns
     assert "_is_unflagged" not in pre_result.columns
+
+
+def test_identity_capture_precedes_haplo_projection_and_survives_selection(tmp_path, monkeypatch):
+    """Complete raw observations are captured before counting and persist through TSV."""
+    motifs = nomenclature_config["motifs"]
+    rows = pd.DataFrame(
+        [
+            {
+                **kestrel_stage_frame(
+                    "raw",
+                    rows=1,
+                    motifs="S-C",
+                    pos=67,
+                    ref="G",
+                    alt="GG",
+                    depth_alt=4,
+                    depth_region=400,
+                )
+                .iloc[0]
+                .to_dict(),
+                "Motif_sequence": motifs["C"] + motifs["S"],
+            },
+            {
+                **kestrel_stage_frame(
+                    "raw",
+                    rows=1,
+                    motifs="A-J",
+                    pos=67,
+                    ref="C",
+                    alt="CG",
+                    depth_alt=7,
+                    depth_region=500,
+                )
+                .iloc[0]
+                .to_dict(),
+                "Motif_sequence": motifs["J"] + motifs["A"],
+            },
+        ]
+    )
+    merged = pd.DataFrame({"Motif": ["S", "A"], "Motif_sequence": [motifs["S"], motifs["A"]]})
+    real_add_haplo_count = kestrel_genotyping.add_haplo_count
+    saw_capture_before_count = False
+
+    def checking_add_haplo_count(frame):
+        nonlocal saw_capture_before_count
+        saw_capture_before_count = set(IDENTITY_CAPTURE_COLUMNS).issubset(frame.columns)
+        return real_add_haplo_count(frame)
+
+    monkeypatch.setattr(kestrel_genotyping, "add_haplo_count", checking_add_haplo_count)
+
+    result = kestrel_genotyping.process_kmer_results(
+        rows,
+        merged,
+        str(tmp_path),
+        kestrel_config(),
+        identity_component=translation_component_from_config(nomenclature_config),
+    )
+
+    assert saw_capture_before_count is True
+    assert len(result) == 1
+    assert set(IDENTITY_CAPTURE_COLUMNS).issubset(result.columns)
+    assert set(IDENTITY_SELECTION_COLUMNS).issubset(result.columns)
+    replayed = parse_selected_candidate_cells(result.iloc[0].to_dict())
+    assert replayed.equivalent_representation_count == 2
+    assert replayed.identity_hypothesis_count == 1
+    assert replayed.selected_row_key.values == ("A-J", 67, "C", "CG")
+
+    pre_result = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t", keep_default_na=False)
+    assert len(pre_result) == 2
+    assert set(IDENTITY_CAPTURE_COLUMNS).issubset(pre_result.columns)
+    assert pre_result[IDENTITY_CAPTURE_COLUMNS[2]].tolist() == ["resolved", "resolved"]
+
+
+def test_reference_loader_seq_reaches_the_string_capture_adapter(tmp_path):
+    """The real FASTA loader's Bio.Seq.Seq value is normalized only at the stage boundary."""
+    motifs = nomenclature_config["motifs"]
+    reference = tmp_path / "motifs.fa"
+    reference.write_text(f">S-C\n{motifs['C'] + motifs['S']}\n", encoding="utf-8")
+    loaded = kestrel_genotyping.load_muc1_reference(reference)
+    assert type(loaded.iloc[0]["Motif_sequence"]).__name__ == "Seq"
+    row = kestrel_stage_frame(
+        "raw",
+        rows=1,
+        motifs="S-C",
+        pos=67,
+        ref="G",
+        alt="GG",
+        depth_alt=7,
+        depth_region=500,
+    )
+    row["Motif_sequence"] = pd.Series([loaded.iloc[0]["Motif_sequence"]], dtype=object)
+    merged = pd.DataFrame({"Motif": ["S"], "Motif_sequence": [motifs["S"]]})
+
+    result = kestrel_genotyping.process_kmer_results(
+        row,
+        merged,
+        str(tmp_path),
+        kestrel_config(),
+        identity_component=translation_component_from_config(nomenclature_config),
+    )
+
+    replayed = parse_selected_candidate_cells(result.iloc[0].to_dict())
+    assert replayed.translation.status == "resolved"
+
+
+def test_duplicate_raw_rows_keep_ordinal_binding_through_legacy_selection(tmp_path):
+    """Motif dedupe may reject one duplicate, but cannot collapse its captured observation."""
+    motifs = nomenclature_config["motifs"]
+    rows = kestrel_stage_frame(
+        "raw",
+        rows=2,
+        motifs="S-C",
+        pos=67,
+        ref="G",
+        alt="GG",
+        depth_alt=4,
+        depth_region=400,
+    )
+    rows.loc[1, "POS"] = 67
+    rows.loc[1, "Sample"] = "1/1:7:500"
+    rows["Motif_sequence"] = [motifs["C"] + motifs["S"]] * 2
+    merged = pd.DataFrame({"Motif": ["S"], "Motif_sequence": [motifs["S"]]})
+
+    result = kestrel_genotyping.process_kmer_results(
+        rows,
+        merged,
+        str(tmp_path),
+        kestrel_config(),
+        identity_component=translation_component_from_config(nomenclature_config),
+    )
+
+    replayed = parse_selected_candidate_cells(result.iloc[0].to_dict())
+    assert replayed.selected_observation_ordinal == 1
+    assert replayed.equivalent_representation_count == 2
+    assert result.iloc[0]["Estimated_Depth_AlternateVariant"] == 7
+    assert result.iloc[0]["Estimated_Depth_Variant_ActiveRegion"] == 500
+
+    pre_result = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t", dtype=str)
+    assert pre_result["__Identity_Observation_Ordinal"].tolist() == ["0", "1"]
 
 
 class TestConstructKestrelCommand:

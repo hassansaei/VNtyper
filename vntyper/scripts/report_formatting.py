@@ -69,6 +69,7 @@ from vntyper.scripts.fastp_cutoffs import (
     validated_fastp_fraction,
     validated_fastp_mapping,
 )
+from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMN_HELP, IDENTITY_COLUMNS
 from vntyper.scripts.nomenclature_presentation import (
     COLUMN_HELP,
     NOMENCLATURE_FLAG_MEANINGS,
@@ -150,6 +151,7 @@ KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
     "Ambiguity_Interval": "Ambiguity",
     "Repeat_Form": "Repeat Form",
     "Nomenclature_Note": "Naming Note",
+    **{column: column for column in IDENTITY_COLUMNS},
     # Keep the long unbroken motif sequence last even as later output fields are added: the two
     # confidence/flag columns must not be displaced by the widest value (#242).
     "Motif_sequence": "Motif Sequence",
@@ -175,6 +177,7 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Ambiguity_Interval",
     "Repeat_Form",
     "Nomenclature_Note",
+    *IDENTITY_COLUMNS,
 )
 
 #: adVNTR result column -> report heading. Applied to the *rendered* frame only.
@@ -210,6 +213,7 @@ ADVNTR_DISPLAY_HEADINGS: dict[str, str] = {
     "Ambiguity_Interval": "Ambiguity",
     "Repeat_Form": "Repeat Form",
     "Nomenclature_Note": "Naming Note",
+    **{column: column for column in IDENTITY_COLUMNS},
 }
 
 #: How a displayed value is turned into text. Every column of both results tables
@@ -255,6 +259,7 @@ KESTREL_CELL_FORMATS: dict[str, str] = {
     "Ambiguity_Interval": FORMAT_TEXT,
     "Repeat_Form": FORMAT_TEXT,
     "Nomenclature_Note": FORMAT_TEXT,
+    **dict.fromkeys(IDENTITY_COLUMNS, FORMAT_TEXT),
     "Motif_sequence": FORMAT_TEXT,
 }
 
@@ -291,6 +296,7 @@ ADVNTR_CELL_FORMATS: dict[str, str] = {
     "Ambiguity_Interval": FORMAT_TEXT,
     "Repeat_Form": FORMAT_TEXT,
     "Nomenclature_Note": FORMAT_TEXT,
+    **dict.fromkeys(IDENTITY_COLUMNS, FORMAT_TEXT),
 }
 
 #: Headings whose values are identifiers, sequences or coordinates rather than prose,
@@ -311,6 +317,7 @@ MONO_COLUMNS: frozenset[str] = frozenset(
         "Repeat_Form",
         "Motif Sequence",
         "RU",
+        "Molecular_Identity",
     }
 )
 
@@ -328,8 +335,11 @@ MONO_COLUMNS: frozenset[str] = frozenset(
 #: allele (the ambiguity interval, the repeat form, both callers' own names, the naming
 #: note) or is a figure the column beside it derives (``Depth (Region)``, which
 #: ``Depth Score`` is the ratio over) or the 60 bp sequence, which is the widest value
-#: in the document and the least scanned. Nineteen columns measured 1,946px inside a
-#: 1,130px frame; twelve fit.
+#: in the document and the least scanned. The four molecular-identity provenance fields
+#: are also folded: they remain in display order under the screen column control and
+#: print as labelled values in the per-row appendix, where their unbroken serialization
+#: can wrap instead of widening the A4 table. Nineteen columns measured 1,946px inside a
+#: 1,130px frame; twelve fit before the identity quartet was added.
 KESTREL_ESSENTIAL_COLUMNS: frozenset[str] = frozenset(
     {
         "Motif",
@@ -1018,7 +1028,7 @@ def annotate_table_columns(
         added = f' class="{" ".join(classes)}"' if classes else ""
         if tag == "th":
             added += ' scope="col"'
-            explanation = COLUMN_HELP.get(heading)
+            explanation = COLUMN_HELP.get(heading) or IDENTITY_COLUMN_HELP.get(heading)
             if explanation:
                 added += f' title="{escape_html(explanation)}"'
         return f"<{tag}{attributes}{added}>"

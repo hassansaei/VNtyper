@@ -61,6 +61,15 @@ FINAL_COLUMNS = [
     "Nomenclature_adVNTR",
 ]
 
+IDENTITY_COLUMNS = [
+    "Molecular_Identity",
+    "Molecular_Identity_Status",
+    "Equivalent_Representation_Count",
+    "Identity_Hypothesis_Count",
+]
+
+POSITIVE_COLUMNS = [*FINAL_COLUMNS, *IDENTITY_COLUMNS]
+
 RESULT_SUFFIX = "_adVNTR_result.tsv"
 
 #: adVNTR writes a ``#``-prefixed header; the parser normalises ``#VID`` to ``VID``.
@@ -103,6 +112,7 @@ NULLABLE_COLUMNS = (
 def assert_is_negative_placeholder(df: pd.DataFrame) -> None:
     """Assert the frame is exactly the one-row negative placeholder the report expects."""
     assert list(df.columns) == FINAL_COLUMNS
+    assert not set(IDENTITY_COLUMNS).intersection(df.columns)
     assert len(df) == 1
     row = df.iloc[0]
     assert row["VID"] == "Negative"
@@ -143,7 +153,7 @@ class TestCanonicalParsing:
         advntr.process_advntr_output(str(source), str(tmp_path), "output")
 
         df = read_result(tmp_path)
-        assert list(df.columns) == FINAL_COLUMNS
+        assert list(df.columns) == POSITIVE_COLUMNS
         assert len(df) == 1
         row = df.iloc[0]
         assert row["VID"] == "25561"
@@ -467,7 +477,7 @@ class TestCompoundVariants:
         advntr.process_advntr_output(str(source), str(tmp_path), "output")
 
         df = read_result(tmp_path)
-        assert list(df.columns) == FINAL_COLUMNS
+        assert list(df.columns) == POSITIVE_COLUMNS
         assert CANONICAL_VARIANT in set(df["Variant"]), "the unrelated canonical variant must survive"
 
     @pytest.mark.parametrize(

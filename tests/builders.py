@@ -171,6 +171,10 @@ STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
         "Nomenclature_Note",
         "Nomenclature_Kestrel",
         "Nomenclature_adVNTR",
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
     ),
 }
 
@@ -302,9 +306,19 @@ def kestrel_stage_frame(stage: str, rows: int = 1, **overrides: Any) -> pd.DataF
         # Use the real annotator rather than literal values: the nomenclature module
         # is pure, so this stays a pure builder, and a builder that invented its own
         # names would drift from what the pipeline actually writes.
+        from vntyper.scripts.molecular_identity import IdentityTranslation, make_coding_edit, make_molecular_identity
+        from vntyper.scripts.molecular_identity_presentation import identity_result_cells
         from vntyper.scripts.nomenclature_annotate import annotate_kestrel_frame
 
         frame = annotate_kestrel_frame(frame)
+        translation = IdentityTranslation(
+            make_molecular_identity((make_coding_edit(60, 59, "", "C"),)),
+            "resolved",
+            None,
+            False,
+        )
+        for column, value in identity_result_cells(translation).items():
+            frame[column] = value
     return frame[list(STAGE_COLUMNS[stage])]
 
 

@@ -753,8 +753,15 @@ details[open] > summary::before { transform: rotate(90deg) translateX(-2px); }
      column here is what put 757px of the Kestrel table, the 121 bp motif sequence among
      it, off the right edge of every printed page with nothing saying so. The table
      prints the columns that fit, and `.record-appendix` prints every folded value under
-     it, labelled, one block per row. The control itself is removed above, because a
-     radio beside its label states an option paper does not have. */
+     it, labelled, one block per row. Print owns that split directly: the screen-only
+     `essential-columns` class is added by JavaScript and does not exist when scripting
+     is disabled, so paper unconditionally hides the marked table cells while leaving
+     their appendix values visible. The control itself is removed above, because a radio
+     beside its label states an option paper does not have. */
+  .table td.col-optional,
+  .table th.col-optional {
+    display: none !important;
+  }
   .table.essential-columns { table-layout: auto; }
   .print-only,
   .record-appendix {

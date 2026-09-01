@@ -100,6 +100,14 @@ DEBUG_LOG_LINE = "DEBUG kestrel_genotyping: writing kestrel_result.tsv"
 #: The sentence that replaces it.
 LOG_POINTER = "The full pipeline log is in the HTML original of this report."
 
+#: A complete current identity quartet whose long wire value has no break opportunity.
+#: The first Kestrel row carries these exact values; the PDF assertion reads them back
+#: beside their labels so the print-width appendix cannot silently omit or truncate one.
+PRINT_IDENTITY = "MUC1-X-60-coding-v1|60|59|-|C"
+PRINT_IDENTITY_STATUS = "legacy-selected-among-multiple"
+PRINT_EQUIVALENT_REPRESENTATION_COUNT = 2
+PRINT_IDENTITY_HYPOTHESIS_COUNT = 3
+
 #: Three Kestrel rows. Each depth score is unique and printed to six decimal places
 #: by the server, so counting them counts rows that actually reached the page.
 KESTREL_ROWS: tuple[dict[str, Any], ...] = (
@@ -115,6 +123,10 @@ KESTREL_ROWS: tuple[dict[str, Any], ...] = (
         "Depth_Score": 0.010012,
         "Confidence": "High_Precision",
         "Flag": "Not flagged",
+        "Molecular_Identity": PRINT_IDENTITY,
+        "Molecular_Identity_Status": PRINT_IDENTITY_STATUS,
+        "Equivalent_Representation_Count": PRINT_EQUIVALENT_REPRESENTATION_COUNT,
+        "Identity_Hypothesis_Count": PRINT_IDENTITY_HYPOTHESIS_COUNT,
     },
     {
         "Motif": "6",
@@ -128,6 +140,10 @@ KESTREL_ROWS: tuple[dict[str, Any], ...] = (
         "Depth_Score": 0.008034,
         "Confidence": "Low_Precision",
         "Flag": "Low_Depth",
+        "Molecular_Identity": "MUC1-X-60-coding-v1|59|59|C|-",
+        "Molecular_Identity_Status": "unique",
+        "Equivalent_Representation_Count": 1,
+        "Identity_Hypothesis_Count": 2,
     },
     {
         "Motif": "7",
@@ -141,6 +157,10 @@ KESTREL_ROWS: tuple[dict[str, Any], ...] = (
         "Depth_Score": 0.006001,
         "Confidence": "Low_Precision",
         "Flag": "Depth_Score_Below_Threshold",
+        "Molecular_Identity": "",
+        "Molecular_Identity_Status": "unresolved",
+        "Equivalent_Representation_Count": 0,
+        "Identity_Hypothesis_Count": 2,
     },
 )
 
@@ -163,6 +183,8 @@ def _render_report(output_dir: Path, *, sample_name: str = SAMPLE_NAME) -> Path:
     log_file = output_dir / "pipeline.log"
     log_file.write_text(f"{DEBUG_LOG_LINE}\n", encoding="utf-8")
     payload = {
+        "schema_version": 2,
+        "decision_policy": "legacy-selection-v1",
         "version": PIPELINE_VERSION,
         "sample_name": sample_name,
         "sample_name_is_explicit": True,
@@ -304,6 +326,22 @@ def test_the_printed_pdf_is_a_complete_record(printable_report: Path, browser: B
 
     assert SAMPLE_NAME in squashed, "the printed record does not say whose report it is"
     assert MOTIF_SEQUENCE in squashed, "the synthetic stress motif sequence is still truncated in print"
+    for label in (
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    ):
+        assert label in squashed, f"the printed identity appendix omits the exact label {label!r}"
+    assert PRINT_IDENTITY in squashed, "the full unbroken molecular identity is clipped or absent"
+    assert PRINT_IDENTITY_STATUS in squashed, "the distinctive recorded identity status is absent"
+    assert (
+        _squashed(
+            f"Equivalent_Representation_Count {PRINT_EQUIVALENT_REPRESENTATION_COUNT} "
+            f"Identity_Hypothesis_Count {PRINT_IDENTITY_HYPOTHESIS_COUNT}"
+        )
+        in squashed
+    ), "the distinctive identity counts are not printed beside their exact labels"
     for marker in ROW_MARKERS:
         assert squashed.count(marker) == 1, f"the variant row identified by {marker} did not print exactly once"
     assert "Researchuseonly" in squashed, "the printed record makes no statement about its use"
@@ -524,6 +562,28 @@ def test_the_record_survives_a_reader_with_scripting_off(printable_report: Path,
     assert SAMPLE_NAME in squashed
     assert _squashed(LOG_POINTER) in squashed
     assert _squashed(DEBUG_LOG_LINE) not in squashed
+    for label in (
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    ):
+        exact_label = re.escape(label) + (r"(?!_Status)" if label == "Molecular_Identity" else "")
+        assert len(re.findall(exact_label, squashed)) == 3, (
+            f"the no-script PDF prints {label!r} somewhere other than the three labelled row appendices"
+        )
+    for identity, status, equivalent_count, hypothesis_count in (
+        ("MUC1-X-60-coding-v1|60|59|-|C", "legacy-selected-among-multiple", 2, 3),
+        ("MUC1-X-60-coding-v1|59|59|C|-", "unique", 1, 2),
+        ("", "unresolved", 0, 2),
+    ):
+        record = _squashed(
+            f"Molecular_Identity {identity} Molecular_Identity_Status {status} "
+            f"Equivalent_Representation_Count {equivalent_count} Identity_Hypothesis_Count {hypothesis_count}"
+        )
+        assert squashed.count(record) == 1, (
+            f"the no-script PDF omits or duplicates the labelled identity record ending in {hypothesis_count!r}"
+        )
 
 
 def test_the_printed_record_carries_the_coverage_verdict(printable_report: Path, browser: Browser) -> None:

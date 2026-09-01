@@ -24,6 +24,29 @@ The reference is **the canonical MUC1 60 bp repeat unit in coding orientation**,
 tract of 7 × C at positions 53–59 is the one Wenzel et al. (2018, PMID:29520014)
 publish.
 
+## Molecular identity and caller representation
+
+The caller's `POS`, `REF`, `ALT`, `Variant` and `Nomenclature` cells are representations
+of its result; they are not used to reconstruct molecular identity in a report or cohort.
+Every current positive Kestrel and adVNTR result records one complete quartet, in this
+order:
+
+1. `Molecular_Identity` — the stable serialized edit, empty when unresolved;
+2. `Molecular_Identity_Status` — `unique`, `legacy-selected-among-multiple`, or
+   `unresolved`;
+3. `Equivalent_Representation_Count` — representations equivalent to the row's selected
+   identity, or integer `0` when unresolved; and
+4. `Identity_Hypothesis_Count` — distinct resolved identities considered for the caller,
+   including a nonzero count beside an unresolved selected row when alternatives resolved.
+
+Sample and cohort HTML, TSV, CSV and JSON surfaces copy these four recorded values. A
+schema-1 or schema-2 summary row missing any member of the quartet displays the literal
+`legacy identity not recorded` in all four downstream cells. It is never completed from
+plausible legacy alleles or names. Current negative caller TSVs keep their narrower schemas
+and gain no identity fields. In the sample report, the quartet remains in the HTML table
+under the screen column control. It is folded out of the width-limited table on paper and
+printed in exact order as labelled values in the per-row appendix.
+
 ### Why there is no `c.` prefix
 
 A `c.` prefix asserts a coding-DNA reference sequence, and **no transcript places this

@@ -187,6 +187,39 @@ def compile_flag_rules(flag_rules: object, columns: Collection[str]) -> Compiled
     return CompiledFlagRules(rules=tuple(compiled))
 
 
+def validate_duplicate_flagging_config(
+    duplicates_config: object,
+    flag_rules: CompiledFlagRules,
+) -> str:
+    """Validate the sole flag token emitted by duplicate detection.
+
+    Args:
+        duplicates_config: Untrusted duplicate-flagging configuration, or ``None``.
+        flag_rules: Already compiled ordinary flag rules for collision detection.
+
+    Returns:
+        The validated configured name, or the historical default when absent.
+
+    Raises:
+        ValueError: If the configuration or name is malformed, reserved, or colliding.
+    """
+    default_name = "Potential_Duplicate"
+    if duplicates_config is None:
+        return default_name
+    if not isinstance(duplicates_config, Mapping):
+        _invalid_flagging("duplicate_flagging must be a mapping")
+    flag_name = duplicates_config.get("flag_name", default_name)
+    if not isinstance(flag_name, str) or not flag_name:
+        _invalid_flagging("duplicate_flagging.flag_name must be a non-empty string")
+    if "," in flag_name:
+        _invalid_flagging("duplicate_flagging.flag_name must not contain a comma")
+    if flag_name in _RESERVED_FLAG_NAMES:
+        _invalid_flagging(f"duplicate_flagging.flag_name {flag_name!r} is reserved")
+    if flag_name in {ordinary_name for ordinary_name, _rule in flag_rules.rules}:
+        _invalid_flagging(f"duplicate_flagging.flag_name {flag_name!r} collides with flagging_rules")
+    return flag_name
+
+
 def add_flags(
     df: pd.DataFrame,
     flag_rules: object,
@@ -226,6 +259,7 @@ def add_flags(
         pd.DataFrame: A copy of the input DataFrame with an added 'Flag' column.
     """
     compiled = flag_rules if isinstance(flag_rules, CompiledFlagRules) else compile_flag_rules(flag_rules, df.columns)
+    duplicate_flag_name = validate_duplicate_flagging_config(duplicates_config, compiled)
 
     # Create a copy to avoid modifying the original DataFrame
     df_copy = df.copy()
@@ -279,7 +313,7 @@ def add_flags(
             group_cols=group_cols,
             sort_cols=sort_cols,
             sort_ascending=sort_ascending,
-            duplicate_flag_name=duplicates_config.get("flag_name", "Potential_Duplicate"),
+            duplicate_flag_name=duplicate_flag_name,
         )
     else:
         logger.debug("No duplicates_config or 'enabled' is False; skipping duplicate flagging.")

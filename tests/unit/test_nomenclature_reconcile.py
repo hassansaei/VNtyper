@@ -8,15 +8,31 @@ canonical X, and source-specific support at or above a threshold.
 Research use only.
 """
 
+from dataclasses import replace
+
 import pytest
 
+from vntyper.scripts.identity_reconciliation import (
+    IdentityReconciliationObservation,
+    IdentityReconciliationPolicy,
+)
+from vntyper.scripts.molecular_identity import (
+    EvidenceDisposition,
+    EvidenceDispositionValue,
+    IdentityTranslation,
+    MolecularIdentity,
+    make_coding_edit,
+    make_molecular_identity,
+)
 from vntyper.scripts.nomenclature import (
     CALLER_OF,
+    FLAG_CALLER_DISAGREEMENT,
     FLAG_LOW_EVIDENCE_SUPPORT,
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
     FLAG_LOW_KMER_PATH_SUPPORT,
     FLAG_LOW_READ_SUPPORT,
     FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
+    KNOWN_VARIANTS,
     MIN_SUPPORT_FOR_TIER_A,
     Nomenclature,
     from_advntr,
@@ -27,6 +43,259 @@ from vntyper.scripts.nomenclature import (
 from vntyper.scripts.nomenclature_bam import refine
 
 pytestmark = pytest.mark.unit
+
+IDENTITY_POLICY = IdentityReconciliationPolicy(5, 5)
+_DUPC_IDENTITY = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+_DUPA_IDENTITY = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
+
+
+def _identity_observation(
+    identity: MolecularIdentity | None,
+    call: Nomenclature,
+    *,
+    kmer_depth: int | None = None,
+    advntr_reads: int | None = None,
+    disposition: EvidenceDispositionValue = "admissible",
+    presentation_call_index: int | None = None,
+) -> IdentityReconciliationObservation:
+    translation = (
+        IdentityTranslation(identity, "resolved", None, False)
+        if identity is not None
+        else IdentityTranslation(None, "unresolved", "missing-motif-context", False)
+    )
+    return IdentityReconciliationObservation(
+        translation=translation,
+        display_name=call.name,
+        source=call.source,
+        event=call.event,
+        net_length=call.net_length,
+        flags=frozenset(call.flags),
+        disposition=EvidenceDisposition(disposition),
+        known_variant_match=call.name in KNOWN_VARIANTS,
+        kestrel_alternate_kmer_path_depth=kmer_depth,
+        advntr_sequencing_read_support=advntr_reads,
+        presentation_call_index=presentation_call_index,
+    )
+
+
+def test_typed_adapter_rejects_equal_display_names_with_different_identities() -> None:
+    kestrel = _kestrel_dupc()
+    advntr = _advntr_dupc()
+
+    merged = reconcile(
+        kestrel,
+        advntr,
+        identity_observations=(
+            _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40),
+            _identity_observation(_DUPA_IDENTITY, advntr, advntr_reads=40),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert merged.name == "59dupC", "the packaged legacy display row remains primary"
+    assert merged.tier == "B"
+    assert FLAG_CALLER_DISAGREEMENT in merged.flags
+
+
+def test_typed_adapter_agrees_by_identity_without_replacing_the_legacy_display_row() -> None:
+    kestrel = Nomenclature("legacy-display", "duplication", "X", "B", (), None, None, 1, "kestrel_vcf")
+    advntr = Nomenclature("other-display", "duplication", "X", "B", (), None, None, 1, "advntr")
+
+    merged = reconcile(
+        kestrel,
+        advntr,
+        identity_observations=(
+            _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40),
+            _identity_observation(_DUPC_IDENTITY, advntr, advntr_reads=40),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert merged.name == "legacy-display"
+    assert merged.source == "reconciled"
+    assert FLAG_CALLER_DISAGREEMENT not in merged.flags
+
+
+def test_typed_adapter_rejects_call_observation_cardinality_drift() -> None:
+    kestrel = _kestrel_dupc()
+    with pytest.raises(ValueError, match="one identity observation per call"):
+        reconcile(kestrel, identity_observations=(), identity_policy=IDENTITY_POLICY)
+
+
+def test_explicit_binding_rejects_a_duplicate_even_when_every_call_index_is_present() -> None:
+    kestrel = _kestrel_dupc()
+    advntr = _advntr_dupc()
+    with pytest.raises(ValueError, match="exactly one identity observation per call"):
+        reconcile(
+            kestrel,
+            advntr,
+            identity_observations=(
+                _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40, presentation_call_index=0),
+                _identity_observation(_DUPC_IDENTITY, advntr, advntr_reads=40, presentation_call_index=1),
+                _identity_observation(_DUPC_IDENTITY, advntr, advntr_reads=40, presentation_call_index=1),
+            ),
+            identity_policy=IDENTITY_POLICY,
+        )
+
+
+def test_explicit_binding_rejects_a_missing_call_index() -> None:
+    kestrel = _kestrel_dupc()
+    advntr = _advntr_dupc()
+    with pytest.raises(ValueError, match="exactly one identity observation per call"):
+        reconcile(
+            kestrel,
+            advntr,
+            identity_observations=(
+                _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40, presentation_call_index=0),
+            ),
+            identity_policy=IDENTITY_POLICY,
+        )
+
+
+def test_explicit_binding_rejects_an_out_of_range_extra_call_index() -> None:
+    kestrel = _kestrel_dupc()
+    with pytest.raises(ValueError, match="exactly one identity observation per call"):
+        reconcile(
+            kestrel,
+            identity_observations=(
+                _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40, presentation_call_index=0),
+                _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40, presentation_call_index=1),
+            ),
+            identity_policy=IDENTITY_POLICY,
+        )
+
+
+def test_explicit_binding_accepts_reordered_observations_and_preserves_call_order() -> None:
+    kestrel = _kestrel_dupc()
+    advntr = Nomenclature("same-identity-other-display", "duplication", "X", "B", (), None, None, 1, "advntr")
+
+    merged = reconcile(
+        kestrel,
+        advntr,
+        identity_observations=(
+            _identity_observation(_DUPC_IDENTITY, advntr, advntr_reads=40, presentation_call_index=1),
+            _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40, presentation_call_index=0),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert merged.name == "59dupC"
+
+
+def test_explicit_binding_rejects_a_display_bearing_unbound_observation() -> None:
+    kestrel = _kestrel_dupc()
+    malformed_unbound = replace(
+        _identity_observation(_DUPC_IDENTITY, _advntr_dupc(), advntr_reads=40),
+        advntr_mean_coverage=100,
+    )
+
+    with pytest.raises(ValueError, match="unbound observation must be a complete adVNTR row"):
+        reconcile(
+            kestrel,
+            identity_observations=(
+                _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40, presentation_call_index=0),
+                malformed_unbound,
+            ),
+            identity_policy=IDENTITY_POLICY,
+        )
+
+
+def test_identity_insufficient_different_event_cannot_withdraw_the_admissible_kestrel_presentation() -> None:
+    kestrel = _kestrel_dupc()
+    advntr = Nomenclature("58_59insG", "insertion", "X", "B", (), None, None, 1, "advntr")
+
+    merged = reconcile(
+        kestrel,
+        advntr,
+        identity_observations=(
+            _identity_observation(_DUPC_IDENTITY, kestrel, kmer_depth=40),
+            _identity_observation(
+                _DUPA_IDENTITY,
+                advntr,
+                advntr_reads=400,
+                disposition="identity-insufficient",
+            ),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert merged.name == "59dupC"
+    assert merged.event == "duplication"
+    assert merged.tier == "B"
+    assert FLAG_CALLER_DISAGREEMENT not in merged.flags
+
+
+def test_unresolved_vcf_abstention_preserves_exact_legacy_low_support_flags() -> None:
+    kestrel = _kestrel_dupc()
+    advntr = _advntr_dupc()
+    supports = {"kestrel_vcf": 2, "advntr": 4}
+
+    legacy = reconcile(kestrel, advntr, supports=supports)
+    typed = reconcile(
+        kestrel,
+        advntr,
+        supports=supports,
+        identity_observations=(
+            _identity_observation(None, kestrel, kmer_depth=2),
+            _identity_observation(_DUPC_IDENTITY, advntr, advntr_reads=4),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert typed.flags == legacy.flags
+    assert {FLAG_LOW_KMER_PATH_SUPPORT, FLAG_LOW_READ_SUPPORT}.issubset(typed.flags)
+
+
+def test_unbound_bam_advntr_abstention_preserves_exact_legacy_low_support_flags() -> None:
+    kestrel = from_kestrel("X-X", 61, "T", "TC")
+    bam = replace(
+        _from_haplotypes("58_59insG", "insertion"),
+        flags=(FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,),
+    )
+    advntr = from_advntr("I23_2_C_LEN1")[0]
+    supports = {"kestrel_vcf": 40, "kestrel_bam": 2, "advntr": 4}
+
+    legacy = reconcile(kestrel, bam, advntr, supports=supports)
+    typed = reconcile(
+        kestrel,
+        bam,
+        advntr,
+        supports=supports,
+        identity_observations=(
+            _identity_observation(_DUPA_IDENTITY, kestrel, kmer_depth=40),
+            _identity_observation(None, bam),
+            _identity_observation(_DUPC_IDENTITY, advntr, advntr_reads=4),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert typed.flags == legacy.flags
+    assert {
+        FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
+        FLAG_LOW_READ_SUPPORT,
+        FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
+    }.issubset(typed.flags)
+
+
+def test_future_source_abstention_preserves_generic_legacy_low_support_flag() -> None:
+    future = Nomenclature("59dupC", "duplication", "X", "B", (), None, None, 1, "future_caller")
+    advntr = _advntr_dupc()
+    supports = {"future_caller": 2, "advntr": 4}
+
+    legacy = reconcile(future, advntr, supports=supports)
+    typed = reconcile(
+        future,
+        advntr,
+        supports=supports,
+        identity_observations=(
+            _identity_observation(None, future),
+            _identity_observation(_DUPC_IDENTITY, advntr, advntr_reads=4),
+        ),
+        identity_policy=IDENTITY_POLICY,
+    )
+
+    assert typed.flags == legacy.flags
+    assert FLAG_LOW_EVIDENCE_SUPPORT in typed.flags
 
 
 def _kestrel_dupc() -> Nomenclature:

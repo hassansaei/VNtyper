@@ -1,5 +1,6 @@
 """Pure checks for strict, value-bearing real-integration outcome declarations."""
 
+import json
 from pathlib import Path
 from typing import Any, Literal
 from unittest import mock
@@ -7,6 +8,7 @@ from unittest import mock
 import pytest
 
 from tests import parametrization
+from tests.integration import test_cram_reference_pipeline_contract as cram_reference_contract
 from tests.integration import test_pipeline_integration as local_integration
 from tests.parametrization import get_advntr_test_cases, get_bam_test_cases, get_fastq_test_cases, load_test_config
 from tests.support import orchestration
@@ -27,6 +29,9 @@ EXPECTED_BAM_ROUTING = {
     "example_b178_hg19_subset_default": (16_929, 16_929, 0, 1),
     "example_40cf_hg38_subset_default": (19_492, 19_492, 0, 93),
 }
+
+LEGACY_CROSS_MATCH_MESSAGE = "At least one match was found between Kestrel and adVNTR results."
+LEGACY_NO_MATCH_MESSAGE = "No matches were found between Kestrel and adVNTR results."
 
 
 def _negative_case() -> dict[str, Any]:
@@ -128,6 +133,60 @@ def test_clean_remapped_paired_bam_retains_a_real_advntr_success_contract() -> N
         "MeanCoverage": {"value": 70.3333333333, "tolerance_percentage": 10},
         "Pvalue": {"value": 5.774455097259999e-59, "log10_tolerance": 2},
     }
+
+
+def test_legacy_cross_match_report_assertion_accepts_the_semantic_chip(tmp_path: Path) -> None:
+    """Historical sentence declarations follow the report's replacement concordance chip."""
+    (tmp_path / "summary_report.html").write_text(
+        '<span class="chip-label">Concordance</span><span class="chip-value">Match</span>',
+        encoding="utf-8",
+    )
+
+    orchestration._assert_report_values({"report_assertions": [LEGACY_CROSS_MATCH_MESSAGE]}, tmp_path)
+
+
+def test_legacy_cross_match_report_assertion_rejects_the_wrong_semantic_chip(tmp_path: Path) -> None:
+    """An unrelated later Match chip cannot repair a wrong Concordance verdict."""
+    (tmp_path / "summary_report.html").write_text(
+        '<span class="chip-label">Concordance</span><span class="chip-value">No match</span>'
+        '<span class="chip-label">Another status</span><span class="chip-value">Match</span>',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AssertionError, match="missing declared text"):
+        orchestration._assert_report_values({"report_assertions": [LEGACY_CROSS_MATCH_MESSAGE]}, tmp_path)
+
+
+def test_legacy_cross_match_report_assertion_accepts_the_no_match_semantic_chip(tmp_path: Path) -> None:
+    """The historical negative sentence follows the adjacent negative chip."""
+    (tmp_path / "summary_report.html").write_text(
+        '<span class="chip-label">Concordance</span>\n  <span class="chip-value">No match</span>',
+        encoding="utf-8",
+    )
+
+    orchestration._assert_report_values({"report_assertions": [LEGACY_NO_MATCH_MESSAGE]}, tmp_path)
+
+
+def test_legacy_cross_match_report_assertion_rejects_an_unrelated_no_match_chip(tmp_path: Path) -> None:
+    """An unrelated later No match chip cannot repair a positive Concordance verdict."""
+    (tmp_path / "summary_report.html").write_text(
+        '<span class="chip-label">Concordance</span><span class="chip-value">Match</span>'
+        '<span class="chip-label">Another status</span><span class="chip-value">No match</span>',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AssertionError, match="missing declared text"):
+        orchestration._assert_report_values({"report_assertions": [LEGACY_NO_MATCH_MESSAGE]}, tmp_path)
+
+
+def test_compact_cram_contract_config_disables_genome_coordinate_array_metrics(tmp_path: Path) -> None:
+    """The purpose fixture's custom compact region cannot retain genome-coordinate array bounds."""
+    config = cram_reference_contract._local_config(tmp_path)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+
+    assembly = payload["bam_processing"]["assemblies"]["GRCh37"]
+    assert assembly["vntr_region_coords"] == "1-10000"
+    assert "vntr_array_coords" not in assembly
 
 
 def test_direct_single_fastq_has_an_end_to_end_integration_contract() -> None:

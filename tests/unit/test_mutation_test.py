@@ -738,6 +738,41 @@ def test_the_call_selection_module_is_a_mutation_target() -> None:
     assert "tests/unit/test_motif_exclusion_pipeline.py" in scoped
 
 
+def test_identity_decision_modules_are_wide_mutation_targets() -> None:
+    """
+    Candidate grouping or reconciliation flips can choose a plausible wrong identity.
+
+    The dedicated decision tests and every direct integration consumer that carries
+    candidate/reconciliation identity state must be in the scoped fast path. Otherwise
+    a ``--module`` run can report a healthy score while never exercising the selection
+    or publication path that would reveal the wrong molecular identity.
+    """
+    required_scopes = {
+        "vntyper/scripts/identity_candidates.py": (
+            "tests/unit/test_identity_candidates.py",
+            "tests/unit/test_identity_bam_binding.py",
+            "tests/unit/test_identity_reconciliation.py",
+            "tests/unit/test_kestrel_filtering.py",
+            "tests/unit/test_kestrel_result_publication.py",
+            "tests/unit/test_molecular_identity_surfaces.py",
+            "tests/unit/test_nomenclature_bam.py",
+            "tests/unit/test_nomenclature_surfaces.py",
+        ),
+        "vntyper/scripts/identity_reconciliation.py": (
+            "tests/unit/test_identity_reconciliation.py",
+            "tests/unit/test_nomenclature_reconcile.py",
+        ),
+    }
+
+    missing = {
+        module: tuple(path for path in required if path not in mutation_test.TARGETS.get(module, ()))
+        for module, required in required_scopes.items()
+        if any(path not in mutation_test.TARGETS.get(module, ()) for path in required)
+    }
+
+    assert missing == {}
+
+
 # ---------------------------------------------------------------------------
 # The clean-tree preflight
 # ---------------------------------------------------------------------------

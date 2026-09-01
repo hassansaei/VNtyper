@@ -33,6 +33,12 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
+from vntyper.scripts.identity_reconciliation import (
+    IdentityReconciliationObservation,
+    IdentityReconciliationPolicy,
+    reconcile_identity_observations,
+    select_compatibility_presentation_index,
+)
 from vntyper.scripts.nomenclature_evidence import (
     FLAG_LOW_EVIDENCE_SUPPORT,
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
@@ -624,6 +630,127 @@ def reconcile(
     *calls: Nomenclature,
     support: int | None = None,
     supports: Mapping[str, int | None] | None = None,
+    identity_observations: tuple[IdentityReconciliationObservation, ...] | None = None,
+    identity_policy: IdentityReconciliationPolicy | None = None,
+) -> Nomenclature:
+    """Combine caller calls through legacy or explicitly supplied identity evidence.
+
+    Args:
+        *calls: Legacy presentation calls in their existing order.
+        support: Legacy scalar support for compatibility-only callers.
+        supports: Legacy support keyed by source.
+        identity_observations: Typed observations aligned one-for-one with ``calls``.
+        identity_policy: Explicit source-unit thresholds for typed reconciliation.
+
+    Returns:
+        The unchanged legacy projection when identity metadata is absent, or the
+        identity-keyed decision projected onto the existing ``Nomenclature`` shape.
+
+    Raises:
+        ValueError: If typed observations and their explicit policy are inconsistent.
+    """
+    if identity_observations is None:
+        if identity_policy is not None:
+            raise ValueError("An identity policy requires typed identity observations")
+        return _reconcile_legacy(*calls, support=support, supports=supports)
+    if identity_policy is None:
+        raise ValueError("Typed identity observations require an explicit identity policy")
+    if not calls:
+        return _undetermined("unknown", 0, "reconciled", ())
+
+    implicit_positional_binding = len(identity_observations) == len(calls) and all(
+        observation.presentation_call_index is None for observation in identity_observations
+    )
+    presentation_call_indices = tuple(
+        index if implicit_positional_binding else observation.presentation_call_index
+        for index, observation in enumerate(identity_observations)
+    )
+    bound_call_indices = tuple(index for index in presentation_call_indices if index is not None)
+    if tuple(sorted(bound_call_indices)) != tuple(range(len(calls))):
+        raise ValueError("Typed reconciliation requires exactly one identity observation per call")
+    if not implicit_positional_binding and any(
+        observation.presentation_call_index is None and not observation.is_unbound_advntr_row
+        for observation in identity_observations
+    ):
+        raise ValueError("An unbound observation must be a complete adVNTR row")
+    if any(
+        observation.display_name != call.name
+        or observation.source != call.source
+        or observation.event != call.event
+        or observation.net_length != call.net_length
+        for observation, call_index in zip(identity_observations, presentation_call_indices, strict=True)
+        if call_index is not None
+        for call in (calls[call_index],)
+    ):
+        raise ValueError("Typed identity observations must match their presentation calls")
+
+    admissible_call_indices = tuple(
+        index
+        for index in range(len(calls))
+        if any(
+            call_index == index and observation.disposition.value == "admissible"
+            for observation, call_index in zip(identity_observations, presentation_call_indices, strict=True)
+        )
+    )
+    decision_call_indices = admissible_call_indices or tuple(range(len(calls)))
+    decision_calls = tuple(calls[index] for index in decision_call_indices)
+    relative_selection = select_compatibility_presentation_index(decision_calls)
+    if relative_selection is None:  # pragma: no cover - calls was established above
+        return _undetermined("unknown", 0, "reconciled", ())
+    compatibility_call_index = decision_call_indices[relative_selection]
+    compatibility_observation_index = next(
+        index for index, call_index in enumerate(presentation_call_indices) if call_index == compatibility_call_index
+    )
+    compatibility_presentation = _reconcile_legacy(*decision_calls, support=support, supports=supports)
+    result = reconcile_identity_observations(
+        identity_observations,
+        identity_policy,
+        presentation_selected_observation_index=compatibility_observation_index,
+    )
+    selected_observation_index = result.presentation_selected_observation_index
+    if selected_observation_index is None:  # pragma: no cover - calls established a compatibility selection
+        raise ValueError("Typed reconciliation did not select a presentation observation")
+    selected_call_index = presentation_call_indices[selected_observation_index]
+    if selected_call_index is None:
+        raise ValueError("Typed reconciliation selected an unbound row observation for presentation")
+    presentation = (
+        compatibility_presentation if selected_call_index == compatibility_call_index else calls[selected_call_index]
+    )
+
+    flags = set().union(*(call.flags for call in decision_calls))
+    if result.caller_disagreement or (result.identity is None and FLAG_CALLER_DISAGREEMENT in presentation.flags):
+        flags.add(FLAG_CALLER_DISAGREEMENT)
+    if any(identity_observations[index].translation.context_diverges for index in result.backing_observation_indices):
+        flags.add(FLAG_MOTIF_CONTEXT_DIVERGES)
+    for source in result.low_support_sources:
+        flags.add(low_support_flag_for_source(source))
+    if result.identity is None:
+        flags.update(compatibility_presentation.flags)
+    if FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT in presentation.flags:
+        flags.add(FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT)
+    if presentation.name is not None:
+        flags.add(FLAG_KNOWN_VARIANT if presentation.name in KNOWN_VARIANTS else FLAG_REPRESENTATION_ONLY)
+
+    if result.event_disagreement or presentation.name is None:
+        return _undetermined("unknown", presentation.net_length, "reconciled", tuple(sorted(flags)))
+    tier = "B" if result.tier == "abstained" else result.tier
+    return Nomenclature(
+        name=presentation.name,
+        event=presentation.event,
+        unit=presentation.unit,
+        tier=tier,
+        flags=tuple(sorted(flags)),
+        ambiguity=presentation.ambiguity,
+        repeat_form=presentation.repeat_form,
+        net_length=presentation.net_length,
+        source="reconciled" if len(result.backing_sources) > 1 else presentation.source,
+    )
+
+
+def _reconcile_legacy(
+    *calls: Nomenclature,
+    support: int | None = None,
+    supports: Mapping[str, int | None] | None = None,
 ) -> Nomenclature:
     """Combine independent callers into one result, and decide its tier.
 
@@ -657,6 +784,8 @@ def reconcile(
         return _undetermined("unknown", 0, "reconciled", ())
 
     primary = next((call for call in usable if call.source == "kestrel_vcf"), usable[0])
+    selected_index = select_compatibility_presentation_index(usable)
+    assert selected_index is not None
     flags = set(primary.flags)
     for call in usable:
         flags.update(call.flags)
@@ -683,21 +812,10 @@ def reconcile(
     if len(backing) > 1:
         flags.add(FLAG_CALLER_DISAGREEMENT)
 
-    # An allele two independent callers name outvotes one that only a single caller
-    # does. Measured on the benchmark this is what recovers the `insG` families:
-    # Kestrel's VCF places them one base 3' of truth, while adVNTR and Kestrel's
-    # resolved haplotype records agree on the right position (129 -> 135 of 200,
-    # no name lost).
-    #
-    # Only an unambiguous majority decides. Two corroborated alleles are a genuine
-    # conflict rather than a vote to settle, and zero leaves the existing order
-    # intact -- which is what keeps "VCF primary" true whenever nothing outvotes it.
-    corroborated = [name for name, sources in backing.items() if _is_corroborated(sources)]
-    winner = corroborated[0] if len(corroborated) == 1 else None
-
-    chosen = next((call for call in named if call.name == winner), None) if winner is not None else None
-    if chosen is None:
-        chosen = named[0] if named else None
+    # The pure compatibility selector owns the legacy majority/VCF-primary choice so
+    # the typed adapter and direct legacy callers cannot drift apart.
+    selected = usable[selected_index]
+    chosen = selected if selected.name is not None else None
     chosen_name = chosen.name if chosen is not None else None
 
     # Independence is judged on the chosen allele's own backing, not on every name

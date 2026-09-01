@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from vntyper.scripts.summary import md5sum, parse_csv, parse_json_file, parse_tsv
@@ -93,6 +94,44 @@ def test_parse_tsv_keeps_a_row_that_is_empty_but_for_its_first_column(tmp_path: 
     path = _write(tmp_path / "mostly-empty.tsv", "A\tB\tC\n1\t\t\n")
 
     assert parse_tsv(path)["data"] == [{"A": "1", "B": "", "C": ""}]
+
+
+def test_parse_tsv_decodes_writer_quoted_json_cells(tmp_path: Path) -> None:
+    """TSV quoting added by pandas must not become part of a summary cell."""
+    path = _write(
+        tmp_path / "quoted.tsv",
+        'Name\tMetadata\ncall\t"{""source"":""kestrel"",""values"":[67,""G""]}"\n',
+    )
+
+    assert parse_tsv(path)["data"] == [{"Name": "call", "Metadata": '{"source":"kestrel","values":[67,"G"]}'}]
+
+
+def test_parse_tsv_round_trips_a_pandas_quoted_multiline_cell(tmp_path: Path) -> None:
+    """A logical TSV record may span physical lines when pandas quotes a cell."""
+    path = tmp_path / "multiline.tsv"
+    pd.DataFrame([{"Name": "call", "Note": "line one\nline two"}]).to_csv(path, sep="\t", index=False)
+
+    assert parse_tsv(str(path))["data"] == [{"Name": "call", "Note": "line one\nline two"}]
+
+
+def test_parse_tsv_reports_the_physical_line_after_a_multiline_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A malformed row after a multiline cell is diagnosed at its real start line."""
+    path = _write(tmp_path / "multiline-then-ragged.tsv", 'A\tB\ncall\t"x\ny"\n1\n')
+
+    with caplog.at_level(logging.WARNING):
+        result = parse_tsv(path)
+
+    assert result["data"] == [{"A": "call", "B": "x\ny"}]
+    assert "multiline-then-ragged.tsv:4" in caplog.text
+
+
+def test_parse_tsv_skips_a_delimiter_only_blank_record(tmp_path: Path) -> None:
+    """A delimiter-only physical row retains the parser's historical blank semantics."""
+    path = _write(tmp_path / "delimiter-blank.tsv", "A\tB\tC\n\t\t\n1\t2\t3\n")
+
+    assert parse_tsv(path)["data"] == [{"A": "1", "B": "2", "C": "3"}]
 
 
 # --- ragged rows: the behaviour this module pins -----------------------------

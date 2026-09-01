@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -370,6 +371,15 @@ _STRICT_KESTREL_FIELDS = frozenset(
     }
 )
 
+_LEGACY_REPORT_PRESENTATION = {
+    "At least one match was found between Kestrel and adVNTR results.": re.compile(
+        r'<span class="chip-label">Concordance</span>\s*<span class="chip-value">Match</span>'
+    ),
+    "No matches were found between Kestrel and adVNTR results.": re.compile(
+        r'<span class="chip-label">Concordance</span>\s*<span class="chip-value">No match</span>'
+    ),
+}
+
 
 def _require_oracle_fields(test_case: dict[str, Any], required: frozenset[str]) -> None:
     missing = sorted(required.difference(test_case))
@@ -516,10 +526,17 @@ def _assert_report_values(test_case: dict[str, Any], output_dir: Path) -> None:
         # The compatibility fixtures predate the semantic report template and retain
         # report_config.json's historical ``<br>``-joined message. The template now
         # renders the same author-owned segments as separate paragraphs. Compare the
-        # exact words in their declared order, while allowing markup between them;
-        # changing, dropping, or reordering any segment still fails the oracle.
+        # exact words in their declared order; the two retired concordance sentences
+        # instead require the real label/value spans to be adjacent, with only template
+        # whitespace between them. Changing, dropping, or reordering still fails.
         cursor = 0
         for segment in fragment.split("<br>"):
+            legacy_presentation = _LEGACY_REPORT_PRESENTATION.get(segment)
+            if legacy_presentation is not None:
+                match = legacy_presentation.search(report, cursor)
+                assert match is not None, f"Summary report is missing declared text: {segment}"
+                cursor = match.end()
+                continue
             position = report.find(segment, cursor)
             assert position >= 0, f"Summary report is missing declared text: {segment}"
             cursor = position + len(segment)

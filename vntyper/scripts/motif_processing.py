@@ -30,6 +30,7 @@ import logging
 import pandas as pd
 from Bio import SeqIO
 
+from vntyper.scripts.identity_candidate_persistence import IDENTITY_CAPTURE_COLUMNS
 from vntyper.scripts.motif_decisions import (
     apply_combined_exclusions,
     apply_gg_alt_rule,
@@ -436,6 +437,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             ]
             if "is_valid_frameshift" in motif_left.columns:
                 keep_cols.append("is_valid_frameshift")
+            keep_cols.extend(column for column in IDENTITY_CAPTURE_COLUMNS if column in motif_left.columns)
             motif_left = motif_left[keep_cols]
 
             # Apply frameshift-aware sorting and deduplication (DRY: uses shared helper)
@@ -464,6 +466,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             ]
             if "is_valid_frameshift" in motif_right.columns:
                 keep_cols.append("is_valid_frameshift")
+            keep_cols.extend(column for column in IDENTITY_CAPTURE_COLUMNS if column in motif_right.columns)
             motif_right = motif_right[keep_cols]
 
             # Issue #136 Fix: Branch based on use_uniform_filtering flag

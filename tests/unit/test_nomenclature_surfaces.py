@@ -6,6 +6,7 @@ from those same frames, and the HTML report all inherit them together.
 Research use only.
 """
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -14,9 +15,17 @@ import pysam
 import pytest
 
 from tests.builders import STAGE_COLUMNS, kestrel_stage_frame
-from vntyper.scripts import nomenclature, nomenclature_annotate
+from vntyper.scripts import nomenclature, nomenclature_annotate, nomenclature_bam_adapter
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
+from vntyper.scripts.molecular_identity import (
+    IdentityTranslation,
+    MolecularIdentity,
+    make_coding_edit,
+    make_molecular_identity,
+    serialize_molecular_identity,
+)
+from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS
 from vntyper.scripts.nomenclature import (
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
     FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
@@ -31,6 +40,14 @@ from vntyper.scripts.nomenclature_annotate import (
     reconcile_caller_outputs,
 )
 from vntyper.scripts.nomenclature_bam import BamRescuer
+from vntyper.scripts.nomenclature_bam_evidence import BamLocusEvidence
+from vntyper.scripts.nomenclature_bam_replay import (
+    BAM_REPLAY_FILENAME,
+    BamReplayArtifact,
+    BamReplayLocus,
+    read_bam_replay_artifact,
+    write_bam_replay_artifact,
+)
 from vntyper.scripts.report_formatting import ADVNTR_DISPLAY_COLUMNS, KESTREL_DISPLAY_COLUMNS
 from vntyper.scripts.summary import parse_tsv
 
@@ -44,7 +61,7 @@ pytestmark = pytest.mark.unit
 
 def test_the_named_stage_is_final_plus_the_nomenclature_columns() -> None:
     added = tuple(column for column in STAGE_COLUMNS["named"] if column not in STAGE_COLUMNS["final"])
-    assert added == NOMENCLATURE_COLUMNS
+    assert added == (*NOMENCLATURE_COLUMNS, *IDENTITY_COLUMNS)
 
 
 def test_the_named_stage_keeps_the_subset_invariant() -> None:
@@ -104,6 +121,34 @@ def test_a_negative_kestrel_run_keeps_its_ten_column_schema() -> None:
     out = annotate_kestrel_frame(negative)
     assert list(out.columns) == list(negative.columns)
     assert len(out.columns) == 10
+
+
+def test_a_negative_kestrel_rerun_clears_stale_replay_without_widening_schema(tmp_path: Path) -> None:
+    negative = pd.DataFrame(
+        [
+            {
+                "Motif": "None",
+                "Variant": "None",
+                "POS": "None",
+                "REF": "None",
+                "ALT": "None",
+                "Motif_sequence": "None",
+                "Estimated_Depth_AlternateVariant": "None",
+                "Estimated_Depth_Variant_ActiveRegion": "None",
+                "Depth_Score": "None",
+                "Confidence": "Negative",
+            }
+        ]
+    )
+    write_bam_replay_artifact(
+        tmp_path,
+        BamReplayArtifact((BamReplayLocus((0,), "observed", BamLocusEvidence((), 0, {})),)),
+    )
+
+    out = annotate_kestrel_frame(negative, tmp_path)
+
+    assert list(out.columns) == list(negative.columns)
+    assert not (tmp_path / BAM_REPLAY_FILENAME).exists()
 
 
 def test_a_negative_advntr_row_leaves_the_five_empty_not_placeheld() -> None:
@@ -176,6 +221,213 @@ def _write_caller_outputs(tmp_path, advntr_state: str, support: str) -> tuple[Pa
         f"25561\t{advntr_state}\t{support}\tduplication, position-ambiguous\tB\t\t53_59\t53C[7]>53C[8]\n"
     )
     return kestrel, advntr
+
+
+def _write_identity_aware_outputs(
+    tmp_path: Path,
+    kestrel_identity: MolecularIdentity,
+    *,
+    advntr_flag: str = "Not flagged",
+) -> tuple[Path, Path]:
+    raw_key = '{"source":"kestrel","values":["X-X",67,"G","GG"]}'
+    kestrel_row = {
+        "Motifs": "X-X",
+        "POS": "67",
+        "REF": "G",
+        "ALT": "GG",
+        "Confidence": "High_Precision",
+        "Estimated_Depth_AlternateVariant": "40",
+        "Nomenclature": "59dupC",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "",
+        "Ambiguity_Interval": "53_59",
+        "Repeat_Form": "53C[7]>53C[8]",
+        "__Identity_Raw_Representation_Key": raw_key,
+        "__Identity_Molecular_Identity": serialize_molecular_identity(kestrel_identity),
+        "__Identity_Translation_Status": "resolved",
+        "__Identity_Translation_Failure": "absent",
+        "__Identity_Context_Diverges": "false",
+        "__Identity_Observation_Ordinal": "0",
+        "__Identity_Selected_Raw_Representation_Key": raw_key,
+        "__Identity_Equivalent_Representation_Count": "1",
+        "__Identity_Hypothesis_Count": "1",
+        "__Identity_Group_Blocking_Gates": "[]",
+        "__Identity_Group_Flags": "[]",
+        "__Identity_Selected_Observation_Ordinal": "0",
+        "__Identity_Group_Context_Diverges": "false",
+    }
+    kestrel = tmp_path / "kestrel_result.tsv"
+    pd.DataFrame([kestrel_row]).to_csv(kestrel, sep="\t", index=False)
+    advntr = tmp_path / "output_adVNTR_result.tsv"
+    pd.DataFrame(
+        [
+            {
+                "VID": "25561",
+                "Variant": "I22_2_G_LEN1",
+                "NumberOfSupportingReads": "40",
+                "MeanCoverage": "100",
+                "RU": "2",
+                "POS": "22",
+                "Flag": advntr_flag,
+                "Nomenclature": "59dupC",
+                "Nomenclature_Tier": "B",
+                "Nomenclature_Flags": "",
+                "Ambiguity_Interval": "53_59",
+                "Repeat_Form": "53C[7]>53C[8]",
+            }
+        ]
+    ).to_csv(advntr, sep="\t", index=False)
+    return kestrel, advntr
+
+
+def _attach_kestrel_identity_metadata(
+    kestrel: Path,
+    identity: MolecularIdentity | None,
+) -> None:
+    frame = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    row = frame.loc[0]
+    raw_key = json.dumps(
+        {"source": "kestrel", "values": [row["Motifs"], int(row["POS"]), row["REF"], row["ALT"]]},
+        separators=(",", ":"),
+    )
+    resolved = identity is not None
+    frame["__Identity_Raw_Representation_Key"] = raw_key
+    frame["__Identity_Molecular_Identity"] = (
+        serialize_molecular_identity(identity) if identity is not None else "absent"
+    )
+    frame["__Identity_Translation_Status"] = "resolved" if resolved else "unresolved"
+    frame["__Identity_Translation_Failure"] = "absent" if resolved else "missing-motif-context"
+    frame["__Identity_Context_Diverges"] = "false"
+    frame["__Identity_Observation_Ordinal"] = "0"
+    frame["__Identity_Selected_Raw_Representation_Key"] = raw_key
+    frame["__Identity_Equivalent_Representation_Count"] = "1" if resolved else "0"
+    frame["__Identity_Hypothesis_Count"] = "1" if resolved else "0"
+    frame["__Identity_Group_Blocking_Gates"] = "[]"
+    frame["__Identity_Group_Flags"] = "[]"
+    frame["__Identity_Selected_Observation_Ordinal"] = "0"
+    frame["__Identity_Group_Context_Diverges"] = "false"
+    frame.to_csv(kestrel, sep="\t", index=False)
+
+
+def _attach_advntr_identity_context(advntr: Path) -> None:
+    frame = pd.read_csv(advntr, sep="\t", dtype=str)
+    frame["MeanCoverage"] = "100"
+    frame["RU"] = "2"
+    frame["POS"] = "23"
+    frame["Flag"] = "Not flagged"
+    frame.to_csv(advntr, sep="\t", index=False)
+
+
+def _identity_stage_row(
+    *,
+    ordinal: int,
+    position: int,
+    reference: str,
+    alternate: str,
+    locus_position: int,
+    identity: MolecularIdentity | None,
+) -> dict[str, object]:
+    pair = nomenclature.pair_sequence("X-X")
+    assert pair is not None
+    raw_key = json.dumps(
+        {"source": "kestrel", "values": ["X-X", position, reference, alternate]},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    resolved = identity is not None
+    return {
+        "Motifs": "X-X",
+        "POS": position,
+        "REF": reference,
+        "ALT": alternate,
+        "Motif_sequence": pair,
+        "Motif_fasta": "X-X",
+        "POS_fasta": locus_position,
+        "Estimated_Depth_AlternateVariant": 40,
+        "__Identity_Raw_Representation_Key": raw_key,
+        "__Identity_Molecular_Identity": serialize_molecular_identity(identity) if identity is not None else "absent",
+        "__Identity_Translation_Status": "resolved" if resolved else "unresolved",
+        "__Identity_Translation_Failure": "absent" if resolved else "invalid-allele",
+        "__Identity_Context_Diverges": "false",
+        "__Identity_Observation_Ordinal": str(ordinal),
+        "__Identity_Selected_Raw_Representation_Key": raw_key,
+        "__Identity_Equivalent_Representation_Count": "1" if resolved else "0",
+        "__Identity_Hypothesis_Count": "1" if resolved else "0",
+        "__Identity_Group_Blocking_Gates": "[]",
+        "__Identity_Group_Flags": "[]",
+        "__Identity_Selected_Observation_Ordinal": str(ordinal),
+        "__Identity_Group_Context_Diverges": "false",
+    }
+
+
+def test_production_reconciliation_uses_persisted_kestrel_identity_not_equal_display(tmp_path) -> None:
+    dup_a = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_a)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert "caller-disagreement" in written.loc[0, "Nomenclature_Flags"]
+
+
+def test_pr_a_polymorphic_advntr_row_remains_admissible_for_identity_agreement(tmp_path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c, advntr_flag="Polymorphic_Call")
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature_Tier"] == "A"
+
+
+def test_production_identity_policy_is_resolved_from_checked_in_config_at_the_stage_boundary(tmp_path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
+    config = nomenclature.load_nomenclature_config()
+    config["thresholds"] = {**config["thresholds"], "min_support_for_high_confidence": 41}
+
+    with mock.patch.object(nomenclature_annotate, "load_nomenclature_config", return_value=config) as loaded:
+        assert reconcile_caller_outputs(kestrel, advntr) is True
+    loaded.assert_called_once_with()
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert "low-kmer-path-support" in written.loc[0, "Nomenclature_Flags"]
+    assert "low-read-support" in written.loc[0, "Nomenclature_Flags"]
+
+
+def test_production_reconciliation_fails_closed_on_malformed_internal_identity_metadata(tmp_path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
+    frame = pd.read_csv(kestrel, sep="\t", dtype=str)
+    frame.loc[0, "__Identity_Selected_Raw_Representation_Key"] = '{"source": "kestrel", "values": []}'
+    frame.to_csv(kestrel, sep="\t", index=False)
+
+    with pytest.raises(ValueError):
+        reconcile_caller_outputs(kestrel, advntr)
+
+
+def test_production_identity_depth_overflow_is_a_controlled_value_error(tmp_path) -> None:
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
+    frame = pd.read_csv(kestrel, sep="\t", dtype=str)
+    frame.loc[0, "Estimated_Depth_AlternateVariant"] = "inf"
+    frame.to_csv(kestrel, sep="\t", index=False)
+
+    with pytest.raises(ValueError, match="alternate k-mer-path depth"):
+        reconcile_caller_outputs(kestrel, advntr)
+
+
+def test_legacy_numeric_adapter_accepts_decimal_artifact_parity() -> None:
+    assert nomenclature_annotate._as_int("40.0") == 40
+    assert nomenclature_annotate._as_int(40.0) == 40
+
+
+@pytest.mark.parametrize("value", ["inf", float("inf"), "NaN", float("nan")])
+def test_legacy_numeric_adapter_treats_nonfinite_artifacts_as_unknown(value: object) -> None:
+    assert nomenclature_annotate._as_int(value) is None
 
 
 def _write_disagreeing_outputs(tmp_path) -> tuple[Path, Path]:
@@ -284,6 +536,38 @@ def _write_pair_bam(
     pysam.index(str(path))  # type: ignore[attr-defined]
 
 
+def _write_pair_edit_records(
+    path: Path,
+    record_edits: tuple[tuple[tuple[int, str], ...], ...],
+) -> None:
+    """Write real pair-reference records carrying one or more insertions."""
+    pair = nomenclature.pair_sequence("X-X")
+    assert pair is not None
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "X-X", "LN": len(pair)}]}
+    with pysam.AlignmentFile(str(path), "wb", header=header) as handle:
+        for index, edits in enumerate(record_edits):
+            cursor = 0
+            cigar: list[str] = []
+            query: list[str] = []
+            for position, bases in edits:
+                cigar.append(f"{position - cursor}=")
+                cigar.append(f"{len(bases)}I")
+                query.extend((pair[cursor:position], bases))
+                cursor = position
+            cigar.append(f"{len(pair) - cursor}=")
+            query.append(pair[cursor:])
+            record = pysam.AlignedSegment(handle.header)
+            record.query_name = f"joint_haplotype_{index}"
+            record.reference_id = 0
+            record.reference_start = 0
+            record.mapping_quality = 255
+            record.cigarstring = "".join(cigar)
+            record.query_sequence = "".join(query)
+            record.set_tag("XD", 5 + index)
+            handle.write(record)
+    pysam.index(str(path))  # type: ignore[attr-defined]
+
+
 def test_annotate_kestrel_frame_uses_record_support_not_xd_for_a_bam_candidate(tmp_path: Path) -> None:
     """The direct stage path must consult a candidate and keep XD observational."""
     _write_pair_bam(
@@ -326,6 +610,344 @@ def test_annotate_kestrel_frame_uses_record_support_not_xd_for_a_bam_candidate(t
     assert FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT in named.loc[0, "Nomenclature_Flags"]
 
 
+def test_identity_aware_kestrel_stage_replaces_stale_replay_with_not_consulted(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0, position=62, reference="G", alternate="GC", locus_position=61, identity=identity
+            )
+        ]
+    )
+    write_bam_replay_artifact(
+        tmp_path,
+        BamReplayArtifact((BamReplayLocus((99,), "observed", BamLocusEvidence((), 0, {})),)),
+    )
+
+    named = annotate_kestrel_frame(frame, tmp_path)
+
+    assert named.loc[0, "Nomenclature"] == "58_59insG"
+    assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact((BamReplayLocus((0,), "not-consulted", None),))
+    assert BAM_REPLAY_FILENAME not in named.columns
+
+
+def test_identity_aware_kestrel_stage_uses_the_injected_run_component(tmp_path: Path) -> None:
+    from vntyper.scripts.identity_candidates import translation_component_from_config
+
+    identity = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0, position=62, reference="G", alternate="GC", locus_position=61, identity=identity
+            )
+        ]
+    )
+    component = translation_component_from_config(nomenclature.load_nomenclature_config())
+
+    with mock.patch.object(
+        nomenclature_annotate,
+        "load_nomenclature_config",
+        side_effect=AssertionError("must not reload the run config"),
+    ):
+        annotate_kestrel_frame(frame, tmp_path, identity_component=component)
+
+    assert read_bam_replay_artifact(tmp_path).loci[0].state == "not-consulted"
+
+
+def test_identity_aware_kestrel_stage_records_unavailable_candidate_group(tmp_path: Path) -> None:
+    frame = pd.DataFrame(
+        [_identity_stage_row(ordinal=0, position=999, reference="G", alternate="GG", locus_position=61, identity=None)]
+    )
+
+    annotate_kestrel_frame(frame, tmp_path)
+
+    assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact((BamReplayLocus((0,), "unavailable", None),))
+
+
+def test_identity_aware_kestrel_stage_records_observed_zero_record_locus(tmp_path: Path) -> None:
+    _write_pair_edit_records(tmp_path / "output.bam", ())
+    frame = pd.DataFrame(
+        [_identity_stage_row(ordinal=0, position=999, reference="G", alternate="GG", locus_position=61, identity=None)]
+    )
+
+    annotate_kestrel_frame(frame, tmp_path)
+
+    assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact(
+        (BamReplayLocus((0,), "observed", BamLocusEvidence((), 0, {})),)
+    )
+
+
+def test_identity_aware_kestrel_stage_records_a_real_tie_once_for_the_joint_group(tmp_path: Path) -> None:
+    _write_pair_edit_records(
+        tmp_path / "output.bam",
+        (((62, "C"),), ((62, "C"),), ((62, "T"),), ((62, "T"),)),
+    )
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0, position=999, reference="G", alternate="GG", locus_position=61, identity=None
+            ),
+            _identity_stage_row(
+                ordinal=1, position=998, reference="G", alternate="GA", locus_position=61, identity=None
+            ),
+        ]
+    )
+    rescuers: list[BamRescuer] = []
+    open_rescuer = nomenclature_annotate._open_rescuer
+
+    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir)
+        assert rescuer is not None
+        rescuers.append(rescuer)
+        return rescuer
+
+    with mock.patch.object(nomenclature_annotate, "_open_rescuer", side_effect=tracked_open):
+        annotate_kestrel_frame(frame, tmp_path)
+
+    locus = read_bam_replay_artifact(tmp_path).loci[0]
+    assert rescuers[0].fetches == 1
+    assert locus.candidate_observation_ordinals == (0, 1)
+    assert locus.state == "observed"
+    assert locus.evidence is not None
+    assert locus.evidence.eligible_record_count == 4
+    assert locus.evidence.winning_identity is None
+
+
+def test_joint_resolved_candidates_reconcile_a_real_two_by_two_tie_with_one_fetch(tmp_path: Path) -> None:
+    identity_c = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    identity_t = make_molecular_identity((make_coding_edit(59, 58, "", "A"),))
+    _write_pair_edit_records(
+        tmp_path / "output.bam",
+        (((62, "C"),), ((62, "C"),), ((62, "T"),), ((62, "T"),)),
+    )
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0, position=62, reference="G", alternate="GC", locus_position=61, identity=identity_c
+            ),
+            _identity_stage_row(
+                ordinal=1, position=62, reference="G", alternate="GT", locus_position=61, identity=identity_t
+            ),
+        ]
+    )
+    named = annotate_kestrel_frame(frame, tmp_path)
+    kestrel, advntr = _write_caller_outputs(tmp_path, "D23_2_C_LEN1", "24")
+    named.to_csv(kestrel, sep="\t", index=False)
+    _attach_advntr_identity_context(advntr)
+    rescuers: list[BamRescuer] = []
+    open_rescuer = nomenclature_bam_adapter.open_rescuer
+
+    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir)
+        assert rescuer is not None
+        rescuers.append(rescuer)
+        return rescuer
+
+    with mock.patch.object(nomenclature_bam_adapter, "open_rescuer", side_effect=tracked_open):
+        assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    artifact = read_bam_replay_artifact(tmp_path)
+    assert rescuers[0].fetches == 1
+    assert artifact.loci[0].candidate_observation_ordinals == (0, 1)
+    assert artifact.loci[0].state == "observed"
+    assert artifact.loci[0].evidence is not None
+    assert artifact.loci[0].evidence.eligible_record_count == 4
+    assert artifact.loci[0].evidence.counts == {identity_c: 2, identity_t: 2}
+    assert artifact.loci[0].evidence.winning_identity is None
+
+
+def test_joint_candidate_group_counts_both_cooccurring_identities_from_one_real_record(tmp_path: Path) -> None:
+    first_identity = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    second_identity = make_molecular_identity((make_coding_edit(58, 57, "", "T"),))
+    _write_pair_edit_records(tmp_path / "output.bam", ((((62, "C"), (63, "A"))),))
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0,
+                position=62,
+                reference="G",
+                alternate="GC",
+                locus_position=61,
+                identity=first_identity,
+            ),
+            _identity_stage_row(
+                ordinal=1,
+                position=63,
+                reference="G",
+                alternate="GA",
+                locus_position=61,
+                identity=second_identity,
+            ),
+        ]
+    )
+    named = annotate_kestrel_frame(frame, tmp_path)
+    kestrel, advntr = _write_caller_outputs(tmp_path, "D23_2_C_LEN1", "24")
+    named.to_csv(kestrel, sep="\t", index=False)
+    _attach_advntr_identity_context(advntr)
+    rescuers: list[BamRescuer] = []
+    open_rescuer = nomenclature_bam_adapter.open_rescuer
+
+    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir)
+        assert rescuer is not None
+        rescuers.append(rescuer)
+        return rescuer
+
+    with mock.patch.object(nomenclature_bam_adapter, "open_rescuer", side_effect=tracked_open):
+        assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    artifact = read_bam_replay_artifact(tmp_path)
+    assert rescuers[0].fetches == 1
+    assert artifact.loci[0].candidate_observation_ordinals == (0, 1)
+    assert artifact.loci[0].evidence is not None
+    assert artifact.loci[0].evidence.record_identity_sets == ((first_identity, second_identity),)
+    assert artifact.loci[0].evidence.counts == {first_identity: 1, second_identity: 1}
+
+
+def test_equivalent_candidate_representations_remain_bindings_not_extra_votes(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    _write_pair_edit_records(tmp_path / "output.bam", (((62, "G"),),))
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0, position=62, reference="G", alternate="GG", locus_position=61, identity=identity
+            ),
+            _identity_stage_row(
+                ordinal=1, position=63, reference="G", alternate="GG", locus_position=61, identity=identity
+            ),
+        ]
+    )
+    named = annotate_kestrel_frame(frame, tmp_path)
+    kestrel, advntr = _write_caller_outputs(tmp_path, "D23_2_C_LEN1", "24")
+    named.to_csv(kestrel, sep="\t", index=False)
+    _attach_advntr_identity_context(advntr)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    locus = read_bam_replay_artifact(tmp_path).loci[0]
+    assert locus.candidate_observation_ordinals == (0, 1)
+    assert locus.evidence is not None
+    assert locus.evidence.record_identity_sets == ((identity,),)
+    assert locus.evidence.bindings_by_record == (((0, 1),),)
+    assert locus.evidence.counts == {identity: 1}
+
+
+def test_joint_candidate_groups_fetch_once_per_locus_and_preserve_row_order(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    _write_pair_edit_records(tmp_path / "output.bam", (((62, "G"),),))
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=2, position=64, reference="G", alternate="GG", locus_position=100, identity=identity
+            ),
+            _identity_stage_row(
+                ordinal=0, position=62, reference="G", alternate="GG", locus_position=61, identity=identity
+            ),
+            _identity_stage_row(
+                ordinal=1, position=63, reference="G", alternate="GG", locus_position=61, identity=identity
+            ),
+        ]
+    )
+    named = annotate_kestrel_frame(frame, tmp_path)
+    kestrel, advntr = _write_caller_outputs(tmp_path, "D23_2_C_LEN1", "24")
+    named.to_csv(kestrel, sep="\t", index=False)
+    _attach_advntr_identity_context(advntr)
+    rescuers: list[BamRescuer] = []
+    open_rescuer = nomenclature_bam_adapter.open_rescuer
+
+    def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir)
+        assert rescuer is not None
+        rescuers.append(rescuer)
+        return rescuer
+
+    with mock.patch.object(nomenclature_bam_adapter, "open_rescuer", side_effect=tracked_open):
+        assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    artifact = read_bam_replay_artifact(tmp_path)
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert rescuers[0].fetches == 2
+    assert tuple(locus.candidate_observation_ordinals for locus in artifact.loci) == ((0, 1), (2,))
+    assert written["POS_fasta"].tolist() == ["100", "61", "61"]
+
+
+@pytest.mark.parametrize("advntr_state", ["missing", "unreadable", "empty"])
+def test_failed_or_absent_advntr_reconciliation_preserves_kestrel_stage_replay(
+    tmp_path: Path,
+    advntr_state: str,
+) -> None:
+    identity = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0, position=62, reference="G", alternate="GC", locus_position=61, identity=identity
+            )
+        ]
+    )
+    named = annotate_kestrel_frame(frame, tmp_path)
+    kestrel = tmp_path / "kestrel_result.tsv"
+    named.to_csv(kestrel, sep="\t", index=False)
+    advntr = tmp_path / "output_adVNTR_result.tsv"
+    if advntr_state == "unreadable":
+        advntr.write_bytes(b"\xff\xfe")
+    elif advntr_state == "empty":
+        advntr.write_text("VID\tVariant\tNumberOfSupportingReads\n", encoding="utf-8")
+    initial = read_bam_replay_artifact(tmp_path)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is False
+    assert read_bam_replay_artifact(tmp_path) == initial
+
+
+def test_reconciliation_cannot_downgrade_complete_kestrel_stage_observation(tmp_path: Path) -> None:
+    _write_pair_edit_records(tmp_path / "output.bam", ())
+    frame = pd.DataFrame(
+        [_identity_stage_row(ordinal=0, position=999, reference="G", alternate="GG", locus_position=61, identity=None)]
+    )
+    named = annotate_kestrel_frame(frame, tmp_path)
+    initial = read_bam_replay_artifact(tmp_path)
+    kestrel, advntr = _write_caller_outputs(tmp_path, "D23_2_C_LEN1", "24")
+    named.to_csv(kestrel, sep="\t", index=False)
+    _attach_advntr_identity_context(advntr)
+    (tmp_path / "output.bam.bai").unlink()
+    (tmp_path / "output.bam").unlink()
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert read_bam_replay_artifact(tmp_path) == initial
+    assert initial.loci[0].state == "observed"
+
+
+def test_failed_kestrel_rerun_cannot_leave_stale_replay_after_lifecycle_start(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    row = _identity_stage_row(
+        ordinal=0,
+        position=62,
+        reference="G",
+        alternate="GC",
+        locus_position=61,
+        identity=identity,
+    )
+    row["__Identity_Selected_Raw_Representation_Key"] = '{"source":"kestrel","values":[]}'
+    write_bam_replay_artifact(
+        tmp_path,
+        BamReplayArtifact((BamReplayLocus((0,), "observed", BamLocusEvidence((), 0, {})),)),
+    )
+
+    with pytest.raises(ValueError):
+        annotate_kestrel_frame(pd.DataFrame([row]), tmp_path)
+
+    assert not (tmp_path / BAM_REPLAY_FILENAME).exists()
+
+
+def test_group_projection_rejects_invalid_row_alignment_boundaries() -> None:
+    with pytest.raises(ValueError, match="row count"):
+        nomenclature_bam_adapter.observe_identity_groups((), True, frozenset(), None, object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="eligible row"):
+        nomenclature_bam_adapter.observe_identity_groups((), 1, frozenset({1}), None, object())
+    with pytest.raises(ValueError, match="cover every source row"):
+        nomenclature_bam_adapter.observe_identity_groups((), 1, frozenset(), None, object())
+
+
 def test_row_verdicts_keep_each_haplotype_call_paired_with_its_vcf_row() -> None:
     """Compacting a missing first BAM call must not shift row two onto row one."""
     first_vcf = from_kestrel("X-X", 67, "G", "GG")
@@ -356,6 +978,37 @@ def test_the_cross_caller_stage_consults_resolved_haplotype_records(tmp_path) ->
     assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
     assert FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT in written.loc[0, "Nomenclature_Flags"]
     assert written.loc[0, "Nomenclature_Tier"] == "B", "four records, not XD, set the support boundary"
+
+
+def test_identity_aware_stage_retains_advntr_plus_bam_insg_recovery_without_bam_identity(tmp_path) -> None:
+    kestrel, advntr = _write_disagreeing_outputs(tmp_path)
+    vcf_identity = make_molecular_identity((make_coding_edit(60, 59, "", "G"),))
+    _attach_kestrel_identity_metadata(kestrel, vcf_identity)
+    _attach_advntr_identity_context(advntr)
+    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", minimum_kmer_depths=(5, 181, 7_416, 8_704))
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "58_59insG"
+    assert written.loc[0, "Nomenclature_Kestrel"] == "59_60insG"
+    assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert "low-haplotype-record-support" in written.loc[0, "Nomenclature_Flags"]
+
+
+def test_identity_aware_unresolved_vcf_retains_vcf_primary_presentation(tmp_path) -> None:
+    kestrel, advntr = _write_disagreeing_outputs(tmp_path)
+    _attach_kestrel_identity_metadata(kestrel, None)
+    _attach_advntr_identity_context(advntr)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert written.loc[0, "Nomenclature"] == "59_60insG"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert written.loc[0, "Nomenclature_Kestrel"] == "59_60insG"
+    assert written.loc[0, "Nomenclature_adVNTR"] == "58_59insG"
 
 
 def test_the_haplotype_records_alone_do_not_outvote_the_vcf(tmp_path) -> None:
@@ -396,7 +1049,7 @@ def test_xd_cannot_change_production_nomenclature_decisions(
     _write_pair_bam(case_dir / "output.bam", 62, "C", minimum_kmer_depths)
 
     rescuers: list[BamRescuer] = []
-    open_rescuer = nomenclature_annotate._open_rescuer
+    open_rescuer = nomenclature_bam_adapter.open_rescuer
 
     def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
         rescuer = open_rescuer(output_dir)
@@ -404,7 +1057,7 @@ def test_xd_cannot_change_production_nomenclature_decisions(
             rescuers.append(rescuer)
         return rescuer
 
-    with mock.patch.object(nomenclature_annotate, "_open_rescuer", side_effect=tracked_open):
+    with mock.patch.object(nomenclature_bam_adapter, "open_rescuer", side_effect=tracked_open):
         assert reconcile_caller_outputs(kestrel, advntr) is True
 
     written = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
@@ -452,8 +1105,12 @@ def test_non_candidate_never_opens_or_fetches_the_bam(tmp_path: Path) -> None:
     """A settled caller agreement must return before constructing a rescuer."""
     _write_pair_bam(tmp_path / "output.bam", 62, "C", (5, 181, 7_416, 8_704))
     supports: dict[str, int | None] = {"kestrel_vcf": 40, "advntr": 40}
-    with mock.patch.object(nomenclature_annotate, "_open_rescuer", wraps=nomenclature_annotate._open_rescuer) as opened:
-        calls = nomenclature_annotate._haplotype_calls(
+    with mock.patch.object(
+        nomenclature_bam_adapter,
+        "open_rescuer",
+        wraps=nomenclature_bam_adapter.open_rescuer,
+    ) as opened:
+        calls = nomenclature_bam_adapter.haplotype_calls(
             [pd.Series({"Motif_fasta": "X-X", "POS_fasta": 61})],
             tmp_path,
             [from_kestrel("X-X", 67, "G", "GG")],
@@ -463,6 +1120,18 @@ def test_non_candidate_never_opens_or_fetches_the_bam(tmp_path: Path) -> None:
 
     assert calls == []
     opened.assert_not_called()
+
+
+def test_haplotype_replay_output_requires_aligned_translation_output(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="requires aligned identity translations"):
+        nomenclature_bam_adapter.haplotype_calls(
+            [],
+            tmp_path,
+            [],
+            [],
+            {},
+            bam_replay_loci=[],
+        )
 
 
 def test_candidate_rows_share_one_rescuer_and_keep_fetch_order(tmp_path: Path) -> None:
@@ -475,7 +1144,7 @@ def test_candidate_rows_share_one_rescuer_and_keep_fetch_order(tmp_path: Path) -
     supports: dict[str, int | None] = {"kestrel_vcf": 40, "advntr": 40}
     fetched_loci: list[tuple[str, int]] = []
     rescuers: list[BamRescuer] = []
-    open_rescuer = nomenclature_annotate._open_rescuer
+    open_rescuer = nomenclature_bam_adapter.open_rescuer
 
     def tracked_open(output_dir: str | Path | None) -> BamRescuer | None:
         rescuer = open_rescuer(output_dir)
@@ -490,8 +1159,8 @@ def test_candidate_rows_share_one_rescuer_and_keep_fetch_order(tmp_path: Path) -
         rescuers.append(rescuer)
         return rescuer
 
-    with mock.patch.object(nomenclature_annotate, "_open_rescuer", side_effect=tracked_open):
-        calls = nomenclature_annotate._haplotype_calls(
+    with mock.patch.object(nomenclature_bam_adapter, "open_rescuer", side_effect=tracked_open):
+        calls = nomenclature_bam_adapter.haplotype_calls(
             rows,
             tmp_path,
             [from_kestrel("X-X", 61, "T", "TC")],
@@ -505,6 +1174,145 @@ def test_candidate_rows_share_one_rescuer_and_keep_fetch_order(tmp_path: Path) -
     assert fetched_loci == [("X-X", 61), ("X-X", 67)]
     assert len(calls) == 2
     assert supports["kestrel_bam"] == 4, "the production mapping must carry the record count, not XD"
+
+
+def test_production_haplotype_path_returns_candidate_bound_identity_without_incrementing_metadata(
+    tmp_path: Path,
+) -> None:
+    identity = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    pair = nomenclature.pair_sequence("X-X")
+    assert pair is not None
+    raw_key = '{"source":"kestrel","values":["X-X",62,"G","GC"]}'
+    row = pd.Series(
+        {
+            "Motifs": "X-X",
+            "POS": "62",
+            "REF": "G",
+            "ALT": "GC",
+            "Motif_sequence": pair,
+            "Motif_fasta": "X-X",
+            "POS_fasta": "61",
+            "__Identity_Raw_Representation_Key": raw_key,
+            "__Identity_Molecular_Identity": serialize_molecular_identity(identity),
+            "__Identity_Translation_Status": "resolved",
+            "__Identity_Translation_Failure": "absent",
+            "__Identity_Context_Diverges": "false",
+            "__Identity_Observation_Ordinal": "0",
+            "__Identity_Selected_Raw_Representation_Key": raw_key,
+            "__Identity_Equivalent_Representation_Count": "1",
+            "__Identity_Hypothesis_Count": "1",
+            "__Identity_Group_Blocking_Gates": "[]",
+            "__Identity_Group_Flags": "[]",
+            "__Identity_Selected_Observation_Ordinal": "0",
+            "__Identity_Group_Context_Diverges": "false",
+        }
+    )
+    _write_pair_bam(tmp_path / "output.bam", inserted_at=62, base="C", minimum_kmer_depths=(5, 181, 7_416))
+    bindings: list[IdentityTranslation | None] = []
+    supports: dict[str, int | None] = {"kestrel_vcf": 40, "advntr": 40}
+    disagreeing_advntr = Nomenclature("59delC", "deletion", "X", "B", (), None, None, -1, "advntr")
+
+    calls = nomenclature_bam_adapter.haplotype_calls(
+        [row],
+        tmp_path,
+        [from_kestrel("X-X", 62, "G", "GC")],
+        [disagreeing_advntr],
+        supports,
+        bam_translations=bindings,
+    )
+
+    assert len(calls) == 1
+    assert calls[0] is not None
+    assert [binding.identity if binding is not None else None for binding in bindings] == [identity]
+    assert row["__Identity_Equivalent_Representation_Count"] == "1"
+    assert row["__Identity_Hypothesis_Count"] == "1"
+
+
+def _identity_aware_candidate_outputs(tmp_path: Path) -> tuple[Path, Path, MolecularIdentity]:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I23_2_C_LEN1", "24")
+    _attach_kestrel_identity_metadata(kestrel, identity)
+    _attach_advntr_identity_context(advntr)
+    frame = pd.read_csv(kestrel, sep="\t", comment="#", dtype=str)
+    pair = nomenclature.pair_sequence("X-X")
+    assert pair is not None
+    frame["Motif_sequence"] = pair
+    frame["Motif_fasta"] = "X-X"
+    frame["POS_fasta"] = "61"
+    frame.to_csv(kestrel, sep="\t", index=False)
+    return kestrel, advntr, identity
+
+
+def test_identity_aware_reconciliation_writes_not_consulted_replay_state(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, identity)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact((BamReplayLocus((0,), "not-consulted", None),))
+    written = pd.read_csv(kestrel, sep="\t", dtype=str)
+    assert BAM_REPLAY_FILENAME not in written.columns
+
+
+def test_identity_aware_reconciliation_writes_unavailable_replay_state(tmp_path: Path) -> None:
+    kestrel, advntr, _ = _identity_aware_candidate_outputs(tmp_path)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact((BamReplayLocus((0,), "unavailable", None),))
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        BamLocusEvidence((), 0, {}),
+    ],
+    ids=["empty-observed-locus"],
+)
+def test_identity_aware_reconciliation_writes_complete_observed_replay_evidence(
+    tmp_path: Path,
+    evidence: BamLocusEvidence,
+) -> None:
+    kestrel, advntr, _ = _identity_aware_candidate_outputs(tmp_path)
+
+    class ReplayRescuer:
+        def rescue_with_identity_evidence(self, *_args):
+            return None, evidence
+
+        def close(self) -> None:
+            return None
+
+    with mock.patch.object(nomenclature_bam_adapter, "open_rescuer", return_value=ReplayRescuer()):
+        assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    artifact = read_bam_replay_artifact(tmp_path)
+    assert artifact == BamReplayArtifact((BamReplayLocus((0,), "observed", evidence),))
+    assert artifact.loci[0].evidence is not None
+    assert artifact.loci[0].evidence.records == evidence.records
+    assert artifact.loci[0].evidence.counts == evidence.counts
+
+
+def test_legacy_reconciliation_does_not_manufacture_a_pr_a_replay_artifact(tmp_path: Path) -> None:
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "24")
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert not (tmp_path / BAM_REPLAY_FILENAME).exists()
+
+
+def test_failed_reconciliation_preserves_the_completed_kestrel_stage_artifact(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, identity)
+    initial = BamReplayArtifact((BamReplayLocus((0,), "not-consulted", None),))
+    write_bam_replay_artifact(tmp_path, initial)
+    frame = pd.read_csv(kestrel, sep="\t", dtype=str)
+    frame.loc[0, "__Identity_Selected_Raw_Representation_Key"] = '{"source":"kestrel","values":[]}'
+    frame.to_csv(kestrel, sep="\t", index=False)
+
+    with pytest.raises(ValueError):
+        reconcile_caller_outputs(kestrel, advntr)
+
+    assert read_bam_replay_artifact(tmp_path) == initial
 
 
 def test_a_missing_allele_cell_does_not_become_a_name(tmp_path) -> None:

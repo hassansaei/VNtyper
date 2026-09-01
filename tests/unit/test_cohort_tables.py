@@ -17,11 +17,13 @@ Characterisation throughout, with one exception noted in its own docstring.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pandas as pd
 import pytest
 
+from vntyper.scripts.cohort_exports import write_cohort_frame
 from vntyper.scripts.cohort_inputs import parse_pipeline_summary
 from vntyper.scripts.cohort_tables import (
     ADVNTR_DISPLAY_COLUMNS,
@@ -136,7 +138,7 @@ def test_a_non_string_is_returned_unchanged(value: object) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_kestrel_display_columns_are_the_recorded_seventeen() -> None:
+def test_the_kestrel_display_columns_are_the_recorded_twenty_four() -> None:
     assert KESTREL_DISPLAY_COLUMNS == (
         "Sample",
         "Motif",
@@ -158,6 +160,10 @@ def test_the_kestrel_display_columns_are_the_recorded_seventeen() -> None:
         "Ambiguity_Interval",
         "Repeat_Form",
         "Nomenclature_Note",
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
     )
 
 
@@ -167,6 +173,42 @@ def test_the_kestrel_table_renders_its_columns_in_the_declared_order() -> None:
     headings = _headings(kestrel_table_html(frame))
 
     assert headings == ["Sample", "Motif", "Flag"]
+
+
+def test_one_schema_projected_frame_drives_cohort_html_tsv_csv_and_json(tmp_path) -> None:
+    """Catch per-export identity inference or a surface dropping one projected field."""
+    quartet = (
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    )
+    values = {
+        "Molecular_Identity": "",
+        "Molecular_Identity_Status": "unresolved",
+        "Equivalent_Representation_Count": 0,
+        "Identity_Hypothesis_Count": 4,
+    }
+    summary = {
+        "schema_version": 2,
+        "steps": [{"step": "Kestrel Genotyping", "parsed_result": {"data": [{"Motif": "5", **values}]}}],
+    }
+    rows, _, _ = parse_pipeline_summary(summary)
+    frame = pd.DataFrame([{"Sample": "s1", **rows[0]}])
+
+    headings = _headings(kestrel_table_html(frame))
+    write_cohort_frame(frame, tmp_path, "cohort_kestrel", "Kestrel", ["tsv", "csv", "json"])
+
+    assert tuple(headings[-4:]) == quartet
+    assert (tmp_path / "cohort_kestrel.tsv").read_text(encoding="utf-8").splitlines()[0].split("\t")[-4:] == list(
+        quartet
+    )
+    assert (tmp_path / "cohort_kestrel.csv").read_text(encoding="utf-8").splitlines()[0].split(",")[-4:] == list(
+        quartet
+    )
+    exported = json.loads((tmp_path / "cohort_kestrel.json").read_text(encoding="utf-8"))[0]
+    assert list(exported)[-4:] == list(quartet)
+    assert {key: exported[key] for key in quartet} == values
 
 
 def test_a_column_the_frame_does_not_have_is_skipped_rather_than_raising() -> None:
@@ -325,7 +367,7 @@ def test_kestrel_missing_cells_render_empty_without_coercing_real_values() -> No
 # ---------------------------------------------------------------------------
 
 
-def test_the_advntr_display_columns_are_the_recorded_sixteen() -> None:
+def test_the_advntr_display_columns_are_the_recorded_twenty_three() -> None:
     assert ADVNTR_DISPLAY_COLUMNS == (
         "Sample",
         "VID",
@@ -346,6 +388,10 @@ def test_the_advntr_display_columns_are_the_recorded_sixteen() -> None:
         "Ambiguity_Interval",
         "Repeat_Form",
         "Nomenclature_Note",
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
     )
 
 

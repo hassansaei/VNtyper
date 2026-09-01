@@ -42,11 +42,28 @@ from vntyper.scripts.flagging import (
     add_artifact_gate,
     add_flags,
     compile_flag_rules,
+    validate_duplicate_flagging_config,
+)
+from vntyper.scripts.identity_candidate_persistence import (
+    IDENTITY_CAPTURE_COLUMNS,
+    candidate_capture_cells,
+    selected_candidate_cells,
+)
+from vntyper.scripts.identity_candidates import (
+    IdentityTranslationComponent,
+    capture_kestrel_observations,
+    overlay_legacy_projection,
+    translation_component_from_config,
+    with_candidate_evidence,
 )
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
+from vntyper.scripts.molecular_identity_presentation import (
+    IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS,
+    identity_translation_diagnostic_cells,
+)
 from vntyper.scripts.motif_processing import (
     load_additional_motifs,
     load_muc1_reference,
@@ -54,6 +71,7 @@ from vntyper.scripts.motif_processing import (
     preprocessing_deletion,
     preprocessing_insertion,
 )
+from vntyper.scripts.nomenclature import load_nomenclature_config
 from vntyper.scripts.nomenclature_annotate import annotate_kestrel_frame
 from vntyper.scripts.scoring import (
     extract_frameshifts,
@@ -549,6 +567,8 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     """
     flagging_rules = kestrel_config.get("flagging_rules", {})
     compiled_flag_rules = compile_flag_rules(flagging_rules, KESTREL_FLAG_COLUMNS)
+    duplicates_config = kestrel_config.get("duplicate_flagging", {})
+    validate_duplicate_flagging_config(duplicates_config, compiled_flag_rules)
     logger.info("Processing Kestrel VCF results...")
 
     # Step 1) Filter the original VCF to extract INDELs
@@ -631,12 +651,14 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     merged_motifs = load_additional_motifs(config)
 
     # Perform frame scoring, depth scoring, confidence assignment, etc.
+    identity_component = translation_component_from_config(load_nomenclature_config())
     processed_df = process_kmer_results(
         combined_df,
         merged_motifs,
         output_dir,
         kestrel_config,
         compiled_flag_rules=compiled_flag_rules,
+        identity_component=identity_component,
     )
 
     if processed_df.empty:
@@ -650,16 +672,13 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     # flags are available before variant selection (fixes #145). Only re-apply
     # here if the Flag column is missing (e.g., process_kmer_results was called
     # without flagging rules configured).
-    if "Flag" not in processed_df.columns:
-        duplicates_config = kestrel_config.get("duplicate_flagging", {})
-
-        if compiled_flag_rules.rules or duplicates_config.get("enabled", False):
-            processed_df = add_flags(processed_df, compiled_flag_rules, duplicates_config=duplicates_config)
+    if "Flag" not in processed_df.columns and (compiled_flag_rules.rules or duplicates_config.get("enabled", False)):
+        processed_df = add_flags(processed_df, compiled_flag_rules, duplicates_config=duplicates_config)
 
     # Name the variants before writing. Doing it here rather than in a later stage is
     # what makes one edit reach every surface: the TSV below, the pipeline summary
     # built from this same frame, and the HTML report all inherit the columns.
-    processed_df = annotate_kestrel_frame(processed_df, output_dir)
+    processed_df = annotate_kestrel_frame(processed_df, output_dir, identity_component=identity_component)
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
@@ -720,6 +739,7 @@ def process_kmer_results(
     output_dir,
     kestrel_config,
     compiled_flag_rules: CompiledFlagRules | None = None,
+    identity_component: IdentityTranslationComponent | None = None,
 ):
     """
     Applies the main postprocessing heuristics:
@@ -750,12 +770,17 @@ def process_kmer_results(
             Contains thresholds for depth score & confidence assignment.
         compiled_flag_rules: Rules already validated against the Kestrel postprocessing
             schema by the VCF-level caller. Direct callers may omit this argument.
+        identity_component: Explicit complete-context translation component. The
+            production VCF boundary supplies the checked-in nomenclature component;
+            focused legacy callers may omit identity capture.
 
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
     """
     if compiled_flag_rules is None:
         compiled_flag_rules = compile_flag_rules(kestrel_config.get("flagging_rules", {}), KESTREL_FLAG_COLUMNS)
+    duplicates_config = kestrel_config.get("duplicate_flagging", {})
+    validate_duplicate_flagging_config(duplicates_config, compiled_flag_rules)
 
     if combined_df.empty:
         return combined_df
@@ -780,6 +805,23 @@ def process_kmer_results(
     if df.empty:
         return df
 
+    identity_candidates = None
+    if identity_component is not None:
+        capture_records = df.to_dict("records")
+        for record in capture_records:
+            record["Motif_sequence"] = str(record["Motif_sequence"])
+        identity_candidates = capture_kestrel_observations(capture_records, identity_component)
+        capture_rows = [candidate_capture_cells(candidate) for candidate in identity_candidates.candidates]
+        df = df.copy()
+        for column in IDENTITY_CAPTURE_COLUMNS:
+            df[column] = [cells[column] for cells in capture_rows]
+        diagnostic_rows = [
+            identity_translation_diagnostic_cells(candidate.observation.translation)
+            for candidate in identity_candidates.candidates
+        ]
+        for column in IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS:
+            df[column] = [cells[column] for cells in diagnostic_rows]
+
     # (4.5) Add haplo_count after confidence assignment
     df = add_haplo_count(df)
 
@@ -798,7 +840,6 @@ def process_kmer_results(
     # are available after step (6). Moving flagging here fixes #145: previously,
     # a flagged variant could be selected over an unflagged one because
     # select_single_best_variant ran before add_flags.
-    duplicates_config = kestrel_config.get("duplicate_flagging", {})
     if compiled_flag_rules.rules or duplicates_config.get("enabled", False):
         df = add_flags(df, compiled_flag_rules, duplicates_config=duplicates_config)
 
@@ -809,11 +850,31 @@ def process_kmer_results(
     # exactly the pre-#174 behaviour.
     df = add_artifact_gate(df, kestrel_config.get("artifact_flags", []))
 
+    evidenced_candidates = None
+    passing_identity_ordinals: tuple[int, ...] = ()
+    if identity_candidates is not None:
+        evidenced_candidates = with_candidate_evidence(identity_candidates, df.to_dict("records"))
+        passing_mask = df[list(FILTER_COLUMNS)].all(axis=1)
+        passing_identity_ordinals = tuple(
+            int(serialized) for serialized in df.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]]
+        )
+
     # (7) Final Filter
     df = filter_final_dataframe(df, output_dir)
     if df.empty:
         logger.info("All rows failed one or more filter criteria. Returning empty.")
         return df
+
+    if evidenced_candidates is not None:
+        df = df.drop(columns=list(IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS))
+        selected_ordinal = int(df.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]])
+        selected_candidates = overlay_legacy_projection(
+            evidenced_candidates,
+            passing_identity_ordinals,
+            selected_ordinal,
+        )
+        for column, value in selected_candidate_cells(selected_candidates).items():
+            df[column] = value
 
     # (8) Now generate the BED file from the fully filtered result
     bed_file_path = generate_bed_file(df, output_dir)

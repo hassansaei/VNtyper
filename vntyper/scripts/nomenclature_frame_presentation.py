@@ -1,0 +1,142 @@
+"""Present caller result rows with nomenclature and positive molecular identity.
+
+This focused adapter is the pandas boundary for adVNTR result frames. The naming
+and molecular-identity decisions remain in their pure owning modules.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import pandas as pd
+
+from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS, advntr_identity_result_rows
+from vntyper.scripts.nomenclature import Nomenclature, confidence_note, from_advntr, reconcile, render
+
+if TYPE_CHECKING:
+    from vntyper.scripts.identity_candidates import IdentityTranslator
+
+#: The columns, in this order, on every surface that carries them.
+#:
+#: ``Nomenclature`` is the reconciled verdict. The two per-caller columns beside it
+#: are what each caller reported on its own, kept so a disagreement stays legible:
+#: collapsing both files to a single verdict destroyed the evidence a reader needs
+#: in order to weigh that verdict at all. They are named absolutely rather than
+#: relatively ("the other caller"), so a row means the same thing in either file and
+#: in a cohort table that merges them.
+NOMENCLATURE_COLUMNS: tuple[str, ...] = (
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Nomenclature_Flags",
+    "Ambiguity_Interval",
+    "Repeat_Form",
+    "Nomenclature_Note",
+    "Nomenclature_Kestrel",
+    "Nomenclature_adVNTR",
+)
+
+#: A negative Kestrel run writes a different, 10-column schema whose first column is
+#: singular ``Motif``. It carries no variant, so there is nothing to name.
+_NEGATIVE_MARKERS = ("None", "Negative", "Not applicable")
+
+
+def is_negative_result_row(row: pd.Series) -> bool:
+    """Return whether a result row is a caller's negative placeholder.
+
+    Args:
+        row: One result row.
+
+    Returns:
+        True for the negative-run placeholder of either caller.
+    """
+    if str(row.get("Confidence", "")) == "Negative":
+        return True
+    if str(row.get("VID", "")) == "Negative":
+        return True
+    return str(row.get("Motif", "")) == "None" and "Motifs" not in row.index
+
+
+def nomenclature_result_cells(call: Nomenclature, kestrel: str = "", advntr: str = "") -> dict[str, str]:
+    """Project a call onto the nomenclature columns.
+
+    The displayed name comes from :func:`render`, never from ``call.name``: the tier
+    decides what may be shown, and reading the field directly would leak a bare
+    number from a tier that is not entitled to state one.
+
+    Args:
+        call: The reconciled call.
+        kestrel: What Kestrel reported, or ``""`` when it reported nothing.
+        advntr: What adVNTR reported, or ``""`` when it did not run or reported
+            nothing. adVNTR is an optional module, so empty is the ordinary case.
+
+    Returns:
+        The nomenclature column values.
+    """
+    interval = ""
+    if call.ambiguity is not None:
+        low, high = call.ambiguity
+        interval = f"{low}_{high}"
+
+    return {
+        "Nomenclature": render(call),
+        "Nomenclature_Tier": call.tier,
+        "Nomenclature_Flags": ";".join(call.flags),
+        "Ambiguity_Interval": interval,
+        "Repeat_Form": call.repeat_form or "",
+        "Nomenclature_Note": confidence_note(call),
+        "Nomenclature_Kestrel": kestrel,
+        "Nomenclature_adVNTR": advntr,
+    }
+
+
+def annotate_advntr_frame(
+    frame: pd.DataFrame,
+    *,
+    identity_component: IdentityTranslator | None = None,
+) -> pd.DataFrame:
+    """Add nomenclature and optional identity columns to an adVNTR result frame.
+
+    Unlike Kestrel, adVNTR may report several events for one sample. Each row is
+    named on its own here; cross-row reconciliation belongs to whatever combines the
+    two callers, which is the only place that can see both.
+
+    Args:
+        frame: The processed adVNTR frame, as written to ``output_adVNTR_result.tsv``.
+        identity_component: Current-run complete-context translation component. When
+            supplied, public identity cells are appended to positive rows.
+
+    Returns:
+        A copy with the nomenclature columns appended, empty on the negative
+        placeholder row. The identity quartet is appended only when a component is
+        supplied for a positive result frame.
+    """
+    if frame.empty or "Variant" not in frame.columns:
+        return frame
+
+    annotated = frame.copy()
+    cells: list[dict[str, str]] = []
+    for _, row in annotated.iterrows():
+        if is_negative_result_row(row):
+            cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
+            continue
+        support: int | None
+        try:
+            support = int(float(row.get("NumberOfSupportingReads", "")))
+        except (TypeError, ValueError):
+            support = None
+        calls = from_advntr(str(row["Variant"]))
+        if not calls:
+            cells.append(dict.fromkeys(NOMENCLATURE_COLUMNS, ""))
+            continue
+        merged = reconcile(*calls, support=support)
+        # Kestrel's column is filled by the cross-caller stage, which is the only
+        # place that can see it.
+        cells.append(nomenclature_result_cells(merged, advntr=render(merged)))
+
+    for column in NOMENCLATURE_COLUMNS:
+        annotated[column] = [cell[column] for cell in cells]
+    if identity_component is not None:
+        result_cells = advntr_identity_result_rows(annotated.to_dict("records"), identity_component)
+        for column in IDENTITY_COLUMNS:
+            annotated[column] = [cell[column] for cell in result_cells]
+    return annotated

@@ -190,6 +190,20 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "tests/unit/test_screening_summary.py",
         "tests/unit/test_generate_report.py",
     ),
+    "vntyper/scripts/identity_candidates.py": (
+        "tests/unit/test_identity_candidates.py",
+        "tests/unit/test_identity_bam_binding.py",
+        "tests/unit/test_identity_reconciliation.py",
+        "tests/unit/test_kestrel_filtering.py",
+        "tests/unit/test_kestrel_result_publication.py",
+        "tests/unit/test_molecular_identity_surfaces.py",
+        "tests/unit/test_nomenclature_bam.py",
+        "tests/unit/test_nomenclature_surfaces.py",
+    ),
+    "vntyper/scripts/identity_reconciliation.py": (
+        "tests/unit/test_identity_reconciliation.py",
+        "tests/unit/test_nomenclature_reconcile.py",
+    ),
     # Registered by the 2026-08-27 test-hardening pass after two of this module's
     # mutants survived the entire unit tier: a collapsed confidence-priority ladder
     # and an emptied final to_csv publication. It is NOT a pure-decision module -- it

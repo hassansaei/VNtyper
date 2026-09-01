@@ -393,7 +393,7 @@ pytestmark = pytest.mark.unit
 #: Re-recorded 2026-08-26 when the ``[IMAGES]`` section was dropped from the document.
 #: Verified identical under pandas 2.2.2 / plotly 6.9.0 and pandas 2.2.3 / plotly 7.0.0,
 #: which is the point of dropping it.
-EXPECTED_FINGERPRINT = "8d32ebc38e6efb7dcaa286e8182d324f583990e902f3495331a2c037c9eca75c"
+EXPECTED_FINGERPRINT = "6d6f6c3bd47027ad2a2ec250bae363bd2d8514b38efea03b7590f3ab8fc16d6b"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid
@@ -1355,8 +1355,14 @@ def test_an_export_written_after_the_report_carries_no_internal_columns(tmp_path
     kestrel_header = (output_dir / "cohort_kestrel.csv").read_text(encoding="utf-8").splitlines()[0]
     advntr_header = (output_dir / "cohort_advntr.csv").read_text(encoding="utf-8").splitlines()[0]
 
-    assert kestrel_header == "Motif,Confidence,Flag,Sample"
-    assert advntr_header == "VID,Flag,Sample"
+    identity_quartet = [
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    ]
+    assert kestrel_header.split(",") == ["Motif", "Confidence", "Flag", *identity_quartet, "Sample"]
+    assert advntr_header.split(",") == ["VID", "Flag", *identity_quartet, "Sample"]
 
 
 def test_the_html_reading_key_does_not_change_nomenclature_export_columns(tmp_path) -> None:
@@ -1390,6 +1396,10 @@ def test_the_html_reading_key_does_not_change_nomenclature_export_columns(tmp_pa
         "Nomenclature",
         "Nomenclature_Tier",
         "Nomenclature_Flags",
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
         "Sample",
     ]
     assert pd.read_csv(output_dir / "cohort_kestrel.csv").columns.tolist() == expected

@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 #: ``Path.stem`` it must finish deriving while the first is a name to print verbatim.
 SUMMARY_SCHEMA_VERSION = 2
 
+#: Packaged caller-selection policy recorded by current schema-2 summaries. Identity
+#: provenance is additive in work package A; schema 3 remains reserved for the later
+#: governed decision-profile contract.
+DEFAULT_DECISION_POLICY = "legacy-selection-v1"
+
 
 def start_summary(
     version=None,
@@ -107,13 +112,14 @@ def start_summary(
             For BAM and CRAM, the alignment plan's own source label instead.
 
     Returns:
-        dict: A summary dictionary with its schema version, pipeline start timestamp,
-        version, input files, the run's sample name and where it came from, the
-        effective reference selection,
+        dict: A summary dictionary with its schema version, decision policy, pipeline
+        start timestamp, version, input files, the run's sample name and where it came
+        from, the effective reference selection,
         a placeholder for the region the run resolves later, and an empty steps list.
     """
     return {
         "schema_version": SUMMARY_SCHEMA_VERSION,
+        "decision_policy": DEFAULT_DECISION_POLICY,
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
@@ -179,24 +185,26 @@ def parse_tsv(file_path):
     header = None
 
     try:
-        with open(file_path, encoding="utf-8") as f:
-            for line_number, raw_line in enumerate(f, start=1):
-                # Strip the line ending only. `.strip()` also removes the trailing
-                # tab of a row whose last column is empty, which makes a well-formed
-                # row arrive one field short and be discarded as ragged below --
-                # silently, since nothing about the row is actually wrong. Every
-                # nullable column is the empty string by contract, so whenever one is
-                # last that dropped real data.
-                line = raw_line.rstrip("\r\n")
-                if not line.strip():
+        with open(file_path, encoding="utf-8", newline="") as f:
+            reader = csv.reader(f, delimiter="\t")
+            next_physical_line = 1
+            for row_values in reader:
+                # csv.reader yields logical records, so a quoted cell may span more
+                # than one physical line. Keep the first physical line for diagnostics
+                # before advancing past every line this logical record consumed.
+                line_number = next_physical_line
+                next_physical_line = reader.line_num + 1
+                if not row_values or not any(value.strip() for value in row_values):
                     continue
-                if line.startswith("#"):
-                    comments.append(line.lstrip("#").strip())
+                if row_values[0].startswith("#"):
+                    comments.append("\t".join(row_values).lstrip("#").strip())
                     continue
+                # These are writer-controlled result files. Standard CSV semantics
+                # deliberately make an unclosed quote consume later physical lines;
+                # the field-count check below then rejects the malformed logical row.
                 if header is None:
-                    header = line.split("\t")
+                    header = row_values
                     continue
-                row_values = line.split("\t")
                 # Validate the field count per row rather than letting zip() silently
                 # truncate to the shorter sequence: a ragged row means a malformed or
                 # truncated file, and dropping columns without a word turns corruption

@@ -38,7 +38,9 @@ def _local_config(tmp_path: Path) -> Path:
     """Pin reference lookup and coverage to the purpose fixture's compact contig."""
     payload = json.loads((REPO_ROOT / "vntyper" / "config.json").read_text(encoding="utf-8"))
     payload["cram"]["local_ref_path"] = str(tmp_path / "local-ref" / "%2s" / "%2s" / "%s")
-    payload["bam_processing"]["assemblies"]["GRCh37"]["vntr_region_coords"] = "1-10000"
+    assembly = payload["bam_processing"]["assemblies"]["GRCh37"]
+    assembly["vntr_region_coords"] = "1-10000"
+    assembly.pop("vntr_array_coords")
     config = tmp_path / "config.json"
     config.write_text(json.dumps(payload), encoding="utf-8")
     return config
@@ -220,7 +222,7 @@ def _assert_no_reference_flags_in_cram_commands(result: subprocess.CompletedProc
     markers = (
         "Running captured command: samtools view ",
         "Executing region slicing with command: samtools view ",
-        "Executing filtering with command: set -o pipefail; samtools view ",
+        "Executing filtering with command: ",
         "Calculating VNTR coverage with command: samtools depth ",
     )
     for marker in markers:
