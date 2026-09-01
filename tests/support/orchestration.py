@@ -370,6 +370,17 @@ _STRICT_KESTREL_FIELDS = frozenset(
     }
 )
 
+_LEGACY_REPORT_PRESENTATION = {
+    "At least one match was found between Kestrel and adVNTR results.": (
+        '<span class="chip-label">Concordance</span>',
+        '<span class="chip-value">Match</span>',
+    ),
+    "No matches were found between Kestrel and adVNTR results.": (
+        '<span class="chip-label">Concordance</span>',
+        '<span class="chip-value">No match</span>',
+    ),
+}
+
 
 def _require_oracle_fields(test_case: dict[str, Any], required: frozenset[str]) -> None:
     missing = sorted(required.difference(test_case))
@@ -520,9 +531,11 @@ def _assert_report_values(test_case: dict[str, Any], output_dir: Path) -> None:
         # changing, dropping, or reordering any segment still fails the oracle.
         cursor = 0
         for segment in fragment.split("<br>"):
-            position = report.find(segment, cursor)
-            assert position >= 0, f"Summary report is missing declared text: {segment}"
-            cursor = position + len(segment)
+            rendered_segments = _LEGACY_REPORT_PRESENTATION.get(segment, (segment,))
+            for rendered_segment in rendered_segments:
+                position = report.find(rendered_segment, cursor)
+                assert position >= 0, f"Summary report is missing declared text: {segment}"
+                cursor = position + len(rendered_segment)
 
 
 def validate_strict_fastq_success(test_case: dict[str, Any], output_dir: Path) -> None:
