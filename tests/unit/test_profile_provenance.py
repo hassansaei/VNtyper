@@ -120,6 +120,15 @@ def test_legacy_summary_never_reads_or_infers_a_current_profile(tmp_path: Path, 
     assert recorded.revision == LEGACY_DECISION_PROFILE_REVISION
 
 
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_legacy_schema_rejects_schema_three_profile_fields_as_a_downgrade(tmp_path: Path, schema_version: int) -> None:
+    profile, _snapshot = _snapshot_packaged(tmp_path)
+    summary = {"schema_version": schema_version, "steps": [], **profile_summary_fields(profile)}
+
+    with pytest.raises(ValueError, match="legacy.*decision profile|schema 3.*field"):
+        resolve_summary_profile(summary, tmp_path)
+
+
 @pytest.mark.parametrize("missing", ["advntr_evidence_digest", *sorted(PROFILE_FIELDS)])
 def test_schema_three_requires_every_profile_and_pr_b_evidence_field(tmp_path: Path, missing: str) -> None:
     profile, _snapshot = _snapshot_packaged(tmp_path)
@@ -285,6 +294,43 @@ def test_schema_three_rejects_malformed_caller_step_containers(
     summary["steps"] = steps
 
     with pytest.raises(ValueError, match=message):
+        resolve_summary_profile(summary, tmp_path)
+
+
+@pytest.mark.parametrize("parsed_result", [None, [], "malformed"])
+def test_schema_three_rejects_nonmapping_caller_results(tmp_path: Path, parsed_result: object) -> None:
+    profile, _snapshot = _snapshot_packaged(tmp_path)
+    summary = _schema_three_summary(profile)
+    summary["steps"] = [{"step": STEP_KESTREL, "parsed_result": parsed_result}]
+
+    with pytest.raises(ValueError, match="parsed_result must be an object"):
+        resolve_summary_profile(summary, tmp_path)
+
+
+@pytest.mark.parametrize("disposition", [None, "excluded-artifact"])
+def test_schema_three_positive_advntr_row_requires_governed_evidence_disposition(
+    tmp_path: Path, disposition: str | None
+) -> None:
+    profile, _snapshot = _snapshot_packaged(tmp_path)
+    row = {
+        "VID": "25561",
+        **GOOD_IDENTITY_ROW,
+    }
+    if disposition is not None:
+        row["Evidence_Disposition"] = disposition
+    summary = _schema_three_summary(profile)
+    summary["steps"] = [{"step": STEP_ADVNTR, "parsed_result": {"data": [row]}}]
+
+    with pytest.raises(ValueError, match="Evidence_Disposition"):
+        resolve_summary_profile(summary, tmp_path)
+
+
+def test_schema_three_binds_recorded_evidence_digest_to_the_profile_component(tmp_path: Path) -> None:
+    profile, _snapshot = _snapshot_packaged(tmp_path)
+    summary = _schema_three_summary(profile)
+    summary["advntr_evidence_digest"] = "0" * 64
+
+    with pytest.raises(ValueError, match="profile.*adVNTR evidence digest|evidence digest.*profile"):
         resolve_summary_profile(summary, tmp_path)
 
 

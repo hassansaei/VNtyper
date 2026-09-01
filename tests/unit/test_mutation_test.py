@@ -773,6 +773,42 @@ def test_identity_decision_modules_are_wide_mutation_targets() -> None:
     assert missing == {}
 
 
+def test_decision_profile_modules_are_wide_mutation_targets() -> None:
+    """Profile parsing, semantics, freezing and provenance must all be mutated."""
+    required_scopes = {
+        "vntyper/scripts/decision_profile_schema.py": {
+            "tests/unit/test_decision_profile_schema.py",
+            "tests/unit/test_render_decision_profile.py",
+        },
+        "vntyper/scripts/decision_profile_semantics.py": {
+            "tests/unit/test_decision_profile_resolution.py",
+            "tests/unit/test_decision_profile_schema.py",
+        },
+        "vntyper/scripts/decision_profile.py": {
+            "tests/unit/test_decision_profile_resolution.py",
+            "tests/unit/test_profile_provenance.py",
+        },
+        "vntyper/scripts/run_configuration.py": {
+            "tests/unit/test_advntr_decision_threading.py",
+            "tests/unit/test_kestrel_decision_threading.py",
+            "tests/unit/test_pipeline_shark_step.py",
+        },
+        "vntyper/scripts/profile_provenance.py": {
+            "tests/unit/test_cohort_profile_provenance.py",
+            "tests/unit/test_generate_report.py",
+            "tests/unit/test_profile_provenance.py",
+        },
+    }
+
+    missing = {
+        module: sorted(required - set(mutation_test.TARGETS.get(module, ())))
+        for module, required in required_scopes.items()
+        if required - set(mutation_test.TARGETS.get(module, ()))
+    }
+
+    assert missing == {}
+
+
 # ---------------------------------------------------------------------------
 # The clean-tree preflight
 # ---------------------------------------------------------------------------

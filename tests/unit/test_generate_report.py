@@ -2634,14 +2634,15 @@ def test_pipeline_log_failure_returns_failure_message(monkeypatch, caplog) -> No
     ]
 
 
-def test_pipeline_summary_failure_returns_empty_mapping(monkeypatch, caplog) -> None:
-    """An unreadable pipeline summary preserves report rendering's empty state."""
+def test_present_unreadable_pipeline_summary_fails_closed(monkeypatch, caplog) -> None:
+    """A present unreadable summary cannot be relabeled as a legacy run."""
     monkeypatch.setattr(generate_report.os.path, "exists", lambda _path: True)
     monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable summary")))
     caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
     caplog.clear()
 
-    assert generate_report.load_pipeline_summary("pipeline_summary.json") == {}
+    with pytest.raises(ValueError, match="Failed to load pipeline summary"):
+        generate_report.load_pipeline_summary("pipeline_summary.json")
     assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
         (logging.ERROR, "Failed to load pipeline summary: unreadable summary")
     ]

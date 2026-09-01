@@ -109,9 +109,8 @@ def test_bam_rescuer_retains_the_resolved_flank_and_thin_threshold(tmp_path: Pat
     assert rescuer.thin_haplotype_record_support == 4
 
 
-def test_cross_match_uses_the_resolved_required_advntr_disposition() -> None:
+def test_cross_match_never_promotes_identity_insufficient_evidence_to_agreement() -> None:
     component = dict(resolve_run_configuration().cross_match)
-    component["required_advntr_evidence_disposition"] = "identity-insufficient"
     kestrel = [{"REF": "C", "ALT": "CC", "POS": 67}]
     advntr = [
         {
@@ -129,7 +128,7 @@ def test_cross_match_uses_the_resolved_required_advntr_disposition() -> None:
         custom_context_active=True,
     )
 
-    assert result["overall_match"] == "Yes"
+    assert result["overall_match"] == "No"
 
 
 def test_custom_cross_match_context_cannot_fall_back_to_package_policy() -> None:

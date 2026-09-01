@@ -366,6 +366,12 @@ def validate_complete_inventory(
             if field.validation_class is ValidationClass.FIXED_SAFETY and field.value != baseline.value:
                 raise ValueError(f"immutable fixed-safety field differs: {pointer}")
             if (
+                kind == "explicit-custom"
+                and field.validation_class is ValidationClass.GENERATED_MUTABLE
+                and field.value != baseline.value
+            ):
+                raise ValueError(f"explicit-custom profile must copy generated-mutable field: {pointer}")
+            if (
                 kind == "generated"
                 and field.validation_class is ValidationClass.EXPLICIT_CUSTOM
                 and field.value != baseline.value
@@ -376,6 +382,9 @@ def validate_complete_inventory(
         raise ValueError(
             f"decision profile components differ: expected {sorted(_COMPONENTS)}, got {sorted(components)}"
         )
+    from vntyper.scripts.decision_profile_semantics import validate_component_semantics
+
+    validate_component_semantics(components)
     return tuple(fields[pointer] for pointer in sorted(fields))
 
 

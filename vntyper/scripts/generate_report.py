@@ -170,7 +170,10 @@ def load_pipeline_summary(summary_file_path):
         summary_file_path (str or Path): Path to the pipeline summary file.
 
     Returns:
-        dict: The loaded summary dictionary or an empty dict if load fails.
+        dict: The loaded summary dictionary, or an empty dictionary only when absent.
+
+    Raises:
+        ValueError: If a present summary cannot be read or parsed.
     """
     logger.info("Loading pipeline summary from %s", summary_file_path)
     if not os.path.exists(summary_file_path):
@@ -182,8 +185,9 @@ def load_pipeline_summary(summary_file_path):
         logger.debug("Pipeline summary loaded successfully.")
         return summary
     except Exception as e:
-        logger.error("Failed to load pipeline summary: %s", e)
-        return {}
+        message = f"Failed to load pipeline summary: {e}"
+        logger.error(message)
+        raise ValueError(message) from e
 
 
 def load_fastp_output(fastp_file):

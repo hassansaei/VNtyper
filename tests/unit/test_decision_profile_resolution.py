@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -54,9 +55,9 @@ def test_explicit_profile_is_complete_canonicalized_and_never_overlaid(tmp_path:
     assert resolved.profile_kind == "explicit-custom"
     assert resolved.canonical_bytes == canonical_json_bytes(document)
     kestrel = resolved.components["kestrel"]
-    assert isinstance(kestrel, dict)
+    assert isinstance(kestrel, Mapping)
     duplicate_flagging = kestrel["duplicate_flagging"]
-    assert isinstance(duplicate_flagging, dict)
+    assert isinstance(duplicate_flagging, Mapping)
     assert duplicate_flagging["flag_name"] == "Unit_Test_Duplicate"
 
 
@@ -73,6 +74,71 @@ def test_parser_rejects_ambiguous_or_nonstandard_json(raw: str, message: str) ->
 
     with pytest.raises(ValueError, match=message):
         parse_decision_profile(raw, packaged_document=packaged.document)
+
+
+@pytest.mark.parametrize(
+    ("pointer", "value", "message"),
+    [
+        (
+            "/components/kestrel/flagging_rules/False_Positive_4bp_Insertion/all/0/operator",
+            "definitely-not-an-operator",
+            "operator",
+        ),
+        ("/components/kestrel/motif_filtering/position_threshold", -500, "position_threshold"),
+        ("/components/kestrel/selection/confidence_priority/High_Precision", -1, "confidence_priority"),
+        ("/components/kestrel/selection/sort_order/0/column", "not-a-column", "sort_order"),
+        ("/components/kestrel/artifact_flags/0", "Missing_Flag", "artifact_flags"),
+        ("/components/kestrel/duplicate_flagging/enabled", "yes", "enabled"),
+        ("/components/kestrel/duplicate_flagging/sort_by/0/column", "missing", "sort_by"),
+        ("/components/kestrel/selection/unflagged_value", "", "unflagged_value"),
+    ],
+)
+def test_resolution_rejects_semantically_invalid_mutable_values(pointer: str, value: object, message: str) -> None:
+    packaged = load_packaged_decision_profile()
+    document = _custom_document()
+    inventory = document["inventory"]
+    assert isinstance(inventory, dict)
+    inventory[pointer]["value"] = value
+
+    with pytest.raises(ValueError, match=message):
+        parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+
+
+def test_resolution_rejects_a_governed_rule_evidence_mismatch() -> None:
+    packaged = load_packaged_decision_profile()
+    document = _custom_document()
+    inventory = document["inventory"]
+    assert isinstance(inventory, dict)
+    pointer = "/components/advntr/flagging_rules/Polymorphic_Call/all/0/right/literal/0"
+    inventory[pointer]["value"] = "NOT_A_GOVERNED_STATE"
+
+    with pytest.raises(ValueError, match="fixed-safety|governed|Polymorphic"):
+        parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+
+
+def test_run_resolution_rejects_non_neutral_generated_dominance_until_it_has_a_consumer(tmp_path: Path) -> None:
+    packaged = load_packaged_decision_profile()
+    document = copy.deepcopy(dict(packaged.document))
+    document["profile_id"] = "unit-test-generated-active"
+    document["profile_revision"] = "test-1"
+    document["profile_kind"] = "generated"
+    document["generated_metadata"] = {
+        "packaged_base_hash": packaged.digest,
+        "generator_name": "unit-test",
+        "generator_version": "1",
+        "objective": "lexicographic-safety-v1",
+        "dataset_manifest_hash": "a" * 64,
+        "partition_manifest_hash": "b" * 64,
+        "seed": 295,
+    }
+    inventory = document["inventory"]
+    assert isinstance(inventory, dict)
+    inventory["/components/dominance/enabled"]["value"] = True
+    path = tmp_path / "generated.json"
+    path.write_bytes(canonical_json_bytes(document))
+
+    with pytest.raises(ValueError, match="dominance.*not active|neutral"):
+        resolve_run_configuration(path)
 
 
 @pytest.mark.parametrize("kind", ["packaged", "unsupported"])

@@ -412,6 +412,7 @@ def run_kestrel(
                     config,
                     nomenclature_component=nomenclature_decision,
                     runtime_component=runtime,
+                    custom_context_active=custom_context_active,
                 )
                 completed = True
                 break  # Stop after the first successful k-mer size
@@ -570,6 +571,7 @@ def process_kestrel_output(
     *,
     nomenclature_component: Mapping[str, object] | None = None,
     runtime_component: Mapping[str, object] | None = None,
+    custom_context_active: bool = False,
 ):
     """
     Processes the Kestrel output VCF files after Kestrel finishes.
@@ -591,6 +593,7 @@ def process_kestrel_output(
         kestrel_config (dict): Contains thresholds for depth, alt coverage, etc.
         config (dict): Main pipeline config (paths, additional references).
         nomenclature_component: Immutable nomenclature component for this run.
+        custom_context_active: Whether an explicit custom profile owns this run.
 
     Returns:
         pd.DataFrame or None:
@@ -603,7 +606,7 @@ def process_kestrel_output(
     nomenclature_decision = resolve_compatibility_component(
         "nomenclature",
         nomenclature_component,
-        custom_context_active=False,
+        custom_context_active=custom_context_active,
     )
     flagging_rules = kestrel_config.get("flagging_rules", {})
     compiled_flag_rules = compile_flag_rules(flagging_rules, KESTREL_FLAG_COLUMNS)
@@ -699,11 +702,12 @@ def process_kestrel_output(
         kestrel_config,
         compiled_flag_rules=compiled_flag_rules,
         identity_component=identity_component,
+        custom_context_active=custom_context_active,
     )
 
     if processed_df.empty:
         logger.warning("Final processed DataFrame is empty. Writing empty result.")
-        selection = _resolve_selection(kestrel_config)
+        selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active)
         # #266: the one empty-result branch with a scored frame behind it, and therefore the
         # only one that can say anything about what was suppressed.
         note_config = {
@@ -794,6 +798,7 @@ def process_kmer_results(
     kestrel_config,
     compiled_flag_rules: CompiledFlagRules | None = None,
     identity_component: IdentityTranslationComponent | None = None,
+    custom_context_active: bool = False,
 ):
     """
     Applies the main postprocessing heuristics:
@@ -827,11 +832,13 @@ def process_kmer_results(
         identity_component: Explicit complete-context translation component. The
             production VCF boundary supplies the checked-in nomenclature component;
             focused legacy callers may omit identity capture.
+        custom_context_active: Whether missing profile-owned selection values must fail
+            instead of using the packaged compatibility fallback.
 
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
     """
-    selection = _resolve_selection(kestrel_config)
+    selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active)
     if compiled_flag_rules is None:
         compiled_flag_rules = compile_flag_rules(kestrel_config.get("flagging_rules", {}), KESTREL_FLAG_COLUMNS)
     duplicates_config = kestrel_config.get("duplicate_flagging", {})
@@ -1029,7 +1036,11 @@ def add_haplo_count(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _resolve_selection(selection: Mapping[str, object] | KestrelSelection | None) -> KestrelSelection:
+def _resolve_selection(
+    selection: Mapping[str, object] | KestrelSelection | None,
+    *,
+    custom_context_active: bool = False,
+) -> KestrelSelection:
     """Resolve a typed Kestrel selection for production and direct compatibility calls."""
     if isinstance(selection, KestrelSelection):
         return selection
@@ -1042,6 +1053,8 @@ def _resolve_selection(selection: Mapping[str, object] | KestrelSelection | None
     if isinstance(nested, Mapping):
         selection = nested
     elif "confidence_priority" not in selection:
+        if custom_context_active:
+            raise ValueError("Kestrel selection component is missing the complete selection mapping")
         component = resolve_compatibility_component("kestrel", None, custom_context_active=False)
         selection = component["selection"]  # type: ignore[assignment]
         if not isinstance(selection, Mapping):
@@ -1052,6 +1065,8 @@ def _resolve_selection(selection: Mapping[str, object] | KestrelSelection | None
 def select_single_best_variant(
     df: pd.DataFrame,
     selection: Mapping[str, object] | KestrelSelection | None = None,
+    *,
+    custom_context_active: bool = False,
 ) -> pd.DataFrame:
     """
     Select the single best variant (Hassan's requirement: "one representative variant").
@@ -1067,6 +1082,10 @@ def select_single_best_variant(
 
     Args:
         df: DataFrame with Confidence, haplo_count, Depth_Score, POS columns
+        selection: Complete selection mapping, typed selection, or None for a legacy
+            packaged compatibility caller.
+        custom_context_active: Whether an incomplete mapping must fail rather than use
+            the legacy packaged compatibility fallback.
 
     Returns:
         DataFrame with exactly 1 row (the best variant), or empty if input empty
@@ -1094,7 +1113,7 @@ def select_single_best_variant(
     if df.empty:
         return df
 
-    resolved_selection = _resolve_selection(selection)
+    resolved_selection = _resolve_selection(selection, custom_context_active=custom_context_active)
 
     df = df.copy()
     df["_priority"] = df["Confidence"].map(resolved_selection.confidence_priority).fillna(0)

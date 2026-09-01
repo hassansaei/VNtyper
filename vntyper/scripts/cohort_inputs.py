@@ -618,9 +618,10 @@ def load_pipeline_summary_for_sample(
     For the adVNTR step, the algorithm result will later be computed based on the logic
     defined in report_config.json.
 
-    Anything that goes wrong - the file is absent, the JSON does not parse, a timestamp
-    does not - is logged and yields three empties, so one unreadable sample does not
-    abort the cohort.
+    An absent file, unreadable JSON, or malformed legacy statistic is logged and yields
+    three empties, so an unreadable legacy sample does not abort the cohort. Present
+    decision-profile or adVNTR-evidence provenance is security-relevant: invalid or
+    incomplete provenance raises instead of silently dropping the sample.
 
     Parameters
     ----------
@@ -651,21 +652,34 @@ def load_pipeline_summary_for_sample(
     try:
         with open(summary_path) as f:
             summary = json.load(f)
-        kestrel, advntr, stats = parse_pipeline_summary(summary)
+    except Exception as e:
+        logger.error(f"Error loading pipeline summary from {sample_dir}: {e}")
+        return [], [], {}
+    try:
         recorded_profile = resolve_summary_profile(summary, sample_dir)
         profile_fields = profile_export_fields(recorded_profile)
-        kestrel = annotate_profile_rows(kestrel, profile_fields)
-        advntr = annotate_profile_rows(advntr, profile_fields)
-        stats.update(profile_fields)
         from vntyper.modules.advntr.artifact_evidence import resolve_recorded_artifact_evidence
 
         recorded_evidence = resolve_recorded_artifact_evidence(
             summary.get("advntr_evidence_digest"),
             sample_dir / ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE,
         )
+    except Exception as e:
+        message = f"Invalid decision profile or evidence provenance in {sample_dir}: {e}"
+        logger.error(message)
+        raise ValueError(message) from e
+    try:
+        kestrel, advntr, stats = parse_pipeline_summary(summary)
+        kestrel = annotate_profile_rows(kestrel, profile_fields)
+        advntr = annotate_profile_rows(advntr, profile_fields)
+        stats.update(profile_fields)
         stats["advntr_evidence_revision"] = recorded_evidence.revision
         stats["advntr_evidence_assertion"] = recorded_evidence.assertion or ""
         return kestrel, advntr, stats
     except Exception as e:
+        if summary.get("schema_version") == 3:
+            message = f"Invalid schema 3 pipeline summary in {sample_dir}: {e}"
+            logger.error(message)
+            raise ValueError(message) from e
         logger.error(f"Error loading pipeline summary from {sample_dir}: {e}")
         return [], [], {}

@@ -237,6 +237,44 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "tests/unit/test_subthreshold.py",
         "tests/unit/test_template_escaping.py",
     ),
+    "vntyper/scripts/decision_profile_schema.py": (
+        "tests/unit/test_decision_profile_schema.py",
+        "tests/unit/test_render_decision_profile.py",
+    ),
+    "vntyper/scripts/decision_profile_semantics.py": (
+        "tests/unit/test_decision_profile_resolution.py",
+        "tests/unit/test_decision_profile_schema.py",
+        "tests/unit/test_kestrel_decision_threading.py",
+        "tests/unit/test_nomenclature_decision_threading.py",
+    ),
+    "vntyper/scripts/decision_profile.py": (
+        "tests/unit/test_cohort_profile_provenance.py",
+        "tests/unit/test_decision_profile_resolution.py",
+        "tests/unit/test_decision_profile_schema.py",
+        "tests/unit/test_generate_report.py",
+        "tests/unit/test_pipeline_artifact_paths.py",
+        "tests/unit/test_profile_provenance.py",
+        "tests/unit/test_render_decision_profile.py",
+    ),
+    "vntyper/scripts/run_configuration.py": (
+        "tests/unit/test_advntr_command.py",
+        "tests/unit/test_advntr_decision_threading.py",
+        "tests/unit/test_advntr_flagging_rules.py",
+        "tests/unit/test_decision_profile_resolution.py",
+        "tests/unit/test_kestrel_decision_threading.py",
+        "tests/unit/test_kestrel_result_publication.py",
+        "tests/unit/test_nomenclature_decision_threading.py",
+        "tests/unit/test_nomenclature_surfaces.py",
+        "tests/unit/test_pipeline_artifact_paths.py",
+        "tests/unit/test_pipeline_cwd.py",
+        "tests/unit/test_pipeline_kestrel.py",
+        "tests/unit/test_pipeline_shark_step.py",
+    ),
+    "vntyper/scripts/profile_provenance.py": (
+        "tests/unit/test_cohort_profile_provenance.py",
+        "tests/unit/test_generate_report.py",
+        "tests/unit/test_profile_provenance.py",
+    ),
 }
 
 #: Known high-signal mutant that the scoring unit tests must kill. The harness refuses

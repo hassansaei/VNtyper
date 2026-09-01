@@ -72,6 +72,7 @@ _CRITICAL_NUMERIC_METADATA: dict[str, tuple[str, str, bool]] = {
 
 _FIXED_PREFIXES = (
     "/components/advntr/artifact_evidence/",
+    "/components/advntr/flagging_rules/Polymorphic_Call/",
     "/components/advntr/settings/",
     "/components/kestrel/confidence_assignment/",
     "/components/kestrel/selection/final_filter_columns/",
@@ -213,6 +214,12 @@ def _validation_class(pointer: str) -> ValidationClass:
     if pointer in _CRITICAL_NUMERIC_METADATA or pointer.startswith(_FIXED_PREFIXES):
         return ValidationClass.FIXED_SAFETY
     if pointer == "/components/kestrel/alt_filtering/gg_depth_score_threshold":
+        return ValidationClass.FIXED_SAFETY
+    if pointer in {
+        "/components/cross_match/required_advntr_evidence_disposition",
+        "/components/kestrel/flagging_rules/Low_Depth_Conserved_Motifs/all/1/operator",
+        "/components/shark",
+    }:
         return ValidationClass.FIXED_SAFETY
     return ValidationClass.EXPLICIT_CUSTOM
 

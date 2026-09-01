@@ -138,7 +138,9 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
         config,
         compiled_flag_rules=None,
         identity_component=None,
+        custom_context_active=False,
     ):
+        assert custom_context_active is False
         seen["combined_rows"] = len(combined_df)
         seen["alts"] = list(combined_df["ALT"])
         seen["identity_component"] = identity_component

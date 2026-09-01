@@ -21,7 +21,7 @@ from vntyper.scripts.decision_profile import (
     load_packaged_decision_profile,
     parse_decision_profile,
 )
-from vntyper.scripts.decision_profile_schema import validate_complete_inventory
+from vntyper.scripts.decision_profile_schema import component_projection, validate_complete_inventory
 from vntyper.scripts.molecular_identity import parse_molecular_identity, serialize_molecular_identity
 from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS
 from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_KESTREL
@@ -44,6 +44,7 @@ _PROFILE_FIELDS = frozenset(
 _PROFILE_KINDS = frozenset({"packaged", "explicit-custom", "generated"})
 _PROFILE_SOURCES = frozenset({"package", "explicit-cli"})
 _IDENTITY_STATUSES = frozenset({"unique", "legacy-selected-among-multiple", "unresolved"})
+_EVIDENCE_DISPOSITIONS = frozenset({"admissible", "identity-insufficient"})
 
 
 @dataclass(frozen=True)
@@ -237,7 +238,7 @@ def _validate_schema_three_identity_rows(summary: Mapping[str, object]) -> None:
             continue
         parsed_result = raw_step.get("parsed_result")
         if not isinstance(parsed_result, Mapping):
-            continue
+            raise ValueError("summary schema 3 caller parsed_result must be an object")
         rows = parsed_result.get("data", [])
         if not isinstance(rows, list):
             raise ValueError("summary schema 3 caller step data must be an array")
@@ -248,12 +249,18 @@ def _validate_schema_three_identity_rows(summary: Mapping[str, object]) -> None:
             positive = (
                 not is_empty_result_row(caller_row) if step_name == STEP_KESTREL else raw_row.get("VID") != "Negative"
             )
+            if step_name == STEP_ADVNTR and positive:
+                disposition = raw_row.get("Evidence_Disposition")
+                if disposition not in _EVIDENCE_DISPOSITIONS:
+                    raise ValueError("summary schema 3 positive adVNTR row requires a supported Evidence_Disposition")
             _validate_identity_row(raw_row, positive=positive)
 
 
 def verify_profile_snapshot(
     provenance: DecisionProfileProvenance,
     snapshot_path: str | Path,
+    *,
+    advntr_evidence_digest: str | None = None,
 ) -> DecisionProfileProvenance:
     """Verify one recorded snapshot without substituting a current profile.
 
@@ -284,12 +291,14 @@ def verify_profile_snapshot(
         packaged = load_packaged_decision_profile()
         if raw != packaged.canonical_bytes:
             raise ValueError("recorded package-source snapshot does not match the checked-in packaged profile")
+        advntr_component = component_projection(document, "advntr")
         profile_id = document["profile_id"]
         revision = document["profile_revision"]
         kind = document["profile_kind"]
     else:
         packaged = load_packaged_decision_profile()
         resolved = parse_decision_profile(raw, packaged_document=packaged.document)
+        advntr_component = resolved.components["advntr"]
         profile_id = resolved.profile_id
         revision = resolved.profile_revision
         kind = resolved.profile_kind
@@ -299,6 +308,14 @@ def verify_profile_snapshot(
         provenance.profile_kind,
     ):
         raise ValueError("recorded decision profile metadata differs from its verified snapshot")
+    if advntr_evidence_digest is not None:
+        if not isinstance(advntr_component, Mapping):
+            raise ValueError("recorded decision profile adVNTR component must be an object")
+        artifact_evidence = advntr_component.get("artifact_evidence")
+        if not isinstance(artifact_evidence, Mapping):
+            raise ValueError("recorded decision profile adVNTR artifact evidence must be an object")
+        if artifact_evidence.get("digest") != advntr_evidence_digest:
+            raise ValueError("recorded profile adVNTR evidence digest differs from the summary evidence digest")
     return provenance
 
 
@@ -324,9 +341,12 @@ def resolve_summary_profile(
     schema_version = summary.get("schema_version")
     if isinstance(schema_version, bool):
         raise ValueError(f"unsupported pipeline summary schema version: {schema_version}")
-    if schema_version is None or schema_version in {1, 2}:
+    if schema_version is None or (isinstance(schema_version, int) and schema_version in {1, 2}):
+        forbidden = sorted(_PROFILE_FIELDS & set(summary))
+        if forbidden:
+            raise ValueError(f"legacy summary cannot contain schema 3 decision profile fields: {forbidden}")
         return DecisionProfileProvenance(None, None, None, None, None, None)
-    if schema_version != 3:
+    if not isinstance(schema_version, int) or schema_version != 3:
         raise ValueError(f"unsupported pipeline summary schema version: {schema_version}")
     if "advntr_evidence_digest" not in summary:
         raise ValueError("summary schema 3 requires advntr_evidence_digest")
@@ -342,4 +362,8 @@ def resolve_summary_profile(
     provenance = _parse_recorded_provenance(summary)
     _validate_schema_three_identity_rows(summary)
     assert provenance.snapshot_path is not None
-    return verify_profile_snapshot(provenance, Path(run_root) / provenance.snapshot_path)
+    return verify_profile_snapshot(
+        provenance,
+        Path(run_root) / provenance.snapshot_path,
+        advntr_evidence_digest=evidence_digest,
+    )

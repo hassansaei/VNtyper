@@ -549,7 +549,6 @@ def aggregate_cohort(
             decision_profile_provenance=[
                 {"Sample": stats["Sample"], **{column: stats[column] for column in PROFILE_EXPORT_COLUMNS}}
                 for stats in additional_stats_list
-                if all(column in stats for column in PROFILE_EXPORT_COLUMNS)
             ],
         )
     finally:

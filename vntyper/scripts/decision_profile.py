@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, cast
 
 from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
@@ -36,6 +37,15 @@ class ResolvedDecisionProfile:
     components: Mapping[str, object]
 
 
+def _freeze(value: object) -> object:
+    """Recursively freeze one JSON-compatible resolved value."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze(child) for key, child in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(child) for child in value)
+    return value
+
+
 def _resolved(
     document: dict[str, object],
     *,
@@ -52,9 +62,12 @@ def _resolved(
     if source == "explicit-cli" and kind not in {"explicit-custom", "generated"}:
         raise ValueError("an explicit CLI decision profile must be explicit-custom or generated")
     canonical = canonical_json_bytes(document)
-    components = {
-        name: component_projection(document, name, packaged_profile=packaged_document) for name in _COMPONENT_NAMES
-    }
+    components = MappingProxyType(
+        {
+            name: _freeze(component_projection(document, name, packaged_profile=packaged_document))
+            for name in _COMPONENT_NAMES
+        }
+    )
     return ResolvedDecisionProfile(
         profile_id=cast(str, document["profile_id"]),
         profile_revision=cast(str, document["profile_revision"]),

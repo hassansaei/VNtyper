@@ -21,6 +21,14 @@ DECISION_MODULES = {
         "shark_config",
         "shark_settings",
     },
+    REPOSITORY_ROOT / "vntyper/scripts/pipeline.py": {
+        "advntr_config",
+        "advntr_settings",
+        "kestrel_config",
+        "shark_config",
+        "shark_settings",
+    },
+    REPOSITORY_ROOT / "vntyper/scripts/pipeline_kestrel.py": {"kestrel_config"},
 }
 NOMENCLATURE_CONSUMERS = (
     REPOSITORY_ROOT / "vntyper/scripts/kestrel_genotyping.py",
@@ -31,18 +39,57 @@ NOMENCLATURE_CONSUMERS = (
 
 
 def _module_assignments(tree: ast.Module) -> set[str]:
-    """Return names assigned directly in a module body."""
-    assigned: set[str] = set()
-    for statement in tree.body:
-        targets: list[ast.expr] = []
-        if isinstance(statement, ast.Assign):
-            targets = statement.targets
-        elif isinstance(statement, ast.AnnAssign):
-            targets = [statement.target]
-        for target in targets:
-            if isinstance(target, ast.Name):
-                assigned.add(target.id)
-    return assigned
+    """Return names bound at module scope, including imports and nested blocks."""
+
+    class ModuleBindingVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.assigned: set[str] = set()
+
+        def visit_Name(self, node: ast.Name) -> None:  # noqa: N802 - ast visitor API
+            if isinstance(node.ctx, ast.Store):
+                self.assigned.add(node.id)
+
+        def visit_Import(self, node: ast.Import) -> None:  # noqa: N802 - ast visitor API
+            self.assigned.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802 - ast visitor API
+            self.assigned.update(alias.asname or alias.name for alias in node.names)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802 - ast visitor API
+            self.assigned.add(node.name)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802 - ast visitor API
+            self.assigned.add(node.name)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802 - ast visitor API
+            self.assigned.add(node.name)
+
+    visitor = ModuleBindingVisitor()
+    visitor.visit(tree)
+    return visitor.assigned
+
+
+def _called_name(node: ast.Call) -> str | None:
+    """Return the terminal name of a direct or module-qualified call."""
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def test_module_binding_scan_covers_imports_and_nested_module_blocks_but_not_locals() -> None:
+    tree = ast.parse("import package as imported\nif enabled:\n    nested = 1\ndef function():\n    local = 2\n")
+
+    assert _module_assignments(tree) == {"function", "imported", "nested"}
+
+
+def test_call_scan_covers_direct_and_module_qualified_calls() -> None:
+    direct, qualified = (
+        node for node in ast.walk(ast.parse("load_config()\nmodule.load_config()\n")) if isinstance(node, ast.Call)
+    )
+
+    assert _called_name(direct) == _called_name(qualified) == "load_config"
 
 
 def test_stage_modules_do_not_own_packaged_decision_globals() -> None:
@@ -63,11 +110,23 @@ def test_nomenclature_consumers_do_not_reload_the_legacy_sidecar() -> None:
     for path in NOMENCLATURE_CONSUMERS:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         if any(
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "load_nomenclature_config"
-            for node in ast.walk(tree)
+            isinstance(node, ast.Call) and _called_name(node) == "load_nomenclature_config" for node in ast.walk(tree)
         ):
+            violations.append(str(path.relative_to(REPOSITORY_ROOT)))
+
+    assert violations == []
+
+
+def test_shark_consumers_do_not_reload_the_runtime_sidecar_as_decision_policy() -> None:
+    """SHARK's empty profile component must be resolved, not inferred from its path sidecar."""
+    consumers = (
+        REPOSITORY_ROOT / "vntyper/scripts/pipeline.py",
+        REPOSITORY_ROOT / "vntyper/modules/shark/shark_filtering.py",
+    )
+    violations: list[str] = []
+    for path in consumers:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if any(isinstance(node, ast.Call) and _called_name(node) == "load_shark_config" for node in ast.walk(tree)):
             violations.append(str(path.relative_to(REPOSITORY_ROOT)))
 
     assert violations == []

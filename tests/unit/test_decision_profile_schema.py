@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ PACKAGE_ROOT = Path(__file__).parents[2] / "vntyper"
 PROFILE_PATH = PACKAGE_ROOT / "profiles" / "decision_profile.json"
 DIGEST_PATH = PACKAGE_ROOT / "profiles" / "decision_profile.sha256"
 PROJECTION_PATH = PACKAGE_ROOT / "profiles" / "decision_projection.json"
+EXPECTED_PACKAGED_PROFILE_SHA256 = "be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718"
 
 
 def _packaged_profile() -> dict[str, object]:
@@ -47,7 +49,36 @@ def test_packaged_profile_is_canonical_and_matches_sidecar() -> None:
     assert re.fullmatch(rb"[0-9a-f]{64}\n", digest_bytes)
     digest = digest_bytes[:-1].decode("ascii")
     assert digest == hashlib.sha256(raw).hexdigest() == canonical_sha256(profile)
+    assert digest == EXPECTED_PACKAGED_PROFILE_SHA256
     validate_complete_inventory(profile)
+
+
+def test_governed_advntr_evidence_and_cross_match_disposition_are_independently_fixed() -> None:
+    profile = _packaged_profile()
+    inventory = profile["inventory"]
+    assert isinstance(inventory, dict)
+
+    governed_prefix = "/components/advntr/flagging_rules/Polymorphic_Call/"
+    governed = {pointer for pointer in inventory if pointer.startswith(governed_prefix)}
+    assert governed
+    assert all(inventory[pointer]["class"] == ValidationClass.FIXED_SAFETY.value for pointer in governed)
+    assert _field(profile, "/components/cross_match/required_advntr_evidence_disposition") == {
+        "class": ValidationClass.FIXED_SAFETY.value,
+        "value": "admissible",
+    }
+
+
+def test_polymorphic_rule_states_are_exactly_the_governed_artifact_states() -> None:
+    projection = load_strict_json_object(PROJECTION_PATH.read_bytes())
+    advntr = projection["advntr"]
+    assert isinstance(advntr, dict)
+    evidence = advntr["artifact_evidence"]
+    rules = advntr["flagging_rules"]
+    assert isinstance(evidence, dict) and isinstance(rules, dict)
+
+    governed = evidence["active_states"]
+    polymorphic = rules["Polymorphic_Call"]
+    assert polymorphic["all"][0]["right"]["literal"] == governed
 
 
 def test_inventory_is_an_exact_flattening_of_the_checked_in_projection() -> None:
@@ -73,6 +104,78 @@ def test_every_inventory_leaf_has_exactly_one_validation_class() -> None:
     observed = {field["class"] for field in inventory.values()}
     assert observed == {member.value for member in ValidationClass}
     assert all(isinstance(field["class"], str) for field in inventory.values())
+    assert Counter(field["class"] for field in inventory.values()) == {
+        ValidationClass.FIXED_SAFETY.value: 172,
+        ValidationClass.EXPLICIT_CUSTOM.value: 69,
+        ValidationClass.GENERATED_MUTABLE.value: 6,
+    }
+
+
+def test_one_complete_explicit_profile_can_change_every_explicit_custom_leaf() -> None:
+    """Every field advertised as operator-editable has a valid non-default value."""
+    packaged = _packaged_profile()
+    explicit = copy.deepcopy(packaged)
+    explicit["profile_kind"] = "explicit-custom"
+    explicit["profile_id"] = "unit-test-all-explicit-fields"
+    inventory = explicit["inventory"]
+    assert isinstance(inventory, dict)
+    explicit_pointers = {
+        pointer for pointer, field in inventory.items() if field["class"] == ValidationClass.EXPLICIT_CUSTOM.value
+    }
+    column_replacements = {
+        "NumberOfSupportingReads": "MeanCoverage",
+        "RU": "Variant",
+        "Kestrel_Allele_Change": "Kestrel_REF",
+        "Advntr_Allele_Change": "Advntr_REF",
+        "Kestrel_Variant_Type": "Kestrel_ALT",
+        "Advntr_Variant_Type": "Advntr_ALT",
+        "REF": "ALT",
+        "ALT": "REF",
+        "Depth_Score": "haplo_count",
+        "Motif": "Variant",
+        "confidence_priority": "is_unflagged",
+        "is_unflagged": "Depth_Score",
+        "haplo_count": "POS",
+        "POS": "confidence_priority",
+    }
+    operator_replacements = {"lt": "eq", "eq": "casefold_eq", "casefold_eq": "eq"}
+    changed: set[str] = set()
+    for pointer in sorted(explicit_pointers):
+        field = inventory[pointer]
+        value = field["value"]
+        if pointer.endswith("/operator"):
+            field["value"] = operator_replacements[value]
+        elif "/duplicate_flagging/sort_by/" in pointer and pointer.endswith("/column"):
+            field["value"] = "POS"
+        elif pointer.endswith("/column"):
+            field["value"] = column_replacements[value]
+        elif "/duplicate_flagging/group_by/" in pointer:
+            field["value"] = {"REF": "ALT", "ALT": "REF"}[value]
+        elif pointer.endswith("/artifact_flags/0"):
+            field["value"] = "Low_Depth_Conserved_Motifs"
+        elif isinstance(value, bool):
+            field["value"] = not value
+        elif isinstance(value, (int, float)):
+            field["value"] = value + 10
+        elif isinstance(value, list):
+            field["value"] = ["CUSTOM"]
+        elif isinstance(value, str):
+            field["value"] = f"{value}-custom"
+        else:
+            raise AssertionError(f"no valid differential fixture for {pointer}: {value!r}")
+        if field["value"] != value:
+            changed.add(pointer)
+
+    assert changed == explicit_pointers
+    validate_complete_inventory(explicit, packaged_profile=packaged)
+
+
+def test_packaged_inventory_rejects_an_invalid_fixed_output_format() -> None:
+    packaged = _packaged_profile()
+    _field(packaged, "/components/advntr/settings/output_format")["value"] = "bam"
+
+    with pytest.raises(ValueError, match="output_format"):
+        validate_complete_inventory(packaged)
 
 
 @pytest.mark.parametrize(
@@ -249,6 +352,8 @@ def _different_json_value(value: object) -> object:
         return value + 1
     if isinstance(value, str):
         return f"{value}-mutated"
+    if isinstance(value, dict):
+        return {"unexpected": True}
     raise AssertionError(f"fixed-safety mutation fixture has unsupported value: {value!r}")
 
 
@@ -340,10 +445,19 @@ def test_generated_metadata_is_closed_and_mutable_grid_is_bounded() -> None:
         "partition_manifest_hash": "b" * 64,
         "seed": 295,
     }
+    _field(generated, "/components/dominance/enabled")["value"] = True
     _field(generated, "/components/dominance/minimum_record_count_margin")["value"] = 2
     _field(generated, "/components/dominance/minimum_record_share")["value"] = 0.75
     _field(generated, "/components/dominance/minimum_record_share_margin")["value"] = 0.25
     _field(generated, "/components/dominance/xd_veto")["value"] = "missingness"
+    _field(generated, "/components/dominance/abstain_on_inadmissible_advntr")["value"] = True
+    generated_inventory = generated["inventory"]
+    assert isinstance(generated_inventory, dict)
+    assert all(
+        field["value"] != _field(packaged, pointer)["value"]
+        for pointer, field in generated_inventory.items()
+        if field["class"] == ValidationClass.GENERATED_MUTABLE.value
+    )
     validate_complete_inventory(generated, packaged_profile=packaged)
 
     generated_metadata = generated["generated_metadata"]

@@ -265,7 +265,9 @@ class TestTheScoredEmptyBranch:
             config,
             compiled_flag_rules=None,
             identity_component=None,
+            custom_context_active=False,
         ):
+            assert custom_context_active is False
             row = {} if eligible else {st.DEPTH_GATE: True}
             pre_result(Path(output_dir) / "kestrel_pre_result.tsv", [row])
             return pd.DataFrame()
