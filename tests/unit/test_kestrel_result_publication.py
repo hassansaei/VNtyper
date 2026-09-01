@@ -9,6 +9,7 @@ drives the real ``process_kestrel_output`` through the non-empty path and assert
 values parsed back from the written file with the repo's own reader.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from unittest import mock
 
@@ -180,7 +181,9 @@ def test_a_positive_result_publishes_its_data_row_to_the_tsv(tmp_path: Path) -> 
     assert seen["annotation_identity_component"] is seen["identity_component"]
     assert seen["annotation_nomenclature_component"] is run.nomenclature
     assert seen["identity_component"].kestrel_motifs == run.nomenclature["motifs"]
-    assert seen["identity_component"].advntr_rotation_offset == run.nomenclature["advntr"]["rotation_offset"]
+    advntr_nomenclature = run.nomenclature["advntr"]
+    assert isinstance(advntr_nomenclature, Mapping)
+    assert seen["identity_component"].advntr_rotation_offset == advntr_nomenclature["rotation_offset"]
     assert returned is not None and len(returned) == 1
 
     parsed = parse_tsv(str(tmp_path / "kestrel_result.tsv"))

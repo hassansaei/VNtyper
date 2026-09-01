@@ -375,6 +375,10 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
     replay_phase = ""
     run_configuration = resolve_run_configuration()
     kestrel_component = run_configuration.kestrel
+    artifact_flags = kestrel_component["artifact_flags"]
+    selection = kestrel_component["selection"]
+    assert isinstance(artifact_flags, tuple)
+    assert isinstance(selection, Mapping)
     original_is_candidate = nomenclature_bam_adapter.is_candidate
     original_rescue = BamRescuer.rescue_with_identity_evidence
     identity_component = translation_component_from_config(run_configuration.nomenclature)
@@ -415,7 +419,7 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
             dtype={"Motif_fasta": str, "POS_fasta": str, "Motif": str},
             keep_default_na=False,
         )
-        pre_result = add_artifact_gate(pre_result, kestrel_component.get("artifact_flags", []))
+        pre_result = add_artifact_gate(pre_result, artifact_flags)
         records = pre_result.to_dict("records")
         for record in records:
             record["Motif_sequence"] = str(record["Motif_sequence"])
@@ -432,7 +436,7 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
         evidenced = with_candidate_evidence(candidates, pre_result.to_dict("records"))
         passing_mask = pre_result[list(FILTER_COLUMNS)].all(axis=1)
         passing_ordinals = tuple(int(value) for value in pre_result.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]])
-        selected = filter_final_dataframe(pre_result, str(output_dir), selection=kestrel_component["selection"])
+        selected = filter_final_dataframe(pre_result, str(output_dir), selection=selection)
 
         if selected.empty:
             shutil.copyfile(source_result, output_dir / "kestrel_result.tsv")

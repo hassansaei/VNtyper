@@ -6,6 +6,7 @@ import hashlib
 import shlex
 import subprocess
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +16,9 @@ import pytest
 from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.fastq_bam_processing import process_bam_to_fastq
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
-from vntyper.scripts.kestrel_genotyping import kestrel_config, process_kestrel_output
+from vntyper.scripts.kestrel_genotyping import process_kestrel_output
 from vntyper.scripts.pipeline_read_routing import count_fastq_records
+from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.scripts.utils import load_config
 
 pytestmark = pytest.mark.integration
@@ -80,7 +82,9 @@ def _run_kestrel(
 ) -> tuple[Counter[tuple[str, ...]], str]:
     """Build and execute one calibrated real Kestrel invocation."""
     output.mkdir(parents=True)
-    settings = kestrel_config["kestrel_settings"]
+    run_configuration = resolve_run_configuration()
+    settings = run_configuration.kestrel_runtime["kestrel_settings"]
+    assert isinstance(settings, Mapping)
     reference_vntr = REPOSITORY / config["reference_data"]["muc1_reference_vntr"]
     kestrel_jar = REPOSITORY / config["tools"]["kestrel"]
     vcf = output / "output.vcf"
@@ -121,7 +125,14 @@ def _run_kestrel(
 
     vcf_text = vcf.read_text(encoding="utf-8")
     assert "##source=Kestrel1.0.1" in vcf_text
-    process_kestrel_output(output, vcf, reference_vntr, kestrel_config, config)
+    process_kestrel_output(
+        output,
+        vcf,
+        reference_vntr,
+        run_configuration.kestrel,
+        config,
+        nomenclature_component=run_configuration.nomenclature,
+    )
     result = pd.read_csv(output / "kestrel_result.tsv", sep="\t", comment="#")
     assert len(result) == 1
     return _vcf_records(vcf), str(result.iloc[0]["Confidence"])

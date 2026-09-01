@@ -230,12 +230,14 @@ def test_fixed_safety_and_generated_explicit_fields_cannot_drift() -> None:
         "partition_manifest_hash": "b" * 64,
         "seed": 295,
     }
+    generated_inventory = generated["inventory"]
+    assert isinstance(generated_inventory, dict)
     explicit_pointer = next(
         pointer
-        for pointer, field in generated["inventory"].items()
+        for pointer, field in generated_inventory.items()
         if field["class"] == ValidationClass.EXPLICIT_CUSTOM.value and isinstance(field["value"], str)
     )
-    generated["inventory"][explicit_pointer]["value"] += "-changed"
+    generated_inventory[explicit_pointer]["value"] += "-changed"
     with pytest.raises(ValueError, match="generated profile must copy explicit-custom field"):
         validate_complete_inventory(generated, packaged_profile=packaged)
 
@@ -250,11 +252,17 @@ def _different_json_value(value: object) -> object:
     raise AssertionError(f"fixed-safety mutation fixture has unsupported value: {value!r}")
 
 
-_FIXED_FIELDS = {
-    pointer: field
-    for pointer, field in _packaged_profile()["inventory"].items()
-    if field["class"] == ValidationClass.FIXED_SAFETY.value
-}
+def _fixed_fields() -> dict[str, dict[str, object]]:
+    inventory = _packaged_profile()["inventory"]
+    assert isinstance(inventory, dict)
+    return {
+        pointer: field
+        for pointer, field in inventory.items()
+        if isinstance(field, dict) and field["class"] == ValidationClass.FIXED_SAFETY.value
+    }
+
+
+_FIXED_FIELDS = _fixed_fields()
 _FIXED_NUMERIC_SEMANTICS = [
     (pointer, key)
     for pointer, field in _FIXED_FIELDS.items()
@@ -338,6 +346,8 @@ def test_generated_metadata_is_closed_and_mutable_grid_is_bounded() -> None:
     _field(generated, "/components/dominance/xd_veto")["value"] = "missingness"
     validate_complete_inventory(generated, packaged_profile=packaged)
 
-    generated["generated_metadata"]["unexpected"] = True
+    generated_metadata = generated["generated_metadata"]
+    assert isinstance(generated_metadata, dict)
+    generated_metadata["unexpected"] = True
     with pytest.raises(ValueError, match="generated_metadata fields differ"):
         validate_complete_inventory(generated, packaged_profile=packaged)

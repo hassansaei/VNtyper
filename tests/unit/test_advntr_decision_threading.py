@@ -21,7 +21,12 @@ def test_explicit_settings_control_the_command_without_module_state(tmp_path: Pa
     alignment.touch()
     output.mkdir()
     commands: list[str] = []
-    monkeypatch.setattr(advntr, "run_command", lambda command, *_args, **_kwargs: commands.append(command) or True)
+
+    def record_command(command, *_args, **_kwargs) -> bool:
+        commands.append(command)
+        return True
+
+    monkeypatch.setattr(advntr, "run_command", record_command)
     run = resolve_run_configuration()
     component = dict(run.advntr)
     component["settings"] = {

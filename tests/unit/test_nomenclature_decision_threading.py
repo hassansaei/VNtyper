@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pandas as pd
@@ -47,6 +48,7 @@ def test_nomenclature_configuration_rejects_malformed_components(change, expecte
 
 def test_identity_policy_retains_the_two_value_five_names_and_units() -> None:
     component = resolve_run_configuration().nomenclature["identity_reconciliation"]
+    assert isinstance(component, Mapping)
 
     policy = IdentityReconciliationPolicy.from_component(component)
 
@@ -58,7 +60,9 @@ def test_identity_policy_retains_the_two_value_five_names_and_units() -> None:
 
 
 def test_identity_policy_rejects_an_incomplete_profile_component() -> None:
-    component = dict(resolve_run_configuration().nomenclature["identity_reconciliation"])
+    raw_component = resolve_run_configuration().nomenclature["identity_reconciliation"]
+    assert isinstance(raw_component, Mapping)
+    component = dict(raw_component)
     component.pop("source_evidence_units")
 
     with pytest.raises(ValueError, match="identity reconciliation component fields differ"):

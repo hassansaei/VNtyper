@@ -7,6 +7,7 @@ Research use only.
 """
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from unittest import mock
 
@@ -421,7 +422,9 @@ def test_production_identity_policy_is_resolved_from_checked_in_config_at_the_st
     dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
     kestrel, advntr = _write_identity_aware_outputs(tmp_path, dup_c)
     component = dict(resolve_run_configuration().nomenclature)
-    identity = dict(component["identity_reconciliation"])
+    identity_component = component["identity_reconciliation"]
+    assert isinstance(identity_component, Mapping)
+    identity = dict(identity_component)
     identity["kestrel_min_alternate_kmer_path_depth"] = 41
     component["identity_reconciliation"] = identity
 

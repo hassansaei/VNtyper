@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import pandas as pd
 import pytest
 
@@ -13,7 +15,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_explicit_confidence_priority_changes_the_selected_row() -> None:
-    selection = dict(resolve_run_configuration().kestrel["selection"])  # type: ignore[arg-type]
+    raw_selection = resolve_run_configuration().kestrel["selection"]
+    assert isinstance(raw_selection, Mapping)
+    selection = dict(raw_selection)
     selection["confidence_priority"] = {
         "High_Precision*": 0,
         "High_Precision": 1,

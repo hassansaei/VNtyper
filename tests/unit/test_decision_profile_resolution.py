@@ -53,7 +53,11 @@ def test_explicit_profile_is_complete_canonicalized_and_never_overlaid(tmp_path:
     assert resolved.source == "explicit-cli"
     assert resolved.profile_kind == "explicit-custom"
     assert resolved.canonical_bytes == canonical_json_bytes(document)
-    assert resolved.components["kestrel"]["duplicate_flagging"]["flag_name"] == "Unit_Test_Duplicate"
+    kestrel = resolved.components["kestrel"]
+    assert isinstance(kestrel, dict)
+    duplicate_flagging = kestrel["duplicate_flagging"]
+    assert isinstance(duplicate_flagging, dict)
+    assert duplicate_flagging["flag_name"] == "Unit_Test_Duplicate"
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,14 @@ def test_pipeline_resolves_profile_exactly_once_before_dispatch(monkeypatch: pyt
         order.append("resolve")
         return sentinel
 
-    def handle(args: object, **_kwargs: object) -> None:
+    def handle(
+        args: argparse.Namespace,
+        config: dict[str, object],
+        parser: argparse.ArgumentParser,
+        log_level_value: int,
+        log_file_str: str | None,
+    ) -> None:
+        del config, parser, log_level_value, log_file_str
         assert args.run_configuration is sentinel
         order.append("handler")
 

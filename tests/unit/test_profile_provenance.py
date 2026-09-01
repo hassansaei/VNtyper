@@ -109,7 +109,7 @@ def test_schema_three_snapshot_verifies_to_the_recorded_profile(tmp_path: Path) 
 
 @pytest.mark.parametrize("schema_version", [None, 1, 2])
 def test_legacy_summary_never_reads_or_infers_a_current_profile(tmp_path: Path, schema_version: int | None) -> None:
-    summary = {"steps": []}
+    summary: dict[str, object] = {"steps": []}
     if schema_version is not None:
         summary["schema_version"] = schema_version
 
