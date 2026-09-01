@@ -66,7 +66,9 @@ from pathlib import Path
 from typing import Any
 
 from vntyper.scripts.artifact_names import ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE
+from vntyper.scripts.cohort_profiles import annotate_profile_rows, profile_export_fields
 from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
+from vntyper.scripts.profile_provenance import resolve_summary_profile
 from vntyper.scripts.report_formatting import is_empty_result_row
 from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
@@ -637,6 +639,9 @@ def load_pipeline_summary_for_sample(
           - coverage: coverage metrics dict (mean, median, stdev, min, max)
           - advntr_evidence_revision: verified run digest or explicit legacy text
           - advntr_evidence_assertion: approved assertion, or empty for a legacy run
+          - Decision_Profile_ID: verified run profile ID or explicit legacy text
+          - Decision_Profile_Revision: verified revision or explicit legacy text
+          - Decision_Profile_SHA256: verified run digest or explicit legacy text
     """
     sample_dir = Path(sample_dir)
     summary_path = sample_dir / PIPELINE_SUMMARY_FILENAME
@@ -647,6 +652,11 @@ def load_pipeline_summary_for_sample(
         with open(summary_path) as f:
             summary = json.load(f)
         kestrel, advntr, stats = parse_pipeline_summary(summary)
+        recorded_profile = resolve_summary_profile(summary, sample_dir)
+        profile_fields = profile_export_fields(recorded_profile)
+        kestrel = annotate_profile_rows(kestrel, profile_fields)
+        advntr = annotate_profile_rows(advntr, profile_fields)
+        stats.update(profile_fields)
         from vntyper.modules.advntr.artifact_evidence import resolve_recorded_artifact_evidence
 
         recorded_evidence = resolve_recorded_artifact_evidence(

@@ -44,6 +44,7 @@ from vntyper.scripts.cohort_inputs import (
     duplicate_identity,
     load_pipeline_summary_for_sample,
 )
+from vntyper.scripts.cohort_profiles import PROFILE_EXPORT_COLUMNS, group_decision_profiles
 from vntyper.scripts.cohort_pseudonyms import (
     pseudonym_settings,
     pseudonymized_sample_name,
@@ -135,6 +136,7 @@ def generate_cohort_summary_report(
     additional_stats_html="",
     sample_names=None,
     advntr_evidence_provenance=None,
+    decision_profile_provenance=None,
 ):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results along with
@@ -162,6 +164,8 @@ def generate_cohort_summary_report(
         of sample names present in the two result frames.
     advntr_evidence_provenance : sequence of mapping, optional
         Per-sample run-recorded evidence revision and assertion values.
+    decision_profile_provenance : sequence of mapping, optional
+        Per-sample verified decision-profile ID, revision, and SHA-256.
 
     Returns
     -------
@@ -206,23 +210,66 @@ def generate_cohort_summary_report(
     # --------------------------------------------------------------------
     color_list = ["#FF0000", "#FFA500", "#404040", "#B0B0B0"]  # Exactly 4 colors
 
-    # Generate one interactive Kestrel donut fragment with 4 categories.
-    kestrel_plot_html = generate_donut_chart(
-        values=[k_pos, k_pos_flag, k_neg, k_unest],
-        labels=["Positive", "Positive (Flagged)", "Negative", "Unestablished"],
-        total=total_kestrel,
-        title="Kestrel Results",
-        colors=color_list,
-    )
-
-    # Generate one interactive adVNTR donut fragment with 4 categories.
-    advntr_plot_html = generate_donut_chart(
-        values=[a_pos, a_pos_flag, a_neg, a_unest],
-        labels=["Positive", "Positive (Flagged)", "Negative", "Unestablished"],
-        total=total_advntr,
-        title="adVNTR Results",
-        colors=color_list,
-    )
+    profile_groups = group_decision_profiles(decision_profile_provenance or ())
+    pooled_metrics_suppressed = len(profile_groups) > 1
+    profile_group_context: list[dict[str, object]] = []
+    if pooled_metrics_suppressed:
+        kestrel_plot_html = ""
+        advntr_plot_html = ""
+        for group in profile_groups:
+            group_kestrel = kestrel_sample_results.reindex(group.samples)
+            group_advntr = advntr_sample_results.reindex(group.samples)
+            gk_pos, gk_flag, gk_neg, gk_unest, gk_total = category_counts(group_kestrel)
+            ga_pos, ga_flag, ga_neg, ga_unest, ga_total = category_counts(group_advntr)
+            profile_group_context.append(
+                {
+                    "profile_id": group.profile_id,
+                    "revision": group.revision,
+                    "sha256": group.sha256,
+                    "samples": group.samples,
+                    "kestrel_plot": generate_donut_chart(
+                        [gk_pos, gk_flag, gk_neg, gk_unest],
+                        ["Positive", "Positive (Flagged)", "Negative", "Unestablished"],
+                        gk_total,
+                        "Kestrel Results",
+                        color_list,
+                    ),
+                    "advntr_plot": generate_donut_chart(
+                        [ga_pos, ga_flag, ga_neg, ga_unest],
+                        ["Positive", "Positive (Flagged)", "Negative", "Unestablished"],
+                        ga_total,
+                        "adVNTR Results",
+                        color_list,
+                    ),
+                }
+            )
+    else:
+        # One profile authority permits one cohort-level decision-performance aggregate.
+        kestrel_plot_html = generate_donut_chart(
+            values=[k_pos, k_pos_flag, k_neg, k_unest],
+            labels=["Positive", "Positive (Flagged)", "Negative", "Unestablished"],
+            total=total_kestrel,
+            title="Kestrel Results",
+            colors=color_list,
+        )
+        advntr_plot_html = generate_donut_chart(
+            values=[a_pos, a_pos_flag, a_neg, a_unest],
+            labels=["Positive", "Positive (Flagged)", "Negative", "Unestablished"],
+            total=total_advntr,
+            title="adVNTR Results",
+            colors=color_list,
+        )
+        profile_group_context = [
+            {
+                "profile_id": group.profile_id,
+                "revision": group.revision,
+                "sha256": group.sha256,
+                "samples": group.samples,
+                "kestrel_plot": "",
+                "advntr_plot": "",
+            }
+            for group in profile_groups
+        ]
 
     # `Confidence` is the only cell in either table that holds markup this module built
     # (a colour span). Every other column is a sample's own string - the sample name most
@@ -237,7 +284,8 @@ def generate_cohort_summary_report(
     # Autoescaping, to parity with the per-sample report (AGENTS.md trap 11): anything
     # marked `|safe` in the template must be a fragment VNtyper built, never a value read
     # from a sample. The six `|safe` uses are the two escaped tables above, the stats
-    # table, Plotly's two figure fragments, and Plotly's library below.
+    # table and Plotly's figure/library fragments. Profile-specific figures use the
+    # same VNtyper-built Plotly return values; no sample-derived value is marked safe.
     env = Environment(
         loader=FileSystemLoader(template_search_paths(template_dir, entry_template="cohort_summary_template.html")),
         autoescape=select_autoescape(["html", "xml"]),
@@ -254,13 +302,21 @@ def generate_cohort_summary_report(
         "advntr_positive": advntr_html,
         "kestrel_plot_interactive": kestrel_plot_html,
         "advntr_plot_interactive": advntr_plot_html,
-        "plotly_library": get_plotlyjs() if (kestrel_plot_html or advntr_plot_html) else "",
+        "plotly_library": get_plotlyjs()
+        if (
+            kestrel_plot_html
+            or advntr_plot_html
+            or any(group["kestrel_plot"] or group["advntr_plot"] for group in profile_group_context)
+        )
+        else "",
         "kestrel_missing": samples_without_rows(kestrel_df, sample_names),
         "advntr_missing": samples_without_rows(advntr_df, sample_names),
         "nomenclature_legend": legend,
         "show_kestrel_bam_semantics": any(entry["term"] in bam_evidence_flags for entry in legend),
         "additional_stats": additional_stats_html,
         "advntr_evidence_provenance": advntr_evidence_provenance or (),
+        "decision_profile_groups": profile_group_context,
+        "pooled_decision_metrics_suppressed": pooled_metrics_suppressed,
     }
 
     try:
@@ -489,6 +545,11 @@ def aggregate_cohort(
                     "assertion": stats["advntr_evidence_assertion"],
                 }
                 for stats in additional_stats_list
+            ],
+            decision_profile_provenance=[
+                {"Sample": stats["Sample"], **{column: stats[column] for column in PROFILE_EXPORT_COLUMNS}}
+                for stats in additional_stats_list
+                if all(column in stats for column in PROFILE_EXPORT_COLUMNS)
             ],
         )
     finally:

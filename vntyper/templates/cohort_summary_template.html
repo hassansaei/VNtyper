@@ -117,6 +117,25 @@
       {% endfor %}
     </ul>
     {% endif %}
+    {% if decision_profile_groups %}
+    <h2>Decision profile groups</h2>
+    {% if pooled_decision_metrics_suppressed %}
+    <p>Pooled decision-performance plots are suppressed across decision profile hashes.</p>
+    {% endif %}
+    {% for group in decision_profile_groups %}
+    <section class="decision-profile-group">
+      <h3>{{ group.profile_id }} — revision {{ group.revision }}</h3>
+      <p><strong>Decision profile SHA-256:</strong> {{ group.sha256 }}</p>
+      <p><strong>Samples:</strong> {{ group.samples | join(", ") }}</p>
+      {% if pooled_decision_metrics_suppressed %}
+      <h4>Profile-specific Kestrel summary</h4>
+      <div class="plot">{{ group.kestrel_plot | safe }}</div>
+      <h4>Profile-specific adVNTR summary</h4>
+      <div class="plot">{{ group.advntr_plot | safe }}</div>
+      {% endif %}
+    </section>
+    {% endfor %}
+    {% endif %}
     <!-- Custom switch for toggling flagged values, aligned to the left.
          Default state is unchecked (flagged rows hidden).
 
@@ -140,10 +159,12 @@
       {{ kestrel_positive | safe }}
     </div>
 
+    {% if not pooled_decision_metrics_suppressed %}
     <h2>Kestrel Summary Plot</h2>
     <div class="plot">
       {{ kestrel_plot_interactive | safe }}
     </div>
+    {% endif %}
     {% if kestrel_missing %}
       <p class="table-status">{{ kestrel_missing | length }} sample(s) contributed no Kestrel result
         rows and are counted as Unestablished: {{ kestrel_missing | join(", ") }}.</p>
@@ -154,10 +175,12 @@
       {{ advntr_positive | safe }}
     </div>
 
+    {% if not pooled_decision_metrics_suppressed %}
     <h2>adVNTR Summary Plot</h2>
     <div class="plot">
       {{ advntr_plot_interactive | safe }}
     </div>
+    {% endif %}
     {% if advntr_missing %}
       <p class="table-status">{{ advntr_missing | length }} sample(s) contributed no adVNTR result
         rows and are counted as Unestablished: {{ advntr_missing | join(", ") }}.</p>

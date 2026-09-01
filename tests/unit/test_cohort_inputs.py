@@ -723,6 +723,9 @@ def test_a_sample_directory_is_read_from_its_summary_file(tmp_path) -> None:
             "Molecular_Identity_Status": "legacy identity not recorded",
             "Equivalent_Representation_Count": "legacy identity not recorded",
             "Identity_Hypothesis_Count": "legacy identity not recorded",
+            "Decision_Profile_ID": "decision profile not recorded by legacy run",
+            "Decision_Profile_Revision": "decision profile not recorded by legacy run",
+            "Decision_Profile_SHA256": "decision profile not recorded by legacy run",
         }
     ]
     assert advntr == []
