@@ -29,6 +29,7 @@ from typing import Any
 
 import pandas as pd
 
+from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS
 from vntyper.scripts.report_formatting import confidence_html, escaped_table_html, is_empty_result_row
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ KESTREL_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Ambiguity_Interval",
     "Repeat_Form",
     "Nomenclature_Note",
+    *IDENTITY_COLUMNS,
 )
 
 #: adVNTR result columns, in display order.
@@ -97,6 +99,7 @@ ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
     "Ambiguity_Interval",
     "Repeat_Form",
     "Nomenclature_Note",
+    *IDENTITY_COLUMNS,
 )
 
 #: The one escaping exemption in the whole cohort report: the column

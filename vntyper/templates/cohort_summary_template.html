@@ -123,7 +123,8 @@
       </label>
     </div>
 
-    <h2>Kestrel Results</h2>
+    <h2>Kestrel Results</h2>{# The pre-rendered table carries the complete molecular-identity quartet;
+      the template performs no inference or client-side completion. #}
     <div class="table-container">
       {{ kestrel_positive | safe }}
     </div>
@@ -137,7 +138,7 @@
         rows and are counted as Unestablished: {{ kestrel_missing | join(", ") }}.</p>
     {% endif %}
 
-    <h2>adVNTR Results</h2>
+    <h2>adVNTR Results</h2>{# The same server-rendered quartet contract applies here without JavaScript/network. #}
     <div class="table-container">
       {{ advntr_positive | safe }}
     </div>

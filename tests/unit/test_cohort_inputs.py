@@ -525,8 +525,14 @@ def test_the_four_consumed_steps_are_read_out_of_a_summary() -> None:
 
     kestrel, advntr, stats = parse_pipeline_summary(summary)
 
-    assert kestrel == [{"Motif": "5"}]
-    assert advntr == [{"VID": "25561"}]
+    legacy_identity = {
+        "Molecular_Identity": "legacy identity not recorded",
+        "Molecular_Identity_Status": "legacy identity not recorded",
+        "Equivalent_Representation_Count": "legacy identity not recorded",
+        "Identity_Hypothesis_Count": "legacy identity not recorded",
+    }
+    assert kestrel == [{"Motif": "5", **legacy_identity}]
+    assert advntr == [{"VID": "25561", **legacy_identity}]
     assert stats == {
         "runtime": "90.00 seconds",
         "version": "2.0.6",
@@ -534,6 +540,70 @@ def test_the_four_consumed_steps_are_read_out_of_a_summary() -> None:
         "pipeline": "bwa-mem",
         "coverage": {"mean": "31.2"},
     }
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_legacy_positive_rows_reach_every_cohort_surface_with_four_explicit_legacy_cells(
+    schema_version: int,
+) -> None:
+    """Catch cohort reconstruction from plausible legacy allele and nomenclature cells."""
+    legacy = {"Motif": "5", "POS": 67, "REF": "G", "ALT": "GG", "Nomenclature": "59dupC"}
+    summary = {
+        "schema_version": schema_version,
+        "steps": [{"step": STEP_KESTREL, "parsed_result": {"data": [legacy]}}],
+    }
+
+    kestrel, _, _ = parse_pipeline_summary(summary)
+
+    quartet = (
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    )
+    assert list(kestrel[0])[-4:] == list(quartet)
+    assert {key: kestrel[0][key] for key in quartet} == dict.fromkeys(quartet, "legacy identity not recorded")
+
+
+def test_complete_recorded_identity_values_reach_the_cohort_unchanged() -> None:
+    """Catch cohort-side status/count recalculation from the other cells in the row."""
+    recorded = {
+        "Molecular_Identity": "",
+        "Molecular_Identity_Status": "unresolved",
+        "Equivalent_Representation_Count": 0,
+        "Identity_Hypothesis_Count": 5,
+    }
+    summary = {
+        "schema_version": 2,
+        "steps": [
+            {
+                "step": STEP_ADVNTR,
+                "parsed_result": {"data": [{"VID": "25561", "POS": 67, "REF": "G", "ALT": "GG", **recorded}]},
+            }
+        ],
+    }
+
+    _, advntr, _ = parse_pipeline_summary(summary)
+
+    assert {key: advntr[0][key] for key in recorded} == recorded
+
+
+def test_negative_caller_rows_are_not_widened_during_cohort_loading() -> None:
+    """Catch compatibility projection changing either frozen negative result schema."""
+    kestrel_negative = {"Motif": "None", "POS": "None", "REF": "None", "ALT": "None", "Confidence": "Negative"}
+    advntr_negative = {"VID": "Negative", "Variant": "None", "Flag": "Not applicable"}
+    summary = {
+        "schema_version": 2,
+        "steps": [
+            {"step": STEP_KESTREL, "parsed_result": {"data": [kestrel_negative]}},
+            {"step": STEP_ADVNTR, "parsed_result": {"data": [advntr_negative]}},
+        ],
+    }
+
+    kestrel, advntr, _ = parse_pipeline_summary(summary)
+
+    assert kestrel == [kestrel_negative]
+    assert advntr == [advntr_negative]
 
 
 def test_an_empty_summary_yields_the_documented_defaults() -> None:
@@ -616,7 +686,15 @@ def test_a_sample_directory_is_read_from_its_summary_file(tmp_path) -> None:
 
     kestrel, advntr, stats = load_pipeline_summary_for_sample(sample)
 
-    assert kestrel == [{"Motif": "5"}]
+    assert kestrel == [
+        {
+            "Motif": "5",
+            "Molecular_Identity": "legacy identity not recorded",
+            "Molecular_Identity_Status": "legacy identity not recorded",
+            "Equivalent_Representation_Count": "legacy identity not recorded",
+            "Identity_Hypothesis_Count": "legacy identity not recorded",
+        }
+    ]
     assert advntr == []
     assert stats["version"] == "2.0.6"
 

@@ -818,6 +818,23 @@ def test_every_displayed_column_declares_how_its_value_is_rendered() -> None:
     assert set(rf.ADVNTR_CELL_FORMATS) == set(rf.ADVNTR_DISPLAY_COLUMNS)
 
 
+def test_both_sample_result_tables_expose_the_exact_identity_quartet_in_a6_order() -> None:
+    """Catch dropping, renaming, reordering, or numerically reformatting a public identity field."""
+    quartet = (
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    )
+
+    assert tuple(rf.KESTREL_DISPLAY_COLUMNS)[-5:-1] == quartet
+    assert tuple(rf.ADVNTR_DISPLAY_COLUMNS)[-4:] == quartet
+    assert tuple(rf.KESTREL_CELL_FORMATS)[-5:-1] == quartet
+    assert tuple(rf.ADVNTR_CELL_FORMATS)[-4:] == quartet
+    assert {rf.KESTREL_CELL_FORMATS[column] for column in quartet} == {rf.FORMAT_TEXT}
+    assert {rf.ADVNTR_CELL_FORMATS[column] for column in quartet} == {rf.FORMAT_TEXT}
+
+
 def test_nomenclature_columns_are_text_and_the_real_motif_remains_last() -> None:
     """Main's nomenclature fields must not undo #242's width/format contracts."""
     nomenclature = (
@@ -831,9 +848,9 @@ def test_nomenclature_columns_are_text_and_the_real_motif_remains_last() -> None
         "Nomenclature_Note",
     )
 
-    assert tuple(rf.KESTREL_DISPLAY_COLUMNS)[-9:-1] == nomenclature
+    assert tuple(rf.KESTREL_DISPLAY_COLUMNS)[-13:-5] == nomenclature
     assert tuple(rf.KESTREL_DISPLAY_COLUMNS)[-1] == "Motif_sequence"
-    assert tuple(rf.ADVNTR_DISPLAY_COLUMNS)[-8:] == nomenclature
+    assert tuple(rf.ADVNTR_DISPLAY_COLUMNS)[-12:-4] == nomenclature
     assert {rf.KESTREL_CELL_FORMATS[column] for column in nomenclature} == {rf.FORMAT_TEXT}
     assert {rf.ADVNTR_CELL_FORMATS[column] for column in nomenclature} == {rf.FORMAT_TEXT}
 
@@ -1118,9 +1135,23 @@ def test_every_display_heading_of_both_tables_has_column_help() -> None:
     """
     headings = {*rf.KESTREL_DISPLAY_COLUMNS.values(), *rf.ADVNTR_DISPLAY_HEADINGS.values()}
 
-    missing = sorted(heading for heading in headings if heading not in rf.COLUMN_HELP)
+    missing = sorted(
+        heading for heading in headings if heading not in rf.COLUMN_HELP and heading not in rf.IDENTITY_COLUMN_HELP
+    )
 
     assert missing == [], f"these column headings carry no explanation: {missing}"
+
+
+def test_each_identity_heading_uses_the_help_owned_by_identity_presentation() -> None:
+    """Catch identity columns rendering without their focused, server-side reading key."""
+    headings = list(rf.IDENTITY_COLUMN_HELP)
+    markup = rf.annotate_table_columns(
+        rf.escaped_table_html(pd.DataFrame([dict.fromkeys(headings, "recorded")]), classes="table"),
+        headings,
+    )
+
+    for heading, explanation in rf.IDENTITY_COLUMN_HELP.items():
+        assert f'scope="col" title="{rf.escape_html(explanation)}">{heading}</th>' in markup
 
 
 def test_the_advntr_headings_cover_exactly_the_advntr_display_columns() -> None:

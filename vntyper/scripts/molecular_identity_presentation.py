@@ -22,12 +22,74 @@ IDENTITY_COLUMNS: tuple[str, ...] = (
     "Identity_Hypothesis_Count",
 )
 
+LEGACY_IDENTITY_NOT_RECORDED = "legacy identity not recorded"
+
+IDENTITY_COLUMN_HELP: dict[str, str] = {
+    "Molecular_Identity": "Stable molecular identity recorded by the emitting run.",
+    "Molecular_Identity_Status": "Whether the recorded identity was unique, selected among alternatives, or unresolved.",
+    "Equivalent_Representation_Count": "Caller representations recorded as equivalent to this molecular identity.",
+    "Identity_Hypothesis_Count": "Distinct resolved molecular identities considered for this caller result.",
+}
+
 IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS: tuple[str, ...] = (
     "Molecular_Identity",
     "Molecular_Identity_Translation_Status",
     "Molecular_Identity_Translation_Failure",
     "Molecular_Identity_Context_Diverges",
 )
+
+
+def identity_compatibility_cells(
+    row: Mapping[str, object],
+    *,
+    schema_version: object,
+) -> dict[str, object]:
+    """Project recorded or explicit legacy identity cells from a summary row.
+
+    Schema 1 and schema 2 introduced no required identity container. Field presence,
+    rather than allele-shaped legacy cells, is therefore the only compatibility
+    discriminator. A complete quartet is copied exactly; any absent member makes all
+    four cells explicit legacy text. ``schema_version`` is accepted at this boundary so
+    the later schema-3 validator can strengthen the same contract without changing its
+    callers. A7 deliberately adds no schema-3 requirement.
+
+    Args:
+        row: One caller-positive result row read from a pipeline summary.
+        schema_version: Summary schema recorded with the row, or ``None`` for a summary
+            written before schema provenance existed.
+
+    Returns:
+        The exact four compatibility cells in public column order.
+    """
+    del schema_version
+    if all(column in row for column in IDENTITY_COLUMNS):
+        return {column: row[column] for column in IDENTITY_COLUMNS}
+    return dict.fromkeys(IDENTITY_COLUMNS, LEGACY_IDENTITY_NOT_RECORDED)
+
+
+def identity_compatible_result_row(
+    row: Mapping[str, object],
+    *,
+    schema_version: object,
+    positive: bool,
+) -> dict[str, object]:
+    """Build one downstream result row with identity compatibility presentation.
+
+    Args:
+        row: One row from a caller result recorded in a pipeline summary.
+        schema_version: Summary schema recorded with the row, or ``None``.
+        positive: Whether the caller row is a result rather than its frozen negative
+            placeholder.
+
+    Returns:
+        A new row. Positive rows end in the exact identity quartet; negative rows are
+        copied without widening their caller schema.
+    """
+    if not positive:
+        return dict(row)
+    projected = {key: value for key, value in row.items() if key not in IDENTITY_COLUMNS}
+    projected.update(identity_compatibility_cells(row, schema_version=schema_version))
+    return projected
 
 
 def identity_result_cells(

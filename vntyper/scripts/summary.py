@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 #: ``Path.stem`` it must finish deriving while the first is a name to print verbatim.
 SUMMARY_SCHEMA_VERSION = 2
 
+#: Packaged caller-selection policy recorded by current schema-2 summaries. Identity
+#: provenance is additive in work package A; schema 3 remains reserved for the later
+#: governed decision-profile contract.
+DEFAULT_DECISION_POLICY = "legacy-selection-v1"
+
 
 def start_summary(
     version=None,
@@ -107,13 +112,14 @@ def start_summary(
             For BAM and CRAM, the alignment plan's own source label instead.
 
     Returns:
-        dict: A summary dictionary with its schema version, pipeline start timestamp,
-        version, input files, the run's sample name and where it came from, the
-        effective reference selection,
+        dict: A summary dictionary with its schema version, decision policy, pipeline
+        start timestamp, version, input files, the run's sample name and where it came
+        from, the effective reference selection,
         a placeholder for the region the run resolves later, and an empty steps list.
     """
     return {
         "schema_version": SUMMARY_SCHEMA_VERSION,
+        "decision_policy": DEFAULT_DECISION_POLICY,
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},

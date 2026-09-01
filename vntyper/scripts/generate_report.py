@@ -47,6 +47,7 @@ from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_cove
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
 from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs, build_fastp_measurement
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
+from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
     ADVNTR_CELL_FORMATS,
@@ -67,6 +68,7 @@ from vntyper.scripts.report_formatting import (
     flagged_row_count,
     folded_record_html,
     format_number_columns,
+    is_empty_result_row,
     js_json_literal,
     nomenclature_legend,
     numeric_headings,
@@ -549,7 +551,17 @@ def generate_summary_report(
     # pathogenic variants identified by adVNTR" and `adVNTR: negative` while the Kestrel
     # section two headings up said "this is not a negative".
     kestrel_state = get_step_state(pipeline_summary, STEP_KESTREL)
-    kestrel_df, kestrel_df_raw = build_kestrel_frames(get_step_data(pipeline_summary, STEP_KESTREL))
+    schema_version = pipeline_summary.get("schema_version")
+    kestrel_rows = get_step_data(pipeline_summary, STEP_KESTREL)
+    kestrel_rows = [
+        identity_compatible_result_row(
+            row,
+            schema_version=schema_version,
+            positive=not is_empty_result_row(row),
+        )
+        for row in kestrel_rows
+    ]
+    kestrel_df, kestrel_df_raw = build_kestrel_frames(kestrel_rows)
 
     # #266. The note is a `##` banner line on `kestrel_result.tsv`, so it arrives through
     # `parsed_result["comments"]` and never through `data` -- it cannot become a row here.
@@ -575,7 +587,16 @@ def generate_summary_report(
     # beside it is what keeps the two apart in everything the reader sees.
     advntr_state = get_step_state(pipeline_summary, STEP_ADVNTR)
     advntr_available = advntr_state == STEP_READ
-    advntr_df = build_advntr_frame(get_step_data(pipeline_summary, STEP_ADVNTR))
+    advntr_rows = get_step_data(pipeline_summary, STEP_ADVNTR)
+    advntr_rows = [
+        identity_compatible_result_row(
+            row,
+            schema_version=schema_version,
+            positive=row.get("VID") != "Negative",
+        )
+        for row in advntr_rows
+    ]
+    advntr_df = build_advntr_frame(advntr_rows)
 
     pipeline_log_content = load_pipeline_log(log_file)
 
@@ -946,6 +967,7 @@ def generate_summary_report(
         # values as absent instead of drawing them as if they were facts - and so the
         # phrase itself exists in exactly one place (`report_identity.NOT_RECORDED`).
         "not_recorded": NOT_RECORDED,
+        "decision_policy": recorded_or_not(pipeline_summary.get("decision_policy")),
         "assembly_declared": assembly_declared_text,
         "assembly_detected": recorded_or_not(assembly_text),
         "region_resolved": format_region(pipeline_summary.get("region_resolved")),

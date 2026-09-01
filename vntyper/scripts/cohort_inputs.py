@@ -65,6 +65,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
+from vntyper.scripts.report_formatting import is_empty_result_row
 from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
     STEP_BAM_HEADER,
@@ -568,12 +570,29 @@ def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[di
     additional_stats["assembly"] = "N/A"
     additional_stats["pipeline"] = "N/A"
     additional_stats["coverage"] = {}
+    schema_version = summary.get("schema_version")
 
     for step in summary.get("steps", []):
         if step.get("step") == STEP_KESTREL:
-            kestrel_data = step.get("parsed_result", {}).get("data", [])
+            rows = step.get("parsed_result", {}).get("data", [])
+            kestrel_data = [
+                identity_compatible_result_row(
+                    row,
+                    schema_version=schema_version,
+                    positive=not is_empty_result_row(row),
+                )
+                for row in rows
+            ]
         elif step.get("step") == STEP_ADVNTR:
-            advntr_data = step.get("parsed_result", {}).get("data", [])
+            rows = step.get("parsed_result", {}).get("data", [])
+            advntr_data = [
+                identity_compatible_result_row(
+                    row,
+                    schema_version=schema_version,
+                    positive=row.get("VID") != "Negative",
+                )
+                for row in rows
+            ]
         elif step.get("step") == STEP_BAM_HEADER:
             parsed = step.get("parsed_result", {})
             additional_stats["assembly"] = parsed.get("assembly_text", "N/A")

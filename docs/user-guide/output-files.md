@@ -59,6 +59,10 @@ This is the primary output file. Each row represents a genotyped variant.
 | `Repeat_Form` | Tract copy-number change, e.g. `53C[7]>53C[8]`. Empty outside a detectable tract |
 | `Nomenclature_Kestrel` | What Kestrel named on its own |
 | `Nomenclature_adVNTR` | What adVNTR named on its own. Empty when the optional adVNTR module did not run |
+| `Molecular_Identity` | Stable molecular identity serialization. Empty when unresolved |
+| `Molecular_Identity_Status` | `unique`, `legacy-selected-among-multiple`, or `unresolved` |
+| `Equivalent_Representation_Count` | Number of caller representations equivalent to the selected identity; integer `0` when unresolved |
+| `Identity_Hypothesis_Count` | Number of distinct resolved identities considered for this caller result |
 
 `Nomenclature` is the reconciled verdict; the two per-caller columns beside it say
 what each caller reported, so a disagreement stays legible in either result file. Both
@@ -70,7 +74,19 @@ written only where they mean something, and are left empty rather than padded wi
 placeholder.
 
 A negative run writes a different, narrower schema (first column `Motif`, no depth or
-flag columns) and carries none of these — there is no variant, so there is no name.
+flag columns) and carries none of these — there is no variant, so there is no name or
+molecular identity row.
+
+Positive adVNTR result rows append the same four molecular-identity columns in the same
+order. Negative adVNTR output retains its existing narrower schema. The per-sample HTML
+report, `pipeline_summary.json`, and cohort HTML/TSV/CSV/JSON exports carry all four
+recorded values; they never infer them from `POS`, `REF`, `ALT`, `Variant` or
+`Nomenclature`.
+
+For compatibility, a schema-1 or schema-2 summary row missing any one of the four fields
+renders `legacy identity not recorded` in all four downstream identity cells. A complete
+quartet is copied exactly, including an empty unresolved identity, integer `0`
+representation count, and a nonzero hypothesis count.
 
 ## Kestrel output.bam evidence
 
@@ -193,6 +209,8 @@ Key fields:
 
 ```json
 {
+  "schema_version": 2,
+  "decision_policy": "legacy-selection-v1",
   "version": "{{ version }}",
   "pipeline_start": "2024-01-15T10:30:00",
   "pipeline_end": "2024-01-15T10:35:00",
@@ -206,3 +224,8 @@ Key fields:
   ]
 }
 ```
+
+Molecular-identity publication is additive to summary schema 2; it does not introduce
+schema 3. Current summaries record the packaged selection policy as
+`decision_policy: legacy-selection-v1`. Older summaries without that provenance remain
+readable and are labelled as not recorded rather than being assigned the current policy.

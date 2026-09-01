@@ -1104,6 +1104,69 @@ def test_the_kestrel_table_carries_the_display_headings(positive_summary) -> Non
         assert _has_heading(html, heading), f"the Kestrel table does not render {heading!r} as a scoped heading"
 
 
+def test_both_sample_html_tables_render_the_exact_recorded_identity_quartet_in_order(tmp_path: Path) -> None:
+    """Catch either template path dropping, renaming, reordering, or recomputing a recorded cell."""
+    quartet = (
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    )
+    kestrel_identity = {
+        "Molecular_Identity": "muc1-mi-v1|INS|c.59_60|C",
+        "Molecular_Identity_Status": "legacy-selected-among-multiple",
+        "Equivalent_Representation_Count": 2,
+        "Identity_Hypothesis_Count": 3,
+    }
+    advntr_identity = {
+        "Molecular_Identity": "",
+        "Molecular_Identity_Status": "unresolved",
+        "Equivalent_Representation_Count": 0,
+        "Identity_Hypothesis_Count": 4,
+    }
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, **kestrel_identity}]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged", **advntr_identity}]),
+        schema_version=2,
+    )
+
+    html = render(tmp_path)
+    kestrel_table = _kestrel_table(html)
+    advntr_table = html.split("<h2>adVNTR Identified Variants</h2>", 1)[1].split("</table>", 1)[0]
+
+    def headings(table: str) -> list[str]:
+        return re.findall(r'<th[^>]*scope="col"[^>]*>([^<]+)</th>', table)
+
+    assert tuple(headings(kestrel_table)[-5:-1]) == quartet
+    assert tuple(headings(advntr_table)[-4:]) == quartet
+    for value in kestrel_identity.values():
+        assert f">{value}<" in kestrel_table
+    assert ">unresolved<" in advntr_table
+    assert ">0<" in advntr_table
+    assert ">4<" in advntr_table
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_legacy_sample_html_renders_all_four_literal_cells_without_allele_inference(
+    tmp_path: Path,
+    schema_version: int,
+) -> None:
+    """Catch schema-1/2 report rendering that guesses identity from plausible legacy cells."""
+    write_summary(
+        tmp_path,
+        tabular_step(
+            summary_steps.STEP_KESTREL,
+            [{**KESTREL_ROW, "POS": 67, "REF": "G", "ALT": "GG", "Nomenclature": "59dupC"}],
+        ),
+        schema_version=schema_version,
+    )
+
+    table = _kestrel_table(render(tmp_path))
+
+    assert table.count("legacy identity not recorded") == 4
+
+
 def test_both_report_tables_show_the_complete_mutation_naming_record(tmp_path: Path) -> None:
     """#271's naming evidence must survive the summary-to-HTML boundary.
 
@@ -2585,6 +2648,12 @@ def test_pipeline_summary_failure_returns_empty_mapping(monkeypatch, caplog) -> 
 
 PAYLOAD = "<script>alert(1)</script>"
 ESCAPED = "&lt;script&gt;alert(1)&lt;/script&gt;"
+RECORDED_IDENTITY_ROW = {
+    "Molecular_Identity": "muc1-mi-v1|INS|c.59_60|C",
+    "Molecular_Identity_Status": "unique",
+    "Equivalent_Representation_Count": 1,
+    "Identity_Hypothesis_Count": 1,
+}
 
 
 def test_an_input_file_name_is_escaped(tmp_path) -> None:
@@ -2658,6 +2727,7 @@ ADVNTR_ESCAPING_ROW = {
     "REF": "G",
     "ALT": "GG",
     "Flag": "Not flagged",
+    **RECORDED_IDENTITY_ROW,
 }
 
 #: Every adVNTR display column except the one exemption, derived from the display
@@ -2756,7 +2826,10 @@ def test_every_kestrel_cell_but_the_two_we_build_is_escaped(tmp_path, column: st
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
-        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, column: PAYLOAD}]),
+        tabular_step(
+            summary_steps.STEP_KESTREL,
+            [{**KESTREL_ROW, **RECORDED_IDENTITY_ROW, column: PAYLOAD}],
+        ),
     )
 
     html = render(tmp_path)
@@ -3715,13 +3788,69 @@ def test_the_provenance_block_reads_the_assembly_fields_already_recorded(tmp_pat
     assert "hg38_ensembl" in block
     assert "GRCh38" in block
     assert "chr1:155,184,000-155,194,000" in block
-    assert "not recorded by this run" not in block
+    assert _labeled_value(block, "Reference assembly requested") == "hg38_ensembl"
+    assert _labeled_value(block, "Summary schema version") == "1"
+    assert _labeled_value(block, "Decision policy") == "not recorded by this run"
 
 
 def test_the_summary_schema_version_is_shown(tmp_path) -> None:
     write_summary(tmp_path, schema_version=1)
 
     assert _labeled_value(render(tmp_path), "Summary schema version") == "1"
+
+
+def test_current_summary_provenance_keeps_schema_two_and_records_the_default_decision_policy(tmp_path) -> None:
+    """Catch an early schema-3 bump or omission/substitution of the packaged policy literal."""
+    current = summary.start_summary(version="9.9.9")
+    summary.write_summary(current, tmp_path / "pipeline_summary.json")
+
+    on_disk = json.loads((tmp_path / "pipeline_summary.json").read_text(encoding="utf-8"))
+    block = _provenance_block(render(tmp_path))
+
+    assert summary.SUMMARY_SCHEMA_VERSION == 2
+    assert on_disk["schema_version"] == 2
+    assert on_disk["decision_policy"] == "legacy-selection-v1"
+    assert _labeled_value(block, "Decision policy") == "legacy-selection-v1"
+    assert "schema 3" not in block.lower()
+
+
+def test_sample_tsv_and_summary_json_preserve_the_complete_identity_quartet_order_and_values(tmp_path) -> None:
+    """Catch summary parsing that drops or reorders one caller-published identity field."""
+    quartet = (
+        "Molecular_Identity",
+        "Molecular_Identity_Status",
+        "Equivalent_Representation_Count",
+        "Identity_Hypothesis_Count",
+    )
+    result_path = tmp_path / "kestrel_result.tsv"
+    result_path.write_text(
+        "Motif\t" + "\t".join(quartet) + "\n5\t\tunresolved\t0\t4\n",
+        encoding="utf-8",
+    )
+    summary_path = tmp_path / "pipeline_summary.json"
+    current = summary.start_summary(version="9.9.9")
+    summary.record_step(
+        current,
+        summary_steps.STEP_KESTREL,
+        str(result_path),
+        "tsv",
+        "kestrel",
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        write_summary_path=str(summary_path),
+    )
+
+    tsv_header = result_path.read_text(encoding="utf-8").splitlines()[0].split("\t")
+    json_row = json.loads(summary_path.read_text(encoding="utf-8"))["steps"][0]["parsed_result"]["data"][0]
+
+    assert tuple(tsv_header[-4:]) == quartet
+    assert tuple(json_row)[-4:] == quartet
+    assert {key: json_row[key] for key in quartet} == {
+        "Molecular_Identity": "",
+        "Molecular_Identity_Status": "unresolved",
+        "Equivalent_Representation_Count": "0",
+        "Identity_Hypothesis_Count": "4",
+    }
 
 
 # ---------------------------------------------------------------------------
