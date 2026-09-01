@@ -12,6 +12,7 @@ import pytest
 from tests.support.pipeline_harness import run_pipeline_under_harness
 from vntyper.modules.shark import shark_filtering
 from vntyper.scripts import pipeline as pipeline_module
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.unit
 
@@ -156,3 +157,26 @@ def test_the_step_end_is_captured_after_counting_and_writing(tmp_path, monkeypat
         "summary_done",
         "now",
     ]
+
+
+def test_pipeline_forwards_the_resolved_empty_policy_and_runtime_references(tmp_path) -> None:
+    seen: dict[str, object] = {}
+    write_filter_outputs = fake_shark_filter(1, 1)
+
+    def recording_filter(**kwargs):
+        seen.update(kwargs)
+        return write_filter_outputs(**kwargs)
+
+    with mock.patch("vntyper.modules.shark.shark_filtering.run_shark_filter", side_effect=recording_filter):
+        run_pipeline_under_harness(
+            tmp_path / "out",
+            bam=None,
+            fastq1="/in/r1.fastq.gz",
+            fastq2="/in/r2.fastq.gz",
+            extra_modules=["shark"],
+        )
+
+    run = resolve_run_configuration()
+    assert seen["resolved_component"] == run.shark == {}
+    assert seen["config"] == run.shark_runtime
+    assert seen["custom_context_active"] is False

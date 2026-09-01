@@ -437,12 +437,10 @@ def run_pipeline(
             # --- SHARK Filtering Module ---
             if "shark" in extra_modules:
                 from vntyper.modules.shark.shark_filtering import (
-                    load_shark_config,
                     run_shark_filter,
                     write_shark_step_summary,
                 )
 
-                shark_config = load_shark_config()
                 logger.info("SHARK module included. Running SHARK filtering first.")
                 run_sample_name = sample_name or "sample"
                 shark_start = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -450,11 +448,13 @@ def run_pipeline(
                     fastq_1=fastq1,
                     fastq_2=fastq2,
                     output_dir=dirs["fastq_bam_processing"],
-                    config=shark_config,
+                    config=run_configuration.shark_runtime,
                     main_config=config,
                     sample_name=run_sample_name,
                     reference_assembly=reference_assembly,
                     threads=threads,
+                    resolved_component=run_configuration.shark,
+                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                 )
                 shark_step_file = os.path.join(dirs["fastq_bam_processing"], f"{run_sample_name}_shark_step.json")
                 write_shark_step_summary(fastq1, fastq2, shark_step_file)

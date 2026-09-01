@@ -132,12 +132,16 @@ class TestConfigResolution:
 
         assert "-r /refs/custom_region.fa " in captured_command[0]["command"]
 
-    def test_patching_the_module_global_has_no_effect(self, tmp_path, captured_command, monkeypatch):
-        monkeypatch.setattr(shark, "shark_settings", {"muc1_region_fasta": "/refs/patched.fa"})
+    def test_the_module_has_no_runtime_config_global(self, tmp_path, captured_command):
+        assert not hasattr(shark, "shark_settings")
 
         filter_with(tmp_path)
 
-        assert "/refs/patched.fa" not in captured_command[0]["command"]
+        assert "reference/muc1_region_hg19.fa" in captured_command[0]["command"]
+
+    def test_custom_context_requires_the_explicit_empty_decision_component(self, tmp_path):
+        with pytest.raises(ValueError, match="custom Shark run context requires an explicit resolved component"):
+            filter_with(tmp_path, custom_context_active=True)
 
     @pytest.mark.parametrize(
         "config",
