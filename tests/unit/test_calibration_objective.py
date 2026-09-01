@@ -54,6 +54,25 @@ def _evaluation(metrics: CandidateMetrics, **changes: object) -> CandidateEvalua
     return CandidateEvaluation(**values)  # type: ignore[arg-type]
 
 
+def _outcome(**changes: object) -> OutcomeObservation:
+    values: dict[str, object] = {
+        "key": "member-a",
+        "assay_class": "assay-a",
+        "mutation_class": "duplication",
+        "expected_identity": "identity-a",
+        "expected_display_name": "59dupC",
+        "selected_identity": "identity-a",
+        "displayed_name": "59dupC",
+        "tier": "A",
+        "abstained": False,
+        "applicable": True,
+        "baseline_applicable": True,
+        "baseline_tier": "A",
+    }
+    values.update(changes)
+    return OutcomeObservation(**values)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     ("earlier", "better_later"),
     [
@@ -344,3 +363,215 @@ def test_controls_are_counted_separately_and_applicability_mismatch_is_retained(
     assert summary.metrics.control_findings == 1
     assert not summary.metrics.applicability_matches
     assert summary.metrics.tier_a_reachable
+
+
+def test_objective_value_objects_are_frozen() -> None:
+    evaluation = _evaluation(_metrics())
+    outcome = _outcome()
+    summary = calculate_metrics(
+        (outcome,), profile_sha256="a" * 64, free_parameter_count=0, required_strata=("assay-a:duplication",)
+    )
+
+    for value in (evaluation, outcome, summary):
+        with pytest.raises(AttributeError):
+            value.stratum_counts = ()  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"metrics": object()}, "CandidateMetrics"),
+        ({"detection_lower_bound": 0}, "detection lower bound"),
+        ({"macro_exact_lower_bound": 0}, "macro exact lower bound"),
+        ({"holm_adjusted_p_value": 0}, "Holm-adjusted"),
+        ({"stratum_counts": []}, "non-empty tuple"),
+        ({"stratum_counts": ()}, "non-empty tuple"),
+        ({"stratum_counts": (True,)}, "non-negative integers"),
+        ({"stratum_counts": (1.0,)}, "non-negative integers"),
+        ({"stratum_counts": (-1,)}, "non-negative integers"),
+        ({"holm_adjusted_p_value": Fraction(-1, 100)}, "between zero and one"),
+        ({"holm_adjusted_p_value": Fraction(101, 100)}, "between zero and one"),
+    ],
+)
+def test_candidate_evaluation_rejects_each_invalid_contract_branch(changes: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        values: dict[str, object] = {
+            "metrics": _metrics(),
+            "detection_lower_bound": Fraction(0),
+            "macro_exact_lower_bound": Fraction(0),
+            "stratum_counts": (2, 2),
+            "holm_adjusted_p_value": Fraction(1, 100),
+        }
+        values.update(changes)
+        CandidateEvaluation(**values)  # type: ignore[arg-type]
+
+
+def test_candidate_evaluation_rejects_tier_a_errors_missing_from_all_tier_count() -> None:
+    inconsistent = replace(_metrics(), wrong_tier_a_displayed_names=1, wrong_displayed_names_all_tiers=0)
+
+    with pytest.raises(ValueError, match="all-tier wrong"):
+        _evaluation(inconsistent)
+
+
+@pytest.mark.parametrize("field", ["key", "assay_class", "mutation_class"])
+@pytest.mark.parametrize("value", ["", 1])
+def test_outcome_rejects_invalid_required_text(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match="non-empty string"):
+        _outcome(**{field: value})
+
+
+@pytest.mark.parametrize("field", ["abstained", "applicable", "baseline_applicable"])
+def test_outcome_rejects_non_boolean_state(field: str) -> None:
+    with pytest.raises(ValueError, match="Boolean"):
+        _outcome(**{field: 1})
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"expected_identity": None},
+        {"expected_display_name": None},
+        {"selected_identity": None},
+        {"displayed_name": None},
+    ],
+)
+def test_outcome_requires_joint_identity_and_display_name(changes: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="jointly present"):
+        _outcome(**changes)
+
+
+def test_outcome_rejects_selection_on_abstention_and_selection_without_tier() -> None:
+    with pytest.raises(ValueError, match="abstention cannot carry"):
+        _outcome(abstained=True)
+    with pytest.raises(ValueError, match="requires a fixed reconciliation tier"):
+        _outcome(tier=None)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"observations": ()}, "requires outcome observations"),
+        ({"observations": (object(),)}, "OutcomeObservation"),
+        ({"profile_sha256": "a" * 63}, "64 characters"),
+        ({"profile_sha256": "z" * 64}, "lowercase hexadecimal"),
+        ({"profile_sha256": 64}, "64 characters"),
+        ({"free_parameter_count": True}, "non-negative integer"),
+        ({"free_parameter_count": 1.0}, "non-negative integer"),
+        ({"free_parameter_count": -1}, "non-negative integer"),
+        ({"required_strata": ()}, "predeclared strata"),
+        ({"required_strata": ("",)}, "unique non-empty"),
+        ({"required_strata": (1,)}, "unique non-empty"),
+        ({"required_strata": ("assay-a:duplication", "assay-a:duplication")}, "unique non-empty"),
+    ],
+)
+def test_calculate_metrics_rejects_each_invalid_input_branch(changes: dict[str, object], message: str) -> None:
+    arguments: dict[str, object] = {
+        "observations": (_outcome(),),
+        "profile_sha256": "a" * 64,
+        "free_parameter_count": 0,
+        "required_strata": ("assay-a:duplication",),
+    }
+    arguments.update(changes)
+    with pytest.raises(ValueError, match=message):
+        calculate_metrics(**arguments)  # type: ignore[arg-type]
+
+
+def test_calculate_metrics_requires_mutated_truth_and_handles_no_applicable_denominator() -> None:
+    control = _outcome(
+        expected_identity=None,
+        expected_display_name=None,
+        selected_identity=None,
+        displayed_name=None,
+        tier=None,
+        baseline_tier=None,
+    )
+    with pytest.raises(ValueError, match="mutated truth"):
+        calculate_metrics(
+            (control,), profile_sha256="a" * 64, free_parameter_count=0, required_strata=("assay-a:control",)
+        )
+
+    summary = calculate_metrics(
+        (_outcome(baseline_applicable=False),),
+        profile_sha256="a" * 64,
+        free_parameter_count=0,
+        required_strata=("assay-a:duplication",),
+    )
+    assert summary.metrics.abstention_fraction == 0
+
+
+def test_tier_a_reachability_is_required_only_when_the_baseline_requires_it() -> None:
+    without_baseline_a = calculate_metrics(
+        (_outcome(tier="B", baseline_tier="B"),),
+        profile_sha256="a" * 64,
+        free_parameter_count=0,
+        required_strata=("assay-a:duplication",),
+    )
+    lost_baseline_a = calculate_metrics(
+        (_outcome(selected_identity=None, displayed_name=None, tier=None, abstained=True),),
+        profile_sha256="a" * 64,
+        free_parameter_count=0,
+        required_strata=("assay-a:duplication",),
+    )
+
+    assert without_baseline_a.metrics.tier_a_reachable
+    assert not lost_baseline_a.metrics.tier_a_reachable
+
+
+def test_lexicographic_key_and_selection_reject_invalid_types_and_empty_family() -> None:
+    protocol = decode_protocol(synthetic_protocol())
+    with pytest.raises(ValueError, match="CandidateMetrics"):
+        lexicographic_safety_key(object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="CalibrationProtocol"):
+        select_candidate((), object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="CandidateEvaluation"):
+        select_candidate((object(),), protocol)  # type: ignore[arg-type]
+    assert select_candidate((), protocol) is None
+
+
+def test_admissibility_accepts_every_constraint_at_its_inclusive_boundary() -> None:
+    protocol = decode_protocol(synthetic_protocol())
+    boundary = _evaluation(
+        _metrics(
+            abstention_fraction=protocol.maximum_abstention_fraction,
+            free_parameter_count=protocol.maximum_free_parameters,
+        ),
+        stratum_counts=(protocol.minimum_stratum_count,),
+        detection_lower_bound=Fraction(0),
+        macro_exact_lower_bound=Fraction(0),
+        holm_adjusted_p_value=Fraction(1, 20),
+    )
+
+    assert select_candidate((boundary,), protocol) == boundary
+
+
+def test_free_parameter_contract_rejects_each_invalid_leaf() -> None:
+    neutral: dict[str, object] = {
+        "enabled": False,
+        "minimum_record_count_margin": 0,
+        "minimum_record_share": 0.0,
+        "minimum_record_share_margin": 0.0,
+        "xd_veto": "disabled",
+        "abstain_on_inadmissible_advntr": False,
+    }
+    invalid = (
+        {key: value for key, value in neutral.items() if key != "enabled"},
+        {**neutral, "extra": 1},
+        {**neutral, "enabled": 0},
+        {**neutral, "abstain_on_inadmissible_advntr": 0},
+        {**neutral, "minimum_record_count_margin": True},
+        {**neutral, "minimum_record_count_margin": 1.0},
+        {**neutral, "minimum_record_count_margin": -1},
+        {**neutral, "minimum_record_share": True},
+        {**neutral, "minimum_record_share": "0"},
+        {**neutral, "minimum_record_share": -0.1},
+        {**neutral, "minimum_record_share": 1.1},
+        {**neutral, "minimum_record_share_margin": True},
+        {**neutral, "minimum_record_share_margin": "0"},
+        {**neutral, "minimum_record_share_margin": -0.1},
+        {**neutral, "minimum_record_share_margin": 1.1},
+        {**neutral, "xd_veto": "other"},
+    )
+
+    for component in invalid:
+        with pytest.raises(ValueError):
+            count_free_parameters(component)

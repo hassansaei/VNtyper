@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -17,6 +18,7 @@ _DOMINANCE_FIELDS = {
     "xd_veto",
     "abstain_on_inadmissible_advntr",
 }
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,8 @@ def calculate_metrics(
         raise ValueError("calibration objective rows must be OutcomeObservation values")
     if not isinstance(profile_sha256, str) or len(profile_sha256) != 64:
         raise ValueError("calibration objective profile SHA-256 must contain 64 characters")
+    if _SHA256_PATTERN.fullmatch(profile_sha256) is None:
+        raise ValueError("calibration objective profile SHA-256 must be lowercase hexadecimal")
     if isinstance(free_parameter_count, bool) or not isinstance(free_parameter_count, int) or free_parameter_count < 0:
         raise ValueError("calibration objective free parameter count must be a non-negative integer")
     if not isinstance(required_strata, Sequence) or not required_strata:
