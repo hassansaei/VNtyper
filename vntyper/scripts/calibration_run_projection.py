@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 
 from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
@@ -257,6 +258,8 @@ def _optional(value: object) -> str | None:
 def _support(value: object, source: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         raise ValueError(f"calibration {source} baseline support must be numeric")
+    if isinstance(value, str) and ("_" in value or value.strip() != value or not value):
+        raise ValueError(f"calibration {source} baseline support must be numeric")
     try:
         if isinstance(value, float) or (isinstance(value, str) and any(char in value for char in ".eE")):
             number: int | float = float(value)
@@ -264,6 +267,8 @@ def _support(value: object, source: str) -> int | float:
             number = int(value)
     except ValueError as error:
         raise ValueError(f"calibration {source} baseline support must be numeric") from error
+    if not math.isfinite(number):
+        raise ValueError(f"calibration {source} baseline support must be finite")
     if number < 0:
         raise ValueError(f"calibration {source} baseline support must be non-negative")
     return number

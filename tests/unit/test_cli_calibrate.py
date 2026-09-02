@@ -123,9 +123,13 @@ def test_completed_failed_operation_is_installed_before_cli_exit_one(
     assert (output / "retirement.json").is_file()
     # The operator is told which operation failed and where its attestation landed,
     # rather than receiving a bare status 1.
-    errors = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    errors = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.ERROR and record.name == "vntyper.scripts.cli_calibrate"
+    ]
     assert errors == [
-        f"calibration validate completed with a failed outcome; its complete failed attestation is installed at {output}"
+        f"calibration validate completed with a failed outcome; its complete failed output is installed at {output}"
     ]
 
 

@@ -376,13 +376,15 @@ def test_the_four_counts_run_concurrently(tmp_path: Path) -> None:
     loaded machine. Counting distinct worker threads is racy too -- with two-record
     fixtures the first worker can finish before the second submit, so the executor
     reuses it and only one thread identity is ever seen, which is what happened under
-    coverage tracing. A two-party barrier inside the count is deterministic: it can
-    only be passed while two counts are in flight at once, and a serial implementation
+    coverage tracing. A barrier inside the count is deterministic: it can
+    only be passed while every count is in flight at once, and a serial implementation
     trips its timeout instead of passing by luck.
     """
     produced = _paths(tmp_path, (2, 2, 0, 0))
     threads: set[int] = set()
-    overlap = threading.Barrier(2, timeout=10)
+    # One party per produced file: every count must be in flight at once, which is
+    # exactly what a pool sized to the number of files provides.
+    overlap = threading.Barrier(len(produced), timeout=10)
     real_count = pipeline_read_routing.count_fastq_records
 
     def record_thread(path, *, lines_per_record):

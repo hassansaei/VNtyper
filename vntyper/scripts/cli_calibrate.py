@@ -47,7 +47,7 @@ def handle_calibrate(
     if not successful:
         logger.error(
             f"calibration {operation} completed with a failed outcome; "
-            f"its complete failed attestation is installed at {args.output}"
+            f"its complete failed output is installed at {args.output}"
         )
         raise SystemExit(1)
 

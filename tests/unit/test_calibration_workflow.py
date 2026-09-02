@@ -800,3 +800,10 @@ def test_baseline_support_parsing_never_truncates_a_fractional_value(value: obje
 
     assert parsed == expected
     assert type(parsed) is type(expected)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), "nan", "inf", "1_2", " 12", "", "12 "])
+def test_baseline_support_parsing_rejects_nonfinite_and_noncanonical_values(value: object) -> None:
+    """Mutation caught: a non-finite float or an underscore numeral passes as a valid support."""
+    with pytest.raises(ValueError, match="must be (numeric|finite)"):
+        _support(value, "kestrel")

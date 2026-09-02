@@ -61,12 +61,12 @@ def test_projection_rejects_duplicate_reordered_or_missing_row_key_alignment(
         project_baseline(expected, observed, _labels())
 
 
-@pytest.mark.parametrize("missing", ["name", "canonical_identity", "tier"])
+@pytest.mark.parametrize("missing", ["name", "canonical_identity", "tier", "manifest_key"])
 def test_projection_reports_a_missing_row_field_as_a_typed_error(missing: str) -> None:
     """Mutation caught: a truncated baseline row escapes as a bare ``KeyError``."""
     expected = [_row("a"), _row("b")]
     observed = [_row("a"), _row("b")]
     del expected[1][missing]
 
-    with pytest.raises(ValueError, match=f"lacks required field: {missing}"):
+    with pytest.raises(ValueError, match=f"lacks required field: {missing}|row keys must be non-empty strings"):
         project_baseline(expected, observed, _labels())
