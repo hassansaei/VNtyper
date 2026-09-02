@@ -9,6 +9,8 @@ Implementation commit:
 - `a3731e7030912332811aff4eae8c61039c8da699 fix(calibration): enforce external custody bindings`
 - `28b4bc5ff8d886dd8fe4c5fcf19a06f092fea13a fix(calibration): harden custody review seams`
 - `de9a1eb2176bdda7ce432b1939f4afb0466a8228 fix(calibration): close custody re-review gaps`
+- `985354da7234d065368a3d55b80b12b78c6b356c fix(calibration): preserve durable terminal outcomes`
+- `fbf767b39a13375e049343d143af806787e57a4b fix(calibration): bind validation retirement outcomes`
 
 No Task 5, golden, release, version, tag, workflow, or issue-administration work was performed.
 
@@ -55,7 +57,7 @@ no command that mints a custodian import; the fixture builder exists only in uni
   cleanup/retirement boundaries, remove only their own partial target, and re-raise
   `KeyboardInterrupt` or `SystemExit`.
 - Extracted the new pure locked-artifact, result-encoding, study-binding, and custodian-
-  authority logic. `calibration_artifacts.py` is 552 lines after the review correction, below
+  authority logic. `calibration_artifacts.py` is 549 lines after the review correction, below
   the repository's approximate 650-line guideline.
 
 The command surface remains exactly `extract`, `fit`, `validate`, and `evaluate`. The
@@ -289,3 +291,76 @@ Final second-review evidence:
 
 No Task 5, golden execution, release, version, tag, workflow, or issue-administration
 work was performed in this correction round.
+
+## Durable-terminal unlock correction
+
+A final narrow review reproduced an incoherent success boundary: after the completion
+record and output checksums were durable, an explicit `flock(LOCK_UN)` `OSError` was
+propagated. The CLI consequently deleted its otherwise complete staging directory even
+though the successful profile/evidence pair could never be retried. The same boundary
+could turn a completed failed evaluation into an exception after retirement was durable.
+
+The owner now always closes the descriptor and sets it to `-1`, but suppresses only an
+`OSError` from explicit unlock when a completion or retirement terminal is already
+published. Before terminal publication, unlock errors still propagate; close errors are
+also unchanged. Closing the descriptor releases the POSIX lock even when the redundant
+explicit unlock reports an error.
+
+RED-first full CLI probes cover both coherent terminal outcomes under an injected
+`LOCK_UN` failure:
+
+- success returns normally (shell status 0), installs a checksum-valid output, writes
+  exactly one completion, and writes no retirement; and
+- completed failure exits 1 only after installing checksum-valid failed output and
+  exactly one retirement, with no completion.
+
+Fresh verification for this narrow correction:
+
+- Full custody, artifact, and calibration CLI files: `70 passed in 18.88s`.
+- Focused Ruff/format: `2 files already formatted`; `All checks passed!`.
+- Focused mypy: `Success: no issues found in 1 source file`.
+- `git diff --check` and the staged diff check were clean.
+
+Per the controller's instruction, the full unit gate was not redundantly rerun for this
+narrow three-line production correction. No Task 5 or release-administration work was
+performed.
+
+## Opus-5/high checkpoint dispositions
+
+The controller's independent Opus-5/high checkpoint raised two concrete candidates.
+Both were reproduced RED-first and corrected:
+
+1. A forged validation feature document could be given a self-consistent role manifest
+   and checksum tree while retaining the original run commitments and profile binding.
+   `_load_roles` now validates every supplied role-manifest subset against the study
+   binding, rather than applying that comparison only to the training/selection pair.
+2. Two completed-failed validation operations could both pass the initial active check,
+   after which one installed retirement and the other lost its output to the exclusive
+   retirement write. Both paths now use the exact-pair serialized, idempotent retirement
+   operation. Deterministic concurrent validation proves that both callers return
+   `False`, install checksum-valid failed outputs, and reference the same durable
+   retirement terminal.
+
+The suggestion to leave transient validation exceptions active was rejected: the
+approved Task 4 contract explicitly requires exceptional validation retirement. The
+existing exact-byte study-binding import was also audited and found already enforced by
+both the raw imported-byte hash in the authority/checksum inventory and the decoded
+canonical binding comparison during header validation. The ordinary locked-root audit
+found no additional read path: ordinary extraction normalizes only value-free locked
+commitments, while completed-run extraction remains limited to the three nonlocked
+roles. These non-live minor candidates therefore required no production change.
+
+Fresh verification for this checkpoint correction:
+
+- RED counterexamples: both failed before the fix (forged validation was accepted; the
+  concurrent loser raised and produced no output), then `2 passed` after the fix.
+- Full custody, artifact, calibration CLI, and study-binding files: `77 passed in
+  19.93s`.
+- Focused Ruff/format: `2 files already formatted`; `All checks passed!`.
+- Focused mypy: `Success: no issues found in 1 source file`.
+- `git diff --check` and the staged diff check were clean;
+  `calibration_artifacts.py` is 549 lines.
+
+Per the controller's instruction, the earlier full unit and patch-coverage evidence was
+not redundantly regenerated for this narrow correction. No Task 5 or release-
+administration work was performed.
