@@ -485,10 +485,35 @@ summary | release-summary | none | always records success, failure, skipped jobs
 
 ## Traps
 
-1. **Config is loaded at import time.** `kestrel_genotyping.py`, `advntr_genotyping.py`
-   and `shark_filtering.py` read their JSON into module globals on import, and
-   `run_kestrel()` reads the module-level `kestrel_config` rather than its `config`
-   argument. `--config-path` cannot override them; tests must patch the module global.
+1. **Decisions come from one resolved profile, not from an import-time global** (#175,
+   #306). This trap used to say the opposite, and the old wording survived the change:
+   `kestrel_genotyping.py`, `advntr_genotyping.py` and `shark_filtering.py` no longer
+   assign any module-level config. `load_kestrel_config()`, `load_advntr_config()` and
+   `load_shark_config()` still exist and still default to the JSON beside each module,
+   but nothing in the package calls them any more — only tests do, to read a shipped
+   value.
+
+   What runs instead: `resolve_run_configuration(path)` in `run_configuration.py`
+   resolves exactly one complete decision profile per run — the verified packaged
+   `vntyper/profiles/decision_profile.json`, or the one file given to
+   `--decision-profile` — recursively freezes every component, and separately loads the
+   three module JSONs as *runtime* sidecars from paths it owns. `pipeline.py` requires an
+   already-resolved `RunConfiguration` and threads the frozen components into each stage
+   as the keyword-only `resolved_component`, `nomenclature_component`,
+   `dominance_component` and `runtime_component` arguments. Profiles are never overlaid,
+   discovered, or merged, and the resolved identity, revision, kind, source, digest and
+   snapshot are recorded so a call can be traced to the decisions that produced it.
+
+   Two consequences for anything you write. **The decision values live in the profile**,
+   including the Kestrel depth-score and alternate-depth thresholds, each carrying its
+   class (`fixed-safety` or `explicit-custom`), comparator and unit — so change a decision
+   by supplying a complete profile, not by editing an installed JSON. And **tests build a
+   component instead of patching a global**: call `resolve_run_configuration()`, copy the
+   component you need, override the key under test, and pass it in. Patching a module
+   config global no longer does anything, because there is no longer one to patch.
+
+   `--config-path` is still a different thing entirely, and still only reaches
+   `config.json` — see trap 2.
 2. **`--config-path` replaces the whole config, it does not merge.** Missing keys raise
    `KeyError` deep in the pipeline (`config["tools"]["java_path"]`, no `.get`).
 3. **Both configuration-driven rule consumers share one deliberately small comparator
@@ -506,9 +531,10 @@ summary | release-summary | none | always records success, failure, skipped jobs
      one byte-exact historical expression. Modified whitespace, custom expressions, and
      an expression assigned to the wrong flag are rejected. There is no general-purpose
      expression parser and no `eval`/`exec` path.
-   - Packaged configs still load at their existing import-time locations. Validation
-     occurs when the consuming flagging or cross-match stage begins, before copying or
-     iterating a DataFrame, rather than at module import.
+   - Neither module loads any JSON itself: `add_flags` takes its rule set as an argument
+     and `cross_match_variants` takes a resolved component, both supplied by the run's
+     decision profile (trap 1). Validation occurs when the consuming flagging or
+     cross-match stage begins, before copying or iterating a DataFrame.
 4. **Stages mark, they do not filter.** Kestrel stages append **six** boolean columns
    (`is_frameshift`, `is_valid_frameshift`, `depth_confidence_pass`, `alt_filter_pass`,
    `motif_filter_pass`, `flag_filter_pass`); `filter_final_dataframe()` ANDs them at the
