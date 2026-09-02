@@ -28,6 +28,38 @@ examined, its existing run trees predate the complete schema-3 replay sidecar se
 for a new calibration extraction, and no independent custodian kept a locked cohort.
 Consequently no value from this corpus is reported as validation or held-out performance.
 
+The golden tier therefore does not relabel those historical summaries. It asserts that
+the four selected source summaries remain schema 2, then independently materializes the
+smallest governed schema-3 fixture from literal facts in both roots:
+
+- `train-pair-3000` supplies training facts;
+- `select-pair-3001` supplies policy-selection facts;
+- `validate-pair-3003` supplies validation facts; and
+- `held-pair-3004` supplies only the value-free locked member/run declaration during
+  ordinary extraction.
+
+Simulation `ground_truth.csv` supplies the independently derived canonical identity and
+displayed name. The paired adVNTR-root Kestrel result supplies motif context, depth,
+support, confidence, flag, and tier. The oracle binds the exact SHA-256 of that truth file
+and every selected historical summary/result file. It then invokes the real `vntyper
+calibrate extract` and `vntyper calibrate fit` CLI operations, independently verifies the
+installed checksum inventories and literal feature/baseline rows, and strictly resolves
+the fitted generated profile.
+
+Before the candidate sweep, the gate proves the packaged neutral replay and the complete
+historical 400-member figures above. The one-member finite development candidate is
+dominance enabled, record-count margin `1`, record share `0.5`, share margin `0.0`, and XD
+veto `disabled`; its deterministic generated-profile SHA-256 is
+`7fc772512eee789cd0a909fa939fd87305b4eb14a6769bcbf15b340afc7ce6f8`.
+That file is loadable only by explicit selection and does not replace the packaged
+default.
+
+The fixture persists the classification
+`previously-examined-development-simulation`, with
+`eligible_for_independent_validation=false` and
+`eligible_for_locked_evaluate=false`. It states explicitly that this is neither an
+independent external cohort nor custodian-locked heldout evidence.
+
 ## What remains blocked
 
 Issue #295 stays open until there are:
@@ -62,4 +94,6 @@ pytest -m golden tests/golden -q -rs
 ```
 
 A missing root or a skip is not evidence. The recorded verification must show both roots,
-400 members, and zero skips.
+400 members, real `extract` plus `fit`, the fitted digest above, and zero skips. The
+historical schema-2 bridge is a development regression proof only; it is not a substitute
+for producing schema-3 artifacts prospectively under external custody.

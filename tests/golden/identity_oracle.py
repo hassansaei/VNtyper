@@ -178,6 +178,7 @@ RECURRENT_STATE_EVIDENCE = frozenset(
 )
 GOVERNED_ASSERTION = "A carried-forward recurrent adVNTR State is insufficient for molecular identity."
 _POLICY_EXPLANATION_COLUMNS = frozenset({"Nomenclature_Flags", "Nomenclature_Note", "Evidence_Disposition"})
+_NONPUBLIC_PERSISTENCE_COLUMNS = frozenset({"__Reconciled_Molecular_Identity"})
 
 
 def assert_independent_import_closure(entrypoint: Path, repository_root: Path) -> tuple[Path, ...]:
@@ -509,11 +510,23 @@ def _record_policy_projections(
     for caller, rows in public_rows.items():
         projection_key = f"{decision_key}/{caller}"
         stable[projection_key] = tuple(
-            tuple(sorted((column, value) for column, value in row.items() if column not in _POLICY_EXPLANATION_COLUMNS))
+            tuple(
+                sorted(
+                    (column, value)
+                    for column, value in row.items()
+                    if column not in _POLICY_EXPLANATION_COLUMNS | _NONPUBLIC_PERSISTENCE_COLUMNS
+                )
+            )
             for row in rows
         )
         unaffected[projection_key] = tuple(
-            tuple(sorted((column, value) for column, value in row.items() if column != "Evidence_Disposition"))
+            tuple(
+                sorted(
+                    (column, value)
+                    for column, value in row.items()
+                    if column != "Evidence_Disposition" and column not in _NONPUBLIC_PERSISTENCE_COLUMNS
+                )
+            )
             for row in rows
             if not (
                 (caller == "advntr" and (row.get("Variant") or "").strip() in RECURRENT_STATE_EVIDENCE)

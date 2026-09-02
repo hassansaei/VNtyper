@@ -565,6 +565,46 @@ def test_oracle_import_closure_is_independent() -> None:
     assert oracle_path.resolve() in scanned
 
 
+def test_policy_projection_excludes_only_the_internal_reconciled_identity_handoff() -> None:
+    """Private identity persistence is not public, while an arbitrary new field remains locked."""
+
+    def projections(
+        row: dict[str, str],
+    ) -> tuple[
+        dict[str, tuple[tuple[tuple[str, str], ...], ...]],
+        dict[str, tuple[tuple[tuple[str, str], ...], ...]],
+    ]:
+        stable: dict[str, tuple[tuple[tuple[str, str], ...], ...]] = {}
+        unaffected: dict[str, tuple[tuple[tuple[str, str], ...], ...]] = {}
+        explanations: dict[str, tuple[tuple[str, str, str, str], ...]] = {}
+        identity_oracle._record_policy_projections(  # noqa: SLF001 - directly tests the oracle boundary
+            stable,
+            unaffected,
+            explanations,
+            "experiment/sample",
+            "mutated",
+            {"kestrel": (row,), "advntr": ()},
+        )
+        return stable, unaffected
+
+    baseline = projections({"Nomenclature": "59dupC"})
+    with_internal_handoff = projections(
+        {
+            "Nomenclature": "59dupC",
+            "__Reconciled_Molecular_Identity": "MUC1-X-60-coding-v1|60|59|-|C",
+        }
+    )
+    with_new_public_field = projections({"Nomenclature": "59dupC", "New_Public_Field": "changed"})
+
+    assert with_internal_handoff == baseline
+    assert identity_oracle.public_projection_fingerprint(with_new_public_field[0]) != (
+        identity_oracle.public_projection_fingerprint(baseline[0])
+    )
+    assert identity_oracle.public_projection_fingerprint(with_new_public_field[1]) != (
+        identity_oracle.public_projection_fingerprint(baseline[1])
+    )
+
+
 def test_recursive_guard_rejects_nested_production_import(tmp_path: Path) -> None:
     """The guard must recurse; scanning only the entry file would miss this import."""
     entry = tmp_path / "entry.py"
