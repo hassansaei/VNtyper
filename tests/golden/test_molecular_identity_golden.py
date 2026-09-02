@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -16,7 +15,6 @@ import pandas as pd
 import pytest
 
 from tests.golden import identity_oracle, policy_projection_oracle
-from tests.golden.calibration_oracle import require_explicit_roots
 from tests.golden.identity_oracle import (
     IDENTITY_COLUMNS,
     SELECTED_PROJECTION_COLUMNS,
@@ -26,6 +24,7 @@ from tests.golden.identity_oracle import (
     IdentityCounts,
     load_golden_corpus,
 )
+from tests.golden.root_requirements import resolve_explicit_roots
 from vntyper.modules.advntr.advntr_genotyping import process_advntr_output
 from vntyper.scripts import nomenclature_annotate, nomenclature_bam_adapter
 from vntyper.scripts.identity_candidate_persistence import (
@@ -53,8 +52,6 @@ from vntyper.scripts.nomenclature_bam import BamConsensus, BamRescuer
 from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.golden
-
-SIM_ROOT, ADVNTR_ROOT = require_explicit_roots(os.environ)
 
 PACKAGE_PROFILES = Path(__file__).parents[2] / "vntyper" / "profiles"
 PR_B_DECISION_PROJECTION_SHA256 = "338fe05d010f623e794dcf93393904fa13bd8713e2d074c8a5b6c72d6efd96fd"
@@ -349,10 +346,16 @@ PRA_BAM_POSITIVE_CONTROL_KEYS = frozenset(
 )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def required_explicit_roots() -> tuple[Path, Path]:
+    """Fail selected golden execution while leaving deselected collection safe."""
+    return resolve_explicit_roots()
+
+
 @pytest.fixture(scope="module")
-def corpus() -> GoldenCorpus:
+def corpus(required_explicit_roots: tuple[Path, Path]) -> GoldenCorpus:
     """Load both owner-supplied roots without a skip fallback."""
-    return load_golden_corpus(SIM_ROOT, ADVNTR_ROOT)
+    return load_golden_corpus(*required_explicit_roots)
 
 
 @pytest.fixture(scope="module")
@@ -376,6 +379,8 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
     original_is_candidate = nomenclature_bam_adapter.is_candidate
     original_rescue = BamRescuer.rescue_with_identity_evidence
     identity_component = translation_component_from_config(run_configuration.nomenclature)
+    sim_root = corpus.sim_root
+    advntr_root = corpus.advntr_root
 
     def counted_is_candidate(call: Nomenclature) -> bool:
         nonlocal eligible
@@ -493,8 +498,8 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
     def copy_and_reconcile(key: str, condition: str) -> None:
         nonlocal active_key, replay_phase
         experiment, pair_id = key.split("/", maxsplit=1)
-        source_kestrel = SIM_ROOT / experiment / "vntyper" / pair_id / condition / "kestrel"
-        source_advntr = ADVNTR_ROOT / experiment / pair_id / condition / "advntr"
+        source_kestrel = sim_root / experiment / "vntyper" / pair_id / condition / "kestrel"
+        source_advntr = advntr_root / experiment / pair_id / condition / "advntr"
         output_sample = output_root / experiment / pair_id / condition
         output_kestrel = output_sample / "kestrel"
         output_advntr = output_sample / "advntr"
@@ -533,7 +538,7 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
         for key in sorted(corpus.control_keys):
             copy_and_reconcile(key, "normal")
 
-    observed = load_golden_corpus(SIM_ROOT, output_root)
+    observed = load_golden_corpus(sim_root, output_root)
     for link in bam_input_symlinks:
         resolved_source = link.resolve(strict=True)
         stat = resolved_source.stat()
@@ -798,13 +803,17 @@ def test_complete_public_identity_quartet_projection_is_literal(uut_replay: UutR
     )
 
 
-def test_both_roots_and_every_sample_are_loaded(corpus: GoldenCorpus, uut_replay: UutReplay) -> None:
+def test_both_roots_and_every_sample_are_loaded(
+    corpus: GoldenCorpus,
+    uut_replay: UutReplay,
+    required_explicit_roots: tuple[Path, Path],
+) -> None:
     """A missing root, sample, condition, or caller artifact must fail rather than skip."""
-    assert corpus.sim_root == SIM_ROOT.resolve()
-    assert corpus.advntr_root == ADVNTR_ROOT.resolve()
+    assert corpus.sim_root == required_explicit_roots[0]
+    assert corpus.advntr_root == required_explicit_roots[1]
     assert corpus.mutated_samples == 200
     assert corpus.control_samples == 200
-    assert uut_replay.corpus.sim_root == SIM_ROOT.resolve()
+    assert uut_replay.corpus.sim_root == required_explicit_roots[0]
     assert uut_replay.mutated_replays == 200
     assert uut_replay.control_replays == 200
 

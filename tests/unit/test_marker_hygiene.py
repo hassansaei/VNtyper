@@ -17,8 +17,10 @@ measurable time: any file that contributes zero items to a `-m unit` run is eith
 unmarked or has no tests, and we distinguish those by source inspection.
 """
 
+import os
 import re
-import runpy
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -107,16 +109,46 @@ def test_no_test_modules_outside_the_known_tiers() -> None:
     )
 
 
-def test_molecular_identity_golden_module_skips_when_benchmark_roots_are_absent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Non-golden tier collection cannot require out-of-band benchmark roots."""
-    monkeypatch.delenv("VNTYPER_SIM_ROOT", raising=False)
-    monkeypatch.delenv("VNTYPER_ADVNTR_ROOT", raising=False)
-    module = UNIT_DIR.parent / "golden" / "test_molecular_identity_golden.py"
+@pytest.mark.parametrize("module_name", ["test_molecular_identity_golden.py", "test_nomenclature_golden.py"])
+def test_golden_modules_collect_when_deselected_without_benchmark_roots(module_name: str) -> None:
+    """Non-golden collection must not resolve out-of-band roots during import."""
+    result = _run_golden_probe(module_name, "not golden", collect_only=True)
 
-    with pytest.raises(pytest.skip.Exception, match="benchmark roots are unset"):
-        runpy.run_path(str(module), run_name="__golden_collection_probe__")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("module_name", ["test_molecular_identity_golden.py", "test_nomenclature_golden.py"])
+def test_selected_golden_modules_fail_without_benchmark_roots(module_name: str) -> None:
+    """Selected golden execution must fail closed rather than skip absent evidence."""
+    result = _run_golden_probe(module_name, "golden", collect_only=False)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "VNTYPER_SIM_ROOT must name an explicit golden corpus root" in output
+    assert " skipped" not in output
+
+
+def _run_golden_probe(module_name: str, marker: str, *, collect_only: bool) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ)
+    environment.pop("VNTYPER_SIM_ROOT", None)
+    environment.pop("VNTYPER_ADVNTR_ROOT", None)
+    argv = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-m",
+        marker,
+        "-q",
+        "-o",
+        "log_cli=false",
+        "--maxfail=1",
+    ]
+    if collect_only:
+        argv.append("--collect-only")
+    argv.append(str(UNIT_DIR.parent / "golden" / module_name))
+    if collect_only:
+        argv.append(f"{__file__}::test_root_pytest_ini_is_the_single_live_marker_authority")
+    return subprocess.run(argv, cwd=REPO_ROOT, env=environment, capture_output=True, text=True, check=False)
 
 
 def test_every_browser_file_declares_the_browser_marker() -> None:

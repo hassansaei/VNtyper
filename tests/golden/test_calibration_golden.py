@@ -13,7 +13,10 @@ from pathlib import Path
 import pytest
 
 from tests.golden import calibration_oracle
-from tests.golden.calibration_oracle import load_development_snapshot, materialize_development_fixture
+from tests.golden.calibration_oracle import (
+    load_development_snapshot,
+    materialize_development_fixture,
+)
 from tests.golden.identity_oracle import DisplayCounts
 from vntyper.scripts.decision_profile import resolve_decision_profile
 from vntyper.scripts.run_configuration import resolve_run_configuration
@@ -60,14 +63,49 @@ def explicit_roots() -> tuple[Path, Path]:
 
 
 @pytest.fixture(scope="module")
-def snapshot(explicit_roots: tuple[Path, Path]):
-    """Load both explicit roots with no per-test skip fallback."""
-    return load_development_snapshot(*explicit_roots)
+def workflow_events() -> list[str]:
+    """Record completed replay and CLI phases for the ordering contract."""
+    return []
 
 
 @pytest.fixture(scope="module")
-def completed_workflow(explicit_roots: tuple[Path, Path], tmp_path_factory: pytest.TempPathFactory):
+def packaged_replay(explicit_roots: tuple[Path, Path], workflow_events: list[str]):
+    """Complete the literal historical projection before any candidate workflow."""
+    replay = load_development_snapshot(*explicit_roots)
+    assert replay.mutated_samples == 200
+    assert replay.control_samples == 200
+    assert replay.public_identity_rows == 374
+    assert replay.selected_locus_rows == 178
+    assert replay.total == DisplayCounts(displayed=154, exact=136, wrong=18)
+    assert replay.by_tier == {
+        "A": DisplayCounts(displayed=53, exact=53, wrong=0),
+        "B": DisplayCounts(displayed=101, exact=83, wrong=18),
+        "C": DisplayCounts(displayed=0, exact=0, wrong=0),
+    }
+    assert replay.control_findings == 0
+    profile = REPO_ROOT / "vntyper" / "profiles" / "decision_profile.json"
+    projection = REPO_ROOT / "vntyper" / "profiles" / "decision_projection.json"
+    assert hashlib.sha256(profile.read_bytes()).hexdigest() == PACKAGED_PROFILE_SHA256
+    assert hashlib.sha256(projection.read_bytes()).hexdigest() == PACKAGED_PROJECTION_SHA256
+    workflow_events.append("packaged-replay-complete")
+    return replay
+
+
+@pytest.fixture(scope="module")
+def snapshot(packaged_replay):
+    """Expose the completed replay with no per-test skip fallback."""
+    return packaged_replay
+
+
+@pytest.fixture(scope="module")
+def completed_workflow(
+    explicit_roots: tuple[Path, Path],
+    packaged_replay,
+    workflow_events: list[str],
+    tmp_path_factory: pytest.TempPathFactory,
+):
     """Materialize the independent bridge, then run the real extract and fit CLI."""
+    assert packaged_replay.evidence_role == "previously-examined-development-simulation"
     work = tmp_path_factory.mktemp("calibration-golden")
     fixture = materialize_development_fixture(*explicit_roots, REPO_ROOT, work / "inputs")
     evidence = work / "evidence"
@@ -84,6 +122,9 @@ def completed_workflow(explicit_roots: tuple[Path, Path], tmp_path_factory: pyte
         "--output",
         evidence,
     )
+    if extract.returncode != 0:
+        raise AssertionError(f"calibration extract failed before fit: {extract.stderr}")
+    workflow_events.append("extract-complete")
     fit = _run_cli(
         fixture.truth_path.parent,
         "fit",
@@ -94,6 +135,9 @@ def completed_workflow(explicit_roots: tuple[Path, Path], tmp_path_factory: pyte
         "--output",
         candidate,
     )
+    if fit.returncode != 0:
+        raise AssertionError(f"calibration fit failed: {fit.stderr}")
+    workflow_events.append("fit-complete")
     return fixture, evidence, candidate, extract, fit
 
 
@@ -102,6 +146,26 @@ def test_missing_explicit_root_is_a_failure_not_a_skip() -> None:
         calibration_oracle.require_explicit_roots({})
     with pytest.raises(AssertionError, match="VNTYPER_ADVNTR_ROOT"):
         calibration_oracle.require_explicit_roots({"VNTYPER_SIM_ROOT": str(REPO_ROOT)})
+
+
+@pytest.mark.parametrize("incomplete_name", ["VNTYPER_SIM_ROOT", "VNTYPER_ADVNTR_ROOT"])
+def test_present_but_incomplete_explicit_root_is_a_failure(
+    explicit_roots: tuple[Path, Path], tmp_path: Path, incomplete_name: str
+) -> None:
+    sim_root = tmp_path / "simulation"
+    advntr_root = tmp_path / "advntr"
+    sim_root.mkdir()
+    advntr_root.mkdir()
+
+    with pytest.raises(AssertionError, match=rf"{incomplete_name}.*incomplete"):
+        calibration_oracle.require_explicit_roots(
+            {
+                "VNTYPER_SIM_ROOT": str(sim_root if incomplete_name == "VNTYPER_SIM_ROOT" else explicit_roots[0]),
+                "VNTYPER_ADVNTR_ROOT": str(
+                    advntr_root if incomplete_name == "VNTYPER_ADVNTR_ROOT" else explicit_roots[1]
+                ),
+            }
+        )
 
 
 def test_calibration_oracle_has_no_production_import_path() -> None:
@@ -216,6 +280,10 @@ def test_real_cli_extract_installs_exact_role_inventory_and_literal_replay(compl
     ]
     calibration_oracle.verify_checksum_tree(locked_root)
     calibration_oracle.verify_checksum_tree(evidence)
+    calibration_oracle.verify_exact_child_directories(
+        evidence / "roles",
+        ("locked-heldout", "policy-selection", "training", "validation"),
+    )
     for role in ("training", "policy-selection", "validation"):
         assert sorted(path.name for path in (evidence / "roles" / role).iterdir()) == [
             "baseline.json",
@@ -297,6 +365,86 @@ def test_locked_heldout_checksum_corruption_fails_independent_verification(compl
 
     with pytest.raises(AssertionError, match="calibration checksum differs"):
         calibration_oracle.verify_checksum_tree(corrupted)
+
+
+def test_extra_evidence_role_directory_fails_independent_inventory(completed_workflow, tmp_path: Path) -> None:
+    """A role unknown to the literal four-role study cannot hide in extract output."""
+    _fixture, evidence, _candidate, _extract, _fit = completed_workflow
+    corrupted = tmp_path / "roles"
+    shutil.copytree(evidence / "roles", corrupted)
+    (corrupted / "unreviewed-role").mkdir()
+
+    with pytest.raises(AssertionError, match="calibration child-directory inventory differs"):
+        calibration_oracle.verify_exact_child_directories(
+            corrupted,
+            ("locked-heldout", "policy-selection", "training", "validation"),
+        )
+
+
+def test_packaged_replay_completes_before_extract_and_fit(completed_workflow, workflow_events: list[str]) -> None:
+    """Fixture dependencies must complete neutral replay before either CLI phase."""
+    _fixture, _evidence, _candidate, extract, fit = completed_workflow
+    assert (extract.returncode, fit.returncode) == (0, 0)
+    assert workflow_events == ["packaged-replay-complete", "extract-complete", "fit-complete"]
+
+
+def test_bridge_md5_is_explicitly_nonsecurity(
+    explicit_roots: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The legacy summary checksum must opt out of security-sensitive MD5 use."""
+    real_md5 = hashlib.md5
+
+    def fips_md5(value: bytes, *, usedforsecurity: bool = True):
+        if usedforsecurity:
+            raise ValueError("MD5 is unavailable for security-sensitive use")
+        return real_md5(value, usedforsecurity=usedforsecurity)
+
+    monkeypatch.setattr(calibration_oracle.hashlib, "md5", fips_md5)
+    fixture = materialize_development_fixture(*explicit_roots, REPO_ROOT, tmp_path / "inputs")
+
+    assert len(fixture.members) == 4
+
+
+def test_snapshot_constructor_binds_every_field_by_keyword(
+    explicit_roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Eligibility booleans cannot shift position when the snapshot schema changes."""
+    corpus = calibration_oracle.identity_oracle.load_golden_corpus(*explicit_roots)
+    sentinel = object()
+
+    def keyword_only_snapshot(
+        *,
+        sim_root: Path,
+        advntr_root: Path,
+        mutated_samples: int,
+        control_samples: int,
+        public_identity_rows: int,
+        selected_locus_rows: int,
+        total: DisplayCounts,
+        by_tier: dict[str, DisplayCounts],
+        control_findings: int,
+        evidence_role: str,
+        eligible_for_independent_validation: bool,
+        eligible_for_locked_evaluate: bool,
+        ineligibility_reason: str,
+    ) -> object:
+        assert sim_root == explicit_roots[0]
+        assert advntr_root == explicit_roots[1]
+        assert mutated_samples == control_samples == 200
+        assert public_identity_rows == 374
+        assert selected_locus_rows == 178
+        assert total == DisplayCounts(154, 136, 18)
+        assert by_tier["A"] == DisplayCounts(53, 53, 0)
+        assert control_findings == 0
+        assert evidence_role == "previously-examined-development-simulation"
+        assert eligible_for_independent_validation is False
+        assert eligible_for_locked_evaluate is False
+        assert "previously examined development evidence" in ineligibility_reason
+        return sentinel
+
+    monkeypatch.setattr(calibration_oracle, "DevelopmentCalibrationSnapshot", keyword_only_snapshot)
+
+    assert calibration_oracle.snapshot_from_corpus(corpus) is sentinel
 
 
 def test_packaged_replay_precedes_fit_and_generated_profile_is_explicit_only(completed_workflow) -> None:

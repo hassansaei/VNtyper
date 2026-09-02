@@ -102,6 +102,13 @@ _CORE_ARTIFACTS = (
     "kestrel/bam_identity_replay.v1.json",
     "kestrel/kestrel_result.tsv",
 )
+_ROOT_ANCHORS = {
+    "VNTYPER_SIM_ROOT": ("experiment1_dupC/ground_truth.csv",),
+    "VNTYPER_ADVNTR_ROOT": (
+        "experiment1_dupC/pair_3000/mutated/pipeline_summary.json",
+        "experiment1_dupC/pair_3000/mutated/kestrel/kestrel_result.tsv",
+    ),
+}
 
 
 def require_explicit_roots(environment: Mapping[str, str]) -> tuple[Path, Path]:
@@ -114,9 +121,9 @@ def require_explicit_roots(environment: Mapping[str, str]) -> tuple[Path, Path]:
         The simulation and paired adVNTR roots in their declared order.
 
     Raises:
-        AssertionError: If either variable is absent or either root is missing.
+        AssertionError: If either variable is absent or either root is missing or incomplete.
     """
-    values = []
+    values: list[Path] = []
     for name in ("VNTYPER_SIM_ROOT", "VNTYPER_ADVNTR_ROOT"):
         value = environment.get(name)
         if not value:
@@ -125,6 +132,10 @@ def require_explicit_roots(environment: Mapping[str, str]) -> tuple[Path, Path]:
         if not root.is_dir():
             raise AssertionError(f"{name} golden corpus root not found: {root}")
         values.append(root)
+    for name, root in zip(("VNTYPER_SIM_ROOT", "VNTYPER_ADVNTR_ROOT"), values, strict=True):
+        missing = [relative for relative in _ROOT_ANCHORS[name] if not (root / relative).is_file()]
+        if missing:
+            raise AssertionError(f"{name} golden corpus root is incomplete; missing: {', '.join(missing)}")
     return values[0], values[1]
 
 
@@ -141,19 +152,19 @@ def snapshot_from_corpus(corpus: GoldenCorpus) -> DevelopmentCalibrationSnapshot
     public_rows = sum(len(rows) for rows in corpus.identity_projection_by_sample.values())
     selected_rows = sum(len(rows) for rows in corpus.selected_projection_by_sample.values())
     return DevelopmentCalibrationSnapshot(
-        corpus.sim_root,
-        corpus.advntr_root,
-        corpus.mutated_samples,
-        corpus.control_samples,
-        public_rows,
-        selected_rows,
-        corpus.total,
-        dict(corpus.by_tier),
-        corpus.control_findings,
-        "previously-examined-development-simulation",
-        False,
-        False,
-        (
+        sim_root=corpus.sim_root,
+        advntr_root=corpus.advntr_root,
+        mutated_samples=corpus.mutated_samples,
+        control_samples=corpus.control_samples,
+        public_identity_rows=public_rows,
+        selected_locus_rows=selected_rows,
+        total=corpus.total,
+        by_tier=dict(corpus.by_tier),
+        control_findings=corpus.control_findings,
+        evidence_role="previously-examined-development-simulation",
+        eligible_for_independent_validation=False,
+        eligible_for_locked_evaluate=False,
+        ineligibility_reason=(
             "The simulations and paired caller outputs were previously examined development evidence; "
             "they are neither independent external validation nor a custodian-locked held-out cohort."
         ),
@@ -354,6 +365,14 @@ def verify_checksum_tree(root: Path) -> None:
             raise AssertionError(f"calibration checksum differs: {root / name}")
 
 
+def verify_exact_child_directories(root: Path, expected: tuple[str, ...]) -> None:
+    """Require an exact direct-child directory inventory with no files or extras."""
+    actual = {path.name for path in root.iterdir() if path.is_dir()}
+    non_directories = {path.name for path in root.iterdir() if not path.is_dir()}
+    if actual != set(expected) or non_directories:
+        raise AssertionError(f"calibration child-directory inventory differs: {root}")
+
+
 def _write_schema_three_run(
     root: Path,
     member: DevelopmentFixtureMember,
@@ -476,7 +495,7 @@ def _write_schema_three_run(
                 "step": "Kestrel Genotyping",
                 "result_file": f"/historical-schema2-bridge/{member.key}/kestrel_result.tsv",
                 "file_type": "tsv",
-                "md5sum": hashlib.md5(result_bytes).hexdigest(),
+                "md5sum": hashlib.md5(result_bytes, usedforsecurity=False).hexdigest(),
                 "parsed_result": {"comments": [], "data": [final_row]},
             }
         ],
