@@ -300,7 +300,7 @@ def test_clopper_pearson_pins_non_boundary_estimate_and_interval() -> None:
 
 def test_clopper_pearson_confidence_is_keyword_only() -> None:
     with pytest.raises(TypeError):
-        clopper_pearson_interval(1, 2, Fraction(9, 10))  # type: ignore[call-arg]
+        clopper_pearson_interval(1, 2, Fraction(9, 10))  # type: ignore[misc]
 
 
 @pytest.mark.parametrize(

@@ -2,8 +2,10 @@
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -28,7 +30,7 @@ from vntyper.scripts.calibration_statistics import PairedObservation, paired_gro
 from vntyper.scripts.calibration_workflow import extract_evidence, fit_candidate, validate_candidate
 from vntyper.scripts.canonical_json import canonical_json_bytes
 from vntyper.scripts.molecular_identity import parse_molecular_identity
-from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
+from vntyper.scripts.nomenclature_annotate import DominanceSeamOutcome, reconcile_caller_outputs
 from vntyper.scripts.nomenclature_bam_evidence import BamIdentityEvidence, BamLocusEvidence
 from vntyper.scripts.nomenclature_bam_replay import BamReplayArtifact, BamReplayLocus, write_bam_replay_artifact
 from vntyper.scripts.profile_provenance import profile_summary_fields
@@ -320,7 +322,10 @@ def test_extract_retains_a_no_finding_member_without_fabricating_a_baseline_call
     evidence = extract_evidence(_study(), _labels(held_control=True), runs)
 
     held_feature = next(row for row in evidence.features.rows if row.manifest_key == "held")
-    held_baseline = next(row for row in evidence.baseline["expected"]["rows"] if row["manifest_key"] == "held")
+    expected = evidence.baseline["expected"]
+    assert isinstance(expected, Mapping)
+    expected_rows = cast(Sequence[Mapping[str, object]], expected["rows"])
+    held_baseline = next(row for row in expected_rows if row["manifest_key"] == "held")
     assert held_feature.features["assay_class"] == "capture-short-read"
     assert held_feature.features.get("canonical_identity") == (IDENTITY if retain_pre_result else None)
     assert held_baseline == {
@@ -336,7 +341,9 @@ def test_extract_retains_a_no_finding_member_without_fabricating_a_baseline_call
         "abstention": None,
         "identity_projection": {},
     }
-    assert evidence.baseline["expected"]["aggregate"]["control_findings"] == 0
+    aggregate = expected["aggregate"]
+    assert isinstance(aggregate, Mapping)
+    assert aggregate["control_findings"] == 0
 
 
 def test_extract_accepts_replay_for_only_the_retained_final_candidate(tmp_path: Path) -> None:
@@ -383,7 +390,10 @@ def test_extract_uses_advntr_when_kestrel_is_the_exact_negative_placeholder(tmp_
 
     evidence = extract_evidence(_study(), _labels(), runs)
 
-    row = next(row for row in evidence.baseline["expected"]["rows"] if row["manifest_key"] == "train")
+    expected = evidence.baseline["expected"]
+    assert isinstance(expected, Mapping)
+    expected_rows = cast(Sequence[Mapping[str, object]], expected["rows"])
+    row = next(row for row in expected_rows if row["manifest_key"] == "train")
     assert row["canonical_identity"] == OTHER_IDENTITY
     assert row["name"] == "58dupG"
     assert row["support"] == 7
@@ -403,7 +413,10 @@ def test_extract_uses_the_reconciled_advntr_selected_whole_locus_verdict(tmp_pat
 
     evidence = extract_evidence(_study(), _labels(), runs)
 
-    row = next(row for row in evidence.baseline["expected"]["rows"] if row["manifest_key"] == "train")
+    expected = evidence.baseline["expected"]
+    assert isinstance(expected, Mapping)
+    expected_rows = cast(Sequence[Mapping[str, object]], expected["rows"])
+    row = next(row for row in expected_rows if row["manifest_key"] == "train")
     assert row["canonical_identity"] == OTHER_IDENTITY
     assert row["name"] == "58dupG"
     assert row["identity_projection"] == {
@@ -425,7 +438,10 @@ def test_extract_never_selects_identity_from_equal_display_names(tmp_path: Path)
 
     evidence = extract_evidence(_study(), _labels(), runs)
 
-    row = next(row for row in evidence.baseline["expected"]["rows"] if row["manifest_key"] == "train")
+    expected = evidence.baseline["expected"]
+    assert isinstance(expected, Mapping)
+    expected_rows = cast(Sequence[Mapping[str, object]], expected["rows"])
+    row = next(row for row in expected_rows if row["manifest_key"] == "train")
     assert row["canonical_identity"] == OTHER_IDENTITY
     assert row["name"] == "59dupC"
 
@@ -560,7 +576,9 @@ def test_fitted_profile_resolves_and_drives_production_whole_locus_reconciliatio
         objective="lexicographic-safety-v1",
         evaluator=lambda profile: calibration_artifacts._evaluate(profile, evidence),
     )
-    assert dict(candidate.profile.components["dominance"]) == expected_component
+    fitted_dominance = candidate.profile.components["dominance"]
+    assert isinstance(fitted_dominance, Mapping)
+    assert dict(fitted_dominance) == expected_component
     profile_path = tmp_path / "fitted-profile.json"
     profile_path.write_bytes(candidate.profile.canonical_bytes)
 
@@ -582,6 +600,7 @@ def test_fitted_profile_resolves_and_drives_production_whole_locus_reconciliatio
     )
 
     written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert isinstance(outcome, DominanceSeamOutcome)
     assert outcome.dominance_outcome == "selected"
     assert written.loc[0, "__Reconciled_Molecular_Identity"] == OTHER_IDENTITY
     assert written.loc[0, "Nomenclature"] == "58dupG"

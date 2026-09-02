@@ -466,6 +466,7 @@ def test_kestrel_only_generated_dominance_consumes_retained_votes_once(tmp_path:
     _write_retained_identity_votes(tmp_path, identity)
 
     outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
+    assert isinstance(outcome, DominanceSeamOutcome)
     assert outcome.evaluated is True
     assert outcome.rewritten is True
 
@@ -487,6 +488,7 @@ def test_generated_dominance_abstention_clears_only_the_whole_locus_projection(t
         None,
         dominance_component=_active_dominance(minimum_record_count_margin=3),
     )
+    assert isinstance(outcome, DominanceSeamOutcome)
     assert outcome.evaluated is True
     assert outcome.dominance_outcome == "abstained"
 
@@ -517,6 +519,7 @@ def test_generated_advntr_veto_abstains_instead_of_falling_through(tmp_path: Pat
         advntr,
         dominance_component=_active_dominance(abstain_on_inadmissible_advntr=True),
     )
+    assert isinstance(outcome, DominanceSeamOutcome)
     assert outcome.evaluated is True
     assert outcome.dominance_outcome == "abstained"
 
@@ -567,6 +570,7 @@ def test_generated_dominance_selects_a_distinct_complete_kestrel_candidate_proje
 
     outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
 
+    assert isinstance(outcome, DominanceSeamOutcome)
     assert outcome.dominance_outcome == "selected"
     written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
     assert written.loc[0, "__Reconciled_Molecular_Identity"] == serialize_molecular_identity(identity_b)
@@ -600,6 +604,7 @@ def test_enabled_dominance_explicitly_evaluates_unavailable_bam_as_not_applicabl
 
     outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
 
+    assert isinstance(outcome, DominanceSeamOutcome)
     assert outcome.evaluated is True
     assert outcome.rewritten is False
     assert outcome.dominance_outcome == "not-applicable"
@@ -629,6 +634,7 @@ def test_enabled_dominance_evaluates_a_genuine_negative_exactly_once(
     outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
 
     assert calls == 1
+    assert isinstance(outcome, DominanceSeamOutcome)
     assert outcome.evaluated is True
     assert outcome.rewritten is False
     assert outcome.dominance_outcome == "not-applicable"

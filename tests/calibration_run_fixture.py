@@ -226,7 +226,7 @@ def write_schema_three_run(
         evidence_digest = evidence.digest
         artifact_names.extend(ADVNTR_ARTIFACTS)
 
-    steps = [
+    steps: list[dict[str, object]] = [
         {
             "step": "Kestrel Genotyping",
             "result_file": f"/untrusted/operator/path/{key}/result.tsv",

@@ -6,8 +6,10 @@ import logging
 import os
 import shutil
 import threading
+from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -452,7 +454,7 @@ def test_terminal_release_error_preserves_coherent_cli_outcome(
     ):
         if passed:
             assert (
-                cli.main(
+                cast(Callable[[list[str] | None], object], cli.main)(
                     [
                         "calibrate",
                         "evaluate",
