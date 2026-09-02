@@ -45,6 +45,10 @@ def handle_calibrate(
         raise ValueError(message)
     successful = _atomic_output(args.output, lambda staging: producer(args, staging))
     if not successful:
+        logger.error(
+            f"calibration {operation} completed with a failed outcome; "
+            f"its complete failed attestation is installed at {args.output}"
+        )
         raise SystemExit(1)
 
 

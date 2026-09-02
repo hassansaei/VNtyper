@@ -85,7 +85,20 @@ class SecureDirectoryReader:
 
 
 def read_regular_path(path: Path) -> bytes:
-    """Read one exact regular path from the same no-follow file descriptor."""
+    """Read one exact regular path from the same no-follow file descriptor.
+
+    Args:
+        path: Exact regular file to read without following a symlink.
+
+    Returns:
+        The complete file bytes read from the pinned descriptor.
+
+    Raises:
+        ValueError: If no-follow opens are unsupported, or the path is unreadable,
+            a symlink, or not a regular file.
+    """
+    if not isinstance(path, Path) or not _NOFOLLOW:
+        raise ValueError("secure calibration payload reads require Path and O_NOFOLLOW support")
     try:
         descriptor = os.open(path, os.O_RDONLY | _CLOEXEC | _NOFOLLOW)
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):

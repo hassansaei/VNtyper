@@ -3,6 +3,7 @@
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 from typing import cast
@@ -25,7 +26,8 @@ from vntyper.scripts.calibration_features import decode_label_artifact
 from vntyper.scripts.calibration_manifest import decode_study_declaration
 from vntyper.scripts.calibration_objective import CandidateEvaluation, count_free_parameters
 from vntyper.scripts.calibration_profiles import build_generated_profile
-from vntyper.scripts.calibration_run_projection import with_complete_kestrel_candidate_projections
+from vntyper.scripts.calibration_run_extraction import CORE_RUN_ARTIFACTS, validate_run_artifact_hashes
+from vntyper.scripts.calibration_run_projection import _support, with_complete_kestrel_candidate_projections
 from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_workflow import extract_evidence, fit_candidate, validate_candidate
 from vntyper.scripts.canonical_json import canonical_json_bytes
@@ -428,6 +430,62 @@ def test_extract_explicit_profile_with_enabled_dominance_uses_complete_candidate
     }
 
 
+def test_extract_rejects_a_summary_profile_kind_that_disagrees_with_the_verified_snapshot(tmp_path: Path) -> None:
+    """Mutation caught: the candidate universe is keyed on the summary's declared profile kind.
+
+    The summary's ``decision_profile_kind`` is not part of the hashed profile bytes, so
+    editing it alone leaves the pinned profile digest intact. Extraction must still fail
+    closed instead of letting a summary field steer the replay universe.
+    """
+    packaged = load_packaged_decision_profile()
+    packaged_dominance = packaged.components["dominance"]
+    assert isinstance(packaged_dominance, Mapping)
+    profile = build_generated_profile(
+        {**packaged_dominance, "enabled": False},
+        dataset_manifest_hash="a" * 64,
+        partition_manifest_hash="b" * 64,
+        seed=295,
+        objective="lexicographic-safety-v1",
+        generator_version=__version__,
+    )
+    runs = _runs(tmp_path)
+    runs["train"] = write_schema_three_run(tmp_path / "summary-kind-drift", "train", extra_pre_result=True)
+    train_run = runs["train"]
+    assert isinstance(train_run, dict)
+    _bind_profile_to_run(train_run, profile)
+    summary_path = Path(str(train_run["root"])) / "pipeline_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["decision_profile_kind"] == "generated"
+    summary["decision_profile_kind"] = "explicit-custom"
+    summary_path.write_bytes(canonical_json_bytes(summary))
+    refresh_run_hashes(train_run)
+
+    with pytest.raises(ValueError, match="differs from its verified snapshot"):
+        extract_evidence(_study(), _labels(), runs)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["../pipeline_summary.json", "/etc/hostname", "kestrel/../pipeline_summary.json", "./pipeline_summary.json"],
+)
+def test_run_artifact_declarations_reject_traversal_and_absolute_names(relative: str) -> None:
+    """Mutation caught: a declared artifact name is joined onto the run root unchecked."""
+    artifacts: dict[object, object] = dict.fromkeys(CORE_RUN_ARTIFACTS, "0" * 64)
+    artifacts[relative] = "0" * 64
+
+    with pytest.raises(ValueError, match="fixed safe relative paths"):
+        validate_run_artifact_hashes(artifacts)
+
+
+def test_run_artifact_declarations_reject_names_outside_the_closed_contract() -> None:
+    """Mutation caught: any well-formed relative name is accepted, not only the fixed set."""
+    artifacts: dict[object, object] = dict.fromkeys(CORE_RUN_ARTIFACTS, "0" * 64)
+    artifacts["kestrel/extra.tsv"] = "0" * 64
+
+    with pytest.raises(ValueError, match="membership differs from the closed current-run contract"):
+        validate_run_artifact_hashes(artifacts)
+
+
 def test_extract_rejects_replay_for_a_stale_nonretained_pre_result_ordinal(tmp_path: Path) -> None:
     runs = _runs(tmp_path)
     runs["train"] = write_schema_three_run(tmp_path / "two-pre-one-final", "train", extra_pre_result=True)
@@ -589,16 +647,7 @@ def test_fit_reads_only_training_and_policy_selection_and_requires_baseline_repl
 
     baseline = dict(evidence.baseline)
     baseline["observed"] = {"aggregate": {}, "per_tier": {}, "rows": []}
-    failed = type(evidence)(
-        evidence.study,
-        evidence.features,
-        evidence.labels,
-        baseline,
-        evidence.run_hashes,
-        evidence.study_sha256,
-        evidence.dataset_sha256,
-        evidence.profile_dataset_sha256,
-    )
+    failed = replace(evidence, baseline=baseline)
     with pytest.raises(ValueError, match="baseline"):
         fit_candidate(failed, objective="lexicographic-safety-v1", evaluator=_evaluate)
 
@@ -739,3 +788,15 @@ def test_generated_profile_cannot_cross_studies_with_the_same_candidate_paramete
 
     with pytest.raises(ValueError, match="study|protocol|dataset|seed|partition"):
         validate_candidate(candidate.profile, evidence_b)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(12, 12), ("12", 12), ("12.5", 12.5), (12.5, 12.5), (12.0, 12.0)],
+)
+def test_baseline_support_parsing_never_truncates_a_fractional_value(value: object, expected: int | float) -> None:
+    """Mutation caught: a fractional numeric support is silently truncated by ``int``."""
+    parsed = _support(value, "kestrel")
+
+    assert parsed == expected
+    assert type(parsed) is type(expected)

@@ -84,3 +84,14 @@ def test_read_files_rejects_duplicate_names_without_leaking_descriptors(tmp_path
         descriptors_after = frozenset(os.listdir("/proc/self/fd"))
 
     assert descriptors_after == descriptors_before
+
+
+def test_read_regular_path_refuses_to_degrade_without_no_follow_support(tmp_path: Path) -> None:
+    """Mutation caught: a platform without O_NOFOLLOW silently follows symlinks on payload reads."""
+    payload = tmp_path / "payload.json"
+    payload.write_bytes(b"{}\n")
+
+    with patch.object(calibration_secure_io, "_NOFOLLOW", 0), pytest.raises(ValueError, match="O_NOFOLLOW"):
+        read_regular_path(payload)
+
+    assert read_regular_path(payload) == b"{}\n"

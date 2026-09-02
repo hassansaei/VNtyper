@@ -92,15 +92,15 @@ def _projection(rows: list[dict[str, object]], labels_by_key: Mapping[str, Label
     per_tier: dict[str, dict[str, int]] = {}
     for order, row in enumerate(rows):
         row["order"] = order
-        key = row["manifest_key"]
+        key = _row_field(row, "manifest_key")
         if not isinstance(key, str):
             raise ValueError("calibration baseline row manifest key must be a string")
         label = labels_by_key.get(key)
         if label is None:
             raise ValueError(f"calibration baseline row has no independent label: {key}")
-        name = row["name"]
-        identity = row["canonical_identity"]
-        tier = row["tier"]
+        name = _row_field(row, "name")
+        identity = _row_field(row, "canonical_identity")
+        tier = _row_field(row, "tier")
         if name is not None:
             aggregate["displayed"] += 1
             if label.truth_status == "control":
@@ -118,6 +118,12 @@ def _projection(rows: list[dict[str, object]], labels_by_key: Mapping[str, Label
             if identity is not None and identity == label.expected_identity:
                 counts["exact"] += 1
     return {"aggregate": aggregate, "per_tier": per_tier, "rows": rows}
+
+
+def _row_field(row: Mapping[str, object], key: str) -> object:
+    if key not in row:
+        raise ValueError(f"calibration baseline row lacks required field: {key}")
+    return row[key]
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:

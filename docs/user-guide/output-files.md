@@ -81,7 +81,9 @@ Positive adVNTR result rows append the same four molecular-identity columns in t
 order. Negative adVNTR output retains its existing narrower schema. The Kestrel result
 additionally carries `__Identity_*` capture and selection cells, and positive rows in both
 caller result files carry `__Reconciled_Molecular_Identity`: the canonical serialization of
-the whole-locus identity the reconciler selected, or an empty cell after abstention. The
+the whole-locus identity the reconciler selected, or an empty cell after abstention. A run
+under an explicitly selected profile with dominance enabled also writes
+`__Dominance_Abstention_Reason`, the closed abstention token or an empty cell. The
 double-underscore prefix marks internal identity-capture and calibration-replay
 persistence, not public fields: they are copied into `pipeline_summary.json` with the
 other result columns, excluded from the policy projection, not rendered in the HTML

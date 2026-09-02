@@ -258,7 +258,10 @@ def _support(value: object, source: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         raise ValueError(f"calibration {source} baseline support must be numeric")
     try:
-        number = float(value) if isinstance(value, str) and any(char in value for char in ".eE") else int(value)
+        if isinstance(value, float) or (isinstance(value, str) and any(char in value for char in ".eE")):
+            number: int | float = float(value)
+        else:
+            number = int(value)
     except ValueError as error:
         raise ValueError(f"calibration {source} baseline support must be numeric") from error
     if number < 0:

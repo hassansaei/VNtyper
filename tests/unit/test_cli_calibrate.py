@@ -101,7 +101,7 @@ def test_atomic_output_cleans_exact_staging_on_base_exception(
 
 
 def test_completed_failed_operation_is_installed_before_cli_exit_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     output = tmp_path / "validation"
 
@@ -115,12 +115,18 @@ def test_completed_failed_operation_is_installed_before_cli_exit_one(
         ["calibrate", "validate", *_path_options("validate", tmp_path), "--output", str(output)]
     )
 
-    with pytest.raises(SystemExit) as failure:
+    with pytest.raises(SystemExit) as failure, caplog.at_level(logging.ERROR, logger="vntyper.scripts.cli_calibrate"):
         cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
 
     assert failure.value.code == 1
     assert (output / "attestation.json").is_file()
     assert (output / "retirement.json").is_file()
+    # The operator is told which operation failed and where its attestation landed,
+    # rather than receiving a bare status 1.
+    errors = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    assert errors == [
+        f"calibration validate completed with a failed outcome; its complete failed attestation is installed at {output}"
+    ]
 
 
 def test_main_maps_completed_failed_operation_to_one_after_install(

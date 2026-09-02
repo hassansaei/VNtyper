@@ -220,7 +220,7 @@ def write_schema_three_run(
             "step": "adVNTR Genotyping",
             "result_file": f"/untrusted/operator/path/{key}/advntr.tsv",
             "file_type": "tsv",
-            "md5sum": hashlib.md5(advntr_bytes).hexdigest(),
+            "md5sum": hashlib.md5(advntr_bytes, usedforsecurity=False).hexdigest(),
             "parsed_result": {"comments": [], "data": [advntr_row]},
         }
         evidence_digest = evidence.digest
@@ -231,7 +231,7 @@ def write_schema_three_run(
             "step": "Kestrel Genotyping",
             "result_file": f"/untrusted/operator/path/{key}/result.tsv",
             "file_type": "tsv",
-            "md5sum": hashlib.md5(result_bytes).hexdigest(),
+            "md5sum": hashlib.md5(result_bytes, usedforsecurity=False).hexdigest(),
             "parsed_result": {"comments": [], "data": final_rows},
         }
     ]
