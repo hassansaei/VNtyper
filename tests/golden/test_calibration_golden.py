@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -207,11 +208,13 @@ def test_real_cli_extract_installs_exact_role_inventory_and_literal_replay(compl
         "run_commitments.json",
         "study.json",
     ]
-    assert sorted(path.name for path in (evidence / "roles" / "locked-heldout").iterdir()) == [
+    locked_root = evidence / "roles" / "locked-heldout"
+    assert sorted(path.name for path in locked_root.iterdir()) == [
         "checksums.json",
         "member_declaration.json",
         "run_commitments.json",
     ]
+    calibration_oracle.verify_checksum_tree(locked_root)
     calibration_oracle.verify_checksum_tree(evidence)
     for role in ("training", "policy-selection", "validation"):
         assert sorted(path.name for path in (evidence / "roles" / role).iterdir()) == [
@@ -283,6 +286,17 @@ def test_real_cli_extract_installs_exact_role_inventory_and_literal_replay(compl
             "tie": False,
             "tier": member.tier,
         }
+
+
+def test_locked_heldout_checksum_corruption_fails_independent_verification(completed_workflow, tmp_path: Path) -> None:
+    """A changed locked declaration must fail the same independent checksum verifier."""
+    _fixture, evidence, _candidate, _extract, _fit = completed_workflow
+    corrupted = tmp_path / "locked-heldout"
+    shutil.copytree(evidence / "roles" / "locked-heldout", corrupted)
+    (corrupted / "member_declaration.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="calibration checksum differs"):
+        calibration_oracle.verify_checksum_tree(corrupted)
 
 
 def test_packaged_replay_precedes_fit_and_generated_profile_is_explicit_only(completed_workflow) -> None:

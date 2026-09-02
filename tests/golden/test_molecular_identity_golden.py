@@ -15,7 +15,8 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from tests.golden import identity_oracle
+from tests.golden import identity_oracle, policy_projection_oracle
+from tests.golden.calibration_oracle import require_explicit_roots
 from tests.golden.identity_oracle import (
     IDENTITY_COLUMNS,
     SELECTED_PROJECTION_COLUMNS,
@@ -23,7 +24,6 @@ from tests.golden.identity_oracle import (
     ExpectedIdentity,
     GoldenCorpus,
     IdentityCounts,
-    assert_independent_import_closure,
     load_golden_corpus,
 )
 from vntyper.modules.advntr.advntr_genotyping import process_advntr_output
@@ -54,13 +54,7 @@ from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.golden
 
-_SIM_ROOT = os.environ.get("VNTYPER_SIM_ROOT")
-_ADVNTR_ROOT = os.environ.get("VNTYPER_ADVNTR_ROOT")
-if not _SIM_ROOT or not _ADVNTR_ROOT:
-    pytest.skip("VNTYPER_SIM_ROOT and VNTYPER_ADVNTR_ROOT benchmark roots are unset", allow_module_level=True)
-
-SIM_ROOT = Path(_SIM_ROOT)
-ADVNTR_ROOT = Path(_ADVNTR_ROOT)
+SIM_ROOT, ADVNTR_ROOT = require_explicit_roots(os.environ)
 
 PACKAGE_PROFILES = Path(__file__).parents[2] / "vntyper" / "profiles"
 PR_B_DECISION_PROJECTION_SHA256 = "338fe05d010f623e794dcf93393904fa13bd8713e2d074c8a5b6c72d6efd96fd"
@@ -558,82 +552,6 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
     )
 
 
-def test_oracle_import_closure_is_independent() -> None:
-    """A production helper entering any recursive local import must fail the guard."""
-    oracle_path = Path(identity_oracle.__file__)
-    scanned = assert_independent_import_closure(oracle_path, Path(__file__).parents[2])
-    assert oracle_path.resolve() in scanned
-
-
-def test_policy_projection_excludes_only_the_internal_reconciled_identity_handoff() -> None:
-    """Private identity persistence is not public, while an arbitrary new field remains locked."""
-
-    def projections(
-        row: dict[str, str],
-    ) -> tuple[
-        dict[str, tuple[tuple[tuple[str, str], ...], ...]],
-        dict[str, tuple[tuple[tuple[str, str], ...], ...]],
-    ]:
-        stable: dict[str, tuple[tuple[tuple[str, str], ...], ...]] = {}
-        unaffected: dict[str, tuple[tuple[tuple[str, str], ...], ...]] = {}
-        explanations: dict[str, tuple[tuple[str, str, str, str], ...]] = {}
-        identity_oracle._record_policy_projections(  # noqa: SLF001 - directly tests the oracle boundary
-            stable,
-            unaffected,
-            explanations,
-            "experiment/sample",
-            "mutated",
-            {"kestrel": (row,), "advntr": ()},
-        )
-        return stable, unaffected
-
-    baseline = projections({"Nomenclature": "59dupC"})
-    with_internal_handoff = projections(
-        {
-            "Nomenclature": "59dupC",
-            "__Reconciled_Molecular_Identity": "MUC1-X-60-coding-v1|60|59|-|C",
-        }
-    )
-    with_new_public_field = projections({"Nomenclature": "59dupC", "New_Public_Field": "changed"})
-
-    assert with_internal_handoff == baseline
-    assert identity_oracle.public_projection_fingerprint(with_new_public_field[0]) != (
-        identity_oracle.public_projection_fingerprint(baseline[0])
-    )
-    assert identity_oracle.public_projection_fingerprint(with_new_public_field[1]) != (
-        identity_oracle.public_projection_fingerprint(baseline[1])
-    )
-
-
-def test_recursive_guard_rejects_nested_production_import(tmp_path: Path) -> None:
-    """The guard must recurse; scanning only the entry file would miss this import."""
-    entry = tmp_path / "entry.py"
-    helper = tmp_path / "helper.py"
-    entry.write_text("from helper import value\n", encoding="utf-8")
-    helper.write_text("from vntyper.scripts.nomenclature import reconcile\nvalue = reconcile\n", encoding="utf-8")
-
-    with pytest.raises(AssertionError, match=r"helper\.py.*vntyper\.scripts\.nomenclature"):
-        assert_independent_import_closure(entry, tmp_path)
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "import importlib\nvalue = importlib.import_module('vntyper.scripts.nomenclature')\n",
-        "from importlib import import_module\nvalue = import_module('vntyper.scripts.nomenclature')\n",
-        "import importlib as il\nvalue = il.import_module('vntyper.scripts.nomenclature')\n",
-        "value = __import__('vntyper.scripts.nomenclature')\n",
-    ],
-)
-def test_recursive_guard_rejects_literal_dynamic_production_import(tmp_path: Path, source: str) -> None:
-    """Literal dynamic imports must not bypass the independent-oracle boundary."""
-    entry = tmp_path / "entry.py"
-    entry.write_text(source, encoding="utf-8")
-
-    with pytest.raises(AssertionError, match=r"entry\.py.*vntyper\.scripts\.nomenclature"):
-        assert_independent_import_closure(entry, tmp_path)
-
-
 def test_truth_oracle_derives_every_literal_identity_and_name(corpus) -> None:
     """A coordinate, allele, normalization, or display projection change must fail."""
     assert corpus.expected_by_class == EXPECTED_CLASS_IDENTITIES
@@ -861,12 +779,12 @@ def test_identity_quartet_fingerprint_changes_for_one_cell() -> None:
     projection = {"sample/kestrel": (("identity", "unique", "1", "1"),)}
     changed = {"sample/kestrel": (("identity", "unique", "1", "2"),)}
 
-    assert identity_oracle.selected_projection_fingerprint(projection) == (
+    assert policy_projection_oracle.selected_projection_fingerprint(projection) == (
         "55bec88299f6d83eb5b3e36e9bf970d6d8a077201a8750f8a44c3f69c4458238"
     )
-    assert identity_oracle.selected_projection_fingerprint(changed) != identity_oracle.selected_projection_fingerprint(
-        projection
-    )
+    assert policy_projection_oracle.selected_projection_fingerprint(
+        changed
+    ) != policy_projection_oracle.selected_projection_fingerprint(projection)
 
 
 def test_complete_public_identity_quartet_projection_is_literal(uut_replay: UutReplay) -> None:
@@ -875,7 +793,9 @@ def test_complete_public_identity_quartet_projection_is_literal(uut_replay: UutR
     assert len(projection) == 800
     assert sum(len(rows) for rows in projection.values()) == 374
     assert all(len(cells) == len(IDENTITY_COLUMNS) for rows in projection.values() for cells in rows)
-    assert identity_oracle.selected_projection_fingerprint(projection) == PRA_PUBLIC_IDENTITY_QUARTET_FINGERPRINT
+    assert policy_projection_oracle.selected_projection_fingerprint(projection) == (
+        PRA_PUBLIC_IDENTITY_QUARTET_FINGERPRINT
+    )
 
 
 def test_both_roots_and_every_sample_are_loaded(corpus: GoldenCorpus, uut_replay: UutReplay) -> None:
@@ -915,10 +835,10 @@ def test_pr_b_changes_only_governed_explanations_while_every_public_finding_stay
     """Compare against the measured B1 replay, never expectations derived from B2."""
     observed = uut_replay.corpus
 
-    assert identity_oracle.public_projection_fingerprint(observed.policy_stable_projection_by_sample) == (
+    assert policy_projection_oracle.public_projection_fingerprint(observed.policy_stable_projection_by_sample) == (
         PRB_POLICY_STABLE_PUBLIC_FINGERPRINT
     )
-    assert identity_oracle.public_projection_fingerprint(observed.unaffected_public_projection_by_sample) == (
+    assert policy_projection_oracle.public_projection_fingerprint(observed.unaffected_public_projection_by_sample) == (
         PRB_UNAFFECTED_PUBLIC_FINGERPRINT
     )
 
@@ -930,7 +850,7 @@ def test_pr_b_changes_only_governed_explanations_while_every_public_finding_stay
         expected_flags = PRB_EXPECTED_EXPLANATION_FLAGS.get(decision_key)
 
         for variant, flags, note, disposition in after_rows:
-            governed = caller == "advntr" and variant in identity_oracle.RECURRENT_STATE_EVIDENCE
+            governed = caller == "advntr" and variant in policy_projection_oracle.RECURRENT_STATE_EVIDENCE
             affected = governed or (caller == "kestrel" and expected_flags is not None)
             if not affected:
                 if caller == "advntr":
@@ -947,7 +867,7 @@ def test_pr_b_changes_only_governed_explanations_while_every_public_finding_stay
             else:
                 assert disposition == "<missing>"
             assert flags == expected_flags
-            assert note.endswith(f"; {identity_oracle.GOVERNED_ASSERTION}")
+            assert note.endswith(f"; {policy_projection_oracle.GOVERNED_ASSERTION}")
 
     assert collision_rows == 11
     assert admissible_rows == 185
@@ -991,7 +911,9 @@ def test_selected_kestrel_projection_is_exact_and_ordered(corpus: GoldenCorpus, 
     """Every selected raw row, empty result, and deterministic tie winner is frozen."""
     historical = corpus.selected_projection_by_sample
     current = uut_replay.corpus.selected_projection_by_sample
-    assert identity_oracle.selected_projection_fingerprint(historical) == PHASE1_SELECTED_PROJECTION_FINGERPRINT
+    assert (
+        policy_projection_oracle.selected_projection_fingerprint(historical) == PHASE1_SELECTED_PROJECTION_FINGERPRINT
+    )
     assert len(historical) == 400
     assert sum(bool(rows) for rows in historical.values()) == 178
     mismatches = {
@@ -1050,7 +972,7 @@ def test_pr_a_measured_identity_policy_baseline_is_literal(
         "C": DisplayCounts(0, 0, 0),
     }
     assert {tier: len(keys) for tier, keys in observed.tier_keys.items()} == {"A": 0, "B": 154, "C": 0}
-    assert identity_oracle.sample_sets_fingerprint(observed.tier_keys) == PRA_CURRENT_TIER_FINGERPRINT
+    assert policy_projection_oracle.sample_sets_fingerprint(observed.tier_keys) == PRA_CURRENT_TIER_FINGERPRINT
     assert frozenset().union(*observed.tier_keys.values()) == frozenset().union(*corpus.tier_keys.values())
     assert observed.control_findings == corpus.control_findings == 0
 
@@ -1065,7 +987,9 @@ def test_pr_a_measured_identity_policy_baseline_is_literal(
         "disagreement": 26,
         "unresolved": 76,
     }
-    assert identity_oracle.sample_sets_fingerprint(observed.identity_outcome_keys) == PRA_IDENTITY_OUTCOME_FINGERPRINT
+    assert policy_projection_oracle.sample_sets_fingerprint(observed.identity_outcome_keys) == (
+        PRA_IDENTITY_OUTCOME_FINGERPRINT
+    )
     assert corpus.identity_outcome_keys == {
         "agreement": frozenset(),
         "disagreement": frozenset(),
@@ -1073,7 +997,7 @@ def test_pr_a_measured_identity_policy_baseline_is_literal(
     }
     assert len(observed.public_truth_identity_keys) == 148
     assert (
-        identity_oracle.sample_sets_fingerprint({"truth": observed.public_truth_identity_keys})
+        policy_projection_oracle.sample_sets_fingerprint({"truth": observed.public_truth_identity_keys})
         == PRA_PUBLIC_TRUTH_IDENTITY_FINGERPRINT
     )
 
@@ -1086,13 +1010,14 @@ def test_bam_positive_controls_pin_eligibility_fetch_evidence_resolution_and_tru
     fetch_keys = frozenset(uut_replay.fetches_by_key)
     assert len(uut_replay.eligible_keys) == 83
     assert (
-        identity_oracle.sample_sets_fingerprint({"eligible": uut_replay.eligible_keys}) == PRA_BAM_ELIGIBLE_FINGERPRINT
+        policy_projection_oracle.sample_sets_fingerprint({"eligible": uut_replay.eligible_keys})
+        == PRA_BAM_ELIGIBLE_FINGERPRINT
     )
     assert len(fetch_keys) == uut_replay.bam_fetches == 68
-    assert identity_oracle.sample_sets_fingerprint({"fetch": fetch_keys}) == PRA_BAM_FETCH_FINGERPRINT
+    assert policy_projection_oracle.sample_sets_fingerprint({"fetch": fetch_keys}) == PRA_BAM_FETCH_FINGERPRINT
     assert len(observed.complete_bam_evidence_keys) == 68
     assert (
-        identity_oracle.sample_sets_fingerprint({"complete": observed.complete_bam_evidence_keys})
+        policy_projection_oracle.sample_sets_fingerprint({"complete": observed.complete_bam_evidence_keys})
         == PRA_COMPLETE_BAM_FINGERPRINT
     )
     assert observed.bam_truth_match_keys == PRA_BAM_TRUTH_MATCH_KEYS

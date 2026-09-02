@@ -16,6 +16,7 @@ from pathlib import Path
 
 from tests.golden import identity_oracle
 from tests.golden.identity_oracle import DisplayCounts, GoldenCorpus
+from tests.golden.oracle_import_guard import assert_independent_import_closure as assert_oracle_import_closure
 
 
 @dataclass(frozen=True)
@@ -161,7 +162,7 @@ def snapshot_from_corpus(corpus: GoldenCorpus) -> DevelopmentCalibrationSnapshot
 
 def assert_independent_import_closure(repo_root: Path) -> frozenset[Path]:
     """Reject direct, recursive, or dynamic production imports in this oracle."""
-    scanned = identity_oracle.assert_independent_import_closure(Path(__file__), repo_root)
+    scanned = assert_oracle_import_closure(Path(__file__), repo_root)
     return frozenset(scanned)
 
 
