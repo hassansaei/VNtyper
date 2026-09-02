@@ -102,29 +102,34 @@ def test_changelog_preserves_released_history_and_records_the_fix_in_2_0_12() ->
 
 
 def test_phase_1_changelog_entry_does_not_rewrite_released_history() -> None:
-    """Catch edits below Unreleased while allowing this Phase 1 entry to evolve."""
+    """Catch edits to released history while allowing the Unreleased section to evolve.
+
+    The Phase 1 entry shipped in 2.0.27, so everything from that heading down is released
+    history and is pinned byte-for-byte. A release bump legitimately moves this pin once:
+    it demotes the previous ``(Current)`` marker and adds the new release above it.
+    """
     page = _read("docs/about/changelog.md")
-    released = page[page.index("## 2.0.26") :]
+    released = page[page.index("## 2.0.27") :]
     assert hashlib.sha256(released.encode()).hexdigest() == (
-        "a73bb192c6d2cf6cd0fede04ec9f9ec55b0eac9eaa5743fe558d82709d3c54f7"
+        "b67335664e7041f2cba903e3c5e615f8daef3cfff504461d14da4baf8108cd72"
     )
 
-    unreleased = _section(page, "## Unreleased", "## 2.0.26")
-    normalized = " ".join(unreleased.split())
+    phase_1_release = _section(page, "## 2.0.27", "## 2.0.26")
+    normalized = " ".join(phase_1_release.split())
     assert "Phase 1" in normalized
     assert "Refs #295" in normalized
     assert "resolved haplotype records" in normalized
     assert "minimum k-mer depth" in normalized
     assert "does not weight votes or alter names or tiers" in normalized
-    assert "bam_thin_haplotype_record_support" in unreleased
-    assert "bam_thin_support" in unreleased
-    assert "supporting_haplotype_records" in unreleased
-    assert "fetched_haplotype_records" in unreleased
-    assert "distinct_edit_count" in unreleased
+    assert "bam_thin_haplotype_record_support" in phase_1_release
+    assert "bam_thin_support" in phase_1_release
+    assert "supporting_haplotype_records" in phase_1_release
+    assert "fetched_haplotype_records" in phase_1_release
+    assert "distinct_edit_count" in phase_1_release
     assert "read-only `support`, `total`, and `n_distinct` compatibility properties" in normalized
     assert "replace the pre-Phase-1 `low-read-support` token" in normalized
     assert "BAM-specific `thin-haplotype-record-support` and `low-haplotype-record-support`" in normalized
-    assert all(f"#{issue}" in unreleased for issue in (270, 267, 269))
+    assert all(f"#{issue}" in phase_1_release for issue in (270, 267, 269))
 
 
 def test_nomenclature_page_documents_every_authoritative_flag_and_source_unit() -> None:
