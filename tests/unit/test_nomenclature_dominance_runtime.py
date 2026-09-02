@@ -340,3 +340,45 @@ def test_disabled_policy_preserves_an_identity_abstained_legacy_baseline() -> No
     assert result.selected_identity is None
     assert result.decision.outcome == "not-applicable"
     assert result.abstention_reason is None
+
+
+def test_absent_bam_evaluation_calls_the_real_evaluator_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = _runtime()
+    calls = 0
+    real_evaluate = runtime.evaluate_dominance
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "evaluate_dominance", counted)
+
+    decision = runtime.evaluate_absent_bam_dominance(
+        (EvidenceDisposition("admissible"),),
+        _component(),
+    )
+
+    assert calls == 1
+    assert decision.outcome == "not-applicable"
+
+
+def test_absent_bam_evaluation_rejects_malformed_dispositions() -> None:
+    runtime = _runtime()
+
+    with pytest.raises(ValueError, match="dispositions"):
+        runtime.evaluate_absent_bam_dominance([], _component())
+
+
+def test_absent_bam_evaluation_fails_closed_on_an_impossible_evaluator_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime()
+    monkeypatch.setattr(
+        runtime,
+        "evaluate_dominance",
+        lambda *_args, **_kwargs: runtime.DominanceDecision("abstained", None, "record-tie"),
+    )
+
+    with pytest.raises(ValueError, match="must evaluate as not-applicable"):
+        runtime.evaluate_absent_bam_dominance((), _component())

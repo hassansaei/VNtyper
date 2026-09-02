@@ -64,6 +64,7 @@ from vntyper.scripts.nomenclature_dominance_runtime import (
     DOMINANCE_ABSTENTION_COLUMN,
     DominanceSeamOutcome,
     dominance_abstention_note,
+    evaluate_absent_bam_dominance,
     reconcile_complete_retained_dominance,
     reconcile_retained_dominance,
     retain_bam_replay,
@@ -80,6 +81,9 @@ from vntyper.scripts.nomenclature_frame_presentation import (
 )
 from vntyper.scripts.nomenclature_frame_presentation import (
     annotate_advntr_frame as annotate_advntr_frame,
+)
+from vntyper.scripts.nomenclature_frame_presentation import (
+    is_canonical_kestrel_negative_frame as _is_canonical_kestrel_negative_frame,
 )
 from vntyper.scripts.nomenclature_frame_presentation import (
     is_negative_result_row as _is_negative,
@@ -350,14 +354,35 @@ def reconcile_caller_outputs(
         logger.warning("Cross-caller reconciliation skipped; could not read a result file: %s", error)
         return False
 
-    if kestrel.empty or (advntr_path is not None and advntr.empty) or "Motifs" not in kestrel.columns:
-        if dominance_enabled and advntr_path is None:
-            return DominanceSeamOutcome(True, False, "not-applicable")
+    if kestrel.empty or (advntr_path is not None and advntr.empty):
         if dominance_enabled:
-            raise ValueError("enabled dominance requires readable positive caller prerequisites")
+            raise ValueError("enabled dominance requires canonical non-empty caller prerequisites")
         return False
 
     resolved_artifact_evidence = artifact_evidence or load_packaged_artifact_evidence()
+
+    if "Motifs" not in kestrel.columns:
+        canonical_negative = _is_canonical_kestrel_negative_frame(kestrel)
+        if not dominance_enabled:
+            return False
+        if not canonical_negative:
+            raise ValueError("enabled dominance requires canonical Kestrel negative or positive caller prerequisites")
+        if advntr_path is not None and not {
+            "VID",
+            "Variant",
+            "NumberOfSupportingReads",
+        } <= set(advntr.columns):
+            raise ValueError("enabled dominance requires canonical adVNTR caller prerequisites")
+        negative_advntr_keep = [not _is_negative(row) for _, row in advntr.iterrows()]
+        positive_negative_kestrel_rows = [
+            row for (_, row), keep in zip(advntr.iterrows(), negative_advntr_keep, strict=True) if keep
+        ]
+        negative_kestrel_dispositions = tuple(
+            evidence_disposition_for_state(str(row.get("Variant", "")), resolved_artifact_evidence)
+            for row in positive_negative_kestrel_rows
+        )
+        decision = evaluate_absent_bam_dominance(negative_kestrel_dispositions, resolved_dominance)
+        return DominanceSeamOutcome(True, False, decision.outcome)
 
     supports: dict[str, int | None] = {}
     kestrel_keep = [not _is_negative(row) for _, row in kestrel.iterrows()]
@@ -401,7 +426,8 @@ def reconcile_caller_outputs(
     named_vcf = [call for call in vcf_calls if call is not None]
     if not named_vcf and not advntr_calls:
         if dominance_enabled:
-            return DominanceSeamOutcome(True, False, "not-applicable")
+            decision = evaluate_absent_bam_dominance(tuple(advntr_dispositions), resolved_dominance)
+            return DominanceSeamOutcome(True, False, decision.outcome)
         return False
 
     identity_component: Any = None

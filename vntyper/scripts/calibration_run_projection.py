@@ -133,6 +133,50 @@ def build_shipped_projection(
     }
 
 
+def with_complete_kestrel_candidate_projections(
+    shipped: Mapping[str, object],
+    candidate_rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Close a shipped rendering map over persisted complete Kestrel candidates.
+
+    Args:
+        shipped: Fixed whole-locus shipped projection.
+        candidate_rows: Passing generated-run pre-result rows with fixed names.
+
+    Returns:
+        A copy whose rendering map includes every typed candidate at the shipped tier.
+
+    Raises:
+        ValueError: If the shipped map or a candidate's fixed presentation is malformed
+            or conflicts with an existing canonical projection.
+    """
+    raw_projection = shipped.get("identity_projection")
+    if not isinstance(raw_projection, Mapping):
+        raise ValueError("calibration shipped identity projection must be an object")
+    if any(not isinstance(value, Mapping) for value in raw_projection.values()):
+        raise ValueError("calibration shipped candidate projections must be objects")
+    projection = {str(identity): dict(value) for identity, value in raw_projection.items()}  # type: ignore[arg-type]
+    tier = shipped.get("tier")
+    if tier is not None and (not isinstance(tier, str) or not tier):
+        raise ValueError("calibration shipped candidate tier must be non-empty or null")
+    for row in candidate_rows:
+        persisted = parse_selected_candidate_cells(row)
+        identity = persisted.translation.identity
+        if identity is None:
+            continue
+        serialized = serialize_molecular_identity(identity)
+        name = row.get("Nomenclature")
+        if not isinstance(name, str) or not name:
+            raise ValueError("calibration complete Kestrel candidate requires one fixed presentation")
+        value = {"name": name, "tier": tier}
+        previous = projection.setdefault(serialized, value)
+        if previous != value:
+            raise ValueError("calibration canonical candidate has conflicting fixed presentations")
+    result = dict(shipped)
+    result["identity_projection"] = {identity: projection[identity] for identity in sorted(projection)}
+    return result
+
+
 def _kestrel_entries(
     rows: Sequence[Mapping[str, object]],
 ) -> list[tuple[str, str, str, str | None, str, Mapping[str, object]]]:

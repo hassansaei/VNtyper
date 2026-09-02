@@ -13,7 +13,11 @@ from pathlib import Path
 from types import MappingProxyType
 
 from vntyper.modules.advntr.artifact_evidence import load_artifact_evidence
-from vntyper.scripts.calibration_run_projection import build_shipped_projection, retained_kestrel_ordinals
+from vntyper.scripts.calibration_run_projection import (
+    build_shipped_projection,
+    retained_kestrel_ordinals,
+    with_complete_kestrel_candidate_projections,
+)
 from vntyper.scripts.canonical_json import load_strict_json_object
 from vntyper.scripts.identity_candidate_persistence import (
     IDENTITY_CAPTURE_COLUMNS,
@@ -247,6 +251,14 @@ def extract_completed_run(
 
     expected_row = build_shipped_projection(manifest_key, expected_rows, expected_advntr_rows)
     observed_row = build_shipped_projection(manifest_key, observed_rows, observed_advntr_rows)
+    if profile.profile_kind == "generated":
+        complete_candidate_rows = tuple(
+            retained.row
+            for _ordinal, retained in sorted(pre_by_ordinal.items())
+            if all(retained.row.get(column) == "True" for column in LEGACY_GATE_COLUMNS)
+        )
+        expected_row = with_complete_kestrel_candidate_projections(expected_row, complete_candidate_rows)
+        observed_row = with_complete_kestrel_candidate_projections(observed_row, complete_candidate_rows)
     features = _runtime_features(
         assay_class,
         summary,

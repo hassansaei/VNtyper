@@ -17,7 +17,12 @@ import pytest
 
 from tests.builders import STAGE_COLUMNS, kestrel_stage_frame
 from vntyper.modules.advntr.artifact_evidence import ASSERTION
-from vntyper.scripts import nomenclature, nomenclature_annotate, nomenclature_bam_adapter
+from vntyper.scripts import (
+    nomenclature,
+    nomenclature_annotate,
+    nomenclature_bam_adapter,
+    nomenclature_dominance_runtime,
+)
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
 from vntyper.scripts.identity_candidates import LEGACY_GATE_COLUMNS, translation_component_from_config
@@ -600,7 +605,10 @@ def test_enabled_dominance_explicitly_evaluates_unavailable_bam_as_not_applicabl
     assert outcome.dominance_outcome == "not-applicable"
 
 
-def test_enabled_dominance_marks_a_genuine_negative_as_explicitly_evaluated(tmp_path: Path) -> None:
+def test_enabled_dominance_evaluates_a_genuine_negative_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     kestrel = tmp_path / "kestrel_result.tsv"
     kestrel.write_text(
         "Motif\tVariant\tPOS\tREF\tALT\tMotif_sequence\tEstimated_Depth_AlternateVariant\t"
@@ -608,12 +616,77 @@ def test_enabled_dominance_marks_a_genuine_negative_as_explicitly_evaluated(tmp_
         "None\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNegative\n",
         encoding="utf-8",
     )
+    calls = 0
+    real_evaluate = nomenclature_dominance_runtime.evaluate_dominance
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(nomenclature_dominance_runtime, "evaluate_dominance", counted)
 
     outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
 
+    assert calls == 1
     assert outcome.evaluated is True
     assert outcome.rewritten is False
     assert outcome.dominance_outcome == "not-applicable"
+
+
+def test_enabled_dominance_evaluates_negative_kestrel_with_positive_advntr_once_and_preserves_finding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "24")
+    kestrel.write_text(
+        "Motif\tVariant\tPOS\tREF\tALT\tMotif_sequence\tEstimated_Depth_AlternateVariant\t"
+        "Estimated_Depth_Variant_ActiveRegion\tDepth_Score\tConfidence\n"
+        "None\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNegative\n",
+        encoding="utf-8",
+    )
+    before = advntr.read_bytes()
+    calls = 0
+    real_evaluate = nomenclature_dominance_runtime.evaluate_dominance
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(nomenclature_dominance_runtime, "evaluate_dominance", counted)
+
+    outcome = reconcile_caller_outputs(kestrel, advntr, dominance_component=_active_dominance())
+
+    assert calls == 1
+    assert outcome == DominanceSeamOutcome(True, False, "not-applicable")
+    assert advntr.read_bytes() == before
+    written = pd.read_csv(advntr, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "Variant"] == "I22_2_G_LEN1"
+    assert written.loc[0, "Nomenclature"] == "duplication, position-ambiguous"
+
+
+def test_enabled_dominance_rejects_malformed_advntr_beside_canonical_negative_kestrel(tmp_path: Path) -> None:
+    kestrel = tmp_path / "kestrel_result.tsv"
+    kestrel.write_text(
+        "Motif\tVariant\tPOS\tREF\tALT\tMotif_sequence\tEstimated_Depth_AlternateVariant\t"
+        "Estimated_Depth_Variant_ActiveRegion\tDepth_Score\tConfidence\n"
+        "None\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNegative\n",
+        encoding="utf-8",
+    )
+    advntr = tmp_path / "output_adVNTR_result.tsv"
+    advntr.write_text("Variant\nI22_2_G_LEN1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical adVNTR"):
+        reconcile_caller_outputs(kestrel, advntr, dominance_component=_active_dominance())
+
+
+def test_enabled_dominance_rejects_a_noncanonical_kestrel_negative(tmp_path: Path) -> None:
+    kestrel = tmp_path / "kestrel_result.tsv"
+    kestrel.write_text("Motif\tConfidence\nNone\tNegative\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical Kestrel negative"):
+        reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
 
 
 def test_enabled_dominance_outcome_cannot_claim_an_unevaluated_seam() -> None:

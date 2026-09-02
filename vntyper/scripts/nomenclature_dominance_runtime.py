@@ -276,6 +276,38 @@ def retained_whole_locus_bam_evidence(
     return validated_whole_locus_bam_evidence(artifact, authoritative_identities)
 
 
+def evaluate_absent_bam_dominance(
+    advntr_dispositions: tuple[EvidenceDisposition, ...],
+    component: Mapping[str, object],
+) -> DominanceDecision:
+    """Evaluate one genuine no-BAM/no-locus seam through the real policy evaluator.
+
+    Args:
+        advntr_dispositions: Governed dispositions for visible positive adVNTR rows.
+        component: Complete immutable dominance policy.
+
+    Returns:
+        The evaluator's required not-applicable decision.
+
+    Raises:
+        ValueError: If dispositions are malformed or absent BAM does not evaluate as
+            not-applicable.
+    """
+    if not isinstance(advntr_dispositions, tuple) or any(
+        not isinstance(disposition, EvidenceDisposition) for disposition in advntr_dispositions
+    ):
+        raise ValueError("absent-BAM dominance dispositions must be a tuple of EvidenceDisposition values")
+    whole_locus_disposition = EvidenceDisposition(
+        "identity-insufficient"
+        if any(disposition.value == "identity-insufficient" for disposition in advntr_dispositions)
+        else "admissible"
+    )
+    decision = evaluate_dominance(DominanceEvidence(None, whole_locus_disposition), component)
+    if decision.outcome != "not-applicable":
+        raise ValueError("absent BAM dominance evidence must evaluate as not-applicable")
+    return decision
+
+
 def retain_bam_replay(
     existing: BamReplayArtifact | None,
     current_loci: tuple[BamReplayLocus, ...],

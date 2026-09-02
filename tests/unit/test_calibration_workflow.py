@@ -1,5 +1,6 @@
 """In-memory calibration extraction, fitting, and validation workflow."""
 
+import hashlib
 import json
 from fractions import Fraction
 from pathlib import Path
@@ -16,17 +17,23 @@ from tests.calibration_run_fixture import (
     write_schema_three_run,
 )
 from tests.unit.test_calibration_contract import synthetic_protocol
+from vntyper.scripts import calibration_artifacts
 from vntyper.scripts.calibration_contract import CandidateMetrics
 from vntyper.scripts.calibration_features import decode_label_artifact
 from vntyper.scripts.calibration_manifest import decode_study_declaration
 from vntyper.scripts.calibration_objective import CandidateEvaluation, count_free_parameters
+from vntyper.scripts.calibration_profiles import build_generated_profile
+from vntyper.scripts.calibration_run_projection import with_complete_kestrel_candidate_projections
 from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_workflow import extract_evidence, fit_candidate, validate_candidate
+from vntyper.scripts.canonical_json import canonical_json_bytes
 from vntyper.scripts.molecular_identity import parse_molecular_identity
 from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
 from vntyper.scripts.nomenclature_bam_evidence import BamIdentityEvidence, BamLocusEvidence
 from vntyper.scripts.nomenclature_bam_replay import BamReplayArtifact, BamReplayLocus, write_bam_replay_artifact
+from vntyper.scripts.profile_provenance import profile_summary_fields
 from vntyper.scripts.run_configuration import resolve_run_configuration
+from vntyper.version import __version__
 
 pytestmark = pytest.mark.unit
 
@@ -46,7 +53,7 @@ def _groups(key: str) -> dict[str, list[str]]:
     }
 
 
-def _study():
+def _study(*, protocol: dict[str, object] | None = None):
     members = [
         {
             "key": "held",
@@ -80,13 +87,18 @@ def _study():
     return decode_study_declaration(
         {
             "schema_version": "calibration-study-v1",
-            "protocol": synthetic_protocol(),
+            "protocol": protocol or synthetic_protocol(),
             "partitions": {"schema_version": "calibration-partitions-v1", "members": members},
         }
     )
 
 
-def _labels(*, held_control: bool = False):
+def _labels(
+    *,
+    held_control: bool = False,
+    expected_identity: str | None = None,
+    expected_display_name: str = "59dupC",
+):
     return decode_label_artifact(
         {
             "schema_version": "calibration-labels-v1",
@@ -95,8 +107,10 @@ def _labels(*, held_control: bool = False):
                     "label_key": f"l-{key}",
                     "manifest_key": key,
                     "truth_status": "control" if held_control and key == "held" else "mutated",
-                    "expected_identity": None if held_control and key == "held" else f"identity-{key}",
-                    "expected_display_name": None if held_control and key == "held" else "59dupC",
+                    "expected_identity": (
+                        None if held_control and key == "held" else expected_identity or f"identity-{key}"
+                    ),
+                    "expected_display_name": None if held_control and key == "held" else expected_display_name,
                     "mutation_class": "duplication",
                 }
                 for key in ("held", "select", "train", "validate")
@@ -128,6 +142,82 @@ def _evaluate(profile) -> CandidateEvaluation:
         "a" * 64,
     )
     return CandidateEvaluation(metrics, Fraction(0), Fraction(0), (2,), Fraction(1, 1000))
+
+
+def test_complete_candidate_rendering_projection_rejects_a_missing_shipped_map() -> None:
+    with pytest.raises(ValueError, match="identity projection"):
+        with_complete_kestrel_candidate_projections({}, ())
+
+
+def _producer_shaped_ab_run(root: Path, key: str, profile) -> dict[str, object]:
+    """Write complete A/B pre-selection and deduplicated replay before extraction."""
+    run = write_schema_three_run(root, key)
+    kestrel_root = root / "kestrel"
+    pre_path = kestrel_root / "kestrel_pre_result.tsv"
+    pre = pd.read_csv(pre_path, sep="\t", dtype=str, keep_default_na=False)
+    selection = {
+        "__Identity_Equivalent_Representation_Count": "1",
+        "__Identity_Hypothesis_Count": "2",
+        "__Identity_Group_Blocking_Gates": "[]",
+        "__Identity_Group_Flags": "[]",
+        "__Identity_Group_Context_Diverges": "false",
+    }
+    for column, value in selection.items():
+        pre[column] = value
+    pre["__Identity_Selected_Raw_Representation_Key"] = pre["__Identity_Raw_Representation_Key"]
+    pre["__Identity_Selected_Observation_Ordinal"] = pre["__Identity_Observation_Ordinal"]
+    pre["Nomenclature"] = "59dupC"
+    second = pre.loc[0].copy()
+    raw_key = json.dumps(
+        {"source": "kestrel", "values": ["X-X", 62, "G", "GC"]},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    second.update(
+        {
+            "POS": "62",
+            "ALT": "GC",
+            "Nomenclature": "58dupG",
+            "Molecular_Identity": OTHER_IDENTITY,
+            "__Identity_Raw_Representation_Key": raw_key,
+            "__Identity_Molecular_Identity": OTHER_IDENTITY,
+            "__Identity_Observation_Ordinal": "1",
+            "__Identity_Selected_Raw_Representation_Key": raw_key,
+            "__Identity_Selected_Observation_Ordinal": "1",
+        }
+    )
+    pd.DataFrame([pre.loc[0], second]).to_csv(pre_path, sep="\t", index=False)
+
+    identity_a = parse_molecular_identity(IDENTITY)
+    identity_b = parse_molecular_identity(OTHER_IDENTITY)
+    records = (
+        BamIdentityEvidence((identity_a,), ((0,),), 7),
+        BamIdentityEvidence((identity_b,), ((1,),), 8),
+        BamIdentityEvidence((identity_b,), ((1,),), 12),
+        BamIdentityEvidence((identity_b,), ((1,),), 16),
+    )
+    write_bam_replay_artifact(
+        kestrel_root,
+        BamReplayArtifact(
+            (BamReplayLocus((0, 1), "observed", BamLocusEvidence(records, 4, {identity_a: 1, identity_b: 3})),)
+        ),
+    )
+
+    (root / "provenance" / "decision_profile.json").write_bytes(profile.canonical_bytes)
+    summary_path = root / "pipeline_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary.update(profile_summary_fields(profile))
+    result = kestrel_root / "kestrel_result.tsv"
+    result_frame = pd.read_csv(result, sep="\t", dtype=str, keep_default_na=False)
+    result_frame["__Identity_Hypothesis_Count"] = "2"
+    result_frame["Molecular_Identity_Status"] = "legacy-selected-among-multiple"
+    result_frame["Identity_Hypothesis_Count"] = "2"
+    result_frame.to_csv(result, sep="\t", index=False)
+    summary["steps"][0]["md5sum"] = hashlib.md5(result.read_bytes()).hexdigest()
+    summary["steps"][0]["parsed_result"]["data"] = result_frame.to_dict(orient="records")
+    summary_path.write_bytes(canonical_json_bytes(summary))
+    refresh_run_hashes(run)
+    return run
 
 
 def test_extract_snapshots_complete_study_features_labels_baseline_and_run_hashes(tmp_path: Path) -> None:
@@ -426,10 +516,50 @@ def test_fit_reads_only_training_and_policy_selection_and_requires_baseline_repl
 
 
 def test_fitted_profile_resolves_and_drives_production_whole_locus_reconciliation(tmp_path: Path) -> None:
-    """Mutation caught: a fitted generated dominance component has no production consumer."""
-    runs = _runs(tmp_path / "runs")
-    evidence = extract_evidence(_study(), _labels(), runs)
-    candidate = fit_candidate(evidence, objective="lexicographic-safety-v1", evaluator=_evaluate)
+    """Producer A/B evidence drives real fitting and then the production identity change."""
+    protocol = synthetic_protocol()
+    protocol["candidate_grid"] = {
+        "minimum_record_count_margin": [2],
+        "minimum_record_share": [0.75],
+        "minimum_record_share_margin": [0.25],
+        "xd_veto": ["disabled"],
+    }
+    study = _study(protocol=protocol)
+    expected_component = {
+        "enabled": True,
+        "minimum_record_count_margin": 2,
+        "minimum_record_share": 0.75,
+        "minimum_record_share_margin": 0.25,
+        "xd_veto": "disabled",
+        "abstain_on_inadmissible_advntr": False,
+    }
+    producer_profile = build_generated_profile(
+        expected_component,
+        dataset_manifest_hash="a" * 64,
+        partition_manifest_hash=study.partitions.sha256,
+        seed=study.protocol.seed,
+        objective=study.protocol.objective,
+        generator_version=__version__,
+    )
+    runs = {
+        key: _producer_shaped_ab_run(tmp_path / "runs" / key, key, producer_profile)
+        for key in ("held", "select", "train", "validate")
+    }
+    evidence = extract_evidence(
+        study,
+        _labels(expected_identity=OTHER_IDENTITY, expected_display_name="58dupG"),
+        runs,
+    )
+    assert evidence.features.rows[0].features["canonical_identity"] == OTHER_IDENTITY
+    assert evidence.features.rows[0].features["haplotype_record_count_margin"] == 2
+    assert evidence.features.rows[0].features["haplotype_record_share"] == 0.75
+
+    candidate = fit_candidate(
+        evidence,
+        objective="lexicographic-safety-v1",
+        evaluator=lambda profile: calibration_artifacts._evaluate(profile, evidence),
+    )
+    assert dict(candidate.profile.components["dominance"]) == expected_component
     profile_path = tmp_path / "fitted-profile.json"
     profile_path.write_bytes(candidate.profile.canonical_bytes)
 
@@ -438,50 +568,8 @@ def test_fitted_profile_resolves_and_drives_production_whole_locus_reconciliatio
     assert isinstance(train, dict)
     root = Path(str(train["root"]))
     kestrel = root / "kestrel" / "kestrel_result.tsv"
-    pre_path = root / "kestrel" / "kestrel_pre_result.tsv"
-    pre = pd.read_csv(pre_path, sep="\t", dtype=str, keep_default_na=False)
-    selection_columns = {
-        "__Identity_Equivalent_Representation_Count": "1",
-        "__Identity_Hypothesis_Count": "2",
-        "__Identity_Group_Blocking_Gates": "[]",
-        "__Identity_Group_Flags": "[]",
-        "__Identity_Group_Context_Diverges": "false",
-    }
-    for column, value in selection_columns.items():
-        pre[column] = value
-    pre["__Identity_Selected_Raw_Representation_Key"] = pre["__Identity_Raw_Representation_Key"]
-    pre["__Identity_Selected_Observation_Ordinal"] = pre["__Identity_Observation_Ordinal"]
-    pre["Nomenclature"] = "59dupC"
-    second = pre.loc[0].copy()
-    raw_key = json.dumps(
-        {"source": "kestrel", "values": ["X-X", 62, "G", "GC"]},
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    second.update(
-        {
-            "POS": "62",
-            "ALT": "GC",
-            "Nomenclature": "58dupG",
-            "Molecular_Identity": OTHER_IDENTITY,
-            "__Identity_Raw_Representation_Key": raw_key,
-            "__Identity_Molecular_Identity": OTHER_IDENTITY,
-            "__Identity_Observation_Ordinal": "1",
-            "__Identity_Selected_Raw_Representation_Key": raw_key,
-            "__Identity_Selected_Observation_Ordinal": "1",
-        }
-    )
-    pd.DataFrame([pre.loc[0], second]).to_csv(pre_path, sep="\t", index=False)
-    identity_b = parse_molecular_identity(OTHER_IDENTITY)
-    records = (
-        BamIdentityEvidence((identity_b,), ((1,),), 8),
-        BamIdentityEvidence((identity_b,), ((1,),), 12),
-        BamIdentityEvidence((identity_b,), ((1,),), 16),
-    )
-    write_bam_replay_artifact(
-        root / "kestrel",
-        BamReplayArtifact((BamReplayLocus((0, 1), "observed", BamLocusEvidence(records, 3, {identity_b: 3})),)),
-    )
+    before = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert before.loc[0, "Nomenclature"] == "59dupC"
 
     assert resolved.dominance["enabled"] is True
     outcome = reconcile_caller_outputs(
@@ -496,6 +584,7 @@ def test_fitted_profile_resolves_and_drives_production_whole_locus_reconciliatio
     assert outcome.dominance_outcome == "selected"
     assert written.loc[0, "__Reconciled_Molecular_Identity"] == OTHER_IDENTITY
     assert written.loc[0, "Nomenclature"] == "58dupG"
+    assert written.loc[0, "Nomenclature"] != before.loc[0, "Nomenclature"]
     assert written.loc[0, "__Dominance_Abstention_Reason"] == ""
 
 
