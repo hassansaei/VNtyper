@@ -7,13 +7,15 @@ import VNtyper normalization, naming, grouping, reconciliation, or decision code
 
 from __future__ import annotations
 
-import ast
 import csv
-import hashlib
 import json
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from tests.golden.policy_projection_oracle import (
+    RECURRENT_STATE_EVIDENCE,
+    record_policy_projections,
+)
 
 REFERENCE = "MUC1-X-60-coding-v1"
 CANONICAL_X = "GCCCACGGTGTCACCTCGGCCCCGGACACCAGGCCGGCCCCGGGCTCCACCGCCCCCCCA"
@@ -146,137 +148,6 @@ _MUTATIONS = {
     "insA_pos54": _Mutation("insert", 54, 55, "A"),
 }
 
-# Independent literal transcription of the governed #267 recurrent-State evidence.
-# Never import the production artifact here: this oracle must detect its drift.
-RECURRENT_STATE_EVIDENCE = frozenset(
-    {
-        "I10_2_A_LEN1",
-        "D8_2&D9_2&I9_2_A_LEN9",
-        "D2_2&I2_2_C_LEN5",
-        "I39_2_A_LEN4",
-        "I52_2_A_LEN7",
-        "I45_2_A_LEN4",
-        "D45_2&I45_2_A_LEN2",
-        "D14_2&I14_2_G_LEN14",
-        "D58_2&D59_2",
-        "I60_2_A_LEN10",
-        "I14_2_G_LEN16",
-        "I18_2_T_LEN1",
-        "I21_2_G_LEN4",
-        "D29_2&I29_2_A_LEN2",
-        "D8_2&I8_2_A_LEN20",
-        "D20_2&D21_2",
-        "D21_2&D22_2",
-        "I14_2_A_LEN1",
-        "I11_2_G_LEN1",
-        "I26_7_A_LEN25",
-        "D17_2&D18_2&D19_2&D20_2&D21_2",
-        "I14_2_C_LEN4",
-        "I23_6_G_LEN1",
-        "I21_2_T_LEN1",
-    }
-)
-GOVERNED_ASSERTION = "A carried-forward recurrent adVNTR State is insufficient for molecular identity."
-_POLICY_EXPLANATION_COLUMNS = frozenset({"Nomenclature_Flags", "Nomenclature_Note", "Evidence_Disposition"})
-
-
-def assert_independent_import_closure(entrypoint: Path, repository_root: Path) -> tuple[Path, ...]:
-    """Recursively AST-scan local imports and reject every production import.
-
-    Args:
-        entrypoint: Python file at the root of the closure.
-        repository_root: Directory within which imports count as local.
-
-    Returns:
-        tuple[Path, ...]: Every recursively scanned local source file.
-
-    Raises:
-        AssertionError: If a file is absent or any closure member imports ``vntyper``.
-    """
-    root = repository_root.resolve()
-    pending = [entrypoint.resolve()]
-    scanned: set[Path] = set()
-    forbidden: list[str] = []
-
-    while pending:
-        source = pending.pop()
-        if source in scanned:
-            continue
-        if not source.is_file():
-            raise AssertionError(f"oracle import-closure source does not exist: {source}")
-        try:
-            source.relative_to(root)
-        except ValueError as error:
-            raise AssertionError(f"oracle import-closure source escapes repository root: {source}") from error
-        scanned.add(source)
-        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        importlib_aliases = {
-            alias.asname or alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-            if alias.name == "importlib"
-        }
-        import_module_aliases = {
-            alias.asname or alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "importlib"
-            for alias in node.names
-            if alias.name == "import_module"
-        }
-
-        for node in ast.walk(tree):
-            modules: list[tuple[str, int]] = []
-            if isinstance(node, ast.Import):
-                modules.extend((alias.name, 0) for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                modules.append((node.module or "", node.level))
-                modules.extend(
-                    (f"{node.module}.{alias.name}" if node.module else alias.name, node.level)
-                    for alias in node.names
-                    if alias.name != "*"
-                )
-            elif isinstance(node, ast.Call):
-                dynamic_module = _literal_dynamic_import(node, importlib_aliases, import_module_aliases)
-                if dynamic_module is not None:
-                    modules.append((dynamic_module, 0))
-            else:
-                continue
-
-            for module, level in modules:
-                if module == "vntyper" or module.startswith("vntyper."):
-                    forbidden.append(f"{source}: imports {module}")
-                    continue
-                pending.extend(
-                    path for path in _resolve_local_imports(source, root, module, level) if path not in scanned
-                )
-
-    if forbidden:
-        raise AssertionError("forbidden production import in oracle closure: " + "; ".join(sorted(forbidden)))
-    return tuple(sorted(scanned))
-
-
-def _literal_dynamic_import(
-    node: ast.Call,
-    importlib_aliases: set[str],
-    import_module_aliases: set[str],
-) -> str | None:
-    """Return the literal target of a supported dynamic-import spelling."""
-    if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
-        return None
-    if isinstance(node.func, ast.Name) and node.func.id == "__import__":
-        return node.args[0].value
-    if isinstance(node.func, ast.Name) and node.func.id in import_module_aliases:
-        return node.args[0].value
-    if (
-        isinstance(node.func, ast.Attribute)
-        and node.func.attr == "import_module"
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id in importlib_aliases
-    ):
-        return node.args[0].value
-    return None
-
 
 def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
     """Load both explicit roots and derive truth and historical public outcomes.
@@ -339,7 +210,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         public_rows = _public_rows(advntr, experiment, pair_id, "mutated")
         recurrent_state_collisions.extend(_recurrent_state_collisions(key, "mutated", public_rows))
         _record_identity_projection(identity_projection, key, "mutated", public_rows)
-        _record_policy_projections(
+        record_policy_projections(
             policy_stable_projection,
             unaffected_public_projection,
             policy_explanation,
@@ -401,7 +272,7 @@ def load_golden_corpus(sim_root: Path, advntr_root: Path) -> GoldenCorpus:
         public_rows = _public_rows(advntr, experiment, pair_id, "normal")
         recurrent_state_collisions.extend(_recurrent_state_collisions(key, "normal", public_rows))
         _record_identity_projection(identity_projection, key, "normal", public_rows)
-        _record_policy_projections(
+        record_policy_projections(
             policy_stable_projection,
             unaffected_public_projection,
             policy_explanation,
@@ -461,28 +332,6 @@ def _recurrent_state_collisions(
     )
 
 
-def selected_projection_fingerprint(projection: Mapping[str, tuple[tuple[str, ...], ...]]) -> str:
-    """Return a deterministic fingerprint of every literal selected-row cell."""
-    payload = json.dumps(projection, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def public_projection_fingerprint(projection: Mapping[str, object]) -> str:
-    """Return a deterministic fingerprint for a nested public-row projection."""
-    payload = json.dumps(projection, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def sample_sets_fingerprint(sample_sets: dict[str, frozenset[str]]) -> str:
-    """Return a deterministic fingerprint of named literal sample-key sets."""
-    payload = json.dumps(
-        {name: sorted(keys) for name, keys in sample_sets.items()},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 def _record_identity_projection(
     projection: dict[str, tuple[tuple[str, ...], ...]],
     key: str,
@@ -493,73 +342,6 @@ def _record_identity_projection(
         projection[f"{key}/{condition}/{caller}"] = tuple(
             tuple(row.get(column, "<missing>") for column in IDENTITY_COLUMNS) for row in rows
         )
-
-
-def _record_policy_projections(
-    stable: dict[str, tuple[tuple[tuple[str, str], ...], ...]],
-    unaffected: dict[str, tuple[tuple[tuple[str, str], ...], ...]],
-    explanations: dict[str, tuple[tuple[str, str, str, str], ...]],
-    key: str,
-    condition: str,
-    public_rows: dict[str, tuple[dict[str, str], ...]],
-) -> None:
-    """Record B1-stable cells and independently scoped B2 explanation cells."""
-    decision_key = f"{key}/{condition}"
-    collision = any((row.get("Variant") or "").strip() in RECURRENT_STATE_EVIDENCE for row in public_rows["advntr"])
-    for caller, rows in public_rows.items():
-        projection_key = f"{decision_key}/{caller}"
-        stable[projection_key] = tuple(
-            tuple(sorted((column, value) for column, value in row.items() if column not in _POLICY_EXPLANATION_COLUMNS))
-            for row in rows
-        )
-        unaffected[projection_key] = tuple(
-            tuple(sorted((column, value) for column, value in row.items() if column != "Evidence_Disposition"))
-            for row in rows
-            if not (
-                (caller == "advntr" and (row.get("Variant") or "").strip() in RECURRENT_STATE_EVIDENCE)
-                or (caller == "kestrel" and collision)
-            )
-        )
-        explanations[projection_key] = tuple(
-            (
-                (row.get("Variant") or "").strip(),
-                (row.get("Nomenclature_Flags") or "").strip(),
-                (row.get("Nomenclature_Note") or "").strip(),
-                row.get("Evidence_Disposition", "<missing>").strip(),
-            )
-            for row in rows
-        )
-
-
-def _resolve_local_imports(source: Path, root: Path, module: str, level: int) -> tuple[Path, ...]:
-    if level:
-        base = source.parent
-        for _ in range(level - 1):
-            base = base.parent
-        parts = module.split(".") if module else []
-        candidates = [(base, parts)]
-    else:
-        parts = module.split(".") if module else []
-        candidates = [(root, parts), (source.parent, parts)]
-
-    for base, candidate_parts in candidates:
-        candidate = base.joinpath(*candidate_parts)
-        file_candidate = candidate.with_suffix(".py")
-        package_candidate = candidate / "__init__.py"
-        if file_candidate.is_file():
-            return _package_initializers(base, candidate_parts[:-1]) + (file_candidate.resolve(),)
-        if package_candidate.is_file():
-            return _package_initializers(base, candidate_parts)
-    return ()
-
-
-def _package_initializers(base: Path, parts: list[str]) -> tuple[Path, ...]:
-    initializers: list[Path] = []
-    for index in range(1, len(parts) + 1):
-        initializer = base.joinpath(*parts[:index], "__init__.py")
-        if initializer.is_file():
-            initializers.append(initializer.resolve())
-    return tuple(initializers)
 
 
 def _expected_identity(spec: _Mutation) -> ExpectedIdentity:

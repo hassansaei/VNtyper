@@ -23,11 +23,23 @@ _GROUP_KEYS = (
 )
 
 
-def _member(key: str, role: str, *, groups: dict[str, list[str]] | None = None) -> dict[str, object]:
+def _member(
+    key: str,
+    role: str,
+    *,
+    groups: dict[str, list[str]] | None = None,
+    assay_class: str = "capture-short-read",
+) -> dict[str, object]:
     complete = {namespace: [f"{namespace}:{key}"] for namespace in _GROUP_KEYS}
     if groups:
         complete.update(groups)
-    return {"key": key, "role": role, "provenance": "development", "groups": complete}
+    return {
+        "key": key,
+        "role": role,
+        "provenance": "development",
+        "assay_class": assay_class,
+        "groups": complete,
+    }
 
 
 def _manifest(*members: dict[str, object]) -> dict[str, object]:
@@ -150,3 +162,16 @@ def test_study_declaration_hashes_protocol_and_all_four_roles() -> None:
     incomplete["partitions"] = _manifest(_member("train", "training"))
     with pytest.raises(ValueError, match="four"):
         decode_study_declaration(incomplete)
+
+
+def test_study_declaration_binds_each_member_to_a_predeclared_assay_class() -> None:
+    partitions = _manifest(
+        {**_member("held", "locked-heldout"), "provenance": "external-custodian"},
+        _member("select", "policy-selection"),
+        _member("train", "training", assay_class="genome-short-read"),
+        _member("validate", "validation"),
+    )
+    raw = {"schema_version": "calibration-study-v1", "protocol": synthetic_protocol(), "partitions": partitions}
+
+    with pytest.raises(ValueError, match="assay class.*protocol|protocol.*assay class"):
+        decode_study_declaration(raw)

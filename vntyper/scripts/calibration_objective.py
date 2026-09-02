@@ -131,6 +131,10 @@ def calculate_metrics(
     controls = tuple(row for row in observations if row.expected_identity is None)
     if not mutated:
         raise ValueError("calibration objective requires mutated truth members")
+    observed_strata = {f"{row.assay_class}:{row.mutation_class}" for row in mutated}
+    undeclared_strata = observed_strata - set(strata)
+    if undeclared_strata:
+        raise ValueError(f"calibration objective observations use undeclared strata: {sorted(undeclared_strata)}")
     exact_by_stratum: dict[str, tuple[int, int]] = {}
     for stratum in strata:
         members = tuple(row for row in mutated if f"{row.assay_class}:{row.mutation_class}" == stratum)
@@ -258,6 +262,7 @@ def _is_admissible(evaluation: CandidateEvaluation, protocol: CalibrationProtoco
         and metrics.applicability_matches
         and metrics.abstention_fraction <= protocol.maximum_abstention_fraction
         and metrics.free_parameter_count <= protocol.maximum_free_parameters
+        and len(evaluation.stratum_counts) == len(protocol.required_strata)
         and all(count >= protocol.minimum_stratum_count for count in evaluation.stratum_counts)
         and evaluation.detection_lower_bound >= 0
         and evaluation.macro_exact_lower_bound >= 0

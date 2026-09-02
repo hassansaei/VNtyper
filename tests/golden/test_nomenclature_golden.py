@@ -3,7 +3,9 @@
 These are the numbers the design argues from, pinned so they cannot regress
 silently. The benchmark tree is supplied out of band -- ``VNTYPER_SIM_ROOT`` for the
 simulated cohort, ``VNTYPER_ADVNTR_ROOT`` for the adVNTR batch -- so no path to
-either is committed and the tier skips wherever they are absent.
+either is committed. Deselected tests remain collection-safe, while selected golden
+execution fails explicitly for missing, nonexistent, or incomplete roots; a skip is
+never accepted as golden evidence.
 
 Not part of ``make test-unit``, which selects ``-m unit tests/unit``. Run with::
 
@@ -15,7 +17,6 @@ Research use only.
 from __future__ import annotations
 
 import csv
-import os
 from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
@@ -24,14 +25,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from tests.golden.root_requirements import resolve_explicit_roots
 from vntyper.scripts.nomenclature import Nomenclature, from_advntr, from_kestrel, reconcile, render
 from vntyper.scripts.nomenclature_annotate import _is_negative
 from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate, refine
 
 pytestmark = pytest.mark.golden
-
-SIM_ROOT = os.environ.get("VNTYPER_SIM_ROOT")
-ADVNTR_ROOT = os.environ.get("VNTYPER_ADVNTR_ROOT")
 
 EXPERIMENTS = ("experiment1_dupC", "experiment2_atypical")
 
@@ -76,22 +75,18 @@ VCF_ONLY_FLOOR: dict[str, int] = {
 }
 
 
+@pytest.fixture(scope="module", autouse=True)
+def required_explicit_roots() -> tuple[Path, Path]:
+    """Fail selected golden execution while leaving deselected collection safe."""
+    return resolve_explicit_roots()
+
+
 def _require_sim() -> Path:
-    if not SIM_ROOT:
-        pytest.skip("VNTYPER_SIM_ROOT unset")
-    root = Path(SIM_ROOT)
-    if not root.is_dir():
-        pytest.skip(f"benchmark root not found: {root}")
-    return root
+    return resolve_explicit_roots()[0]
 
 
 def _require_advntr() -> Path:
-    if not ADVNTR_ROOT:
-        pytest.skip("VNTYPER_ADVNTR_ROOT unset")
-    root = Path(ADVNTR_ROOT)
-    if not root.is_dir():
-        pytest.skip(f"adVNTR batch root not found: {root}")
-    return root
+    return resolve_explicit_roots()[1]
 
 
 def _truth(root: Path, experiment: str) -> dict[str, str]:

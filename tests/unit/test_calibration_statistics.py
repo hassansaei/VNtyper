@@ -25,7 +25,12 @@ def test_group_bootstrap_resamples_complete_groups_not_rows() -> None:
         PairedObservation("family-b", "assay-a:dup", Fraction(1), Fraction(0)),
     )
 
-    interval = paired_group_bootstrap(observations, iterations=10_000, seed=295)
+    interval = paired_group_bootstrap(
+        observations,
+        required_strata=("assay-a:dup",),
+        iterations=10_000,
+        seed=295,
+    )
 
     assert interval.resampling_unit_count == 2
     assert interval.iterations == 10_000
@@ -34,6 +39,7 @@ def test_group_bootstrap_resamples_complete_groups_not_rows() -> None:
             PairedObservation(str(index), row.stratum, row.baseline, row.candidate)
             for index, row in enumerate(observations)
         ),
+        required_strata=("assay-a:dup",),
         iterations=10_000,
         seed=295,
     )
@@ -45,8 +51,8 @@ def test_bootstrap_is_deterministic_and_identical_pairs_have_zero_bounds() -> No
         for index in range(5)
     )
 
-    first = paired_group_bootstrap(rows, iterations=10_000, seed=295)
-    second = paired_group_bootstrap(rows, iterations=10_000, seed=295)
+    first = paired_group_bootstrap(rows, required_strata=("assay-a:dup",), iterations=10_000, seed=295)
+    second = paired_group_bootstrap(rows, required_strata=("assay-a:dup",), iterations=10_000, seed=295)
 
     assert first == second
     assert (first.one_sided_lower, first.two_sided_lower, first.two_sided_upper) == (
@@ -63,9 +69,38 @@ def test_group_spanning_strata_and_empty_input_fail_closed() -> None:
     )
 
     with pytest.raises(ValueError, match="strata"):
-        paired_group_bootstrap(crossing, iterations=10_000, seed=295)
+        paired_group_bootstrap(
+            crossing,
+            required_strata=("assay-a:dup", "assay-b:dup"),
+            iterations=10_000,
+            seed=295,
+        )
     with pytest.raises(ValueError):
-        paired_group_bootstrap((), iterations=10_000, seed=295)
+        paired_group_bootstrap((), required_strata=("assay-a:dup",), iterations=10_000, seed=295)
+
+
+def test_bootstrap_rejects_an_empty_cell_in_the_frozen_stratum_vector() -> None:
+    rows = (PairedObservation("group", "assay-a:dup", Fraction(0), Fraction(1)),)
+
+    with pytest.raises(ValueError, match="empty declared bootstrap strata.*assay-b:del"):
+        paired_group_bootstrap(
+            rows,
+            required_strata=("assay-a:dup", "assay-b:del"),
+            iterations=10_000,
+            seed=295,
+        )
+
+
+def test_bootstrap_rejects_observations_outside_the_frozen_stratum_vector() -> None:
+    rows = (PairedObservation("group", "assay-b:del", Fraction(0), Fraction(1)),)
+
+    with pytest.raises(ValueError, match="undeclared bootstrap stratum.*assay-b:del"):
+        paired_group_bootstrap(
+            rows,
+            required_strata=("assay-a:dup",),
+            iterations=10_000,
+            seed=295,
+        )
 
 
 def test_clopper_pearson_zero_event_interval_is_exact_boundary_case() -> None:
@@ -120,6 +155,7 @@ def test_paired_observation_is_frozen() -> None:
 def test_statistical_result_value_objects_are_frozen() -> None:
     bootstrap = paired_group_bootstrap(
         (PairedObservation("group", "assay:dup", Fraction(0), Fraction(1)),),
+        required_strata=("assay:dup",),
         iterations=10_000,
         seed=295,
     )
@@ -163,6 +199,7 @@ def test_paired_observation_rejects_every_invalid_identifier_and_rate(arguments:
 def test_bootstrap_rejects_each_invalid_control(changes: dict[str, object]) -> None:
     arguments: dict[str, object] = {
         "observations": (PairedObservation("group", "assay:dup", Fraction(0), Fraction(1)),),
+        "required_strata": ("assay:dup",),
         "iterations": 10_000,
         "seed": 295,
     }
@@ -180,7 +217,12 @@ def test_bootstrap_reports_literal_estimate_and_percentile_bounds() -> None:
         PairedObservation("d", "assay-b:del", Fraction(0), Fraction(0)),
     )
 
-    interval = paired_group_bootstrap(rows, iterations=10_000, seed=295)
+    interval = paired_group_bootstrap(
+        rows,
+        required_strata=("assay-a:dup", "assay-b:del"),
+        iterations=10_000,
+        seed=295,
+    )
 
     assert interval.estimate == Fraction(1, 4)
     assert interval.one_sided_lower == Fraction(-1, 2)
@@ -189,13 +231,31 @@ def test_bootstrap_reports_literal_estimate_and_percentile_bounds() -> None:
     assert interval.resampling_unit_count == 4
 
 
+def test_bootstrap_reports_finite_corrected_one_sided_noninferiority_p_value() -> None:
+    rows = tuple(
+        PairedObservation(
+            f"group-{index:02d}",
+            "assay-a:dup",
+            Fraction(index >= 13),
+            Fraction(index < 13),
+        )
+        for index in range(20)
+    )
+
+    interval = paired_group_bootstrap(rows, required_strata=("assay-a:dup",), iterations=10_000, seed=295)
+
+    assert interval.one_sided_lower == Fraction(0)
+    assert interval.one_sided_noninferiority_p_value == Fraction(497, 10_001)
+    assert interval.one_sided_noninferiority_p_value != Fraction(0)
+
+
 def test_bootstrap_accepts_seed_zero_and_calls_the_three_literal_percentiles() -> None:
     rows = (PairedObservation("group", "assay:dup", Fraction(0), Fraction(1)),)
 
     with patch(
         "vntyper.scripts.calibration_statistics._percentile", wraps=lambda values, probability: values[0]
     ) as percentile:
-        interval = paired_group_bootstrap(rows, iterations=10_000, seed=0)
+        interval = paired_group_bootstrap(rows, required_strata=("assay:dup",), iterations=10_000, seed=0)
 
     assert interval.estimate == Fraction(1)
     assert [call.args[1] for call in percentile.call_args_list] == [
@@ -240,7 +300,7 @@ def test_clopper_pearson_pins_non_boundary_estimate_and_interval() -> None:
 
 def test_clopper_pearson_confidence_is_keyword_only() -> None:
     with pytest.raises(TypeError):
-        clopper_pearson_interval(1, 2, Fraction(9, 10))  # type: ignore[call-arg]
+        clopper_pearson_interval(1, 2, Fraction(9, 10))  # type: ignore[misc]
 
 
 @pytest.mark.parametrize(

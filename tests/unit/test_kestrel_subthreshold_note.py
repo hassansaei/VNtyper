@@ -21,6 +21,7 @@ import pytest
 
 from vntyper.scripts import kestrel_genotyping as kg
 from vntyper.scripts import subthreshold as st
+from vntyper.scripts.canonical_json import load_strict_json_object
 from vntyper.scripts.summary import parse_tsv
 
 pytestmark = pytest.mark.unit
@@ -74,6 +75,21 @@ class TestOutputEmptyResult:
         assert len(rows) == 1
         assert rows[0]["Confidence"] == "Negative"
         assert list(rows[0]) == PLACEHOLDER_COLUMNS
+
+    def test_publishes_canonical_empty_identity_replay_artifacts(self, tmp_path: Path) -> None:
+        """Every completed negative replaces stale identity inputs with closed empties."""
+        (tmp_path / "kestrel_pre_result.tsv").write_text("stale\nvalue\n", encoding="utf-8")
+        (tmp_path / "bam_identity_replay.v1.json").write_text('{"stale":true}\n', encoding="utf-8")
+
+        kg.output_empty_result(str(tmp_path), ["## VNtyper Kestrel result"])
+
+        pre_result_text = (tmp_path / "kestrel_pre_result.tsv").read_text(encoding="utf-8")
+        assert pre_result_text.startswith("__Identity_Raw_Representation_Key\t")
+        assert pre_result_text.count("\n") == 1
+        assert load_strict_json_object((tmp_path / "bam_identity_replay.v1.json").read_bytes()) == {
+            "schema_version": "bam-identity-replay-v1",
+            "loci": [],
+        }
 
     def test_the_note_is_appended_as_a_banner_line(self, tmp_path: Path):
         kg.output_empty_result(str(tmp_path), ["## VNtyper Kestrel result"], note=NOTE)
@@ -289,6 +305,10 @@ class TestTheScoredEmptyBranch:
         assert any(st.NOTE_MARKER in line for line in comments)
         assert len(rows) == 1
         assert rows[0]["Confidence"] == "Negative"
+        scored_pre_result = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t")
+        assert len(scored_pre_result) == 1
+        assert scored_pre_result.loc[0, "Depth_Score"] == 0.0031
+        assert load_strict_json_object((tmp_path / "bam_identity_replay.v1.json").read_bytes())["loci"] == []
 
     def test_a_scored_empty_result_with_nothing_eligible_carries_none(self, tmp_path: Path):
         assert self.drive(tmp_path, eligible=False) is None

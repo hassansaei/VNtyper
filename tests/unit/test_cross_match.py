@@ -145,6 +145,72 @@ def test_cross_match_rejects_unknown_advntr_evidence_disposition() -> None:
         )
 
 
+def test_cross_match_preserves_a_reconciled_negative_advntr_placeholder() -> None:
+    """An additive blank column must not invalidate the frozen negative row."""
+    result = cross_match_variants(
+        kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+        advntr_records=[
+            {
+                "VID": "Negative",
+                "REF": "Not applicable",
+                "ALT": "Not applicable",
+                "POS": "Not applicable",
+                "Evidence_Disposition": "",
+            }
+        ],
+    )
+
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["Match"] == "No"
+    assert result["overall_match"] == "No"
+
+
+def test_cross_match_rejects_a_blank_positive_advntr_evidence_disposition() -> None:
+    with pytest.raises(ValueError, match="unsupported Evidence_Disposition"):
+        cross_match_variants(
+            kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+            advntr_records=[{"VID": "25561", "REF": "C", "ALT": "CC", "POS": 67, "Evidence_Disposition": ""}],
+        )
+
+
+@pytest.mark.parametrize("sentinel", ["negative", " Negative ", "NEGATIVE", "Negative "])
+def test_cross_match_fails_closed_on_a_noncanonical_negative_sentinel(sentinel: str) -> None:
+    """Only the exact canonical placeholder is negative evidence; a variant is a malformed positive."""
+    with pytest.raises(ValueError, match="unsupported Evidence_Disposition"):
+        cross_match_variants(
+            kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+            advntr_records=[
+                {
+                    "VID": sentinel,
+                    "REF": "Not applicable",
+                    "ALT": "Not applicable",
+                    "POS": "Not applicable",
+                    "Evidence_Disposition": "",
+                }
+            ],
+        )
+
+
+def test_cross_match_reports_a_canonical_negative_beside_a_positive_row_without_hiding_either() -> None:
+    """Mixed input: the placeholder stays a non-match and cannot suppress the positive comparison."""
+    result = cross_match_variants(
+        kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+        advntr_records=[
+            {
+                "VID": "Negative",
+                "REF": "Not applicable",
+                "ALT": "Not applicable",
+                "POS": "Not applicable",
+                "Evidence_Disposition": "",
+            },
+            {"VID": "25561", "REF": "C", "ALT": "CC", "POS": 67, "Evidence_Disposition": "admissible"},
+        ],
+    )
+
+    assert [match["Match"] for match in result["matches"]] == ["No", "Yes"]
+    assert result["overall_match"] == "Yes"
+
+
 def test_a_non_matching_pair_is_not_reported_as_a_match():
     result = cross_match_variants(
         kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],

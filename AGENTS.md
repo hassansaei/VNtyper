@@ -365,8 +365,10 @@ limit.
   compares a report with itself.
 - **`golden` is the fifth directory tier** (`tests/golden`,
   `pytest -m golden tests/golden`). It compares against a known-truth simulated cohort
-  supplied through `VNTYPER_SIM_ROOT` and `VNTYPER_ADVNTR_ROOT`, skips without those
-  inputs, and deliberately remains outside `make check-all`.
+  supplied through `VNTYPER_SIM_ROOT` and `VNTYPER_ADVNTR_ROOT`. Deselected collection
+  is safe; selected golden execution requires both roots and fails without skipping if
+  either root is absent, missing, or incomplete. The tier deliberately remains outside
+  `make check-all`.
 - **Every new unit test file must declare `pytestmark = pytest.mark.unit`.** CI runs
   `pytest -m unit`, so an unmarked file silently never runs. This is enforced by
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;

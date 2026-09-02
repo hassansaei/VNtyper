@@ -47,7 +47,9 @@ from vntyper.scripts.flagging import (
 )
 from vntyper.scripts.identity_candidate_persistence import (
     IDENTITY_CAPTURE_COLUMNS,
+    IDENTITY_SELECTION_COLUMNS,
     candidate_capture_cells,
+    complete_candidate_projection_cells,
     selected_candidate_cells,
 )
 from vntyper.scripts.identity_candidates import (
@@ -61,6 +63,7 @@ from vntyper.scripts.kestrel_command import construct_kestrel_command as constru
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_decision_config import KestrelSelection, project_kestrel_selection
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
+from vntyper.scripts.kestrel_result_artifacts import write_empty_kestrel_artifacts
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
 from vntyper.scripts.molecular_identity_presentation import (
     IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS,
@@ -267,6 +270,7 @@ def run_kestrel(
     *,
     resolved_component: Mapping[str, object] | None = None,
     nomenclature_component: Mapping[str, object] | None = None,
+    dominance_component: Mapping[str, object] | None = None,
     runtime_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
 ):
@@ -299,6 +303,11 @@ def run_kestrel(
             so a new parameter in front of the existing optional ones would silently
             rebind them for any external caller. Defaults to 4, matching
             ``config.json``'s ``default_values.threads``.
+        resolved_component: Immutable Kestrel decision component for this run.
+        nomenclature_component: Immutable nomenclature component for this run.
+        dominance_component: Immutable whole-locus dominance component for this run.
+        runtime_component: Immutable excluded Kestrel runtime component.
+        custom_context_active: Whether an explicit custom profile owns this run.
 
     Raises:
         RuntimeError: If Kestrel fails for a given k-mer size, or if no configured
@@ -316,6 +325,11 @@ def run_kestrel(
     nomenclature_decision = resolve_compatibility_component(
         "nomenclature",
         nomenclature_component,
+        custom_context_active=custom_context_active,
+    )
+    dominance_decision = resolve_compatibility_component(
+        "dominance",
+        dominance_component,
         custom_context_active=custom_context_active,
     )
     runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
@@ -411,6 +425,7 @@ def run_kestrel(
                     decision,
                     config,
                     nomenclature_component=nomenclature_decision,
+                    dominance_component=dominance_decision,
                     runtime_component=runtime,
                     custom_context_active=custom_context_active,
                 )
@@ -570,6 +585,7 @@ def process_kestrel_output(
     config,
     *,
     nomenclature_component: Mapping[str, object] | None = None,
+    dominance_component: Mapping[str, object] | None = None,
     runtime_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
 ):
@@ -593,6 +609,7 @@ def process_kestrel_output(
         kestrel_config (dict): Contains thresholds for depth, alt coverage, etc.
         config (dict): Main pipeline config (paths, additional references).
         nomenclature_component: Immutable nomenclature component for this run.
+        dominance_component: Immutable whole-locus dominance component for this run.
         custom_context_active: Whether an explicit custom profile owns this run.
 
     Returns:
@@ -606,6 +623,11 @@ def process_kestrel_output(
     nomenclature_decision = resolve_compatibility_component(
         "nomenclature",
         nomenclature_component,
+        custom_context_active=custom_context_active,
+    )
+    dominance_decision = resolve_compatibility_component(
+        "dominance",
+        dominance_component,
         custom_context_active=custom_context_active,
     )
     flagging_rules = kestrel_config.get("flagging_rules", {})
@@ -695,15 +717,27 @@ def process_kestrel_output(
 
     # Perform frame scoring, depth scoring, confidence assignment, etc.
     identity_component = translation_component_from_config(nomenclature_decision)
-    processed_df = process_kmer_results(
-        combined_df,
-        merged_motifs,
-        output_dir,
-        kestrel_config,
-        compiled_flag_rules=compiled_flag_rules,
-        identity_component=identity_component,
-        custom_context_active=custom_context_active,
-    )
+    if dominance_decision.get("enabled") is True:
+        processed_df = process_kmer_results(
+            combined_df,
+            merged_motifs,
+            output_dir,
+            kestrel_config,
+            compiled_flag_rules=compiled_flag_rules,
+            identity_component=identity_component,
+            custom_context_active=custom_context_active,
+            retain_complete_identity_candidates=True,
+        )
+    else:
+        processed_df = process_kmer_results(
+            combined_df,
+            merged_motifs,
+            output_dir,
+            kestrel_config,
+            compiled_flag_rules=compiled_flag_rules,
+            identity_component=identity_component,
+            custom_context_active=custom_context_active,
+        )
 
     if processed_df.empty:
         logger.warning("Final processed DataFrame is empty. Writing empty result.")
@@ -718,6 +752,7 @@ def process_kestrel_output(
             output_dir,
             header,
             note=_subthreshold_note(output_dir, note_config, selection.final_filter_columns),
+            preserve_pre_result=True,
         )
         return None
 
@@ -731,12 +766,35 @@ def process_kestrel_output(
     # Name the variants before writing. Doing it here rather than in a later stage is
     # what makes one edit reach every surface: the TSV below, the pipeline summary
     # built from this same frame, and the HTML report all inherit the columns.
-    processed_df = annotate_kestrel_frame(
-        processed_df,
-        output_dir,
-        identity_component=identity_component,
-        resolved_component=nomenclature_decision,
-    )
+    if dominance_decision.get("enabled") is True:
+        from vntyper.scripts.kestrel_dominance_candidates import publish_dominance_selection
+
+        selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active)
+        pre_result_path = Path(output_dir) / "kestrel_pre_result.tsv"
+        pre_result = pd.read_csv(pre_result_path, sep="\t", dtype=str, keep_default_na=False)
+        selected_ordinal = int(processed_df.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]])
+        # The fixed sequence lives in one pure function so the published result keeps
+        # the legacy column set and the pre-result keeps every diagnostic.
+        merged_pre_result, processed_df = publish_dominance_selection(
+            pre_result,
+            selection.final_filter_columns,
+            selected_ordinal,
+            lambda candidates: annotate_kestrel_frame(
+                candidates,
+                output_dir,
+                identity_component=identity_component,
+                resolved_component=nomenclature_decision,
+                retain_complete_identity_evidence=True,
+            ),
+        )
+        merged_pre_result.to_csv(pre_result_path, sep="\t", index=False)
+    else:
+        processed_df = annotate_kestrel_frame(
+            processed_df,
+            output_dir,
+            identity_component=identity_component,
+            resolved_component=nomenclature_decision,
+        )
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
@@ -748,7 +806,7 @@ def process_kestrel_output(
     return processed_df
 
 
-def output_empty_result(output_dir, header, note=None):
+def output_empty_result(output_dir, header, note=None, preserve_pre_result=False):
     """
     Creates an empty result file with correct headers and a
     placeholder 'Negative' variant row to indicate no variants
@@ -762,32 +820,17 @@ def output_empty_result(output_dir, header, note=None):
             and never a row, so the 10-column placeholder schema below is unchanged and
             no consumer that reads the table can mistake it for a call -- `parse_tsv`
             routes `#` lines into `comments`, and `data` never sees them.
+        preserve_pre_result (bool, optional): Keep the scored pre-result on the
+            post-filter no-call branch. Earlier branches replace stale state.
     """
-    final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
-
-    empty_result_data = {
-        "Motif": ["None"],
-        "Variant": ["None"],
-        "POS": ["None"],
-        "REF": ["None"],
-        "ALT": ["None"],
-        "Motif_sequence": ["None"],
-        "Estimated_Depth_AlternateVariant": ["None"],
-        "Estimated_Depth_Variant_ActiveRegion": ["None"],
-        "Depth_Score": ["None"],
-        "Confidence": ["Negative"],
-    }
-    empty_df = pd.DataFrame(empty_result_data)
-
-    banner = list(header)
     if note:
-        banner.append(f"## {note}")
         logger.info("Recording a below-reporting-floor note on an otherwise empty result.")
-
-    with open(final_output_path, "w") as f:
-        f.write("\n".join(banner) + "\n")
-        empty_df.to_csv(f, sep="\t", index=False)
-
+    final_output_path = write_empty_kestrel_artifacts(
+        output_dir,
+        header,
+        note=note,
+        preserve_pre_result=preserve_pre_result,
+    )
     logger.info(f"Empty result file with placeholder saved at {final_output_path}")
 
 
@@ -799,6 +842,7 @@ def process_kmer_results(
     compiled_flag_rules: CompiledFlagRules | None = None,
     identity_component: IdentityTranslationComponent | None = None,
     custom_context_active: bool = False,
+    retain_complete_identity_candidates: bool = False,
 ):
     """
     Applies the main postprocessing heuristics:
@@ -834,6 +878,8 @@ def process_kmer_results(
             focused legacy callers may omit identity capture.
         custom_context_active: Whether missing profile-owned selection values must fail
             instead of using the packaged compatibility fallback.
+        retain_complete_identity_candidates: Persist an authoritative selection
+            projection for every passing identity hypothesis before legacy reduction.
 
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
@@ -926,6 +972,14 @@ def process_kmer_results(
         passing_identity_ordinals = tuple(
             int(serialized) for serialized in df.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]]
         )
+        if retain_complete_identity_candidates:
+            projections = complete_candidate_projection_cells(evidenced_candidates, passing_identity_ordinals)
+            for column in IDENTITY_SELECTION_COLUMNS:
+                df[column] = ""
+            for row_index in df.index[passing_mask]:
+                ordinal = int(df.loc[row_index, IDENTITY_CAPTURE_COLUMNS[5]])
+                for column, value in projections[ordinal].items():
+                    df.loc[row_index, column] = value
 
     # (7) Final Filter
     df = filter_final_dataframe(df, output_dir, selection=selection)

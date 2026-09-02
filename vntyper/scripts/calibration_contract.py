@@ -27,6 +27,8 @@ _PROTOCOL_FIELDS = {
     "maximum_free_parameters",
     "minimum_stratum_count",
     "maximum_abstention_fraction",
+    "assay_classes",
+    "mutation_classes",
     "candidate_grid",
 }
 _GRID_FIELDS = {
@@ -80,6 +82,9 @@ class CalibrationProtocol:
     maximum_free_parameters: int
     minimum_stratum_count: int
     maximum_abstention_fraction: Fraction
+    assay_classes: tuple[str, ...]
+    mutation_classes: tuple[str, ...]
+    required_strata: tuple[str, ...]
     candidate_grid: Mapping[str, tuple[object, ...]]
     candidates: tuple[CandidateRule, ...]
     sha256: str
@@ -200,6 +205,10 @@ def validate_attestation_bindings(
 
 def decode_protocol(value: object) -> CalibrationProtocol:
     """Decode the strict finite version-1 calibration protocol."""
+    if isinstance(value, Mapping):
+        for field, label in (("assay_classes", "assay classes"), ("mutation_classes", "mutation classes")):
+            if field not in value:
+                raise ValueError(f"calibration protocol requires predeclared {label}")
     raw = _exact_object(value, _PROTOCOL_FIELDS, "calibration protocol")
     if raw["objective"] != "lexicographic-safety-v1":
         raise ValueError("calibration protocol objective must be lexicographic-safety-v1")
@@ -219,6 +228,9 @@ def decode_protocol(value: object) -> CalibrationProtocol:
     maximum_abstention = _unit_fraction(
         raw["maximum_abstention_fraction"], "calibration protocol maximum abstention fraction"
     )
+    assay_classes = _sorted_unique_strings(raw["assay_classes"], "calibration protocol assay classes")
+    mutation_classes = _sorted_unique_strings(raw["mutation_classes"], "calibration protocol mutation classes")
+    required_strata = tuple(f"{assay}:{mutation}" for assay, mutation in product(assay_classes, mutation_classes))
     grid = _decode_grid(raw["candidate_grid"])
     count_margins = cast(tuple[int, ...], grid["minimum_record_count_margin"])
     shares = cast(tuple[Fraction, ...], grid["minimum_record_share"])
@@ -234,17 +246,20 @@ def decode_protocol(value: object) -> CalibrationProtocol:
         )
     )
     return CalibrationProtocol(
-        "lexicographic-safety-v1",
-        10_000,
-        "percentile",
-        "holm",
-        seed,
-        maximum_parameters,
-        minimum_stratum_count,
-        maximum_abstention,
-        MappingProxyType(grid),
-        candidates,
-        canonical_sha256(raw),
+        objective="lexicographic-safety-v1",
+        bootstrap_iterations=10_000,
+        bootstrap_interval="percentile",
+        multiplicity_method="holm",
+        seed=seed,
+        maximum_free_parameters=maximum_parameters,
+        minimum_stratum_count=minimum_stratum_count,
+        maximum_abstention_fraction=maximum_abstention,
+        assay_classes=assay_classes,
+        mutation_classes=mutation_classes,
+        required_strata=required_strata,
+        candidate_grid=MappingProxyType(grid),
+        candidates=candidates,
+        sha256=canonical_sha256(raw),
     )
 
 
@@ -412,6 +427,20 @@ def _unique_list(value: object, label: str) -> list[object]:
     if len({repr(item) for item in value}) != len(value):
         raise ValueError(f"{label} must not contain duplicate values")
     return value
+
+
+def _sorted_unique_strings(value: object, label: str) -> tuple[str, ...]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or not item for item in value)
+        or value != sorted(value)
+        or len(value) != len(set(value))
+    ):
+        raise ValueError(f"{label} must be sorted unique non-empty strings")
+    if any(":" in item for item in value):
+        raise ValueError(f"{label} must not contain ':'")
+    return tuple(value)
 
 
 def _nonnegative_integer(value: object, label: str) -> int:

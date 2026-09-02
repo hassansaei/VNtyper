@@ -15,6 +15,7 @@ from vntyper.scripts.identity_candidates import (
     IdentityCandidateSet,
     RawKeyValues,
     RawRepresentationKey,
+    overlay_legacy_projection,
 )
 from vntyper.scripts.molecular_identity import (
     IdentityTranslation,
@@ -58,6 +59,15 @@ class PersistedIdentityCandidate:
     blocking_gates: frozenset[str]
     flags: frozenset[str]
     group_context_diverges: bool
+
+
+@dataclass(frozen=True)
+class PersistedIdentityCapture:
+    """One complete identity capture decoded from a pre-result TSV row."""
+
+    translation: IdentityTranslation
+    row_key: RawRepresentationKey
+    observation_ordinal: int
 
 
 def candidate_capture_cells(candidate: IdentityCandidate) -> dict[str, str]:
@@ -120,6 +130,40 @@ def selected_candidate_cells(candidates: IdentityCandidateSet) -> dict[str, str]
     }
 
 
+def complete_candidate_projection_cells(
+    candidates: IdentityCandidateSet,
+    passing_observation_ordinals: tuple[int, ...],
+) -> dict[int, dict[str, str]]:
+    """Persist one authoritative projection for every passing candidate.
+
+    Args:
+        candidates: Complete caller capture with row evidence attached.
+        passing_observation_ordinals: Stable ordinals surviving all legacy gates.
+
+    Returns:
+        Selection metadata keyed by each passing candidate's own ordinal.
+
+    Raises:
+        ValueError: If ordinals are malformed, duplicated, or absent from capture.
+    """
+    if not isinstance(candidates, IdentityCandidateSet):
+        raise ValueError("Complete candidate projections require an IdentityCandidateSet")
+    if not isinstance(passing_observation_ordinals, tuple) or any(
+        isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0
+        for ordinal in passing_observation_ordinals
+    ):
+        raise ValueError("Passing candidate ordinals must be a tuple of non-negative integers")
+    if passing_observation_ordinals != tuple(sorted(set(passing_observation_ordinals))):
+        raise ValueError("Passing candidate ordinals must be unique and increasing")
+    captured = {candidate.observation_ordinal for candidate in candidates.candidates}
+    if not set(passing_observation_ordinals) <= captured:
+        raise ValueError("Passing candidate ordinal is absent from complete capture")
+    return {
+        ordinal: selected_candidate_cells(overlay_legacy_projection(candidates, passing_observation_ordinals, ordinal))
+        for ordinal in passing_observation_ordinals
+    }
+
+
 def parse_selected_candidate_cells(row: Mapping[str, object]) -> PersistedIdentityCandidate:
     """Decode selected candidate metadata after a TSV round trip.
 
@@ -175,6 +219,37 @@ def parse_selected_candidate_cells(row: Mapping[str, object]) -> PersistedIdenti
         blocking_gates=blocking_gates,
         flags=_parse_strings(_required_string(row, IDENTITY_SELECTION_COLUMNS[4])),
         group_context_diverges=group_context_diverges,
+    )
+
+
+def parse_candidate_capture_cells(row: Mapping[str, object]) -> PersistedIdentityCapture:
+    """Decode one pre-selection identity capture after a TSV round trip.
+
+    Args:
+        row: Mapping containing every internal identity-capture column.
+
+    Returns:
+        Validated raw-key, translation, and stable observation ordinal.
+
+    Raises:
+        KeyError: If a required internal column is absent.
+        ValueError: If serialized values are inconsistent or malformed.
+    """
+    raw_key = _parse_raw_key(_required_string(row, IDENTITY_CAPTURE_COLUMNS[0]))
+    identity_text = _required_string(row, IDENTITY_CAPTURE_COLUMNS[1])
+    failure_text = _required_string(row, IDENTITY_CAPTURE_COLUMNS[3])
+    identity = None if identity_text == ABSENT_TOKEN else parse_molecular_identity(identity_text)
+    failure = None if failure_text == ABSENT_TOKEN else cast(TranslationFailure, failure_text)
+    translation = IdentityTranslation(
+        identity,
+        cast(TranslationStatus, _required_string(row, IDENTITY_CAPTURE_COLUMNS[2])),
+        failure,
+        _parse_bool(row[IDENTITY_CAPTURE_COLUMNS[4]]),
+    )
+    return PersistedIdentityCapture(
+        translation,
+        raw_key,
+        _nonnegative_int(row, IDENTITY_CAPTURE_COLUMNS[5]),
     )
 
 

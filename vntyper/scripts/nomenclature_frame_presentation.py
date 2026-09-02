@@ -40,6 +40,18 @@ NOMENCLATURE_COLUMNS: tuple[str, ...] = (
 #: A negative Kestrel run writes a different, 10-column schema whose first column is
 #: singular ``Motif``. It carries no variant, so there is nothing to name.
 _NEGATIVE_MARKERS = ("None", "Negative", "Not applicable")
+_CANONICAL_KESTREL_NEGATIVE = {
+    "Motif": "None",
+    "Variant": "None",
+    "POS": "None",
+    "REF": "None",
+    "ALT": "None",
+    "Motif_sequence": "None",
+    "Estimated_Depth_AlternateVariant": "None",
+    "Estimated_Depth_Variant_ActiveRegion": "None",
+    "Depth_Score": "None",
+    "Confidence": "Negative",
+}
 
 
 def is_negative_result_row(row: pd.Series) -> bool:
@@ -56,6 +68,25 @@ def is_negative_result_row(row: pd.Series) -> bool:
     if str(row.get("VID", "")) == "Negative":
         return True
     return str(row.get("Motif", "")) == "None" and "Motifs" not in row.index
+
+
+def is_canonical_kestrel_negative_frame(frame: pd.DataFrame) -> bool:
+    """Recognize the exact one-row negative Kestrel production schema.
+
+    Args:
+        frame: Parsed Kestrel result frame.
+
+    Returns:
+        Whether columns, values, and order equal the canonical negative artifact.
+    """
+    return (
+        len(frame) == 1
+        and tuple(frame.columns) == tuple(_CANONICAL_KESTREL_NEGATIVE)
+        and all(
+            str(frame.iloc[0][column]) == expected or (expected == "None" and pd.isna(frame.iloc[0][column]))
+            for column, expected in _CANONICAL_KESTREL_NEGATIVE.items()
+        )
+    )
 
 
 def nomenclature_result_cells(

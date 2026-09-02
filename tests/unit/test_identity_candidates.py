@@ -14,6 +14,7 @@ from vntyper.scripts.identity_candidate_persistence import (
     IDENTITY_CAPTURE_COLUMNS,
     IDENTITY_SELECTION_COLUMNS,
     candidate_capture_cells,
+    complete_candidate_projection_cells,
     parse_selected_candidate_cells,
     selected_candidate_cells,
 )
@@ -169,6 +170,24 @@ def test_same_raw_tuple_under_two_motifs_retains_two_hypotheses() -> None:
         ("X-5", 67, "G", "GG"),
         ("S-C", 67, "G", "GG"),
     }
+
+
+def test_complete_candidate_projection_persists_every_passing_hypothesis_before_legacy_selection() -> None:
+    """Mutation caught: only the later legacy-selected candidate receives authoritative metadata."""
+    captured = _captured(
+        [_kestrel_row("X-5", _FIVE + _X), _kestrel_row("S-C", _C + _S)],
+        _MotifSensitiveComponent(),
+    )
+    rows = [_row_for_candidate(candidate) for candidate in captured.candidates]
+    evidenced = with_candidate_evidence(captured, rows)
+
+    projections = complete_candidate_projection_cells(evidenced, (0, 1))
+
+    assert tuple(sorted(projections)) == (0, 1)
+    assert projections[0][SELECTED_ORDINAL_COLUMN] == "0"
+    assert projections[1][SELECTED_ORDINAL_COLUMN] == "1"
+    assert projections[0]["__Identity_Hypothesis_Count"] == "2"
+    assert projections[1]["__Identity_Hypothesis_Count"] == "2"
 
 
 def test_equivalent_representations_do_not_sum_support() -> None:

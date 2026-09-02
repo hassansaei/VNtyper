@@ -47,6 +47,7 @@ from vntyper.scripts.artifact_names import (
     pipeline_artifact_paths,
     select_best_vcf_file,
 )
+from vntyper.scripts.nomenclature_annotate import DominanceSeamOutcome
 
 pytestmark = pytest.mark.unit
 
@@ -354,6 +355,7 @@ def test_pipeline_snapshots_the_supplied_explicit_context_without_reloading_pack
     kestrel_call = harness.kwargs("run_kestrel")
     assert kestrel_call["resolved_component"] is run_configuration.kestrel
     assert kestrel_call["nomenclature_component"] is run_configuration.nomenclature
+    assert kestrel_call["dominance_component"] is run_configuration.dominance
     assert kestrel_call["runtime_component"] is run_configuration.kestrel_runtime
     assert kestrel_call["custom_context_active"] is True
     parsing_call = harness.kwargs("process_advntr_output")
@@ -361,8 +363,92 @@ def test_pipeline_snapshots_the_supplied_explicit_context_without_reloading_pack
     assert parsing_call["nomenclature_component"] is run_configuration.nomenclature
     reconciliation_call = harness.kwargs("reconcile_caller_outputs")
     assert reconciliation_call["resolved_component"] is run_configuration.nomenclature
+    assert reconciliation_call["dominance_component"] is run_configuration.dominance
     cross_match_call = harness.kwargs("cross_match_variants")
     assert cross_match_call["resolved_component"] is run_configuration.cross_match
+
+
+@pytest.mark.parametrize("extra_modules", [[], ["advntr"]], ids=["kestrel-only", "with-advntr"])
+def test_generated_dominance_reaches_the_final_whole_locus_seam_once(tmp_path: Path, extra_modules: list[str]) -> None:
+    """An enabled explicit profile must run once after the final available caller."""
+    from vntyper.scripts.calibration_profiles import build_generated_profile
+    from vntyper.scripts.run_configuration import resolve_run_configuration
+
+    generated = build_generated_profile(
+        {
+            "enabled": True,
+            "minimum_record_count_margin": 1,
+            "minimum_record_share": 0.5,
+            "minimum_record_share_margin": 0.0,
+            "xd_veto": "disabled",
+            "abstain_on_inadmissible_advntr": False,
+        },
+        dataset_manifest_hash="a" * 64,
+        partition_manifest_hash="b" * 64,
+        seed=295,
+        objective="lexicographic-safety-v1",
+        generator_version="test",
+    )
+    path = tmp_path / "generated.json"
+    path.write_bytes(generated.canonical_bytes)
+    run_configuration = resolve_run_configuration(path)
+
+    harness = run_pipeline_under_harness(
+        tmp_path / "out",
+        run_configuration=run_configuration,
+        extra_modules=extra_modules,
+        stage_side_effects={
+            "reconcile_caller_outputs": lambda *_args, **_kwargs: DominanceSeamOutcome(
+                evaluated=True,
+                rewritten=False,
+                dominance_outcome="not-applicable",
+            )
+        },
+    )
+
+    reconciliation = harness.call("reconcile_caller_outputs")
+    assert reconciliation.call_count == 1
+    if extra_modules:
+        assert reconciliation.call_args.args[1] is not None
+    else:
+        assert reconciliation.call_args.args[1] is None
+    assert reconciliation.call_args.kwargs["dominance_component"] is run_configuration.dominance
+
+
+def test_pipeline_rejects_an_enabled_dominance_seam_that_did_not_evaluate(tmp_path: Path) -> None:
+    """Mutation caught: a False runtime result silently skips the selected generated policy."""
+    from vntyper.scripts.calibration_profiles import build_generated_profile
+    from vntyper.scripts.run_configuration import resolve_run_configuration
+
+    generated = build_generated_profile(
+        {
+            "enabled": True,
+            "minimum_record_count_margin": 1,
+            "minimum_record_share": 0.5,
+            "minimum_record_share_margin": 0.0,
+            "xd_veto": "disabled",
+            "abstain_on_inadmissible_advntr": False,
+        },
+        dataset_manifest_hash="a" * 64,
+        partition_manifest_hash="b" * 64,
+        seed=295,
+        objective="lexicographic-safety-v1",
+        generator_version="test",
+    )
+    path = tmp_path / "generated.json"
+    path.write_bytes(generated.canonical_bytes)
+
+    harness = run_pipeline_under_harness(
+        tmp_path / "out",
+        run_configuration=resolve_run_configuration(path),
+        stage_side_effects={"reconcile_caller_outputs": lambda *_args, **_kwargs: False},
+        expect_failure=True,
+    )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert harness.call("reconcile_caller_outputs").call_count == 1
+    assert harness.stages["generate_summary_report"].call_count == 0
 
 
 def test_the_fastq_path_hands_every_stage_the_declared_basename(tmp_path: Path) -> None:

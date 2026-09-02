@@ -24,11 +24,6 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from vntyper.scripts.identity_reconciliation import (
-    IdentityReconciliationObservation,
-    IdentityReconciliationPolicy,
-    build_identity_reconciliation_observations,
-)
 from vntyper.scripts.molecular_identity import IdentityTranslation
 from vntyper.scripts.molecular_identity_presentation import (
     IDENTITY_COLUMNS,
@@ -61,12 +56,25 @@ from vntyper.scripts.nomenclature_bam_replay import (
     BamReplayArtifact,
     BamReplayLocus,
     invalidate_bam_replay_artifact,
-    merge_bam_replay_artifacts,
     read_bam_replay_artifact,
-    validate_bam_replay_artifact_ordinals,
     write_bam_replay_artifact,
 )
 from vntyper.scripts.nomenclature_decision_config import NomenclatureDecisionConfig, decision_config_from_component
+from vntyper.scripts.nomenclature_dominance_runtime import (
+    DOMINANCE_ABSTENTION_COLUMN,
+    DominanceSeamOutcome,
+    dominance_abstention_note,
+    evaluate_absent_bam_dominance,
+    reconcile_complete_retained_dominance,
+    reconcile_retained_dominance,
+    retain_bam_replay,
+)
+from vntyper.scripts.nomenclature_dominance_runtime import (
+    production_identity_observations as _production_identity_observations,
+)
+from vntyper.scripts.nomenclature_dominance_runtime import (
+    rows_carry_identity_metadata as _rows_carry_identity_metadata,
+)
 from vntyper.scripts.nomenclature_frame_presentation import (
     NOMENCLATURE_COLUMNS,
     append_decision_explanation,
@@ -75,10 +83,21 @@ from vntyper.scripts.nomenclature_frame_presentation import (
     annotate_advntr_frame as annotate_advntr_frame,
 )
 from vntyper.scripts.nomenclature_frame_presentation import (
+    is_canonical_kestrel_negative_frame as _is_canonical_kestrel_negative_frame,
+)
+from vntyper.scripts.nomenclature_frame_presentation import (
     is_negative_result_row as _is_negative,
 )
 from vntyper.scripts.nomenclature_frame_presentation import (
     nomenclature_result_cells as _cells,
+)
+from vntyper.scripts.nomenclature_identity_projection import (
+    IdentityAwareNomenclatureResult,
+    reconcile_identity_aware_nomenclature,
+)
+from vntyper.scripts.reconciled_identity_persistence import (
+    RECONCILED_IDENTITY_COLUMN,
+    encode_reconciled_identity,
 )
 from vntyper.scripts.run_configuration import resolve_compatibility_component
 
@@ -117,6 +136,7 @@ def annotate_kestrel_frame(
     identity_component: Any = None,
     resolved_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
+    retain_complete_identity_evidence: bool = False,
 ) -> pd.DataFrame:
     """Add the nomenclature columns to a Kestrel result frame.
 
@@ -129,6 +149,8 @@ def annotate_kestrel_frame(
         identity_component: Current-run complete-context translation component.
         resolved_component: Immutable nomenclature component for this run.
         custom_context_active: Whether an explicit custom profile owns this run.
+        retain_complete_identity_evidence: Observe every supplied positive typed
+            candidate for the later whole-locus dominance seam.
 
     Returns:
         pd.DataFrame: A copy with the five columns appended. The negative-run frame
@@ -170,7 +192,7 @@ def annotate_kestrel_frame(
         call = _kestrel_row_call(row, decision_config)
         merged = reconcile(call, decision_config=decision_config) if call is not None else None
         merged_calls.append(merged)
-        if merged is not None and is_candidate(merged):
+        if merged is not None and (retain_complete_identity_evidence or is_candidate(merged)):
             eligible_indices.add(row_index)
 
     rescuer = _open_rescuer(output_dir, decision_config)
@@ -185,6 +207,7 @@ def annotate_kestrel_frame(
                 rescuer,
                 identity_component,
                 decision_config,
+                deduplicate_whole_locus=retain_complete_identity_evidence,
             )
             bam_calls = list(projection.calls)
             replay_artifact = projection.artifact
@@ -252,13 +275,14 @@ def _kestrel_row_call(
 
 def reconcile_caller_outputs(
     kestrel_tsv: str | Path,
-    advntr_tsv: str | Path,
+    advntr_tsv: str | Path | None,
     kestrel_dir: str | Path | None = None,
     *,
     artifact_evidence: ArtifactEvidence | None = None,
     resolved_component: Mapping[str, object] | None = None,
+    dominance_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
-) -> bool:
+) -> bool | DominanceSeamOutcome:
     """Reconcile the two callers' written results and rewrite both in place.
 
     Each caller names its own rows as it writes them, which is what puts the columns
@@ -271,21 +295,24 @@ def reconcile_caller_outputs(
     3. Record what each caller said, so a disagreement stays legible instead of
        being collapsed into one verdict.
 
-    adVNTR is an optional module. When it has not run this step never fires, and the
-    Kestrel result stands exactly as its own stage wrote it.
+    adVNTR is optional. Without it, the packaged neutral path leaves Kestrel bytes
+    untouched; an explicitly enabled dominance component still evaluates this final
+    whole-locus seam from retained Kestrel evidence.
 
     Args:
         kestrel_tsv: Path to ``kestrel_result.tsv``.
-        advntr_tsv: Path to ``output_adVNTR_result.tsv``.
+        advntr_tsv: Path to ``output_adVNTR_result.tsv``, or None when adVNTR
+            was not selected and an enabled dominance profile owns the final seam.
         kestrel_dir: Directory holding ``output.bam``. Defaults to the directory the
             Kestrel TSV sits in, which is where the pipeline writes it.
         artifact_evidence: Verified governed State evidence. The packaged artifact is
             used by this standalone compatibility boundary when omitted.
         resolved_component: Immutable nomenclature component for this run.
+        dominance_component: Immutable whole-locus dominance component for this run.
         custom_context_active: Whether an explicit custom profile owns this run.
 
     Returns:
-        bool: True when both files were read and rewritten.
+        Legacy ``bool`` when dominance is disabled; otherwise an explicit evaluated outcome.
     """
     decision_component = resolve_compatibility_component(
         "nomenclature",
@@ -293,6 +320,12 @@ def reconcile_caller_outputs(
         custom_context_active=custom_context_active,
     )
     decision_config = decision_config_from_component(decision_component)
+    resolved_dominance = resolve_compatibility_component(
+        "dominance",
+        dominance_component,
+        custom_context_active=custom_context_active,
+    )
+    dominance_enabled = resolved_dominance.get("enabled") is True
 
     from vntyper.modules.advntr.artifact_evidence import (
         ASSERTION,
@@ -301,23 +334,55 @@ def reconcile_caller_outputs(
         load_packaged_artifact_evidence,
     )
 
-    kestrel_path, advntr_path = Path(kestrel_tsv), Path(advntr_tsv)
-    if not kestrel_path.is_file() or not advntr_path.is_file():
+    kestrel_path = Path(kestrel_tsv)
+    advntr_path = Path(advntr_tsv) if advntr_tsv is not None else None
+    if not kestrel_path.is_file() or (advntr_path is not None and not advntr_path.is_file()):
+        if dominance_enabled:
+            raise ValueError("enabled dominance requires every selected caller result artifact")
         logger.debug("Cross-caller reconciliation skipped; one of the result files is absent.")
+        return False
+    if advntr_path is None and not dominance_enabled:
         return False
 
     try:
         header = [line for line in kestrel_path.read_text().splitlines() if line.startswith("##")]
         kestrel = pd.read_csv(kestrel_path, sep="\t", comment="#", dtype=str)
-        advntr = pd.read_csv(advntr_path, sep="\t", dtype=str)
+        advntr = pd.read_csv(advntr_path, sep="\t", dtype=str) if advntr_path is not None else pd.DataFrame()
     except (OSError, ValueError, pd.errors.ParserError) as error:
+        if dominance_enabled:
+            raise ValueError("enabled dominance could not read a required caller result artifact") from error
         logger.warning("Cross-caller reconciliation skipped; could not read a result file: %s", error)
         return False
 
-    if kestrel.empty or advntr.empty or "Motifs" not in kestrel.columns:
+    if kestrel.empty or (advntr_path is not None and advntr.empty):
+        if dominance_enabled:
+            raise ValueError("enabled dominance requires canonical non-empty caller prerequisites")
         return False
 
     resolved_artifact_evidence = artifact_evidence or load_packaged_artifact_evidence()
+
+    if "Motifs" not in kestrel.columns:
+        canonical_negative = _is_canonical_kestrel_negative_frame(kestrel)
+        if not dominance_enabled:
+            return False
+        if not canonical_negative:
+            raise ValueError("enabled dominance requires canonical Kestrel negative or positive caller prerequisites")
+        if advntr_path is not None and not {
+            "VID",
+            "Variant",
+            "NumberOfSupportingReads",
+        } <= set(advntr.columns):
+            raise ValueError("enabled dominance requires canonical adVNTR caller prerequisites")
+        negative_advntr_keep = [not _is_negative(row) for _, row in advntr.iterrows()]
+        positive_negative_kestrel_rows = [
+            row for (_, row), keep in zip(advntr.iterrows(), negative_advntr_keep, strict=True) if keep
+        ]
+        negative_kestrel_dispositions = tuple(
+            evidence_disposition_for_state(str(row.get("Variant", "")), resolved_artifact_evidence)
+            for row in positive_negative_kestrel_rows
+        )
+        decision = evaluate_absent_bam_dominance(negative_kestrel_dispositions, resolved_dominance)
+        return DominanceSeamOutcome(True, False, decision.outcome)
 
     supports: dict[str, int | None] = {}
     kestrel_keep = [not _is_negative(row) for _, row in kestrel.iterrows()]
@@ -325,8 +390,14 @@ def reconcile_caller_outputs(
     identity_aware = _rows_carry_identity_metadata(kestrel_rows)
     existing_replay: BamReplayArtifact | None = None
     if identity_aware:
-        with suppress(FileNotFoundError):
-            existing_replay = read_bam_replay_artifact(kestrel_dir or kestrel_path.parent)
+        if dominance_enabled:
+            try:
+                existing_replay = read_bam_replay_artifact(kestrel_dir or kestrel_path.parent)
+            except (FileNotFoundError, OSError, ValueError) as error:
+                raise ValueError("enabled dominance requires a readable retained BAM replay artifact") from error
+        else:
+            with suppress(FileNotFoundError):
+                existing_replay = read_bam_replay_artifact(kestrel_dir or kestrel_path.parent)
 
     # Aligned to `kestrel_rows`, `None` where a row could not be translated. Position
     # is what ties a call back to the record it came from, so nothing is compacted.
@@ -346,7 +417,7 @@ def reconcile_caller_outputs(
     advntr_keep = [not _is_negative(row) for _, row in advntr.iterrows()]
     positive_advntr_rows = [row for (_, row), keep in zip(advntr.iterrows(), advntr_keep, strict=True) if keep]
     advntr_dispositions = [
-        evidence_disposition_for_state(str(row.get("Variant", "")), resolved_artifact_evidence).value
+        evidence_disposition_for_state(str(row.get("Variant", "")), resolved_artifact_evidence)
         for row in positive_advntr_rows
     ]
     advntr_calls_by_row = _advntr_calls_by_row(advntr, advntr_keep, supports, decision_config)
@@ -354,6 +425,9 @@ def reconcile_caller_outputs(
 
     named_vcf = [call for call in vcf_calls if call is not None]
     if not named_vcf and not advntr_calls:
+        if dominance_enabled:
+            decision = evaluate_absent_bam_dominance(tuple(advntr_dispositions), resolved_dominance)
+            return DominanceSeamOutcome(True, False, decision.outcome)
         return False
 
     identity_component: Any = None
@@ -361,8 +435,12 @@ def reconcile_caller_outputs(
         from vntyper.scripts.identity_candidates import translation_component_from_config
 
         identity_component = translation_component_from_config(decision_component)
-    bam_translations: list[IdentityTranslation | None] | None = [] if identity_component is not None else None
-    bam_replay_loci: list[BamReplayLocus] | None = [] if identity_component is not None else None
+    bam_translations: list[IdentityTranslation | None] | None = (
+        [] if identity_component is not None and not dominance_enabled else None
+    )
+    bam_replay_loci: list[BamReplayLocus] | None = (
+        [] if identity_component is not None and not dominance_enabled else None
+    )
     bam_calls = _haplotype_calls(
         kestrel_rows,
         kestrel_dir or kestrel_path.parent,
@@ -375,6 +453,16 @@ def reconcile_caller_outputs(
         decision_config=decision_config,
     )
     named_bam = [call for call in bam_calls if call is not None]
+    retained_replay: BamReplayArtifact | None = None
+    if bam_replay_loci is not None:
+        from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
+
+        expected_ordinals = tuple(
+            sorted(parse_selected_candidate_cells(row).selected_observation_ordinal for row in kestrel_rows)
+        )
+        retained_replay = retain_bam_replay(existing_replay, tuple(bam_replay_loci), expected_ordinals)
+    elif dominance_enabled:
+        retained_replay = existing_replay
 
     # Order matters: the Kestrel VCF is offered first so that whenever nothing
     # outvotes it, it is the call that stands. adVNTR is optional; Kestrel is not.
@@ -383,25 +471,31 @@ def reconcile_caller_outputs(
         kestrel_rows,
         vcf_calls,
         bam_calls,
-        advntr,
-        advntr_keep,
+        positive_advntr_rows,
         advntr_calls_by_row,
         bam_translations,
         decision_config=decision_config,
         translation_component=identity_component,
         artifact_evidence=resolved_artifact_evidence,
     )
+    merged: Nomenclature | None
     if identity_inputs is None:
+        if resolved_dominance.get("enabled") is True:
+            raise ValueError("enabled dominance requires current-run canonical identity metadata")
         merged = reconcile(*ordered_calls, supports=supports, decision_config=decision_config)
+        reconciled_identity = None
+        identity_aware_result = None
     else:
         identity_observations, policy = identity_inputs
-        merged = reconcile(
+        identity_aware_result = reconcile_identity_aware_nomenclature(
             *ordered_calls,
             supports=supports,
             identity_observations=identity_observations,
             identity_policy=policy,
             decision_config=decision_config,
         )
+        merged = identity_aware_result.call
+        reconciled_identity = identity_aware_result.selected_identity
     for bam_call in named_bam:
         # Still applied after the vote, because it carries one rule the vote cannot:
         # A delins is unrepresentable in Kestrel's VCF, so one seen in the
@@ -418,20 +512,92 @@ def reconcile_caller_outputs(
     kestrel_summary = _summarise([call for call in kestrel_row_calls if call is not None])
     advntr_summary = _summarise(advntr_calls)
 
-    cells = _cells(
-        merged,
-        kestrel=kestrel_summary,
-        advntr=advntr_summary,
-        decision_config=decision_config,
-    )
-    if "identity-insufficient" in advntr_dispositions:
+    dominance_result = None
+    complete_rows: tuple[Mapping[str, object], ...] = ()
+    complete_calls: tuple[Nomenclature | None, ...] = ()
+    if dominance_enabled:
+        from vntyper.scripts.identity_candidates import LEGACY_GATE_COLUMNS
+        from vntyper.scripts.kestrel_dominance_candidates import passing_candidate_frame
+
+        pre_result_path = (
+            Path(kestrel_dir) if kestrel_dir is not None else kestrel_path.parent
+        ) / "kestrel_pre_result.tsv"
+        try:
+            pre_result = pd.read_csv(pre_result_path, sep="\t", dtype=str, keep_default_na=False)
+            complete_candidates = passing_candidate_frame(pre_result, LEGACY_GATE_COLUMNS)
+        except (OSError, ValueError, pd.errors.ParserError) as error:
+            raise ValueError("enabled dominance requires a readable complete Kestrel candidate pre-result") from error
+        if complete_candidates.empty or "Nomenclature" not in complete_candidates:
+            raise ValueError("enabled dominance requires fixed presentations for complete Kestrel candidates")
+        complete_rows = tuple(row for _, row in complete_candidates.iterrows())
+        complete_calls = tuple(_kestrel_row_call(row, decision_config) for row in complete_rows)
+    if identity_aware_result is not None and retained_replay is not None:
+        from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
+
+        assert merged is not None
+        baseline = IdentityAwareNomenclatureResult(merged, reconciled_identity)
+        if dominance_enabled:
+            dominance_result = reconcile_complete_retained_dominance(
+                baseline,
+                complete_rows,
+                complete_calls,
+                identity_observations,
+                ordered_calls,
+                retained_replay,
+                tuple(advntr_dispositions),
+                resolved_dominance,
+            )
+        else:
+            persisted = tuple(parse_selected_candidate_cells(row) for row in kestrel_rows)
+            dominance_result = reconcile_retained_dominance(
+                baseline,
+                tuple(candidate.translation.identity for candidate in persisted),
+                tuple(kestrel_row_calls),
+                identity_observations,
+                ordered_calls,
+                retained_replay,
+                tuple(advntr_dispositions),
+                resolved_dominance,
+                {candidate.selected_observation_ordinal: candidate.translation.identity for candidate in persisted},
+            )
+        if dominance_result.decision.outcome != "not-applicable":
+            merged = dominance_result.call
+            reconciled_identity = dominance_result.selected_identity
+        elif advntr_path is None:
+            return DominanceSeamOutcome(True, False, "not-applicable")
+    elif dominance_enabled:
+        raise ValueError("enabled dominance requires an evaluated identity-aware retained replay seam")
+
+    if merged is None:
+        cells = dict.fromkeys(NOMENCLATURE_COLUMNS, "")
+        cells["Nomenclature_Kestrel"] = kestrel_summary
+        cells["Nomenclature_adVNTR"] = advntr_summary
+        assert dominance_result is not None and dominance_result.abstention_reason is not None
+        cells["Nomenclature_Note"] = dominance_abstention_note(dominance_result.abstention_reason)
+    else:
+        cells = _cells(
+            merged,
+            kestrel=kestrel_summary,
+            advntr=advntr_summary,
+            decision_config=decision_config,
+        )
+    if identity_inputs is not None:
+        cells[RECONCILED_IDENTITY_COLUMN] = encode_reconciled_identity(reconciled_identity)
+    if dominance_result is not None and dominance_result.decision.outcome != "not-applicable":
+        cells[DOMINANCE_ABSTENTION_COLUMN] = dominance_result.abstention_reason or ""
+    if any(disposition.value == "identity-insufficient" for disposition in advntr_dispositions):
         cells["Nomenclature_Note"] = append_decision_explanation(cells["Nomenclature_Note"], ASSERTION)
 
     surfaces: tuple[tuple[pd.DataFrame, Path, list[bool], list[str], str, list[str]], ...] = (
         (kestrel, kestrel_path, kestrel_keep, header, "Nomenclature_Kestrel", kestrel_row_names),
-        (advntr, advntr_path, advntr_keep, [], "Nomenclature_adVNTR", advntr_row_names),
     )
+    if advntr_path is not None:
+        surfaces += ((advntr, advntr_path, advntr_keep, [], "Nomenclature_adVNTR", advntr_row_names),)
     for frame, path, keep, file_header, own_column, own_names in surfaces:
+        if not any(keep):
+            # A caller-negative TSV is a frozen, deliberately narrower schema.
+            # No positive row exists on which to project reconciliation fields.
+            continue
         updated = frame.copy()
         mask = pd.Series(keep, index=updated.index)
         for column, value in cells.items():
@@ -445,80 +611,22 @@ def reconcile_caller_outputs(
         if own_column == "Nomenclature_adVNTR":
             if EVIDENCE_DISPOSITION_COLUMN not in updated.columns:
                 updated[EVIDENCE_DISPOSITION_COLUMN] = ""
-            updated.loc[mask, EVIDENCE_DISPOSITION_COLUMN] = advntr_dispositions
+            updated.loc[mask, EVIDENCE_DISPOSITION_COLUMN] = [disposition.value for disposition in advntr_dispositions]
         _write_tsv(updated, path, file_header)
 
-    if bam_replay_loci is not None:
-        from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
-
-        current_replay = BamReplayArtifact(tuple(bam_replay_loci))
-        expected_ordinals = tuple(
-            sorted(parse_selected_candidate_cells(row).selected_observation_ordinal for row in kestrel_rows)
-        )
-        validate_bam_replay_artifact_ordinals(current_replay, expected_ordinals)
-        retained_replay = (
-            merge_bam_replay_artifacts(existing_replay, current_replay)
-            if existing_replay is not None
-            else current_replay
-        )
+    if retained_replay is not None:
         write_bam_replay_artifact(kestrel_dir or kestrel_path.parent, retained_replay)
 
     logger.info(
         "Cross-caller nomenclature reconciled: tier %s (kestrel=%r advntr=%r).",
-        merged.tier,
+        merged.tier if merged is not None else "abstained",
         kestrel_summary,
         advntr_summary,
     )
+    if dominance_enabled:
+        assert dominance_result is not None
+        return DominanceSeamOutcome(True, True, dominance_result.decision.outcome)
     return True
-
-
-def _production_identity_observations(
-    kestrel_rows: list[pd.Series],
-    vcf_calls: list[Nomenclature | None],
-    bam_calls: list[Nomenclature | None],
-    advntr: pd.DataFrame,
-    advntr_keep: list[bool],
-    advntr_calls_by_row: list[list[Nomenclature]],
-    bam_translations: list[IdentityTranslation | None] | None = None,
-    *,
-    decision_config: NomenclatureDecisionConfig,
-    translation_component: Any = None,
-    artifact_evidence: ArtifactEvidence,
-) -> tuple[tuple[IdentityReconciliationObservation, ...], IdentityReconciliationPolicy] | None:
-    """Build current-run identity observations or select the deliberate legacy path."""
-    from vntyper.scripts.identity_candidate_persistence import (
-        IDENTITY_CAPTURE_COLUMNS,
-        IDENTITY_SELECTION_COLUMNS,
-    )
-
-    identity_columns = frozenset((*IDENTITY_CAPTURE_COLUMNS, *IDENTITY_SELECTION_COLUMNS))
-    if not identity_columns.intersection(column for row in kestrel_rows for column in row.index):
-        return None
-    positive_advntr_rows = [row for (_, row), keep in zip(advntr.iterrows(), advntr_keep, strict=True) if keep]
-    if translation_component is None:
-        raise ValueError("Current-run identity metadata requires an explicit translation component")
-    observations = build_identity_reconciliation_observations(
-        kestrel_rows,
-        vcf_calls,
-        bam_calls,
-        positive_advntr_rows,
-        advntr_calls_by_row,
-        translation_component,
-        frozenset(decision_config.known_variants),
-        artifact_evidence=artifact_evidence,
-        bam_translations=bam_translations,
-    )
-    if observations is None:  # pragma: no cover - identity columns were established above
-        raise ValueError("Current-run identity metadata unexpectedly selected the legacy path")
-    return observations, decision_config.identity_reconciliation
-
-
-def _rows_carry_identity_metadata(rows: list[pd.Series]) -> bool:
-    """Whether result rows contain any current-run internal identity metadata."""
-    from vntyper.scripts.identity_candidate_persistence import IDENTITY_CAPTURE_COLUMNS, IDENTITY_SELECTION_COLUMNS
-
-    identity_columns = frozenset((*IDENTITY_CAPTURE_COLUMNS, *IDENTITY_SELECTION_COLUMNS))
-    return bool(identity_columns.intersection(column for row in rows for column in row.index))
 
 
 def _lesser(left: int | None, right: int | None) -> int | None:

@@ -17,10 +17,16 @@ import pytest
 
 from tests.builders import STAGE_COLUMNS, kestrel_stage_frame
 from vntyper.modules.advntr.artifact_evidence import ASSERTION
-from vntyper.scripts import nomenclature, nomenclature_annotate, nomenclature_bam_adapter
+from vntyper.scripts import (
+    nomenclature,
+    nomenclature_annotate,
+    nomenclature_bam_adapter,
+    nomenclature_dominance_runtime,
+)
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
-from vntyper.scripts.identity_candidates import translation_component_from_config
+from vntyper.scripts.cross_match import cross_match_variants
+from vntyper.scripts.identity_candidates import LEGACY_GATE_COLUMNS, translation_component_from_config
 from vntyper.scripts.molecular_identity import (
     IdentityTranslation,
     MolecularIdentity,
@@ -38,13 +44,14 @@ from vntyper.scripts.nomenclature import (
 )
 from vntyper.scripts.nomenclature_annotate import (
     NOMENCLATURE_COLUMNS,
+    DominanceSeamOutcome,
     annotate_advntr_frame,
     annotate_kestrel_frame,
     append_decision_explanation,
     reconcile_caller_outputs,
 )
 from vntyper.scripts.nomenclature_bam import BamRescuer
-from vntyper.scripts.nomenclature_bam_evidence import BamLocusEvidence
+from vntyper.scripts.nomenclature_bam_evidence import BamIdentityEvidence, BamLocusEvidence
 from vntyper.scripts.nomenclature_bam_replay import (
     BAM_REPLAY_FILENAME,
     BamReplayArtifact,
@@ -267,6 +274,19 @@ def _write_identity_aware_outputs(
     }
     kestrel = tmp_path / "kestrel_result.tsv"
     pd.DataFrame([kestrel_row]).to_csv(kestrel, sep="\t", index=False)
+    pre_row = {
+        **kestrel_row,
+        "Motif_sequence": nomenclature.pair_sequence("X-X"),
+        "Motif_fasta": "X-X",
+        "POS_fasta": "66",
+        "is_frameshift": "True",
+        "is_valid_frameshift": "True",
+        "depth_confidence_pass": "True",
+        "alt_filter_pass": "True",
+        "motif_filter_pass": "True",
+        "flag_filter_pass": "True",
+    }
+    pd.DataFrame([pre_row]).to_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t", index=False)
     advntr = tmp_path / "output_adVNTR_result.tsv"
     pd.DataFrame(
         [
@@ -381,6 +401,27 @@ def test_production_reconciliation_uses_persisted_kestrel_identity_not_equal_dis
     assert "caller-disagreement" in written.loc[0, "Nomenclature_Flags"]
 
 
+def test_positive_kestrel_reconciliation_preserves_the_frozen_negative_advntr_schema(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, identity)
+    advntr.write_text(
+        "VID\tVariant\tNumberOfSupportingReads\tMeanCoverage\tPvalue\tRU\tPOS\tREF\tALT\tFlag\t"
+        "Nomenclature\tNomenclature_Tier\tNomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\t"
+        "Nomenclature_Note\tNomenclature_Kestrel\tNomenclature_adVNTR\n"
+        "Negative\tNot applicable\tNot applicable\tNot applicable\tNot applicable\tNot applicable\t"
+        "Not applicable\tNot applicable\tNot applicable\tNot applicable\t\t\t\t\t\t\t\t\n",
+        encoding="utf-8",
+    )
+    before = advntr.read_bytes()
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert advntr.read_bytes() == before
+    result = cross_match_variants(parse_tsv(kestrel)["data"], parse_tsv(advntr)["data"])
+    assert result["overall_match"] == "No"
+    assert result["matches"][0]["Match"] == "No"
+
+
 def test_governed_advntr_state_stays_visible_but_cannot_back_tier_a(tmp_path: Path) -> None:
     dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
     kestrel, advntr = _write_identity_aware_outputs(
@@ -416,6 +457,316 @@ def test_unlisted_advntr_state_retains_tier_a_and_admissible_projection(tmp_path
     assert written.loc[0, "Nomenclature_Tier"] == "A"
     assert mirrored.loc[0, "Evidence_Disposition"] == "admissible"
     assert ASSERTION not in str(written.loc[0, "Nomenclature_Note"])
+
+
+def _write_retained_identity_votes(path: Path, identity: MolecularIdentity, count: int = 2) -> None:
+    records = tuple(BamIdentityEvidence((identity,), ((0,),), 10) for _ in range(count))
+    evidence = BamLocusEvidence(records, count, {identity: count})
+    write_bam_replay_artifact(path, BamReplayArtifact((BamReplayLocus((0,), "observed", evidence),)))
+
+
+def _active_dominance(**changes: object) -> dict[str, object]:
+    component = dict(resolve_run_configuration().dominance)
+    component.update(
+        {
+            "enabled": True,
+            "minimum_record_count_margin": 1,
+            "minimum_record_share": 0.5,
+            "minimum_record_share_margin": 0.0,
+            "xd_veto": "disabled",
+            "abstain_on_inadmissible_advntr": False,
+            **changes,
+        }
+    )
+    return component
+
+
+def test_kestrel_only_generated_dominance_consumes_retained_votes_once(tmp_path: Path) -> None:
+    """Mutation caught: the optional adVNTR branch is the only runtime consumer."""
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, _advntr = _write_identity_aware_outputs(tmp_path, identity)
+    _write_retained_identity_votes(tmp_path, identity)
+
+    outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
+    assert isinstance(outcome, DominanceSeamOutcome)
+    assert outcome.evaluated is True
+    assert outcome.rewritten is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == serialize_molecular_identity(identity)
+    assert written.loc[0, "__Dominance_Abstention_Reason"] == ""
+
+
+def test_generated_dominance_abstention_clears_only_the_whole_locus_projection(tmp_path: Path) -> None:
+    """Mutation caught: insufficient dominance preserves a selected global name."""
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, _advntr = _write_identity_aware_outputs(tmp_path, identity)
+    _write_retained_identity_votes(tmp_path, identity)
+
+    outcome = reconcile_caller_outputs(
+        kestrel,
+        None,
+        dominance_component=_active_dominance(minimum_record_count_margin=3),
+    )
+    assert isinstance(outcome, DominanceSeamOutcome)
+    assert outcome.evaluated is True
+    assert outcome.dominance_outcome == "abstained"
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "Nomenclature"] == ""
+    assert written.loc[0, "Nomenclature_Tier"] == ""
+    assert written.loc[0, "Nomenclature_Kestrel"] == "59dupC"
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == ""
+    assert written.loc[0, "__Dominance_Abstention_Reason"] == "insufficient-dominance"
+    assert written.loc[0, "Nomenclature_Note"] == "Whole-locus dominance abstention: insufficient-dominance."
+
+
+def test_generated_advntr_veto_abstains_instead_of_falling_through(tmp_path: Path) -> None:
+    """Mutation caught: a governed adVNTR veto is ignored after a BAM winner exists."""
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(
+        tmp_path,
+        identity,
+        advntr_state="I23_6_G_LEN1",
+        advntr_ru="6",
+        advntr_pos="23",
+        advntr_flag="Polymorphic_Call",
+    )
+    _write_retained_identity_votes(tmp_path, identity)
+
+    outcome = reconcile_caller_outputs(
+        kestrel,
+        advntr,
+        dominance_component=_active_dominance(abstain_on_inadmissible_advntr=True),
+    )
+    assert isinstance(outcome, DominanceSeamOutcome)
+    assert outcome.evaluated is True
+    assert outcome.dominance_outcome == "abstained"
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "Nomenclature"] == ""
+    assert written.loc[0, "__Dominance_Abstention_Reason"] == "inadmissible-advntr"
+
+
+def test_generated_dominance_rejects_an_impossible_advntr_identity_bound_to_a_kestrel_ordinal(tmp_path: Path) -> None:
+    """Mutation caught: production trusts a replay binding manufactured outside its producer."""
+    kestrel_identity = make_molecular_identity((make_coding_edit(60, 59, "", "A"),))
+    advntr_identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, kestrel_identity)
+    _write_retained_identity_votes(tmp_path, advntr_identity)
+
+    with pytest.raises(ValueError, match="BAM.*binding.*candidate|candidate.*identity"):
+        reconcile_caller_outputs(kestrel, advntr, dominance_component=_active_dominance())
+
+
+def test_generated_dominance_selects_a_distinct_complete_kestrel_candidate_projection(tmp_path: Path) -> None:
+    """The producer-retained candidate universe can replace the legacy-selected identity."""
+    identity_a = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    identity_b = make_molecular_identity((make_coding_edit(59, 58, "", "A"),))
+    _write_pair_edit_records(
+        tmp_path / "output.bam",
+        (((62, "C"),), ((62, "T"),), ((62, "T"),)),
+    )
+    source = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0, position=62, reference="G", alternate="GC", locus_position=61, identity=identity_a
+            ),
+            _identity_stage_row(
+                ordinal=1, position=62, reference="G", alternate="GT", locus_position=61, identity=identity_b
+            ),
+        ]
+    )
+    for column in LEGACY_GATE_COLUMNS:
+        source[column] = True
+    pre = annotate_kestrel_frame(source, tmp_path, retain_complete_identity_evidence=True)
+    pre.to_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t", index=False)
+    kestrel = tmp_path / "kestrel_result.tsv"
+    pre.iloc[[0]].to_csv(kestrel, sep="\t", index=False)
+
+    replay = read_bam_replay_artifact(tmp_path)
+    assert replay.loci[0].evidence is not None
+    assert replay.loci[0].evidence.counts == {identity_a: 1, identity_b: 2}
+
+    outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
+
+    assert isinstance(outcome, DominanceSeamOutcome)
+    assert outcome.dominance_outcome == "selected"
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == serialize_molecular_identity(identity_b)
+    assert written.loc[0, "Nomenclature"] == pre.loc[1, "Nomenclature"]
+    assert written.loc[0, "Nomenclature"] != pre.loc[0, "Nomenclature"]
+    assert written.loc[0, "Nomenclature_Tier"] == "B"
+
+
+def test_enabled_dominance_fails_closed_when_retained_replay_is_missing(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, _advntr = _write_identity_aware_outputs(tmp_path, identity)
+
+    with pytest.raises(ValueError, match="enabled dominance.*replay|replay.*required"):
+        reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
+
+
+def test_enabled_dominance_fails_closed_when_complete_candidate_pre_result_is_missing(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, _advntr = _write_identity_aware_outputs(tmp_path, identity)
+    _write_retained_identity_votes(tmp_path, identity)
+    (tmp_path / "kestrel_pre_result.tsv").unlink()
+
+    with pytest.raises(ValueError, match="complete Kestrel candidate pre-result"):
+        reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
+
+
+def test_enabled_dominance_explicitly_evaluates_unavailable_bam_as_not_applicable(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, _advntr = _write_identity_aware_outputs(tmp_path, identity)
+    write_bam_replay_artifact(tmp_path, BamReplayArtifact((BamReplayLocus((0,), "unavailable", None),)))
+
+    outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
+
+    assert isinstance(outcome, DominanceSeamOutcome)
+    assert outcome.evaluated is True
+    assert outcome.rewritten is False
+    assert outcome.dominance_outcome == "not-applicable"
+
+
+def test_enabled_dominance_evaluates_a_genuine_negative_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kestrel = tmp_path / "kestrel_result.tsv"
+    kestrel.write_text(
+        "Motif\tVariant\tPOS\tREF\tALT\tMotif_sequence\tEstimated_Depth_AlternateVariant\t"
+        "Estimated_Depth_Variant_ActiveRegion\tDepth_Score\tConfidence\n"
+        "None\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNegative\n",
+        encoding="utf-8",
+    )
+    before = kestrel.read_bytes()
+    calls = 0
+    real_evaluate = nomenclature_dominance_runtime.evaluate_dominance
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(nomenclature_dominance_runtime, "evaluate_dominance", counted)
+
+    outcome = reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
+
+    assert calls == 1
+    assert isinstance(outcome, DominanceSeamOutcome)
+    assert outcome.evaluated is True
+    assert outcome.rewritten is False
+    assert outcome.dominance_outcome == "not-applicable"
+    # The ten-column negative placeholder is a frozen schema: the seam's own
+    # "rewritten=False" is not the oracle for it, the bytes are.
+    assert kestrel.read_bytes() == before
+
+
+def test_enabled_dominance_evaluates_negative_kestrel_with_positive_advntr_once_and_preserves_finding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kestrel, advntr = _write_caller_outputs(tmp_path, "I22_2_G_LEN1", "24")
+    kestrel.write_text(
+        "Motif\tVariant\tPOS\tREF\tALT\tMotif_sequence\tEstimated_Depth_AlternateVariant\t"
+        "Estimated_Depth_Variant_ActiveRegion\tDepth_Score\tConfidence\n"
+        "None\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNegative\n",
+        encoding="utf-8",
+    )
+    before = advntr.read_bytes()
+    kestrel_before = kestrel.read_bytes()
+    calls = 0
+    real_evaluate = nomenclature_dominance_runtime.evaluate_dominance
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(nomenclature_dominance_runtime, "evaluate_dominance", counted)
+
+    outcome = reconcile_caller_outputs(kestrel, advntr, dominance_component=_active_dominance())
+
+    assert calls == 1
+    assert outcome == DominanceSeamOutcome(True, False, "not-applicable")
+    assert advntr.read_bytes() == before
+    assert kestrel.read_bytes() == kestrel_before
+    written = pd.read_csv(advntr, sep="\t", dtype=str, keep_default_na=False)
+    assert written.loc[0, "Variant"] == "I22_2_G_LEN1"
+    assert written.loc[0, "Nomenclature"] == "duplication, position-ambiguous"
+
+
+def test_enabled_dominance_rejects_malformed_advntr_beside_canonical_negative_kestrel(tmp_path: Path) -> None:
+    kestrel = tmp_path / "kestrel_result.tsv"
+    kestrel.write_text(
+        "Motif\tVariant\tPOS\tREF\tALT\tMotif_sequence\tEstimated_Depth_AlternateVariant\t"
+        "Estimated_Depth_Variant_ActiveRegion\tDepth_Score\tConfidence\n"
+        "None\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNegative\n",
+        encoding="utf-8",
+    )
+    advntr = tmp_path / "output_adVNTR_result.tsv"
+    advntr.write_text("Variant\nI22_2_G_LEN1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical adVNTR"):
+        reconcile_caller_outputs(kestrel, advntr, dominance_component=_active_dominance())
+
+
+def test_enabled_dominance_rejects_a_noncanonical_kestrel_negative(tmp_path: Path) -> None:
+    kestrel = tmp_path / "kestrel_result.tsv"
+    kestrel.write_text("Motif\tConfidence\nNone\tNegative\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical Kestrel negative"):
+        reconcile_caller_outputs(kestrel, None, dominance_component=_active_dominance())
+
+
+def test_enabled_dominance_outcome_cannot_claim_an_unevaluated_seam() -> None:
+    with pytest.raises(ValueError, match="record evaluation"):
+        DominanceSeamOutcome(False, False, "not-applicable")
+
+
+@pytest.mark.parametrize(
+    ("rewritten", "outcome", "message"),
+    [
+        (0, "not-applicable", "rewrite status"),
+        (False, "invalid", "valid dominance outcome"),
+    ],
+)
+def test_enabled_dominance_outcome_rejects_malformed_status(
+    rewritten: object,
+    outcome: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        DominanceSeamOutcome(True, rewritten, outcome)  # type: ignore[arg-type]
+
+
+def test_packaged_neutral_dominance_preserves_result_and_replay_bytes(tmp_path: Path) -> None:
+    """Mutation caught: merely threading the neutral component changes an artifact byte."""
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    legacy = tmp_path / "legacy"
+    explicit = tmp_path / "explicit"
+    legacy.mkdir()
+    explicit.mkdir()
+    legacy_kestrel, legacy_advntr = _write_identity_aware_outputs(legacy, identity)
+    explicit_kestrel, explicit_advntr = _write_identity_aware_outputs(explicit, identity)
+
+    assert reconcile_caller_outputs(legacy_kestrel, legacy_advntr) is True
+    assert (
+        reconcile_caller_outputs(
+            explicit_kestrel,
+            explicit_advntr,
+            dominance_component=resolve_run_configuration().dominance,
+        )
+        is True
+    )
+
+    assert explicit_kestrel.read_bytes() == legacy_kestrel.read_bytes()
+    assert explicit_advntr.read_bytes() == legacy_advntr.read_bytes()
+    assert (explicit / BAM_REPLAY_FILENAME).read_bytes() == (legacy / BAM_REPLAY_FILENAME).read_bytes()
 
 
 def test_production_identity_policy_is_resolved_from_checked_in_config_at_the_stage_boundary(tmp_path) -> None:
@@ -796,6 +1147,62 @@ def test_identity_aware_kestrel_stage_records_a_real_tie_once_for_the_joint_grou
     assert locus.evidence is not None
     assert locus.evidence.eligible_record_count == 4
     assert locus.evidence.winning_identity is None
+
+
+def test_complete_candidate_observation_deduplicates_one_long_record_across_disjoint_windows(tmp_path: Path) -> None:
+    """Mutation caught: separate disjoint fetches retain one long physical record twice."""
+    identity = make_molecular_identity((make_coding_edit(59, 58, "", "G"),))
+    _write_pair_edit_records(tmp_path / "output.bam", (((62, "C"),),))
+    frame = pd.DataFrame(
+        [
+            _identity_stage_row(
+                ordinal=0, position=62, reference="G", alternate="GC", locus_position=20, identity=identity
+            ),
+            _identity_stage_row(
+                ordinal=1, position=62, reference="G", alternate="GC", locus_position=100, identity=identity
+            ),
+        ]
+    )
+    rescuers: list[BamRescuer] = []
+    open_rescuer = nomenclature_annotate._open_rescuer
+
+    def tracked_open(
+        output_dir: str | Path | None,
+        decision_config: NomenclatureDecisionConfig | None = None,
+    ) -> BamRescuer | None:
+        rescuer = open_rescuer(output_dir, decision_config)
+        assert rescuer is not None
+        rescuers.append(rescuer)
+        return rescuer
+
+    with mock.patch.object(nomenclature_annotate, "_open_rescuer", side_effect=tracked_open):
+        annotate_kestrel_frame(frame, tmp_path, retain_complete_identity_evidence=True)
+
+    artifact = read_bam_replay_artifact(tmp_path)
+    assert rescuers[0].fetches == 1
+    assert len(artifact.loci) == 1
+    assert artifact.loci[0].candidate_observation_ordinals == (0, 1)
+    assert artifact.loci[0].evidence is not None
+    assert artifact.loci[0].evidence.eligible_record_count == 1
+    assert len(artifact.loci[0].evidence.records) == 1
+    assert artifact.loci[0].evidence.xd_by_record == (5,)
+
+
+def test_contig_group_clustering_rejects_a_negative_flank() -> None:
+    with pytest.raises(ValueError, match="flank"):
+        nomenclature_bam_adapter.cluster_identity_groups_by_contig((), frozenset(), -1)
+
+
+def test_identity_observation_rejects_a_non_boolean_whole_locus_switch() -> None:
+    with pytest.raises(ValueError, match="deduplication switch"):
+        nomenclature_bam_adapter.observe_identity_groups(
+            (),
+            0,
+            frozenset(),
+            None,
+            object(),
+            deduplicate_whole_locus="yes",  # type: ignore[arg-type]
+        )
 
 
 def test_joint_resolved_candidates_reconcile_a_real_two_by_two_tie_with_one_fetch(tmp_path: Path) -> None:
@@ -1352,6 +1759,7 @@ def test_identity_aware_reconciliation_writes_not_consulted_replay_state(tmp_pat
     assert read_bam_replay_artifact(tmp_path) == BamReplayArtifact((BamReplayLocus((0,), "not-consulted", None),))
     written = pd.read_csv(kestrel, sep="\t", dtype=str)
     assert BAM_REPLAY_FILENAME not in written.columns
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == serialize_molecular_identity(identity)
 
 
 def test_identity_aware_reconciliation_writes_unavailable_replay_state(tmp_path: Path) -> None:

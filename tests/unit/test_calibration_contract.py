@@ -29,6 +29,8 @@ def synthetic_protocol() -> dict[str, object]:
         "maximum_free_parameters": 4,
         "minimum_stratum_count": 2,
         "maximum_abstention_fraction": 0.25,
+        "assay_classes": ["capture-short-read"],
+        "mutation_classes": ["duplication"],
         "candidate_grid": {
             "minimum_record_count_margin": [1, 2],
             "minimum_record_share": [0.5, 0.75],
@@ -45,10 +47,85 @@ def test_protocol_decodes_exact_finite_grid_and_hash() -> None:
     assert protocol.bootstrap_iterations == 10_000
     assert protocol.maximum_abstention_fraction.numerator == 1
     assert protocol.maximum_abstention_fraction.denominator == 4
+    assert protocol.assay_classes == ("capture-short-read",)
+    assert protocol.mutation_classes == ("duplication",)
+    assert protocol.required_strata == ("capture-short-read:duplication",)
     assert len(protocol.candidates) == 16
     assert len(protocol.sha256) == 64
     assert protocol.candidates[0].minimum_record_count_margin == 1
     assert protocol.candidates[-1].xd_veto == "missingness"
+
+
+@pytest.mark.parametrize("field", ["assay_classes", "mutation_classes"])
+def test_protocol_requires_predeclared_study_dimensions(field: str) -> None:
+    raw = synthetic_protocol()
+    del raw[field]
+
+    with pytest.raises(ValueError, match=field.replace("_", " ")):
+        decode_protocol(raw)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("assay_classes", []),
+        ("assay_classes", ("capture-short-read",)),
+        ("assay_classes", [""]),
+        ("assay_classes", [1]),
+        ("assay_classes", ["genome-short-read", "capture-short-read"]),
+        ("assay_classes", ["capture-short-read", "capture-short-read"]),
+        ("mutation_classes", []),
+        ("mutation_classes", ("duplication",)),
+        ("mutation_classes", [""]),
+        ("mutation_classes", [1]),
+        ("mutation_classes", ["duplication", "deletion"]),
+        ("mutation_classes", ["duplication", "duplication"]),
+    ],
+)
+def test_protocol_study_dimensions_are_sorted_unique_and_non_empty(field: str, value: object) -> None:
+    raw = synthetic_protocol()
+    raw[field] = value
+
+    with pytest.raises(ValueError, match="sorted unique non-empty strings"):
+        decode_protocol(raw)
+
+
+def test_protocol_digest_and_cross_product_bind_every_predeclared_stratum() -> None:
+    raw = synthetic_protocol()
+    raw["assay_classes"] = ["capture-short-read", "genome-short-read"]
+    raw["mutation_classes"] = ["deletion", "duplication"]
+
+    protocol = decode_protocol(raw)
+
+    assert protocol.required_strata == (
+        "capture-short-read:deletion",
+        "capture-short-read:duplication",
+        "genome-short-read:deletion",
+        "genome-short-read:duplication",
+    )
+    changed = deepcopy(raw)
+    changed["mutation_classes"] = ["duplication"]
+    assert decode_protocol(changed).sha256 != protocol.sha256
+
+
+@pytest.mark.parametrize(
+    ("assay_classes", "mutation_classes"),
+    [
+        (["capture:short-read"], ["duplication"]),
+        (["capture-short-read"], ["dup:lication"]),
+        (["a", "a:b"], ["b:c", "c"]),
+    ],
+)
+def test_protocol_rejects_ambiguous_stratum_delimiters(
+    assay_classes: list[str],
+    mutation_classes: list[str],
+) -> None:
+    raw = synthetic_protocol()
+    raw["assay_classes"] = assay_classes
+    raw["mutation_classes"] = mutation_classes
+
+    with pytest.raises(ValueError, match="must not contain ':'"):
+        decode_protocol(raw)
 
 
 @pytest.mark.parametrize(

@@ -12,7 +12,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-CalibrationOperation = Callable[[argparse.Namespace, Path], None]
+CalibrationOperation = Callable[[argparse.Namespace, Path], bool]
 
 
 def handle_calibrate(
@@ -43,10 +43,16 @@ def handle_calibrate(
         message = f"unsupported calibration operation: {operation!r}"
         logger.error(message)
         raise ValueError(message)
-    _atomic_output(args.output, lambda staging: producer(args, staging))
+    successful = _atomic_output(args.output, lambda staging: producer(args, staging))
+    if not successful:
+        logger.error(
+            f"calibration {operation} completed with a failed outcome; "
+            f"its complete failed output is installed at {args.output}"
+        )
+        raise SystemExit(1)
 
 
-def _atomic_output(output: Path, producer: Callable[[Path], None]) -> None:
+def _atomic_output(output: Path, producer: Callable[[Path], bool]) -> bool:
     """Build a sibling directory and rename it only after complete success."""
     if not isinstance(output, Path):
         raise ValueError("calibration output must be a Path")
@@ -55,41 +61,44 @@ def _atomic_output(output: Path, producer: Callable[[Path], None]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
-        producer(staging)
+        successful = producer(staging)
+        if not isinstance(successful, bool):
+            raise ValueError("calibration operation must return a completed-operation success value")
         if not any(staging.iterdir()):
             raise ValueError("calibration operation produced no artifacts")
         os.rename(staging, output)
-    except Exception:
+    except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+    return successful
 
 
-def _extract(args: argparse.Namespace, output: Path) -> None:
+def _extract(args: argparse.Namespace, output: Path) -> bool:
     """Extract a validated calibration evidence bundle."""
     from vntyper.scripts.calibration_artifacts import extract_artifact_bundle
 
-    extract_artifact_bundle(args.truth, args.partitions, args.runs, output)
+    return extract_artifact_bundle(args.truth, args.partitions, args.runs, output)
 
 
-def _fit(args: argparse.Namespace, output: Path) -> None:
+def _fit(args: argparse.Namespace, output: Path) -> bool:
     """Fit one candidate from an extracted evidence bundle."""
     from vntyper.scripts.calibration_artifacts import fit_artifact_bundle
 
-    fit_artifact_bundle(args.evidence, args.objective, output)
+    return fit_artifact_bundle(args.evidence, args.objective, output)
 
 
-def _validate(args: argparse.Namespace, output: Path) -> None:
+def _validate(args: argparse.Namespace, output: Path) -> bool:
     """Validate a fixed generated profile without selecting another."""
     from vntyper.scripts.calibration_artifacts import validate_artifact_bundle
 
-    validate_artifact_bundle(args.profile, args.evidence, output)
+    return validate_artifact_bundle(args.profile, args.evidence, output)
 
 
-def _evaluate(args: argparse.Namespace, output: Path) -> None:
+def _evaluate(args: argparse.Namespace, output: Path) -> bool:
     """Evaluate a fixed profile against one-use locked evidence."""
     from vntyper.scripts.calibration_artifacts import evaluate_artifact_bundle
 
-    evaluate_artifact_bundle(args.profile, args.evidence, output)
+    return evaluate_artifact_bundle(args.profile, args.evidence, output)
 
 
 OPERATIONS: dict[str, CalibrationOperation] = {

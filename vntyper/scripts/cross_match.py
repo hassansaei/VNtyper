@@ -103,8 +103,13 @@ def _configured_match_rule(config: object) -> object:
 
 
 def _advntr_evidence_disposition(record: Mapping[str, object]) -> str:
-    """Read the closed additive disposition, defaulting only legacy rows."""
+    """Read the closed additive disposition, preserving the frozen negative row."""
     value = record.get("Evidence_Disposition", "admissible")
+    if record.get("VID") == "Negative" and value == "":
+        # Cross-caller reconciliation mirrors additive positive-only columns onto
+        # the deliberately narrower legacy negative placeholder.  Its blank cell
+        # is absence of evidence, not a malformed positive evidence disposition.
+        return "admissible"
     if value not in _EVIDENCE_DISPOSITIONS:
         message = f"adVNTR record has unsupported Evidence_Disposition: {value}"
         logger.error(message)

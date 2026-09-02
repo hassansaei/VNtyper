@@ -75,12 +75,6 @@ def resolve_run_configuration(path: str | Path | None = None) -> RunConfiguratio
         Frozen run configuration.
     """
     profile = resolve_decision_profile(path)
-    if profile.profile_kind == "generated":
-        packaged = resolve_decision_profile()
-        if profile.components["dominance"] != packaged.components["dominance"]:
-            raise ValueError(
-                "generated dominance policy is not active until its PR-D consumer is installed; use neutral values"
-            )
     frozen = {name: _freeze(component) for name, component in profile.components.items()}
     runtime = {name: _freeze(component) for name, component in _load_runtime_components().items()}
     return RunConfiguration(

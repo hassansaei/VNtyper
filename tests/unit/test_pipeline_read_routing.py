@@ -372,21 +372,30 @@ def test_a_truncated_multibyte_character_at_end_of_file_is_rejected(tmp_path: Pa
 def test_the_four_counts_run_concurrently(tmp_path: Path) -> None:
     """Serial counting spent 1044ms decoding; zlib releases the GIL, so they overlap.
 
-    Asserting on thread identity rather than on elapsed time: a timing assertion is
-    flaky on a loaded machine, while "these ran on more than one thread" is exactly the
-    property that makes the overlap possible.
+    Asserting on overlap rather than on elapsed time: a timing assertion is flaky on a
+    loaded machine. Counting distinct worker threads is racy too -- with two-record
+    fixtures the first worker can finish before the second submit, so the executor
+    reuses it and only one thread identity is ever seen, which is what happened under
+    coverage tracing. A barrier inside the count is deterministic: it can
+    only be passed while every count is in flight at once, and a serial implementation
+    trips its timeout instead of passing by luck.
     """
     produced = _paths(tmp_path, (2, 2, 0, 0))
     threads: set[int] = set()
+    # One party per produced file: every count must be in flight at once, which is
+    # exactly what a pool sized to the number of files provides.
+    overlap = threading.Barrier(len(produced), timeout=10)
     real_count = pipeline_read_routing.count_fastq_records
 
     def record_thread(path, *, lines_per_record):
         threads.add(threading.get_ident())
+        overlap.wait()
         return real_count(path, lines_per_record=lines_per_record)
 
     with mock.patch.object(pipeline_read_routing, "count_fastq_records", record_thread):
         assert route_converted_fastqs(produced, config={}) == (produced[0], produced[1])
 
+    assert not overlap.broken
     assert len(threads) > 1
     assert threading.get_ident() not in threads
 

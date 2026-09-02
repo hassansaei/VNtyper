@@ -42,6 +42,8 @@ APPROVED_RUNTIME_FEATURES = frozenset(
         "tool_version",
         "reference_version",
         "assay_class",
+        "decision_profile_sha256",
+        "decision_policy",
     }
 )
 _RECIPE_FIELDS = {
