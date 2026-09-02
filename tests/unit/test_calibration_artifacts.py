@@ -44,6 +44,11 @@ from vntyper.scripts.decision_profile import resolve_decision_profile
 
 pytestmark = pytest.mark.unit
 
+# Concurrency tests synchronise on events and barriers, never on elapsed time. The
+# budget below only bounds a genuine deadlock; a two-core CI runner under coverage
+# tracing exceeded a 5 s budget while behaving correctly, so it is deliberately large.
+_SLOW_HOST_TIMEOUT = 120.0
+
 
 def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) -> None:
     truth, partitions, runs = _inputs(tmp_path)
@@ -315,16 +320,16 @@ def test_concurrent_completed_failed_validation_installs_both_coherent_outputs(t
     profile = candidate / "decision_profile.json"
     barrier = threading.Barrier(2)
     results: list[bool] = []
-    errors: list[ValueError] = []
+    errors: list[Exception] = []
 
     def active_then_wait(custody: Path, profile_sha256: str, evidence_sha256: str) -> None:
         require_candidate_active(custody, profile_sha256, evidence_sha256)
-        barrier.wait(timeout=5)
+        barrier.wait(timeout=_SLOW_HOST_TIMEOUT)
 
     def validate(output: Path) -> None:
         try:
             results.append(validate_artifact_bundle(profile, evidence, output))
-        except ValueError as error:
+        except (ValueError, threading.BrokenBarrierError) as error:  # a broken barrier must surface below
             errors.append(error)
 
     with (
@@ -335,7 +340,8 @@ def test_concurrent_completed_failed_validation_installs_both_coherent_outputs(t
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join(timeout=5)
+            thread.join(timeout=_SLOW_HOST_TIMEOUT)
+            assert not thread.is_alive(), "validation thread did not finish within the slow-host budget"
 
     assert results == [False, False] and not errors
     custody_retirements = tuple((tmp_path / ".evidence.calibration-custody" / "retired").glob("*.json"))
@@ -539,7 +545,7 @@ def test_claim_owner_excludes_retirement_through_locked_result_finalization(tmp_
 
     def blocking_decoder(value: object):
         decoder_entered.set()
-        assert release_decoder.wait(timeout=5)
+        assert release_decoder.wait(timeout=_SLOW_HOST_TIMEOUT)
         return real_decoder(value)
 
     def evaluate() -> None:
@@ -562,14 +568,15 @@ def test_claim_owner_excludes_retirement_through_locked_result_finalization(tmp_
     with patch("vntyper.scripts.calibration_artifacts.decode_metrics", side_effect=blocking_decoder):
         evaluation_thread = threading.Thread(target=evaluate)
         evaluation_thread.start()
-        assert decoder_entered.wait(timeout=5)
+        assert decoder_entered.wait(timeout=_SLOW_HOST_TIMEOUT)
         retirement_thread = threading.Thread(target=retire)
         retirement_thread.start()
         retirement_thread.join(timeout=0.2)
         assert retirement_thread.is_alive()
         release_decoder.set()
-        evaluation_thread.join(timeout=5)
-        retirement_thread.join(timeout=5)
+        evaluation_thread.join(timeout=_SLOW_HOST_TIMEOUT)
+        retirement_thread.join(timeout=_SLOW_HOST_TIMEOUT)
+        assert not evaluation_thread.is_alive() and not retirement_thread.is_alive()
 
     assert evaluation_results == [True] and not evaluation_errors
     assert len(retirement_errors) == 1 and "completed" in str(retirement_errors[0])

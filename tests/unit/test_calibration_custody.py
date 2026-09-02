@@ -24,6 +24,11 @@ from vntyper.scripts.calibration_workflow import evaluate_locked_candidate
 
 pytestmark = pytest.mark.unit
 
+# Concurrency tests synchronise on events and barriers, never on elapsed time. The
+# budget below only bounds a genuine deadlock; a two-core CI runner under coverage
+# tracing exceeded a 5 s budget while behaving correctly, so it is deliberately large.
+_SLOW_HOST_TIMEOUT = 120.0
+
 
 def _profile(margin: int = 1):
     return build_generated_profile(
@@ -284,7 +289,7 @@ def test_claim_owner_excludes_concurrent_retirement_until_success_is_terminal(tm
 
     def read_payload() -> bytes:
         payload_entered.set()
-        assert release_payload.wait(timeout=5)
+        assert release_payload.wait(timeout=_SLOW_HOST_TIMEOUT)
         return payload
 
     def evaluate() -> None:
@@ -303,14 +308,15 @@ def test_claim_owner_excludes_concurrent_retirement_until_success_is_terminal(tm
 
     evaluation_thread = threading.Thread(target=evaluate)
     evaluation_thread.start()
-    assert payload_entered.wait(timeout=5)
+    assert payload_entered.wait(timeout=_SLOW_HOST_TIMEOUT)
     retirement_thread = threading.Thread(target=retire)
     retirement_thread.start()
     retirement_thread.join(timeout=0.2)
     assert retirement_thread.is_alive()
     release_payload.set()
-    evaluation_thread.join(timeout=5)
-    retirement_thread.join(timeout=5)
+    evaluation_thread.join(timeout=_SLOW_HOST_TIMEOUT)
+    retirement_thread.join(timeout=_SLOW_HOST_TIMEOUT)
+    assert not evaluation_thread.is_alive() and not retirement_thread.is_alive()
 
     assert len(evaluation_results) == 1 and not evaluation_errors
     assert len(retirement_errors) == 1 and "completed" in str(retirement_errors[0])
@@ -368,7 +374,7 @@ def test_retirement_inserted_between_active_check_and_precommit_prevents_evaluat
     def blocking_write(path, raw, message):
         if path.parent.name == "retired":
             retirement_entered.set()
-            assert release_retirement.wait(timeout=5)
+            assert release_retirement.wait(timeout=_SLOW_HOST_TIMEOUT)
         return real_exclusive_write(path, raw, message)
 
     def evaluator(_raw: bytes) -> int:
@@ -388,12 +394,13 @@ def test_retirement_inserted_between_active_check_and_precommit_prevents_evaluat
     with patch("vntyper.scripts.calibration_custody._exclusive_write", side_effect=blocking_write):
         retirement_thread = threading.Thread(target=retire)
         retirement_thread.start()
-        assert retirement_entered.wait(timeout=5)
+        assert retirement_entered.wait(timeout=_SLOW_HOST_TIMEOUT)
         evaluation_thread = threading.Thread(target=evaluate)
         evaluation_thread.start()
         release_retirement.set()
-        retirement_thread.join(timeout=5)
-        evaluation_thread.join(timeout=5)
+        retirement_thread.join(timeout=_SLOW_HOST_TIMEOUT)
+        evaluation_thread.join(timeout=_SLOW_HOST_TIMEOUT)
+        assert not evaluation_thread.is_alive() and not retirement_thread.is_alive()
 
     assert not evaluated
     assert len(errors) == 1 and isinstance(errors[0], ValueError) and "retired" in str(errors[0])
