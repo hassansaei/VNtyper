@@ -8,6 +8,7 @@ import pandas as pd
 
 from vntyper.scripts.identity_candidate_persistence import IDENTITY_SELECTION_COLUMNS
 from vntyper.scripts.identity_candidates import OBSERVATION_ORDINAL_COLUMN
+from vntyper.scripts.molecular_identity_presentation import IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS
 
 
 def passing_candidate_frame(frame: pd.DataFrame, filter_columns: Sequence[str]) -> pd.DataFrame:
@@ -40,6 +41,30 @@ def passing_candidate_frame(frame: pd.DataFrame, filter_columns: Sequence[str]) 
     if ordinals != tuple(sorted(set(ordinals))):
         raise ValueError("complete Kestrel dominance candidate ordinals must be unique and increasing")
     return passing
+
+
+def legacy_result_candidates(frame: pd.DataFrame) -> pd.DataFrame:
+    """Drop the pre-result-only translation diagnostics before final annotation.
+
+    The legacy selection path removes these four columns from the selected row before
+    the public identity quartet is appended. The enabled-dominance path annotates rows
+    projected straight out of the retained pre-result, so it must remove them too, or
+    its ``kestrel_result.tsv`` gains three columns and moves ``Molecular_Identity`` out
+    of the quartet position the legacy result publishes.
+
+    Args:
+        frame: Passing candidate rows projected from the complete pre-result.
+
+    Returns:
+        A copy without the four diagnostic columns, in the legacy column order.
+
+    Raises:
+        ValueError: If any diagnostic column is absent.
+    """
+    missing = sorted(set(IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS) - set(frame.columns))
+    if missing:
+        raise ValueError(f"complete Kestrel dominance candidates lack translation diagnostics: {missing}")
+    return frame.drop(columns=list(IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS))
 
 
 def merge_candidate_annotations(pre_result: pd.DataFrame, annotated: pd.DataFrame) -> pd.DataFrame:

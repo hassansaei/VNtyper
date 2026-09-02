@@ -5,10 +5,12 @@ import pytest
 
 from vntyper.scripts.identity_candidate_persistence import IDENTITY_SELECTION_COLUMNS
 from vntyper.scripts.kestrel_dominance_candidates import (
+    legacy_result_candidates,
     merge_candidate_annotations,
     passing_candidate_frame,
     selected_candidate_frame,
 )
+from vntyper.scripts.molecular_identity_presentation import IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS
 
 pytestmark = pytest.mark.unit
 
@@ -72,3 +74,28 @@ def test_selected_candidate_frame_uses_the_legacy_ordinal_without_reranking() ->
 def test_selected_candidate_frame_rejects_invalid_or_absent_ordinal(ordinal: int) -> None:
     with pytest.raises(ValueError, match="ordinal"):
         selected_candidate_frame(_frame(), ordinal)
+
+
+def test_legacy_result_candidates_drop_exactly_the_four_pre_result_diagnostics() -> None:
+    """Mutation caught: the dominance branch publishes translation diagnostics the legacy row drops."""
+    frame = _frame()
+    for column in IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS:
+        frame[column] = "diagnostic"
+    frame["Nomenclature"] = "59dupC"
+
+    result = legacy_result_candidates(frame)
+
+    assert not set(IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS).intersection(result.columns)
+    assert list(result.columns) == [
+        column for column in frame.columns if column not in IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS
+    ]
+    assert len(result) == len(frame)
+
+
+def test_legacy_result_candidates_fail_closed_when_a_diagnostic_is_absent() -> None:
+    frame = _frame()
+    for column in IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS[1:]:
+        frame[column] = "diagnostic"
+
+    with pytest.raises(ValueError, match="lack translation diagnostics"):
+        legacy_result_candidates(frame)

@@ -571,3 +571,76 @@ class _DistinctKestrelTranslations:
 
     def translate_kestrel(self, representation) -> IdentityTranslation:
         return _RESOLVED if representation.motifs == "S-C" else _RESOLVED_OTHER
+
+
+def test_enabled_dominance_final_result_keeps_the_legacy_result_schema(tmp_path: Path) -> None:
+    """Mutation caught: the dominance branch publishes pre-result diagnostics the legacy branch drops.
+
+    ``process_kestrel_output`` replaces the legacy selected row with the same row projected
+    out of the retained pre-result when dominance is enabled. The published
+    ``kestrel_result.tsv`` must keep the legacy column set and order, so the two profiles
+    cannot produce structurally different final artifacts for the same input.
+    """
+    from vntyper.scripts.kestrel_dominance_candidates import (
+        legacy_result_candidates,
+        passing_candidate_frame,
+        selected_candidate_frame,
+    )
+
+    config = load_nomenclature_config()
+    motifs = config["motifs"]
+
+    def rows() -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    **kestrel_stage_frame(
+                        "raw", rows=1, motifs="S-C", pos=67, ref="G", alt="GG", depth_alt=7, depth_region=500
+                    )
+                    .iloc[0]
+                    .to_dict(),
+                    "Motif_sequence": motifs["C"] + motifs["S"],
+                },
+                {
+                    **kestrel_stage_frame(
+                        "raw", rows=1, motifs="A-J", pos=67, ref="C", alt="CG", depth_alt=7, depth_region=500
+                    )
+                    .iloc[0]
+                    .to_dict(),
+                    "Motif_sequence": motifs["J"] + motifs["A"],
+                },
+            ]
+        )
+
+    merged = pd.DataFrame({"Motif": ["S", "A"], "Motif_sequence": [motifs["S"], motifs["A"]]})
+    legacy_dir = tmp_path / "legacy"
+    dominance_dir = tmp_path / "dominance"
+    legacy_dir.mkdir()
+    dominance_dir.mkdir()
+
+    legacy = kestrel_genotyping.process_kmer_results(
+        rows(),
+        merged,
+        str(legacy_dir),
+        kestrel_config(),
+        identity_component=cast(IdentityTranslationComponent, _DistinctKestrelTranslations()),
+    )
+    legacy_final = annotate_kestrel_frame(legacy)
+
+    retained = kestrel_genotyping.process_kmer_results(
+        rows(),
+        merged,
+        str(dominance_dir),
+        kestrel_config(),
+        identity_component=cast(IdentityTranslationComponent, _DistinctKestrelTranslations()),
+        retain_complete_identity_candidates=True,
+    )
+    pre_result = pd.read_csv(dominance_dir / "kestrel_pre_result.tsv", sep="\t", dtype=str, keep_default_na=False)
+    candidates = legacy_result_candidates(passing_candidate_frame(pre_result, LEGACY_GATE_COLUMNS))
+    annotated = annotate_kestrel_frame(candidates, retain_complete_identity_evidence=True)
+    selected = selected_candidate_frame(annotated, int(retained.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]]))
+
+    assert list(selected.columns) == list(legacy_final.columns)
+    assert tuple(selected.columns[-4:]) == IDENTITY_COLUMNS
+    assert selected.iloc[0]["Nomenclature"] == legacy_final.iloc[0]["Nomenclature"]
+    assert selected.iloc[0]["Molecular_Identity"] == legacy_final.iloc[0]["Molecular_Identity"]

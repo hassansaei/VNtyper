@@ -768,6 +768,7 @@ def process_kestrel_output(
     # built from this same frame, and the HTML report all inherit the columns.
     if dominance_decision.get("enabled") is True:
         from vntyper.scripts.kestrel_dominance_candidates import (
+            legacy_result_candidates,
             merge_candidate_annotations,
             passing_candidate_frame,
             selected_candidate_frame,
@@ -776,7 +777,9 @@ def process_kestrel_output(
         selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active)
         pre_result_path = Path(output_dir) / "kestrel_pre_result.tsv"
         pre_result = pd.read_csv(pre_result_path, sep="\t", dtype=str, keep_default_na=False)
-        candidates = passing_candidate_frame(pre_result, selection.final_filter_columns)
+        # Mirror the legacy path: the four pre-result translation diagnostics never
+        # reach the published result, and the public quartet is appended after them.
+        candidates = legacy_result_candidates(passing_candidate_frame(pre_result, selection.final_filter_columns))
         annotated_candidates = annotate_kestrel_frame(
             candidates,
             output_dir,
