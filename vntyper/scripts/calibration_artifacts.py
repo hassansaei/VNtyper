@@ -18,7 +18,7 @@ from vntyper.scripts.calibration_artifact_io import (
 )
 from vntyper.scripts.calibration_baseline import project_baseline
 from vntyper.scripts.calibration_contract import decode_metrics
-from vntyper.scripts.calibration_custody import require_candidate_active, retire_candidate
+from vntyper.scripts.calibration_custody import ensure_candidate_retired, require_candidate_active
 from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
 from vntyper.scripts.calibration_locked_artifacts import build_locked_declaration_documents
 from vntyper.scripts.calibration_locked_evaluation import evaluate_artifact_bundle as _evaluate_locked_artifact_bundle
@@ -183,7 +183,7 @@ def validate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
         evaluation = _evaluate(profile, evidence)
         passed = select_candidate((evaluation,), evidence.study.protocol) is not None
         if not passed:
-            retirement = retire_candidate(
+            retirement = ensure_candidate_retired(
                 custody,
                 profile.digest,
                 evidence.dataset_sha256,
@@ -231,7 +231,7 @@ def validate_artifact_bundle(profile_path: Path, evidence_path: Path, output: Pa
         return passed
     except BaseException as error:
         if not retirement_installed:
-            retire_candidate(
+            ensure_candidate_retired(
                 custody,
                 profile.digest,
                 evidence.dataset_sha256,
@@ -333,8 +333,7 @@ def _load_roles(root: Path, roles: tuple[str, ...]) -> ExtractedEvidence:
             "run_artifact_sha256": run_hashes,
         }
     )
-    if set(roles) == {"training", "policy-selection"}:
-        validate_study_binding(binding, study, observed_manifests)
+    validate_study_binding(binding, study, observed_manifests)
     return ExtractedEvidence(
         study,
         features,

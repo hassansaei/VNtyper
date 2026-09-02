@@ -23,7 +23,7 @@ from vntyper.scripts.calibration_artifacts import (
     validate_artifact_bundle,
 )
 from vntyper.scripts.calibration_contract import decode_attestation, decode_metrics
-from vntyper.scripts.calibration_custody import claim_candidate, retire_candidate
+from vntyper.scripts.calibration_custody import claim_candidate, require_candidate_active, retire_candidate
 from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
 from vntyper.scripts.calibration_locked_artifacts import decode_locked_payload
 from vntyper.scripts.calibration_manifest import decode_study_declaration
@@ -278,6 +278,68 @@ def test_validation_refuses_a_self_checksummed_role_directory_swap(tmp_path: Pat
             evidence,
             tmp_path / "validation-attestation",
         )
+
+
+def test_validation_refuses_self_consistent_artifacts_not_bound_to_the_profile(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation_role = evidence / "roles" / "validation"
+    features_path = validation_role / "features.json"
+    features = load_strict_json_object(features_path.read_bytes())
+    rows = features["rows"]
+    assert isinstance(rows, list) and isinstance(rows[0], dict)
+    rows[0]["feature_key"] = "attacker-authored-validation-feature"
+    write_json(features_path, features)
+    manifest_path = validation_role / "manifest.json"
+    manifest = load_strict_json_object(manifest_path.read_bytes())
+    manifest["features_sha256"] = canonical_sha256(features)
+    write_json(manifest_path, manifest)
+    write_checksums(validation_role)
+    write_checksums(evidence)
+
+    with pytest.raises(ValueError, match="binding|manifest commitment"):
+        validate_artifact_bundle(candidate / "decision_profile.json", evidence, tmp_path / "validation")
+
+
+def test_concurrent_completed_failed_validation_installs_both_coherent_outputs(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    profile = candidate / "decision_profile.json"
+    barrier = threading.Barrier(2)
+    results: list[bool] = []
+    errors: list[ValueError] = []
+
+    def active_then_wait(custody: Path, profile_sha256: str, evidence_sha256: str) -> None:
+        require_candidate_active(custody, profile_sha256, evidence_sha256)
+        barrier.wait(timeout=5)
+
+    def validate(output: Path) -> None:
+        try:
+            results.append(validate_artifact_bundle(profile, evidence, output))
+        except ValueError as error:
+            errors.append(error)
+
+    with (
+        patch("vntyper.scripts.calibration_artifacts.require_candidate_active", side_effect=active_then_wait),
+        patch("vntyper.scripts.calibration_artifacts.select_candidate", return_value=None),
+    ):
+        threads = [threading.Thread(target=validate, args=(tmp_path / f"validation-{index}",)) for index in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+    assert results == [False, False] and not errors
+    for index in range(2):
+        output = tmp_path / f"validation-{index}"
+        verify_checksums(output)
+        assert (output / "retirement.json").is_file()
 
 
 def test_completed_failed_validation_writes_attestation_and_retirement_before_returning_false(tmp_path: Path) -> None:
