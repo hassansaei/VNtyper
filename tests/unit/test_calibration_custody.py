@@ -439,6 +439,25 @@ def test_owner_claim_descriptor_closes_even_if_unlock_fails(tmp_path: Path) -> N
     assert frozenset(os.listdir("/proc/self/fd")) == descriptors_before
 
 
+def test_owner_claim_propagates_close_error_before_terminal(tmp_path: Path) -> None:
+    descriptors_before = frozenset(os.listdir("/proc/self/fd"))
+    claim = claim_candidate(tmp_path / "custody", "a" * 64, "b" * 64, "c" * 64)
+    real_close = os.close
+
+    def close_then_fail(descriptor: int) -> None:
+        real_close(descriptor)
+        raise OSError("close failed after releasing descriptor")
+
+    with (
+        patch("vntyper.scripts.calibration_custody.os.close", side_effect=close_then_fail),
+        pytest.raises(OSError, match="close failed after releasing descriptor"),
+    ):
+        claim.close()
+
+    assert claim.descriptor == -1
+    assert frozenset(os.listdir("/proc/self/fd")) == descriptors_before
+
+
 def _assert_pair_lock_released(custody: Path, profile: str, evidence: str) -> None:
     lock_path = custody / "locks" / f"{profile}.{evidence}.lock"
     descriptor = os.open(lock_path, os.O_RDWR)

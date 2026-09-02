@@ -336,10 +336,13 @@ def test_concurrent_completed_failed_validation_installs_both_coherent_outputs(t
             thread.join(timeout=5)
 
     assert results == [False, False] and not errors
+    custody_retirements = tuple((tmp_path / ".evidence.calibration-custody" / "retired").glob("*.json"))
+    assert len(custody_retirements) == 1
+    retirement_bytes = custody_retirements[0].read_bytes()
     for index in range(2):
         output = tmp_path / f"validation-{index}"
         verify_checksums(output)
-        assert (output / "retirement.json").is_file()
+        assert (output / "retirement.json").read_bytes() == retirement_bytes
 
 
 def test_completed_failed_validation_writes_attestation_and_retirement_before_returning_false(tmp_path: Path) -> None:
@@ -407,8 +410,11 @@ def test_completed_failed_locked_evaluation_writes_attestation_and_retirement(tm
     assert (heldout / "retirement.json").is_file()
 
 
+@pytest.mark.parametrize("release_failure", ["unlock", "close"])
 @pytest.mark.parametrize(("passed", "status"), [(True, "passed"), (False, "failed")])
-def test_terminal_unlock_error_preserves_coherent_cli_outcome(tmp_path: Path, passed: bool, status: str) -> None:
+def test_terminal_release_error_preserves_coherent_cli_outcome(
+    tmp_path: Path, passed: bool, status: str, release_failure: str
+) -> None:
     truth, partitions, runs = _inputs(tmp_path)
     evidence = tmp_path / "evidence"
     extract_artifact_bundle(truth, partitions, runs, evidence)
@@ -420,15 +426,25 @@ def test_terminal_unlock_error_preserves_coherent_cli_outcome(tmp_path: Path, pa
     custodian = _custodian_import(tmp_path / "custodian", truth, partitions, runs, profile, validation)
     output = tmp_path / "heldout"
     real_flock = fcntl.flock
+    real_close = os.close
+    claim_descriptors: list[int] = []
 
-    def fail_unlock(descriptor: int, operation: int) -> None:
-        if operation == fcntl.LOCK_UN:
+    def fail_release_flock(descriptor: int, operation: int) -> None:
+        if operation == fcntl.LOCK_EX:
+            claim_descriptors.append(descriptor)
+        if release_failure == "unlock" and operation == fcntl.LOCK_UN and descriptor in claim_descriptors:
             raise OSError("explicit unlock failed")
         real_flock(descriptor, operation)
 
+    def close_then_fail(descriptor: int) -> None:
+        real_close(descriptor)
+        if release_failure == "close" and descriptor in claim_descriptors:
+            raise OSError("close failed after releasing descriptor")
+
     with (
         patch("vntyper.cli.setup_logging"),
-        patch("vntyper.scripts.calibration_custody.fcntl.flock", side_effect=fail_unlock),
+        patch("vntyper.scripts.calibration_custody.fcntl.flock", side_effect=fail_release_flock),
+        patch("vntyper.scripts.calibration_custody.os.close", side_effect=close_then_fail),
         patch(
             "vntyper.scripts.calibration_artifacts.select_candidate",
             side_effect=select_candidate if passed else lambda *_args: None,
@@ -471,6 +487,9 @@ def test_terminal_unlock_error_preserves_coherent_cli_outcome(tmp_path: Path, pa
     custody = tmp_path / ".custodian.calibration-custody"
     assert len(tuple((custody / ("completed" if passed else "retired")).glob("*.json"))) == 1
     assert not tuple((custody / ("retired" if passed else "completed")).glob("*.json"))
+    assert len(claim_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(claim_descriptors[0])
 
 
 def test_post_consumption_interrupt_retires_before_reraising(tmp_path: Path) -> None:

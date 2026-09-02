@@ -112,7 +112,11 @@ class CandidateClaim:
                 if self.terminal_path is None:
                     raise
             finally:
-                os.close(descriptor)
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    if self.terminal_path is None:
+                        raise
 
 
 def write_precommit(
