@@ -241,8 +241,13 @@ def test_collected_test_module_basenames_are_unique() -> None:
 
 def test_root_pytest_ini_is_the_single_live_marker_authority() -> None:
     pytest_ini = (REPO_ROOT / "pytest.ini").read_text(encoding="utf-8")
+    marker_contract = " ".join(pytest_ini.split())
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "--strict-markers" in pytest_ini
     for marker in ("unit", "integration", "docker", "browser", "golden", "smoke", "slow"):
         assert f"{marker}:" in pytest_ini
+    assert "deselected collection is safe" in marker_contract
+    assert "selected execution requires both VNTYPER_SIM_ROOT and VNTYPER_ADVNTR_ROOT" in marker_contract
+    assert "fails without skipping if either root is absent, missing, or incomplete" in marker_contract
+    assert "skips without them" not in marker_contract
     assert "[tool.pytest.ini_options]" not in pyproject
