@@ -9,9 +9,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from vntyper.scripts.calibration_artifact_io import load_object
-from vntyper.scripts.calibration_contract import CalibrationAttestation, decode_attestation
-from vntyper.scripts.canonical_json import load_strict_json_object
+from vntyper.scripts.calibration_secure_io import SecureDirectoryReader
+from vntyper.scripts.calibration_study_binding import StudyBinding, decode_study_binding
+from vntyper.scripts.calibration_validation_attestation import (
+    ValidationAttestation,
+    decode_validation_attestation,
+)
+from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,13 @@ _FIELDS = {
     "locked_dataset_sha256",
     "locked_run_hashes_sha256",
     "validation_attestation_sha256",
+    "validation_evidence_sha256",
+    "study_binding_sha256",
+    "run_commitments_sha256",
+    "validation_role_run_commitments_sha256",
+    "validation_role_run_artifacts_sha256",
+    "locked_role_run_commitments_sha256",
+    "locked_role_run_artifacts_sha256",
 }
 
 
@@ -50,9 +61,40 @@ class CustodianAuthority:
     locked_dataset_sha256: str
     locked_run_hashes_sha256: str
     validation_attestation_sha256: str
+    validation_evidence_sha256: str
+    study_binding_sha256: str
+    run_commitments_sha256: str
+    validation_role_run_commitments_sha256: str
+    validation_role_run_artifacts_sha256: str
+    locked_role_run_commitments_sha256: str
+    locked_role_run_artifacts_sha256: str
 
 
-def load_custodian_import_header(evidence_path: Path) -> tuple[CustodianAuthority, CalibrationAttestation]:
+@dataclass
+class CustodianImport:
+    """Pinned custodian header and deferred no-follow locked payload reader."""
+
+    authority: CustodianAuthority
+    validation: ValidationAttestation
+    study_binding: StudyBinding
+    reader: SecureDirectoryReader
+
+    def read_locked_payload(self) -> bytes:
+        """Read locked bytes once from the pinned import directory after precommit."""
+        return self.reader.read_file("locked_payload.json")
+
+    def close(self) -> None:
+        """Close the pinned import directory."""
+        self.reader.close()
+
+    def __enter__(self) -> CustodianImport:
+        return self
+
+    def __exit__(self, _type, _value, _traceback) -> None:
+        self.close()
+
+
+def load_custodian_import_header(evidence_path: Path) -> CustodianImport:
     """Load and bind only non-locked custodian header bytes before precommit.
 
     Args:
@@ -70,36 +112,44 @@ def load_custodian_import_header(evidence_path: Path) -> tuple[CustodianAuthorit
         "validation_attestation.json",
         "locked_payload.json",
         "checksums.json",
+        "study_binding.json",
     }
     try:
-        entries = tuple(evidence_path.iterdir())
-    except OSError as error:
-        raise ValueError(f"custodian import is missing or unreadable: {evidence_path}") from error
-    if {path.name for path in entries} != expected or any(not path.is_file() or path.is_symlink() for path in entries):
-        raise ValueError("custodian import fields differ from the closed authority bundle")
+        reader = SecureDirectoryReader.open(evidence_path, expected)
+    except ValueError as error:
+        raise ValueError(f"custodian import is invalid: {error}") from error
     try:
-        authority_raw = (evidence_path / "authority_attestation.json").read_bytes()
-        validation_raw = (evidence_path / "validation_attestation.json").read_bytes()
-    except OSError as error:
-        raise ValueError("custodian import authority or validation attestation is unreadable") from error
-    authority = decode_custodian_authority(load_strict_json_object(authority_raw))
-    validation = decode_attestation(load_strict_json_object(validation_raw))
-    validation_sha256 = hashlib.sha256(validation_raw).hexdigest()
-    if authority.validation_attestation_sha256 != validation_sha256:
-        raise ValueError("custodian authority does not bind the exact validation-attestation bytes")
-    checksums = load_object(evidence_path / "checksums.json", "custodian import checksums")
-    files = _mapping(checksums.get("files"), "custodian import checksum files")
-    expected_files = expected - {"checksums.json"}
-    if checksums.get("schema_version") != "calibration-checksums-v1" or set(files) != expected_files:
-        raise ValueError("custodian import checksum fields differ")
-    observed = {
-        "authority_attestation.json": hashlib.sha256(authority_raw).hexdigest(),
-        "validation_attestation.json": validation_sha256,
-        "locked_payload.json": authority.locked_payload_sha256,
-    }
-    if files != observed:
-        raise ValueError("custodian import checksum bindings differ")
-    return authority, validation
+        raw = reader.read_files(
+            ("authority_attestation.json", "validation_attestation.json", "study_binding.json", "checksums.json")
+        )
+        authority = decode_custodian_authority(load_strict_json_object(raw["authority_attestation.json"]))
+        validation_document = load_strict_json_object(raw["validation_attestation.json"])
+        if canonical_json_bytes(validation_document) != raw["validation_attestation.json"]:
+            raise ValueError("custodian import validation attestation must be canonical installed bytes")
+        validation = decode_validation_attestation(validation_document)
+        binding = decode_study_binding(load_strict_json_object(raw["study_binding.json"]))
+        validation_sha256 = hashlib.sha256(raw["validation_attestation.json"]).hexdigest()
+        if authority.validation_attestation_sha256 != validation_sha256:
+            raise ValueError("custodian authority does not bind the exact validation-attestation bytes")
+        if authority.study_binding_sha256 != hashlib.sha256(raw["study_binding.json"]).hexdigest():
+            raise ValueError("custodian authority does not bind the exact study-binding bytes")
+        checksums = load_strict_json_object(raw["checksums.json"])
+        files = _mapping(checksums.get("files"), "custodian import checksum files")
+        expected_files = expected - {"checksums.json"}
+        if checksums.get("schema_version") != "calibration-checksums-v1" or set(files) != expected_files:
+            raise ValueError("custodian import checksum fields differ")
+        observed = {
+            "authority_attestation.json": hashlib.sha256(raw["authority_attestation.json"]).hexdigest(),
+            "validation_attestation.json": validation_sha256,
+            "study_binding.json": hashlib.sha256(raw["study_binding.json"]).hexdigest(),
+            "locked_payload.json": authority.locked_payload_sha256,
+        }
+        if files != observed:
+            raise ValueError("custodian import checksum bindings differ")
+        return CustodianImport(authority, validation, binding, reader)
+    except BaseException:
+        reader.close()
+        raise
 
 
 def decode_custodian_authority(value: object) -> CustodianAuthority:
@@ -143,6 +193,13 @@ def decode_custodian_authority(value: object) -> CustodianAuthority:
         _digest(value["locked_dataset_sha256"], "locked dataset"),
         _digest(value["locked_run_hashes_sha256"], "locked run hashes"),
         _digest(value["validation_attestation_sha256"], "validation attestation"),
+        _digest(value["validation_evidence_sha256"], "validation evidence"),
+        _digest(value["study_binding_sha256"], "study binding"),
+        _digest(value["run_commitments_sha256"], "run commitments"),
+        _digest(value["validation_role_run_commitments_sha256"], "validation role run commitments"),
+        _digest(value["validation_role_run_artifacts_sha256"], "validation role run artifacts"),
+        _digest(value["locked_role_run_commitments_sha256"], "locked role run commitments"),
+        _digest(value["locked_role_run_artifacts_sha256"], "locked role run artifacts"),
     )
 
 
@@ -158,6 +215,13 @@ def validate_custodian_authority_bindings(
     locked_dataset_sha256: str,
     locked_run_hashes_sha256: str,
     validation_attestation_sha256: str,
+    validation_evidence_sha256: str,
+    study_binding_sha256: str,
+    run_commitments_sha256: str,
+    validation_role_run_commitments_sha256: str,
+    validation_role_run_artifacts_sha256: str,
+    locked_role_run_commitments_sha256: str,
+    locked_role_run_artifacts_sha256: str,
 ) -> None:
     """Require the authority assertion to bind every opened artifact exactly.
 
@@ -190,6 +254,13 @@ def validate_custodian_authority_bindings(
             (locked_dataset_sha256, "opened locked dataset"),
             (locked_run_hashes_sha256, "opened locked run hashes"),
             (validation_attestation_sha256, "opened validation attestation"),
+            (validation_evidence_sha256, "opened validation evidence"),
+            (study_binding_sha256, "opened study binding"),
+            (run_commitments_sha256, "opened run commitments"),
+            (validation_role_run_commitments_sha256, "opened validation role run commitments"),
+            (validation_role_run_artifacts_sha256, "opened validation role run artifacts"),
+            (locked_role_run_commitments_sha256, "opened locked role run commitments"),
+            (locked_role_run_artifacts_sha256, "opened locked role run artifacts"),
         )
     )
     observed = (
@@ -202,9 +273,16 @@ def validate_custodian_authority_bindings(
         authority.locked_dataset_sha256,
         authority.locked_run_hashes_sha256,
         authority.validation_attestation_sha256,
+        authority.validation_evidence_sha256,
+        authority.study_binding_sha256,
+        authority.run_commitments_sha256,
+        authority.validation_role_run_commitments_sha256,
+        authority.validation_role_run_artifacts_sha256,
+        authority.locked_role_run_commitments_sha256,
+        authority.locked_role_run_artifacts_sha256,
     )
     if observed != expected:
-        raise ValueError("calibration custodian authority bindings differ from opened artifacts")
+        raise ValueError("calibration custodian authority protocol or artifact bindings differ from opened artifacts")
 
 
 def _text(value: object, label: str) -> str:

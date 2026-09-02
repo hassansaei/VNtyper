@@ -34,6 +34,13 @@ def _document() -> dict[str, object]:
         "locked_dataset_sha256": "1" * 64,
         "locked_run_hashes_sha256": "2" * 64,
         "validation_attestation_sha256": "3" * 64,
+        "validation_evidence_sha256": "4" * 64,
+        "study_binding_sha256": "5" * 64,
+        "run_commitments_sha256": "6" * 64,
+        "validation_role_run_commitments_sha256": "7" * 64,
+        "validation_role_run_artifacts_sha256": "8" * 64,
+        "locked_role_run_commitments_sha256": "9" * 64,
+        "locked_role_run_artifacts_sha256": "0" * 64,
     }
 
 
@@ -51,6 +58,13 @@ def test_external_authority_round_trips_and_validates_every_binding() -> None:
         locked_dataset_sha256="1" * 64,
         locked_run_hashes_sha256="2" * 64,
         validation_attestation_sha256="3" * 64,
+        validation_evidence_sha256="4" * 64,
+        study_binding_sha256="5" * 64,
+        run_commitments_sha256="6" * 64,
+        validation_role_run_commitments_sha256="7" * 64,
+        validation_role_run_artifacts_sha256="8" * 64,
+        locked_role_run_commitments_sha256="9" * 64,
+        locked_role_run_artifacts_sha256="0" * 64,
     )
     assert authority.custodian_name == "Independent Example Repository"
 
@@ -91,6 +105,13 @@ def test_external_authority_rejects_unknown_fields_and_each_mismatched_binding()
             locked_dataset_sha256="1" * 64,
             locked_run_hashes_sha256="2" * 64,
             validation_attestation_sha256="3" * 64,
+            validation_evidence_sha256="4" * 64,
+            study_binding_sha256="5" * 64,
+            run_commitments_sha256="6" * 64,
+            validation_role_run_commitments_sha256="7" * 64,
+            validation_role_run_artifacts_sha256="8" * 64,
+            locked_role_run_commitments_sha256="9" * 64,
+            locked_role_run_artifacts_sha256="0" * 64,
         )
 
 
@@ -111,8 +132,13 @@ def test_custodian_header_requires_authority_to_bind_exact_validation_bytes(tmp_
     write_json(tmp_path / "validation_attestation.json", validation)
     with (tmp_path / "validation_attestation.json").open("ab") as stream:
         stream.write(b" ")
+    authority["validation_attestation_sha256"] = hashlib.sha256(
+        (tmp_path / "validation_attestation.json").read_bytes()
+    ).hexdigest()
+    write_json(tmp_path / "authority_attestation.json", authority)
     (tmp_path / "locked_payload.json").write_bytes(b"locked")
+    (tmp_path / "study_binding.json").write_bytes(b"{}\n")
     write_checksums(tmp_path)
 
-    with pytest.raises(ValueError, match="exact validation-attestation bytes"):
+    with pytest.raises(ValueError, match="canonical.*validation|validation.*canonical"):
         load_custodian_import_header(tmp_path)

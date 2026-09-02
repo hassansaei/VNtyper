@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 import shutil
 from fractions import Fraction
 from pathlib import Path
@@ -19,13 +20,17 @@ from vntyper.scripts.calibration_artifacts import (
     validate_artifact_bundle,
 )
 from vntyper.scripts.calibration_contract import decode_attestation
-from vntyper.scripts.calibration_features import decode_label_artifact
+from vntyper.scripts.calibration_custody import claim_candidate
+from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
 from vntyper.scripts.calibration_locked_artifacts import decode_locked_payload
 from vntyper.scripts.calibration_manifest import decode_study_declaration
 from vntyper.scripts.calibration_objective import calculate_metrics
 from vntyper.scripts.calibration_profiles import build_generated_profile
 from vntyper.scripts.calibration_role_inputs import build_role_inputs
+from vntyper.scripts.calibration_run_extraction import decode_run_hashes
 from vntyper.scripts.calibration_statistics import BootstrapInterval
+from vntyper.scripts.calibration_study_binding import decode_study_binding
+from vntyper.scripts.calibration_validation_attestation import decode_validation_attestation
 from vntyper.scripts.calibration_workflow import extract_evidence
 from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
 from vntyper.scripts.cli_calibrate import handle_calibrate
@@ -113,7 +118,9 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
             str(validation),
         ]
     )
-    validation_attestation = decode_attestation(load_strict_json_object((validation / "attestation.json").read_bytes()))
+    validation_attestation = decode_validation_attestation(
+        load_strict_json_object((validation / "attestation.json").read_bytes())
+    )
     assert validation_attestation.role == "validation"
     assert (validation / "report.html").is_file()
     assert (validation / "intervals.json").is_file()
@@ -154,6 +161,28 @@ def test_ordinary_extract_discloses_no_locked_values_or_custody_assertion(tmp_pa
     assert b"59dupC" not in locked_bytes
     for forbidden in ("features.json", "labels.json", "baseline.json", "locked_payload.json", "evidence_manifest.json"):
         assert not (locked_root / forbidden).exists()
+
+
+def test_ordinary_extract_accepts_nonlocked_truth_without_reading_locked_run_roots(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    truth_document = load_strict_json_object(truth.read_bytes())
+    labels = truth_document["labels"]
+    assert isinstance(labels, dict) and isinstance(labels["rows"], list)
+    labels["rows"] = [row for row in labels["rows"] if isinstance(row, dict) and row["manifest_key"] != "held"]
+    truth.write_bytes(canonical_json_bytes(truth_document))
+    runs_document = load_strict_json_object(runs.read_bytes())
+    run_values = runs_document["runs"]
+    assert isinstance(run_values, dict) and isinstance(run_values["held"], dict)
+    locked_root = Path(str(run_values["held"]["root"]))
+    original_read = Path.read_bytes
+
+    def refuse_locked_reads(path: Path) -> bytes:
+        if path == locked_root or locked_root in path.parents:
+            raise AssertionError(f"ordinary extraction opened locked run bytes: {path}")
+        return original_read(path)
+
+    with patch.object(Path, "read_bytes", refuse_locked_reads):
+        assert extract_artifact_bundle(truth, partitions, runs, tmp_path / "evidence") is True
 
 
 def test_fit_refuses_an_objective_different_from_the_snapshotted_protocol(tmp_path: Path) -> None:
@@ -238,6 +267,24 @@ def test_completed_failed_validation_writes_attestation_and_retirement_before_re
         validate_artifact_bundle(candidate / "decision_profile.json", evidence, tmp_path / "validation-again")
 
 
+def test_completed_failed_validation_retires_before_fallible_result_writes(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+
+    with (
+        patch("vntyper.scripts.calibration_artifacts.select_candidate", return_value=None),
+        patch("vntyper.scripts.calibration_artifacts.write_json", side_effect=RuntimeError("disk failed")),
+        pytest.raises(RuntimeError, match="disk failed"),
+    ):
+        validate_artifact_bundle(candidate / "decision_profile.json", evidence, tmp_path / "validation")
+
+    custody = tmp_path / ".evidence.calibration-custody"
+    assert len(tuple((custody / "retired").glob("*.json"))) == 1
+
+
 def test_completed_failed_locked_evaluation_writes_attestation_and_retirement(tmp_path: Path) -> None:
     truth, partitions, runs = _inputs(tmp_path)
     evidence = tmp_path / "evidence"
@@ -263,6 +310,93 @@ def test_completed_failed_locked_evaluation_writes_attestation_and_retirement(tm
 
     assert load_strict_json_object((heldout / "attestation.json").read_bytes())["status"] == "failed"
     assert (heldout / "retirement.json").is_file()
+
+
+def test_post_consumption_interrupt_retires_before_reraising(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(candidate / "decision_profile.json", evidence, validation)
+    custodian = _custodian_import(
+        tmp_path / "custodian", truth, partitions, runs, candidate / "decision_profile.json", validation
+    )
+
+    with (
+        patch("vntyper.scripts.calibration_artifacts.decode_metrics", side_effect=KeyboardInterrupt()),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        evaluate_artifact_bundle(candidate / "decision_profile.json", custodian, tmp_path / "heldout")
+
+    custody = tmp_path / ".custodian.calibration-custody"
+    assert len(tuple((custody / "consumed").glob("*.json"))) == 1
+    assert len(tuple((custody / "retired").glob("*.json"))) == 1
+
+
+@pytest.mark.parametrize("mutation", ["aggregate", "row-key", "row-order"])
+def test_locked_evaluation_rejects_unreplayed_baseline_semantics(tmp_path: Path, mutation: str) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(candidate / "decision_profile.json", evidence, validation)
+    custodian = _custodian_import(
+        tmp_path / "custodian", truth, partitions, runs, candidate / "decision_profile.json", validation
+    )
+    payload_path = custodian / "locked_payload.json"
+    payload = load_strict_json_object(payload_path.read_bytes())
+    baseline = payload["baseline"]
+    assert isinstance(baseline, dict)
+    expected = baseline["expected"]
+    observed = baseline["observed"]
+    assert isinstance(expected, dict) and isinstance(observed, dict)
+    if mutation == "aggregate":
+        assert isinstance(observed["aggregate"], dict)
+        observed["aggregate"]["displayed"] = 999
+    else:
+        for projection in (expected, observed):
+            rows = projection["rows"]
+            assert isinstance(rows, list) and isinstance(rows[0], dict)
+            rows[0]["manifest_key" if mutation == "row-key" else "order"] = "train" if mutation == "row-key" else 999
+    payload_path.write_bytes(canonical_json_bytes(payload))
+    _refresh_locked_authority(custodian)
+
+    with pytest.raises(ValueError, match="baseline|row|aggregate|order"):
+        evaluate_artifact_bundle(candidate / "decision_profile.json", custodian, tmp_path / "heldout")
+
+
+def test_locked_payload_symlink_swap_after_precommit_is_rejected_and_retired(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(candidate / "decision_profile.json", evidence, validation)
+    custodian = _custodian_import(
+        tmp_path / "custodian", truth, partitions, runs, candidate / "decision_profile.json", validation
+    )
+    payload = custodian / "locked_payload.json"
+    replacement = tmp_path / "replacement-locked-payload.json"
+
+    def swap_after_precommit(*args, **kwargs):
+        precommit = claim_candidate(*args, **kwargs)
+        replacement.write_bytes(payload.read_bytes())
+        payload.unlink()
+        os.symlink(replacement, payload)
+        return precommit
+
+    with (
+        patch("vntyper.scripts.calibration_workflow.claim_candidate", side_effect=swap_after_precommit),
+        pytest.raises(ValueError, match="symlink|regular|locked evidence"),
+    ):
+        evaluate_artifact_bundle(candidate / "decision_profile.json", custodian, tmp_path / "heldout")
+
+    assert len(tuple((tmp_path / ".custodian.calibration-custody" / "retired").glob("*.json"))) == 1
 
 
 def test_locked_evaluation_refuses_manifest_protocol_mismatched_to_payload(tmp_path: Path) -> None:
@@ -325,6 +459,70 @@ def test_locked_evaluation_rejects_cross_study_reuse_with_identical_candidate_gr
 
     with pytest.raises(ValueError, match="validation|study|protocol|bindings"):
         evaluate_artifact_bundle(candidate / "decision_profile.json", custodian_b, tmp_path / "heldout")
+
+
+def test_generated_profile_rejects_alternate_validation_run_commitments(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence_a = tmp_path / "evidence-a"
+    extract_artifact_bundle(truth, partitions, runs, evidence_a)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence_a, "lexicographic-safety-v1", candidate)
+    runs_document = load_strict_json_object(runs.read_bytes())
+    run_values = runs_document["runs"]
+    assert isinstance(run_values, dict)
+    run_values["validate"] = write_schema_three_run(tmp_path / "alternate-validation", "validate", support=11)
+    runs.write_bytes(canonical_json_bytes(runs_document))
+    evidence_b = tmp_path / "evidence-b"
+    extract_artifact_bundle(truth, partitions, runs, evidence_b)
+
+    with pytest.raises(ValueError, match="study|dataset|binding|commitment"):
+        validate_artifact_bundle(candidate / "decision_profile.json", evidence_b, tmp_path / "validation")
+
+
+def test_locked_evaluation_rejects_alternate_held_run_commitments(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(candidate / "decision_profile.json", evidence, validation)
+    runs_document = load_strict_json_object(runs.read_bytes())
+    run_values = runs_document["runs"]
+    assert isinstance(run_values, dict)
+    run_values["held"] = write_schema_three_run(tmp_path / "alternate-held", "held", support=11)
+    runs.write_bytes(canonical_json_bytes(runs_document))
+    custodian = _custodian_import(
+        tmp_path / "custodian", truth, partitions, runs, candidate / "decision_profile.json", validation
+    )
+
+    with pytest.raises(ValueError, match="held|run|commitment|binding"):
+        evaluate_artifact_bundle(candidate / "decision_profile.json", custodian, tmp_path / "heldout")
+
+
+def test_locked_evaluation_rejects_arbitrary_validation_evidence_hash(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(candidate / "decision_profile.json", evidence, validation)
+    custodian = _custodian_import(
+        tmp_path / "custodian", truth, partitions, runs, candidate / "decision_profile.json", validation
+    )
+    validation_path = custodian / "validation_attestation.json"
+    validation_document = load_strict_json_object(validation_path.read_bytes())
+    validation_document["evidence_sha256"] = "9" * 64
+    write_json(validation_path, validation_document)
+    authority_path = custodian / "authority_attestation.json"
+    authority = load_strict_json_object(authority_path.read_bytes())
+    authority["validation_attestation_sha256"] = hashlib.sha256(validation_path.read_bytes()).hexdigest()
+    write_json(authority_path, authority)
+    write_checksums(custodian)
+
+    with pytest.raises(ValueError, match="validation.*evidence|binding|commitment"):
+        evaluate_artifact_bundle(candidate / "decision_profile.json", custodian, tmp_path / "heldout")
 
 
 def test_fit_rejects_a_declared_but_unobserved_bootstrap_stratum(tmp_path: Path) -> None:
@@ -559,6 +757,9 @@ def _custodian_import(
     locked_evidence = decode_locked_payload(payload_raw)
     validation_attestation = load_strict_json_object((validation_root / "attestation.json").read_bytes())
     write_json(root / "validation_attestation.json", validation_attestation)
+    study_binding_document = load_strict_json_object((validation_root / "study_binding.json").read_bytes())
+    write_json(root / "study_binding.json", study_binding_document)
+    binding = decode_study_binding(study_binding_document)
     profile = resolve_decision_profile(profile_path)
     metadata = profile.document["generated_metadata"]
     assert isinstance(metadata, dict) or hasattr(metadata, "get")
@@ -580,10 +781,45 @@ def _custodian_import(
         "validation_attestation_sha256": hashlib.sha256(
             (root / "validation_attestation.json").read_bytes()
         ).hexdigest(),
+        "validation_evidence_sha256": validation_attestation["evidence_sha256"],
+        "study_binding_sha256": hashlib.sha256((root / "study_binding.json").read_bytes()).hexdigest(),
+        "run_commitments_sha256": binding.run_commitments_sha256,
+        "validation_role_run_commitments_sha256": binding.role_run_commitments_sha256["validation"],
+        "validation_role_run_artifacts_sha256": binding.role_run_artifacts_sha256["validation"],
+        "locked_role_run_commitments_sha256": binding.role_run_commitments_sha256["locked-heldout"],
+        "locked_role_run_artifacts_sha256": binding.role_run_artifacts_sha256["locked-heldout"],
     }
     write_json(root / "authority_attestation.json", authority)
     write_checksums(root)
     return root
+
+
+def _refresh_locked_authority(root: Path) -> None:
+    payload_raw = (root / "locked_payload.json").read_bytes()
+    payload = load_strict_json_object(payload_raw)
+    study = decode_study_declaration(payload["study"])
+    features = decode_feature_artifact(payload["features"])
+    labels = decode_label_artifact(payload["labels"])
+    baseline = payload["baseline"]
+    run_hashes_raw = payload["run_hashes"]
+    assert isinstance(run_hashes_raw, dict)
+    run_hashes = decode_run_hashes(run_hashes_raw)
+    dataset_sha256 = canonical_sha256(
+        {
+            "study_sha256": study.sha256,
+            "features_sha256": features.sha256,
+            "labels_sha256": labels.sha256,
+            "baseline_sha256": canonical_sha256(baseline),
+            "run_artifact_sha256": run_hashes,
+        }
+    )
+    authority_path = root / "authority_attestation.json"
+    authority = load_strict_json_object(authority_path.read_bytes())
+    authority["locked_payload_sha256"] = hashlib.sha256(payload_raw).hexdigest()
+    authority["locked_dataset_sha256"] = dataset_sha256
+    authority["locked_run_hashes_sha256"] = canonical_sha256(run_hashes)
+    write_json(authority_path, authority)
+    write_checksums(root)
 
 
 def _run_cli(argv: list[str]) -> None:

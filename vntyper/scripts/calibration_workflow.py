@@ -11,15 +11,14 @@ from typing import cast
 from vntyper.scripts.calibration_baseline import build_baseline
 from vntyper.scripts.calibration_custody import (
     ConsumptionReceipt,
+    claim_candidate,
     open_locked_payload,
     retire_candidate,
-    write_precommit,
 )
 from vntyper.scripts.calibration_features import (
     FeatureArtifact,
     LabelArtifact,
     decode_feature_artifact,
-    validate_artifact_alignment,
 )
 from vntyper.scripts.calibration_manifest import StudyDeclaration, require_operation_roles
 from vntyper.scripts.calibration_objective import CandidateEvaluation, count_free_parameters, select_candidate
@@ -83,6 +82,8 @@ def extract_evidence(
     study: StudyDeclaration,
     labels: LabelArtifact,
     runs: Mapping[str, object],
+    *,
+    roles: tuple[str, ...] = ("training", "policy-selection", "validation", "locked-heldout"),
 ) -> ExtractedEvidence:
     """Derive features and shipped replay from complete immutable run artifacts.
 
@@ -102,16 +103,19 @@ def extract_evidence(
         raise ValueError("calibration extraction requires a StudyDeclaration")
     if not isinstance(runs, Mapping) or set(runs) != {member.key for member in study.partitions.members}:
         raise ValueError("calibration run roots must match the complete partition manifest")
+    allowed_roles = {"training", "policy-selection", "validation", "locked-heldout"}
+    if not isinstance(roles, tuple) or not roles or len(roles) != len(set(roles)) or not set(roles) <= allowed_roles:
+        raise ValueError("calibration extraction roles must be a unique non-empty authorized tuple")
     if not isinstance(labels, LabelArtifact):
         raise ValueError("calibration extraction requires a decoded label artifact")
     label_keys = tuple(row.manifest_key for row in labels.rows)
-    manifest_keys = tuple(member.key for member in study.partitions.members)
+    manifest_keys = tuple(member.key for member in study.partitions.members if member.role in roles)
     if label_keys != manifest_keys:
         raise ValueError("calibration label rows must align exactly with the partition manifest")
     extractions = []
     run_hashes: dict[str, Mapping[str, str]] = {}
     members = {member.key: member for member in study.partitions.members}
-    for key in sorted(runs):
+    for key in manifest_keys:
         declaration = decode_run_artifact_declaration(runs[key])
         extracted = extract_completed_run(key, members[key].assay_class, declaration)
         extractions.append(extracted)
@@ -129,7 +133,8 @@ def extract_evidence(
             ],
         }
     )
-    validate_artifact_alignment(features, labels, study.partitions)
+    if tuple(row.manifest_key for row in features.rows) != manifest_keys:
+        raise ValueError("calibration feature rows must align exactly with the authorized partition roles")
     baseline = build_baseline(extractions, {row.manifest_key: row for row in labels.rows})
     baseline_copy = cast(Mapping[str, object], _freeze(baseline))
     dataset_sha256 = canonical_sha256(
@@ -215,7 +220,7 @@ def validate_candidate(profile: ResolvedDecisionProfile, evidence: ExtractedEvid
 
 def evaluate_locked_candidate(
     profile: ResolvedDecisionProfile,
-    payload_path: Path,
+    payload_source: Path | Callable[[], bytes],
     protocol_sha256: str,
     evidence_sha256: str,
     custody_dir: Path,
@@ -227,14 +232,14 @@ def evaluate_locked_candidate(
         raise ValueError("locked calibration evaluation requires an evaluator")
     packaged = load_packaged_decision_profile()
     validate_generated_allowlist(profile, packaged)
-    precommit = write_precommit(
+    precommit = claim_candidate(
         custody_dir,
         profile.digest,
         protocol_sha256,
         evidence_sha256,
     )
     try:
-        opened = open_locked_payload(payload_path, precommit, custody_dir)
+        opened = open_locked_payload(payload_source, precommit, custody_dir)
         result = evaluator(opened.payload)
     except BaseException as error:
         retire_candidate(

@@ -9,6 +9,7 @@ from typing import cast
 
 from vntyper.scripts.calibration_artifact_io import freeze_json
 from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
+from vntyper.scripts.calibration_locked_baseline import validate_locked_baseline
 from vntyper.scripts.calibration_manifest import StudyDeclaration, decode_study_declaration
 from vntyper.scripts.calibration_run_extraction import decode_run_hashes
 from vntyper.scripts.calibration_workflow import ExtractedEvidence
@@ -85,6 +86,7 @@ def decode_locked_payload(raw: bytes) -> ExtractedEvidence:
     labels = decode_label_artifact(payload["labels"])
     hashes = decode_run_hashes(_mapping(payload["run_hashes"], "run hashes"))
     baseline = dict(_mapping(payload["baseline"], "baseline"))
+    validate_locked_baseline(baseline, features, labels)
     dataset = canonical_sha256(
         {
             "study_sha256": study.sha256,

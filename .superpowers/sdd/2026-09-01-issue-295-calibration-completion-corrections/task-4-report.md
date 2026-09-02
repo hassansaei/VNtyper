@@ -17,7 +17,7 @@ plaintext locked payload, or the former locally generated external-custodian evi
 manifest. The locked role contains only a value-free member declaration, exact run-root
 and artifact-hash commitments, and its direct-child checksum manifest.
 
-`evaluate --evidence` now treats its input as a separately supplied, closed four-file
+`evaluate --evidence` now treats its input as a separately supplied, closed five-file
 custodian import. It rejects an ordinary local extraction bundle and requires:
 
 - a strict named external-custodian authority assertion;
@@ -53,7 +53,7 @@ no command that mints a custodian import; the fixture builder exists only in uni
   cleanup/retirement boundaries, remove only their own partial target, and re-raise
   `KeyboardInterrupt` or `SystemExit`.
 - Extracted the new pure locked-artifact, result-encoding, study-binding, and custodian-
-  authority logic. `calibration_artifacts.py` is 635 lines after the extraction, below
+  authority logic. `calibration_artifacts.py` is 552 lines after the review correction, below
   the repository's approximate 650-line guideline.
 
 The command surface remains exactly `extract`, `fit`, `validate`, and `evaluate`. The
@@ -139,8 +139,13 @@ Production:
 - `vntyper/scripts/cli_calibrate.py`
 - new `vntyper/scripts/calibration_custodian_import.py`
 - new `vntyper/scripts/calibration_locked_artifacts.py`
+- new `vntyper/scripts/calibration_locked_baseline.py`
+- new `vntyper/scripts/calibration_locked_evaluation.py`
+- new `vntyper/scripts/calibration_run_commitments.py`
+- new `vntyper/scripts/calibration_secure_io.py`
 - new `vntyper/scripts/calibration_result_artifacts.py`
 - new `vntyper/scripts/calibration_study_binding.py`
+- new `vntyper/scripts/calibration_validation_attestation.py`
 
 Tests:
 
@@ -150,12 +155,14 @@ Tests:
 - `tests/unit/test_cli_calibrate.py`
 - new `tests/unit/test_calibration_custodian_import.py`
 - new `tests/unit/test_calibration_result_artifacts.py`
+- new `tests/unit/test_calibration_secure_io.py`
 - new `tests/unit/test_calibration_study_binding.py`
+- new `tests/unit/test_calibration_validation_attestation.py`
 
 ## Self-review
 
 - Confirmed the locked payload is not read by header/inventory/checksum validation; the
-  precommit is durably installed before `Path.read_bytes()` can expose it.
+  precommit is durably installed before the pinned directory descriptor can open it.
 - Confirmed ordinary extraction's locked directory contains exactly the declaration,
   commitments, and checksum files and has no former evidence assertion.
 - Confirmed the authority binds exact validation bytes as well as exact locked payload
@@ -167,6 +174,55 @@ Tests:
 - Confirmed every new `BaseException` catch is at an atomic cleanup or custody/
   retirement boundary and re-raises.
 - Confirmed no cryptographic or independent-validation claim was introduced.
+
+## Independent review corrections
+
+The independent Task 4 review required six corrections. Each was reproduced with a
+failing regression test before its implementation was accepted:
+
+1. **Ordinary extraction custody:** extraction now filters truth to the three nonlocked
+   roles, validates all four predeclared run commitments without opening their roots,
+   and calls completed-run extraction only for training, policy-selection, and
+   validation. A read spy proves locked truth may be absent and locked run roots remain
+   inaccessible.
+2. **Complete lineage:** the profile binding now commits all-role normalized run
+   declarations, per-role artifact hashes, and the validation evidence dataset. The
+   version-2 validation attestation, study binding, custodian authority, and import
+   cross-bind exact study/protocol/partition/profile-dataset/run/evidence identities.
+   Alternate validation support, alternate held runs, arbitrary validation evidence,
+   and noncanonical validation bytes all fail closed.
+3. **Strict locked baseline replay:** a focused decoder enforces closed projection and
+   row schemas, strict scalar types, expected/observed equality, identical canonical
+   feature/label/baseline keys and ordering, and exact recomputation of aggregate and
+   per-tier counts from rows and labels. Aggregate `999`, cross-role row keys, and row
+   order `999` are rejected.
+4. **Post-consumption retirement:** all locked result decoding, output writing, and
+   finalization are inside an exact `BaseException` retirement boundary. Completed
+   failures retire before later fallible writes. A `KeyboardInterrupt` injected into
+   metric decoding leaves exactly one consumption and one retirement record and is
+   re-raised unchanged.
+5. **TOCTOU and symlinks:** custodian inventory, authority, validation, study binding,
+   checksums, and deferred locked payload use directory-relative/file-descriptor reads,
+   `O_NOFOLLOW`, regular-file `fstat`, and the same opened descriptor for validation and
+   bytes. Payload symlink swaps fail after precommit, while header/checksum replacement
+   probes demonstrate that already-opened bytes cannot be substituted.
+6. **Atomic active-to-precommit transition:** retirement and claim/precommit serialize
+   on a narrowly scoped exact-pair file lock. A deterministic concurrent retirement
+   test proves the evaluator and consumption remain unreachable when retirement wins.
+
+Fresh review-correction verification:
+
+- Calibration and CLI families: `333 passed in 27.18s`.
+- Direct security/static slice: `12 passed in 3.32s`; Ruff clean; mypy clean across
+  `233 source files`; `git diff --check` clean.
+- BLE001 policy and race guards: `110 passed in 2.21s`; the test helper was narrowed to
+  its expected `ValueError`, so the reviewed production exception inventory did not
+  expand.
+- Full branch-inclusive unit gate: `10168 passed, 5 skipped in 396.52s`; coverage
+  `91.85%`, above the `86%` floor.
+- Staged patch coverage: `87%` across 2,051 changed executable lines, above the `80%`
+  gate.
+- `calibration_artifacts.py`: 552 lines, below the repository guideline.
 
 ## Remaining risks and limitation
 

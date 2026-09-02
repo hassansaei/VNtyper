@@ -1,11 +1,13 @@
 """Local precommit, one-use consumption, and candidate retirement guards."""
 
 import hashlib
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from vntyper.scripts import calibration_custody
 from vntyper.scripts.calibration_contract import decode_evidence_manifest
 from vntyper.scripts.calibration_custody import (
     open_locked_payload,
@@ -267,6 +269,53 @@ def test_retired_profile_evidence_pair_is_refused_before_another_operation(tmp_p
     with pytest.raises(ValueError, match="retired"):
         require_candidate_active(custody, "a" * 64, "b" * 64)
     require_candidate_active(custody, "c" * 64, "b" * 64)
+
+
+def test_retirement_inserted_between_active_check_and_precommit_prevents_evaluation(tmp_path: Path) -> None:
+    payload = tmp_path / "locked.json"
+    payload.write_bytes(b"locked")
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+    profile = _profile()
+    custody = tmp_path / "custody"
+    evaluated = False
+    retirement_entered = threading.Event()
+    release_retirement = threading.Event()
+    real_exclusive_write = calibration_custody._exclusive_write
+    errors: list[ValueError] = []
+
+    def blocking_write(path, raw, message):
+        if path.parent.name == "retired":
+            retirement_entered.set()
+            assert release_retirement.wait(timeout=5)
+        return real_exclusive_write(path, raw, message)
+
+    def evaluator(_raw: bytes) -> int:
+        nonlocal evaluated
+        evaluated = True
+        return 1
+
+    def retire() -> None:
+        retire_candidate(custody, profile.digest, digest, "concurrent-retirement")
+
+    def evaluate() -> None:
+        try:
+            evaluate_locked_candidate(profile, payload, "c" * 64, digest, custody, evaluator=evaluator)
+        except ValueError as error:
+            errors.append(error)
+
+    with patch("vntyper.scripts.calibration_custody._exclusive_write", side_effect=blocking_write):
+        retirement_thread = threading.Thread(target=retire)
+        retirement_thread.start()
+        assert retirement_entered.wait(timeout=5)
+        evaluation_thread = threading.Thread(target=evaluate)
+        evaluation_thread.start()
+        release_retirement.set()
+        retirement_thread.join(timeout=5)
+        evaluation_thread.join(timeout=5)
+
+    assert not evaluated
+    assert len(errors) == 1 and isinstance(errors[0], ValueError) and "retired" in str(errors[0])
+    assert not tuple((custody / "consumed").glob("*.json"))
 
 
 def test_custody_records_reject_malformed_hashes_and_empty_reasons(tmp_path: Path) -> None:

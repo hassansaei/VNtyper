@@ -49,10 +49,29 @@ def _study():
     )
 
 
+def _manifests(study):
+    return {
+        role: {
+            "study_sha256": study.sha256,
+            "features_sha256": character * 64,
+            "labels_sha256": "d" * 64,
+            "baseline_sha256": "e" * 64,
+        }
+        for role, character in (("training", "a"), ("policy-selection", "b"), ("validation", "c"))
+    }
+
+
+def _runs():
+    return {
+        key: {"member_key": key, "root": f"/runs/{key}", "artifacts": {"summary.json": character * 64}}
+        for key, character in (("held", "a"), ("select", "b"), ("train", "c"), ("validate", "d"))
+    }
+
+
 def test_study_binding_round_trips_and_binds_role_and_run_commitments() -> None:
     study = _study()
-    manifests = {"training": {"role": "training"}, "policy-selection": {"role": "policy-selection"}}
-    run_commitments = {"train": {"summary.json": "a" * 64}, "select": {"summary.json": "b" * 64}}
+    manifests = _manifests(study)
+    run_commitments = _runs()
 
     binding = build_study_binding(study, manifests, run_commitments)
     decoded = decode_study_binding(binding.document)
@@ -66,24 +85,29 @@ def test_study_binding_round_trips_and_binds_role_and_run_commitments() -> None:
 
 def test_study_binding_rejects_cross_study_and_commitment_tampering() -> None:
     study = _study()
-    manifests = {"training": {"role": "training"}, "policy-selection": {"role": "policy-selection"}}
-    runs = {"train": {"summary.json": "a" * 64}, "select": {"summary.json": "b" * 64}}
+    manifests = _manifests(study)
+    runs = _runs()
     binding = build_study_binding(study, manifests, runs)
 
     with pytest.raises(ValueError, match="study|binding"):
         validate_study_binding(replace(binding, study_sha256="f" * 64), study, manifests, runs)
     with pytest.raises(ValueError, match="role manifest|binding"):
-        validate_study_binding(binding, study, {**manifests, "training": {"role": "changed"}}, runs)
+        validate_study_binding(binding, study, {**manifests, "training": {"changed": True}}, runs)
     with pytest.raises(ValueError, match="run commitment|binding"):
-        validate_study_binding(binding, study, manifests, {**runs, "train": {"summary.json": "c" * 64}})
+        validate_study_binding(
+            binding,
+            study,
+            manifests,
+            {**runs, "train": {"member_key": "train", "root": "/runs/train", "artifacts": {"summary.json": "f" * 64}}},
+        )
 
 
 def test_study_binding_decoder_rejects_unknown_fields_and_bad_dataset_digest() -> None:
     study = _study()
     binding = build_study_binding(
         study,
-        {"training": {"role": "training"}, "policy-selection": {"role": "policy-selection"}},
-        {"train": {"summary.json": "a" * 64}, "select": {"summary.json": "b" * 64}},
+        _manifests(study),
+        _runs(),
     )
     unknown = dict(binding.document)
     unknown["extra"] = True
