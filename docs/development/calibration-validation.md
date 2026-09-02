@@ -12,7 +12,14 @@ trees. It currently pins:
 - 200 mutated members and 200 paired normal controls;
 - 374 public identity rows and 178 selected locus rows;
 - shipped displayed-name projection 154 displayed, 136 exact, and 18 wrong;
-- Tier A 53/53/0, Tier B 101/83/18, Tier C 0/0/0;
+- the frozen historical Phase 1 caller projection recorded in the selected historical
+  summaries, Tier A 53/53/0, Tier B 101/83/18, Tier C 0/0/0, kept as the pre-identity
+  reference;
+- the measured identity-policy projection of the current code on the same corpus,
+  Tier A 0/0/0, Tier B 154/136/18, Tier C 0/0/0, pinned literally by
+  `test_pr_a_measured_identity_policy_baseline_is_literal`: identity-keyed reconciliation
+  deliberately keeps context-divergent evidence out of Tier A, so the total is unchanged
+  while no name reaches Tier A on this corpus;
 - zero control findings;
 - packaged profile SHA-256
   `be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718`; and
@@ -46,8 +53,10 @@ calibrate extract` and `vntyper calibrate fit` CLI operations, independently ver
 installed checksum inventories and literal feature/baseline rows, and strictly resolves
 the fitted generated profile.
 
-Before the candidate sweep, the gate proves the packaged neutral replay and the complete
-historical 400-member figures above. The one-member finite development candidate is
+Before evaluating the development grid, the gate proves the packaged neutral replay and
+the complete historical 400-member figures above. A one-member grid cannot contest the
+objective's ordering or tie-break; those are exercised by the objective's unit tests, not
+by this gate. The one-member finite development candidate is
 dominance enabled, record-count margin `1`, record share `0.5`, share margin `0.0`, and XD
 veto `disabled`; its deterministic generated-profile SHA-256 is
 `7fc772512eee789cd0a909fa939fd87305b4eb14a6769bcbf15b340afc7ce6f8`.

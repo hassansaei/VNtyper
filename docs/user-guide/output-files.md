@@ -78,7 +78,14 @@ flag columns) and carries none of these — there is no variant, so there is no 
 molecular identity row.
 
 Positive adVNTR result rows append the same four molecular-identity columns in the same
-order. Negative adVNTR output retains its existing narrower schema. The per-sample HTML
+order. Negative adVNTR output retains its existing narrower schema. The Kestrel result
+additionally carries `__Identity_*` capture and selection cells, and positive rows in both
+caller result files carry `__Reconciled_Molecular_Identity`: the canonical serialization of
+the whole-locus identity the reconciler selected, or an empty cell after abstention. The
+double-underscore prefix marks internal identity-capture and calibration-replay
+persistence, not public fields: they are copied into `pipeline_summary.json` with the
+other result columns, excluded from the policy projection, not rendered in the HTML
+report, and never written to a negative row. The per-sample HTML
 report, `pipeline_summary.json`, and cohort HTML/TSV/CSV/JSON exports carry all four
 recorded values; they never infer them from `POS`, `REF`, `ALT`, `Variant` or
 `Nomenclature`. In a sample HTML report, use the table's column control to show the

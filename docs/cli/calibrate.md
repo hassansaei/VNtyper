@@ -30,6 +30,11 @@ features. Supplying a locked label, an unknown field, a duplicate, or a reordere
 an error. Runs must retain schema-3 `pipeline_summary.json`,
 `kestrel/kestrel_pre_result.tsv`, `kestrel/bam_identity_replay.v1.json`, fixed caller
 results, and the recorded profile snapshot; callers, BAMs, and CRAMs are never reopened.
+Whether a run contributes its complete Kestrel candidate universe or only its selected
+row is decided by the `dominance.enabled` value in that run's verified
+`provenance/decision_profile.json` snapshot: a packaged snapshot must equal the package
+profile byte for byte, any other snapshot is re-parsed against the packaged base, and the
+recorded profile kind, summary fields, and paths are never used as that switch.
 
 Ordinary extraction does not open the locked run root and does not write locked features,
 labels, baseline, plaintext payload, evidence manifest, or custody claim. Its
@@ -60,6 +65,10 @@ the profile/evidence pair once. Success, completed failure, interruption, and ex
 all reach a durable terminal state before the operation lock is released. Local file
 locks, precommits, receipts, and append-only retirement records prevent accidental local
 reuse; they do not prove that the cohort was independently selected or externally held.
+The operation lock is an advisory POSIX `flock` on the custody directory. It serializes
+cooperating processes on one host and one filesystem with working advisory-lock
+semantics; it is not a distributed or multi-host guarantee, and no portability claim is
+made for non-POSIX platforms or filesystems whose advisory-lock semantics differ.
 
 ## Using a generated profile
 
@@ -74,7 +83,8 @@ vntyper pipeline --bam sample.bam -o results/ \
 Only the six dominance/whole-locus-abstention leaves may differ. Fixed safety fields,
 including `0.00469`, `0.00515`, `20`, `21`, `100`, `200`, BAM flank `8`, thin
 haplotype-record support `3`, and both Tier-A support values `5`, remain immutable.
-XD is always an optional minimum k-mer depth, never a read or vote weight.
+XD is always an optional minimum k-mer depth: never a sequencing-read or molecule count,
+never a vote weight, and never a tie-break or winner selector.
 
 ## Evidence status
 
