@@ -10,6 +10,7 @@ from vntyper.scripts.calibration_contract import decode_evidence_manifest
 from vntyper.scripts.calibration_custody import (
     open_locked_payload,
     record_consumption,
+    require_candidate_active,
     retire_candidate,
     write_precommit,
 )
@@ -122,13 +123,69 @@ def test_failed_open_consumes_evidence_and_retires_candidate(tmp_path: Path) -> 
         evaluate_locked_candidate(
             profile,
             payload,
-            evidence,
+            evidence.protocol_sha256,
+            evidence.features_sha256,
             tmp_path / "custody",
             evaluator=lambda raw: {"bytes": len(raw)},
         )
 
     retired = tuple((tmp_path / "custody" / "retired").glob("*.json"))
     assert len(retired) == 1
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt(), SystemExit(9)])
+def test_interrupted_locked_access_retires_the_pair_and_cannot_retry(
+    tmp_path: Path, interruption: BaseException
+) -> None:
+    payload = tmp_path / "locked.json"
+    payload.write_bytes(b"locked")
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+    profile = _profile()
+    evidence = _evidence(digest)
+    custody = tmp_path / "custody"
+
+    with (
+        patch("vntyper.scripts.calibration_workflow.open_locked_payload", side_effect=interruption),
+        pytest.raises(type(interruption)),
+    ):
+        evaluate_locked_candidate(
+            profile,
+            payload,
+            evidence.protocol_sha256,
+            evidence.features_sha256,
+            custody,
+            evaluator=lambda raw: len(raw),
+        )
+
+    assert len(tuple((custody / "retired").glob("*.json"))) == 1
+    with pytest.raises(ValueError, match="precommit|retired|one-use"):
+        evaluate_locked_candidate(
+            profile,
+            payload,
+            evidence.protocol_sha256,
+            evidence.features_sha256,
+            custody,
+            evaluator=lambda raw: len(raw),
+        )
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt(), SystemExit(9)])
+def test_interrupted_exclusive_write_removes_only_its_partial_target(
+    tmp_path: Path, interruption: BaseException
+) -> None:
+    custody = tmp_path / "custody"
+    neighbour = custody / "precommits" / "keep.json"
+    neighbour.parent.mkdir(parents=True)
+    neighbour.write_text("keep\n", encoding="utf-8")
+
+    with (
+        patch("vntyper.scripts.calibration_custody.os.fsync", side_effect=interruption),
+        pytest.raises(type(interruption)),
+    ):
+        write_precommit(custody, "a" * 64, "b" * 64, "c" * 64)
+
+    assert neighbour.read_text(encoding="utf-8") == "keep\n"
+    assert not (custody / "precommits" / f"{'a' * 64}.{'c' * 64}.json").exists()
 
 
 def test_failed_evaluator_cannot_reuse_locked_evidence(tmp_path: Path) -> None:
@@ -142,7 +199,8 @@ def test_failed_evaluator_cannot_reuse_locked_evidence(tmp_path: Path) -> None:
         evaluate_locked_candidate(
             profile,
             payload,
-            evidence,
+            evidence.protocol_sha256,
+            evidence.features_sha256,
             tmp_path / "custody",
             evaluator=lambda raw: (_ for _ in ()).throw(RuntimeError("evaluation failed")),
         )
@@ -150,7 +208,8 @@ def test_failed_evaluator_cannot_reuse_locked_evidence(tmp_path: Path) -> None:
         evaluate_locked_candidate(
             _profile(2),
             payload,
-            evidence,
+            evidence.protocol_sha256,
+            evidence.features_sha256,
             tmp_path / "custody",
             evaluator=lambda raw: {"bytes": len(raw)},
         )
@@ -165,7 +224,8 @@ def test_successful_locked_evaluation_is_role_and_hash_bound(tmp_path: Path) -> 
     result = evaluate_locked_candidate(
         profile,
         payload,
-        _evidence(digest),
+        _evidence(digest).protocol_sha256,
+        digest,
         tmp_path / "custody",
         evaluator=lambda raw: {"bytes": len(raw)},
     )
@@ -177,25 +237,14 @@ def test_successful_locked_evaluation_is_role_and_hash_bound(tmp_path: Path) -> 
     assert result.receipt.path.is_file()
 
 
-def test_non_heldout_or_development_evidence_cannot_enter_evaluation(tmp_path: Path) -> None:
+def test_malformed_authority_hashes_cannot_enter_locked_evaluation(tmp_path: Path) -> None:
     payload = tmp_path / "locked.json"
     payload.write_bytes(b"locked")
     digest = hashlib.sha256(payload.read_bytes()).hexdigest()
-    validation = decode_evidence_manifest(
-        {
-            "schema_version": "calibration-evidence-v1",
-            "role": "validation",
-            "provenance": "development",
-            "protocol_sha256": "c" * 64,
-            "partition_manifest_sha256": "d" * 64,
-            "features_sha256": digest,
-            "labels_sha256": "e" * 64,
-            "baseline_sha256": "f" * 64,
-        }
-    )
-
-    with pytest.raises(ValueError, match="held-out|custodian"):
-        evaluate_locked_candidate(_profile(), payload, validation, tmp_path / "custody", evaluator=lambda raw: len(raw))
+    with pytest.raises(ValueError, match="SHA-256"):
+        evaluate_locked_candidate(
+            _profile(), payload, "invalid", digest, tmp_path / "custody", evaluator=lambda raw: len(raw)
+        )
 
 
 def test_consumption_and_retirement_records_are_append_only(tmp_path: Path) -> None:
@@ -208,6 +257,16 @@ def test_consumption_and_retirement_records_are_append_only(tmp_path: Path) -> N
         record_consumption(custody, "d" * 64, "b" * 64, "c" * 64)
     with pytest.raises(ValueError):
         retire_candidate(custody, "a" * 64, "b" * 64, "failed-again")
+
+
+def test_retired_profile_evidence_pair_is_refused_before_another_operation(tmp_path: Path) -> None:
+    custody = tmp_path / "custody"
+    require_candidate_active(custody, "a" * 64, "b" * 64)
+    retire_candidate(custody, "a" * 64, "b" * 64, "failed-validation")
+
+    with pytest.raises(ValueError, match="retired"):
+        require_candidate_active(custody, "a" * 64, "b" * 64)
+    require_candidate_active(custody, "c" * 64, "b" * 64)
 
 
 def test_custody_records_reject_malformed_hashes_and_empty_reasons(tmp_path: Path) -> None:

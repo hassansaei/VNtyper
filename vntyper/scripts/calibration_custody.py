@@ -132,6 +132,24 @@ def retire_candidate(custody_dir: Path, profile_sha256: str, evidence_sha256: st
     return path
 
 
+def require_candidate_active(custody_dir: Path, profile_sha256: str, evidence_sha256: str) -> None:
+    """Refuse an exact profile/evidence pair with a durable retirement record.
+
+    Args:
+        custody_dir: Local append-only safeguard root.
+        profile_sha256: Exact generated profile digest.
+        evidence_sha256: Exact role-specific evidence digest.
+
+    Raises:
+        ValueError: If hashes are malformed or the pair is already retired.
+    """
+    root = _custody_root(custody_dir)
+    profile = _digest(profile_sha256, "profile")
+    evidence = _digest(evidence_sha256, "evidence")
+    if (root / "retired" / f"{profile}.{evidence}.json").exists():
+        raise ValueError("calibration profile/evidence pair is retired and cannot be retried")
+
+
 def _verify_precommit(precommit: Precommit) -> None:
     expected = {
         "schema_version": "calibration-precommit-v1",
@@ -164,7 +182,7 @@ def _exclusive_write(path: Path, payload: bytes, conflict_message: str) -> None:
             os.fsync(directory_descriptor)
         finally:
             os.close(directory_descriptor)
-    except Exception:
+    except BaseException:
         with suppress(OSError):
             path.unlink()
         raise

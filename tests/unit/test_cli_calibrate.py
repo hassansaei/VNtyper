@@ -46,9 +46,10 @@ def test_every_operation_atomically_installs_only_complete_output(
 ) -> None:
     output = tmp_path / "result"
 
-    def produce(_args, staging: Path) -> None:
+    def produce(_args, staging: Path) -> bool:
         assert staging.parent == output.parent
         (staging / "complete.json").write_text("{}\n", encoding="utf-8")
+        return True
 
     monkeypatch.setitem(cli_calibrate.OPERATIONS, operation, produce)
     args = build_parser().parse_args(
@@ -74,6 +75,84 @@ def test_failed_operation_leaves_no_partial_output(tmp_path: Path, monkeypatch: 
         cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
     assert not output.exists()
     assert not tuple(tmp_path.glob(".candidate.*"))
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt(), SystemExit(9)])
+def test_atomic_output_cleans_exact_staging_on_base_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: BaseException
+) -> None:
+    output = tmp_path / "candidate"
+    neighbour = tmp_path / ".candidate.keep"
+    neighbour.mkdir()
+
+    def interrupt(_args, staging: Path) -> bool:
+        (staging / "partial.json").write_text("partial\n", encoding="utf-8")
+        raise interruption
+
+    monkeypatch.setitem(cli_calibrate.OPERATIONS, "fit", interrupt)
+    args = build_parser().parse_args(["calibrate", "fit", *_path_options("fit", tmp_path), "--output", str(output)])
+
+    with pytest.raises(type(interruption)):
+        cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+
+    assert neighbour.is_dir()
+    assert not output.exists()
+    assert set(tmp_path.glob(".candidate.*")) == {neighbour}
+
+
+def test_completed_failed_operation_is_installed_before_cli_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "validation"
+
+    def completed_failure(_args, staging: Path) -> bool:
+        (staging / "attestation.json").write_text('{"status":"failed"}\n', encoding="utf-8")
+        (staging / "retirement.json").write_text('{"reason":"failed-validation"}\n', encoding="utf-8")
+        return False
+
+    monkeypatch.setitem(cli_calibrate.OPERATIONS, "validate", completed_failure)
+    args = build_parser().parse_args(
+        ["calibrate", "validate", *_path_options("validate", tmp_path), "--output", str(output)]
+    )
+
+    with pytest.raises(SystemExit) as failure:
+        cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+
+    assert failure.value.code == 1
+    assert (output / "attestation.json").is_file()
+    assert (output / "retirement.json").is_file()
+
+
+def test_main_maps_completed_failed_operation_to_one_after_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "validation"
+
+    def completed_failure(_args, staging: Path) -> bool:
+        (staging / "attestation.json").write_text('{"status":"failed"}\n', encoding="utf-8")
+        (staging / "retirement.json").write_text('{"reason":"failed-validation"}\n', encoding="utf-8")
+        return False
+
+    monkeypatch.setitem(cli_calibrate.OPERATIONS, "validate", completed_failure)
+    monkeypatch.setattr(cli, "setup_logging", lambda log_level=logging.INFO, log_file=None: None)
+
+    with pytest.raises(SystemExit) as failure:
+        cli.main(
+            [
+                "calibrate",
+                "validate",
+                "--profile",
+                str(tmp_path / "profile.json"),
+                "--evidence",
+                str(tmp_path / "evidence"),
+                "--output",
+                str(output),
+            ]
+        )
+
+    assert failure.value.code == 1
+    assert (output / "attestation.json").is_file()
+    assert (output / "retirement.json").is_file()
 
 
 def test_objective_mismatch_exits_one_without_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

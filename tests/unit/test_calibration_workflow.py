@@ -510,6 +510,7 @@ def test_fit_reads_only_training_and_policy_selection_and_requires_baseline_repl
         evidence.run_hashes,
         evidence.study_sha256,
         evidence.dataset_sha256,
+        evidence.profile_dataset_sha256,
     )
     with pytest.raises(ValueError, match="baseline"):
         fit_candidate(failed, objective="lexicographic-safety-v1", evaluator=_evaluate)
@@ -636,3 +637,15 @@ def test_validate_cannot_select_another_profile_or_open_heldout(tmp_path: Path) 
     assert attestation.role == "validation"
     assert attestation.profile_sha256 == candidate.profile.digest
     assert attestation.accessed_roles == ("validation",)
+
+
+def test_generated_profile_cannot_cross_studies_with_the_same_candidate_parameters(tmp_path: Path) -> None:
+    study_a = _study()
+    evidence_a = extract_evidence(study_a, _labels(), _runs(tmp_path / "a"))
+    candidate = fit_candidate(evidence_a, objective="lexicographic-safety-v1", evaluator=_evaluate)
+    protocol_b = synthetic_protocol()
+    protocol_b["seed"] = 296
+    evidence_b = extract_evidence(_study(protocol=protocol_b), _labels(), _runs(tmp_path / "b"))
+
+    with pytest.raises(ValueError, match="study|protocol|dataset|seed|partition"):
+        validate_candidate(candidate.profile, evidence_b)

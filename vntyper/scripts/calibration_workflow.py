@@ -9,7 +9,6 @@ from types import MappingProxyType
 from typing import cast
 
 from vntyper.scripts.calibration_baseline import build_baseline
-from vntyper.scripts.calibration_contract import EvidenceManifest
 from vntyper.scripts.calibration_custody import (
     ConsumptionReceipt,
     open_locked_payload,
@@ -46,6 +45,7 @@ class ExtractedEvidence:
     run_hashes: Mapping[str, Mapping[str, str]]
     study_sha256: str
     dataset_sha256: str
+    profile_dataset_sha256: str
 
 
 @dataclass(frozen=True)
@@ -149,6 +149,7 @@ def extract_evidence(
         MappingProxyType({key: MappingProxyType(dict(value)) for key, value in run_hashes.items()}),
         study.sha256,
         dataset_sha256,
+        dataset_sha256,
     )
 
 
@@ -174,7 +175,7 @@ def fit_candidate(
             continue
         profile = build_generated_profile(
             component,
-            dataset_manifest_hash=evidence.dataset_sha256,
+            dataset_manifest_hash=evidence.profile_dataset_sha256,
             partition_manifest_hash=evidence.study.partitions.sha256,
             seed=evidence.study.protocol.seed,
             objective=objective,
@@ -207,6 +208,7 @@ def validate_candidate(profile: ResolvedDecisionProfile, evidence: ExtractedEvid
         raise ValueError("calibration validation requires ExtractedEvidence")
     packaged = load_packaged_decision_profile()
     validate_generated_allowlist(profile, packaged)
+    _validate_profile_study_binding(profile, evidence)
     accessed = require_operation_roles(evidence.study.partitions, "validate")
     return WorkflowAttestation("validation", profile.digest, evidence.dataset_sha256, accessed)
 
@@ -214,16 +216,13 @@ def validate_candidate(profile: ResolvedDecisionProfile, evidence: ExtractedEvid
 def evaluate_locked_candidate(
     profile: ResolvedDecisionProfile,
     payload_path: Path,
-    evidence: EvidenceManifest,
+    protocol_sha256: str,
+    evidence_sha256: str,
     custody_dir: Path,
     *,
     evaluator: Callable[[bytes], object],
 ) -> LockedEvaluation:
     """Precommit and consume externally held-out evidence exactly once."""
-    if not isinstance(evidence, EvidenceManifest):
-        raise ValueError("locked calibration evaluation requires an EvidenceManifest")
-    if evidence.role != "locked-heldout" or evidence.provenance != "external-custodian":
-        raise ValueError("locked held-out evaluation requires external custodian evidence")
     if not callable(evaluator):
         raise ValueError("locked calibration evaluation requires an evaluator")
     packaged = load_packaged_decision_profile()
@@ -231,16 +230,41 @@ def evaluate_locked_candidate(
     precommit = write_precommit(
         custody_dir,
         profile.digest,
-        evidence.protocol_sha256,
-        evidence.features_sha256,
+        protocol_sha256,
+        evidence_sha256,
     )
     try:
         opened = open_locked_payload(payload_path, precommit, custody_dir)
         result = evaluator(opened.payload)
-    except Exception as error:
-        retire_candidate(custody_dir, profile.digest, evidence.features_sha256, str(error) or type(error).__name__)
+    except BaseException as error:
+        retire_candidate(
+            custody_dir,
+            profile.digest,
+            evidence_sha256,
+            f"exceptional-locked-evaluation:{type(error).__name__}",
+        )
         raise
-    return LockedEvaluation(evidence.role, result, profile.digest, evidence.features_sha256, opened.receipt)
+    return LockedEvaluation("locked-heldout", result, profile.digest, evidence_sha256, opened.receipt)
+
+
+def _validate_profile_study_binding(profile: ResolvedDecisionProfile, evidence: ExtractedEvidence) -> None:
+    metadata = profile.document.get("generated_metadata")
+    if not isinstance(metadata, Mapping):
+        raise ValueError("calibration validation requires generated profile study metadata")
+    expected = (
+        evidence.profile_dataset_sha256,
+        evidence.study.partitions.sha256,
+        evidence.study.protocol.objective,
+        evidence.study.protocol.seed,
+    )
+    observed = (
+        metadata.get("dataset_manifest_hash"),
+        metadata.get("partition_manifest_hash"),
+        metadata.get("objective"),
+        metadata.get("seed"),
+    )
+    if observed != expected:
+        raise ValueError("generated profile study, protocol, partition, dataset, objective, or seed binding differs")
 
 
 def _validate_baseline_replay(value: Mapping[str, object]) -> None:

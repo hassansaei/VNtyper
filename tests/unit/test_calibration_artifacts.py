@@ -1,5 +1,6 @@
 """Filesystem codecs and end-to-end calibration operation artifacts."""
 
+import hashlib
 import logging
 import shutil
 from fractions import Fraction
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.calibration_run_fixture import IDENTITY, OTHER_IDENTITY, write_schema_three_run
+from vntyper.scripts.calibration_artifact_io import thaw_json, write_checksums, write_json
 from vntyper.scripts.calibration_artifacts import (
     _observations,
     evaluate_artifact_bundle,
@@ -18,14 +20,17 @@ from vntyper.scripts.calibration_artifacts import (
 )
 from vntyper.scripts.calibration_contract import decode_attestation
 from vntyper.scripts.calibration_features import decode_label_artifact
+from vntyper.scripts.calibration_locked_artifacts import decode_locked_payload
 from vntyper.scripts.calibration_manifest import decode_study_declaration
 from vntyper.scripts.calibration_objective import calculate_metrics
 from vntyper.scripts.calibration_profiles import build_generated_profile
+from vntyper.scripts.calibration_role_inputs import build_role_inputs
 from vntyper.scripts.calibration_statistics import BootstrapInterval
 from vntyper.scripts.calibration_workflow import extract_evidence
-from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
+from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
 from vntyper.scripts.cli_calibrate import handle_calibrate
 from vntyper.scripts.cli_parser import build_parser
+from vntyper.scripts.decision_profile import resolve_decision_profile
 
 pytestmark = pytest.mark.unit
 
@@ -51,7 +56,12 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
     assert (evidence / "study.json").is_file()
     assert (evidence / "groups.json").is_file()
     assert (evidence / "roles" / "policy-selection" / "features.json").is_file()
-    assert (evidence / "roles" / "locked-heldout" / "locked_payload.json").is_file()
+    locked_root = evidence / "roles" / "locked-heldout"
+    assert {path.name for path in locked_root.iterdir()} == {
+        "checksums.json",
+        "member_declaration.json",
+        "run_commitments.json",
+    }
     assert load_strict_json_object((evidence / "checksums.json").read_bytes())["schema_version"] == (
         "calibration-checksums-v1"
     )
@@ -108,41 +118,42 @@ def test_extract_fit_validate_and_one_use_evaluate_round_trip(tmp_path: Path) ->
     assert (validation / "report.html").is_file()
     assert (validation / "intervals.json").is_file()
 
-    heldout = tmp_path / "heldout"
-    _run_cli(
-        [
-            "calibrate",
-            "evaluate",
-            "--profile",
-            str(profile),
-            "--evidence",
-            str(evidence),
-            "--output",
-            str(heldout),
-        ]
-    )
-    heldout_attestation = load_strict_json_object((heldout / "attestation.json").read_bytes())
-    assert decode_attestation(heldout_attestation).role == "locked-heldout"
-    assert (heldout / "report.html").is_file()
-    assert (heldout / "abstentions.tsv").is_file()
-    limitations = load_strict_json_object((heldout / "custody_limitations.json").read_bytes())
-    assert limitations["local_custody_is_independent_proof"] is False
+    with pytest.raises(ValueError, match="custodian.*import|authority attestation"):
+        evaluate_artifact_bundle(profile, evidence, tmp_path / "heldout")
 
-    second = tmp_path / "heldout-again"
-    with pytest.raises(ValueError, match="consumed|one-use"):
-        _run_cli(
-            [
-                "calibrate",
-                "evaluate",
-                "--profile",
-                str(profile),
-                "--evidence",
-                str(evidence),
-                "--output",
-                str(second),
-            ]
-        )
-    assert not second.exists()
+    custodian_import = _custodian_import(tmp_path / "custodian", truth, partitions, runs, profile, validation)
+    heldout = tmp_path / "heldout"
+    assert evaluate_artifact_bundle(profile, custodian_import, heldout) is True
+    assert decode_attestation(load_strict_json_object((heldout / "attestation.json").read_bytes())).role == (
+        "locked-heldout"
+    )
+    assert (heldout / "custody_receipt.json").is_file()
+    limitations = load_strict_json_object((heldout / "custody_limitations.json").read_bytes())
+    assert limitations["local_verification_proves_external_independence"] is False
+
+    with pytest.raises(ValueError, match="consumed|one-use|precommit"):
+        evaluate_artifact_bundle(profile, custodian_import, tmp_path / "heldout-again")
+
+
+def test_ordinary_extract_discloses_no_locked_values_or_custody_assertion(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+
+    locked_root = evidence / "roles" / "locked-heldout"
+    assert {path.name for path in locked_root.iterdir()} == {
+        "checksums.json",
+        "member_declaration.json",
+        "run_commitments.json",
+    }
+    locked_bytes = b"".join(path.read_bytes() for path in sorted(locked_root.iterdir()) if path.is_file())
+    assert b"external-custodian" not in locked_bytes
+    assert IDENTITY.encode() not in locked_bytes
+    assert b"59dupC" not in locked_bytes
+    for forbidden in ("features.json", "labels.json", "baseline.json", "locked_payload.json", "evidence_manifest.json"):
+        assert not (locked_root / forbidden).exists()
 
 
 def test_fit_refuses_an_objective_different_from_the_snapshotted_protocol(tmp_path: Path) -> None:
@@ -207,6 +218,53 @@ def test_validation_refuses_a_self_checksummed_role_directory_swap(tmp_path: Pat
         )
 
 
+def test_completed_failed_validation_writes_attestation_and_retirement_before_returning_false(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation = tmp_path / "validation"
+
+    with patch("vntyper.scripts.calibration_artifacts.select_candidate", return_value=None):
+        assert validate_artifact_bundle(candidate / "decision_profile.json", evidence, validation) is False
+
+    attestation = load_strict_json_object((validation / "attestation.json").read_bytes())
+    assert attestation["status"] == "failed"
+    assert (validation / "retirement.json").is_file()
+    with pytest.raises(ValueError, match="retired"):
+        validate_artifact_bundle(candidate / "decision_profile.json", evidence, tmp_path / "validation-again")
+
+
+def test_completed_failed_locked_evaluation_writes_attestation_and_retirement(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(candidate / "decision_profile.json", evidence, validation)
+    custodian_import = _custodian_import(
+        tmp_path / "custodian",
+        truth,
+        partitions,
+        runs,
+        candidate / "decision_profile.json",
+        validation,
+    )
+    heldout = tmp_path / "heldout"
+
+    with patch("vntyper.scripts.calibration_artifacts.select_candidate", return_value=None):
+        assert evaluate_artifact_bundle(candidate / "decision_profile.json", custodian_import, heldout) is False
+
+    assert load_strict_json_object((heldout / "attestation.json").read_bytes())["status"] == "failed"
+    assert (heldout / "retirement.json").is_file()
+
+
 def test_locked_evaluation_refuses_manifest_protocol_mismatched_to_payload(tmp_path: Path) -> None:
     truth, partitions, runs = _inputs(tmp_path)
     evidence = tmp_path / "evidence"
@@ -215,17 +273,58 @@ def test_locked_evaluation_refuses_manifest_protocol_mismatched_to_payload(tmp_p
     candidate = tmp_path / "candidate"
     candidate.mkdir()
     fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
-    manifest_path = evidence / "roles" / "locked-heldout" / "evidence_manifest.json"
-    manifest = load_strict_json_object(manifest_path.read_bytes())
-    manifest["protocol_sha256"] = "a" * 64
-    manifest_path.write_bytes(canonical_json_bytes(manifest))
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(candidate / "decision_profile.json", evidence, validation)
+    custodian = _custodian_import(
+        tmp_path / "custodian",
+        truth,
+        partitions,
+        runs,
+        candidate / "decision_profile.json",
+        validation,
+    )
+    authority_path = custodian / "authority_attestation.json"
+    authority = load_strict_json_object(authority_path.read_bytes())
+    authority["protocol_sha256"] = "a" * 64
+    authority_path.write_bytes(canonical_json_bytes(authority))
+    write_checksums(custodian)
 
-    with pytest.raises(ValueError, match="protocol"):
+    with pytest.raises(ValueError, match="protocol|study bindings"):
         evaluate_artifact_bundle(
             candidate / "decision_profile.json",
-            evidence,
+            custodian,
             tmp_path / "heldout-attestation",
         )
+
+
+def test_locked_evaluation_rejects_cross_study_reuse_with_identical_candidate_grid(tmp_path: Path) -> None:
+    truth_a, partitions_a, runs_a = _inputs(tmp_path / "a")
+    evidence_a = tmp_path / "evidence-a"
+    evidence_a.mkdir()
+    extract_artifact_bundle(truth_a, partitions_a, runs_a, evidence_a)
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    fit_artifact_bundle(evidence_a, "lexicographic-safety-v1", candidate)
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(candidate / "decision_profile.json", evidence_a, validation)
+
+    truth_b, partitions_b, runs_b = _inputs(tmp_path / "b")
+    study_b = load_strict_json_object(partitions_b.read_bytes())
+    protocol_b = study_b["protocol"]
+    assert isinstance(protocol_b, dict)
+    protocol_b["seed"] = 296
+    partitions_b.write_bytes(canonical_json_bytes(study_b))
+    custodian_b = _custodian_import(
+        tmp_path / "custodian-b",
+        truth_b,
+        partitions_b,
+        runs_b,
+        candidate / "decision_profile.json",
+        validation,
+    )
+
+    with pytest.raises(ValueError, match="validation|study|protocol|bindings"):
+        evaluate_artifact_bundle(candidate / "decision_profile.json", custodian_b, tmp_path / "heldout")
 
 
 def test_fit_rejects_a_declared_but_unobserved_bootstrap_stratum(tmp_path: Path) -> None:
@@ -417,6 +516,74 @@ def _inputs(root: Path) -> tuple[Path, Path, Path]:
     partitions_path.write_bytes(canonical_json_bytes(study_value))
     runs_path.write_bytes(canonical_json_bytes(runs_value))
     return truth_path, partitions_path, runs_path
+
+
+def _custodian_import(
+    root: Path,
+    truth_path: Path,
+    study_path: Path,
+    runs_path: Path,
+    profile_path: Path,
+    validation_root: Path,
+) -> Path:
+    """Create a separately supplied custodian fixture; production has no minting command."""
+    root.mkdir()
+    truth = load_strict_json_object(truth_path.read_bytes())
+    study_raw = load_strict_json_object(study_path.read_bytes())
+    runs_raw = load_strict_json_object(runs_path.read_bytes())
+    study = decode_study_declaration(study_raw)
+    labels = decode_label_artifact(truth["labels"])
+    run_values = runs_raw["runs"]
+    assert isinstance(run_values, dict)
+    extracted = extract_evidence(study, labels, run_values)
+    feature_rows = [
+        {"feature_key": row.feature_key, "manifest_key": row.manifest_key, "features": dict(row.features)}
+        for row in extracted.features.rows
+    ]
+    label_document = truth["labels"]
+    assert isinstance(label_document, dict) and isinstance(label_document["rows"], list)
+    baseline = thaw_json(extracted.baseline)
+    assert isinstance(baseline, dict)
+    locked_keys = tuple(member.key for member in study.partitions.members if member.role == "locked-heldout")
+    inputs = build_role_inputs(locked_keys, feature_rows, label_document["rows"], baseline, extracted.run_hashes)
+    payload = {
+        "schema_version": "calibration-locked-payload-v1",
+        "study": study_raw,
+        "features": inputs.features,
+        "labels": inputs.labels,
+        "baseline": inputs.baseline,
+        "run_hashes": inputs.run_hashes,
+    }
+    payload_raw = canonical_json_bytes(payload)
+    (root / "locked_payload.json").write_bytes(payload_raw)
+    locked_evidence = decode_locked_payload(payload_raw)
+    validation_attestation = load_strict_json_object((validation_root / "attestation.json").read_bytes())
+    write_json(root / "validation_attestation.json", validation_attestation)
+    profile = resolve_decision_profile(profile_path)
+    metadata = profile.document["generated_metadata"]
+    assert isinstance(metadata, dict) or hasattr(metadata, "get")
+    authority = {
+        "schema_version": "calibration-custodian-authority-v1",
+        "authority_kind": "named-external-custodian-attestation",
+        "custodian_name": "Independent Example Repository",
+        "attestation_id": "IER-295-0001",
+        "role": "locked-heldout",
+        "status": "authorized",
+        "study_sha256": study.sha256,
+        "protocol_sha256": study.protocol.sha256,
+        "partition_manifest_sha256": study.partitions.sha256,
+        "profile_sha256": profile.digest,
+        "profile_dataset_sha256": metadata.get("dataset_manifest_hash"),
+        "locked_payload_sha256": hashlib.sha256(payload_raw).hexdigest(),
+        "locked_dataset_sha256": locked_evidence.dataset_sha256,
+        "locked_run_hashes_sha256": canonical_sha256(inputs.run_hashes),
+        "validation_attestation_sha256": hashlib.sha256(
+            (root / "validation_attestation.json").read_bytes()
+        ).hexdigest(),
+    }
+    write_json(root / "authority_attestation.json", authority)
+    write_checksums(root)
+    return root
 
 
 def _run_cli(argv: list[str]) -> None:
