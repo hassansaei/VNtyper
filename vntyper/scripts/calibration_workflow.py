@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -10,10 +11,10 @@ from typing import cast
 
 from vntyper.scripts.calibration_baseline import build_baseline
 from vntyper.scripts.calibration_custody import (
+    CandidateClaim,
     ConsumptionReceipt,
     claim_candidate,
     open_locked_payload,
-    retire_candidate,
 )
 from vntyper.scripts.calibration_features import (
     FeatureArtifact,
@@ -76,6 +77,7 @@ class LockedEvaluation:
     profile_sha256: str
     evidence_sha256: str
     receipt: ConsumptionReceipt
+    claim: CandidateClaim | None = None
 
 
 def extract_evidence(
@@ -226,28 +228,29 @@ def evaluate_locked_candidate(
     custody_dir: Path,
     *,
     evaluator: Callable[[bytes], object],
+    defer_terminal: bool = False,
 ) -> LockedEvaluation:
     """Precommit and consume externally held-out evidence exactly once."""
     if not callable(evaluator):
         raise ValueError("locked calibration evaluation requires an evaluator")
     packaged = load_packaged_decision_profile()
     validate_generated_allowlist(profile, packaged)
-    precommit = claim_candidate(
+    claim = claim_candidate(
         custody_dir,
         profile.digest,
         protocol_sha256,
         evidence_sha256,
     )
     try:
-        opened = open_locked_payload(payload_source, precommit, custody_dir)
+        opened = open_locked_payload(payload_source, claim.precommit, custody_dir)
         result = evaluator(opened.payload)
+        if defer_terminal:
+            return LockedEvaluation("locked-heldout", result, profile.digest, evidence_sha256, opened.receipt, claim)
+        claim.complete()
     except BaseException as error:
-        retire_candidate(
-            custody_dir,
-            profile.digest,
-            evidence_sha256,
-            f"exceptional-locked-evaluation:{type(error).__name__}",
-        )
+        with suppress(BaseException):
+            claim.retire(f"exceptional-locked-evaluation:{type(error).__name__}")
+        claim.close()
         raise
     return LockedEvaluation("locked-heldout", result, profile.digest, evidence_sha256, opened.receipt)
 

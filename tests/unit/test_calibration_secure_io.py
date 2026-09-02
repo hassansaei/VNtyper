@@ -55,3 +55,32 @@ def test_secure_reads_reject_symlink_directories_and_files(tmp_path: Path) -> No
         SecureDirectoryReader.open(linked_root, {"payload.json"})
     with pytest.raises(ValueError, match="symlink"):
         read_regular_path(linked_file)
+
+
+def test_read_files_closes_new_descriptor_when_fstat_fails(tmp_path: Path) -> None:
+    payload = tmp_path / "payload.json"
+    payload.write_bytes(b"payload")
+
+    with SecureDirectoryReader.open(tmp_path, {"payload.json"}) as reader:
+        descriptors_before = frozenset(os.listdir("/proc/self/fd"))
+        with (
+            patch("vntyper.scripts.calibration_secure_io.os.fstat", side_effect=OSError("fstat failed")),
+            pytest.raises(ValueError, match="changed|unreadable|symlink"),
+        ):
+            reader.read_file("payload.json")
+        descriptors_after = frozenset(os.listdir("/proc/self/fd"))
+
+    assert descriptors_after == descriptors_before
+
+
+def test_read_files_rejects_duplicate_names_without_leaking_descriptors(tmp_path: Path) -> None:
+    payload = tmp_path / "payload.json"
+    payload.write_bytes(b"payload")
+
+    with SecureDirectoryReader.open(tmp_path, {"payload.json"}) as reader:
+        descriptors_before = frozenset(os.listdir("/proc/self/fd"))
+        with pytest.raises(ValueError, match="duplicate"):
+            reader.read_files(("payload.json", "payload.json"))
+        descriptors_after = frozenset(os.listdir("/proc/self/fd"))
+
+    assert descriptors_after == descriptors_before

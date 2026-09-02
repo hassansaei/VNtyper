@@ -49,16 +49,17 @@ class SecureDirectoryReader:
 
     def read_files(self, names: tuple[str, ...]) -> dict[str, bytes]:
         """Open all named regular files first, then read each from that same descriptor."""
+        if len(names) != len(set(names)):
+            raise ValueError("secure calibration import file names must not contain duplicates")
         descriptors: dict[str, int] = {}
         try:
             for name in names:
                 if name not in self.names:
                     raise ValueError(f"secure calibration import file is undeclared: {name}")
                 descriptor = os.open(name, os.O_RDONLY | _CLOEXEC | _NOFOLLOW, dir_fd=self.descriptor)
-                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                    os.close(descriptor)
-                    raise ValueError("secure calibration import entry changed from a regular file")
                 descriptors[name] = descriptor
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise ValueError("secure calibration import entry changed from a regular file")
             return {name: _read_descriptor(descriptor) for name, descriptor in descriptors.items()}
         except OSError as error:
             raise ValueError("secure calibration import file changed, is unreadable, or is a symlink") from error

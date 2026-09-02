@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import shutil
+import threading
 from fractions import Fraction
 from pathlib import Path
 from unittest.mock import patch
@@ -19,8 +20,8 @@ from vntyper.scripts.calibration_artifacts import (
     fit_artifact_bundle,
     validate_artifact_bundle,
 )
-from vntyper.scripts.calibration_contract import decode_attestation
-from vntyper.scripts.calibration_custody import claim_candidate
+from vntyper.scripts.calibration_contract import decode_attestation, decode_metrics
+from vntyper.scripts.calibration_custody import claim_candidate, retire_candidate
 from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
 from vntyper.scripts.calibration_locked_artifacts import decode_locked_payload
 from vntyper.scripts.calibration_manifest import decode_study_declaration
@@ -165,11 +166,6 @@ def test_ordinary_extract_discloses_no_locked_values_or_custody_assertion(tmp_pa
 
 def test_ordinary_extract_accepts_nonlocked_truth_without_reading_locked_run_roots(tmp_path: Path) -> None:
     truth, partitions, runs = _inputs(tmp_path)
-    truth_document = load_strict_json_object(truth.read_bytes())
-    labels = truth_document["labels"]
-    assert isinstance(labels, dict) and isinstance(labels["rows"], list)
-    labels["rows"] = [row for row in labels["rows"] if isinstance(row, dict) and row["manifest_key"] != "held"]
-    truth.write_bytes(canonical_json_bytes(truth_document))
     runs_document = load_strict_json_object(runs.read_bytes())
     run_values = runs_document["runs"]
     assert isinstance(run_values, dict) and isinstance(run_values["held"], dict)
@@ -183,6 +179,41 @@ def test_ordinary_extract_accepts_nonlocked_truth_without_reading_locked_run_roo
 
     with patch.object(Path, "read_bytes", refuse_locked_reads):
         assert extract_artifact_bundle(truth, partitions, runs, tmp_path / "evidence") is True
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("locked-row", "label rows|partition manifest"),
+        ("unknown-root", "label.*fields|closed contract"),
+        ("wrong-schema", "label.*schema"),
+        ("unknown-row", "label rows|partition manifest"),
+        ("duplicate-row", "label rows|partition manifest|unique"),
+        ("out-of-order", "label rows|partition manifest|align|increasing"),
+    ],
+)
+def test_ordinary_extract_requires_exact_canonical_nonlocked_truth(tmp_path: Path, mutation: str, message: str) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    document = load_strict_json_object(truth.read_bytes())
+    labels = document["labels"]
+    assert isinstance(labels, dict) and isinstance(labels["rows"], list)
+    rows = labels["rows"]
+    if mutation == "locked-row":
+        rows.insert(0, _label_row("held"))
+    elif mutation == "unknown-root":
+        labels["attacker_authored"] = True
+    elif mutation == "wrong-schema":
+        labels["schema_version"] = "calibration-labels-v0"
+    elif mutation == "unknown-row":
+        rows.append(_label_row("unknown"))
+    elif mutation == "duplicate-row":
+        rows.insert(1, dict(rows[0]))
+    else:
+        rows[0], rows[1] = rows[1], rows[0]
+    truth.write_bytes(canonical_json_bytes(document))
+
+    with pytest.raises(ValueError, match=message):
+        extract_artifact_bundle(truth, partitions, runs, tmp_path / "evidence")
 
 
 def test_fit_refuses_an_objective_different_from_the_snapshotted_protocol(tmp_path: Path) -> None:
@@ -335,6 +366,66 @@ def test_post_consumption_interrupt_retires_before_reraising(tmp_path: Path) -> 
     assert len(tuple((custody / "retired").glob("*.json"))) == 1
 
 
+def test_claim_owner_excludes_retirement_through_locked_result_finalization(tmp_path: Path) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    profile_path = candidate / "decision_profile.json"
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(profile_path, evidence, validation)
+    custodian = _custodian_import(tmp_path / "custodian", truth, partitions, runs, profile_path, validation)
+    authority = load_strict_json_object((custodian / "authority_attestation.json").read_bytes())
+    profile = resolve_decision_profile(profile_path)
+    custody = tmp_path / ".custodian.calibration-custody"
+    decoder_entered = threading.Event()
+    release_decoder = threading.Event()
+    evaluation_results: list[bool] = []
+    evaluation_errors: list[BaseException] = []
+    retirement_errors: list[BaseException] = []
+    real_decoder = decode_metrics
+
+    def blocking_decoder(value: object):
+        decoder_entered.set()
+        assert release_decoder.wait(timeout=5)
+        return real_decoder(value)
+
+    def evaluate() -> None:
+        try:
+            evaluation_results.append(evaluate_artifact_bundle(profile_path, custodian, tmp_path / "heldout"))
+        except ValueError as error:
+            evaluation_errors.append(error)
+
+    def retire() -> None:
+        try:
+            retire_candidate(
+                custody,
+                profile.digest,
+                str(authority["locked_payload_sha256"]),
+                "concurrent-retirement",
+            )
+        except ValueError as error:
+            retirement_errors.append(error)
+
+    with patch("vntyper.scripts.calibration_artifacts.decode_metrics", side_effect=blocking_decoder):
+        evaluation_thread = threading.Thread(target=evaluate)
+        evaluation_thread.start()
+        assert decoder_entered.wait(timeout=5)
+        retirement_thread = threading.Thread(target=retire)
+        retirement_thread.start()
+        retirement_thread.join(timeout=0.2)
+        assert retirement_thread.is_alive()
+        release_decoder.set()
+        evaluation_thread.join(timeout=5)
+        retirement_thread.join(timeout=5)
+
+    assert evaluation_results == [True] and not evaluation_errors
+    assert len(retirement_errors) == 1 and "completed" in str(retirement_errors[0])
+    assert len(tuple((custody / "completed").glob("*.json"))) == 1
+    assert not tuple((custody / "retired").glob("*.json"))
+
+
 @pytest.mark.parametrize("mutation", ["aggregate", "row-key", "row-order"])
 def test_locked_evaluation_rejects_unreplayed_baseline_semantics(tmp_path: Path, mutation: str) -> None:
     truth, partitions, runs = _inputs(tmp_path)
@@ -429,6 +520,10 @@ def test_locked_evaluation_refuses_manifest_protocol_mismatched_to_payload(tmp_p
             custodian,
             tmp_path / "heldout-attestation",
         )
+    custody = tmp_path / ".custodian.calibration-custody"
+    assert not tuple((custody / "precommits").glob("*.json"))
+    assert not tuple((custody / "consumed").glob("*.json"))
+    assert not tuple((custody / "retired").glob("*.json"))
 
 
 def test_locked_evaluation_rejects_cross_study_reuse_with_identical_candidate_grid(tmp_path: Path) -> None:
@@ -581,6 +676,8 @@ def test_candidate_a_to_b_is_counted_as_a_wrong_tier_a_displayed_name(tmp_path: 
         )
     study = decode_study_declaration(load_strict_json_object(partitions.read_bytes()))
     labels_document = load_strict_json_object(truth.read_bytes())["labels"]
+    assert isinstance(labels_document, dict) and isinstance(labels_document["rows"], list)
+    labels_document["rows"].insert(0, _label_row("held"))
     labels = decode_label_artifact(labels_document)
     evidence = extract_evidence(study, labels, run_values)
 
@@ -647,16 +744,8 @@ def _inputs(root: Path) -> tuple[Path, Path, Path]:
     members = []
     run_paths: dict[str, object] = {}
     for key, role in zip(keys, roles, strict=True):
-        labels.append(
-            {
-                "label_key": f"l-{key}",
-                "manifest_key": key,
-                "truth_status": "mutated",
-                "expected_identity": IDENTITY,
-                "expected_display_name": "59dupC",
-                "mutation_class": "duplication",
-            }
-        )
+        if role != "locked-heldout":
+            labels.append(_label_row(key))
         members.append(
             {
                 "key": key,
@@ -716,6 +805,17 @@ def _inputs(root: Path) -> tuple[Path, Path, Path]:
     return truth_path, partitions_path, runs_path
 
 
+def _label_row(key: str) -> dict[str, object]:
+    return {
+        "label_key": f"l-{key}",
+        "manifest_key": key,
+        "truth_status": "mutated",
+        "expected_identity": IDENTITY,
+        "expected_display_name": "59dupC",
+        "mutation_class": "duplication",
+    }
+
+
 def _custodian_import(
     root: Path,
     truth_path: Path,
@@ -730,7 +830,13 @@ def _custodian_import(
     study_raw = load_strict_json_object(study_path.read_bytes())
     runs_raw = load_strict_json_object(runs_path.read_bytes())
     study = decode_study_declaration(study_raw)
-    labels = decode_label_artifact(truth["labels"])
+    ordinary_labels = truth["labels"]
+    assert isinstance(ordinary_labels, dict) and isinstance(ordinary_labels["rows"], list)
+    external_labels = {
+        "schema_version": "calibration-labels-v1",
+        "rows": [_label_row("held"), *ordinary_labels["rows"]],
+    }
+    labels = decode_label_artifact(external_labels)
     run_values = runs_raw["runs"]
     assert isinstance(run_values, dict)
     extracted = extract_evidence(study, labels, run_values)
@@ -738,8 +844,7 @@ def _custodian_import(
         {"feature_key": row.feature_key, "manifest_key": row.manifest_key, "features": dict(row.features)}
         for row in extracted.features.rows
     ]
-    label_document = truth["labels"]
-    assert isinstance(label_document, dict) and isinstance(label_document["rows"], list)
+    label_document = external_labels
     baseline = thaw_json(extracted.baseline)
     assert isinstance(baseline, dict)
     locked_keys = tuple(member.key for member in study.partitions.members if member.role == "locked-heldout")

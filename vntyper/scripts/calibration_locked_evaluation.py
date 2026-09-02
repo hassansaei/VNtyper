@@ -16,7 +16,6 @@ from vntyper.scripts.calibration_custodian_import import (
     load_custodian_import_header,
     validate_custodian_authority_bindings,
 )
-from vntyper.scripts.calibration_custody import ensure_candidate_retired
 from vntyper.scripts.calibration_locked_artifacts import decode_locked_payload
 from vntyper.scripts.calibration_objective import CandidateEvaluation
 from vntyper.scripts.calibration_reporting import write_evaluation_artifacts
@@ -67,21 +66,17 @@ def evaluate_artifact_bundle(
             authority.locked_payload_sha256,
             custody,
             evaluator=locked_evaluator,
+            defer_terminal=True,
         )
+        if locked.claim is None:
+            raise ValueError("locked calibration operation did not retain its finalization claim")
+        claim = locked.claim
         try:
             result = locked.result
             if not isinstance(result, _CompletedLockedResult):
                 raise ValueError("locked calibration evaluator returned an invalid result")
             metrics = metrics_decoder(result.metrics_document)
-            if not result.passed:
-                retirement = ensure_candidate_retired(
-                    custody,
-                    profile.digest,
-                    authority.locked_payload_sha256,
-                    "completed-failed-locked-heldout-evaluation",
-                )
-            else:
-                retirement = None
+            retirement = claim.retire("completed-failed-locked-heldout-evaluation") if not result.passed else None
             write_evaluation_artifacts(
                 output,
                 phase="held-out",
@@ -105,15 +100,12 @@ def evaluate_artifact_bundle(
             )
             _write_custody_artifacts(output, authority, locked.receipt.path, retirement)
             write_checksums(output)
+            if result.passed:
+                claim.complete()
             return result.passed
         except BaseException as error:
             with suppress(BaseException):
-                ensure_candidate_retired(
-                    custody,
-                    profile.digest,
-                    authority.locked_payload_sha256,
-                    f"exceptional-locked-finalization:{type(error).__name__}",
-                )
+                claim.retire(f"exceptional-locked-finalization:{type(error).__name__}")
             raise
 
 
@@ -152,18 +144,23 @@ def _validate_header(
     if expected != observed:
         raise ValueError("custodian import validation lineage differs from the installed study binding")
     if (
-        authority.profile_sha256 != profile.digest
+        authority.study_sha256 != binding.study_sha256
+        or authority.protocol_sha256 != binding.protocol_sha256
+        or authority.partition_manifest_sha256 != binding.partition_manifest_sha256
+        or authority.profile_sha256 != profile.digest
         or authority.profile_dataset_sha256 != binding.dataset_manifest_sha256
         or metadata.get("dataset_manifest_hash") != binding.dataset_manifest_sha256
         or metadata.get("partition_manifest_hash") != binding.partition_manifest_sha256
         or authority.validation_evidence_sha256 != validation.evidence_sha256
+        or authority.validation_attestation_sha256 != validation.sha256
+        or authority.study_binding_sha256 != canonical_sha256(thaw_json(binding.document))
         or authority.run_commitments_sha256 != binding.run_commitments_sha256
         or authority.validation_role_run_commitments_sha256 != binding.role_run_commitments_sha256["validation"]
         or authority.validation_role_run_artifacts_sha256 != binding.role_run_artifacts_sha256["validation"]
         or authority.locked_role_run_commitments_sha256 != binding.role_run_commitments_sha256["locked-heldout"]
         or authority.locked_role_run_artifacts_sha256 != binding.role_run_artifacts_sha256["locked-heldout"]
     ):
-        raise ValueError("custodian authority, profile, or study-binding lineage differs")
+        raise ValueError("custodian authority study, protocol, profile, or study-binding lineage differs")
 
 
 def _validate_locked_evidence(

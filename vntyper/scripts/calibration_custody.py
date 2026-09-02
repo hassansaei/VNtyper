@@ -46,6 +46,72 @@ class OpenedLockedPayload:
     receipt: ConsumptionReceipt
 
 
+@dataclass
+class CandidateClaim:
+    """Operation-lifetime ownership of one exact profile/evidence pair."""
+
+    root: Path
+    precommit: Precommit
+    descriptor: int
+    terminal_path: Path | None = None
+
+    def retire(self, reason: str) -> Path:
+        """Install the owner-authorized failure terminal and release the pair."""
+        if self.terminal_path is not None:
+            if self.terminal_path.parent.name == "retired":
+                return self.terminal_path
+            raise ValueError("completed calibration profile/evidence pair cannot be retired")
+        if self.descriptor < 0:
+            raise ValueError("calibration candidate claim is no longer active")
+        try:
+            self.terminal_path = _write_retirement(
+                self.root,
+                self.precommit.profile_sha256,
+                self.precommit.evidence_sha256,
+                reason,
+            )
+            return self.terminal_path
+        finally:
+            self._release()
+
+    def complete(self) -> Path:
+        """Install the successful terminal and release the pair."""
+        if self.terminal_path is not None:
+            if self.terminal_path.parent.name == "completed":
+                return self.terminal_path
+            raise ValueError("retired calibration profile/evidence pair cannot be completed")
+        if self.descriptor < 0:
+            raise ValueError("calibration candidate claim is no longer active")
+        path = _completion_path(
+            self.root,
+            self.precommit.profile_sha256,
+            self.precommit.evidence_sha256,
+        )
+        payload = {
+            "schema_version": "calibration-completion-v1",
+            "profile_sha256": self.precommit.profile_sha256,
+            "protocol_sha256": self.precommit.protocol_sha256,
+            "evidence_sha256": self.precommit.evidence_sha256,
+        }
+        _exclusive_write(path, canonical_json_bytes(payload), "calibration candidate is already completed")
+        self.terminal_path = path
+        self._release()
+        return path
+
+    def close(self) -> None:
+        """Release an unterminated claim after a failed terminal write."""
+        self._release()
+
+    def _release(self) -> None:
+        if self.descriptor >= 0:
+            descriptor = self.descriptor
+            self.descriptor = -1
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+
 def write_precommit(
     custody_dir: Path,
     profile_sha256: str,
@@ -96,16 +162,28 @@ def record_consumption(
     return ConsumptionReceipt(path, profile, protocol, evidence)
 
 
-def claim_candidate(custody_dir: Path, profile_sha256: str, protocol_sha256: str, evidence_sha256: str) -> Precommit:
-    """Atomically reject retirement and install the exact pair precommit."""
+def claim_candidate(
+    custody_dir: Path, profile_sha256: str, protocol_sha256: str, evidence_sha256: str
+) -> CandidateClaim:
+    """Own the exact pair from atomic precommit through its terminal state."""
     root = _custody_root(custody_dir)
     profile = _digest(profile_sha256, "profile")
     protocol = _digest(protocol_sha256, "protocol")
     evidence = _digest(evidence_sha256, "evidence")
-    with _pair_lock(root, profile, evidence):
+    descriptor = _acquire_pair_lock(root, profile, evidence)
+    try:
         if _retirement_path(root, profile, evidence).exists():
             raise ValueError("calibration profile/evidence pair is retired and cannot be claimed")
-        return write_precommit(root, profile, protocol, evidence)
+        if _completion_path(root, profile, evidence).exists():
+            raise ValueError("calibration profile/evidence pair is completed under the one-use policy")
+        precommit = write_precommit(root, profile, protocol, evidence)
+        return CandidateClaim(root, precommit, descriptor)
+    except BaseException:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+        raise
 
 
 def open_locked_payload(
@@ -140,20 +218,10 @@ def retire_candidate(custody_dir: Path, profile_sha256: str, evidence_sha256: st
     root = _custody_root(custody_dir)
     profile = _digest(profile_sha256, "profile")
     evidence = _digest(evidence_sha256, "evidence")
-    if not isinstance(reason, str) or not reason.strip():
-        raise ValueError("calibration candidate retirement requires a non-empty reason")
-    path = _retirement_path(root, profile, evidence)
-    payload = {
-        "schema_version": "calibration-retirement-v1",
-        "profile_sha256": profile,
-        "evidence_sha256": evidence,
-        "reason": reason,
-    }
     with _pair_lock(root, profile, evidence):
-        _exclusive_write(
-            path, canonical_json_bytes(payload), "calibration candidate is already retired for this evidence"
-        )
-    return path
+        if _completion_path(root, profile, evidence).exists():
+            raise ValueError("completed calibration profile/evidence pair cannot be retired")
+        return _write_retirement(root, profile, evidence, reason)
 
 
 def ensure_candidate_retired(custody_dir: Path, profile_sha256: str, evidence_sha256: str, reason: str) -> Path:
@@ -165,6 +233,8 @@ def ensure_candidate_retired(custody_dir: Path, profile_sha256: str, evidence_sh
         raise ValueError("calibration candidate retirement requires a non-empty reason")
     path = _retirement_path(root, profile, evidence)
     with _pair_lock(root, profile, evidence):
+        if _completion_path(root, profile, evidence).exists():
+            raise ValueError("completed calibration profile/evidence pair cannot be retired")
         if path.exists():
             observed = load_strict_json_object(read_regular_path(path))
             observed_reason = observed.get("reason")
@@ -178,14 +248,7 @@ def ensure_candidate_retired(custody_dir: Path, profile_sha256: str, evidence_sh
             ):
                 raise ValueError("calibration candidate retirement record differs from its exact pair")
             return path
-        payload = {
-            "schema_version": "calibration-retirement-v1",
-            "profile_sha256": profile,
-            "evidence_sha256": evidence,
-            "reason": reason,
-        }
-        _exclusive_write(path, canonical_json_bytes(payload), "calibration candidate is already retired")
-    return path
+        return _write_retirement(root, profile, evidence, reason)
 
 
 def require_candidate_active(custody_dir: Path, profile_sha256: str, evidence_sha256: str) -> None:
@@ -204,6 +267,8 @@ def require_candidate_active(custody_dir: Path, profile_sha256: str, evidence_sh
     evidence = _digest(evidence_sha256, "evidence")
     if _retirement_path(root, profile, evidence).exists():
         raise ValueError("calibration profile/evidence pair is retired and cannot be retried")
+    if _completion_path(root, profile, evidence).exists():
+        raise ValueError("calibration profile/evidence pair is completed and cannot be retried")
 
 
 def _verify_precommit(precommit: Precommit) -> None:
@@ -253,19 +318,48 @@ def _custody_root(value: Path) -> Path:
 
 @contextmanager
 def _pair_lock(root: Path, profile: str, evidence: str) -> Iterator[None]:
+    descriptor = _acquire_pair_lock(root, profile, evidence)
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _acquire_pair_lock(root: Path, profile: str, evidence: str) -> int:
     path = root / "locks" / f"{profile}.{evidence}.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o600)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return descriptor
+    except BaseException:
         os.close(descriptor)
+        raise
 
 
 def _retirement_path(root: Path, profile: str, evidence: str) -> Path:
     return root / "retired" / f"{profile}.{evidence}.json"
+
+
+def _completion_path(root: Path, profile: str, evidence: str) -> Path:
+    return root / "completed" / f"{profile}.{evidence}.json"
+
+
+def _write_retirement(root: Path, profile: str, evidence: str, reason: str) -> Path:
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("calibration candidate retirement requires a non-empty reason")
+    path = _retirement_path(root, profile, evidence)
+    payload = {
+        "schema_version": "calibration-retirement-v1",
+        "profile_sha256": profile,
+        "evidence_sha256": evidence,
+        "reason": reason,
+    }
+    _exclusive_write(path, canonical_json_bytes(payload), "calibration candidate is already retired for this evidence")
+    return path
 
 
 def _digest(value: str, label: str) -> str:

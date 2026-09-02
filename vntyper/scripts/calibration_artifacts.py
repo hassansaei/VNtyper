@@ -65,18 +65,17 @@ def extract_artifact_bundle(truth_path: Path, study_path: Path, runs_path: Path,
         raise ValueError("calibration truth schema version is unsupported")
     study_raw = load_object(study_path, "calibration study")
     study = decode_study_declaration(study_raw)
-    raw_label_rows = _rows(truth["labels"], "calibration labels")
-    nonlocked_keys = {member.key for member in study.partitions.members if member.role != "locked-heldout"}
-    labels = decode_label_artifact(
-        {
-            "schema_version": "calibration-labels-v1",
-            "rows": [
-                row
-                for row in raw_label_rows
-                if _mapping(row, "calibration label row").get("manifest_key") in nonlocked_keys
-            ],
-        }
-    )
+    labels_raw = _mapping(truth["labels"], "calibration labels")
+    if set(labels_raw) != {"schema_version", "rows"}:
+        raise ValueError("calibration label fields differ from the closed contract")
+    if labels_raw["schema_version"] != "calibration-labels-v1":
+        raise ValueError("calibration label schema version is unsupported")
+    raw_label_rows = _rows(labels_raw, "calibration labels")
+    nonlocked_keys = tuple(member.key for member in study.partitions.members if member.role != "locked-heldout")
+    supplied_keys = tuple(_mapping(row, "calibration label row").get("manifest_key") for row in raw_label_rows)
+    if supplied_keys != nonlocked_keys:
+        raise ValueError("calibration label rows must match the canonical nonlocked partition manifest exactly")
+    labels = decode_label_artifact(labels_raw)
     runs_raw = load_object(runs_path, "calibration runs")
     if set(runs_raw) != {"schema_version", "runs"} or runs_raw["schema_version"] != "calibration-runs-v1":
         raise ValueError("calibration runs fields or schema version differ")
@@ -102,11 +101,7 @@ def extract_artifact_bundle(truth_path: Path, study_path: Path, runs_path: Path,
         }
         for row in extracted.features.rows
     ]
-    label_rows = [
-        dict(_mapping(row, "calibration label row"))
-        for row in raw_label_rows
-        if _mapping(row, "calibration label row").get("manifest_key") in nonlocked_keys
-    ]
+    label_rows = [dict(_mapping(row, "calibration label row")) for row in raw_label_rows]
     baseline = _mapping(thaw_json(extracted.baseline), "calibration baseline")
     members_by_role = {
         role: tuple(member.key for member in study.partitions.members if member.role == role) for role in _ROLES

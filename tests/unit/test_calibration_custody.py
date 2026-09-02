@@ -1,6 +1,8 @@
 """Local precommit, one-use consumption, and candidate retirement guards."""
 
+import fcntl
 import hashlib
+import os
 import threading
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +12,7 @@ import pytest
 from vntyper.scripts import calibration_custody
 from vntyper.scripts.calibration_contract import decode_evidence_manifest
 from vntyper.scripts.calibration_custody import (
+    claim_candidate,
     open_locked_payload,
     record_consumption,
     require_candidate_active,
@@ -159,7 +162,7 @@ def test_interrupted_locked_access_retires_the_pair_and_cannot_retry(
             evaluator=lambda raw: len(raw),
         )
 
-    assert len(tuple((custody / "retired").glob("*.json"))) == 1
+    assert (custody / "retired" / f"{profile.digest}.{digest}.json").is_file()
     with pytest.raises(ValueError, match="precommit|retired|one-use"):
         evaluate_locked_candidate(
             profile,
@@ -196,6 +199,7 @@ def test_failed_evaluator_cannot_reuse_locked_evidence(tmp_path: Path) -> None:
     digest = hashlib.sha256(payload.read_bytes()).hexdigest()
     profile = _profile()
     evidence = _evidence(digest)
+    custody = tmp_path / "custody"
 
     with pytest.raises(RuntimeError, match="evaluation failed"):
         evaluate_locked_candidate(
@@ -203,7 +207,7 @@ def test_failed_evaluator_cannot_reuse_locked_evidence(tmp_path: Path) -> None:
             payload,
             evidence.protocol_sha256,
             evidence.features_sha256,
-            tmp_path / "custody",
+            custody,
             evaluator=lambda raw: (_ for _ in ()).throw(RuntimeError("evaluation failed")),
         )
     with pytest.raises(ValueError, match="consumed|one-use"):
@@ -212,9 +216,35 @@ def test_failed_evaluator_cannot_reuse_locked_evidence(tmp_path: Path) -> None:
             payload,
             evidence.protocol_sha256,
             evidence.features_sha256,
-            tmp_path / "custody",
+            custody,
             evaluator=lambda raw: {"bytes": len(raw)},
         )
+    assert (custody / "retired" / f"{profile.digest}.{digest}.json").is_file()
+    _assert_pair_lock_released(custody, profile.digest, digest)
+
+
+def test_success_terminal_write_error_retires_and_releases_the_claim(tmp_path: Path) -> None:
+    payload = tmp_path / "locked.json"
+    payload.write_bytes(b"locked")
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+    profile = _profile()
+    custody = tmp_path / "custody"
+    real_write = calibration_custody._exclusive_write
+
+    def fail_completion(path, raw, message):
+        if path.parent.name == "completed":
+            raise RuntimeError("completion storage failed")
+        return real_write(path, raw, message)
+
+    with (
+        patch("vntyper.scripts.calibration_custody._exclusive_write", side_effect=fail_completion),
+        pytest.raises(RuntimeError, match="completion storage failed"),
+    ):
+        evaluate_locked_candidate(profile, payload, "c" * 64, digest, custody, evaluator=len)
+
+    assert len(tuple((custody / "retired").glob("*.json"))) == 1
+    assert not tuple((custody / "completed").glob("*.json"))
+    _assert_pair_lock_released(custody, profile.digest, digest)
 
 
 def test_successful_locked_evaluation_is_role_and_hash_bound(tmp_path: Path) -> None:
@@ -237,6 +267,58 @@ def test_successful_locked_evaluation_is_role_and_hash_bound(tmp_path: Path) -> 
     assert result.evidence_sha256 == digest
     assert result.role == "locked-heldout"
     assert result.receipt.path.is_file()
+    completed = tuple((tmp_path / "custody" / "completed").glob("*.json"))
+    assert len(completed) == 1
+
+
+def test_claim_owner_excludes_concurrent_retirement_until_success_is_terminal(tmp_path: Path) -> None:
+    payload = b"locked"
+    digest = hashlib.sha256(payload).hexdigest()
+    profile = _profile()
+    custody = tmp_path / "custody"
+    payload_entered = threading.Event()
+    release_payload = threading.Event()
+    evaluation_results: list[object] = []
+    evaluation_errors: list[BaseException] = []
+    retirement_errors: list[BaseException] = []
+
+    def read_payload() -> bytes:
+        payload_entered.set()
+        assert release_payload.wait(timeout=5)
+        return payload
+
+    def evaluate() -> None:
+        try:
+            evaluation_results.append(
+                evaluate_locked_candidate(profile, read_payload, "c" * 64, digest, custody, evaluator=len)
+            )
+        except ValueError as error:
+            evaluation_errors.append(error)
+
+    def retire() -> None:
+        try:
+            retire_candidate(custody, profile.digest, digest, "concurrent-retirement")
+        except ValueError as error:
+            retirement_errors.append(error)
+
+    evaluation_thread = threading.Thread(target=evaluate)
+    evaluation_thread.start()
+    assert payload_entered.wait(timeout=5)
+    retirement_thread = threading.Thread(target=retire)
+    retirement_thread.start()
+    retirement_thread.join(timeout=0.2)
+    assert retirement_thread.is_alive()
+    release_payload.set()
+    evaluation_thread.join(timeout=5)
+    retirement_thread.join(timeout=5)
+
+    assert len(evaluation_results) == 1 and not evaluation_errors
+    assert len(retirement_errors) == 1 and "completed" in str(retirement_errors[0])
+    assert len(tuple((custody / "precommits").glob("*.json"))) == 1
+    assert len(tuple((custody / "consumed").glob("*.json"))) == 1
+    assert len(tuple((custody / "completed").glob("*.json"))) == 1
+    assert not tuple((custody / "retired").glob("*.json"))
+    _assert_pair_lock_released(custody, profile.digest, digest)
 
 
 def test_malformed_authority_hashes_cannot_enter_locked_evaluation(tmp_path: Path) -> None:
@@ -323,3 +405,45 @@ def test_custody_records_reject_malformed_hashes_and_empty_reasons(tmp_path: Pat
         write_precommit(tmp_path, "A" * 64, "b" * 64, "c" * 64)
     with pytest.raises(ValueError, match="reason"):
         retire_candidate(tmp_path, "a" * 64, "b" * 64, " ")
+
+
+def test_pair_lock_descriptor_closes_even_if_unlock_fails(tmp_path: Path) -> None:
+    descriptors_before = frozenset(os.listdir("/proc/self/fd"))
+    real_flock = fcntl.flock
+
+    def fail_unlock(descriptor: int, operation: int) -> None:
+        if operation == fcntl.LOCK_UN:
+            raise OSError("unlock failed")
+        real_flock(descriptor, operation)
+
+    with (
+        patch("vntyper.scripts.calibration_custody.fcntl.flock", side_effect=fail_unlock),
+        pytest.raises(OSError, match="unlock failed"),
+    ):
+        retire_candidate(tmp_path / "custody", "a" * 64, "b" * 64, "failed")
+
+    assert frozenset(os.listdir("/proc/self/fd")) == descriptors_before
+
+
+def test_owner_claim_descriptor_closes_even_if_unlock_fails(tmp_path: Path) -> None:
+    descriptors_before = frozenset(os.listdir("/proc/self/fd"))
+    claim = claim_candidate(tmp_path / "custody", "a" * 64, "b" * 64, "c" * 64)
+
+    with (
+        patch("vntyper.scripts.calibration_custody.fcntl.flock", side_effect=OSError("unlock failed")),
+        pytest.raises(OSError, match="unlock failed"),
+    ):
+        claim.close()
+
+    assert claim.descriptor == -1
+    assert frozenset(os.listdir("/proc/self/fd")) == descriptors_before
+
+
+def _assert_pair_lock_released(custody: Path, profile: str, evidence: str) -> None:
+    lock_path = custody / "locks" / f"{profile}.{evidence}.lock"
+    descriptor = os.open(lock_path, os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
