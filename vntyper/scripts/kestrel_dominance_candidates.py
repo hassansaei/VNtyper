@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import pandas as pd
 
@@ -88,6 +88,38 @@ def merge_candidate_annotations(pre_result: pd.DataFrame, annotated: pd.DataFram
             merged[column] = ""
         merged.loc[annotated.index, column] = annotated[column]
     return merged
+
+
+def publish_dominance_selection(
+    pre_result: pd.DataFrame,
+    filter_columns: Sequence[str],
+    selected_ordinal: int,
+    annotate: Callable[[pd.DataFrame], pd.DataFrame],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run the fixed enabled-dominance publication sequence on a complete pre-result.
+
+    This is the one sequence production uses when a profile enables dominance: every
+    passing hypothesis is projected out of the retained pre-result, stripped of the
+    pre-result-only translation diagnostics exactly as the legacy path strips them,
+    annotated, merged back so the pre-result keeps every row and its diagnostics, and
+    the legacy-selected ordinal is published unchanged.
+
+    Args:
+        pre_result: Complete pre-selection Kestrel frame as read from disk.
+        filter_columns: Frozen legacy gate column names.
+        selected_ordinal: Exact ordinal the legacy ranking selected.
+        annotate: The fixed nomenclature annotation for the passing candidates.
+
+    Returns:
+        The merged pre-result to persist and the one annotated legacy-selected row.
+
+    Raises:
+        ValueError: If any projection step rejects the frame.
+    """
+    candidates = legacy_result_candidates(passing_candidate_frame(pre_result, filter_columns))
+    annotated = annotate(candidates)
+    merged = merge_candidate_annotations(pre_result, annotated)
+    return merged, selected_candidate_frame(annotated, selected_ordinal)
 
 
 def selected_candidate_frame(annotated: pd.DataFrame, selected_ordinal: int) -> pd.DataFrame:

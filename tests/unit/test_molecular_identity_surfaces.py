@@ -581,11 +581,7 @@ def test_enabled_dominance_final_result_keeps_the_legacy_result_schema(tmp_path:
     ``kestrel_result.tsv`` must keep the legacy column set and order, so the two profiles
     cannot produce structurally different final artifacts for the same input.
     """
-    from vntyper.scripts.kestrel_dominance_candidates import (
-        legacy_result_candidates,
-        passing_candidate_frame,
-        selected_candidate_frame,
-    )
+    from vntyper.scripts.kestrel_dominance_candidates import publish_dominance_selection
 
     config = load_nomenclature_config()
     motifs = config["motifs"]
@@ -636,11 +632,23 @@ def test_enabled_dominance_final_result_keeps_the_legacy_result_schema(tmp_path:
         retain_complete_identity_candidates=True,
     )
     pre_result = pd.read_csv(dominance_dir / "kestrel_pre_result.tsv", sep="\t", dtype=str, keep_default_na=False)
-    candidates = legacy_result_candidates(passing_candidate_frame(pre_result, LEGACY_GATE_COLUMNS))
-    annotated = annotate_kestrel_frame(candidates, retain_complete_identity_evidence=True)
-    selected = selected_candidate_frame(annotated, int(retained.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]]))
+    # The same pure sequence production calls, with the same annotation arguments.
+    merged, selected = publish_dominance_selection(
+        pre_result,
+        LEGACY_GATE_COLUMNS,
+        int(retained.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]]),
+        lambda candidates: annotate_kestrel_frame(
+            candidates, str(dominance_dir), retain_complete_identity_evidence=True
+        ),
+    )
 
     assert list(selected.columns) == list(legacy_final.columns)
     assert tuple(selected.columns[-4:]) == IDENTITY_COLUMNS
     assert selected.iloc[0]["Nomenclature"] == legacy_final.iloc[0]["Nomenclature"]
     assert selected.iloc[0]["Molecular_Identity"] == legacy_final.iloc[0]["Molecular_Identity"]
+    # The persisted pre-result keeps every row and every translation diagnostic; only
+    # the public identity value is written onto the passing rows.
+    assert len(merged) == len(pre_result)
+    for column in IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS[1:]:
+        assert merged[column].tolist() == pre_result[column].tolist()
+    assert merged.loc[selected.index[0], "Molecular_Identity"] == selected.iloc[0]["Molecular_Identity"]

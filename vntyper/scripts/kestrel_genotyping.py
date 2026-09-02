@@ -767,29 +767,27 @@ def process_kestrel_output(
     # what makes one edit reach every surface: the TSV below, the pipeline summary
     # built from this same frame, and the HTML report all inherit the columns.
     if dominance_decision.get("enabled") is True:
-        from vntyper.scripts.kestrel_dominance_candidates import (
-            legacy_result_candidates,
-            merge_candidate_annotations,
-            passing_candidate_frame,
-            selected_candidate_frame,
-        )
+        from vntyper.scripts.kestrel_dominance_candidates import publish_dominance_selection
 
         selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active)
         pre_result_path = Path(output_dir) / "kestrel_pre_result.tsv"
         pre_result = pd.read_csv(pre_result_path, sep="\t", dtype=str, keep_default_na=False)
-        # Mirror the legacy path: the four pre-result translation diagnostics never
-        # reach the published result, and the public quartet is appended after them.
-        candidates = legacy_result_candidates(passing_candidate_frame(pre_result, selection.final_filter_columns))
-        annotated_candidates = annotate_kestrel_frame(
-            candidates,
-            output_dir,
-            identity_component=identity_component,
-            resolved_component=nomenclature_decision,
-            retain_complete_identity_evidence=True,
-        )
-        merge_candidate_annotations(pre_result, annotated_candidates).to_csv(pre_result_path, sep="\t", index=False)
         selected_ordinal = int(processed_df.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]])
-        processed_df = selected_candidate_frame(annotated_candidates, selected_ordinal)
+        # The fixed sequence lives in one pure function so the published result keeps
+        # the legacy column set and the pre-result keeps every diagnostic.
+        merged_pre_result, processed_df = publish_dominance_selection(
+            pre_result,
+            selection.final_filter_columns,
+            selected_ordinal,
+            lambda candidates: annotate_kestrel_frame(
+                candidates,
+                output_dir,
+                identity_component=identity_component,
+                resolved_component=nomenclature_decision,
+                retain_complete_identity_evidence=True,
+            ),
+        )
+        merged_pre_result.to_csv(pre_result_path, sep="\t", index=False)
     else:
         processed_df = annotate_kestrel_frame(
             processed_df,
