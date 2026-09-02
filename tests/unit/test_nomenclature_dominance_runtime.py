@@ -382,3 +382,49 @@ def test_absent_bam_evaluation_fails_closed_on_an_impossible_evaluator_outcome(
 
     with pytest.raises(ValueError, match="must evaluate as not-applicable"):
         runtime.evaluate_absent_bam_dominance((), _component())
+
+
+def test_xd_missingness_veto_abstains_at_runtime_instead_of_promoting_the_covered_runner_up() -> None:
+    """Mutation caught: a missing-XD veto on the winner falls through to the fully covered runner-up."""
+    runtime = _runtime()
+    baseline = IdentityAwareNomenclatureResult(_call("59dupC"), _DUPC)
+    candidates = (
+        runtime.DominanceCandidate(_DUPC, baseline.call),
+        runtime.DominanceCandidate(_DUPG, _call("58dupG", source="kestrel_bam")),
+    )
+
+    result = runtime.reconcile_with_dominance(
+        baseline,
+        candidates,
+        _artifact(_record(_DUPC, xd=None), _record(_DUPC), _record(_DUPG, xd=99)),
+        EvidenceDisposition("admissible"),
+        _component(xd_veto="missingness"),
+        {0: _DUPC, 1: _DUPG},
+    )
+
+    assert result.call is None
+    assert result.selected_identity is None
+    assert result.abstention_reason == "xd-missingness"
+
+
+def test_xd_missingness_veto_never_promotes_a_candidate_record_counts_did_not_select() -> None:
+    """Mutation caught: complete XD coverage is treated as a reason to prefer the runner-up."""
+    runtime = _runtime()
+    baseline = IdentityAwareNomenclatureResult(_call("59dupC"), _DUPC)
+    candidates = (
+        runtime.DominanceCandidate(_DUPC, baseline.call),
+        runtime.DominanceCandidate(_DUPG, _call("58dupG", source="kestrel_bam")),
+    )
+
+    result = runtime.reconcile_with_dominance(
+        baseline,
+        candidates,
+        _artifact(_record(_DUPC), _record(_DUPC), _record(_DUPG, xd=None)),
+        EvidenceDisposition("admissible"),
+        _component(xd_veto="missingness"),
+        {0: _DUPC, 1: _DUPG},
+    )
+
+    assert result.selected_identity == _DUPC
+    assert result.call == candidates[0].call
+    assert result.abstention_reason is None

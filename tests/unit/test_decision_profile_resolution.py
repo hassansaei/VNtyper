@@ -144,6 +144,26 @@ def test_run_resolution_accepts_explicit_non_neutral_generated_dominance(tmp_pat
     assert resolved.dominance["enabled"] is True
 
 
+def test_run_resolution_accepts_explicit_custom_non_neutral_dominance(tmp_path: Path) -> None:
+    """Mutation caught: non-neutral dominance is re-gated on ``profile_kind == "generated"``."""
+    packaged = load_packaged_decision_profile()
+    document = json.loads(packaged.canonical_bytes)
+    document["profile_id"] = "unit-test-explicit-custom-active"
+    document["profile_revision"] = "test-1"
+    document["profile_kind"] = "explicit-custom"
+    inventory = document["inventory"]
+    assert isinstance(inventory, dict)
+    inventory["/components/dominance/enabled"]["value"] = True
+    path = tmp_path / "explicit-custom.json"
+    path.write_bytes(canonical_json_bytes(document))
+
+    resolved = resolve_run_configuration(path)
+
+    assert resolved.decision_profile.profile_kind == "explicit-custom"
+    assert resolved.decision_profile.source == "explicit-cli"
+    assert resolved.dominance["enabled"] is True
+
+
 @pytest.mark.parametrize("kind", ["packaged", "unsupported"])
 def test_explicit_path_cannot_select_packaged_or_unknown_kind(tmp_path: Path, kind: str) -> None:
     document = _custom_document()

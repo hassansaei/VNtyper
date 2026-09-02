@@ -643,6 +643,7 @@ def test_enabled_dominance_evaluates_a_genuine_negative_exactly_once(
         "None\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNone\tNegative\n",
         encoding="utf-8",
     )
+    before = kestrel.read_bytes()
     calls = 0
     real_evaluate = nomenclature_dominance_runtime.evaluate_dominance
 
@@ -660,6 +661,9 @@ def test_enabled_dominance_evaluates_a_genuine_negative_exactly_once(
     assert outcome.evaluated is True
     assert outcome.rewritten is False
     assert outcome.dominance_outcome == "not-applicable"
+    # The ten-column negative placeholder is a frozen schema: the seam's own
+    # "rewritten=False" is not the oracle for it, the bytes are.
+    assert kestrel.read_bytes() == before
 
 
 def test_enabled_dominance_evaluates_negative_kestrel_with_positive_advntr_once_and_preserves_finding(
@@ -674,6 +678,7 @@ def test_enabled_dominance_evaluates_negative_kestrel_with_positive_advntr_once_
         encoding="utf-8",
     )
     before = advntr.read_bytes()
+    kestrel_before = kestrel.read_bytes()
     calls = 0
     real_evaluate = nomenclature_dominance_runtime.evaluate_dominance
 
@@ -689,6 +694,7 @@ def test_enabled_dominance_evaluates_negative_kestrel_with_positive_advntr_once_
     assert calls == 1
     assert outcome == DominanceSeamOutcome(True, False, "not-applicable")
     assert advntr.read_bytes() == before
+    assert kestrel.read_bytes() == kestrel_before
     written = pd.read_csv(advntr, sep="\t", dtype=str, keep_default_na=False)
     assert written.loc[0, "Variant"] == "I22_2_G_LEN1"
     assert written.loc[0, "Nomenclature"] == "duplication, position-ambiguous"

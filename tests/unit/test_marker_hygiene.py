@@ -149,7 +149,9 @@ def _run_golden_probe(module_name: str, marker: str, *, collect_only: bool) -> s
     argv.append(str(UNIT_DIR.parent / "golden" / module_name))
     if collect_only:
         argv.append(f"{__file__}::test_root_pytest_ini_is_the_single_live_marker_authority")
-    return subprocess.run(argv, cwd=REPO_ROOT, env=environment, capture_output=True, text=True, check=False)
+    return subprocess.run(
+        argv, cwd=REPO_ROOT, env=environment, capture_output=True, text=True, check=False, timeout=300
+    )
 
 
 def test_every_browser_file_declares_the_browser_marker() -> None:
