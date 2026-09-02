@@ -108,6 +108,9 @@ class CandidateClaim:
             self.descriptor = -1
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                if self.terminal_path is None:
+                    raise
             finally:
                 os.close(descriptor)
 

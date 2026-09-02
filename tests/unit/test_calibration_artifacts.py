@@ -1,5 +1,6 @@
 """Filesystem codecs and end-to-end calibration operation artifacts."""
 
+import fcntl
 import hashlib
 import logging
 import os
@@ -12,7 +13,8 @@ from unittest.mock import patch
 import pytest
 
 from tests.calibration_run_fixture import IDENTITY, OTHER_IDENTITY, write_schema_three_run
-from vntyper.scripts.calibration_artifact_io import thaw_json, write_checksums, write_json
+from vntyper import cli
+from vntyper.scripts.calibration_artifact_io import thaw_json, verify_checksums, write_checksums, write_json
 from vntyper.scripts.calibration_artifacts import (
     _observations,
     evaluate_artifact_bundle,
@@ -25,7 +27,7 @@ from vntyper.scripts.calibration_custody import claim_candidate, retire_candidat
 from vntyper.scripts.calibration_features import decode_feature_artifact, decode_label_artifact
 from vntyper.scripts.calibration_locked_artifacts import decode_locked_payload
 from vntyper.scripts.calibration_manifest import decode_study_declaration
-from vntyper.scripts.calibration_objective import calculate_metrics
+from vntyper.scripts.calibration_objective import calculate_metrics, select_candidate
 from vntyper.scripts.calibration_profiles import build_generated_profile
 from vntyper.scripts.calibration_role_inputs import build_role_inputs
 from vntyper.scripts.calibration_run_extraction import decode_run_hashes
@@ -341,6 +343,72 @@ def test_completed_failed_locked_evaluation_writes_attestation_and_retirement(tm
 
     assert load_strict_json_object((heldout / "attestation.json").read_bytes())["status"] == "failed"
     assert (heldout / "retirement.json").is_file()
+
+
+@pytest.mark.parametrize(("passed", "status"), [(True, "passed"), (False, "failed")])
+def test_terminal_unlock_error_preserves_coherent_cli_outcome(tmp_path: Path, passed: bool, status: str) -> None:
+    truth, partitions, runs = _inputs(tmp_path)
+    evidence = tmp_path / "evidence"
+    extract_artifact_bundle(truth, partitions, runs, evidence)
+    candidate = tmp_path / "candidate"
+    fit_artifact_bundle(evidence, "lexicographic-safety-v1", candidate)
+    profile = candidate / "decision_profile.json"
+    validation = tmp_path / "validation"
+    validate_artifact_bundle(profile, evidence, validation)
+    custodian = _custodian_import(tmp_path / "custodian", truth, partitions, runs, profile, validation)
+    output = tmp_path / "heldout"
+    real_flock = fcntl.flock
+
+    def fail_unlock(descriptor: int, operation: int) -> None:
+        if operation == fcntl.LOCK_UN:
+            raise OSError("explicit unlock failed")
+        real_flock(descriptor, operation)
+
+    with (
+        patch("vntyper.cli.setup_logging"),
+        patch("vntyper.scripts.calibration_custody.fcntl.flock", side_effect=fail_unlock),
+        patch(
+            "vntyper.scripts.calibration_artifacts.select_candidate",
+            side_effect=select_candidate if passed else lambda *_args: None,
+        ),
+    ):
+        if passed:
+            assert (
+                cli.main(
+                    [
+                        "calibrate",
+                        "evaluate",
+                        "--profile",
+                        str(profile),
+                        "--evidence",
+                        str(custodian),
+                        "--output",
+                        str(output),
+                    ]
+                )
+                is None
+            )
+        else:
+            with pytest.raises(SystemExit) as completed_failure:
+                cli.main(
+                    [
+                        "calibrate",
+                        "evaluate",
+                        "--profile",
+                        str(profile),
+                        "--evidence",
+                        str(custodian),
+                        "--output",
+                        str(output),
+                    ]
+                )
+            assert completed_failure.value.code == 1
+
+    verify_checksums(output)
+    assert load_strict_json_object((output / "attestation.json").read_bytes())["status"] == status
+    custody = tmp_path / ".custodian.calibration-custody"
+    assert len(tuple((custody / ("completed" if passed else "retired")).glob("*.json"))) == 1
+    assert not tuple((custody / ("retired" if passed else "completed")).glob("*.json"))
 
 
 def test_post_consumption_interrupt_retires_before_reraising(tmp_path: Path) -> None:
