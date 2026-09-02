@@ -32,7 +32,7 @@ from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 
 # Import cross-match functions from cross_match.py
-from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
+from vntyper.scripts.nomenclature_annotate import DominanceSeamOutcome, reconcile_caller_outputs
 from vntyper.scripts.pipeline_advntr_cleanup import (
     plan_advntr_cleanup,
     validate_pipeline_log_outside_advntr_preflight,
@@ -616,24 +616,25 @@ def run_pipeline(
             threads=threads,
             resolved_component=run_configuration.kestrel,
             nomenclature_component=run_configuration.nomenclature,
+            dominance_component=run_configuration.dominance,
             runtime_component=run_configuration.kestrel_runtime,
             custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
         )
         logger.info(
             "Kestrel genotyping completed."
         )  # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
-        if (
-            "advntr" not in extra_modules
-            and run_configuration.dominance.get("enabled") is True
-            and reconcile_caller_outputs(
+        if "advntr" not in extra_modules and run_configuration.dominance.get("enabled") is True:
+            dominance_outcome = reconcile_caller_outputs(
                 os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
                 None,
                 resolved_component=run_configuration.nomenclature,
                 dominance_component=run_configuration.dominance,
                 custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
             )
-        ):
-            refresh_step(summary, STEP_KESTREL, write_summary_path=summary_file_path)
+            if not isinstance(dominance_outcome, DominanceSeamOutcome) or not dominance_outcome.evaluated:
+                raise RuntimeError("enabled dominance seam did not evaluate the selected run policy")
+            if dominance_outcome.rewritten:
+                refresh_step(summary, STEP_KESTREL, write_summary_path=summary_file_path)
         if "advntr" in extra_modules:
             logger.info("adVNTR module included. Starting adVNTR genotyping.")
             if advntr_context is None:
@@ -719,14 +720,21 @@ def run_pipeline(
                 # Tier A needs two independent callers agreeing, which no single
                 # caller stage can see. Without this step production could never
                 # emit a tier-A name however well the two agreed (#nomenclature).
-                if reconcile_caller_outputs(
+                reconciliation_outcome = reconcile_caller_outputs(
                     os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
                     os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
                     artifact_evidence=advntr_evidence,
                     resolved_component=run_configuration.nomenclature,
                     dominance_component=run_configuration.dominance,
                     custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
+                )
+                if run_configuration.dominance.get("enabled") is True and (
+                    not isinstance(reconciliation_outcome, DominanceSeamOutcome) or not reconciliation_outcome.evaluated
                 ):
+                    raise RuntimeError("enabled dominance seam did not evaluate the selected run policy")
+                if (
+                    isinstance(reconciliation_outcome, DominanceSeamOutcome) and reconciliation_outcome.rewritten
+                ) or reconciliation_outcome is True:
                     # The Kestrel step was recorded before this ran, so the summary
                     # still holds the pre-reconciliation row -- and the HTML report
                     # and cohort tables are built from the summary, not the TSV. Its

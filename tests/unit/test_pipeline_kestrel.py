@@ -69,6 +69,7 @@ def test_stage_forwards_one_explicit_decision_and_runtime_context(tmp_path: Path
     kwargs.update(
         resolved_component=run.kestrel,
         nomenclature_component=run.nomenclature,
+        dominance_component=run.dominance,
         runtime_component=run.kestrel_runtime,
         custom_context_active=True,
     )
@@ -80,6 +81,7 @@ def test_stage_forwards_one_explicit_decision_and_runtime_context(tmp_path: Path
     assert isinstance(runner, mock.Mock)
     assert runner.call_args.kwargs["resolved_component"] is run.kestrel
     assert runner.call_args.kwargs["nomenclature_component"] is run.nomenclature
+    assert runner.call_args.kwargs["dominance_component"] is run.dominance
     assert runner.call_args.kwargs["runtime_component"] is run.kestrel_runtime
     assert runner.call_args.kwargs["custom_context_active"] is True
     assert kwargs["summary"]["kestrel_counting_mode"] == "split"
@@ -201,9 +203,10 @@ def test_threads_is_appended_after_every_existing_run_kestrel_parameter() -> Non
 
     start = names.index("log_level")
     assert names[start : start + 3] == ["log_level", "cwd", "threads"]
-    assert names[-4:] == [
+    assert names[-5:] == [
         "resolved_component",
         "nomenclature_component",
+        "dominance_component",
         "runtime_component",
         "custom_context_active",
     ]

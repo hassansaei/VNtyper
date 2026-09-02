@@ -644,6 +644,11 @@ def test_an_unknown_contig_is_not_an_error(tmp_path: Path) -> None:
     assert BamRescuer(bam).rescue("NOT-A-PAIR", 30) is None
 
 
+def test_identity_cluster_rejects_an_empty_request_set(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="positive candidate positions"):
+        BamRescuer(tmp_path / "absent.bam").rescue_identity_cluster("X-X", (), object())  # type: ignore[arg-type]
+
+
 def test_a_missing_bam_is_not_an_error(tmp_path: Path) -> None:
     assert BamRescuer(tmp_path / "gone.bam").rescue("K-J", 30) is None
 

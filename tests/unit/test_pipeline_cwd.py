@@ -197,6 +197,7 @@ def test_kestrel_stage_boundary_preserves_inputs_configuration_and_summary(tmp_p
         "threads": 4,
         "resolved_component": run_configuration.kestrel,
         "nomenclature_component": run_configuration.nomenclature,
+        "dominance_component": run_configuration.dominance,
         "runtime_component": run_configuration.kestrel_runtime,
         "custom_context_active": False,
     }

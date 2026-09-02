@@ -1,5 +1,6 @@
 """In-memory calibration extraction, fitting, and validation workflow."""
 
+import json
 from fractions import Fraction
 from pathlib import Path
 
@@ -21,7 +22,10 @@ from vntyper.scripts.calibration_manifest import decode_study_declaration
 from vntyper.scripts.calibration_objective import CandidateEvaluation, count_free_parameters
 from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_workflow import extract_evidence, fit_candidate, validate_candidate
+from vntyper.scripts.molecular_identity import parse_molecular_identity
 from vntyper.scripts.nomenclature_annotate import reconcile_caller_outputs
+from vntyper.scripts.nomenclature_bam_evidence import BamIdentityEvidence, BamLocusEvidence
+from vntyper.scripts.nomenclature_bam_replay import BamReplayArtifact, BamReplayLocus, write_bam_replay_artifact
 from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.unit
@@ -434,22 +438,64 @@ def test_fitted_profile_resolves_and_drives_production_whole_locus_reconciliatio
     assert isinstance(train, dict)
     root = Path(str(train["root"]))
     kestrel = root / "kestrel" / "kestrel_result.tsv"
+    pre_path = root / "kestrel" / "kestrel_pre_result.tsv"
+    pre = pd.read_csv(pre_path, sep="\t", dtype=str, keep_default_na=False)
+    selection_columns = {
+        "__Identity_Equivalent_Representation_Count": "1",
+        "__Identity_Hypothesis_Count": "2",
+        "__Identity_Group_Blocking_Gates": "[]",
+        "__Identity_Group_Flags": "[]",
+        "__Identity_Group_Context_Diverges": "false",
+    }
+    for column, value in selection_columns.items():
+        pre[column] = value
+    pre["__Identity_Selected_Raw_Representation_Key"] = pre["__Identity_Raw_Representation_Key"]
+    pre["__Identity_Selected_Observation_Ordinal"] = pre["__Identity_Observation_Ordinal"]
+    pre["Nomenclature"] = "59dupC"
+    second = pre.loc[0].copy()
+    raw_key = json.dumps(
+        {"source": "kestrel", "values": ["X-X", 62, "G", "GC"]},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    second.update(
+        {
+            "POS": "62",
+            "ALT": "GC",
+            "Nomenclature": "58dupG",
+            "Molecular_Identity": OTHER_IDENTITY,
+            "__Identity_Raw_Representation_Key": raw_key,
+            "__Identity_Molecular_Identity": OTHER_IDENTITY,
+            "__Identity_Observation_Ordinal": "1",
+            "__Identity_Selected_Raw_Representation_Key": raw_key,
+            "__Identity_Selected_Observation_Ordinal": "1",
+        }
+    )
+    pd.DataFrame([pre.loc[0], second]).to_csv(pre_path, sep="\t", index=False)
+    identity_b = parse_molecular_identity(OTHER_IDENTITY)
+    records = (
+        BamIdentityEvidence((identity_b,), ((1,),), 8),
+        BamIdentityEvidence((identity_b,), ((1,),), 12),
+        BamIdentityEvidence((identity_b,), ((1,),), 16),
+    )
+    write_bam_replay_artifact(
+        root / "kestrel",
+        BamReplayArtifact((BamReplayLocus((0, 1), "observed", BamLocusEvidence(records, 3, {identity_b: 3})),)),
+    )
 
     assert resolved.dominance["enabled"] is True
-    assert (
-        reconcile_caller_outputs(
-            kestrel,
-            None,
-            resolved_component=resolved.nomenclature,
-            dominance_component=resolved.dominance,
-            custom_context_active=True,
-        )
-        is True
+    outcome = reconcile_caller_outputs(
+        kestrel,
+        None,
+        resolved_component=resolved.nomenclature,
+        dominance_component=resolved.dominance,
+        custom_context_active=True,
     )
 
     written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
-    assert written.loc[0, "__Reconciled_Molecular_Identity"] == IDENTITY
-    assert written.loc[0, "Nomenclature"] == "59dupC"
+    assert outcome.dominance_outcome == "selected"
+    assert written.loc[0, "__Reconciled_Molecular_Identity"] == OTHER_IDENTITY
+    assert written.loc[0, "Nomenclature"] == "58dupG"
     assert written.loc[0, "__Dominance_Abstention_Reason"] == ""
 
 

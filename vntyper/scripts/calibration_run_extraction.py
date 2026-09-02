@@ -25,11 +25,9 @@ from vntyper.scripts.identity_candidate_persistence import (
 from vntyper.scripts.identity_candidates import LEGACY_GATE_COLUMNS
 from vntyper.scripts.molecular_identity import serialize_molecular_identity
 from vntyper.scripts.molecular_identity_presentation import IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS
-from vntyper.scripts.nomenclature_bam_replay import (
-    BamReplayArtifact,
-    decode_bam_replay_artifact,
-    validate_bam_replay_artifact_ordinals,
-)
+from vntyper.scripts.nomenclature_bam_evidence import BamLocusEvidence
+from vntyper.scripts.nomenclature_bam_replay import decode_bam_replay_artifact, validate_bam_replay_artifact_ordinals
+from vntyper.scripts.nomenclature_bam_universe import validated_whole_locus_bam_evidence
 from vntyper.scripts.profile_provenance import resolve_summary_profile
 from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_KESTREL
 
@@ -220,9 +218,19 @@ def extract_completed_run(
 
     replay_value = load_strict_json_object(artifacts["kestrel/bam_identity_replay.v1.json"])
     replay = decode_bam_replay_artifact(replay_value)
-    validate_bam_replay_artifact_ordinals(replay, observed_ordinals)
-    _crosscheck_bam_identity_bindings(replay, pre_by_ordinal)
-    bam_features = _bam_features(replay)
+    replay_ordinals = observed_ordinals
+    if profile.profile_kind == "generated":
+        replay_ordinals = tuple(
+            ordinal
+            for ordinal, retained in sorted(pre_by_ordinal.items())
+            if all(retained.row.get(column) == "True" for column in LEGACY_GATE_COLUMNS)
+        )
+    validate_bam_replay_artifact_ordinals(replay, replay_ordinals)
+    authoritative_identities = {
+        ordinal: pre_by_ordinal[ordinal].capture.translation.identity for ordinal in replay_ordinals
+    }
+    bam_evidence = validated_whole_locus_bam_evidence(replay, authoritative_identities)
+    bam_features = _bam_features(bam_evidence)
 
     expected_advntr: dict[str, object] | None = None
     observed_advntr: dict[str, object] | None = None
@@ -391,32 +399,20 @@ def _crosscheck_selected_pre_result(final: Mapping[str, object], pre: Mapping[st
             raise ValueError("calibration final Kestrel selection differs from its pre-result identity capture")
 
 
-def _crosscheck_bam_identity_bindings(replay: BamReplayArtifact, pre_by_ordinal: Mapping[int, _PreResultRow]) -> None:
-    for locus in replay.loci:
-        if locus.evidence is None:
-            continue
-        for record in locus.evidence.records:
-            for identity, ordinals in zip(record.identities, record.candidate_observation_ordinals, strict=True):
-                if any(pre_by_ordinal[ordinal].capture.translation.identity != identity for ordinal in ordinals):
-                    raise ValueError("calibration BAM identity binding differs from its captured pre-result identity")
-
-
-def _bam_features(replay: BamReplayArtifact) -> dict[str, object]:
+def _bam_features(evidence: BamLocusEvidence | None) -> dict[str, object]:
     counts: dict[str, int] = {}
-    eligible = 0
+    if evidence is None:
+        return {}
+    eligible = evidence.eligible_record_count
     depths: dict[str, list[int]] = {}
-    for locus in replay.loci:
-        if locus.state != "observed" or locus.evidence is None:
+    for identity, count in evidence.counts.items():
+        serialized = serialize_molecular_identity(identity)
+        counts[serialized] = count
+    for record in evidence.records:
+        if record.minimum_kmer_depth is None:
             continue
-        eligible += locus.evidence.eligible_record_count
-        for identity, count in locus.evidence.counts.items():
-            serialized = serialize_molecular_identity(identity)
-            counts[serialized] = counts.get(serialized, 0) + count
-        for record in locus.evidence.records:
-            if record.minimum_kmer_depth is None:
-                continue
-            for identity in record.identities:
-                depths.setdefault(serialize_molecular_identity(identity), []).append(record.minimum_kmer_depth)
+        for identity in record.identities:
+            depths.setdefault(serialize_molecular_identity(identity), []).append(record.minimum_kmer_depth)
     if not counts or eligible == 0:
         return {}
     top_count = max(counts.values())

@@ -73,6 +73,7 @@ def test_dominance_selects_only_an_existing_canonical_candidate_and_keeps_its_fi
         _artifact(_record(_DUPC), _record(_DUPG), _record(_DUPG)),
         EvidenceDisposition("admissible"),
         _component(),
+        {0: _DUPC, 1: _DUPG},
     )
 
     assert result.selected_identity == _DUPG
@@ -106,6 +107,7 @@ def test_dominance_abstention_suppresses_the_whole_locus_selection(
         _artifact(_record(_DUPC), _record(_DUPC)),
         disposition,
         component,
+        {0: _DUPC, 1: _DUPG},
     )
 
     assert result.call is None
@@ -129,6 +131,7 @@ def test_record_tie_abstains_even_when_raw_xd_favours_a_candidate() -> None:
         _artifact(_record(_DUPC, 1), _record(_DUPG, 10_000)),
         EvidenceDisposition("admissible"),
         _component(),
+        {0: _DUPC, 1: _DUPG},
     )
 
     assert result.call is None
@@ -148,6 +151,27 @@ def test_selected_identity_absent_from_fixed_candidates_fails_closed() -> None:
             _artifact(_record(_DUPG), _record(_DUPG)),
             EvidenceDisposition("admissible"),
             _component(),
+            {0: _DUPC, 1: _DUPG},
+        )
+
+
+def test_replay_identity_binding_must_match_the_authoritative_candidate_ordinal() -> None:
+    """Mutation caught: runtime trusts a replay identity bound to another candidate."""
+    runtime = _runtime()
+    baseline = IdentityAwareNomenclatureResult(_call("59dupC"), _DUPC)
+    impossible = BamIdentityEvidence((_DUPG,), ((0,),), 10)
+
+    with pytest.raises(ValueError, match="BAM.*binding.*candidate|candidate.*identity"):
+        runtime.reconcile_with_dominance(
+            baseline,
+            (
+                runtime.DominanceCandidate(_DUPC, baseline.call),
+                runtime.DominanceCandidate(_DUPG, _call("58dupG")),
+            ),
+            _artifact(impossible, impossible),
+            EvidenceDisposition("admissible"),
+            _component(),
+            {0: _DUPC, 1: _DUPG},
         )
 
 
@@ -230,10 +254,10 @@ def test_observed_loci_are_merged_as_unweighted_records_and_absence_stays_missin
     runtime = _runtime()
     first = BamLocusEvidence((_record(_DUPC),), 1, {_DUPC: 1})
     second_records = (
-        BamIdentityEvidence((_DUPC,), ((1,),), 10),
+        BamIdentityEvidence((_DUPG,), ((1,),), 10),
         BamIdentityEvidence((_DUPG,), ((1,),), 10),
     )
-    second = BamLocusEvidence(second_records, 2, {_DUPC: 1, _DUPG: 1})
+    second = BamLocusEvidence(second_records, 2, {_DUPG: 2})
     replay = BamReplayArtifact(
         (
             BamReplayLocus((0,), "observed", first),
@@ -241,13 +265,16 @@ def test_observed_loci_are_merged_as_unweighted_records_and_absence_stays_missin
         )
     )
 
-    merged = runtime.retained_whole_locus_bam_evidence(replay)
+    merged = runtime.retained_whole_locus_bam_evidence(replay, {0: _DUPC, 1: _DUPG})
 
     assert merged is not None
     assert merged.eligible_record_count == 3
-    assert merged.counts == {_DUPC: 2, _DUPG: 1}
+    assert merged.counts == {_DUPC: 1, _DUPG: 2}
     assert (
-        runtime.retained_whole_locus_bam_evidence(BamReplayArtifact((BamReplayLocus((0,), "unavailable", None),)))
+        runtime.retained_whole_locus_bam_evidence(
+            BamReplayArtifact((BamReplayLocus((0,), "unavailable", None),)),
+            {0: _DUPC},
+        )
         is None
     )
 
@@ -286,6 +313,7 @@ def test_disabled_policy_is_byte_path_neutral_and_evaluates_once(monkeypatch: py
         _artifact(_record(_DUPC), _record(_DUPC)),
         EvidenceDisposition("admissible"),
         component,
+        {0: _DUPC, 1: _DUPG},
     )
 
     assert calls == 1
@@ -305,6 +333,7 @@ def test_disabled_policy_preserves_an_identity_abstained_legacy_baseline() -> No
         _artifact(_record(_DUPC), _record(_DUPC)),
         EvidenceDisposition("admissible"),
         _component(enabled=False),
+        {0: _DUPC, 1: _DUPG},
     )
 
     assert result.call is baseline.call

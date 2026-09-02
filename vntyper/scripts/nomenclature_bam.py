@@ -41,6 +41,7 @@ from vntyper.scripts.nomenclature import (
 )
 from vntyper.scripts.nomenclature_bam_evidence import (
     BamEditObservation,
+    BamIdentityEvidence,
     BamIdentityLocus,
     BamIdentityTranslator,
     BamLocusEvidence,
@@ -184,6 +185,8 @@ class _LocusRecord:
 
     edits: tuple[Edit, ...]
     minimum_kmer_depth: int | None
+    reference_start: int
+    reference_end: int
 
 
 def minimum_kmer_depth(record: pysam.AlignedSegment) -> int | None:
@@ -621,29 +624,125 @@ class BamRescuer:
                 consensus = replace(consensus, bound_identity=bound_identity)
         return consensus, evidence
 
+    def rescue_identity_cluster(
+        self,
+        contig: str,
+        requests: tuple[tuple[int, BamIdentityLocus], ...],
+        component: BamIdentityTranslator,
+    ) -> tuple[tuple[tuple[BamConsensus | None, BamLocusEvidence], ...], BamLocusEvidence | None]:
+        """Fetch overlapping candidate windows once and union physical records.
+
+        Args:
+            contig: Shared pair-reference name.
+            requests: Candidate positions and contexts in deterministic order.
+            component: Complete-context identity translator.
+
+        Returns:
+            Per-request compatibility results and one record-deduplicated evidence
+            universe, or an unavailable ``None`` universe when the BAM cannot be read.
+
+        Raises:
+            ValueError: If requests are empty or contain malformed positions.
+        """
+        if not requests or any(
+            isinstance(position, bool) or not isinstance(position, int) or position < 1 for position, _locus in requests
+        ):
+            raise ValueError("BAM identity cluster requires positive candidate positions")
+        windows = tuple((max(0, position - 1 - self._flank), position + self._flank) for position, _ in requests)
+        fetched = self._fetch_window(contig, min(start for start, _ in windows), max(end for _, end in windows))
+        if fetched is None:
+            return (), None
+        union_records, _start, _end = fetched
+        combined: list[dict[MolecularIdentity, list[int]]] = [{} for _ in union_records]
+        consulted: set[int] = set()
+        per_request: list[tuple[BamConsensus | None, BamLocusEvidence]] = []
+        for (position, locus), (start, end) in zip(requests, windows, strict=True):
+            indices = tuple(
+                index
+                for index, record in enumerate(union_records)
+                if record.reference_start < end and record.reference_end > start
+            )
+            records = tuple(union_records[index] for index in indices)
+            consensus = self._compatibility_consensus(records, start, end, contig, position)
+            observations = tuple(
+                project_record_observation(
+                    tuple((edit.start, edit.ref_span, edit.inserted, edit.bases) for edit in record.edits),
+                    record.minimum_kmer_depth,
+                    start,
+                    end,
+                )
+                for record in records
+            )
+            evidence = collect_locus_evidence(observations, locus, component)
+            if consensus is not None:
+                winning_observation = BamEditObservation(
+                    consensus.start,
+                    consensus.ref_span,
+                    consensus.inserted,
+                    consensus.bases,
+                )
+                bound_identity = bind_complete_winner_identity(
+                    observations,
+                    evidence,
+                    winning_observation,
+                    locus,
+                    component,
+                    consensus.supporting_haplotype_records,
+                )
+                if bound_identity is not None:
+                    consensus = replace(consensus, bound_identity=bound_identity)
+            per_request.append((consensus, evidence))
+            for union_index, bound in zip(indices, evidence.records, strict=True):
+                consulted.add(union_index)
+                for identity, ordinals in zip(
+                    bound.identities,
+                    bound.candidate_observation_ordinals,
+                    strict=True,
+                ):
+                    combined[union_index].setdefault(identity, []).extend(ordinals)
+        merged_records = tuple(
+            BamIdentityEvidence(
+                tuple(combined[index]),
+                tuple(tuple(sorted(set(ordinals))) for ordinals in combined[index].values()),
+                union_records[index].minimum_kmer_depth,
+            )
+            for index in sorted(consulted)
+        )
+        counts = {
+            identity: sum(identity in record.identities for record in merged_records)
+            for record in merged_records
+            for identity in record.identities
+        }
+        return tuple(per_request), BamLocusEvidence(merged_records, len(merged_records), counts)
+
     def _fetch_locus(self, contig: str, position: int) -> tuple[tuple[_LocusRecord, ...], int, int] | None:
         """Fetch and parse one locus through the unchanged handle and window policy."""
+        start = max(0, position - 1 - self._flank)
+        end = position + self._flank
+        return self._fetch_window(contig, start, end)
+
+    def _fetch_window(self, contig: str, start: int, end: int) -> tuple[tuple[_LocusRecord, ...], int, int] | None:
+        """Fetch and parse one explicit half-open window."""
         handle = self._open()
         if handle is None:
             return None
-
-        start = max(0, position - 1 - self._flank)
-        end = position + self._flank
         try:
             fetched = list(handle.fetch(contig, start, end))
         except (KeyError, ValueError) as error:
-            logger.debug("BAM rescue skipped; %s:%s unavailable: %s", contig, position, error)
+            logger.debug("BAM rescue skipped; %s:%s-%s unavailable: %s", contig, start, end, error)
             return None
         self.fetches += 1
 
         records: list[_LocusRecord] = []
         for record in fetched:
             depth = minimum_kmer_depth(record)
+            reference_start = record.reference_start
+            reference_end = record.reference_end or reference_start + 1
             if record.cigartuples is None:
-                records.append(_LocusRecord((), depth))
+                records.append(_LocusRecord((), depth, reference_start, reference_end))
                 continue
             edits = tuple(merge_edits(walk_cigar(record.reference_start, record.cigartuples, record.query_sequence)))
-            records.append(_LocusRecord(edits, depth))
+            records.append(_LocusRecord(edits, depth, reference_start, reference_end))
         return tuple(records), start, end
 
     def _compatibility_consensus(

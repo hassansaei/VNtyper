@@ -16,6 +16,7 @@ from vntyper.scripts.nomenclature_bam import BamRescuer, from_bam, is_candidate
 from vntyper.scripts.nomenclature_bam_evidence import (
     BamCandidateBinding,
     BamIdentityLocus,
+    BamLocusEvidence,
 )
 from vntyper.scripts.nomenclature_bam_replay import BamReplayArtifact, BamReplayLocus
 from vntyper.scripts.nomenclature_decision_config import decision_config_from_component
@@ -156,6 +157,49 @@ def group_identity_rows(rows: list[pd.Series]) -> tuple[BamIdentityCandidateGrou
     return tuple(sorted((*complete, *incomplete), key=lambda group: group.candidate_observation_ordinals))
 
 
+def cluster_identity_groups_by_contig(
+    groups: tuple[BamIdentityCandidateGroup, ...],
+    eligible_row_indices: frozenset[int],
+    flank: int,
+) -> tuple[tuple[BamIdentityCandidateGroup, ...], ...]:
+    """Cluster all eligible complete groups into one fetch per pair contig.
+
+    Args:
+        groups: Exact candidate-context groups.
+        eligible_row_indices: Rows selected for evidence observation.
+        flank: Fixed fetch flank on each side, validated for producer custody.
+
+    Returns:
+        Deterministically ordinal-sorted clusters; unavailable and unconsulted
+        groups remain singleton clusters.
+
+    Raises:
+        ValueError: If the flank is not a non-negative integer.
+    """
+    if isinstance(flank, bool) or not isinstance(flank, int) or flank < 0:
+        raise ValueError("BAM identity cluster flank must be a non-negative integer")
+    clusterable: list[BamIdentityCandidateGroup] = []
+    singleton: list[tuple[BamIdentityCandidateGroup, ...]] = []
+    for group in groups:
+        wanted = any(candidate.row_index in eligible_row_indices for candidate in group.candidates)
+        if wanted and group.locus is not None and group.identity_locus is not None:
+            clusterable.append(group)
+        else:
+            singleton.append((group,))
+    clusterable.sort(key=lambda group: (group.locus[0], group.locus[1], group.candidate_observation_ordinals))  # type: ignore[index]
+    by_contig: dict[str, list[BamIdentityCandidateGroup]] = {}
+    for group in clusterable:
+        assert group.locus is not None
+        by_contig.setdefault(group.locus[0], []).append(group)
+    clustered = [tuple(contig_groups) for contig_groups in by_contig.values()]
+    return tuple(
+        sorted(
+            (*clustered, *singleton),
+            key=lambda cluster: tuple(ordinal for group in cluster for ordinal in group.candidate_observation_ordinals),
+        )
+    )
+
+
 def observe_identity_groups(
     groups: tuple[BamIdentityCandidateGroup, ...],
     row_count: int,
@@ -163,6 +207,8 @@ def observe_identity_groups(
     rescuer: BamRescuer | None,
     component: Any,
     decision_config: NomenclatureDecisionConfig | None = None,
+    *,
+    deduplicate_whole_locus: bool = False,
 ) -> BamIdentityGroupProjection:
     """Consult each eligible exact group once and project results to source rows.
 
@@ -173,6 +219,7 @@ def observe_identity_groups(
         rescuer: Shared sample rescuer, or ``None`` when BAM is unavailable.
         component: Stage-bound complete-context translation authority.
         decision_config: Explicit resolved nomenclature values for a run.
+        deduplicate_whole_locus: Union-fetch complete candidates once per contig.
 
     Returns:
         Aligned legacy calls/support/translations and one joint replay locus per
@@ -191,25 +238,39 @@ def observe_identity_groups(
         for index in eligible_row_indices
     ):
         raise ValueError("BAM identity eligible row indices must be valid source-row indices")
+    if not isinstance(deduplicate_whole_locus, bool):
+        raise ValueError("whole-locus BAM deduplication switch must be Boolean")
     calls: list[Nomenclature | None] = [None] * row_count
     supports: list[int | None] = [None] * row_count
     translations: list[IdentityTranslation | None] = [None] * row_count
     replay: list[BamReplayLocus] = []
     all_ordinals: list[int] = []
     all_row_indices: list[int] = []
-    for group in groups:
-        ordinals = group.candidate_observation_ordinals
+    if deduplicate_whole_locus:
+        flank = getattr(rescuer, "flank", 0) if rescuer is not None else 0
+        clusters = cluster_identity_groups_by_contig(groups, eligible_row_indices, flank)
+    else:
+        clusters = tuple((group,) for group in groups)
+    for cluster in clusters:
+        ordinals = tuple(sorted(ordinal for group in cluster for ordinal in group.candidate_observation_ordinals))
         all_ordinals.extend(ordinals)
-        all_row_indices.extend(candidate.row_index for candidate in group.candidates)
-        wanted = tuple(candidate for candidate in group.candidates if candidate.row_index in eligible_row_indices)
+        all_row_indices.extend(candidate.row_index for group in cluster for candidate in group.candidates)
+        wanted = tuple(
+            candidate
+            for group in cluster
+            for candidate in group.candidates
+            if candidate.row_index in eligible_row_indices
+        )
         if not wanted:
             replay.append(BamReplayLocus(ordinals, "not-consulted", None))
             continue
-        if rescuer is None or group.locus is None:
+        if rescuer is None or any(group.locus is None for group in cluster):
             replay.append(BamReplayLocus(ordinals, "unavailable", None))
             continue
-        contig, position = group.locus
-        if group.identity_locus is None:
+        if any(group.identity_locus is None for group in cluster):
+            group = cluster[0]
+            assert group.locus is not None
+            contig, position = group.locus
             consensus = rescuer.rescue(contig, position)
             replay.append(BamReplayLocus(ordinals, "unavailable", None))
             if consensus is not None:
@@ -218,23 +279,43 @@ def observe_identity_groups(
                     calls[candidate.row_index] = call
                     supports[candidate.row_index] = consensus.supporting_haplotype_records
             continue
-        consensus, evidence = rescuer.rescue_with_identity_evidence(contig, position, group.identity_locus, component)
-        if evidence is None:
+        first_locus = cluster[0].locus
+        assert first_locus is not None
+        contig = first_locus[0]
+        typed_requests: list[tuple[int, BamIdentityLocus]] = []
+        for group in cluster:
+            assert group.locus is not None and group.identity_locus is not None
+            typed_requests.append((group.locus[1], group.identity_locus))
+        requests = tuple(typed_requests)
+        results: tuple[tuple[Any, BamLocusEvidence | None], ...]
+        if len(cluster) == 1:
+            consensus, evidence = rescuer.rescue_with_identity_evidence(
+                contig, requests[0][0], requests[0][1], component
+            )
+            results = ((consensus, evidence),)
+            retained_evidence = evidence
+        else:
+            clustered_results, retained_evidence = rescuer.rescue_identity_cluster(contig, requests, component)
+            results = tuple((consensus, evidence) for consensus, evidence in clustered_results)
+        if retained_evidence is None:
             replay.append(BamReplayLocus(ordinals, "unavailable", None))
             continue
-        replay.append(BamReplayLocus(ordinals, "observed", evidence))
-        if consensus is None:
-            continue
-        call = from_bam(contig, consensus, decision_config)
-        support = consensus.supporting_haplotype_records
-        for candidate in wanted:
-            calls[candidate.row_index] = call
-            supports[candidate.row_index] = support
-            if consensus.bound_identity is not None:
-                translations[candidate.row_index] = bind_bam_translation(
-                    candidate.translation,
-                    consensus.bound_identity,
-                )
+        replay.append(BamReplayLocus(ordinals, "observed", retained_evidence))
+        for group, (consensus, _evidence) in zip(cluster, results, strict=True):
+            if consensus is None:
+                continue
+            call = from_bam(contig, consensus, decision_config)
+            support = consensus.supporting_haplotype_records
+            for candidate in group.candidates:
+                if candidate.row_index not in eligible_row_indices:
+                    continue
+                calls[candidate.row_index] = call
+                supports[candidate.row_index] = support
+                if consensus.bound_identity is not None:
+                    translations[candidate.row_index] = bind_bam_translation(
+                        candidate.translation,
+                        consensus.bound_identity,
+                    )
     if tuple(sorted(all_row_indices)) != tuple(range(row_count)):
         raise ValueError("BAM identity groups must cover every source row exactly once")
     artifact = BamReplayArtifact(tuple(replay))

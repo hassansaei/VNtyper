@@ -15,6 +15,7 @@ from vntyper.scripts.identity_candidates import (
     IdentityCandidateSet,
     RawKeyValues,
     RawRepresentationKey,
+    overlay_legacy_projection,
 )
 from vntyper.scripts.molecular_identity import (
     IdentityTranslation,
@@ -126,6 +127,40 @@ def selected_candidate_cells(candidates: IdentityCandidateSet) -> dict[str, str]
         IDENTITY_SELECTION_COLUMNS[4]: _serialize_strings(flags),
         IDENTITY_SELECTION_COLUMNS[5]: str(selected.observation_ordinal),
         IDENTITY_SELECTION_COLUMNS[6]: "true" if group_context_diverges else "false",
+    }
+
+
+def complete_candidate_projection_cells(
+    candidates: IdentityCandidateSet,
+    passing_observation_ordinals: tuple[int, ...],
+) -> dict[int, dict[str, str]]:
+    """Persist one authoritative projection for every passing candidate.
+
+    Args:
+        candidates: Complete caller capture with row evidence attached.
+        passing_observation_ordinals: Stable ordinals surviving all legacy gates.
+
+    Returns:
+        Selection metadata keyed by each passing candidate's own ordinal.
+
+    Raises:
+        ValueError: If ordinals are malformed, duplicated, or absent from capture.
+    """
+    if not isinstance(candidates, IdentityCandidateSet):
+        raise ValueError("Complete candidate projections require an IdentityCandidateSet")
+    if not isinstance(passing_observation_ordinals, tuple) or any(
+        isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0
+        for ordinal in passing_observation_ordinals
+    ):
+        raise ValueError("Passing candidate ordinals must be a tuple of non-negative integers")
+    if passing_observation_ordinals != tuple(sorted(set(passing_observation_ordinals))):
+        raise ValueError("Passing candidate ordinals must be unique and increasing")
+    captured = {candidate.observation_ordinal for candidate in candidates.candidates}
+    if not set(passing_observation_ordinals) <= captured:
+        raise ValueError("Passing candidate ordinal is absent from complete capture")
+    return {
+        ordinal: selected_candidate_cells(overlay_legacy_projection(candidates, passing_observation_ordinals, ordinal))
+        for ordinal in passing_observation_ordinals
     }
 
 

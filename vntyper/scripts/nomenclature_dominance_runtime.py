@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from vntyper.scripts.identity_reconciliation import (
     IdentityReconciliationObservation,
@@ -20,6 +20,7 @@ from vntyper.scripts.nomenclature_bam_replay import (
     merge_bam_replay_artifacts,
     validate_bam_replay_artifact_ordinals,
 )
+from vntyper.scripts.nomenclature_bam_universe import validated_whole_locus_bam_evidence
 from vntyper.scripts.nomenclature_dominance import (
     AbstentionReason,
     DominanceDecision,
@@ -33,6 +34,24 @@ if TYPE_CHECKING:
     from vntyper.scripts.nomenclature_decision_config import NomenclatureDecisionConfig
 
 DOMINANCE_ABSTENTION_COLUMN = "__Dominance_Abstention_Reason"
+
+
+@dataclass(frozen=True)
+class DominanceSeamOutcome:
+    """Explicit result returned only by an enabled production dominance seam."""
+
+    evaluated: bool
+    rewritten: bool
+    dominance_outcome: Literal["selected", "abstained", "not-applicable"]
+
+    def __post_init__(self) -> None:
+        """Require enabled seams to report a complete actual evaluation."""
+        if self.evaluated is not True:
+            raise ValueError("enabled dominance seam outcome must record evaluation")
+        if not isinstance(self.rewritten, bool):
+            raise ValueError("enabled dominance seam rewrite status must be Boolean")
+        if self.dominance_outcome not in {"selected", "abstained", "not-applicable"}:
+            raise ValueError("enabled dominance seam must report a valid dominance outcome")
 
 
 def _is_nomenclature(value: object) -> bool:
@@ -238,11 +257,15 @@ def fixed_caller_candidate_projections(
     return tuple(candidates)
 
 
-def retained_whole_locus_bam_evidence(artifact: BamReplayArtifact) -> BamLocusEvidence | None:
+def retained_whole_locus_bam_evidence(
+    artifact: BamReplayArtifact,
+    authoritative_identities: Mapping[int, MolecularIdentity | None],
+) -> BamLocusEvidence | None:
     """Merge complete observed replay loci without fabricating unavailable records.
 
     Args:
         artifact: Retained BAM replay artifact after lifecycle merging.
+        authoritative_identities: Persisted candidate identities keyed by ordinal.
 
     Returns:
         All observed records in locus order, or ``None`` when BAM evidence is absent.
@@ -250,22 +273,7 @@ def retained_whole_locus_bam_evidence(artifact: BamReplayArtifact) -> BamLocusEv
     Raises:
         ValueError: If ``artifact`` is not a validated replay artifact.
     """
-    if not isinstance(artifact, BamReplayArtifact):
-        raise ValueError("runtime dominance requires a BamReplayArtifact")
-    records = tuple(
-        record
-        for locus in artifact.loci
-        if locus.state == "observed" and locus.evidence is not None
-        for record in locus.evidence.records
-    )
-    if not any(locus.state == "observed" for locus in artifact.loci):
-        return None
-    counts = {
-        identity: sum(identity in record.identities for record in records)
-        for record in records
-        for identity in record.identities
-    }
-    return BamLocusEvidence(records, len(records), counts)
+    return validated_whole_locus_bam_evidence(artifact, authoritative_identities)
 
 
 def retain_bam_replay(
@@ -304,6 +312,7 @@ def reconcile_with_dominance(
     replay_artifact: BamReplayArtifact,
     advntr_disposition: EvidenceDisposition,
     component: Mapping[str, object],
+    authoritative_identities: Mapping[int, MolecularIdentity | None],
 ) -> DominanceNomenclatureResult:
     """Evaluate dominance once and select only an existing candidate projection.
 
@@ -314,6 +323,7 @@ def reconcile_with_dominance(
         advntr_disposition: Governed whole-locus adVNTR disposition. Absence is
             represented by admissible, not by fabricated insufficiency.
         component: Complete immutable dominance profile component.
+        authoritative_identities: Captured candidate identity keyed by ordinal.
 
     Returns:
         Unchanged baseline, one fixed candidate projection, or explicit abstention.
@@ -336,7 +346,10 @@ def reconcile_with_dominance(
         if (previous.name, previous.tier) != (candidate.call.name, candidate.call.tier):
             raise ValueError("one canonical dominance candidate has conflicting fixed presentations")
 
-    evidence = DominanceEvidence(retained_whole_locus_bam_evidence(replay_artifact), advntr_disposition)
+    evidence = DominanceEvidence(
+        retained_whole_locus_bam_evidence(replay_artifact, authoritative_identities),
+        advntr_disposition,
+    )
     decision = evaluate_dominance(evidence, component)
     if decision.outcome == "not-applicable":
         return DominanceNomenclatureResult(baseline.call, baseline.selected_identity, None, decision)
@@ -360,6 +373,7 @@ def reconcile_retained_dominance(
     replay_artifact: BamReplayArtifact,
     advntr_dispositions: tuple[EvidenceDisposition, ...],
     component: Mapping[str, object],
+    authoritative_identities: Mapping[int, MolecularIdentity | None],
 ) -> DominanceNomenclatureResult:
     """Evaluate retained whole-locus evidence against fixed Kestrel projections.
 
@@ -372,6 +386,7 @@ def reconcile_retained_dominance(
         replay_artifact: Retained BAM replay for those rows.
         advntr_dispositions: Governed dispositions for positive adVNTR rows.
         component: Complete immutable dominance profile component.
+        authoritative_identities: Captured candidate identity keyed by ordinal.
 
     Returns:
         One dominance runtime projection from exactly one evaluator call.
@@ -396,7 +411,67 @@ def reconcile_retained_dominance(
         if any(disposition.value == "identity-insufficient" for disposition in advntr_dispositions)
         else "admissible"
     )
-    return reconcile_with_dominance(baseline, candidates, replay_artifact, whole_locus_disposition, component)
+    return reconcile_with_dominance(
+        baseline,
+        candidates,
+        replay_artifact,
+        whole_locus_disposition,
+        component,
+        authoritative_identities,
+    )
+
+
+def reconcile_complete_retained_dominance(
+    baseline: IdentityAwareNomenclatureResult,
+    candidate_rows: tuple[Mapping[str, object], ...],
+    candidate_calls: tuple[Nomenclature | None, ...],
+    identity_observations: tuple[IdentityReconciliationObservation, ...],
+    presentation_calls: tuple[Nomenclature, ...],
+    replay_artifact: BamReplayArtifact,
+    advntr_dispositions: tuple[EvidenceDisposition, ...],
+    component: Mapping[str, object],
+) -> DominanceNomenclatureResult:
+    """Evaluate complete persisted Kestrel candidates with their fixed names.
+
+    Args:
+        baseline: Legacy whole-locus identity-aware reconciliation.
+        candidate_rows: Passing pre-result rows with authoritative identity metadata.
+        candidate_calls: Fixed row calls aligned to ``candidate_rows``.
+        identity_observations: Typed observations from all callers.
+        presentation_calls: Fixed legacy caller presentations.
+        replay_artifact: Producer-retained whole-locus BAM evidence.
+        advntr_dispositions: Governed positive adVNTR dispositions.
+        component: Complete immutable dominance policy.
+
+    Returns:
+        One dominance result selected only from the closed typed candidate set.
+
+    Raises:
+        ValueError: If candidate identity or fixed-presentation custody is incomplete.
+    """
+    from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
+
+    if len(candidate_rows) != len(candidate_calls) or not candidate_rows:
+        raise ValueError("enabled dominance requires aligned complete Kestrel candidate projections")
+    persisted = tuple(parse_selected_candidate_cells(row) for row in candidate_rows)
+    authoritative = {candidate.selected_observation_ordinal: candidate.translation.identity for candidate in persisted}
+    fixed_calls: list[Nomenclature | None] = []
+    for row, call in zip(candidate_rows, candidate_calls, strict=True):
+        fixed_name = str(row.get("Nomenclature", ""))
+        if call is None or not fixed_name:
+            raise ValueError("enabled dominance requires one fixed presentation per complete Kestrel candidate")
+        fixed_calls.append(replace(call, name=fixed_name))
+    return reconcile_retained_dominance(
+        baseline,
+        tuple(candidate.translation.identity for candidate in persisted),
+        tuple(fixed_calls),
+        identity_observations,
+        presentation_calls,
+        replay_artifact,
+        advntr_dispositions,
+        component,
+        authoritative,
+    )
 
 
 def dominance_abstention_note(reason: AbstentionReason) -> str:

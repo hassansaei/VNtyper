@@ -32,6 +32,7 @@ def run_kestrel_stage(
     threads: int = 4,
     resolved_component: Mapping[str, object] | None = None,
     nomenclature_component: Mapping[str, object] | None = None,
+    dominance_component: Mapping[str, object] | None = None,
     runtime_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
 ) -> None:
@@ -53,6 +54,7 @@ def run_kestrel_stage(
             binds.
         resolved_component: Immutable Kestrel decision component for this run.
         nomenclature_component: Immutable nomenclature component for this run.
+        dominance_component: Immutable whole-locus dominance component for this run.
         runtime_component: Immutable excluded Kestrel runtime component.
         custom_context_active: Whether an explicit custom profile owns this run.
 
@@ -82,6 +84,7 @@ def run_kestrel_stage(
     explicit_context = (
         resolved_component is not None
         or nomenclature_component is not None
+        or dominance_component is not None
         or runtime_component is not None
         or custom_context_active
     )
@@ -93,6 +96,11 @@ def run_kestrel_stage(
     nomenclature_decision = resolve_compatibility_component(
         "nomenclature",
         nomenclature_component,
+        custom_context_active=custom_context_active,
+    )
+    dominance_decision = resolve_compatibility_component(
+        "dominance",
+        dominance_component,
         custom_context_active=custom_context_active,
     )
     runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
@@ -128,6 +136,7 @@ def run_kestrel_stage(
         runner_kwargs.update(
             resolved_component=decision,
             nomenclature_component=nomenclature_decision,
+            dominance_component=dominance_decision,
             runtime_component=runtime,
             custom_context_active=custom_context_active,
         )
