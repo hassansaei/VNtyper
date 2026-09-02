@@ -91,7 +91,8 @@ def test_no_test_modules_outside_the_known_tiers() -> None:
     ``golden`` is a tier like the others, run by
     ``pytest -m golden tests/golden``. It is deliberately outside ``make
     check-all``: it compares against a known-truth simulated cohort supplied via
-    ``VNTYPER_SIM_ROOT`` and ``VNTYPER_ADVNTR_ROOT``, and skips without them.
+    ``VNTYPER_SIM_ROOT`` and ``VNTYPER_ADVNTR_ROOT``. Selected golden execution
+    fails closed without complete roots; deselected collection remains safe.
 
     Raises:
         AssertionError: If a stray test module is found.

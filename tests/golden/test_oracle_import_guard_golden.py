@@ -1,5 +1,6 @@
 """Golden contracts for the standard-library oracle import-closure guard."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,33 @@ def test_guard_allows_standard_library_and_recursive_local_imports(tmp_path: Pat
     helper.write_text("from collections import Counter\nvalue = Counter('aba')\n", encoding="utf-8")
 
     assert assert_independent_import_closure(entry, tmp_path) == (entry.resolve(), helper.resolve())
+
+
+@pytest.mark.parametrize("target", ["pandas", "vntyper.scripts.nomenclature"])
+@pytest.mark.parametrize(
+    "source_template",
+    [
+        "from builtins import __import__ as load\nvalue = load({target})\n",
+        "from builtins import __import__ as load\nvalue = load(name={target})\n",
+        "import importlib\nvalue = getattr(importlib, 'import_module')({target})\n",
+        "import importlib\nvalue = getattr(importlib, 'import_module')(name={target})\n",
+        "import importlib as il\nvalue = getattr(il, 'import_module')({target})\n",
+        "import importlib as il\nvalue = getattr(il, 'import_module')(name={target})\n",
+        "import importlib\nvalue = importlib.__import__({target})\n",
+        "import importlib\nvalue = importlib.__import__(name={target})\n",
+    ],
+)
+def test_guard_rejects_additional_literal_dynamic_imports(
+    tmp_path: Path,
+    target: str,
+    source_template: str,
+) -> None:
+    """Callable aliases and literal attribute lookup cannot bypass the closure."""
+    entry = tmp_path / "entry.py"
+    entry.write_text(source_template.format(target=repr(target)), encoding="utf-8")
+
+    with pytest.raises(AssertionError, match=rf"entry\.py.*{re.escape(target)}"):
+        assert_independent_import_closure(entry, tmp_path)
 
 
 @pytest.mark.parametrize(
