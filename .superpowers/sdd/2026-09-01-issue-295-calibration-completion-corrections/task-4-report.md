@@ -7,6 +7,8 @@ DONE_WITH_DOCUMENTED_LIMITATION
 Implementation commit:
 
 - `a3731e7030912332811aff4eae8c61039c8da699 fix(calibration): enforce external custody bindings`
+- `28b4bc5ff8d886dd8fe4c5fcf19a06f092fea13a fix(calibration): harden custody review seams`
+- `de9a1eb2176bdda7ce432b1939f4afb0466a8228 fix(calibration): close custody re-review gaps`
 
 No Task 5, golden, release, version, tag, workflow, or issue-administration work was performed.
 
@@ -231,3 +233,59 @@ verifiable proof of organizational independence. A future trust-root/signature p
 would be a separate reviewed contract. This task intentionally neither implements nor
 claims that policy. The missing independent external cohort remains outside Task 4 and
 is not resolved by these local safeguards.
+
+The exact-pair operation lock is a local POSIX safeguard implemented with
+`fcntl.flock`. It serializes cooperating processes that use the same custody directory
+on a filesystem with working `flock` semantics. It is not a distributed lock, does not
+coordinate different hosts or custody roots, and makes no portability claim for
+non-POSIX platforms or filesystems whose advisory-lock semantics differ. Those limits
+do not weaken the append-only evidence bindings, but deployment must not describe the
+local lock as an external custody or multi-host concurrency guarantee.
+
+## Second independent re-review corrections
+
+The second re-review identified four remaining seams. Each was reproduced before its
+production correction:
+
+1. **Exact ordinary truth:** the ordinary labels document must have exactly
+   `schema_version` and `rows`, use `calibration-labels-v1`, and list exactly the
+   canonical nonlocked partition keys. Locked, unknown, duplicate, and out-of-order
+   rows are rejected instead of filtered. Test fixtures now keep ordinary nonlocked
+   truth separate from the external custodian's complete truth, while the locked-root
+   read spy remains green.
+2. **Operation-lifetime ownership:** an exact-pair owner retains the POSIX file lock
+   through precommit, payload open, evaluation, result decoding, output writes,
+   checksums, and the terminal state. Success appends a profile/protocol/evidence-bound
+   completion record before releasing the lock; failure appends retirement through the
+   existing `BaseException` boundary. Deterministic retirement-wins and claim-wins
+   races prove that no operation can finish both successful and retired. Completion-
+   write errors retire, and normal/error/unlock-failure probes prove descriptor release.
+3. **Preclaim header rejection:** authority study, protocol, partition, profile,
+   profile dataset, exact validation attestation, exact study binding, global run
+   commitments, and validation/locked role commitments are compared with the loaded
+   profile, validation, and study binding before claim. A refreshed-checksum authority
+   protocol mismatch now leaves precommit, consumption, and retirement ledgers empty.
+   Only locked-payload-derived dataset/run/payload values wait until the one-use open.
+4. **Secure-reader lifetime:** opened descriptors enter the cleanup inventory before
+   `fstat`, duplicate requested names are rejected, and every descriptor closes exactly
+   once even when `fstat` or lock release raises.
+
+Final second-review evidence:
+
+- Focused artifacts/custody/secure-I/O family: `54 passed`; after the final descriptor
+  audit the complete custody file was rerun as `20 passed`.
+- Complete calibration and calibration CLI family: `345 passed in 29.22s`.
+- BLE001 policy plus both deterministic races: `111 passed in 3.65s`; the reviewed
+  production broad-exception inventory remains unchanged.
+- Repository format/lint: `604 files already formatted`; `All checks passed!`.
+- Repository mypy: `Success: no issues found in 233 source files`.
+- Final full branch-inclusive unit gate: `10179 passed, 5 skipped, 7 warnings in
+  366.16s`; coverage `91.78%`, above the `86%` floor.
+- A focused custody coverage append for the final descriptor probes regenerated the
+  XML at `91.81%`; this supplements rather than replaces the full-unit result above.
+- Final staged patch coverage: `87%` across `2163` changed executable lines, above the
+  `80%` gate.
+- `git diff --cached --check` was clean, and `calibration_artifacts.py` is `550` lines.
+
+No Task 5, golden execution, release, version, tag, workflow, or issue-administration
+work was performed in this correction round.
