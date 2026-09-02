@@ -11,6 +11,7 @@ Implementation commit:
 - `de9a1eb2176bdda7ce432b1939f4afb0466a8228 fix(calibration): close custody re-review gaps`
 - `985354da7234d065368a3d55b80b12b78c6b356c fix(calibration): preserve durable terminal outcomes`
 - `fbf767b39a13375e049343d143af806787e57a4b fix(calibration): bind validation retirement outcomes`
+- `9386cb9d3c891079e8501f5f7b182def83d9e314 fix(calibration): preserve terminal close outcomes`
 
 No Task 5, golden, release, version, tag, workflow, or issue-administration work was performed.
 
@@ -303,8 +304,9 @@ could turn a completed failed evaluation into an exception after retirement was 
 The owner now always closes the descriptor and sets it to `-1`, but suppresses only an
 `OSError` from explicit unlock when a completion or retirement terminal is already
 published. Before terminal publication, unlock errors still propagate; close errors are
-also unchanged. Closing the descriptor releases the POSIX lock even when the redundant
-explicit unlock reports an error.
+also propagated. Closing the descriptor releases the POSIX lock even when the redundant
+explicit unlock reports an error. The final follow-up below extends this terminal-aware
+boundary to close errors that are reported after the descriptor was released.
 
 RED-first full CLI probes cover both coherent terminal outcomes under an injected
 `LOCK_UN` failure:
@@ -360,6 +362,41 @@ Fresh verification for this checkpoint correction:
 - Focused mypy: `Success: no issues found in 1 source file`.
 - `git diff --check` and the staged diff check were clean;
   `calibration_artifacts.py` is 549 lines.
+
+Per the controller's instruction, the earlier full unit and patch-coverage evidence was
+not redundantly regenerated for this narrow correction. No Task 5 or release-
+administration work was performed.
+
+## Final terminal-close follow-up
+
+The second Opus-5/high correction review approved the prior production fixes and found
+one same-class terminal edge plus one missing concurrency assertion. A real
+`os.close()` followed by an injected `OSError` reproduced the success-ledger/CLI-failure
+contradiction for both successful and completed-failed locked evaluation: the terminal
+was durable, but the CLI discarded its staged output because release still raised.
+
+`CandidateClaim._release` now suppresses an `OSError` from close only after a completion
+or retirement terminal is durable. Before terminal publication the same close error is
+still propagated. The test double performs the real close before raising, and the CLI
+tests confirm the descriptor is invalid afterward, so the test neither fabricates nor
+conceals a lock leak. Success and completed failure retain their respective status,
+checksum-valid output, and exactly one terminal without a contradictory second terminal.
+
+The concurrent completed-failed validation test now additionally proves there is
+exactly one custody retirement record and that both checksum-valid outputs contain
+byte-identical copies of that single durable record.
+
+Fresh verification for this final follow-up:
+
+- RED full CLI close-fault counterexamples: both success and completed failure raised
+  `OSError` after their durable terminal before the production fix.
+- Terminal release, concurrency, and preterminal propagation slice: `6 passed in
+  4.37s` after the fix.
+- Full custody, artifact, calibration CLI, and study-binding files: `80 passed in
+  21.71s`.
+- Focused Ruff/format: `3 files already formatted`; `All checks passed!`.
+- Focused mypy: `Success: no issues found in 1 source file`.
+- `git diff --check` and the staged diff check were clean.
 
 Per the controller's instruction, the earlier full unit and patch-coverage evidence was
 not redundantly regenerated for this narrow correction. No Task 5 or release-
