@@ -497,10 +497,13 @@ summary | release-summary | none | always records success, failure, skipped jobs
    resolves exactly one complete decision profile per run — the verified packaged
    `vntyper/profiles/decision_profile.json`, or the one file given to
    `--decision-profile` — recursively freezes every component, and separately loads the
-   three module JSONs as *runtime* sidecars from paths it owns. `pipeline.py` requires an
-   already-resolved `RunConfiguration` and threads the frozen components into each stage
-   as the keyword-only `resolved_component`, `nomenclature_component`,
-   `dominance_component` and `runtime_component` arguments. Profiles are never overlaid,
+   three module JSONs as *runtime* sidecars from paths it owns. On the CLI path `cli.py`
+   resolves it from `--decision-profile` and hands it to `run_pipeline()`; a direct
+   compatibility caller may omit `run_configuration` and get the packaged profile
+   resolved for it, but anything passed must already be a `RunConfiguration` — a raw dict
+   raises. `pipeline.py` then threads the frozen components into each stage as the
+   keyword-only `resolved_component`, `nomenclature_component`, `dominance_component` and
+   `runtime_component` arguments. Profiles are never overlaid,
    discovered, or merged, and the resolved identity, revision, kind, source, digest and
    snapshot are recorded so a call can be traced to the decisions that produced it.
 
