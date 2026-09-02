@@ -1,5 +1,5 @@
 {
-  "elapsed": 3445.1912656210043,
+  "elapsed": 11456.0,
   "modules": [
     {
       "path": "vntyper/scripts/confidence_assignment.py",
@@ -15,92 +15,97 @@
     },
     {
       "path": "vntyper/scripts/scoring.py",
-      "killed": 20,
+      "killed": 19,
       "survived": 0,
       "survivors": []
     },
     {
       "path": "vntyper/scripts/motif_processing.py",
-      "killed": 43,
-      "survived": 16,
+      "killed": 44,
+      "survived": 17,
       "survivors": [
         {
-          "line": 216,
+          "line": 217,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 231,
+          "line": 232,
           "original": "==",
           "replacement": "!="
         },
         {
-          "line": 239,
+          "line": 240,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 290,
+          "line": 291,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 292,
+          "line": 293,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 295,
+          "line": 296,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 330,
+          "line": 331,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 337,
+          "line": 338,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 341,
+          "line": 342,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 367,
+          "line": 343,
+          "original": "60",
+          "replacement": "61"
+        },
+        {
+          "line": 368,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 491,
+          "line": 494,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 510,
+          "line": 513,
           "original": "-",
           "replacement": "+"
         },
         {
-          "line": 510,
+          "line": 513,
           "original": "1",
           "replacement": "2"
         },
         {
-          "line": 523,
+          "line": 526,
           "original": "not",
           "replacement": ""
         },
         {
-          "line": 525,
+          "line": 528,
           "original": "not",
           "replacement": ""
         },
         {
-          "line": 534,
+          "line": 537,
           "original": "False",
           "replacement": "True"
         }
@@ -120,145 +125,1160 @@
     },
     {
       "path": "vntyper/scripts/variant_parsing.py",
-      "killed": 7,
-      "survived": 0,
-      "survivors": []
+      "killed": 6,
+      "survived": 1,
+      "survivors": [
+        {
+          "line": 114,
+          "original": "0.0",
+          "replacement": "1.0"
+        }
+      ]
     },
     {
       "path": "vntyper/scripts/flagging.py",
-      "killed": 30,
-      "survived": 0,
-      "survivors": []
-    },
-    {
-      "path": "vntyper/scripts/kestrel_genotyping.py",
-      "killed": 60,
-      "survived": 25,
+      "killed": 35,
+      "survived": 3,
       "survivors": [
         {
-          "line": 182,
-          "original": "and",
-          "replacement": "or"
-        },
-        {
-          "line": 220,
-          "original": "continue",
-          "replacement": "break"
-        },
-        {
-          "line": 284,
-          "original": "20",
-          "replacement": "21"
-        },
-        {
-          "line": 285,
-          "original": "30",
-          "replacement": "31"
-        },
-        {
-          "line": 286,
-          "original": "30",
-          "replacement": "31"
-        },
-        {
-          "line": 368,
-          "original": "break",
-          "replacement": "continue"
-        },
-        {
-          "line": 492,
-          "original": "False",
-          "replacement": "True"
-        },
-        {
-          "line": 608,
-          "original": "0",
-          "replacement": "1"
-        },
-        {
-          "line": 611,
+          "line": 148,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 635,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 639,
-          "original": "or",
-          "replacement": "and"
-        },
-        {
-          "line": 777,
+          "line": 295,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 876,
-          "original": "0",
-          "replacement": "1"
+          "line": 478,
+          "original": "False",
+          "replacement": "True"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/identity_candidates.py",
+      "killed": 140,
+      "survived": 44,
+      "survivors": [
+        {
+          "line": 53,
+          "original": "True",
+          "replacement": "False"
         },
         {
-          "line": 933,
+          "line": 68,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 101,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 121,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 132,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 156,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 167,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 311,
+          "original": "-",
+          "replacement": "+"
+        },
+        {
+          "line": 316,
           "original": "3",
           "replacement": "4"
         },
         {
-          "line": 940,
-          "original": "0",
-          "replacement": "1"
+          "line": 482,
+          "original": "or",
+          "replacement": "and"
         },
         {
-          "line": 944,
-          "original": "0",
-          "replacement": "1"
+          "line": 495,
+          "original": "*",
+          "replacement": "/"
         },
         {
-          "line": 946,
-          "original": "0",
-          "replacement": "1"
-        },
-        {
-          "line": 949,
-          "original": "0",
-          "replacement": "1"
-        },
-        {
-          "line": 951,
-          "original": "0",
-          "replacement": "1"
-        },
-        {
-          "line": 954,
-          "original": "0",
-          "replacement": "1"
-        },
-        {
-          "line": 956,
-          "original": "0",
-          "replacement": "1"
-        },
-        {
-          "line": 963,
-          "original": "1",
-          "replacement": "2"
-        },
-        {
-          "line": 1031,
+          "line": 495,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 1083,
+          "line": 498,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 498,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 507,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 510,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 518,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 518,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 538,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 575,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 577,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 578,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 579,
+          "original": "2",
+          "replacement": "3"
+        },
+        {
+          "line": 580,
+          "original": "2",
+          "replacement": "3"
+        },
+        {
+          "line": 590,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 591,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 592,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 592,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 593,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 593,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 594,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 594,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 595,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 595,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 596,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 597,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 597,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 598,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 599,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 599,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 599,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 622,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 622,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 624,
+          "original": "1",
+          "replacement": "2"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/identity_reconciliation.py",
+      "killed": 230,
+      "survived": 65,
+      "survivors": [
+        {
+          "line": 69,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 102,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 103,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 103,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 111,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 112,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 112,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 115,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 116,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 124,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 153,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 167,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 193,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 197,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 203,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 224,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 245,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 246,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 247,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 254,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 277,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 278,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 294,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 294,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 299,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 337,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 348,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 382,
           "original": "==",
           "replacement": "!="
         },
         {
-          "line": 1083,
+          "line": 383,
           "original": "1",
           "replacement": "2"
+        },
+        {
+          "line": 395,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 406,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 445,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 456,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 474,
+          "original": "continue",
+          "replacement": "break"
+        },
+        {
+          "line": 476,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 476,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 476,
+          "original": "!=",
+          "replacement": "=="
+        },
+        {
+          "line": 492,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 508,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 533,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 553,
+          "original": "+=",
+          "replacement": "-="
+        },
+        {
+          "line": 553,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 554,
+          "original": "continue",
+          "replacement": "break"
+        },
+        {
+          "line": 587,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 614,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 615,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 616,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 622,
+          "original": "==",
+          "replacement": "!="
+        },
+        {
+          "line": 632,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 672,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 778,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 818,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 827,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 827,
+          "original": ">=",
+          "replacement": "<"
+        },
+        {
+          "line": 827,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 838,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 845,
+          "original": "==",
+          "replacement": "!="
+        },
+        {
+          "line": 845,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 861,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 866,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 866,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 872,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 872,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 872,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 872,
+          "original": "0",
+          "replacement": "1"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/nomenclature_dominance.py",
+      "killed": 79,
+      "survived": 17,
+      "survivors": [
+        {
+          "line": 67,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 68,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 69,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 70,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 71,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 72,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 82,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 90,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 117,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 122,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 158,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 191,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 191,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 191,
+          "original": "2",
+          "replacement": "3"
+        },
+        {
+          "line": 194,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 194,
+          "original": "in",
+          "replacement": "not in"
+        },
+        {
+          "line": 196,
+          "original": "!=",
+          "replacement": "=="
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/calibration_objective.py",
+      "killed": 133,
+      "survived": 0,
+      "survivors": []
+    },
+    {
+      "path": "vntyper/scripts/calibration_statistics.py",
+      "killed": 168,
+      "survived": 10,
+      "survivors": [
+        {
+          "line": 85,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 91,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 92,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 93,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 94,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 201,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 211,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 235,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 237,
+          "original": "1.0",
+          "replacement": "2.0"
+        },
+        {
+          "line": 260,
+          "original": "1",
+          "replacement": "2"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/kestrel_genotyping.py",
+      "killed": 74,
+      "survived": 35,
+      "survivors": [
+        {
+          "line": 210,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 248,
+          "original": "continue",
+          "replacement": "break"
+        },
+        {
+          "line": 341,
+          "original": "20",
+          "replacement": "21"
+        },
+        {
+          "line": 342,
+          "original": "30",
+          "replacement": "31"
+        },
+        {
+          "line": 343,
+          "original": "30",
+          "replacement": "31"
+        },
+        {
+          "line": 352,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 433,
+          "original": "break",
+          "replacement": "continue"
+        },
+        {
+          "line": 557,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 586,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 705,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 708,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 729,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 763,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 763,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 763,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 763,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 773,
+          "original": "/",
+          "replacement": "*"
+        },
+        {
+          "line": 774,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 775,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 775,
+          "original": "5",
+          "replacement": "6"
+        },
+        {
+          "line": 787,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 790,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 957,
+          "original": "False",
+          "replacement": "True"
+        },
+        {
+          "line": 1080,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 1095,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 1177,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 1181,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 1183,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 1186,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 1188,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 1191,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 1193,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 1200,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 1325,
+          "original": "==",
+          "replacement": "!="
+        },
+        {
+          "line": 1325,
+          "original": "1",
+          "replacement": "2"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/decision_profile_schema.py",
+      "killed": 120,
+      "survived": 19,
+      "survivors": [
+        {
+          "line": 105,
+          "original": "1.0",
+          "replacement": "2.0"
+        },
+        {
+          "line": 106,
+          "original": "1.0",
+          "replacement": "2.0"
+        },
+        {
+          "line": 142,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 145,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 208,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 210,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 219,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 222,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 225,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 243,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 243,
+          "original": "0",
+          "replacement": "1"
+        },
+        {
+          "line": 263,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 283,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 296,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 316,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 321,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 423,
+          "original": "+",
+          "replacement": "-"
+        },
+        {
+          "line": 423,
+          "original": "1",
+          "replacement": "2"
+        },
+        {
+          "line": 436,
+          "original": "*",
+          "replacement": "/"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/decision_profile_semantics.py",
+      "killed": 53,
+      "survived": 0,
+      "survivors": []
+    },
+    {
+      "path": "vntyper/scripts/decision_profile.py",
+      "killed": 12,
+      "survived": 3,
+      "survivors": [
+        {
+          "line": 26,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 60,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 97,
+          "original": "*",
+          "replacement": "/"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/run_configuration.py",
+      "killed": 11,
+      "survived": 2,
+      "survivors": [
+        {
+          "line": 30,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 97,
+          "original": "*",
+          "replacement": "/"
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/profile_provenance.py",
+      "killed": 112,
+      "survived": 15,
+      "survivors": [
+        {
+          "line": 105,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 122,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 128,
+          "original": "and",
+          "replacement": "or"
+        },
+        {
+          "line": 130,
+          "original": "True",
+          "replacement": "False"
+        },
+        {
+          "line": 135,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 168,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 213,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 236,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 237,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 243,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 255,
+          "original": "continue",
+          "replacement": "break"
+        },
+        {
+          "line": 276,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 289,
+          "original": "*",
+          "replacement": "/"
+        },
+        {
+          "line": 381,
+          "original": "or",
+          "replacement": "and"
+        },
+        {
+          "line": 387,
+          "original": "or",
+          "replacement": "and"
         }
       ]
     }
