@@ -25,6 +25,7 @@ from vntyper.scripts import (
 )
 from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS as COHORT_ADVNTR
 from vntyper.scripts.cohort_tables import KESTREL_DISPLAY_COLUMNS as COHORT_KESTREL
+from vntyper.scripts.cross_match import cross_match_variants
 from vntyper.scripts.identity_candidates import LEGACY_GATE_COLUMNS, translation_component_from_config
 from vntyper.scripts.molecular_identity import (
     IdentityTranslation,
@@ -398,6 +399,27 @@ def test_production_reconciliation_uses_persisted_kestrel_identity_not_equal_dis
     assert written.loc[0, "Nomenclature"] == "59dupC"
     assert written.loc[0, "Nomenclature_Tier"] == "B"
     assert "caller-disagreement" in written.loc[0, "Nomenclature_Flags"]
+
+
+def test_positive_kestrel_reconciliation_preserves_the_frozen_negative_advntr_schema(tmp_path: Path) -> None:
+    identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(tmp_path, identity)
+    advntr.write_text(
+        "VID\tVariant\tNumberOfSupportingReads\tMeanCoverage\tPvalue\tRU\tPOS\tREF\tALT\tFlag\t"
+        "Nomenclature\tNomenclature_Tier\tNomenclature_Flags\tAmbiguity_Interval\tRepeat_Form\t"
+        "Nomenclature_Note\tNomenclature_Kestrel\tNomenclature_adVNTR\n"
+        "Negative\tNot applicable\tNot applicable\tNot applicable\tNot applicable\tNot applicable\t"
+        "Not applicable\tNot applicable\tNot applicable\tNot applicable\t\t\t\t\t\t\t\t\n",
+        encoding="utf-8",
+    )
+    before = advntr.read_bytes()
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    assert advntr.read_bytes() == before
+    result = cross_match_variants(parse_tsv(kestrel)["data"], parse_tsv(advntr)["data"])
+    assert result["overall_match"] == "No"
+    assert result["matches"][0]["Match"] == "No"
 
 
 def test_governed_advntr_state_stays_visible_but_cannot_back_tier_a(tmp_path: Path) -> None:

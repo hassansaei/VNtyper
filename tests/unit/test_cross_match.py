@@ -145,6 +145,34 @@ def test_cross_match_rejects_unknown_advntr_evidence_disposition() -> None:
         )
 
 
+def test_cross_match_preserves_a_reconciled_negative_advntr_placeholder() -> None:
+    """An additive blank column must not invalidate the frozen negative row."""
+    result = cross_match_variants(
+        kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+        advntr_records=[
+            {
+                "VID": "Negative",
+                "REF": "Not applicable",
+                "ALT": "Not applicable",
+                "POS": "Not applicable",
+                "Evidence_Disposition": "",
+            }
+        ],
+    )
+
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["Match"] == "No"
+    assert result["overall_match"] == "No"
+
+
+def test_cross_match_rejects_a_blank_positive_advntr_evidence_disposition() -> None:
+    with pytest.raises(ValueError, match="unsupported Evidence_Disposition"):
+        cross_match_variants(
+            kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],
+            advntr_records=[{"VID": "25561", "REF": "C", "ALT": "CC", "POS": 67, "Evidence_Disposition": ""}],
+        )
+
+
 def test_a_non_matching_pair_is_not_reported_as_a_match():
     result = cross_match_variants(
         kestrel_records=[{"REF": "C", "ALT": "CC", "POS": 67}],

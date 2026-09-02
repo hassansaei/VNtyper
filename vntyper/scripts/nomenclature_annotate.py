@@ -594,6 +594,10 @@ def reconcile_caller_outputs(
     if advntr_path is not None:
         surfaces += ((advntr, advntr_path, advntr_keep, [], "Nomenclature_adVNTR", advntr_row_names),)
     for frame, path, keep, file_header, own_column, own_names in surfaces:
+        if not any(keep):
+            # A caller-negative TSV is a frozen, deliberately narrower schema.
+            # No positive row exists on which to project reconciliation fields.
+            continue
         updated = frame.copy()
         mask = pd.Series(keep, index=updated.index)
         for column, value in cells.items():
