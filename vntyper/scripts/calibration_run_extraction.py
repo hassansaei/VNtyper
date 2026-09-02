@@ -19,6 +19,7 @@ from vntyper.scripts.calibration_run_projection import (
     with_complete_kestrel_candidate_projections,
 )
 from vntyper.scripts.canonical_json import load_strict_json_object
+from vntyper.scripts.decision_profile import ProfileKind, load_packaged_decision_profile, parse_decision_profile
 from vntyper.scripts.identity_candidate_persistence import (
     IDENTITY_CAPTURE_COLUMNS,
     PersistedIdentityCandidate,
@@ -168,6 +169,12 @@ def extract_completed_run(
     if summary.get("decision_profile_sha256") != declared_profile_sha256:
         raise ValueError("calibration declared profile SHA-256 differs from the verified summary digest")
     profile = resolve_summary_profile(summary, declaration.root)
+    if profile.profile_kind is None:
+        raise ValueError("calibration run extraction requires schema-3 decision profile provenance")
+    dominance_enabled = _dominance_enabled_from_profile_snapshot(
+        profile.profile_kind,
+        artifacts["provenance/decision_profile.json"],
+    )
 
     steps = _caller_steps(summary)
     has_advntr = STEP_ADVNTR in steps
@@ -223,7 +230,7 @@ def extract_completed_run(
     replay_value = load_strict_json_object(artifacts["kestrel/bam_identity_replay.v1.json"])
     replay = decode_bam_replay_artifact(replay_value)
     replay_ordinals = observed_ordinals
-    if profile.profile_kind == "generated":
+    if dominance_enabled:
         replay_ordinals = tuple(
             ordinal
             for ordinal, retained in sorted(pre_by_ordinal.items())
@@ -251,7 +258,7 @@ def extract_completed_run(
 
     expected_row = build_shipped_projection(manifest_key, expected_rows, expected_advntr_rows)
     observed_row = build_shipped_projection(manifest_key, observed_rows, observed_advntr_rows)
-    if profile.profile_kind == "generated":
+    if dominance_enabled:
         complete_candidate_rows = tuple(
             retained.row
             for _ordinal, retained in sorted(pre_by_ordinal.items())
@@ -274,6 +281,23 @@ def extract_completed_run(
         MappingProxyType(observed_row),
         declaration.artifact_sha256,
     )
+
+
+def _dominance_enabled_from_profile_snapshot(profile_kind: ProfileKind, raw: bytes) -> bool:
+    """Resolve the production candidate-universe switch from verified profile bytes."""
+    packaged = load_packaged_decision_profile()
+    if profile_kind == "packaged":
+        if raw != packaged.canonical_bytes:
+            raise ValueError("recorded packaged decision profile differs from the verified package profile")
+        resolved = packaged
+    else:
+        resolved = parse_decision_profile(raw, packaged_document=packaged.document)
+    if resolved.profile_kind != profile_kind:
+        raise ValueError("recorded decision profile kind differs from its verified snapshot")
+    dominance = resolved.components["dominance"]
+    if not isinstance(dominance, Mapping) or not isinstance(dominance.get("enabled"), bool):
+        raise ValueError("recorded decision profile dominance enabled value must be boolean")
+    return dominance["enabled"] is True
 
 
 def _read_precommitted_artifacts(declaration: RunArtifactDeclaration) -> dict[str, bytes]:

@@ -29,6 +29,7 @@ from vntyper.scripts.calibration_run_projection import with_complete_kestrel_can
 from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_workflow import extract_evidence, fit_candidate, validate_candidate
 from vntyper.scripts.canonical_json import canonical_json_bytes
+from vntyper.scripts.decision_profile import load_packaged_decision_profile, parse_decision_profile
 from vntyper.scripts.molecular_identity import parse_molecular_identity
 from vntyper.scripts.nomenclature_annotate import DominanceSeamOutcome, reconcile_caller_outputs
 from vntyper.scripts.nomenclature_bam_evidence import BamIdentityEvidence, BamLocusEvidence
@@ -222,6 +223,31 @@ def _producer_shaped_ab_run(root: Path, key: str, profile) -> dict[str, object]:
     return run
 
 
+def _explicit_custom_dominance_profile(*, enabled: bool):
+    """Build a valid explicit-custom profile with the requested dominance state."""
+    packaged = load_packaged_decision_profile()
+    document = json.loads(packaged.canonical_bytes)
+    document.update(
+        {
+            "profile_id": f"test-explicit-dominance-{str(enabled).lower()}",
+            "profile_kind": "explicit-custom",
+        }
+    )
+    document["inventory"]["/components/dominance/enabled"]["value"] = enabled
+    return parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+
+
+def _bind_profile_to_run(run: dict[str, object], profile) -> None:
+    """Replace a fixture's snapshotted profile and refresh its closed hashes."""
+    root = Path(str(run["root"]))
+    (root / "provenance" / "decision_profile.json").write_bytes(profile.canonical_bytes)
+    summary_path = root / "pipeline_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary.update(profile_summary_fields(profile))
+    summary_path.write_bytes(canonical_json_bytes(summary))
+    refresh_run_hashes(run)
+
+
 def test_extract_snapshots_complete_study_features_labels_baseline_and_run_hashes(tmp_path: Path) -> None:
     evidence = extract_evidence(_study(), _labels(), _runs(tmp_path))
 
@@ -355,6 +381,51 @@ def test_extract_accepts_replay_for_only_the_retained_final_candidate(tmp_path: 
     train = next(row for row in evidence.features.rows if row.manifest_key == "train")
     assert train.features["canonical_identity"] == IDENTITY
     assert train.features["cooccurring_identity_count"] == 2
+
+
+def test_extract_generated_profile_with_disabled_dominance_uses_only_the_retained_candidate(tmp_path: Path) -> None:
+    packaged = load_packaged_decision_profile()
+    packaged_dominance = packaged.components["dominance"]
+    assert isinstance(packaged_dominance, Mapping)
+    dominance = {**packaged_dominance, "enabled": False}
+    profile = build_generated_profile(
+        dominance,
+        dataset_manifest_hash="a" * 64,
+        partition_manifest_hash="b" * 64,
+        seed=295,
+        objective="lexicographic-safety-v1",
+        generator_version=__version__,
+    )
+    runs = _runs(tmp_path)
+    runs["train"] = write_schema_three_run(tmp_path / "generated-disabled", "train", extra_pre_result=True)
+    train_run = runs["train"]
+    assert isinstance(train_run, dict)
+    _bind_profile_to_run(train_run, profile)
+
+    evidence = extract_evidence(_study(), _labels(), runs)
+
+    expected = evidence.baseline["expected"]
+    assert isinstance(expected, Mapping)
+    rows = cast(Sequence[Mapping[str, object]], expected["rows"])
+    train = next(row for row in rows if row["manifest_key"] == "train")
+    assert train["identity_projection"] == {IDENTITY: {"name": "59dupC", "tier": "A"}}
+
+
+def test_extract_explicit_profile_with_enabled_dominance_uses_complete_candidate_universe(tmp_path: Path) -> None:
+    profile = _explicit_custom_dominance_profile(enabled=True)
+    runs = _runs(tmp_path)
+    runs["train"] = _producer_shaped_ab_run(tmp_path / "explicit-enabled", "train", profile)
+
+    evidence = extract_evidence(_study(), _labels(), runs)
+
+    expected = evidence.baseline["expected"]
+    assert isinstance(expected, Mapping)
+    rows = cast(Sequence[Mapping[str, object]], expected["rows"])
+    train = next(row for row in rows if row["manifest_key"] == "train")
+    assert train["identity_projection"] == {
+        IDENTITY: {"name": "59dupC", "tier": "A"},
+        OTHER_IDENTITY: {"name": "58dupG", "tier": "A"},
+    }
 
 
 def test_extract_rejects_replay_for_a_stale_nonretained_pre_result_ordinal(tmp_path: Path) -> None:
