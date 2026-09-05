@@ -380,10 +380,21 @@ def run_pipeline(
             effective_kestrel_runtime,
             kestrel_runtime_fingerprint,
         ) = resolve_effective_kestrel_runtime(run_configuration, config, project_root)
+        advntr_additional_commands = (
+            module_args.get("advntr", {}).get("additional_commands") if isinstance(module_args, Mapping) else None
+        )
         (
             effective_advntr_runtime,
             advntr_runtime_fingerprint,
-        ) = resolve_effective_advntr_runtime(run_configuration, config) if "advntr" in extra_modules else ({}, None)
+        ) = (
+            resolve_effective_advntr_runtime(
+                run_configuration,
+                config,
+                additional_commands=advntr_additional_commands,
+            )
+            if "advntr" in extra_modules
+            else ({}, None)
+        )
         (
             effective_shark_runtime,
             shark_runtime_fingerprint,
@@ -489,6 +500,7 @@ def run_pipeline(
                 run_configuration,
                 config,
                 advntr_version=advntr_context.version,
+                additional_commands=advntr_additional_commands,
             )
         out_path = Path(output_dir)
         if not resume and out_path.exists() and any(out_path.iterdir()):
@@ -1146,6 +1158,15 @@ def run_pipeline(
                         )
                     advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
                     advntr_execution_config = {**config, "tools": dict(advntr_context.tools)}
+                    advntr_runtime_component = run_configuration.advntr_runtime
+                    if advntr_additional_commands is not None:
+                        advntr_runtime_component = {
+                            **run_configuration.advntr_runtime,
+                            "settings": {
+                                **run_configuration.advntr_runtime.get("settings", {}),
+                                "additional_commands": advntr_additional_commands,
+                            },
+                        }
                     advntr_status = run_advntr(
                         advntr_context.model_snapshot,
                         sorted_bam,
@@ -1155,8 +1176,9 @@ def run_pipeline(
                         cwd=project_root,
                         pipeline_threads=threads,
                         resolved_component=run_configuration.advntr,
-                        runtime_component=run_configuration.advntr_runtime,
+                        runtime_component=advntr_runtime_component,
                         custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
+                        advntr_version=advntr_context.version,
                     )
                     if advntr_status != 0:
                         msg = f"adVNTR genotyping returned non-zero status {advntr_status}; result parsing was not attempted."

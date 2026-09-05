@@ -4,7 +4,13 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### adVNTR v2.2.0 integration and runtime optimizations ([#326](https://github.com/hassansaei/VNtyper/pull/326))
+
+- **adVNTR v2.2.0 upgrade**: Pinned adVNTR to commit `8d7f4721c9e48b474bc9589cc35b7486ceace242` (v2.2.0 release), featuring a Cython-optimized Viterbi dynamic programming core (`nogil`) for parallel read decoding.
+- **Order-of-magnitude genotyping speedup**: Per-sample genotyping runtime drops from ~9 minutes down to ~7 seconds at 8 threads, eliminating the operational requirement for BAM downsampling on standard coverage datasets.
+- **Opt-in v2.2.0 algorithms**: Added CLI and configuration support for `--prune-reverse` (~25% speedup without sensitivity loss) and `--rare-unit-coverage-guard` (eliminating false positives in normal controls while preserving 100% frameshift sensitivity), exposed through `--advntr-additional-commands` and `advntr_config.json`.
+- **Pre-header comments and parser robustness**: Enhanced adVNTR TSV/VCF parsing to handle pre-header `#Input File:` metadata without mangling read identifiers, and isolated the `Context` column.
+- **Modular options validation**: Extracted `advntr_options.py` with allowlist validation, capability checking, and mutual dependency enforcement (`--exact-frameshift-caller` requiring `--rare-unit-coverage-guard`).
 
 ## 2.0.28 (2026-09-05)
 

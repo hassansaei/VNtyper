@@ -201,3 +201,21 @@ is accepted only for backward compatibility with `False_Positive_4bp_Insertion` 
     Setting `"artifact_flags": []` makes every flag advisory, matching VNtyper behavior prior to Issue #174 without code edits.
 
 See [Variant Flagging](../pipeline/flagging.md) for full descriptions of both flag classes.
+
+## adVNTR Runtime Configuration
+
+The optional adVNTR module is configured in `vntyper/modules/advntr/advntr_config.json`:
+
+```json
+{
+  "advntr_settings": {
+    "threads": null,
+    "additional_commands": ""
+  }
+}
+```
+
+- **`threads`**: adVNTR thread count. Setting to `null` instructs adVNTR to inherit the pipeline's `--threads` setting.
+- **`additional_commands`**: Command fragment appended to `advntr genotype`. May include adVNTR v2.2.0 optimization flags such as `--prune-reverse` and `--rare-unit-coverage-guard 0.15`.
+- Per-run command flags can also be provided directly on the command line via `--advntr-additional-commands`.
+

@@ -390,6 +390,10 @@ def handle_pipeline(
             module_args_dict["advntr"]["max_coverage"] = args.advntr_max_coverage
             logger.debug(f"advntr_max_coverage set to {args.advntr_max_coverage}")
 
+        if getattr(args, "advntr_additional_commands", None):
+            module_args_dict["advntr"]["additional_commands"] = args.advntr_additional_commands
+            logger.debug(f"advntr_additional_commands set to {args.advntr_additional_commands}")
+
     else:
         module_args_dict["advntr"] = {}
         logger.debug("advntr module not included.")

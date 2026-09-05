@@ -79,6 +79,15 @@ REPORT_IGV_CHOICES = ("embedded", "sidecar", "off")
 SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
     "calibrate": {},
     "pipeline": {
+        "advntr_additional_commands": (
+            ("--advntr-additional-commands",),
+            "_StoreAction",
+            "str",
+            None,
+            False,
+            None,
+            None,
+        ),
         "advntr_max_coverage": (("--advntr-max-coverage",), "_StoreAction", "int", None, False, None, None),
         "archive_format": (("--archive-format",), "_StoreAction", "str", None, False, ("zip", "tar.gz"), None),
         "archive_results": (("--archive-results",), "_StoreTrueAction", None, False, False, None, 0),

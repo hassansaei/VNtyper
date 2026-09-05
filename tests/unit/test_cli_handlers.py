@@ -412,3 +412,23 @@ def test_a_name_derived_from_an_input_path_is_recorded_as_derived(
 
     assert stub.call_args.kwargs["sample_name"] == expected_name
     assert stub.call_args.kwargs["sample_name_is_explicit"] is False
+
+
+def test_advntr_additional_commands_is_forwarded_to_the_pipeline(tmp_path: Path) -> None:
+    """--advntr-additional-commands is placed in module_args['advntr']['additional_commands']."""
+    stub = _run_handler(
+        [
+            "pipeline",
+            "-o",
+            str(tmp_path),
+            "--bam",
+            "in.bam",
+            "--extra-modules",
+            "advntr",
+            "--advntr-additional-commands",
+            "--prune-reverse --rare-unit-coverage-guard 0.15",
+        ]
+    )
+
+    module_args = stub.call_args.kwargs["module_args"]
+    assert module_args["advntr"]["additional_commands"] == "--prune-reverse --rare-unit-coverage-guard 0.15"

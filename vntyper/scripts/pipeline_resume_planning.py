@@ -279,6 +279,7 @@ def resolve_effective_advntr_runtime(
     run_configuration: RunConfiguration,
     config: Mapping[str, Any],
     advntr_version: str | tuple[int, int, int] | None = None,
+    additional_commands: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Resolve effective adVNTR runtime mapping and fingerprint including command and tool identity."""
     raw_advntr = config.get("tools", {}).get("advntr")
@@ -295,8 +296,16 @@ def resolve_effective_advntr_runtime(
             ".".join(str(part) for part in advntr_version) if isinstance(advntr_version, tuple) else str(advntr_version)
         )
 
+    raw_settings = run_configuration.advntr_runtime.get("settings")
+    base_settings: dict[str, Any] = dict(raw_settings) if isinstance(raw_settings, Mapping) else {}
+    if additional_commands is not None:
+        settings: dict[str, Any] = {**base_settings, "additional_commands": additional_commands}
+    else:
+        settings = dict(base_settings)
+
     effective_advntr_runtime = {
         **dict(run_configuration.advntr_runtime),
+        "settings": settings,
         "advntr_command": advntr_command,
         "advntr_command_fingerprint": advntr_fp,
         "advntr_version": ver_str,

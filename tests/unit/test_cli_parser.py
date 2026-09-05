@@ -91,6 +91,15 @@ def test_the_pipeline_subcommand_keeps_its_defaults():
     assert args.extra_modules == []
     assert args.summary_formats == ""
     assert args.fast_mode is False
+    assert args.advntr_additional_commands is None
+
+
+def test_the_pipeline_subcommand_parses_advntr_additional_commands():
+    """``--advntr-additional-commands`` parses its string argument cleanly."""
+    args = build_parser().parse_args(
+        ["pipeline", "--advntr-additional-commands", "--prune-reverse --rare-unit-coverage-guard 0.15"]
+    )
+    assert args.advntr_additional_commands == "--prune-reverse --rare-unit-coverage-guard 0.15"
 
 
 def test_the_report_subcommand_parses_an_output_directory():
