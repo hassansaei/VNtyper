@@ -107,15 +107,44 @@ def parse_shark_conda_list_json(json_text: str) -> str | None:
                 return f"{version}+{build}"
             return str(version)
 
-    first = data[0]
-    if isinstance(first, dict) and "version" in first:
-        version = first["version"]
-        build = first.get("build_string")
-        if build:
-            return f"{version}+{build}"
-        return str(version)
-
     return None
+
+
+def is_shark_command(command: str) -> bool:
+    """Return True if command directly invokes shark (bare, path, or conda-run).
+
+    Prevents commands for other tools from being misidentified as SHARK when
+    their paths happen to contain 'shark' as a substring.
+
+    Args:
+        command: Command string to inspect.
+
+    Returns:
+        True if the command targets the SHARK executable, False otherwise.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+
+    # Direct binary or path: "shark" or "/path/to/shark"
+    base = tokens[0].split("/")[-1].lower()
+    if base == "shark":
+        return True
+
+    # Conda/mamba run: "mamba run -n <env> shark ..."
+    if base in {"mamba", "conda", "micromamba"} and len(tokens) >= 4 and tokens[1] == "run":
+        i = 2
+        while i < len(tokens):
+            if tokens[i] in {"-n", "--name", "-p", "--prefix"}:
+                i += 2
+            elif tokens[i].startswith("-"):
+                i += 1
+            else:
+                return tokens[i].split("/")[-1].lower() == "shark"
+    return False
 
 
 def parse_shark_help_output(output: str) -> str | None:

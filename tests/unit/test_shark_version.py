@@ -13,6 +13,7 @@ import pytest
 from vntyper.scripts.shark_version import (
     build_shark_version_command,
     extract_conda_env_from_command,
+    is_shark_command,
     parse_shark_conda_list_json,
     parse_shark_help_output,
     resolve_shark_version_from_output,
@@ -137,8 +138,24 @@ class TestParseSharkCondaListJson:
         assert parse_shark_conda_list_json("") is None
         assert parse_shark_conda_list_json("   \n") is None
 
-    def test_falls_back_to_first_entry_if_shark_name_not_matched(self) -> None:
-        assert parse_shark_conda_list_json(PROBE_NON_SHARK_LIST_JSON) == "0.9.1+py310_0"
+    def test_returns_none_if_exact_shark_name_not_matched(self) -> None:
+        assert parse_shark_conda_list_json(PROBE_NON_SHARK_LIST_JSON) is None
+
+
+class TestIsSharkCommand:
+    def test_recognizes_conda_shark_prefix(self) -> None:
+        assert is_shark_command("mamba run -n shark_env shark") is True
+        assert is_shark_command("conda run --name shark_env /path/to/shark") is True
+
+    def test_recognizes_bare_shark(self) -> None:
+        assert is_shark_command("shark") is True
+        assert is_shark_command("/usr/local/bin/shark") is True
+
+    def test_rejects_other_tools_even_if_path_contains_shark(self) -> None:
+        assert is_shark_command("java -jar /opt/shark-pipeline/kestrel.jar -h") is False
+        assert is_shark_command("samtools --version") is False
+        assert is_shark_command("bwa") is False
+        assert is_shark_command("fastp -v") is False
 
 
 class TestParseSharkHelpOutput:
@@ -161,3 +178,4 @@ class TestResolveSharkVersionFromOutput:
         assert resolve_shark_version_from_output(PROBE_EMPTY_LIST_JSON) == "unknown"
         assert resolve_shark_version_from_output("") == "unknown"
         assert resolve_shark_version_from_output("invalid") == "unknown"
+        assert resolve_shark_version_from_output(PROBE_NON_SHARK_LIST_JSON) == "unknown"

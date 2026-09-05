@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from vntyper.scripts.command_builders import quote_path
-from vntyper.scripts.shark_version import build_shark_version_command, parse_shark_conda_list_json
+from vntyper.scripts.shark_version import build_shark_version_command, is_shark_command, parse_shark_conda_list_json
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ def get_tool_version(command, version_flag):
         str: The parsed version string or 'unknown' if parsing fails.
     """
     try:
-        if "shark" in command:
+        if is_shark_command(command):
             conda_cmd = build_shark_version_command(command)
             if conda_cmd is not None:
                 list_result = subprocess.run(conda_cmd, capture_output=True, text=True, check=False)

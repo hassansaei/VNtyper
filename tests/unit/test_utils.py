@@ -430,6 +430,15 @@ def test_get_tool_version_bare_shark_binary_returns_unknown():
     assert get_tool_version("shark", "") == "unknown"
 
 
+def test_get_tool_version_non_shark_tool_with_shark_in_path_is_not_intercepted():
+    """Commands for other tools whose paths contain 'shark' are not intercepted by the shark probe."""
+    mock_proc = mock.Mock(returncode=0, stdout="kestrel version: 1.0.1\n", stderr="")
+    with patch("vntyper.scripts.utils.subprocess.run", return_value=mock_proc) as mock_run:
+        version = get_tool_version("java -jar /opt/shark-pipeline/kestrel.jar -h", "")
+    assert version == "1.0.1"
+    assert mock_run.call_count == 1
+
+
 # ---------------------------------------------------------------------------
 # get_tool_versions
 # ---------------------------------------------------------------------------
