@@ -2,6 +2,7 @@
 
 [![CI Tests](https://github.com/hassansaei/VNtyper/actions/workflows/ci-tests.yml/badge.svg)](https://github.com/hassansaei/VNtyper/actions/workflows/ci-tests.yml)
 [![Docker Build](https://github.com/hassansaei/VNtyper/actions/workflows/docker-build.yml/badge.svg)](https://github.com/hassansaei/VNtyper/actions/workflows/docker-build.yml)
+[![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)](https://github.com/hassansaei/VNtyper/actions/workflows/ci-tests.yml)
 [![PyPI version](https://img.shields.io/pypi/v/vntyper.svg?color=blue)](https://pypi.org/project/vntyper/)
 [![Python versions](https://img.shields.io/pypi/pyversions/vntyper.svg)](https://pypi.org/project/vntyper/)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
@@ -102,11 +103,14 @@ For users who prefer pre-configured environments with all dependencies and refer
 
 ### Python Package (`pip`)
 
-If you already have the external binaries installed and available in your `PATH` (e.g., in an existing HPC module environment):
+`pip install vntyper` installs the complete Python package, entry point scripts, and packaged assets directly from PyPI:
 
 ```bash
 pip install vntyper
 ```
+
+> [!NOTE]
+> **Tool Scope:** The `report`, `cohort`, and `calibrate` subcommands are pure Python and work out-of-the-box immediately after `pip install`. The `pipeline` subcommand executes external bioinformatics binaries (`bwa`, `samtools`, `fastp`, `bcftools`, and Java 11 for Kestrel). If you run `pipeline` from a `pip` installation, ensure these tools are installed in your `PATH` (e.g., via system packages, HPC environment modules, or an existing Conda environment). For a complete environment with all bioinformatics binaries pre-installed, use [Conda / Mamba](#conda--mamba-recommended) or [Docker / Apptainer](#docker--apptainer-zero-setup).
 
 ### Reference Data Setup
 
@@ -144,7 +148,8 @@ vntyper pipeline \
 ```
 
 > [!IMPORTANT]
-> **Keep output separate from input**: For BAM and CRAM runs, keep `--output-dir` outside the directory containing the alignment. Separate `inputs/` and `results/` trees satisfy that ownership boundary.
+> - **Keep output separate from input**: For BAM and CRAM runs, keep `--output-dir` outside the directory containing the alignment. Separate `inputs/` and `results/` trees satisfy that ownership boundary.
+> - **Output artifact naming**: The pipeline's internal output artifact prefix is fixed to `output` (e.g. `summary_report.html`, `pipeline_summary.json`). Do not pass `-n` / `--output-name`; to separate runs, specify distinct `--output-dir` paths.
 
 #### With CRAM Input
 
@@ -308,7 +313,8 @@ flowchart TD
     subgraph Preprocessing
         B1[fastp QC]
         B2[Optional: SHARK Filtering]
-        B3[BWA-MEM Alignment / Samtools Slicing]
+        B3a[BWA-MEM Alignment]
+        B3b[Samtools Slicing]
     end
 
     subgraph Genotyping
@@ -329,10 +335,10 @@ flowchart TD
         E4[MUC1 Slice BAM]
     end
 
-    A1 --> B1 --> B2 --> B3
-    A2 --> B3
-    B3 --> C1
-    B3 -.-> C2
+    A1 --> B1 --> B2 --> B3a --> B3b
+    A2 --> B3b
+    B3b --> C1
+    B3b -.-> C2
     C1 --> D1
     C2 -.-> D1
     D1 --> D2 --> D3
@@ -352,16 +358,16 @@ flowchart TD
 After execution, the `--output-dir` contains:
 
 - **Reports & Summaries:**
-  - `output_report.html` — Interactive HTML report featuring sample-level QC, VNTR coverage statistics, confidence grade chip, caller results, and an embedded IGV.js alignment browser.
-  - `output_summary.json` — Comprehensive, machine-readable run summary.
-  - `pipeline_summary.csv` / `.tsv` — Flattened, single-row summary per run with complete parameter and environment provenance.
+  - `summary_report.html` — Interactive HTML report featuring sample-level QC, VNTR coverage statistics, confidence grade chip, caller results, and an embedded IGV.js alignment browser.
+  - `pipeline_summary.json` — Comprehensive, machine-readable run summary with full parameter and execution provenance.
+  - `pipeline_summary.csv` / `.tsv` — Flattened, single-row summary per run with complete parameter and environment provenance (when requested via `--summary-formats`).
   - `pipeline_summary_rows.tsv` — Flattened table with one row per detected variant call.
 - **Variant Calls:**
-  - `vcf/output_kestrel.vcf` — Standard VCF containing Kestrel variant calls.
-  - `tsv/output_kestrel.tsv` — Detailed Kestrel calls and k-mer path depths.
-  - `tsv/output_advntr.tsv` — adVNTR repeat-unit calls (if enabled).
+  - `kestrel/output_indel.vcf.gz` (or `.vcf`) — Standard VCF containing Kestrel variant calls.
+  - `kestrel/kestrel_result.tsv` — Detailed Kestrel calls and k-mer path depths.
+  - `advntr/output_adVNTR.tsv` — adVNTR repeat-unit calls (when enabled).
 - **Alignments & Logs:**
-  - `output_final.bam` & `.bai` — MUC1-region BAM slice and index.
+  - `fastq_bam_processing/output_sliced.bam` & `.bai` — MUC1-region BAM slice and index.
   - `pipeline.log` — Full execution log with MD5 checksums for reproducibility and traceability.
 
 ---
