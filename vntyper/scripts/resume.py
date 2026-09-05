@@ -49,7 +49,7 @@ def _compute_md5(path: Path) -> str | None:
             for chunk in iter(lambda: f.read(65536), b""):
                 md5.update(chunk)
         return md5.hexdigest()
-    except Exception as exc:
+    except OSError as exc:
         logger.warning("Error calculating MD5 for %s: %s", path, exc)
         return None
 
@@ -77,7 +77,7 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
             logger.warning("Prior summary at %s is not a dictionary", p)
             return None
         return data
-    except Exception as exc:
+    except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to parse prior summary at %s: %s", p, exc)
         return None
 

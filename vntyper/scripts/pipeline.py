@@ -57,6 +57,12 @@ from vntyper.scripts.reference_resolution_environment import pin_reference_resol
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
+from vntyper.scripts.resume import (
+    load_prior_summary,
+    make_reused_step_record,
+    resume_refusals,
+    step_is_reusable,
+)
 from vntyper.scripts.run_configuration import RunConfiguration, resolve_run_configuration
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)
@@ -264,7 +270,9 @@ def run_pipeline(
                 archive_results=archive_results,
                 archive_format=archive_format,
                 protected_paths=(*archive_protected_paths, *additional_operator_paths),
+                revoke_outputs=not resume,
             )
+            advntr_version_overrides["advntr"] = ".".join(str(part) for part in advntr_context.version)
         out_path = Path(output_dir)
         if not resume and out_path.exists() and any(out_path.iterdir()):
             logger.warning("Output directory %s is non-empty; prior results may be overwritten.", output_dir)
@@ -386,35 +394,29 @@ def run_pipeline(
             decision_profile=run_configuration.decision_profile,
         )
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
-        if input_type in ["BAM", "CRAM"]:
-            logger.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
-            conversion_start = datetime.now(timezone.utc).replace(tzinfo=None)
-            if input_type == "BAM":
-                if bam is None or str(bam).strip().lower() == "none":
-                    logger.error("Invalid BAM input (None).")
-                    raise ValueError("Invalid BAM file input.")
-            else:  # CRAM branch
-                if cram is None or str(cram).strip().lower() == "none":
-                    logger.error("Invalid CRAM input (None).")
-                    raise ValueError("Invalid CRAM file input.")
+        prior_summary = None
+        if resume:
+            prior_summary = load_prior_summary(summary_file_path)
+            if prior_summary is None:
+                msg = f"Cannot resume: prior summary not found or invalid at {summary_file_path}"
+                logger.error(msg)
+                raise ValueError(msg)
 
-            produced_fastqs = process_bam_to_fastq(
-                output=dirs["fastq_bam_processing"],
-                output_name="output",
-                threads=threads,
-                config=config,
-                plan=alignment_plan,
-                reference_assembly=reference_assembly,
-                fast_mode=fast_mode,
-                delete_intermediates=delete_intermediates,
-                bed_file=bed_file_path,
-                needs_advntr=needs_advntr,
+            refusals = resume_refusals(
+                prior_summary,
+                version=VERSION,
+                input_files=input_files,
+                sample_name=sample_name,
+                reference_key_used=reference_provenance.key_used,
+                decision_profile_sha256=run_configuration.decision_profile.digest,
             )
-            kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
-            if not kestrel_fastq_files:
-                raise ValueError("FASTQ routing produced no inputs for Kestrel.")
-            conversion_command = "process_bam_to_fastq(plan=alignment_plan, ...)"
+            if refusals:
+                for refusal in refusals:
+                    logger.error("Resume refused: %s", refusal)
+                raise ValueError(f"Cannot resume pipeline: {'; '.join(refusals)}")
+            logger.info("Resuming execution from prior summary (started %s)", prior_summary.get("pipeline_start"))
 
+        if input_type in ["BAM", "CRAM"]:
             if input_type == "BAM":
                 header_parse_start = datetime.now(timezone.utc).replace(tzinfo=None)
                 # Re-read a failed guard from the same proven alignment view.
@@ -431,17 +433,56 @@ def run_pipeline(
                     header_parse_end,
                     write_summary_path=summary_file_path,
                 )
-            conversion_end = datetime.now(timezone.utc).replace(tzinfo=None)
-            record_step(
-                summary,
-                STEP_BAM_TO_FASTQ if input_type == "BAM" else STEP_CRAM_TO_FASTQ,
-                str(kestrel_fastq_files[0]),
-                "fastq",
-                conversion_command,
-                conversion_start,
-                conversion_end,
-                write_summary_path=summary_file_path,
-            )
+
+            conversion_step = STEP_BAM_TO_FASTQ if input_type == "BAM" else STEP_CRAM_TO_FASTQ
+            if resume and prior_summary and step_is_reusable(prior_summary, conversion_step, output_dir):
+                logger.info("Reusing previous %s step results.", conversion_step)
+                prior_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == conversion_step)
+                summary["steps"].append(make_reused_step_record(prior_step, prior_summary.get("pipeline_start")))
+                write_summary(summary, summary_file_path)
+
+                r1_path = Path(prior_step["result_file"])
+                mate_path = r1_path.parent / r1_path.name.replace("_R1", "_R2")
+                kestrel_fastq_files = (r1_path, mate_path) if mate_path.is_file() else (r1_path,)
+            else:
+                logger.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
+                conversion_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                if input_type == "BAM":
+                    if bam is None or str(bam).strip().lower() == "none":
+                        logger.error("Invalid BAM input (None).")
+                        raise ValueError("Invalid BAM file input.")
+                else:  # CRAM branch
+                    if cram is None or str(cram).strip().lower() == "none":
+                        logger.error("Invalid CRAM input (None).")
+                        raise ValueError("Invalid CRAM file input.")
+
+                produced_fastqs = process_bam_to_fastq(
+                    output=dirs["fastq_bam_processing"],
+                    output_name="output",
+                    threads=threads,
+                    config=config,
+                    plan=alignment_plan,
+                    reference_assembly=reference_assembly,
+                    fast_mode=fast_mode,
+                    delete_intermediates=delete_intermediates,
+                    bed_file=bed_file_path,
+                    needs_advntr=needs_advntr,
+                )
+                kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
+                if not kestrel_fastq_files:
+                    raise ValueError("FASTQ routing produced no inputs for Kestrel.")
+                conversion_command = "process_bam_to_fastq(plan=alignment_plan, ...)"
+                conversion_end = datetime.now(timezone.utc).replace(tzinfo=None)
+                record_step(
+                    summary,
+                    STEP_BAM_TO_FASTQ if input_type == "BAM" else STEP_CRAM_TO_FASTQ,
+                    str(kestrel_fastq_files[0]),
+                    "fastq",
+                    conversion_command,
+                    conversion_start,
+                    conversion_end,
+                    write_summary_path=summary_file_path,
+                )
 
         elif input_type == "FASTQ":
             # --- SHARK Filtering Module ---
@@ -511,79 +552,96 @@ def run_pipeline(
                 write_summary_path=summary_file_path,
             )
             logger.info("FASTQ quality control completed.")
-            fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
-            fastq2 = os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz") if paired_fastq_input else None
-            logger.info("Starting FASTQ alignment.")
-            align_start = datetime.now(timezone.utc).replace(tzinfo=None)
-            sorted_bam = align_and_sort_fastq(
-                fastq1,
-                fastq2,
-                bwa_reference,
-                dirs["alignment_processing"],
-                "output",
-                threads,
-                config,
-            )
-            align_end = datetime.now(timezone.utc).replace(tzinfo=None)
-            record_step(
-                summary,
-                STEP_FASTQ_ALIGNMENT,
-                sorted_bam,
-                "bam",
-                "align_and_sort_fastq(...)",
-                align_start,
-                align_end,
-                write_summary_path=summary_file_path,
-            )
-            if not sorted_bam:
-                logger.error(
-                    "Alignment failed: BWA index files for the provided reference "
-                    "are missing or incomplete. Please run 'bwa index <reference.fa>' "
-                    "to generate them."
+            if (
+                resume
+                and prior_summary
+                and step_is_reusable(prior_summary, STEP_BAM_TO_FASTQ_POST_ALIGNMENT, output_dir)
+            ):
+                logger.info("Reusing previous FASTQ alignment and post-alignment conversion.")
+                for st_name in (STEP_FASTQ_ALIGNMENT, STEP_BAM_TO_FASTQ_POST_ALIGNMENT):
+                    prior_st = next((s for s in prior_summary.get("steps", []) if s.get("step") == st_name), None)
+                    if prior_st is not None:
+                        summary["steps"].append(make_reused_step_record(prior_st, prior_summary.get("pipeline_start")))
+                write_summary(summary, summary_file_path)
+                r1_path = Path(dirs["fastq_bam_processing"]) / "output_R1.fastq.gz"
+                r2_path = Path(dirs["fastq_bam_processing"]) / "output_R2.fastq.gz"
+                kestrel_fastq_files = (r1_path, r2_path) if r2_path.is_file() else (r1_path,)
+            else:
+                fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
+                fastq2 = (
+                    os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz") if paired_fastq_input else None
                 )
-                raise RuntimeError("Alignment failed due to missing or incomplete BWA reference indices.")
-            logger.info("FASTQ alignment completed.")
-            alignment_plan = run_preflight(
-                **build_alignment_preflight_kwargs(
-                    in_path=str(sorted_bam),
-                    output_dir=Path(output_dir) / "fastq_bam_processing",
-                    output_name="post_alignment",
-                    file_format="bam",
-                    config=config,
+                logger.info("Starting FASTQ alignment.")
+                align_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                sorted_bam = align_and_sort_fastq(
+                    fastq1,
+                    fastq2,
+                    bwa_reference,
+                    dirs["alignment_processing"],
+                    "output",
+                    threads,
+                    config,
+                )
+                align_end = datetime.now(timezone.utc).replace(tzinfo=None)
+                record_step(
+                    summary,
+                    STEP_FASTQ_ALIGNMENT,
+                    sorted_bam,
+                    "bam",
+                    "align_and_sort_fastq(...)",
+                    align_start,
+                    align_end,
+                    write_summary_path=summary_file_path,
+                )
+                if not sorted_bam:
+                    logger.error(
+                        "Alignment failed: BWA index files for the provided reference "
+                        "are missing or incomplete. Please run 'bwa index <reference.fa>' "
+                        "to generate them."
+                    )
+                    raise RuntimeError("Alignment failed due to missing or incomplete BWA reference indices.")
+                logger.info("FASTQ alignment completed.")
+                alignment_plan = run_preflight(
+                    **build_alignment_preflight_kwargs(
+                        in_path=str(sorted_bam),
+                        output_dir=Path(output_dir) / "fastq_bam_processing",
+                        output_name="post_alignment",
+                        file_format="bam",
+                        config=config,
+                        threads=threads,
+                        bed_file=bed_file_path,
+                        reference_assembly=reference_assembly,
+                        fast_mode=fast_mode,
+                    )
+                )
+                logger.info("Starting BAM to FASTQ conversion (Post-alignment).")
+                conv2_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                produced_fastqs = process_bam_to_fastq(
+                    output=dirs["fastq_bam_processing"],
+                    output_name="output",
                     threads=threads,
-                    bed_file=bed_file_path,
+                    config=config,
+                    plan=alignment_plan,
                     reference_assembly=reference_assembly,
                     fast_mode=fast_mode,
+                    delete_intermediates=delete_intermediates,
+                    bed_file=bed_file_path,
+                    needs_advntr=needs_advntr,
                 )
-            )
-            logger.info("Starting BAM to FASTQ conversion (Post-alignment).")
-            conv2_start = datetime.now(timezone.utc).replace(tzinfo=None)
-            produced_fastqs = process_bam_to_fastq(
-                output=dirs["fastq_bam_processing"],
-                output_name="output",
-                threads=threads,
-                config=config,
-                plan=alignment_plan,
-                reference_assembly=reference_assembly,
-                fast_mode=fast_mode,
-                delete_intermediates=delete_intermediates,
-                bed_file=bed_file_path,
-                needs_advntr=needs_advntr,
-            )
-            kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
-            if not kestrel_fastq_files:
-                raise ValueError("FASTQ routing produced no inputs for Kestrel.")
-            conv2_end = datetime.now(timezone.utc).replace(tzinfo=None)
-            record_step(
-                summary,
-                STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
-                str(kestrel_fastq_files[0]),
-                "fastq",
-                "process_bam_to_fastq(plan=post_alignment_plan, ...)",
-                conv2_start,
-                conv2_end,
-                write_summary_path=summary_file_path,
-            )
+                kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
+                if not kestrel_fastq_files:
+                    raise ValueError("FASTQ routing produced no inputs for Kestrel.")
+                conv2_end = datetime.now(timezone.utc).replace(tzinfo=None)
+                record_step(
+                    summary,
+                    STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                    str(kestrel_fastq_files[0]),
+                    "fastq",
+                    "process_bam_to_fastq(plan=post_alignment_plan, ...)",
+                    conv2_start,
+                    conv2_end,
+                    write_summary_path=summary_file_path,
+                )
             # --- Coverage Calculation ---
         logger.info("Calculating mean coverage over the VNTR region.")
         if alignment_plan is None:
@@ -618,27 +676,35 @@ def run_pipeline(
             write_summary_path=summary_file_path,
         )
 
-        logger.info("Starting Kestrel genotyping.")
-        run_kestrel_stage(
-            fastq_files=kestrel_fastq_files,
-            dirs=dirs,
-            config=config,
-            sample_name=sample_name or "sample",
-            log_level=log_level,
-            cwd=project_root,
-            summary=summary,
-            summary_file_path=summary_file_path,
-            runner=run_kestrel,
-            threads=threads,
-            resolved_component=run_configuration.kestrel,
-            nomenclature_component=run_configuration.nomenclature,
-            dominance_component=run_configuration.dominance,
-            runtime_component=run_configuration.kestrel_runtime,
-            custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
-        )
-        logger.info(
-            "Kestrel genotyping completed."
-        )  # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
+        if resume and prior_summary and step_is_reusable(prior_summary, STEP_KESTREL, output_dir):
+            logger.info("Reusing previous %s step results.", STEP_KESTREL)
+            prior_kestrel_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_KESTREL)
+            summary["steps"].append(make_reused_step_record(prior_kestrel_step, prior_summary.get("pipeline_start")))
+            if "kestrel_counting_mode" in prior_summary:
+                summary["kestrel_counting_mode"] = prior_summary["kestrel_counting_mode"]
+            write_summary(summary, summary_file_path)
+        else:
+            logger.info("Starting Kestrel genotyping.")
+            run_kestrel_stage(
+                fastq_files=kestrel_fastq_files,
+                dirs=dirs,
+                config=config,
+                sample_name=sample_name or "sample",
+                log_level=log_level,
+                cwd=project_root,
+                summary=summary,
+                summary_file_path=summary_file_path,
+                runner=run_kestrel,
+                threads=threads,
+                resolved_component=run_configuration.kestrel,
+                nomenclature_component=run_configuration.nomenclature,
+                dominance_component=run_configuration.dominance,
+                runtime_component=run_configuration.kestrel_runtime,
+                custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
+            )
+            logger.info(
+                "Kestrel genotyping completed."
+            )  # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
         if "advntr" not in extra_modules and run_configuration.dominance.get("enabled") is True:
             dominance_outcome = reconcile_caller_outputs(
                 os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
@@ -655,23 +721,6 @@ def run_pipeline(
             logger.info("adVNTR module included. Starting adVNTR genotyping.")
             if advntr_context is None:
                 raise RuntimeError("adVNTR execution reached without a verified run context.")
-            try:
-                from vntyper.modules.advntr.advntr_genotyping import (
-                    advntr_output_extension,
-                    process_advntr_output,
-                    run_advntr,
-                )
-            except ImportError as exc:
-                logger.error(f"adVNTR module import failed: {exc}")
-                sys.exit(1)
-
-            advntr_settings = run_configuration.advntr.get("settings")
-            if not isinstance(advntr_settings, Mapping):
-                raise ValueError("resolved adVNTR settings must be a mapping")
-            # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
-            # this run's parser. Both supported producer names and the derived result
-            # were already invalidated immediately after input-ownership validation.
-            output_ext = advntr_output_extension(advntr_settings)
             # Which model a run resolved decides which reads adVNTR can ever see: the
             # fetch window comes from the model's own content. Validate before running,
             # because the failure mode is a confident result over a truncated locus
@@ -688,127 +737,150 @@ def run_pipeline(
                 advntr_model["genomic_interval"],
             )
 
-            max_cov = module_args.get("advntr", {}).get("max_coverage")
-            sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
-            if sorted_bam and sorted_bam.exists():
-                if max_cov:
-                    logger.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
-                    sorted_bam = downsample_bam_if_needed(
-                        bam_path=sorted_bam,
-                        max_coverage=max_cov,
-                        reference_assembly=reference_assembly,
-                        threads=threads,
+            if resume and prior_summary and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir):
+                logger.info("Reusing previous %s step results.", STEP_ADVNTR)
+                prior_advntr_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_ADVNTR)
+                summary["steps"].append(make_reused_step_record(prior_advntr_step, prior_summary.get("pipeline_start")))
+                write_summary(summary, summary_file_path)
+            else:
+                try:
+                    from vntyper.modules.advntr.advntr_genotyping import (
+                        advntr_output_extension,
+                        process_advntr_output,
+                        run_advntr,
+                    )
+                except ImportError as exc:
+                    logger.error(f"adVNTR module import failed: {exc}")
+                    sys.exit(1)
+
+                advntr_settings = run_configuration.advntr.get("settings")
+                if not isinstance(advntr_settings, Mapping):
+                    raise ValueError("resolved adVNTR settings must be a mapping")
+                # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
+                # this run's parser. Both supported producer names and the derived result
+                # were already invalidated immediately after input-ownership validation.
+                output_ext = advntr_output_extension(advntr_settings)
+
+                max_cov = module_args.get("advntr", {}).get("max_coverage")
+                sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
+                if sorted_bam and sorted_bam.exists():
+                    if max_cov:
+                        logger.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
+                        sorted_bam = downsample_bam_if_needed(
+                            bam_path=sorted_bam,
+                            max_coverage=max_cov,
+                            reference_assembly=reference_assembly,
+                            threads=threads,
+                            config=config,
+                            coverage_dir=dirs["coverage"],
+                            coverage_prefix="advntr_precheck",
+                        )
+                    advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                    advntr_execution_config = {**config, "tools": dict(advntr_context.tools)}
+                    advntr_status = run_advntr(
+                        advntr_context.model_snapshot,
+                        sorted_bam,
+                        dirs["advntr"],
+                        "output",
+                        config=advntr_execution_config,
+                        cwd=project_root,
+                        pipeline_threads=threads,
+                        resolved_component=run_configuration.advntr,
+                        runtime_component=run_configuration.advntr_runtime,
+                        custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
+                    )
+                    if advntr_status != 0:
+                        msg = f"adVNTR genotyping returned non-zero status {advntr_status}; result parsing was not attempted."
+                        logger.error(msg)
+                        raise RuntimeError(msg)
+                    output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
+                    process_advntr_output(
+                        output_path,
+                        dirs["advntr"],
+                        "output",
                         config=config,
-                        coverage_dir=dirs["coverage"],
-                        coverage_prefix="advntr_precheck",
+                        artifact_evidence=advntr_evidence,
+                        resolved_component=run_configuration.advntr,
+                        nomenclature_component=run_configuration.nomenclature,
+                        custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                     )
-                advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                advntr_execution_config = {**config, "tools": dict(advntr_context.tools)}
-                advntr_status = run_advntr(
-                    advntr_context.model_snapshot,
-                    sorted_bam,
-                    dirs["advntr"],
-                    "output",
-                    config=advntr_execution_config,
-                    cwd=project_root,
-                    pipeline_threads=threads,
-                    resolved_component=run_configuration.advntr,
-                    runtime_component=run_configuration.advntr_runtime,
-                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
-                )
-                if advntr_status != 0:
-                    msg = (
-                        f"adVNTR genotyping returned non-zero status {advntr_status}; result parsing was not attempted."
+                    # Tier A needs two independent callers agreeing, which no single
+                    # caller stage can see. Without this step production could never
+                    # emit a tier-A name however well the two agreed (#nomenclature).
+                    reconciliation_outcome = reconcile_caller_outputs(
+                        os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
+                        os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
+                        artifact_evidence=advntr_evidence,
+                        resolved_component=run_configuration.nomenclature,
+                        dominance_component=run_configuration.dominance,
+                        custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                     )
-                    logger.error(msg)
-                    raise RuntimeError(msg)
-                output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
-                process_advntr_output(
-                    output_path,
-                    dirs["advntr"],
-                    "output",
-                    config=config,
-                    artifact_evidence=advntr_evidence,
-                    resolved_component=run_configuration.advntr,
-                    nomenclature_component=run_configuration.nomenclature,
-                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
-                )
-                # Tier A needs two independent callers agreeing, which no single
-                # caller stage can see. Without this step production could never
-                # emit a tier-A name however well the two agreed (#nomenclature).
-                reconciliation_outcome = reconcile_caller_outputs(
-                    os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
-                    os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
-                    artifact_evidence=advntr_evidence,
-                    resolved_component=run_configuration.nomenclature,
-                    dominance_component=run_configuration.dominance,
-                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
-                )
-                if run_configuration.dominance.get("enabled") is True and (
-                    not isinstance(reconciliation_outcome, DominanceSeamOutcome) or not reconciliation_outcome.evaluated
-                ):
-                    raise RuntimeError("enabled dominance seam did not evaluate the selected run policy")
-                if (
-                    isinstance(reconciliation_outcome, DominanceSeamOutcome) and reconciliation_outcome.rewritten
-                ) or reconciliation_outcome is True:
-                    # The Kestrel step was recorded before this ran, so the summary
-                    # still holds the pre-reconciliation row -- and the HTML report
-                    # and cohort tables are built from the summary, not the TSV. Its
-                    # checksum no longer matched the rewritten file either.
-                    refresh_step(
+                    if run_configuration.dominance.get("enabled") is True and (
+                        not isinstance(reconciliation_outcome, DominanceSeamOutcome)
+                        or not reconciliation_outcome.evaluated
+                    ):
+                        raise RuntimeError("enabled dominance seam did not evaluate the selected run policy")
+                    if (
+                        isinstance(reconciliation_outcome, DominanceSeamOutcome) and reconciliation_outcome.rewritten
+                    ) or reconciliation_outcome is True:
+                        # The Kestrel step was recorded before this ran, so the summary
+                        # still holds the pre-reconciliation row -- and the HTML report
+                        # and cohort tables are built from the summary, not the TSV. Its
+                        # checksum no longer matched the rewritten file either.
+                        refresh_step(
+                            summary,
+                            STEP_KESTREL,
+                            write_summary_path=summary_file_path,
+                        )
+                    advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)
+                    record_step(
                         summary,
-                        STEP_KESTREL,
+                        STEP_ADVNTR,
+                        os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
+                        "tsv",
+                        "run_advntr(...), process_advntr_output(...)",
+                        advntr_start,
+                        advntr_end,
                         write_summary_path=summary_file_path,
                     )
-                advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)
-                record_step(
-                    summary,
-                    STEP_ADVNTR,
-                    os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
-                    "tsv",
-                    "run_advntr(...), process_advntr_output(...)",
-                    advntr_start,
-                    advntr_end,
-                    write_summary_path=summary_file_path,
-                )
-                logger.info("adVNTR genotyping completed.")
+                    logger.info("adVNTR genotyping completed.")
+                else:
+                    logger.error("Sorted BAM required for adVNTR not provided.")
+                    raise ValueError("Sorted BAM required for adVNTR not provided.")
 
-                # --- Cross-Match Variant Comparison ---
-                logger.info("Starting cross-match of Kestrel and adVNTR variant calls.")
-                cross_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                # Extract parsed results from the summary
-                kestrel_records, advntr_records = extract_results_from_pipeline_summary(summary)
-                if not kestrel_records:
-                    logger.error("Kestrel genotyping results not found for cross-match.")
-                    raise ValueError("Kestrel genotyping results not found for cross-match.")
-                if not advntr_records:
-                    logger.error("adVNTR genotyping results not found for cross-match.")
-                    raise ValueError("adVNTR genotyping results not found for cross-match.")
-                crossmatch_summary = cross_match_variants(
-                    kestrel_records,
-                    advntr_records,
-                    resolved_component=run_configuration.cross_match,
-                    custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
-                )
-                cross_match_output = os.path.join(dirs["advntr"], "cross_match_results.tsv")
-                write_results_tsv(crossmatch_summary["matches"], cross_match_output)
-                cross_end = datetime.now(timezone.utc).replace(tzinfo=None)
-                record_step(
-                    summary,
-                    STEP_CROSS_MATCH,
-                    cross_match_output,
-                    "tsv",
-                    "cross_match_variants(kestrel_results, advntr_results)",
-                    cross_start,
-                    cross_end,
-                    write_summary_path=summary_file_path,
-                )
-                logger.info(
-                    f"Cross-match variant comparison completed. Overall match: {crossmatch_summary['overall_match']}"
-                )
-            else:
-                logger.error("Sorted BAM required for adVNTR not provided.")
-                raise ValueError("Sorted BAM required for adVNTR not provided.")
+            # --- Cross-Match Variant Comparison ---
+            logger.info("Starting cross-match of Kestrel and adVNTR variant calls.")
+            cross_start = datetime.now(timezone.utc).replace(tzinfo=None)
+            # Extract parsed results from the summary
+            kestrel_records, advntr_records = extract_results_from_pipeline_summary(summary)
+            if not kestrel_records:
+                logger.error("Kestrel genotyping results not found for cross-match.")
+                raise ValueError("Kestrel genotyping results not found for cross-match.")
+            if not advntr_records:
+                logger.error("adVNTR genotyping results not found for cross-match.")
+                raise ValueError("adVNTR genotyping results not found for cross-match.")
+            crossmatch_summary = cross_match_variants(
+                kestrel_records,
+                advntr_records,
+                resolved_component=run_configuration.cross_match,
+                custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
+            )
+            cross_match_output = os.path.join(dirs["advntr"], "cross_match_results.tsv")
+            write_results_tsv(crossmatch_summary["matches"], cross_match_output)
+            cross_end = datetime.now(timezone.utc).replace(tzinfo=None)
+            record_step(
+                summary,
+                STEP_CROSS_MATCH,
+                cross_match_output,
+                "tsv",
+                "cross_match_variants(kestrel_results, advntr_results)",
+                cross_start,
+                cross_end,
+                write_summary_path=summary_file_path,
+            )
+            logger.info(
+                f"Cross-match variant comparison completed. Overall match: {crossmatch_summary['overall_match']}"
+            )
         else:
             logger.info("adVNTR module not included. Skipping adVNTR genotyping.")
 

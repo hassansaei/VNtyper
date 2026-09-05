@@ -104,6 +104,7 @@ def prepare_advntr_run_context(
     archive_results: bool,
     archive_format: str,
     protected_paths: Iterable[str | Path] = (),
+    revoke_outputs: bool = True,
 ) -> AdvntrRunContext:
     """Prepare the exact adVNTR model, command, and version used by this run.
 
@@ -118,6 +119,7 @@ def prepare_advntr_run_context(
         archive_results: Whether this run selected an archive destination.
         archive_format: Selected public archive format, ``zip`` or ``tar.gz``.
         protected_paths: Operator-owned paths the selected archive cannot revoke.
+        revoke_outputs: Whether to revoke prior outputs before starting.
 
     Returns:
         Frozen run context binding the validated snapshot and verified command.
@@ -132,7 +134,8 @@ def prepare_advntr_run_context(
         archive_results=archive_results,
         archive_format=archive_format,
     )
-    _revoke_prior_outputs(cleanup_plan, protected_paths=protected_paths)
+    if revoke_outputs:
+        _revoke_prior_outputs(cleanup_plan, protected_paths=protected_paths)
     snapshot_path = cleanup_plan.model_snapshot
     model = _snapshot_model(model_source, snapshot_path)
 
