@@ -4,46 +4,61 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.28 (2026-09-05)
+
+### Warning remediation and web stack refresh ([#315](https://github.com/hassansaei/VNtyper/pull/315))
+
+- **FastAPI lifespan and modern task management**: Modernized the web service lifecycle management in `docker/app` using async lifespan context managers, eliminating legacy startup/shutdown handler warnings.
+- **Pandas clean semantics**: Eliminated pandas downcasting warnings by replacing deprecated series transformations with explicit type conversion and `.where()` operations.
+- **Refreshed web dependencies**: Pinned modernized dependencies across `docker/requirements-web.txt` and `pyproject.toml` with strict consistency contracts.
+
+### Test suite parallelization and performance optimization ([#323](https://github.com/hassansaei/VNtyper/pull/323))
+
+- **Parallel test execution with pytest-xdist**: Integrated `pytest-xdist` into local Makefile targets (`test-unit`, `test-fast`, `test-unit-cov`) and the GitHub Actions CI matrix, reducing test run times by up to 5x.
+- **Targeted fixture and permutation optimizations**: Optimized slow test suites (including bootstrap resampling and heavy test generation) without sacrificing branch coverage or mutation score.
+
 ### Confidence grade ([#324](https://github.com/hassansaei/VNtyper/pull/324), Refs [#173](https://github.com/hassansaei/VNtyper/issues/173))
 
 - **Derived sample-level confidence grade**: Added a derived, configuration-driven `confidence_grade` field to `ScreeningSummary` and configured `confidence_grade_rules` in `report_config.json` covering the ordered vocabulary (`not-established`, `no-finding-limited`, `no-finding`, `finding-limited`, `finding`, `finding-corroborated`).
 - **Masthead confidence grade chip**: Rendered the computed confidence grade as a `Confidence grade` chip in the per-sample HTML report masthead via `state_chips`, with opt-in fallback preserving legacy report configuration compatibility.
 - **Render context contract declaration**: Declared `screening_state.confidence_grade` in `report_context_contract.py` for custom-template API compatibility while keeping the template recursive parity audit intact.
 
-### Reporting floor split and decision profile revision 2 (#311)
+### Reporting floor split and decision profile revision 2 ([#322](https://github.com/hassansaei/VNtyper/pull/322), Refs [#311](https://github.com/hassansaei/VNtyper/issues/311))
 
 - Split the MUC1 reporting floor (`confidence_assignment.reporting_floor`, 0.00469) from the lower edge of the `Low_Precision` band (`confidence_assignment.depth_score_thresholds.low`, 0.00469) and linked the GG depth-score threshold (`alt_filtering.gg_depth_score_threshold`) to the reporting floor.
 - Closed a fail-open path in `variant_parsing.py` by requiring `gg_depth_score_threshold` in `alt_filtering`.
 - Bumped decision profile revision to `"2"` and regenerated canonical profile and projection artifacts.
 - **Breaking change for custom decision profiles:** Profiles generated under revision 1 fail closed with `inventory fields differ` because the schema validates exact inventory key equality; revision-1 profiles must be re-issued with `vntyper calibrate`.
 
-### Pipeline execution resume
+### Pipeline execution resume ([#321](https://github.com/hassansaei/VNtyper/pull/321), Refs [#20](https://github.com/hassansaei/VNtyper/issues/20))
 
-- **Checkpoint resumption with `--resume`.** `vntyper pipeline` supports `--resume` to continue an interrupted run or re-render reports without repeating expensive computation (Refs [#20](https://github.com/hassansaei/VNtyper/issues/20)).
+- **Checkpoint resumption with `--resume`.** `vntyper pipeline` supports `--resume` to continue an interrupted run or re-render reports without repeating expensive computation.
   - BAM/CRAM conversion, FASTQ alignment, Kestrel genotyping, and adVNTR genotyping steps are reused when their result files, checksums, and required sibling outputs are intact.
   - Run-identity invariants (version, inputs, sample name, reference selection, and decision profile digest) are strictly verified before execution; any discrepancy causes a fatal refusal before running stages.
   - Reused step records are carried forward into `pipeline_summary.json` with `reused_from` provenance recording the donor run's start timestamp.
   - Default runs now emit a warning when `--output-dir` already contains files. `--keep-intermediates` remains an accepted compatibility flag.
 
-### Ordered confidence rule table (Issue #173 part 1)
+### Ordered confidence rule table ([#319](https://github.com/hassansaei/VNtyper/pull/319), Refs [#173](https://github.com/hassansaei/VNtyper/issues/173))
 
-- **Pure confidence decision layer**: Refactored `confidence_assignment.py` to delegate confidence level assignment to a new pure module `vntyper/scripts/confidence_rules.py` ([#319](https://github.com/hassansaei/VNtyper/pull/319), Refs [#173](https://github.com/hassansaei/VNtyper/issues/173)).
+- **Pure confidence decision layer**: Refactored `confidence_assignment.py` to delegate confidence level assignment to a new pure module `vntyper/scripts/confidence_rules.py`.
 - **First-match rule table**: Replaced six sequential, overwriting masked writes with an ordered, first-match rule table (`ConfidenceRule`, `CONFIDENCE_RULES`, `assign_confidence_labels`) implementing verified empirical semantics (rows 0 to 6) with the reporting floor as an outer precondition.
 - **Behaviour-preserving**: All 54 cells in the confidence boundary matrix, mid-band demotion at `Depth_Score == 0.00515`, the `#183` precedence of high tiers over active-region demotion, and the `#184` fractional-depth gap fallback remain byte-identical.
 - **Mutation testing**: Registered `confidence_rules.py` in `scripts/mutation_test.py` targets with pure unit tests pinning every row, the outer precondition, and rule ordering.
 
-### Cohort call frequency table and exports
+### Cohort call frequency table and exports ([#318](https://github.com/hassansaei/VNtyper/pull/318), Refs [#33](https://github.com/hassansaei/VNtyper/issues/33))
 
-- **Cohort-wide call frequency and rare-allele flag** ([#318](https://github.com/hassansaei/VNtyper/pull/318), Refs [#33](https://github.com/hassansaei/VNtyper/issues/33)).
+- **Cohort-wide call frequency and rare-allele flag**.
   Added pure module `cohort_frequency.py` generating cohort-wide call frequency tables with 14 descriptive columns.
   Variant calls are grouped by `Molecular_Identity` (when status is unique or legacy-selected-among-multiple) or caller representation `(Motifs, POS, REF, ALT)`.
   Denominator evaluates the full cohort roster (including samples without positive calls).
   Configurable cutoff via `cohort.rare_allele_max_frequency` in `config.json` (0.05) and CLI `--rare-allele-max-frequency`.
   Rendered as an interactive, fully escaped table in the cohort HTML report and exported as `cohort_call_frequency.<csv|tsv|json>`.
 
-### Atomic installation of BAM and BAI files
+### Atomic installation of BAM and BAI files ([#320](https://github.com/hassansaei/VNtyper/pull/320), Refs [#314](https://github.com/hassansaei/VNtyper/issues/314))
 
-- **Atomic subprocess writes** ([#320](https://github.com/hassansaei/VNtyper/pull/320), Refs [#314](https://github.com/hassansaei/VNtyper/issues/314)).
+- **Atomic subprocess writes**.
   Every BAM and BAI file produced by `samtools` or `bwa` subprocesses is now written to a
   deterministic sibling `.partial` path and atomically moved into place with `os.replace`
   only upon verified completion. Interrupted or failing subprocesses no longer leave
@@ -53,9 +68,9 @@ All notable changes to VNtyper 2 are documented on this page.
   slice command and converges fast and normal modes. Destination validation contracts
   in `alignment_target_io.py` are widened to include all partial names.
 
-### SHARK provenance and read pairing
+### SHARK provenance and read pairing ([#317](https://github.com/hassansaei/VNtyper/pull/317), Refs [#312](https://github.com/hassansaei/VNtyper/issues/312))
 
-- **SHARK stage records tool version, search parameters, and pairing verification ([#317](https://github.com/hassansaei/VNtyper/pull/317), Refs #312).**
+- **SHARK stage records tool version, search parameters, and pairing verification.**
   The command line explicitly specifies `-k 17 -c 0.6` sourced from the runtime sidecar
   `shark_config.json`, matching SHARK 1.2.0's implicit defaults without modifying the
   empty `/components/shark` decision profile component.
@@ -71,11 +86,10 @@ All notable changes to VNtyper 2 are documented on this page.
   `kept_reads_r1 == kept_reads_r2` before building the payload, raising `ValueError` naming
   both counts and preventing incomplete step records on pairing divergence.
 
-### Flattened pipeline summary tables
+### Flattened pipeline summary tables ([#316](https://github.com/hassansaei/VNtyper/pull/316), Refs [#119](https://github.com/hassansaei/VNtyper/issues/119))
 
 - **`pipeline_summary.csv` and `.tsv` carry the run's provenance and no longer embed
-  JSON text** ([#316](https://github.com/hassansaei/VNtyper/pull/316), Refs
-  [#119](https://github.com/hassansaei/VNtyper/issues/119)). Every
+  JSON text**. Every
   row now starts with `run_*` columns (schema version, decision policy, the six
   `decision_profile_*` fields, version, inputs, sample name, reference selection,
   resolved region, Kestrel counting mode and the adVNTR model); a single-row result
@@ -86,8 +100,7 @@ All notable changes to VNtyper 2 are documented on this page.
   multi-row adVNTR and cross-match results. This is a user-visible change to the shape
   of two operator-facing files that no VNtyper code reads. `--summary-formats` still
   accepts unknown format names silently; validating them is out of scope here.
->>>>>>> origin/main
->>>>>>> origin/main
+
 
 ## 2.0.27 (Current)
 
