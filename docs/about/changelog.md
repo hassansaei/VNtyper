@@ -6,7 +6,7 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ### Atomic installation of BAM and BAI files
 
-- **Atomic subprocess writes** (Refs [#314](https://github.com/hassansaei/VNtyper/issues/314)).
+- **Atomic subprocess writes** ([#320](https://github.com/hassansaei/VNtyper/pull/320), Refs [#314](https://github.com/hassansaei/VNtyper/issues/314)).
   Every BAM and BAI file produced by `samtools` or `bwa` subprocesses is now written to a
   deterministic sibling `.partial` path and atomically moved into place with `os.replace`
   only upon verified completion. Interrupted or failing subprocesses no longer leave
