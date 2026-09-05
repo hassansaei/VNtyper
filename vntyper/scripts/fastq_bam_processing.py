@@ -241,23 +241,37 @@ def process_bam_to_fastq(
         final_bam = final_bam_renamed
         logger.info(f"Renamed merged BAM file to {final_bam}")
 
-        # #162 kept the index beside the merged BAM inside `output`, and no output_bai
-        # is passed for exactly that reason: samtools' default destination is already
-        # inside the output directory. Its only consumers are run_advntr and
-        # downsample_bam_if_needed, both behind --extra-modules advntr; coverage reads
-        # the alignment plan's own view, not this file. Writing it in Kestrel-only mode
-        # is dead work -- 58 ms at --threads 4, 244 ms at --threads 1.
-        if needs_advntr:
-            command_index = build_samtools_index_command(
-                samtools_path=samtools_path,
-                bam_file=final_bam,
-                threads=threads,
-            )
-            log_file_index = Path(output) / f"{output_name}_index.log"
-            logger.info(f"Re-indexing BAM file with command: {command_index}")
+    # Sliced BAM indexing: required only when adVNTR will read the alignment.
+    # Converged across fast_mode and non-fast mode.
+    if needs_advntr:
+        final_bai = Path(f"{final_bam}.bai")
+        partial_bai = partial_path(final_bai)
+        command_index = build_samtools_index_command(
+            samtools_path=samtools_path,
+            bam_file=final_bam,
+            output_bai=partial_bai,
+            threads=threads,
+        )
+        log_file_index = Path(output) / f"{output_name}_index.log"
+        logger.info(f"Re-indexing BAM file with command: {command_index}")
+
+        discard_partial(partial_bai)
+        try:
             if not run_command(command_index, str(log_file_index), critical=True):
                 logger.error("Re-indexing BAM file failed.")
+                discard_partial(partial_bai)
                 raise RuntimeError("Re-indexing BAM file failed.")
+        except BaseException:
+            discard_partial(partial_bai)
+            raise
+
+        if not partial_bai.exists() or partial_bai.stat().st_size == 0:
+            logger.error(f"BAM index file {partial_bai} not created or empty.")
+            discard_partial(partial_bai)
+            raise RuntimeError(f"BAM index file {partial_bai} not created or empty.")
+
+        publish_partial(partial_bai, final_bai)
+        logger.info(f"Published BAM index to {final_bai}")
 
     paths = plan_alignment_fastq_conversion(output=output, output_name=output_name)
     conversion_result = run_alignment_fastq_conversion(
