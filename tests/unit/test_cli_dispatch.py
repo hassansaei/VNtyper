@@ -342,3 +342,46 @@ def test_no_command_prints_help_and_exits_zero(capsys) -> None:
 
     assert excinfo.value.code == 0
     assert "usage:" in capsys.readouterr().out
+
+
+def test_handle_cohort_passes_cli_rare_allele_max_frequency(monkeypatch, tmp_path) -> None:
+    from unittest.mock import MagicMock
+
+    mock_aggregate = MagicMock()
+    monkeypatch.setattr(cli_handlers, "aggregate_cohort", mock_aggregate)
+
+    parser = build_parser()
+    args = parser.parse_args(
+        ["cohort", "-i", str(tmp_path), "-o", str(tmp_path), "--rare-allele-max-frequency", "0.02"]
+    )
+    config = {"cohort": {"rare_allele_max_frequency": 0.05}, "default_values": {}}
+
+    cli_handlers.handle_cohort(args, config, parser, 20, None)
+
+    mock_aggregate.assert_called_once()
+    assert mock_aggregate.call_args.kwargs["rare_allele_max_frequency"] == 0.02
+
+
+def test_handle_cohort_uses_config_default_when_cli_flag_absent(monkeypatch, tmp_path) -> None:
+    from unittest.mock import MagicMock
+
+    mock_aggregate = MagicMock()
+    monkeypatch.setattr(cli_handlers, "aggregate_cohort", mock_aggregate)
+
+    parser = build_parser()
+    args = parser.parse_args(["cohort", "-i", str(tmp_path), "-o", str(tmp_path)])
+    config = {"cohort": {"rare_allele_max_frequency": 0.03}, "default_values": {}}
+
+    cli_handlers.handle_cohort(args, config, parser, 20, None)
+
+    mock_aggregate.assert_called_once()
+    assert mock_aggregate.call_args.kwargs["rare_allele_max_frequency"] == 0.03
+
+
+def test_handle_cohort_rejects_invalid_config_frequency(monkeypatch, tmp_path) -> None:
+    parser = build_parser()
+    args = parser.parse_args(["cohort", "-i", str(tmp_path), "-o", str(tmp_path)])
+    config = {"cohort": {"rare_allele_max_frequency": "invalid"}, "default_values": {}}
+
+    with pytest.raises(ValueError, match="cohort.rare_allele_max_frequency"):
+        cli_handlers.handle_cohort(args, config, parser, 20, None)

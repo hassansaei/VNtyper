@@ -343,6 +343,7 @@ def aggregate_cohort(
     config,
     additional_formats="",
     pseudonymize_samples=False,
+    rare_allele_max_frequency=None,
 ):
     """
     Aggregate outputs from multiple runs into a single summary file.
