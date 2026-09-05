@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.29 (2026-09-06)
+
 ### adVNTR v2.2.0 integration and runtime optimizations ([#326](https://github.com/hassansaei/VNtyper/pull/326))
 
 - **adVNTR v2.2.0 upgrade**: Pinned adVNTR to commit `8d7f4721c9e48b474bc9589cc35b7486ceace242` (v2.2.0 release), featuring a Cython-optimized Viterbi dynamic programming core (`nogil`) for parallel read decoding.
