@@ -486,6 +486,7 @@ def handle_pipeline(
         # the option (#242).
         report_igv=getattr(args, "report_igv", DEFAULT_REPORT_IGV),
         run_configuration=getattr(args, "run_configuration", None),
+        resume=getattr(args, "resume", False),
     )
 
 
