@@ -6,7 +6,7 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ### SHARK provenance and read pairing
 
-- **SHARK stage records tool version, search parameters, and pairing verification (Refs #312).**
+- **SHARK stage records tool version, search parameters, and pairing verification ([#317](https://github.com/hassansaei/VNtyper/pull/317), Refs #312).**
   The command line explicitly specifies `-k 17 -c 0.6` sourced from the runtime sidecar
   `shark_config.json`, matching SHARK 1.2.0's implicit defaults without modifying the
   empty `/components/shark` decision profile component.
