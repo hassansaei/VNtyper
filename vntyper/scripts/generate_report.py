@@ -835,6 +835,7 @@ def generate_summary_report(
         kestrel_execution=execution_state(kestrel_state),
         advntr_execution=execution_state(advntr_state),
         kestrel_subthreshold=kestrel_subthreshold_note is not None,
+        cross_match_is_positive=cross_match_is_positive,
     )
     logger.debug("Summary text generated: %s", screening.text)
 
@@ -1092,6 +1093,7 @@ def generate_summary_report(
             "quality_metrics_pass": screening.quality_metrics_pass,
             "matched_rule": screening.matched_rule,
             "emphasis": screening.emphasis,
+            "confidence_grade": screening.confidence_grade,
             # The binding report-context contract exposes execution separately from
             # algorithm result: performed-and-empty is a negative result, while a
             # stage that did not run or failed established no such result.

@@ -207,6 +207,29 @@ The confidence level describes how much evidence supports the call:
 - **Low_Precision**: The depth score falls inside the closed calibration band, or the alternate depth is at or below 20. Independent validation is essential before the call is relied on.
 - **Negative**: No evidence of a pathogenic VNTR variant above the noise floor.
 
+## Sample-Level Confidence Grade
+
+In addition to variant-level confidence scoring, VNtyper derives a sample-level **confidence grade** during screening summary evaluation. The confidence grade provides an overall assessment of the genotyping outcome, synthesizing caller execution states, calling status, subthreshold signals, coverage quality metrics, and cross-caller concordance.
+
+### Vocabulary and Pre-Emption Order
+
+The confidence grade is evaluated against an ordered, first-match rule table (`confidence_grade_rules`) configured in `report_config.json`, falling back to `confidence_grade_default` (`"not-established"`). Rules are evaluated in strict pre-emption order:
+
+| Grade | Evaluated Conditions | Meaning |
+|-------|----------------------|---------|
+| `not-established` | Caller execution failed (`kestrel_execution` or `advntr_execution == "failed"`), required caller not performed, or unestablished result token | Genotyping could not be completed or caller output was invalid; no outcome established. |
+| `no-finding-limited` | Negative call with subthreshold candidate below reporting floor, or negative call with coverage QC `FAIL` or `NOT_EVALUATED` | No pathogenic variant called, but evidence is limited by shallow coverage or an unconfirmed subthreshold candidate. |
+| `no-finding` | Negative call by both callers (or single caller when adVNTR not run) with coverage QC `PASS` | Clean negative result with acceptable coverage depth and breadth across the VNTR array. |
+| `finding-limited` | Any finding call with coverage QC `FAIL` or `NOT_EVALUATED`, or a flagged Kestrel call (`High_Precision_flagged`, `Low_Precision_flagged`) | Variant detected, but confidence is limited by coverage quality or caller-flagged evidence. |
+| `finding-corroborated` | Unflagged Kestrel call (`High_Precision`, `Low_Precision`) with coverage QC `PASS` and positive cross-caller concordance (`cross_match_is_positive == True`) | Variant detected with acceptable coverage and concordantly supported by independent genotyping callers. |
+| `finding` | Unflagged finding call with coverage QC `PASS` without positive cross-caller match (or adVNTR finding with clean coverage) | Variant detected with acceptable coverage metrics. |
+
+### Configuration and Research Use
+
+Confidence grade assignment is entirely configuration-driven in `report_config.json`. The Python pipeline evaluates the rules as opaque strings and applies a pure text transformation (`result_word`) to render human-readable labels (e.g. `Finding corroborated`, `No finding`). Older report configurations omitting `confidence_grade_rules` withhold the grade gracefully (`confidence_grade = None`), omitting the grade chip from the report masthead without error.
+
+All outputs are for research use only. Confidence grades reflect algorithmic concordance and coverage quality metrics rather than diagnostic certainty.
+
 ## Reference
 
 Saei H. et al., *iScience* 26, 107171 (2023).

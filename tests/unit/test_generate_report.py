@@ -1830,9 +1830,17 @@ def test_no_state_word_is_ever_rendered_as_text(tmp_path, emphasis) -> None:
 
     Asserted on extracted visible text rather than on the source, because `data-state`
     puts all three words in the markup and would make a source assertion pass for the
-    wrong reason.
+    wrong reason. The confidence grade chip is stripped here so the emphasis tokens
+    themselves are tested rather than the configured grade chip vocabulary.
     """
-    text = visible_text(render(_summary_for(emphasis, tmp_path))).lower()
+    html = render(_summary_for(emphasis, tmp_path))
+    html_without_grade_chip = re.sub(
+        r'<li class="chip"[^>]*>\s*<span class="chip-label">Confidence grade</span>.*?</li>',
+        "",
+        html,
+        flags=re.DOTALL,
+    )
+    text = visible_text(html_without_grade_chip).lower()
 
     for word in ("finding", "no-finding", "indeterminate"):
         assert word not in text, f"the report renders the state word {word!r} to the reader"
@@ -1901,19 +1909,19 @@ def test_a_provenance_value_the_run_did_not_record_is_drawn_as_absent(tmp_path) 
 def test_the_state_reaches_the_chip_row(positive_summary) -> None:
     html = render(positive_summary)
 
-    # The two depth figures are chips as well. "How confident should I be" is the third
-    # question this report is opened with, and answering it used to mean holding a depth
-    # score from the table and two coverage figures from a section 250px below it.
+    # The confidence grade is a chip alongside the algorithm and coverage chips.
     assert chip_labels(html) == [
         "Kestrel",
         "adVNTR",
         "Concordance",
+        "Confidence grade",
         "Coverage QC",
         "Mean coverage",
         "Flank depth",
     ]
     assert chip_value(html, "Kestrel") == "High precision"
     assert chip_value(html, "Coverage QC") == "Pass"
+    assert chip_value(html, "Confidence grade") == "Finding"
 
 
 def test_an_unperformed_stage_does_not_render_as_negative(positive_summary) -> None:
@@ -4445,3 +4453,51 @@ class TestSubthresholdNoteInTheReport:
 
         assert subthreshold.NOTE_MARKER not in html
         assert "No variant detected by Kestrel in this sample." in html
+
+
+def test_confidence_grade_reaches_template_context_and_suppressed_on_older_config(tmp_path, monkeypatch) -> None:
+    """confidence_grade is passed in screening_state; an older config withholds the chip."""
+    captured = {}
+    real_env = generate_report.Environment
+
+    def env_spy(*args, **kwargs):
+        env = real_env(*args, **kwargs)
+        orig_get = env.get_template
+
+        def get_tpl(name, *a, **kw):
+            t = orig_get(name, *a, **kw)
+            if name != "report_template.html":
+                return t
+
+            class Spy:
+                def render(self, ctx):
+                    captured.update(ctx)
+                    return t.render(ctx)
+
+            return Spy()
+
+        env.get_template = get_tpl
+        return env
+
+    monkeypatch.setattr(generate_report, "Environment", env_spy)
+
+    # Render with current config
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+    html = render(tmp_path)
+    assert "screening_state" in captured
+    assert captured["screening_state"]["confidence_grade"] == "finding"
+    assert "Confidence grade" in chip_labels(html)
+
+    # Render with stripped config lacking confidence_grade_rules
+    captured.clear()
+    stripped = copy.deepcopy(generate_report.load_report_config())
+    stripped.pop("confidence_grade_rules", None)
+    monkeypatch.setattr(generate_report, "load_report_config", lambda: stripped)
+
+    html_stripped = render(tmp_path)
+    assert captured["screening_state"]["confidence_grade"] is None
+    assert "Confidence grade" not in chip_labels(html_stripped)

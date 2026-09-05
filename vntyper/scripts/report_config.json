@@ -711,5 +711,107 @@
     }
   ],
   "screening_summary_default": "The screening was negative (no valid Kestrel or adVNTR data).",
-  "coverage_not_measured_note": "Note: VNTR coverage was not measured for this run, so the coverage quality gate was not evaluated."
+  "coverage_not_measured_note": "Note: VNTR coverage was not measured for this run, so the coverage quality gate was not evaluated.",
+  "confidence_grade_rules": [
+    {
+      "conditions": {
+        "kestrel_execution": ["failed", "not-performed"]
+      },
+      "grade": "not-established"
+    },
+    {
+      "conditions": {
+        "advntr_execution": "failed"
+      },
+      "grade": "not-established"
+    },
+    {
+      "conditions": {
+        "kestrel_result": "unestablished"
+      },
+      "grade": "not-established"
+    },
+    {
+      "conditions": {
+        "advntr_result": "unestablished"
+      },
+      "grade": "not-established"
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": ["negative", "none"]
+      },
+      "grade": "no-finding-limited"
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative",
+        "advntr_result": ["negative", "none"],
+        "coverage_qc_status": ["FAIL", "NOT_EVALUATED"]
+      },
+      "grade": "no-finding-limited"
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative",
+        "advntr_result": ["negative", "none"],
+        "coverage_qc_status": "PASS"
+      },
+      "grade": "no-finding"
+    },
+    {
+      "conditions": {
+        "kestrel_result": ["High_Precision_flagged", "Low_Precision_flagged"]
+      },
+      "grade": "finding-limited"
+    },
+    {
+      "conditions": {
+        "kestrel_result": ["High_Precision", "Low_Precision"],
+        "coverage_qc_status": ["FAIL", "NOT_EVALUATED"]
+      },
+      "grade": "finding-limited"
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative",
+        "advntr_result": ["positive", "positive flagged"],
+        "coverage_qc_status": ["FAIL", "NOT_EVALUATED"]
+      },
+      "grade": "finding-limited"
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": ["positive", "positive flagged"],
+        "coverage_qc_status": ["FAIL", "NOT_EVALUATED"]
+      },
+      "grade": "finding-limited"
+    },
+    {
+      "conditions": {
+        "kestrel_result": ["High_Precision", "Low_Precision"],
+        "coverage_qc_status": "PASS",
+        "cross_match_is_positive": true
+      },
+      "grade": "finding-corroborated"
+    },
+    {
+      "conditions": {
+        "kestrel_result": ["High_Precision", "Low_Precision"],
+        "coverage_qc_status": "PASS"
+      },
+      "grade": "finding"
+    },
+    {
+      "conditions": {
+        "kestrel_result": ["negative", "negative_subthreshold"],
+        "advntr_result": ["positive", "positive flagged"],
+        "coverage_qc_status": "PASS"
+      },
+      "grade": "finding"
+    }
+  ],
+  "confidence_grade_default": "not-established"
 }

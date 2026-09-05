@@ -28,9 +28,17 @@ If adVNTR was run, its results appear in a separate table showing VID, variant s
 
 **Screening Summary**
 
-The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The chips state the Kestrel result, adVNTR result, concordance and Coverage QC; an unmatched configuration also gets a **Screening rule: Not configured** chip. They use existing pipeline vocabulary such as **High precision**, **Not performed**, **Not assessable**, **PASS** and **FAIL**.
+The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The chips state the Kestrel result, adVNTR result, concordance, Confidence grade, Coverage QC, Mean coverage, and Flank depth; an unmatched configuration also gets a **Screening rule: Not configured** chip. They use existing pipeline and configured vocabulary such as **High precision**, **Not performed**, **Not assessable**, **Finding**, **Finding corroborated**, **No finding**, **PASS** and **FAIL**.
 
-**The masthead produces no verdict word.** Its internal `finding`, `no-finding` and `indeterminate` emphasis states select styling only and are never printed as labels. The words a reader sees come from the pipeline state and the configured interpretive message.
+The **Confidence grade** chip conveys the sample-level confidence derived from `confidence_grade_rules` in `report_config.json`:
+
+- **Finding tone** (amber highlight): `Finding`, `Finding corroborated`
+- **Caution tone** (warning highlight): `Finding limited`, `No finding limited`, `Not established`
+- **Neutral tone**: `No finding`
+
+If a custom report configuration omits `confidence_grade_rules`, the confidence grade is not established and the chip is gracefully omitted from the masthead without error.
+
+**The masthead produces no verdict word.** Its internal `finding`, `no-finding` and `indeterminate` emphasis states select styling only and are never printed as labels. The words a reader sees come from the pipeline state, the configured confidence grade, and the configured interpretive message.
 
 The text is generated from a rule-based system defined in `report_config.json` that considers:
 

@@ -229,6 +229,9 @@ class ScreeningSummary:
         kestrel_execution: Whether the Kestrel stage produced a readable result, was
             never asked to run, or ran and lost it.
         advntr_execution: The same for the adVNTR stage.
+        confidence_grade: The computed confidence grade token (e.g. ``finding-corroborated``,
+            ``no-finding``, ``not-established``), or None when confidence grade rules are
+            not present in the loaded report configuration.
     """
 
     text: str
@@ -240,6 +243,7 @@ class ScreeningSummary:
     kestrel_execution: str = EXECUTION_PERFORMED
     advntr_execution: str = EXECUTION_PERFORMED
     segments: tuple[str, ...] = ()
+    confidence_grade: str | None = None
 
     @property
     def rendered_segments(self) -> tuple[str, ...]:
@@ -338,6 +342,7 @@ NO_MATCH_CHIP = "No match"
 KESTREL_LABEL = "Kestrel"
 ADVNTR_LABEL = "adVNTR"
 CONCORDANCE_LABEL = "Concordance"
+CONFIDENCE_GRADE_LABEL = "Confidence grade"
 
 
 @dataclass(frozen=True)
@@ -357,21 +362,44 @@ class StateChip:
 
 
 def result_word(result: str) -> str:
-    """One computed result token as a chip prints it.
+    """One computed result or grade token as a chip prints it.
 
     A pure transformation of the token rather than a lookup table, and deliberately: a
     table would have to be extended by hand whenever ``report_config.json`` declares a new
     ``result``, and until someone did the chip would either fall back to a wrong word or
-    crash. ``High_Precision`` reads "High precision"; ``positive flagged`` reads "Positive
-    flagged"; nothing is composed, translated or interpreted.
+    crash. Replaces underscores and hyphens with spaces and sentence-cases the token.
+    ``High_Precision`` reads "High precision"; ``finding-corroborated`` reads "Finding
+    corroborated"; nothing is composed, translated or interpreted.
 
     Args:
-        result: A computed ``kestrel_result``/``advntr_result`` value.
+        result: A computed ``kestrel_result``, ``advntr_result``, or ``confidence_grade`` token.
 
     Returns:
         str: The same word, spaced and sentence-cased.
     """
-    return result.replace("_", " ").capitalize()
+    return result.replace("_", " ").replace("-", " ").capitalize()
+
+
+def grade_chip(grade: str | None) -> StateChip | None:
+    """One computed confidence grade as a masthead chip.
+
+    Args:
+        grade: The configured grade token (e.g., ``finding-corroborated``,
+            ``no-finding``, ``not-established``), or None when confidence grade
+            is not supported by the loaded configuration.
+
+    Returns:
+        StateChip | None: The chip to render, or None if ``grade`` is None.
+    """
+    if grade is None:
+        return None
+    if grade in ("finding", "finding-corroborated"):
+        tone = TONE_FINDING
+    elif grade in ("finding-limited", "no-finding-limited", "not-established"):
+        tone = TONE_CAUTION
+    else:
+        tone = TONE_NONE
+    return StateChip(label=CONFIDENCE_GRADE_LABEL, value=result_word(grade), tone=tone)
 
 
 def algorithm_chip(
@@ -452,12 +480,12 @@ def state_chips(
         cross_match_is_positive: Whether that comparison found a match.
 
     Returns:
-        list[StateChip]: Kestrel, adVNTR and concordance, in scan order.
+        list[StateChip]: Kestrel, adVNTR, concordance, and (if supported) confidence grade chips.
     """
     algorithm_logic = report_config.get("algorithm_logic", {})
     kestrel_logic = algorithm_logic.get("kestrel", {})
     advntr_logic = algorithm_logic.get("advntr", {})
-    return [
+    chips = [
         algorithm_chip(
             KESTREL_LABEL,
             summary.kestrel_execution,
@@ -474,6 +502,11 @@ def state_chips(
         ),
         concordance_chip(summary, cross_match_available, cross_match_is_positive),
     ]
+    if summary.confidence_grade is not None:
+        chip = grade_chip(summary.confidence_grade)
+        if chip is not None:
+            chips.append(chip)
+    return chips
 
 
 def load_report_config() -> dict[str, Any]:
@@ -522,6 +555,23 @@ def supports_subthreshold(report_config: dict[str, Any]) -> bool:
     """
     kestrel_logic = report_config.get("algorithm_logic", {}).get("kestrel", {})
     return SUBTHRESHOLD_RESULT in tuple(kestrel_logic.get("non_finding_results", ()))
+
+
+def supports_confidence_grade(report_config: dict[str, Any]) -> bool:
+    """Whether this configuration declares rules to assign a confidence grade.
+
+    True only when ``report_config.json`` declares ``confidence_grade_rules`` as a
+    non-empty sequence. An older configuration written before Issue #173 part 2 does
+    not, and yields no confidence grade and no grade chip rather than a wrong one.
+
+    Args:
+        report_config: The parsed ``report_config.json``.
+
+    Returns:
+        bool: Whether confidence grade rules are declared and active.
+    """
+    rules = report_config.get("confidence_grade_rules")
+    return isinstance(rules, list) and bool(rules)
 
 
 def is_finding(result: str, default: str, non_finding: Sequence[str] = ()) -> bool:
@@ -586,6 +636,23 @@ def find_screening_rule(report_config: dict[str, Any], state: dict[str, Any]) ->
     return None
 
 
+def find_confidence_grade_rule(report_config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the first configured confidence grade rule covering ``state``.
+
+    Args:
+        report_config: The parsed ``report_config.json``.
+        state: Unified conditions dict containing algorithm results, executions,
+            QC status, and cross-match status.
+
+    Returns:
+        dict[str, Any] | None: The matching rule dict, or None when no rule matches.
+    """
+    for rule in report_config.get("confidence_grade_rules", []):
+        if rule_matches(state, rule.get("conditions", {})):
+            return rule
+    return None
+
+
 def build_screening_summary(
     kestrel_df: pd.DataFrame,
     advntr_df: pd.DataFrame,
@@ -596,6 +663,7 @@ def build_screening_summary(
     kestrel_execution: str | None = None,
     advntr_execution: str | None = None,
     kestrel_subthreshold: bool = False,
+    cross_match_is_positive: bool = False,
 ) -> ScreeningSummary:
     """Compute the screening state and look up its configured message.
 
@@ -618,6 +686,8 @@ def build_screening_summary(
             :data:`SUBTHRESHOLD_RESULT` and can do nothing else: the promotion is guarded
             on the computed result already equalling the block's ``default``, so a called
             sample is unreachable however this flag arrives.
+        cross_match_is_positive: Whether the cross-match stage produced a concordant
+            finding between Kestrel and adVNTR.
 
     Returns:
         ScreeningSummary: The state and its message.
@@ -669,6 +739,10 @@ def build_screening_summary(
             "kestrel_result": kestrel_result,
             "advntr_result": advntr_result,
             "quality_metrics_pass": quality_metrics_pass,
+            "coverage_qc_status": coverage_qc.status,
+            "kestrel_execution": kestrel_execution,
+            "advntr_execution": advntr_execution,
+            "cross_match_is_positive": cross_match_is_positive,
         }
         logger.debug("Unified screening conditions: %s", current)
 
@@ -695,8 +769,21 @@ def build_screening_summary(
             advntr_logic.get("default", FALLBACK_ALGORITHM_RESULT),
             advntr_logic.get("non_finding_results", ()),
         )
+
+        confidence_grade: str | None = None
+        if supports_confidence_grade(report_config):
+            grade_rule = find_confidence_grade_rule(report_config, current)
+            if grade_rule is not None:
+                confidence_grade = grade_rule.get("grade")
+            if confidence_grade is None:
+                confidence_grade = report_config.get("confidence_grade_default")
     except Exception as ex:
         logger.error("Exception in build_screening_summary: %s", ex)
+        fallback_grade = (
+            report_config.get("confidence_grade_default", "not-established")
+            if supports_confidence_grade(report_config)
+            else None
+        )
         return ScreeningSummary(
             text=UNAVAILABLE_SUMMARY_MESSAGE,
             is_positive=False,
@@ -707,6 +794,7 @@ def build_screening_summary(
             kestrel_execution=kestrel_execution,
             advntr_execution=advntr_execution,
             segments=(UNAVAILABLE_SUMMARY_MESSAGE,),
+            confidence_grade=fallback_grade,
         )
 
     summary = ScreeningSummary(
@@ -719,6 +807,7 @@ def build_screening_summary(
         kestrel_execution=kestrel_execution,
         advntr_execution=advntr_execution,
         segments=segments,
+        confidence_grade=confidence_grade,
     )
     # A message is evidence only when a rule matched a state every stage established.
     # Withholding anything else is the only honest option, and the vocabulary for saying

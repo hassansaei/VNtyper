@@ -41,6 +41,7 @@ the harness change, so only the "after" side can prove its revision.
 | 8 | `74fcbe0` | `c74e9e5` | DELTAS, every one attributed, **no genotype field changed anywhere** | adVNTR 2.0.x and real `--threads` (#259), against `c74e9e5`, and nothing after it |
 | 9 | `edaf44a` | `80ac6be` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | atomic BAM and BAI installation (#314), against `80ac6be`, and nothing after it |
 | 10 | `936f11e` | `a632aa1` | DELTAS, every one attributed, **no genotype field changed anywhere** | reporting floor split and profile revision 2 (#311), against `a632aa1`, and nothing after it |
+| 11 | `2cf4946` | `a0d27b5` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | derived confidence grade and report masthead chip (#173), against `a0d27b5`, and nothing after it |
 
 Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
 *different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
@@ -1371,4 +1372,81 @@ The retained evidence is bound by these SHA-256 digests:
 | baseline `side.json` | `5ae4bdc4c3607ff7f08815c16db8beb78f877ca528fa8124b624ea58f4dcaf5e` |
 | candidate `side.json` | `8596731beb38755b33470bf3def84e6e899e26833444b9699b9769f7ca3fca8f` |
 | both matrix snapshots | `d218de77d9db2a7802015a1c76aedd51fd4c61c6dddaef87dc489cde3b738339` |
+
+## Run 11 — `a0d27b5` → `2cf4946`, derived confidence grade and report masthead chip (#173)
+
+Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
+all **85 runs on each side verified their package resolution**. The attestation-grade matrix
+comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
+6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
+no run timed out.
+
+The marker was `vntyper.scripts.screening_summary:supports_confidence_grade`, absent on
+the baseline `review-origin-main` (`a0d27b5`) and present on the candidate (`2cf4946`).
+
+### What this run compares
+
+Baseline `a0d27b5` evaluates screening summaries and reports without a confidence grade chip.
+Candidate `2cf4946` introduces configurable confidence grade evaluation (A through E) and
+renders a dedicated Confidence grade chip in the report masthead (`summary_report.html`)
+under `state_chips`.
+
+Because confidence grades are computed purely as an additional presentation chip in the
+HTML report masthead, every variant call, depth score, confidence tier, flag, and
+genotype verdict across the cohort remains identical. Every genotype table, TSV, BED,
+cohort export, and screening summary sentence is byte-identical. The only deltas observed
+are expected ephemeral command string differences due to process substitution file descriptors
+(`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
+
+### Every genotype artefact is unchanged
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `advntr_result` | 0 | 3 |
+| `kestrel_result` | 0 | 77 |
+| `kestrel_pre_result` | 0 | 77 |
+| `coverage_summary` | 0 | 77 |
+| `screening_summary` | 0 | 0 |
+| `report_tables` | 0 | 77 |
+| `cross_match_summary` | 0 | 0 |
+| `cohort_call_frequency_csv` | 0 | 3 |
+| `cohort_call_frequency_json` | 0 | 3 |
+| `cohort_call_frequency_tsv` | 0 | 3 |
+| `cohort_category_counts` | 0 | 3 |
+| `cohort_category_totals` | 0 | 3 |
+| `cohort_output_files` | 0 | 4 |
+| `cohort_tables` | 0 | 3 |
+| `cohort_kestrel_csv` | 0 | 3 |
+| `cohort_kestrel_json` | 0 | 3 |
+| `cohort_kestrel_tsv` | 0 | 3 |
+| `cohort_advntr_csv` | 0 | 3 |
+| `cohort_advntr_json` | 0 | 3 |
+| `cohort_advntr_tsv` | 0 | 3 |
+| `cohort_stats_csv` | 0 | 3 |
+| `cohort_stats_json` | 0 | 3 |
+| `cohort_stats_tsv` | 0 | 3 |
+| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
+| `placed_unmapped_guard_count` | 0 | 81 |
+| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
+| `output_bed` | 0 | 62 |
+| `pseudonymization_table` | 0 | 1 |
+| `exit_code` | 0 | 85 |
+| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
+
+The verdict is **IDENTICAL** under `--expect-command-delta`.
+
+### Command-stream deltas
+
+As in earlier runs, 79 of 81 per-sample cases show ephemeral command string differences due to
+process substitution file descriptors (`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
+
+The retained evidence is bound by these SHA-256 digests:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `result.json` | `fb9565a222b7ebdd6175ef58216537572c0032ab46afb534a4a60c4a67044100` |
+| `result.md` | `da72d53de325f4516e63f7b85b92aaa3813bbd3c5b1d398b3d292539afd871c6` |
+| baseline `side.json` | `5852493a1ddb374e5dce2f059eec4aa3555c80595a71f916c8e717d30798a83b` |
+| candidate `side.json` | `4b897bd131fc82197d45110dd198fcb33f2e6568e5a2f014e61616fbdb8bca95` |
+| both matrix snapshots | `bf8555cd7e734cf8e723e80423ecdbd30e9f83459d8d5e4a42313b63ec82881f` |
 
