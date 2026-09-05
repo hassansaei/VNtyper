@@ -264,7 +264,8 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Failed to parse prior summary at %s: %s", p, exc)
 
-    donor_path = p.parent / "pipeline_summary.donor.json"
+    output_dir = p.parent
+    donor_path = output_dir / "pipeline_summary.donor.json"
     if donor_path.is_file():
         with contextlib.suppress(json.JSONDecodeError, OSError):
             donor_data = json.loads(donor_path.read_text(encoding="utf-8"))
@@ -316,11 +317,22 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                         fastp_matches = True
                         bwa_tool_matches = True
                         shark_tool_matches = True
+                        samtools_tool_matches = True
                         if donor_tools is not None and curr_tools is not None:
-                            fastp_matches = donor_tools.get("fastp") == curr_tools.get("fastp")
-                            bwa_tool_matches = donor_tools.get("bwa") == curr_tools.get("bwa")
+                            from vntyper.scripts.pipeline_resume_planning import tool_identities_match
+
+                            if "samtools" in donor_tools and "samtools" in curr_tools:
+                                samtools_tool_matches = tool_identities_match(
+                                    donor_tools.get("samtools"), curr_tools.get("samtools")
+                                )
+                            elif "samtools" in curr_tools and "samtools" not in donor_tools:
+                                samtools_tool_matches = True
+                            fastp_matches = tool_identities_match(donor_tools.get("fastp"), curr_tools.get("fastp"))
+                            bwa_tool_matches = tool_identities_match(donor_tools.get("bwa"), curr_tools.get("bwa"))
                             if "shark" in donor_tools or "shark" in curr_tools:
-                                shark_tool_matches = donor_tools.get("shark") == curr_tools.get("shark")
+                                shark_tool_matches = tool_identities_match(
+                                    donor_tools.get("shark"), curr_tools.get("shark")
+                                )
                         existing_steps = {s.get("step") for s in data.get("steps", [])}
                         inval_align = (
                             not shark_matches
@@ -328,10 +340,22 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                             or not bwa_matches
                             or not fastp_matches
                             or not bwa_tool_matches
+                            or not samtools_tool_matches
                         )
                         for s in donor_data.get("steps", []):
                             st = s.get("step")
                             if not st or st in existing_steps:
+                                continue
+                            if (
+                                st
+                                in (
+                                    summary_steps.STEP_BAM_TO_FASTQ,
+                                    summary_steps.STEP_CRAM_TO_FASTQ,
+                                    summary_steps.STEP_BAM_HEADER,
+                                    summary_steps.STEP_COVERAGE,
+                                )
+                                and not samtools_tool_matches
+                            ):
                                 continue
                             if st == summary_steps.STEP_FASTQ_QC and (not fastp_matches or not shark_tool_matches):
                                 continue
@@ -345,17 +369,34 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                                 and inval_align
                             ):
                                 continue
-                            if st == summary_steps.STEP_KESTREL and (not k_ref_matches or inval_align):
-                                continue
-                            if st == summary_steps.STEP_ADVNTR and (not adv_model_matches or inval_align):
-                                continue
-                            if st == summary_steps.STEP_CROSS_MATCH and (
-                                not k_ref_matches or not adv_model_matches or inval_align
+                            if st == summary_steps.STEP_KESTREL and (
+                                not k_ref_matches or inval_align or not samtools_tool_matches
                             ):
                                 continue
-                            data.setdefault("steps", []).append(s)
+                            if st == summary_steps.STEP_ADVNTR and (
+                                not adv_model_matches or inval_align or not samtools_tool_matches
+                            ):
+                                continue
+                            if st == summary_steps.STEP_CROSS_MATCH and (
+                                not k_ref_matches or not adv_model_matches or inval_align or not samtools_tool_matches
+                            ):
+                                continue
+                            data.setdefault("steps", []).append(
+                                make_reused_step_record(s, donor_data.get("pipeline_start"), output_root=output_dir)
+                            )
                         if donor_data.get("stage_artifact_md5s"):
                             for st, md5s in donor_data["stage_artifact_md5s"].items():
+                                if (
+                                    st
+                                    in (
+                                        summary_steps.STEP_BAM_TO_FASTQ,
+                                        summary_steps.STEP_CRAM_TO_FASTQ,
+                                        summary_steps.STEP_BAM_HEADER,
+                                        summary_steps.STEP_COVERAGE,
+                                    )
+                                    and not samtools_tool_matches
+                                ):
+                                    continue
                                 if st == summary_steps.STEP_FASTQ_QC and not fastp_matches:
                                     continue
                                 if (
@@ -368,12 +409,19 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                                     and inval_align
                                 ):
                                     continue
-                                if st == summary_steps.STEP_KESTREL and (not k_ref_matches or inval_align):
+                                if st == summary_steps.STEP_KESTREL and (
+                                    not k_ref_matches or inval_align or not samtools_tool_matches
+                                ):
                                     continue
-                                if st == summary_steps.STEP_ADVNTR and (not adv_model_matches or inval_align):
+                                if st == summary_steps.STEP_ADVNTR and (
+                                    not adv_model_matches or inval_align or not samtools_tool_matches
+                                ):
                                     continue
                                 if st == summary_steps.STEP_CROSS_MATCH and (
-                                    not k_ref_matches or not adv_model_matches or inval_align
+                                    not k_ref_matches
+                                    or not adv_model_matches
+                                    or inval_align
+                                    or not samtools_tool_matches
                                 ):
                                     continue
                                 data.setdefault("stage_artifact_md5s", {}).setdefault(st, md5s)
@@ -547,6 +595,42 @@ def _kestrel_has_variants(step_record: Mapping[str, Any] | None, result_path: Pa
     return False
 
 
+def resolve_reused_artifact_path(
+    raw_result_file: str | Path | None,
+    output_root: str | Path,
+) -> Path | None:
+    """Resolve a recorded artifact path to its location inside current output_root.
+
+    Handles moved or copied result directories where recorded paths pointed to the
+    original output root. Checks stage-subdir, flat-subdir, and relative paths.
+
+    Args:
+        raw_result_file: Recorded path to the artifact.
+        output_root: Root directory of the current run.
+
+    Returns:
+        Path within output_root if it exists as a file, else None.
+    """
+    if not raw_result_file:
+        return None
+    out_root = Path(output_root).resolve()
+    raw_path = Path(raw_result_file)
+    candidate_stage = out_root / raw_path.parent.name / raw_path.name
+    if candidate_stage.is_file():
+        return candidate_stage
+    candidate_flat = out_root / raw_path.name
+    if candidate_flat.is_file():
+        return candidate_flat
+    try:
+        rel = raw_path.resolve().relative_to(out_root)
+        candidate_rel = out_root / rel
+        if candidate_rel.is_file():
+            return candidate_rel
+    except (ValueError, RuntimeError):
+        pass
+    return None
+
+
 def step_is_reusable(
     prior: dict[str, Any],
     step_name: str,
@@ -596,22 +680,8 @@ def step_is_reusable(
         return False
 
     out_root = Path(output_root).resolve()
-    raw_path = Path(raw_result_file)
-    candidate_stage = out_root / raw_path.parent.name / raw_path.name
-    candidate_flat = out_root / raw_path.name
-    try:
-        rel = raw_path.resolve().relative_to(out_root)
-        candidate_rel: Path | None = out_root / rel
-    except (ValueError, RuntimeError):
-        candidate_rel = None
-
-    if candidate_stage.is_file():
-        result_path = candidate_stage
-    elif candidate_flat.is_file():
-        result_path = candidate_flat
-    elif candidate_rel is not None and candidate_rel.is_file():
-        result_path = candidate_rel
-    else:
+    result_path = resolve_reused_artifact_path(raw_result_file, out_root)
+    if result_path is None:
         logger.debug("Result file %s for step %r does not exist in %s", raw_result_file, step_name, out_root)
         return False
 
@@ -752,16 +822,22 @@ def step_is_reusable(
 def make_reused_step_record(
     prior_step: dict[str, Any],
     prior_pipeline_start: str | None,
+    output_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Construct a carry-forward step record with reused_from provenance.
 
     Args:
         prior_step: The exact step record from the prior summary.
         prior_pipeline_start: The pipeline_start timestamp of the donor run.
+        output_root: Optional current output directory to rebase result_file to.
 
     Returns:
-        dict[str, Any]: Verbatim copy with reused_from set.
+        dict[str, Any]: Verbatim copy with reused_from set and result_file rebased.
     """
     record = dict(prior_step)
     record["reused_from"] = prior_pipeline_start
+    if output_root is not None and record.get("result_file"):
+        rebased = resolve_reused_artifact_path(record["result_file"], output_root)
+        if rebased is not None:
+            record["result_file"] = str(rebased)
     return record

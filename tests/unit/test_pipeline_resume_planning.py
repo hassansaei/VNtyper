@@ -19,6 +19,8 @@ from vntyper.scripts.pipeline_resume_planning import (
     resolve_effective_advntr_runtime,
     resolve_effective_kestrel_runtime,
     resolve_effective_shark_runtime,
+    resolve_effective_tool_identity,
+    tool_identities_match,
 )
 from vntyper.scripts.resume import fingerprint_file, fingerprint_runtime
 from vntyper.scripts.run_configuration import resolve_run_configuration
@@ -526,3 +528,137 @@ def test_evaluate_resume_compatibility_shark_tool_mismatch() -> None:
     assert compat_shark.inval_qc is True
     assert compat_shark.inval_align is True
     assert compat_shark.kestrel_ref_matches is False
+
+
+def test_tool_identities_match() -> None:
+    """Verify tool identity comparison logic and fingerprint invalidation."""
+    assert tool_identities_match(None, None) is True
+    assert tool_identities_match({"command": "bwa"}, None) is False
+    assert tool_identities_match(None, {"command": "bwa"}) is False
+    assert tool_identities_match({"command": "bwa"}, {"command": "bwa-mem2"}) is False
+    assert tool_identities_match({"command": None}, {"command": None}) is True
+
+    # Missing fingerprints invalidates reuse
+    assert (
+        tool_identities_match({"command": "bwa", "fingerprint": None}, {"command": "bwa", "fingerprint": None}) is False
+    )
+    assert (
+        tool_identities_match({"command": "bwa", "fingerprint": "fp1"}, {"command": "bwa", "fingerprint": None})
+        is False
+    )
+
+    # Matching vs mismatched fingerprints
+    assert (
+        tool_identities_match({"command": "bwa", "fingerprint": "fp1"}, {"command": "bwa", "fingerprint": "fp1"})
+        is True
+    )
+    assert (
+        tool_identities_match({"command": "bwa", "fingerprint": "fp1"}, {"command": "bwa", "fingerprint": "fp2"})
+        is False
+    )
+
+
+def test_resolve_effective_tool_identity_conda_prefix(tmp_path: Path) -> None:
+    """Resolve tool executable and fingerprint through mamba/conda command prefix."""
+    env_dir = tmp_path / "envs" / "shark_env" / "bin"
+    env_dir.mkdir(parents=True)
+    fake_tool = env_dir / "shark"
+    fake_tool.write_text("#!/bin/sh\necho shark", encoding="utf-8")
+    fake_tool.chmod(0o755)
+
+    # Resolve via -p / --prefix
+    res_p = resolve_effective_tool_identity(f"mamba run -p {fake_tool.parent.parent} shark")
+    assert res_p["command"] == f"mamba run -p {fake_tool.parent.parent} shark"
+    assert res_p["executable"] == str(fake_tool.resolve())
+    assert res_p["fingerprint"] is not None
+
+    # Empty command returns all None
+    assert resolve_effective_tool_identity(None) == {"command": None, "executable": None, "fingerprint": None}
+    assert resolve_effective_tool_identity("") == {"command": None, "executable": None, "fingerprint": None}
+
+
+def test_evaluate_resume_compatibility_samtools_tool_mismatch() -> None:
+    """Samtools change invalidates preprocessing, conversion, and callers across BAM, CRAM, and FASTQ."""
+    prior_tools = {
+        "samtools": {"command": "samtools", "executable": "/bin/samtools", "fingerprint": "fp_sam_1"},
+        "fastp": {"command": "fastp", "executable": "/bin/fastp", "fingerprint": "fp_fastp_1"},
+        "bwa": {"command": "bwa", "executable": "/bin/bwa", "fingerprint": "fp_bwa_1"},
+    }
+    prior = {
+        "analysis_settings": {"preprocessing_tools": prior_tools},
+    }
+    curr_tools_changed = {
+        "samtools": {"command": "samtools", "executable": "/bin/samtools_v2", "fingerprint": "fp_sam_2"},
+        "fastp": prior_tools["fastp"],
+        "bwa": prior_tools["bwa"],
+    }
+    base_kwargs: dict[str, Any] = {
+        "kestrel_reference_path": None,
+        "kestrel_reference_fingerprint": None,
+        "kestrel_motifs_path": None,
+        "kestrel_motifs_fingerprint": None,
+        "kestrel_runtime_fingerprint": None,
+        "kestrel_counting_mode": None,
+        "advntr_model_sha": None,
+        "advntr_rus_path": None,
+        "advntr_rus_fingerprint": None,
+        "advntr_runtime_fingerprint": None,
+        "shark_reference_path": None,
+        "shark_reference_fingerprint": None,
+        "shark_runtime_fingerprint": None,
+        "effective_reference_path": None,
+        "effective_reference_fingerprint": None,
+    }
+
+    # FASTQ input
+    compat_fastq = evaluate_resume_compatibility(
+        prior,
+        input_type="FASTQ",
+        current_preprocessing_tools=curr_tools_changed,
+        **base_kwargs,
+    )
+    assert compat_fastq.inval_align is True
+    assert compat_fastq.kestrel_ref_matches is False
+    assert compat_fastq.advntr_model_matches is False
+
+    # BAM input
+    compat_bam = evaluate_resume_compatibility(
+        prior,
+        input_type="BAM",
+        current_preprocessing_tools=curr_tools_changed,
+        **base_kwargs,
+    )
+    assert compat_bam.inval_align is True
+    assert compat_bam.kestrel_ref_matches is False
+    assert compat_bam.advntr_model_matches is False
+
+    # CRAM input
+    compat_cram = evaluate_resume_compatibility(
+        prior,
+        input_type="CRAM",
+        current_preprocessing_tools=curr_tools_changed,
+        **base_kwargs,
+    )
+    assert compat_cram.inval_align is True
+    assert compat_cram.inval_cram is True
+    assert compat_cram.kestrel_ref_matches is False
+    assert compat_cram.advntr_model_matches is False
+
+    # Legacy prior summary without samtools preserves compatibility
+    prior_legacy = {
+        "analysis_settings": {
+            "preprocessing_tools": {
+                "fastp": prior_tools["fastp"],
+                "bwa": prior_tools["bwa"],
+            }
+        },
+    }
+    compat_legacy = evaluate_resume_compatibility(
+        prior_legacy,
+        input_type="BAM",
+        current_preprocessing_tools=curr_tools_changed,
+        **base_kwargs,
+    )
+    assert compat_legacy.inval_align is False
+    assert compat_legacy.kestrel_ref_matches is True
+    assert compat_legacy.advntr_model_matches is True

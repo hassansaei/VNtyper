@@ -20,6 +20,7 @@ from vntyper.scripts.resume import (
     load_prior_summary,
     make_reused_step_record,
     reference_content_matches,
+    resolve_reused_artifact_path,
     resume_refusals,
     step_is_reusable,
 )
@@ -393,6 +394,48 @@ def test_make_reused_step_record_preserves_fields_and_adds_reused_from() -> None
     assert reused["reused_from"] == prior_start
     for k, v in original.items():
         assert reused[k] == v
+
+
+def test_resolve_reused_artifact_path_rebasing(tmp_path: Path) -> None:
+    out_dir = tmp_path / "new_run"
+    kestrel_dir = out_dir / "kestrel"
+    kestrel_dir.mkdir(parents=True)
+    target_file = kestrel_dir / "kestrel_result.tsv"
+    target_file.write_text("dummy", encoding="utf-8")
+
+    assert resolve_reused_artifact_path(None, out_dir) is None
+    assert resolve_reused_artifact_path("", out_dir) is None
+
+    old_stage_path = "/old/run/dir/kestrel/kestrel_result.tsv"
+    resolved = resolve_reused_artifact_path(old_stage_path, out_dir)
+    assert resolved == target_file
+
+    flat_file = out_dir / "summary.tsv"
+    flat_file.write_text("flat", encoding="utf-8")
+    assert resolve_reused_artifact_path("/other/place/summary.tsv", out_dir) == flat_file
+
+    rel_sub = out_dir / "sub" / "file.txt"
+    rel_sub.parent.mkdir()
+    rel_sub.write_text("rel", encoding="utf-8")
+    assert resolve_reused_artifact_path(str(rel_sub), out_dir) == rel_sub
+
+    assert resolve_reused_artifact_path("/old/dir/missing.tsv", out_dir) is None
+
+
+def test_make_reused_step_record_rebases_result_file(tmp_path: Path) -> None:
+    out_dir = tmp_path / "run_2"
+    kestrel_dir = out_dir / "kestrel"
+    kestrel_dir.mkdir(parents=True)
+    target_file = kestrel_dir / "kestrel_result.tsv"
+    target_file.write_text("content", encoding="utf-8")
+
+    original = {
+        "step": summary_steps.STEP_KESTREL,
+        "result_file": "/run_1/kestrel/kestrel_result.tsv",
+    }
+    reused = make_reused_step_record(original, "2026-09-05T09:59:00", output_root=out_dir)
+    assert reused["result_file"] == str(target_file)
+    assert reused["reused_from"] == "2026-09-05T09:59:00"
 
 
 def test_compute_md5_returns_none_for_non_file(tmp_path: Path) -> None:

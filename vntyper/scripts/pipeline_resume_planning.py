@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import shutil
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +55,54 @@ def resolve_effective_tool_identity(
         which = shutil.which(cmd)
         if which:
             exe_path = str(Path(which).resolve())
+        else:
+            try:
+                tokens = shlex.split(cmd)
+            except ValueError:
+                tokens = []
+            if len(tokens) >= 4 and tokens[0] in {"mamba", "conda", "micromamba"} and tokens[1] == "run":
+                launcher = tokens[0]
+                env_name = None
+                env_prefix = None
+                tool_token = None
+                i = 2
+                while i < len(tokens):
+                    if tokens[i] in {"-n", "--name"} and i + 1 < len(tokens):
+                        env_name = tokens[i + 1]
+                        i += 2
+                    elif tokens[i] in {"-p", "--prefix"} and i + 1 < len(tokens):
+                        env_prefix = tokens[i + 1]
+                        i += 2
+                    elif tokens[i].startswith("-"):
+                        i += 1
+                    else:
+                        tool_token = tokens[i]
+                        break
+                if tool_token:
+                    candidates: list[Path] = []
+                    if env_prefix:
+                        candidates.append(Path(env_prefix) / "bin" / tool_token)
+                    if env_name:
+                        if "CONDA_PREFIX" in os.environ:
+                            candidates.append(Path(os.environ["CONDA_PREFIX"]).parent / env_name / "bin" / tool_token)
+                        candidates.append(Path(sys.prefix).parent / env_name / "bin" / tool_token)
+                        launcher_which = shutil.which(launcher)
+                        if launcher_which:
+                            candidates.append(
+                                Path(launcher_which).resolve().parents[1] / "envs" / env_name / "bin" / tool_token
+                            )
+                        candidates.extend(
+                            [
+                                Path.home() / "miniforge3" / "envs" / env_name / "bin" / tool_token,
+                                Path.home() / "miniconda3" / "envs" / env_name / "bin" / tool_token,
+                                Path.home() / "anaconda3" / "envs" / env_name / "bin" / tool_token,
+                                Path("/opt/conda/envs") / env_name / "bin" / tool_token,
+                            ]
+                        )
+                    for cand in candidates:
+                        if cand.is_file():
+                            exe_path = str(cand.resolve())
+                            break
     fp = fingerprint_file(Path(exe_path)) if exe_path and Path(exe_path).is_file() else None
     return {
         "command": cmd,
@@ -61,23 +111,51 @@ def resolve_effective_tool_identity(
     }
 
 
+def tool_identities_match(
+    prior_tool: Mapping[str, Any] | None,
+    curr_tool: Mapping[str, Any] | None,
+) -> bool:
+    """Check whether tool identities match between runs.
+
+    Invalidates reuse (returns False) when either tool was configured but its
+    executable identity/fingerprint could not be established.
+    """
+    if prior_tool is None and curr_tool is None:
+        return True
+    if prior_tool is None or curr_tool is None:
+        return False
+    prior_cmd = prior_tool.get("command")
+    curr_cmd = curr_tool.get("command")
+    if prior_cmd != curr_cmd:
+        return False
+    if prior_cmd is None:
+        return True
+    prior_fp = prior_tool.get("fingerprint")
+    curr_fp = curr_tool.get("fingerprint")
+    if prior_fp is None or curr_fp is None:
+        return False
+    return prior_fp == curr_fp
+
+
 def resolve_effective_preprocessing_tools(
     config: Mapping[str, Any] | None,
     input_type: str | None,
     extra_modules: tuple[str, ...] | Sequence[str] = (),
 ) -> dict[str, Any] | None:
-    """Resolve effective tool identities for FASTQ preprocessing (fastp, bwa, and optionally shark)."""
-    if input_type != "FASTQ" or not isinstance(config, Mapping):
+    """Resolve effective tool identities for preprocessing across input types."""
+    if input_type is None or not isinstance(config, Mapping):
         return None
     tools = config.get("tools", {})
     if not isinstance(tools, Mapping):
         return None
     res: dict[str, Any] = {
-        "fastp": resolve_effective_tool_identity(tools.get("fastp")),
-        "bwa": resolve_effective_tool_identity(tools.get("bwa")),
+        "samtools": resolve_effective_tool_identity(tools.get("samtools", "samtools")),
     }
-    if "shark" in extra_modules:
-        res["shark"] = resolve_effective_tool_identity(tools.get("shark", "shark"))
+    if input_type == "FASTQ":
+        res["fastp"] = resolve_effective_tool_identity(tools.get("fastp"))
+        res["bwa"] = resolve_effective_tool_identity(tools.get("bwa"))
+        if "shark" in extra_modules:
+            res["shark"] = resolve_effective_tool_identity(tools.get("shark", "shark"))
     return res
 
 
@@ -328,13 +406,30 @@ def evaluate_resume_compatibility(
     fastp_matches = True
     bwa_tool_matches = True
     shark_tool_matches = True
-    if input_type == "FASTQ" and prior_summary is not None:
+    samtools_tool_matches = True
+    if prior_summary is not None:
         prior_tools = prior_summary.get("analysis_settings", {}).get("preprocessing_tools")
         if prior_tools is not None and current_preprocessing_tools is not None:
-            fastp_matches = prior_tools.get("fastp") == current_preprocessing_tools.get("fastp")
-            bwa_tool_matches = prior_tools.get("bwa") == current_preprocessing_tools.get("bwa")
-            if "shark" in prior_tools or "shark" in current_preprocessing_tools:
-                shark_tool_matches = prior_tools.get("shark") == current_preprocessing_tools.get("shark")
+            if "samtools" in prior_tools and "samtools" in current_preprocessing_tools:
+                samtools_tool_matches = tool_identities_match(
+                    prior_tools.get("samtools"), current_preprocessing_tools.get("samtools")
+                )
+            elif "samtools" in current_preprocessing_tools and "samtools" not in prior_tools:
+                # Prior summary from earlier version before samtools was tracked
+                samtools_tool_matches = True
+            if input_type == "FASTQ":
+                if "fastp" in prior_tools or "fastp" in current_preprocessing_tools:
+                    fastp_matches = tool_identities_match(
+                        prior_tools.get("fastp"), current_preprocessing_tools.get("fastp")
+                    )
+                if "bwa" in prior_tools or "bwa" in current_preprocessing_tools:
+                    bwa_tool_matches = tool_identities_match(
+                        prior_tools.get("bwa"), current_preprocessing_tools.get("bwa")
+                    )
+                if "shark" in prior_tools or "shark" in current_preprocessing_tools:
+                    shark_tool_matches = tool_identities_match(
+                        prior_tools.get("shark"), current_preprocessing_tools.get("shark")
+                    )
 
     inval_qc = not fastp_matches or not shark_tool_matches
     inval_align = (
@@ -343,8 +438,12 @@ def evaluate_resume_compatibility(
         or not bwa_ref_matches
         or not fastp_matches
         or not bwa_tool_matches
+        or not samtools_tool_matches
     )
-    inval_cram = not cram_ref_matches
+    inval_cram = not cram_ref_matches or not samtools_tool_matches
+    if not samtools_tool_matches:
+        kestrel_ref_matches = False
+        advntr_model_matches = False
     if input_type == "FASTQ" and inval_align:
         kestrel_ref_matches = False
         advntr_model_matches = False
@@ -368,11 +467,19 @@ def record_reused_stage(
     summary: dict[str, Any],
     prior_summary: dict[str, Any],
     step_name: str,
+    output_root: str | Path | None = None,
 ) -> None:
     """Record one reused stage record and carry forward its artifact MD5s."""
     prior_step = next((s for s in prior_summary.get("steps", []) if s.get("step") == step_name), None)
     if prior_step is not None:
-        _record_reused_step(summary, make_reused_step_record(prior_step, prior_summary.get("pipeline_start")))
+        _record_reused_step(
+            summary,
+            make_reused_step_record(
+                prior_step,
+                prior_summary.get("pipeline_start"),
+                output_root=output_root,
+            ),
+        )
     if prior_summary.get("stage_artifact_md5s", {}).get(step_name):
         summary.setdefault("stage_artifact_md5s", {})[step_name] = dict(prior_summary["stage_artifact_md5s"][step_name])
 
@@ -390,6 +497,17 @@ def initial_stage_carry_forward(
     for s in prior_summary.get("steps", []):
         st = s.get("step")
         if not st or not step_is_reusable(prior_summary, st, output_dir, needs_advntr=needs_advntr):
+            continue
+        if (
+            st
+            in (
+                summary_steps.STEP_BAM_TO_FASTQ,
+                summary_steps.STEP_CRAM_TO_FASTQ,
+                summary_steps.STEP_BAM_HEADER,
+                summary_steps.STEP_COVERAGE,
+            )
+            and compatibility.inval_align
+        ):
             continue
         if st == summary_steps.STEP_FASTQ_QC and compatibility.inval_qc:
             continue
@@ -417,7 +535,10 @@ def initial_stage_carry_forward(
             or not compatibility.advntr_model_matches
         ):
             continue
-        _record_reused_step(summary, make_reused_step_record(s, prior_summary.get("pipeline_start")))
+        _record_reused_step(
+            summary,
+            make_reused_step_record(s, prior_summary.get("pipeline_start"), output_root=output_dir),
+        )
 
     if (
         compatibility.advntr_model_matches
@@ -428,6 +549,17 @@ def initial_stage_carry_forward(
 
     if prior_summary.get("stage_artifact_md5s"):
         for st, md5s in prior_summary["stage_artifact_md5s"].items():
+            if (
+                st
+                in (
+                    summary_steps.STEP_BAM_TO_FASTQ,
+                    summary_steps.STEP_CRAM_TO_FASTQ,
+                    summary_steps.STEP_BAM_HEADER,
+                    summary_steps.STEP_COVERAGE,
+                )
+                and compatibility.inval_align
+            ):
+                continue
             if st == summary_steps.STEP_FASTQ_QC and compatibility.inval_qc:
                 continue
             if (

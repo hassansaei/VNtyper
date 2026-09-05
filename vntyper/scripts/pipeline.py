@@ -74,6 +74,7 @@ from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 from vntyper.scripts.resume import (
     fingerprint_file,
     load_prior_summary,
+    resolve_reused_artifact_path,
     resume_refusals,
     step_is_reusable,
 )
@@ -692,6 +693,7 @@ def run_pipeline(
                 resume
                 and prior_summary is not None
                 and not (input_type == "CRAM" and compatibility.inval_cram)
+                and not compatibility.inval_align
                 and step_is_reusable(
                     prior_summary,
                     conversion_step,
@@ -716,7 +718,7 @@ def run_pipeline(
 
             if kestrel_fastq_files is not None:
                 logger.info("Reusing previous %s step results.", conversion_step)
-                record_reused_stage(summary, prior_summary, conversion_step)
+                record_reused_stage(summary, prior_summary, conversion_step, output_root=output_dir)
                 write_summary(summary, summary_file_path)
 
             else:
@@ -834,8 +836,8 @@ def run_pipeline(
 
             if kestrel_fastq_files is not None:
                 logger.info("Reusing previous alignment and post-alignment conversion.")
-                record_reused_stage(summary, prior_summary, STEP_FASTQ_ALIGNMENT)
-                record_reused_stage(summary, prior_summary, STEP_BAM_TO_FASTQ_POST_ALIGNMENT)
+                record_reused_stage(summary, prior_summary, STEP_FASTQ_ALIGNMENT, output_root=output_dir)
+                record_reused_stage(summary, prior_summary, STEP_BAM_TO_FASTQ_POST_ALIGNMENT, output_root=output_dir)
                 can_reuse_qc = (
                     resume
                     and prior_summary is not None
@@ -844,7 +846,7 @@ def run_pipeline(
                 )
                 if can_reuse_qc:
                     logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
-                    record_reused_stage(summary, prior_summary, STEP_FASTQ_QC)
+                    record_reused_stage(summary, prior_summary, STEP_FASTQ_QC, output_root=output_dir)
                 else:
                     _run_and_record_fastq_qc(
                         fastq1, fastq2, threads, dirs, config, summary, summary_file_path, qc_only=True
@@ -853,11 +855,10 @@ def run_pipeline(
                 prior_align_st = next(
                     (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
                 )
-                sorted_bam = (
-                    Path(prior_align_st["result_file"])
-                    if prior_align_st and prior_align_st.get("result_file")
-                    else Path(dirs["alignment_processing"]) / "output_sorted.bam"
-                )
+                candidate_bam = None
+                if prior_align_st and prior_align_st.get("result_file"):
+                    candidate_bam = resolve_reused_artifact_path(prior_align_st["result_file"], output_dir)
+                sorted_bam = candidate_bam or (Path(dirs["alignment_processing"]) / "output_sorted.bam")
                 alignment_plan = run_preflight(
                     **build_alignment_preflight_kwargs(
                         in_path=str(sorted_bam),
@@ -880,7 +881,7 @@ def run_pipeline(
                 )
                 if can_reuse_alignment:
                     logger.info("Reusing previous %s step results.", STEP_FASTQ_ALIGNMENT)
-                    record_reused_stage(summary, prior_summary, STEP_FASTQ_ALIGNMENT)
+                    record_reused_stage(summary, prior_summary, STEP_FASTQ_ALIGNMENT, output_root=output_dir)
                     can_reuse_qc = (
                         resume
                         and prior_summary is not None
@@ -889,7 +890,7 @@ def run_pipeline(
                     )
                     if can_reuse_qc:
                         logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
-                        record_reused_stage(summary, prior_summary, STEP_FASTQ_QC)
+                        record_reused_stage(summary, prior_summary, STEP_FASTQ_QC, output_root=output_dir)
                     else:
                         _run_and_record_fastq_qc(
                             fastq1, fastq2, threads, dirs, config, summary, summary_file_path, qc_only=True
@@ -898,11 +899,10 @@ def run_pipeline(
                     prior_align_st = next(
                         (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
                     )
-                    sorted_bam = (
-                        Path(prior_align_st["result_file"])
-                        if prior_align_st and prior_align_st.get("result_file")
-                        else Path(dirs["alignment_processing"]) / "output_sorted.bam"
-                    )
+                    candidate_bam = None
+                    if prior_align_st and prior_align_st.get("result_file"):
+                        candidate_bam = resolve_reused_artifact_path(prior_align_st["result_file"], output_dir)
+                    sorted_bam = candidate_bam or (Path(dirs["alignment_processing"]) / "output_sorted.bam")
                 else:
                     _run_and_record_fastq_qc(fastq1, fastq2, threads, dirs, config, summary, summary_file_path)
 
@@ -1023,7 +1023,7 @@ def run_pipeline(
             and step_is_reusable(prior_summary, STEP_KESTREL, output_dir)
         ):
             logger.info("Reusing previous %s step results.", STEP_KESTREL)
-            record_reused_stage(summary, prior_summary, STEP_KESTREL)
+            record_reused_stage(summary, prior_summary, STEP_KESTREL, output_root=output_dir)
             if "kestrel_counting_mode" in prior_summary:
                 summary["kestrel_counting_mode"] = prior_summary["kestrel_counting_mode"]
             write_summary(summary, summary_file_path)
@@ -1089,7 +1089,7 @@ def run_pipeline(
                 and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir)
             ):
                 logger.info("Reusing previous %s step results.", STEP_ADVNTR)
-                record_reused_stage(summary, prior_summary, STEP_ADVNTR)
+                record_reused_stage(summary, prior_summary, STEP_ADVNTR, output_root=output_dir)
                 write_summary(summary, summary_file_path)
 
             else:
