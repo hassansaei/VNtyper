@@ -90,11 +90,11 @@ def test_align_and_sort_fastq_failure_leaves_no_partial_or_final_files(tmp_path:
         patch.object(alignment_processing, "run_command", return_value=False),
     ):
         result = alignment_processing.align_and_sort_fastq(
-            fastq1="r1.fq",
-            fastq2="r2.fq",
+            fastq1=Path("r1.fq"),
+            fastq2=Path("r2.fq"),
             output_dir=out_dir,
             output_name="sample",
-            reference="ref.fa",
+            reference=Path("ref.fa"),
             threads=4,
             config={"tools": {"samtools": "samtools", "bwa": "bwa"}},
         )
@@ -122,11 +122,11 @@ def test_align_and_sort_fastq_index_failure_leaves_no_partial_index(tmp_path: Pa
         patch.object(alignment_processing, "run_command", side_effect=mock_run),
     ):
         result = alignment_processing.align_and_sort_fastq(
-            fastq1="r1.fq",
-            fastq2="r2.fq",
+            fastq1=Path("r1.fq"),
+            fastq2=Path("r2.fq"),
             output_dir=out_dir,
             output_name="sample",
-            reference="ref.fa",
+            reference=Path("ref.fa"),
             threads=4,
             config={"tools": {"samtools": "samtools", "bwa": "bwa"}},
         )
@@ -135,4 +135,3 @@ def test_align_and_sort_fastq_index_failure_leaves_no_partial_index(tmp_path: Pa
     assert sorted_bam.exists()  # BAM succeeded and was published
     assert not final_bai.exists()
     assert not partial_bai.exists()
-
