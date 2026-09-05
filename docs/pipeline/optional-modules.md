@@ -1,143 +1,111 @@
 # Optional Modules
 
-VNtyper 2 supports two optional modules that complement the core Kestrel genotyping: **adVNTR** for independent validation using a different algorithmic approach, and **SHARK** for rapid read extraction from large FASTQ datasets.
+VNtyper supports two optional modules to complement Kestrel genotyping: **adVNTR** for independent validation using profile Hidden Markov Models, and **SHARK** for rapid read extraction from large FASTQ datasets.
 
 ## adVNTR
 
 ### Overview
 
-[adVNTR](https://github.com/mehrdadbakhtiari/adVNTR) uses profile Hidden Markov Models (profile-HMMs) to genotype VNTRs. Unlike Kestrel's k-mer-based approach, adVNTR models the repeat structure probabilistically and identifies variants through alignment of reads against trained VNTR models.
+[adVNTR](https://github.com/mehrdadbakhtiari/adVNTR) uses profile Hidden Markov Models (profile-HMMs) to model repeat structures, identifying variants through read-to-model alignment.
 
-!!! info "Complementary approaches"
-    Kestrel and adVNTR use fundamentally different algorithms (k-mer graph vs. profile-HMM). Concordance between the two methods provides strong evidence for a true positive call. Discordance warrants further investigation with orthogonal methods such as SNaPshot or long-read sequencing.
+!!! info "Complementary algorithms"
+    Kestrel (k-mer de Bruijn graph) and adVNTR (profile-HMM) rely on distinct algorithmic principles. Concordance between the two methods provides high confidence. Discordance indicates complex repeat structures that warrant orthogonal investigation (such as SNaPshot or long-read sequencing).
 
 ### Configuration
 
-adVNTR targets MUC1 VNTR using **VNTR ID 25561**, which corresponds to the MUC1 coding VNTR locus. Key settings from `advntr_config.json`:
+adVNTR targets the MUC1 coding VNTR using **VNTR ID 25561**. Key settings in `advntr_config.json`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `vid` | 25561 | VNTR database ID for MUC1 |
-| `threads` | 1 | Parallel threads |
-| `additional_commands` | empty | Optional adVNTR-owned flags; set `-aln` explicitly to request its unused alignment sidecar |
-| `output_format` | `vcf` | Output format (tsv or vcf) |
+| `vid` | 25561 | Database ID for MUC1 VNTR |
+| `threads` | 1 | CPU thread allocation |
+| `additional_commands` | `""` | Optional adVNTR flags; pass `-aln` to generate alignment sidecars |
+| `output_format` | `vcf` | Format of output files (`tsv` or `vcf`) |
 | `max_frameshift` | 100 | Maximum frameshift multiplier for filtering |
-| `frameshift_multiplier` | 3 | Base multiplier for valid frame patterns |
+| `frameshift_multiplier` | 3 | Base multiplier for frame patterns |
 
 ### Requirements
 
-- Conda environment `envadvntr` with adVNTR installed
-- adVNTR reference database for the target assembly (hg19 or hg38)
+- Dedicated conda environment `envadvntr` with adVNTR installed.
+- Reference database for the target assembly (hg19 or hg38).
 
 ### Processing
 
-adVNTR output is processed through frameshift filtering analogous to Kestrel's:
+VNtyper does not consume adVNTR's optional `.aln` sidecar by default. Users can request it by configuring `additional_commands: "-aln"`.
 
-VNtyper does not consume adVNTR's optional `.aln` sidecar, so the shipped default does not
-request it. Operators can still opt in with `additional_commands: "-aln"`; a failure in that
-optional adVNTR post-processing remains a subprocess failure and is not accepted based on a VCF
-that may already have been written.
+Frameshift filtering follows MUC1 biological rules:
 
-- **Deletion frameshifts**: frame values matching `3n + 2` (e.g., 2, 5, 8, 11, ...)
-- **Insertion frameshifts**: frame values matching `3n + 1` (e.g., 1, 4, 7, 10, ...)
+- **Deletion frameshifts**: Net base change matching `3n + 2` (2, 5, 8, 11, ...).
+- **Insertion frameshifts**: Net base change matching `3n + 1` (1, 4, 7, 10, ...).
 
-Variants are annotated with repeat unit (RU) identity and position from adVNTR's state string. REF and ALT are looked up in the MUC1 RU FASTA reference. When that FASTA does not resolve, RU and POS remain available while only REF and ALT fall back to `Not applicable`. adVNTR-specific flagging rules can be configured independently.
+Variants are annotated with repeat unit (RU) identity and position from adVNTR's state string. Reference and alternate alleles are resolved using the MUC1 RU FASTA reference. If that FASTA fails to resolve, RU and POS remain available while REF and ALT report `Not applicable`.
 
 ### Cross-Matching
 
-When both Kestrel and adVNTR results are available, VNtyper 2 performs a cross-match comparison. For each pair of variants (one from each caller), the pipeline:
+When both Kestrel and adVNTR run, VNtyper performs pairwise variant cross-matching:
 
-1. Determines variant type (Insertion, Deletion, or Other) based on REF/ALT lengths
-2. Computes the **allele change** -- the net inserted or deleted sequence after removing the shared prefix
-3. Evaluates a configurable match logic expression (default: allele change and variant type must both match)
+1. Classifies variant type (Insertion, Deletion, or Other) based on allele lengths.
+2. Computes the **allele change**: the net inserted or deleted sequence after trimming common prefixes.
+3. Evaluates concordance logic (default: variant type and net sequence change must match).
 
-The cross-match result (`cross_match_results.tsv`) records all pairwise comparisons and an overall concordance flag ("Yes" if at least one pair matches).
+Results are written to `cross_match_results.tsv`.
 
 ### Runtime
 
-adVNTR genotyping typically requires approximately 9 minutes per sample, significantly longer than Kestrel. Optional BAM downsampling (`--advntr-max-coverage`) can reduce runtime for high-coverage samples.
+adVNTR requires approximately 9 minutes per sample. BAM downsampling (`--advntr-max-coverage`) reduces runtime on high-coverage libraries.
 
 ## SHARK
 
 ### Overview
 
-The SHARK module in VNtyper 2 is a re-implementation of the SHARK concept for MUC1-targeted read extraction. The original SHARK article (Denti et al., *Bioinformatics* 2021) does not provide a publicly available code repository. VNtyper 2's SHARK implementation identifies reads likely originating from the MUC1 region using k-mer matching against a reference sequence, operating directly on FASTQ files without requiring alignment.
+SHARK performs k-mer-based read filtering to extract MUC1-originating reads directly from paired FASTQ inputs without requiring prior whole-genome or whole-exome alignment.
 
-### When to Use SHARK
+### Operational Use
 
-SHARK is for when you only have FASTQ files (no BAM/CRAM) and want to avoid processing entire exome or genome FASTQs through the pipeline. Instead of aligning all reads and then extracting the MUC1 region, SHARK extracts MUC1-relevant reads directly from the raw FASTQs before any alignment occurs.
+Use SHARK when processing whole-genome or whole-exome FASTQ files without an aligned BAM. SHARK filters raw FASTQs directly, avoiding the overhead of aligning full sequencing datasets prior to MUC1 extraction.
 
-This is the typical scenario:
-
-- You have **whole-exome or whole-genome FASTQ files** and no aligned BAM
-- You want to **skip aligning the full dataset** just to extract MUC1 reads
-
-!!! tip "BAM input is always faster"
-    If you have an aligned BAM file, use `--bam` instead. BAM mode extracts MUC1 reads via samtools region slicing, which is much faster than SHARK. SHARK is only useful when BAM files are not available.
+!!! tip "Aligned inputs are faster"
+    When BAM or CRAM files are available, use `--bam` or `--cram`. Region slicing via `samtools view` is substantially faster than k-mer filtering across raw FASTQ files.
 
 ### Requirements
 
-- Conda environment `shark_env` with SHARK installed
-- MUC1 region FASTA references (configured in `shark_config.json`, one per coordinate system)
+- Conda environment `shark_env` containing the SHARK binary.
+- Assembly-specific MUC1 region FASTA files.
 
-### Limitations
+### Constraints
 
-- **FASTQ input only** -- SHARK cannot process BAM/CRAM files. For aligned input, the pipeline uses samtools region extraction instead.
-- **`--reference-assembly` selects between two region FASTAs, not eight** -- see [Reference assembly selects the region](#reference-assembly-selects-the-region) below. It distinguishes coordinate system (GRCh37 vs. GRCh38), not chromosome-naming source, so `hg19`, `GRCh37`, `hg19_ncbi` and `hg19_ensembl` all select the same GRCh37-coordinate FASTA.
-- SHARK filtering runs **before** fastp QC, so filtered reads still undergo quality control downstream.
-- After SHARK filtering, the pipeline still performs BWA alignment and full postprocessing on the filtered reads.
+- **FASTQ input only**: Aligned BAM/CRAM inputs use samtools slicing instead.
+- **Coordinate-specific FASTA selection**: Assembly flags (`--reference-assembly`) select between two coordinate models (GRCh37 vs. GRCh38). Assemblies `hg19`, `GRCh37`, `hg19_ncbi`, and `hg19_ensembl` all map to the GRCh37 FASTA.
+- Filtered reads continue through standard fastp QC and BWA alignment.
 
-### Reference assembly selects the region
+### Assembly-Specific Reference Selection
 
-SHARK filters reads by matching k-mers against a MUC1 region FASTA, and which FASTA it uses
-now follows `--reference-assembly`'s coordinate system (issue #152). This replaces an
-earlier decision ([#187](https://github.com/hassansaei/VNtyper/issues/187)) to keep a single
-hg19-based region FASTA for both assemblies -- reopened once the cost of that shortcut was
-measured rather than assumed: **40.6% of the hg38 region's canonical 17-mers are absent from
-the hg19 region**, and filtering hg38-appropriate reads against the hg19 region measurably
-loses reads -- across the seven `tests/data/` cohort samples, the hg38 region retains
-**3.2--34.7% more reads** than the hg19 region on the same input.
+SHARK matches k-mers against assembly-specific reference FASTAs (Issue #152). Because 40.6% of canonical 17-mers in the hg38 region are absent in hg19, filtering hg38 reads against an hg19 reference loses reads (retaining 3.2% to 34.7% fewer reads across test cohorts).
 
-`select_muc1_region_fasta()` in `vntyper/modules/shark/shark_filtering.py` resolves the
-region FASTA in three tiers, most authoritative first:
+Reference resolution in `vntyper/modules/shark/shark_filtering.py` evaluates three tiers:
 
-1. **`config["reference_data"]`**, keyed `muc1_region_fasta_hg19` / `muc1_region_fasta_hg38`
-   -- what `vntyper install-references` writes. This is consulted first so that references
-   installed into a custom `--output-dir` are honoured: `--config-path` replaces the main
-   `config.json` but never touches `shark_config.json`, so without this layer an installed
-   tree would be invisible to SHARK.
-2. **`shark_config.json`'s `shark_settings`**, keyed the same way -- the shipped default,
-   pointing at `reference/muc1_region_hg19.fa` and `reference/muc1_region_hg38.fa`.
-3. **The legacy flat `muc1_region_fasta` key**, used only when `shark_settings` carries
-   **no** `muc1_region_fasta_*` entry at all. A config with one keyed entry but not the
-   other is treated as an incomplete keyed config, not as pre-#152 legacy, and is not
-   silently patched from the flat key.
+1. **`config["reference_data"]`**: Paths installed via `vntyper install-references`.
+2. **`shark_config.json`**: Shipped defaults (`reference/muc1_region_hg19.fa`, `reference/muc1_region_hg38.fa`).
+3. **Legacy flat key `muc1_region_fasta`**: Consulted only if assembly-specific keys are absent.
 
-Resolution at every tier is by key **membership**: a key present with value `null` is a
-deliberate "disabled" for that assembly and raises rather than falling through to the next
-tier or the legacy key. See [Configuration](../user-guide/configuration.md) and
-[Reference Assemblies](../user-guide/reference-assemblies.md#the-fallback-and-why-a-complete-installation-never-uses-it)
-for the same membership rule as it applies to BWA and adVNTR reference selection.
+Explicit `null` entries are treated as intentionally disabled and raise an error rather than falling back.
 
 ### Execution
 
-SHARK is invoked with paired-end FASTQ input and produces filtered FASTQ files containing only reads matching the MUC1 region:
+SHARK filters paired FASTQ reads against the region FASTA:
 
 ```
 shark -r <muc1_region.fa> -1 R1.fastq -2 R2.fastq \
   -o filtered_R1.fastq -p filtered_R2.fastq -t <threads> -k 17 -c 0.6
 ```
 
-The filtered FASTQs replace the original inputs for all subsequent pipeline steps.
+### Verification and Read Pairing
 
-### Provenance and read pairing
+`pipeline_summary.json` logs execution parameters:
 
-The SHARK filtering step record in `pipeline_summary.json` captures the exact operating point
-and verified read counts:
+- `shark_version`: Binary package version string from conda metadata.
+- `shark_k`: K-mer size (default: `17`).
+- `shark_c`: Confidence threshold (default: `0.6`).
+- `kept_reads_r1` and `kept_reads_r2`: Retained read counts per mate.
 
-* `shark_version`: The conda package version and build string of the SHARK binary (e.g. `1.2.0+h077b44d_5`), probed via conda environment metadata, or `unknown` if probing is unavailable.
-* `shark_k`: The k-mer size used for indexing (default `17`).
-* `shark_c`: The confidence threshold for associating reads (default `0.6`).
-* `kept_reads_r1` and `kept_reads_r2`: The count of reads retained in each mate file.
-
-SHARK filters paired-end reads and requires symmetric output. The stage performs a read-pairing verification check immediately after counting: if `kept_reads_r1` does not equal `kept_reads_r2`, the run fails closed with a `ValueError` naming both counts before the step summary is written or recorded.
+The pipeline enforces symmetric read pairing. If `kept_reads_r1 != kept_reads_r2`, the stage fails closed with a `ValueError` before generating summary records.

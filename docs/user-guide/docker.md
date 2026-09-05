@@ -10,10 +10,7 @@ Pull the latest released image from GitHub Container Registry:
 docker pull ghcr.io/hassansaei/vntyper:latest
 ```
 
-Released images are published to GHCR as `latest` (the newest release), the immutable
-`vX.Y.Z` and `X.Y.Z` tags naming one exact release, and the moving `X` and `X.Y` series
-tags. Pin `vX.Y.Z` for a reproducible run. The `main` tag is rolling and tracks the
-default branch. Docker Hub artifacts are legacy, frozen, and unsupported.
+Released images are published to GHCR as `latest` (the newest release), the immutable `vX.Y.Z` and `X.Y.Z` tags naming one exact release, and the moving `X` and `X.Y` series tags. Pin `vX.Y.Z` for a reproducible run. The `main` tag is rolling and tracks the default branch. Docker Hub artifacts are legacy, frozen, and unsupported.
 
 ## Build from Source
 
@@ -52,9 +49,7 @@ docker run -w /opt/vntyper --rm \
 | Output directory | `/opt/vntyper/output` | Pipeline results |
 
 !!! warning "Input and output must be two different host directories"
-    VNtyper never writes into the directory holding the patient alignment. Mounting one
-    host directory at both container paths puts the output root inside the input tree,
-    and the run is rejected:
+    VNtyper never writes into the directory holding the patient alignment. Mounting one host directory at both container paths places the output root inside the input tree, causing pipeline termination:
 
     ```
     Alignment output root must stay outside the patient input tree:
@@ -63,27 +58,12 @@ docker run -w /opt/vntyper --rm \
     Give the run separate input and output directories.
     ```
 
-    This fires even though the two container paths look different, because the check
-    compares the directories themselves rather than their names. Do **not** do this:
-
-    ```bash
-    # rejected: one host directory mounted at both paths
-    docker run -w /opt/vntyper --rm \
-        --user $(id -u):$(id -g) \
-        -v "$PWD":/opt/vntyper/input \
-        -v "$PWD":/opt/vntyper/output \
-        ghcr.io/hassansaei/vntyper:latest \
-        vntyper pipeline --cram /opt/vntyper/input/sample.cram \
-        -o /opt/vntyper/output/sample/
-    ```
-
-    Mount separate directories instead. A `results/` subdirectory beside the data is
-    fine, as long as it is not the directory the alignment itself sits in:
+    Mount separate host directories:
 
     ```bash
     docker run -w /opt/vntyper --rm \
         --user $(id -u):$(id -g) \
-        -v "$PWD":/opt/vntyper/input \
+        -v "$PWD/data":/opt/vntyper/input \
         -v "$PWD/results":/opt/vntyper/output \
         ghcr.io/hassansaei/vntyper:latest \
         vntyper pipeline --cram /opt/vntyper/input/sample.cram \
@@ -100,7 +80,7 @@ docker run --rm ghcr.io/hassansaei/vntyper:latest java -version
 
 ## Health Checks
 
-The container includes a built-in health check. Monitor status with:
+Inspect container status:
 
 ```bash
 docker ps
@@ -114,44 +94,32 @@ docker logs <container_id>
 
 ## API Server
 
-The API stores job state in Redis and hands work to a Celery worker, so it needs a
-Redis instance and the password for it. `REDIS_PASSWORD` is required and has no
-default: the API, the worker and Redis itself must all be given the same value, and
-the service refuses to start without it. Generate a fresh secret with
-`python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+The API stores job state in Redis and dispatches tasks to Celery workers. Setting `REDIS_PASSWORD` is mandatory across API, worker, and Redis instances; the service refuses startup without it. Generate a secret using:
 
-The full stack (Redis, API, worker, beat) is easiest to bring up with Compose. Copy
-the environment template, set the password in it, and start:
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Initialize the full stack (Redis, API, worker, beat) via Docker Compose:
 
 ```bash
 cp docker/.env.example docker/.env
-$EDITOR docker/.env          # set REDIS_PASSWORD
+$EDITOR docker/.env
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-Shipped Compose keeps ordinary-job outputs in the persistent, service-private
-`result_store`, mounted only into the API and worker. The protected handoff spool uses the
-same service boundary. Replacing `/opt/vntyper/output` with a host/shared bind-mount override
-may be useful for a custom deployment, but it gives that mount's actors access to the result
-namespace and weakens the shipped security boundary.
+Shipped Compose keeps ordinary-job outputs in the persistent, service-private `result_store`, mounted only into the API and worker. The protected handoff spool uses the same service boundary. Replacing `/opt/vntyper/output` with a host/shared bind-mount override may be useful for a custom deployment, but it gives that mount's actors access to the result namespace and weakens the shipped security boundary.
 
 For an existing web deployment, use this migration sequence:
 
-1. Pause new submissions. Drain both the regular and long queues and all active jobs to
-   completion; verify both queues and the active job count are zero. Never purge queued
-   messages, because doing so can strand their protected-spool uploads.
+1. Pause new submissions. Drain both the regular and long queues and all active jobs to completion; verify both queues and the active job count are zero. Never purge queued messages, because doing so can strand their protected-spool uploads.
 2. Stop the API, workers, and beat, then provision the named `result_store`.
-3. While services remain stopped and detached from the legacy host bind, either
-   (recommended) copy existing unexpired output into `result_store` and retain a backup,
-   noting that legacy bytes cannot be retroactively integrity-attested; or explicitly accept
-   retirement and unavailability of those results and archive or remove the legacy store.
+3. While services remain stopped and detached from the legacy host bind, either (recommended) copy existing unexpired output into `result_store` and retain a backup, noting that legacy bytes cannot be retroactively integrity-attested; or explicitly accept retirement and unavailability of those results and archive or remove the legacy store.
 4. Deploy the API, all workers, and beat; verify retained result access; then resume submissions.
 
-Arbitrary same-UID code in either the API or worker service namespace is out of scope: such
-code can access the private volumes or worker descriptors directly.
+Arbitrary same-UID code in either the API or worker service namespace is out of scope: such code can access the private volumes or worker descriptors directly.
 
-`docker/.env.example` documents the remaining settings. To run the API container on
-its own against an existing Redis:
+To execute the API container independently against an existing Redis instance:
 
 ```bash
 docker run -d -p 8000:8000 \
@@ -163,7 +131,7 @@ docker run -d -p 8000:8000 \
     ghcr.io/hassansaei/vntyper:latest
 ```
 
-Submit a job:
+Submit an analysis job:
 
 ```bash
 curl -X POST "http://localhost:8000/run-job/" \
@@ -174,7 +142,7 @@ curl -X POST "http://localhost:8000/run-job/" \
     -F "archive_results=true"
 ```
 
-Download results after completion:
+Download completed results:
 
 ```bash
 curl -O "http://localhost:8000/download/sample.zip"
@@ -182,7 +150,7 @@ curl -O "http://localhost:8000/download/sample.zip"
 
 ## Apptainer / Singularity
 
-Convert the Docker image to an Apptainer SIF:
+Convert the container image to an Apptainer SIF:
 
 ```bash
 apptainer pull docker://ghcr.io/hassansaei/vntyper:latest

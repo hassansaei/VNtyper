@@ -31,14 +31,14 @@ vntyper pipeline \
 For BAM and CRAM input, the output root must be outside the directory containing the
 alignment. The separate `inputs/` and `results/` trees above meet that requirement.
 
-!!! tip "Don't have a BAM file?"
-    Download the VNtyper 2 test dataset (~1.1 GB) to try it out:
+!!! tip "Test Dataset"
+    Download the VNtyper 2 test dataset (~1.1 GB) to test the pipeline:
 
     ```bash
     make download-test-data
     ```
 
-    Then run the pipeline on the test BAM file located in the test data directory.
+    Then run the pipeline on the test BAM file located in `tests/test_data/`.
 
 For paired-end FASTQ input:
 
@@ -50,16 +50,17 @@ vntyper pipeline \
     --threads 4
 ```
 
-Add `--fast-mode` to skip filtering for unmapped and partially mapped reads, speeding up the analysis.
+Add `--fast-mode` to skip filtering for unmapped and partially mapped reads, speeding up alignment extraction.
 
 ## 4. View Results
 
-Once the pipeline completes, the output directory contains:
+The pipeline automatically generates an HTML summary report and tabular outputs in the output directory:
 
 ```
 results/sample/
   pipeline.log                  # Full pipeline log
   pipeline_summary.json         # Machine-readable summary
+  summary_report.html           # Interactive HTML report with embedded IGV
   kestrel/
     kestrel_result.tsv          # Genotyping results (main output)
     output_indel.vcf            # Filtered INDEL VCF
@@ -75,9 +76,9 @@ Kestrel's `output.bam` is an alignment of resolved haplotype records; it is not 
 copy of the input sequencing reads. The HTML report explains the evidence units beside
 its nomenclature reading key.
 
-## 5. Generate an HTML Report
+## 5. Regenerate HTML Reports
 
-Create a visual summary report with IGV integration:
+The pipeline writes `summary_report.html` by default. To regenerate or customize the report without rerunning the pipeline:
 
 ```bash
 vntyper report \
@@ -85,7 +86,7 @@ vntyper report \
     --input-dir results/sample/
 ```
 
-Open the generated HTML file in your browser to review:
+Open the generated HTML file in a web browser to inspect:
 
 - VNTR region coverage statistics
 - Genotyping calls from Kestrel
@@ -94,5 +95,5 @@ Open the generated HTML file in your browser to review:
 
 ## What's Next?
 
-- **[Reference Setup](reference-setup.md)** --- Configure references for different genome assemblies
-- **[User Guide](../user-guide/index.md)** --- Explore advanced pipeline options, optional modules (adVNTR, SHARK), and Docker usage
+- **[Reference Setup](reference-setup.md)**: Configure references for different genome assemblies
+- **[User Guide](../user-guide/index.md)**: Explore advanced pipeline options, optional modules (adVNTR, SHARK), and Docker usage

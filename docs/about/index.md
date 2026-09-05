@@ -17,7 +17,7 @@ Web Server
 :   [vntyper.org](https://vntyper.org)
 
 Current Version
-:   **{{ version }}** -- see the [Changelog](changelog.md) for release history.
+:   **{{ version }}** (see the [Changelog](changelog.md) for release history).
 
 License
 :   [BSD 3-Clause](license.md)
@@ -28,8 +28,8 @@ If you encounter a problem or have a question, please open an issue on the GitHu
 
 :   [github.com/hassansaei/VNtyper/issues](https://github.com/hassansaei/VNtyper/issues)
 
-Before opening a new issue, search the existing issues to see if your question has already been addressed.
+Before opening a new issue, search existing issues to check if your question has already been addressed.
 
 ## How to Cite
 
-If you use VNtyper 2 in your research, please cite the original publication. See the [Citation](citation.md) page for full details and BibTeX entries.
+If you use VNtyper 2 in your research, please cite the corresponding publications. See the [Citation](citation.md) page for full details and BibTeX entries.

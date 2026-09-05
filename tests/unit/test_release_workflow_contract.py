@@ -810,8 +810,7 @@ def test_generation_renames_grammar_and_protected_identities_are_exact() -> None
     assert 'title: "VNtyper"' in (ROOT / "CITATION.cff").read_text(encoding="utf-8")
     assert "site_name: VNtyper" in (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
     assert "## VNtyper Version:" in (ROOT / "vntyper" / "scripts" / "kestrel_genotyping.py").read_text(encoding="utf-8")
-    assert (ROOT / "snakemake" / "vntyper2.smk").is_file()
-    assert (ROOT / "snakemake" / "run_vntyper2.sh").is_file()
+    assert not (ROOT / "snakemake").exists()
     assert "Before VNtyper 2.0.6 all of" in (ROOT / "docs" / "cli" / "online.md").read_text(encoding="utf-8")
 
 

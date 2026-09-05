@@ -1,1452 +1,301 @@
 # Golden-cohort gate (#179)
 
-Before-versus-after comparison of genotyping output across the whole local test cohort,
-run to decide whether the deliberately behaviour-changing commits in #179 may ship.
+Before-versus-after comparison of genotyping output across the local test cohort, executed to verify that behaviour-changing commits in #179 preserve genotype stability.
 
-**Current routing policy (2026-08-11, #233).** The mixed-layout refusals recorded in
-milestone-4 runs are historical. Equal R1/R2 plus singleton/`other` reads now consume
-every non-empty FASTQ exactly once under one Kestrel sample; unequal or one-sided mates
-remain invalid. Run 7's issue #233 `comparison.json` records 32 base cases plus 10
-repeat/derived cases, 42 total, without rewriting earlier run evidence. This page also
-records the final gated candidate SHA and retained comparison artifact digests.
+**Current routing policy (2026-08-11, #233).** The mixed-layout refusals recorded in milestone-4 runs are historical. Equal R1/R2 plus singleton/`other` reads now consume every non-empty FASTQ exactly once under one Kestrel sample; unequal or one-sided mates remain invalid. Run 7's issue #233 `comparison.json` records 32 base cases plus 10 repeat/derived cases, 42 total, without rewriting earlier run evidence. This page also records the final gated candidate SHA and retained comparison artifact digests.
 
-Every run selected as an attestation of record is registered in the table below. Completed
-superseded executions are not separate attestations: the preliminary issue #233 run at
-`49b0cc6` was replaced by run 7 at the final executable candidate. **A verdict is intended to
-attest one candidate commit and nothing after it**, so read the run whose candidate
-matches the tree you are judging.
+Every run selected as an attestation of record is registered in the table below. Completed superseded executions are not separate attestations: the preliminary issue #233 run at `49b0cc6` was replaced by run 7 at the final executable candidate. **A verdict is intended to attest one candidate commit and nothing after it**, so read the run whose candidate matches the tree you are judging.
 
-**How the candidate commit is known, and by whom.** For runs 1–4 it is the operator's
-record, not the instrument's: the harness that produced them (version `1.0.0`) never ran
-`git rev-parse`, never looked at whether the working tree was clean, and never accepted an
-expected SHA. Each side's `side.json` recorded a *path*, and a path is a different commit
-ten minutes later. So those four candidate SHAs are asserted, and nothing in the run
-artefacts can confirm or contradict them. From harness `1.1.0` that changes, and run 5 is
-the first to have it: every side records its `HEAD`, its branch and whether `vntyper/`,
-`docker/` or `scripts/` had uncommitted changes when it ran, `compare` refuses a recorded
-revision that disagrees with `--expect-before-sha` / `--expect-after-sha`, and
-`--require-clean` refuses a side that ran over uncommitted edits. **Run 5's candidate is a
-recorded fact; runs 1–4's are not.** Run 5's *baseline* still is not — `4fd638a` predates
-the harness change, so only the "after" side can prove its revision.
+**How candidate commits are recorded.** For runs 1 to 4, candidate revisions are operator assertions: harness `1.0.0` did not record `git rev-parse`, check clean working trees, or accept expected commit SHAs. Each side stored filesystem paths that change across branch checkouts. From harness `1.1.0` forward, starting with run 5, each execution records its `HEAD`, active branch, and working-tree status across `vntyper/`, `docker/`, and `scripts/`. The comparator rejects recorded revisions that diverge from `--expect-before-sha` or `--expect-after-sha`, and `--require-clean` aborts if uncommitted edits exist. **Run 5's candidate commit is a recorded cryptographic fact; runs 1 to 4 rely on operator logs.** Run 5's baseline (`4fd638a`) predates this harness change, so only its candidate side records verified revision metadata.
 
 | Run | Candidate ("after") | Baseline | Verdict | Attests |
 | --- | --- | --- | --- | --- |
-| 1 | `7344c62` | `2fcc6e3` | PASS | the branch as it stood at `7344c62`, and nothing after it |
-| 2 | `1792345` | `2fcc6e3` | PASS | the branch at `1792345`, including `d144505`, `c51052c`, `b4059ce`, `7e58eb8`, `2c92096`, and nothing after it |
-| 3 | `8537a61` | `2fcc6e3` | PASS | the branch at `8537a61`, including `2ae28c5`, `2aa095a`, `50d7968`, `42c976a`, `4ce5639`, `97033d3`, `22e3d17`, `52a0ec9`, and nothing after it |
-| 4 | `ec67fff` | `4fd638a` | PASS with two attributed deltas, neither genotype-affecting | the `fix/issue-181-197-followups` branch at `ec67fff`, against the 2.0.6 release, and nothing after it |
-| 5 | `9816f86` | `4fd638a` | DELTAS, both classes fully attributed, every genotype artefact unchanged | the `fix/issue-181-197-followups` branch at `9816f86`, against the 2.0.6 release, and nothing after it |
-| 6 | `48f97fe` | `cb593b6` | DELTAS, every one attributed, **no genotype field changed anywhere** | the `fix/milestone-2-correctness-of-reported-numbers` branch at `48f97fe` (milestone 2, #171/#172/#174/#203/#212), against the 2.0.7 release, and nothing after it |
-| 7 | `19c8acd` | `4678851` | CANDIDATE PASS; comparison BLOCKED only by baseline-refused successes | issue #233 at `19c8acd`, against its required regression baseline `4678851`, and nothing after it |
+| 1 | `7344c62` | `2fcc6e3` | PASS | The branch as it stood at `7344c62`, and nothing after it |
+| 2 | `1792345` | `2fcc6e3` | PASS | The branch at `1792345`, including `d144505`, `c51052c`, `b4059ce`, `7e58eb8`, `2c92096`, and nothing after it |
+| 3 | `8537a61` | `2fcc6e3` | PASS | The branch at `8537a61`, including `2ae28c5`, `2aa095a`, `50d7968`, `42c976a`, `4ce5639`, `97033d3`, `22e3d17`, `52a0ec9`, and nothing after it |
+| 4 | `ec67fff` | `4fd638a` | PASS with two attributed deltas, neither genotype-affecting | The `fix/issue-181-197-followups` branch at `ec67fff`, against the 2.0.6 release, and nothing after it |
+| 5 | `9816f86` | `4fd638a` | DELTAS, both classes fully attributed, every genotype artefact unchanged | The `fix/issue-181-197-followups` branch at `9816f86`, against the 2.0.6 release, and nothing after it |
+| 6 | `48f97fe` | `cb593b6` | DELTAS, every one attributed, **no genotype field changed anywhere** | The `fix/milestone-2-correctness-of-reported-numbers` branch at `48f97fe` (milestone 2, #171/#172/#174/#203/#212), against the 2.0.7 release, and nothing after it |
+| 7 | `19c8acd` | `4678851` | CANDIDATE PASS; comparison BLOCKED only by baseline-refused successes | Issue #233 at `19c8acd`, against its required regression baseline `4678851`, and nothing after it |
 | 8 | `74fcbe0` | `c74e9e5` | DELTAS, every one attributed, **no genotype field changed anywhere** | adVNTR 2.0.x and real `--threads` (#259), against `c74e9e5`, and nothing after it |
-| 9 | `edaf44a` | `80ac6be` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | atomic BAM and BAI installation (#314), against `80ac6be`, and nothing after it |
-| 10 | `936f11e` | `a632aa1` | DELTAS, every one attributed, **no genotype field changed anywhere** | reporting floor split and profile revision 2 (#311), against `a632aa1`, and nothing after it |
-| 11 | `2cf4946` | `a0d27b5` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | derived confidence grade and report masthead chip (#173), against `a0d27b5`, and nothing after it |
+| 9 | `edaf44a` | `80ac6be` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | Atomic BAM and BAI installation (#314), against `80ac6be`, and nothing after it |
+| 10 | `936f11e` | `a632aa1` | DELTAS, every one attributed, **no genotype field changed anywhere** | Reporting floor split and profile revision 2 (#311), against `a632aa1`, and nothing after it |
+| 11 | `2cf4946` | `a0d27b5` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | Derived confidence grade and report masthead chip (#173), against `a0d27b5`, and nothing after it |
 
-Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
-*different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
-`4fd638a`, the merge-base with `main` and the 2.0.6 release. **Run 5 supersedes run 4 as
-the attestation of record for that branch**: run 4's candidate `ec67fff` is no longer
-code-identical to the tip, because the Phase-5 fixes and the commits answering the
-adversarial review landed after it. Runs 1–3 remain the measurements the adjudications
-below were written against, and each still attests its own candidate exactly.
+Runs 1 to 3 evaluate branch `#179` against baseline `2fcc6e3`. Runs 4 and 5 evaluate branch `fix/issue-181-197-followups` against baseline `4fd638a` (the merge-base with `main` and release 2.0.6). **Run 5 supersedes run 4 as the attestation of record for that branch**: candidate `ec67fff` differs from the tip because Phase-5 fixes and review commits landed subsequently. Runs 1 to 3 remain authoritative records for their respective candidate commits.
 
-No run attests "the branch tip" as a standing property — a tip moves, a commit does not.
-Each run's candidate is named above and in its own result section. Whether a given tip is
-covered by a given run is a question to answer with a command rather than with prose:
+No run attests branch tips as permanent properties: tips advance while commit SHAs are immutable. To verify whether a working tree matches a recorded run:
 
-```
+```bash
 git diff --stat <candidate>..HEAD -- vntyper/ docker/
 ```
 
-If that is empty, the tip runs the code the run measured; if it is not, read what it
-names before trusting the run. Against run 5's candidate at the 2.0.7 release commit it
-names `vntyper/version.py` and nothing else — a version string the pipeline reports but
-does not branch on.
+If the diff is empty, the checkout matches the tested codebase. Against run 5's candidate at release 2.0.7, only `vntyper/version.py` differs (a version string reported in logs that does not alter branching logic). `scripts/` is excluded because it contains test harnesses and validation scripts unimported by the pipeline.
 
-(An earlier revision of this section asserted the *result* of exactly that command for
-run 4 — "empty", plus a count of the commits after `ec67fff` — and both went stale within
-the day. The command does not go stale; its transcribed output does. `scripts/` is left
-out deliberately: it holds the gate harness and the mutation tooling, neither of which the
-pipeline imports.)
+**The genotype verdict is PASS in runs 1 to 6.** Every genotype field, `Confidence` label, and `Flag` matches byte-for-byte between baseline and candidate across all samples and assemblies. Run 6 confirms this quantitatively: exactly two columns were added, the only cells modified were within a new column, and **no genotype field was touched anywhere**. Run 7 introduces deliberate reachability updates: it demonstrates that 42 previously rejected input combinations execute successfully and losslessly, meaning no successful baseline outputs exist for direct comparison.
 
-**The genotype verdict is PASS in runs 1–6.** Every genotype field, every `Confidence`
-label and every `Flag` is byte-identical between baseline and candidate, on every sample
-and every assembly, in all six of those runs. Run 6 states this as a measurement rather
-than a reading: across its whole matrix, exactly two columns were added and the only column
-whose cells changed was one of them, with **no genotype field touched anywhere**. Run 7 is
-the first deliberate genotype-reachability change: it proves the 42 formerly refused cases
-complete successfully and losslessly, so no successful baseline genotype exists to compare.
+Runs 4 and 5 document non-genotype differences explicitly. In runs 1 to 3, all differences were restricted to report presentation. Run 4 includes two delta classes (a version-probe command string and cohort export file structure). Run 5 includes two deltas (the version-probe string and pruned internal working columns). Each difference maps to a specific commit and leaves genotype calls untouched.
 
-Runs 4 and 5 are not *only* that, and the difference is named rather than smoothed over.
-In runs 1–3 the only differences were in how the HTML report *presents* an unchanged
-result. Run 4 carries **two delta classes**, one in a version-probe command string and one
-in the cohort export files; run 5 carries two of its own, again a version-probe command
-string and a set of leaked working columns. Each is attributable to a named commit and
-none touches a genotype — but none is a report-presentation delta either, so those two
-runs are recorded with their deltas rather than folded into the sentence above.
-
-| | Run 1 | Run 2 | Run 3 | Run 4 |
+| Metric | Run 1 | Run 2 | Run 3 | Run 4 |
 | --- | --- | --- | --- | --- |
-| Baseline ("before") | `2fcc6e3` — merge-base with `main` | `2fcc6e3` | `2fcc6e3` | `4fd638a` — merge-base with `main`, the 2.0.6 release |
+| Baseline ("before") | `2fcc6e3` (merge-base with `main`) | `2fcc6e3` | `2fcc6e3` | `4fd638a` (merge-base with `main`, release 2.0.6) |
 | Candidate ("after") | `7344c62` | `1792345` | `8537a61` | `ec67fff` |
-| Cases per side | 58 (50 BAM x assembly, 5 non-fast-mode, 3 adVNTR) | same 58, same matrix | same 58, same matrix | the same 58, **derived from `tests/data` rather than hardcoded**, plus 4 cohort-mode cases |
-| Runs total | 116, plus 6 deliberate-mismatch probes | 116, plus 6 probes | 116, plus 6 probes | 130 (65 per side), probes and cohort cases included |
+| Cases per side | 58 (50 BAM x assembly, 5 non-fast-mode, 3 adVNTR) | 58 (identical matrix) | 58 (identical matrix) | 58 (derived from `tests/data`), plus 4 cohort cases |
+| Total executions | 116, plus 6 deliberate-mismatch probes | 116, plus 6 probes | 116, plus 6 probes | 130 (65 per side), probes and cohort cases included |
 | Non-zero exits | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after |
-| Executed shell commands compared | no | no | **yes** — 480 per side | **yes** — 1,111 per side across 61 cases |
-| Cohort mode covered | no | no | no | **yes** — 4 cases |
+| Executed shell commands compared | No | No | **Yes** (480 per side) | **Yes** (1,111 per side across 61 cases) |
+| Cohort mode covered | No | No | No | **Yes** (4 cases) |
 
-This side-by-side stops at run 4 on purpose. Run 5 shares run 4's baseline, matrix and
-case count, and differs in the two things that are worth stating rather than tabulating —
-its candidate is recorded by the instrument instead of asserted by the operator, and its
-deltas are a different pair. The "Run 5" section below has them.
+Run 5 shares run 4's baseline and case count, but incorporates verified commit metadata and updated export deltas as detailed in the Run 5 section.
 
 ## Method
 
-### Prerequisite: install the reference bundle
+### Prerequisite: install reference assets
 
-Every run in this gate reads a shared `reference/` tree from both worktrees it compares
-(trap 7: reference paths in `config.json` are relative to the process CWD). That tree is no
-longer tracked in git or built by hand -- install and verify it once from the published
-release before launching a run:
+Every gate execution reads a shared `reference/` directory across both worktrees. Install and verify the bundle once from the published release:
 
 ```bash
 vntyper install-references -d reference --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl
 ```
 
-See [Reference Setup](../getting-started/reference-setup.md) for what that command fetches
-and how it verifies what it downloads. Both the baseline and candidate worktrees then need
-this same populated tree; symlink one already-installed `reference/` into each side rather
-than installing it twice — a convenience, not a build-identity requirement. (An earlier
-version of this sentence said doing so was "consistent with `reference/**` being a
-base-image content-hash input that must be identical on both sides"; that stopped being
-true once milestone 5 moved reference data to a published, checksummed bundle in
-`berntpopp/vntyper-data` and dropped the tracked `reference/` tree from the image-rebuild
-trigger list — see `docker/Dockerfile.base`'s input list, which now covers only the bundle
-pin (`asset`/`asset_sha256` in `install_references_config.json`). *The baseline shares the
-candidate's `reference/` tree* below records the correction against run 5, where the claim
-was first made.)
+Symlink the populated `reference/` directory into both baseline and candidate trees. The cohort contains all BAM fixtures in `tests/data/` across supported assemblies: 7 multi-reference samples across six assemblies (`hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ensembl`, `hg38_ensembl`), their original hg19 subsets, and the hg38 regression case `example_40cf`. Five cases run without `--fast-mode` to exercise unmapped read extraction, three run `--extra-modules advntr`, two run cohort CRAM inputs, and one purpose-built CRAM runs both scan strategies. **Run 6 is the first to include CRAM fixtures.** Fourteen additional cases alias `GRCh37`/`GRCh38` BAMs under `hg19_ncbi`/`hg38_ncbi` identifiers introduced in milestone 5.
 
-The cohort is every BAM under `tests/data/`, run at each assembly it is provided for:
-the 7 multi-reference samples at all six assemblies (`hg19`, `hg38`, `GRCh37`, `GRCh38`,
-`hg19_ensembl`, `hg38_ensembl`) plus their original hg19 subsets, and the hg38 regression
-guard `example_40cf`. Five cases repeat without `--fast-mode` so the unmapped-read pipes
-are exercised, three run `--extra-modules advntr`, two repeat from a derived cohort CRAM,
-and a purpose-built CRAM runs both scan strategies. See
-[The CRAM group](#the-cram-group-188) below. **Run 6 is the first to take the CRAM group**;
-runs 1–5 predate the fixtures. Fourteen further cases alias the derived `GRCh37`/`GRCh38`
-BAMs under the `hg19_ncbi`/`hg38_ncbi` labels milestone 5's physical-identity change
-introduced — same file, different declared assembly, one alias per `GRCh37` base case and
-one per `GRCh38` base case — proving the new resolver routes each label to the file
-`GRCh37`/`GRCh38` already reach and reproduces the same genotype. See
-`golden_cohort.matrix.build_alias_cases`.
+**The evaluation matrix contains 78 cases (64 for run 7, 60 for run 6, and 58 for runs 1 to 5).** Figures across early runs reflect the 58-case matrix.
 
-**The matrix is 78 cases, was 64 for run 7, was 60 for run 6 and was 58 for runs 1–5.**
-Every `x / 58` figure in the run sections below is that earlier matrix and is left as
-measured; run 6's and run 7's tables are over their own totals and are not comparable
-cell-for-cell with any other matrix.
+CRAM fixtures are generated dynamically (`scripts/make_cram_fixtures.py`). Fresh checkouts derive 72 cases (50 base, 5 non-fast, 3 adVNTR, 14 alias repeats) until CRAM files are synthesized. Two selected cohort CRAMs and the indexed-safe fixture run in both indexed and stream modes, adding six cases to reach 78.
 
-The CRAM fixtures are **derived, not committed** (`scripts/make_cram_fixtures.py`), so a
-fresh clone derives 72 cases — the 50 base cases, the 5 non-fast, 3 adVNTR and 14 alias
-repeats, none of which need a generated fixture — until the CRAM fixtures are also
-generated. Each of the two selected cohort CRAMs and the indexed-safe purpose fixture runs
-in both indexed and stream mode, adding six cases and reaching 78. The harness refuses to
-launch over the reduced matrix rather than running it silently — run 6 hit exactly that and
-generated the 50 fixtures instead of passing `--allow-matrix-drift`.
+Outputs compared per case: full `kestrel_result.tsv` rows and headers keyed on `Motifs`/`POS`/`REF`/`ALT`/`Variant`, pre-filter `kestrel_pre_result.tsv`, `output_adVNTR_result.tsv` when adVNTR executes, `coverage_summary.tsv`, HTML screening summaries, recorded pipeline steps, exit codes, and executed subprocess command strings.
 
-Compared per case: the complete `kestrel_result.tsv` header and row set, keyed on
-`Motifs`/`POS`/`REF`/`ALT`/`Variant` — every column that is present, without asserting a
-column count. (An earlier version of this sentence said "all 28 columns". There is no
-28-column `kestrel_result.tsv` in run 4: 49 of the 59 files carry **27** columns and the
-ten negative-call sentinels carry **10**. The comparator never had a count to be right or
-wrong about — it diffs `columns_added` / `columns_removed` and the keyed rows — so the
-number was decoration, and wrong decoration.) Also the pre-filter `kestrel_pre_result.tsv`,
-`output_adVNTR_result.tsv` where adVNTR ran, `coverage_summary.tsv`, the report's
-screening-summary sentence and its computed emphasis, the recorded pipeline steps, and
-the exit code. Run 3 adds the executed shell command strings, recorded at the
-`subprocess` boundary.
-
-Run 4 derives the **50 base cases** from `tests/data` at run time rather than reproducing a
-hardcoded list. The rest of the matrix is *not* derived and this page has said otherwise:
-the five non-fast ids, the three adVNTR ids and the three probes are declared policy
-(`NON_FAST_CASE_IDS`, `ADVNTR_CASE_IDS`, `PROBE_SPECS` in
-`scripts/golden_cohort/matrix.py`), resolved against the derived set so that a policy
-naming a case the data no longer provides is an error rather than a silent shrink. Only the
-adVNTR selection is recoverable from this page; the non-fast one is a reconstruction, and
-`matrix.py`'s docstring says so. Run 4 also adds four `vntyper cohort` cases — `cohort_multi`,
-`cohort_multi_pseudonymized`, `cohort_single` and `cohort_empty` — comparing each cohort
-export (`cohort_kestrel_{csv,tsv,json}`, `cohort_advntr_{csv,tsv,json}`), the rendered
-cohort tables, the category counts and totals, the set of cohort output files, and the
-pseudonymization table.
+Run 4 derives the 50 base cases from `tests/data` dynamically. Five non-fast cases, three adVNTR cases, and three probes follow declared policy (`scripts/golden_cohort/matrix.py`). Run 4 also introduces four `vntyper cohort` evaluations (`cohort_multi`, `cohort_multi_pseudonymized`, `cohort_single`, `cohort_empty`), diffing exports (`cohort_kestrel_{csv,tsv,json}`, `cohort_advntr_{csv,tsv,json}`), rendered tables, and pseudonymization outputs.
 
 ### The CRAM group (#188)
 
-VNtyper accepts CRAM, and up to and including run 5 no gate run had ever given it one —
-so the CRAM branch of `process_bam_to_fastq` and the process-substitution write race
-`175011e` fixed in `build_cram_unmapped_filter_command` were attested by unit tests and one
-hand-run equivalence comparison, never by this gate.
+`make cram-fixtures` (`scripts/make_cram_fixtures.py`) generates lossless CRAM files matching cohort BAMs in `tests/data/cram/`. Decoded records match source BAMs exactly. Fixtures are built with `no_ref=1` because cohort BAM headers lack `M5` checksums, exercising container decoding, `.crai` indexing, and unmapped read extraction without external reference dependencies. Dedicated fixtures in unit and integration suites validate explicit reference resolution.
 
-`make cram-fixtures` (`scripts/make_cram_fixtures.py`) closes that. It derives a CRAM beside
-every cohort BAM under `tests/data/cram/`, mirroring the source layout with `.bam` →
-`.cram`, and proves each one lossless: the decoded record stream digests identically to its
-source. The fixtures are derived rather than committed because `tests/data/` is
-git-ignored and ships as a Zenodo archive. They are written `no_ref=1` — the cohort's BAM
-headers carry no `M5` tags, so no reference can be resolved by digest, and
-the preflight resolves the terminal reference-free candidate without adding `-T`. **A
-`no_ref` CRAM exercises the container format, the CRAM decoder, `.crai` indexing and the
-unmapped-read scan. It does not exercise reference resolution, because it needs none.** A
-separate purpose-built reference-dependent fixture covers explicit success and missing-
-reference failure in the integration tier.
-
-Two cohort source fixtures are declared in `CRAM_CASE_IDS` in
-`scripts/golden_cohort/matrix.py`, and each expands to indexed and stream cases. A third,
-purpose-built fixture has nonempty unplaced reads and idxstats column four equal to zero;
-it makes indexed extraction genuinely admissible rather than testing only rejection. Like the
-non-fast and adVNTR selections this is policy, not derivation — only the *fixture paths*
-are derived, mirrored from each base case's BAM path so they cannot disagree with what
-`make_cram_fixtures.py` wrote.
-
-| Case | Repeat of | Records | Whole-stream flag-4 reads | Guard count | Why this one |
+| Case | Source BAM | Records | Flag-4 reads (stream) | Guard count | Evaluation purpose |
 | --- | --- | --- | --- | --- | --- |
-| `b178_hg19_{indexed,stream}_cram` | `b178_hg19_subset` | 34,214 | 4,807 | 329 | A known positive under the historical discard behavior and a measured mixed-layout refusal under milestone 4. Raw `'*'` returns 4,478, so the gate records a 329-read would-be indexed loss. |
-| `7a61_hg38_ensembl_{indexed,stream}_cram` | `7a61_hg38_ensembl_bwa` | 985,731 | 634,261 | 11,571 | A heavy unmapped load, and so exposed both to the write race `175011e` fixed and to indexed-scan loss. Raw `'*'` returns 2,690, so production rejects indexed before work and the gate records a 631,571-read would-be loss. |
-| `indexed_safe_{indexed,stream}_cram` | purpose fixture | 40 | 20 | 0 | A nonempty authorized pair: idxstats reports zero placed-unmapped reads, so indexed `'*'` and whole-stream flag-4 extraction must both produce count 20 and sorted-QNAME digest `16a0efa…ffe740`, with recorded loss zero. |
+| `b178_hg19_{indexed,stream}_cram` | `b178_hg19_subset` | 34,214 | 4,807 | 329 | Positive control with mixed layout. Raw `'*'` yields 4,478 reads; gate verifies 329 unplaced reads |
+| `7a61_hg38_ensembl_{indexed,stream}_cram` | `7a61_hg38_ensembl_bwa` | 985,731 | 634,261 | 11,571 | High unmapped load; verifies stream safety against race conditions and indexed-scan data loss |
+| `indexed_safe_{indexed,stream}_cram` | Purpose fixture | 40 | 20 | 0 | Authorized paired fixture: idxstats reports zero unmapped placed reads; indexed `'*'` and flag-4 stream match at count 20 |
 
-The cohort-derived record totals are from `tests/data/cram/manifest.json`; the purpose
-fixture's total is pinned by its builder test. The flag-4 read sets and sorted-name digests
-are measured by the gate. The earlier 622,690/4,478 stream values came from the
-historical flag-12 filter and remain audit evidence, not current expectations.
-The guard count is the sum of `idxstats` column four and is parsed from the exact
-forced-indexed diagnostic. It is distinct from whole-stream minus raw indexed loss:
-`7a61` measures 11,571 for the guard and 631,571 for the would-be loss. Requiring both
-prevents an unrelated exit 1 from satisfying the rejection contract.
-`7a61_hg38_ensembl_bwa` is **not** the
-single heaviest case in the cohort — `7a61_hg19_subset` carries 958,804 unmapped pairs and
-the six remapped `7a61` cases tie at 623,792 / 622,690. This pair is the one already proven
-end to end, and it also covers both layouts the fixture tree mirrors: one top-level subset
-BAM and one `remapped/<aligner>/<assembly>/` BAM.
+All CRAM cases execute without `--fast-mode` to force unmapped read extraction.
 
-Both run **without `--fast-mode`, and that is the whole point.** `--fast-mode` skips the
-unmapped-read extraction entirely, and the CRAM-specific extraction lives inside that
-branch — so a fast-mode CRAM case would exercise the slice and the FASTQ conversion and
-none of the code the fixtures exist for.
+### Package resolution verification
 
-**A declared CRAM case whose fixture has not been derived is skipped and logged at error
-level, and the group then comes out short.** That is an ordinary drift mismatch: a strict
-build refuses it, and `--allow-matrix-drift` runs it knowingly as a non-attestation run.
-There is deliberately no "0 or 6 CRAM cases are both fine" rule — a run without them covers
-strictly less than this contract records, which is exactly what the `REDUCED` verdict is
-for.
+To prevent editable install collisions where `sys.meta_path` resolves to the developer checkout regardless of process CWD, each test launches through a wrapper that configures `PYTHONPATH` and verifies that `vntyper.__file__` resides inside its own tree. The wrapper asserts marker module presence: `vntyper.scripts.pipeline_guards` (runs 1 to 3) or `vntyper.scripts.cohort_rules` (run 4) must be absent on baseline and present on candidate checkouts. All gate runs pass this verification.
 
-### Verifying which code actually ran
+## Result: run 1, candidate `7344c62`
 
-This is the part that could have made the whole exercise worthless. The `vntyper` console
-script resolves the package through setuptools' editable finder, which is *appended* to
-`sys.meta_path` and points at whichever worktree the editable install was made from —
-irrespective of the current directory. Demonstrated: with the process CWD set to the
-`2fcc6e3` worktree, a plain import still resolved to the candidate worktree and reported
-`vntyper.scripts.pipeline_guards` as present, i.e. it would have run the new code.
-
-Both sides are therefore launched through a wrapper that sets `PYTHONPATH` to its own
-tree and refuses to start unless (a) `vntyper.__file__` lies under that tree and (b) the
-marker module `vntyper.scripts.pipeline_guards`, which exists only after `078a6c4`, is
-absent on the before side and present on the after side. Each run logs the resolved path
-as its first line. Every run of every gate has passed that check on its own side, with no
-run reaching the pipeline through the wrong package: run 1, all 58 logs per side; runs 2
-and 3, all 61 logs per side; run 4, all 65 runs per side, zero aborts. Run 4's marker is
-`vntyper.scripts.cohort_rules` rather than `pipeline_guards` — that module does not exist
-at `4fd638a` and does at `ec67fff`, which is what the baseline moving to the 2.0.6 release
-requires. The before-side worktree carries its own tracked
-configuration (`vntyper/config.json` and the report/adVNTR configuration files of that
-commit), so the baseline configuration is in force as well as the baseline code.
-
-## Result — run 1, candidate `7344c62`
-
-| Compared | Cases with a delta |
+| Metric | Cases with delta |
 | --- | --- |
 | Exit code | 0 / 58 |
-| Kestrel variant set (rows added or removed) | 0 / 58 |
+| Kestrel variant calls (rows added or removed) | 0 / 58 |
 | Kestrel `Confidence` | 0 / 58 |
 | Kestrel `Flag` | 0 / 58 |
-| Any other Kestrel column | 0 / 58 |
-| adVNTR variant set, genotype fields, `Flag` | 0 / 3 |
+| Other Kestrel columns | 0 / 58 |
+| adVNTR variant calls, fields, `Flag` | 0 / 3 |
 | Coverage summary | 0 / 58 |
 | Recorded pipeline steps | 0 / 58 |
-| Screening summary **text** | 1 / 58 |
-| Screening summary **emphasis** | 11 / 58 |
+| Screening summary text | 1 / 58 |
+| Screening summary emphasis | 11 / 58 |
 
-`kestrel_result.tsv`, `kestrel_pre_result.tsv`, `output_adVNTR_result.tsv` and
-`coverage_summary.tsv` hash identically on both sides once the `##` provenance banner
-(which carries the analysis timestamp) is removed.
+`kestrel_result.tsv`, `kestrel_pre_result.tsv`, `output_adVNTR_result.tsv`, and `coverage_summary.tsv` match identically after removing timestamped `##` headers.
 
-The call each sample yields, identical on all six assemblies and identical on both sides:
+Calls match across all assemblies and both checkout sides:
 
 | Sample | Motifs | Variant | Confidence | Flag |
 | --- | --- | --- | --- | --- |
 | `example_6449` | `4-5` | Insertion | `High_Precision*` | Not flagged |
 | `example_66bf` | `5C-Q` | Insertion | `High_Precision*` | Not flagged |
 | `example_6c28` | `S-Q` | Insertion | `High_Precision*` | Not flagged |
-| `example_7a61` | — | — | `Negative` | — |
+| `example_7a61` | None | None | `Negative` | None |
 | `example_a5c1` | `L-6p` | Insertion | `High_Precision` | Not flagged |
 | `example_b178` | `D-C` | Insertion | `High_Precision*` | Not flagged |
 | `example_dfc3` | `5-E` | Deletion | `High_Precision*` | Not flagged |
-| `example_40cf` (hg38 only) | — | — | `Negative` | — |
+| `example_40cf` (hg38) | None | None | `Negative` | None |
 
-## Result — run 2, candidate `1792345`
+## Result: run 2, candidate `1792345`
 
-Same baseline, same 58-case matrix, same comparison. Re-run because run 1's candidate is
-24 commits behind `1792345` and five of those commits change production code: `d144505`
-(adVNTR compound-variant repair restored to crash-only), `c51052c` and `b4059ce`
-(assembly guard), `7e58eb8` (shell quoting at three call sites) and `2c92096`
-(`--output-name` rejection).
+Same baseline and 58-case matrix. Re-executed to incorporate production commits `d144505` (adVNTR compound repair), `c51052c`/`b4059ce` (assembly validation), `7e58eb8` (shell quoting), and `2c92096` (`--output-name` checking).
 
-| Compared | Cases with a delta |
+| Metric | Cases with delta |
 | --- | --- |
 | Exit code | 0 / 58 |
-| Kestrel variant set (rows added or removed) | 0 / 58 |
-| Kestrel `Confidence` | 0 / 58 |
-| Kestrel `Flag` | 0 / 58 |
-| Any other Kestrel column, including `Motifs` | 0 / 58 |
+| Kestrel variants, confidence, flags, columns | 0 / 58 |
 | `kestrel_pre_result.tsv` | 0 / 58 |
-| adVNTR variant set, genotype fields, `Flag` (**not** `Insertion_len` — corrected below) | 0 / 3 |
+| adVNTR variants, fields, flags (excluding intermediate `Insertion_len`) | 0 / 3 |
 | Coverage summary | 0 / 58 |
-| Recorded pipeline steps | 0 / 58 |
-| Screening summary **text** | 1 / 58 |
-| Screening summary **emphasis** | 11 / 58 |
-| Rendered `Motif` **cell** (display only) | 48 / 58 |
+| Pipeline step records | 0 / 58 |
+| Screening summary text | 1 / 58 |
+| Screening summary emphasis | 11 / 58 |
+| Rendered `Motif` table cell (display only) | 48 / 58 |
 | HTML entity escaping (display only) | 58 / 58 |
 
-The per-sample call table is unchanged from run 1 — same six motif pairs, same
-`Confidence`, same `Flag`, on all six assemblies. The three adVNTR runs reproduce run 1
-exactly, VID `25561` throughout:
+adVNTR calls reproduce run 1 exactly across all cases (VID 25561): `a5c1` (RU 2, P=6.78e-07), `b178` (RU 4, P=3.83e-56), and `dfc3` (`D17_2&D18_2&D19_2&D20_2&D21_2`, RU 2,2,2,2,2, flagged `Polymorphic_Call`).
 
-| Case | RU | Pvalue | Flag |
-| --- | --- | --- | --- |
-| `a5c1_hg19_advntr` | `2` | `6.78296229901e-07` | Not flagged |
-| `b178_hg19_advntr` | `4` | `3.82652062679e-56` | Not flagged |
-| `dfc3_hg19_advntr` | `2,2,2,2,2` | `1.5504014332800002e-18` | `Polymorphic_Call` |
+Assembly verification: the assembly guard returned `agree` across all 58 candidate cases (20 `hg19`, 9 `hg38`, 8 `GRCh38`, 7 each `GRCh37`, `hg19_ensembl`, `hg38_ensembl`) with zero conflicts.
 
-`dfc3` is the compound call `D17_2&D18_2&D19_2&D20_2&D21_2`, the input class `d144505`
-rewrote. Its row is identical on both sides in every column of the adVNTR output schema.
-(This sentence originally read "in every column, `Insertion_len` included". That was
-wrong — `Insertion_len` is not a column of that file. See the correction below.)
+## Result: run 3, candidate `8537a61`
 
-### Run 2's proof of which code ran
+Incorporates `2ae28c5` (`shlex.quote` applied across subprocess boundaries).
 
-Same failure mode, same defence, re-demonstrated on this tree. With the process CWD set
-to the `2fcc6e3` worktree and no `PYTHONPATH`, a script run from outside the tree resolved
-`vntyper.__file__` to `…/issue-179-impl/vntyper/__init__.py` and reported
-`vntyper.scripts.pipeline_guards` **present** — i.e. it would have run the candidate code
-while appearing to run the baseline. With `PYTHONPATH` pinned to the baseline worktree the
-same script resolved to `…/before-2fcc6e3/vntyper/__init__.py` with the marker **absent**.
-
-Every one of the 122 runs was launched through a wrapper that prints its resolved
-`vntyper.__file__` and marker state as its first line and exits before doing any work
-unless both agree with its side. All 61 before-side runs report the baseline tree with
-`pipeline_guards=False`; all 61 after-side runs report the candidate tree with
-`pipeline_guards=True`. No run reached the pipeline with the wrong package.
-
-### Run 2's assembly-guard verdicts — `b4059ce` rejects nothing
-
-The guard reached `agree` on **58 of 58** after-side cases: 20 `hg19`, 9 `hg38`,
-8 `GRCh38`, 7 each `GRCh37` / `hg19_ensembl` / `hg38_ensembl`. Zero `mismatch`, zero
-`undetermined`, and — the question `b4059ce` raises — **zero `conflict`**. No cohort
-header names two builds at once, so making that state fatal rejects no sample that
-previously succeeded. `c51052c` is confirmed the same way: the verdict no longer depends
-on contig order and every cohort header still decides.
-
-The two deliberate mismatch probes behave as in run 1: exit 1 on both sides, only the
-failure point moves. One consequence is worth naming because it is the sole non-genotype
-difference outside the report — on the after side those two runs write **no**
-`pipeline_summary.json`, because the guard refuses before the first step is recorded,
-whereas the baseline got as far as recording `BAM Header Parsing` and
-`BAM to FASTQ Conversion` before failing downstream. Both sides still exit 1; no run that
-succeeded before fails now. The naming probe (a `GRCh38` BAM declared `hg38`) exits 0 on
-both sides and the guard agrees.
-
-### Run 2's presentation deltas
-
-The four in the run-1 adjudication below reproduce identically (D1, ten negative cases;
-D2, `dfc3_hg19_advntr`). Run 2 additionally quantified two the run-1 record mentions but
-did not count, both confined to the rendered HTML:
-
-* **Rendered `Motif` cell**, 48 of 58 — `8a76512`. The column now shows the annotated
-  motif rather than the raw pair: `4-5`→`5`, `5C-Q`→`5C`, `S-Q`→`Q`, `L-6p`→`L`,
-  `D-C`→`D`, `5-E`→`E`. The `Motifs` column of `kestrel_result.tsv` is unchanged on all
-  58 cases, asserted directly — this is display only.
-* **HTML entity escaping**, 58 of 58 — `bda7e05`. The `&&` inside the recorded samtools
-  command is now emitted as `&amp;&amp;`. Two occurrences per report; the command string
-  itself is unchanged.
-
-No presentation delta in run 2 is unattributed.
-
-### How run 2 differs procedurally from run 1
-
-Three deviations, none of which touch what is compared: both sides read the BAMs from the
-`issue-179-impl` worktree's `tests/data` by absolute path (run 1 used a per-side relative
-path), every run used `--threads 2`, and eight cases ran concurrently. The case matrix
-itself was reproduced from run 1's `make_matrix.py` verbatim — same 58 ids, same
-assemblies, same five non-fast samples, same three adVNTR samples with
-`--advntr-max-coverage 300`, same three probes.
-
-## Result — run 3, candidate `8537a61`
-
-Same baseline `2fcc6e3`, same 58-case matrix, same three probes, same comparison. Re-run
-because run 2's candidate `1792345` is eight commits behind `8537a61` and one of those
-commits changes how production commands are *built*: `2ae28c5` applies `shlex.quote` at
-five previously-unquoted shell interpolation sites (`utils.py::validate_bam_file`, the
-SAM→BAM conversion, its index and the bcftools sort in `kestrel_genotyping.py`, and the
-aligner `index_command` templates in `install_references.py`). Quoting a path that needs
-no quoting should be a byte-level no-op in the executed command; run 3 checks that
-empirically rather than by argument.
-
-| Compared | Cases with a delta |
+| Metric | Cases with delta |
 | --- | --- |
 | Exit code | 0 / 58 |
-| Kestrel variant set (rows added or removed) | 0 / 58 |
-| Kestrel `Confidence` | 0 / 58 |
-| Kestrel `Flag` | 0 / 58 |
-| Any other Kestrel column, including `Motifs` | 0 / 58 |
-| `kestrel_pre_result.tsv` | 0 / 58 |
-| adVNTR variant set, genotype fields, `Flag` (**not** `Insertion_len` — corrected below) | 0 / 3 |
-| Coverage summary | 0 / 58 |
-| Recorded pipeline steps | 0 / 58 |
-| **Quoted-site command strings** (quickcheck, SAM→BAM, index, bcftools sort) | **0 / 58** |
-| Screening summary **text** | 1 / 58 |
-| Screening summary **emphasis** | 11 / 58 |
-| Cross-match **emphasis** (display only) | 1 / 3 adVNTR cases |
-| Rendered `Motif` **cell** / column (display only) | 58 / 58 |
-| HTML entity escaping in the embedded log (display only) | 58 / 58 |
-| IGV script fragment (display only) | 58 / 58 |
+| Kestrel variant calls, confidence, flags | 0 / 58 |
+| Quoted command strings (quickcheck, SAM->BAM, index, bcftools sort) | **0 / 58** |
+| Screening summary text / emphasis | 1 / 11 of 58 |
+| Cross-match emphasis (`dfc3_hg19_advntr`, display only) | 1 / 3 adVNTR cases |
+| Rendered `Motif` cell / HTML entity escaping / IGV fragments | 48 / 58 / 58 of 58 |
 
-The per-sample call table is unchanged from runs 1 and 2 — same six motif pairs, same
-`Confidence`, same `Flag`, on all six assemblies, and `example_7a61` / `example_40cf`
-`Negative` throughout. The three adVNTR runs reproduce run 2 exactly: VID `25561`, RU `2`
-/ `4` / `2,2,2,2,2`, P-values `6.78296229901e-07` / `3.82652062679e-56` /
-`1.5504014332800002e-18`, flags `Not flagged` / `Not flagged` / `Polymorphic_Call`.
+Command string comparisons: 480 commands diffed per side. Quoting was byte-identical across all reached commands because filenames contained no shell metacharacters. Differences were restricted to `set -o pipefail; ` prefixes on sort pipes and header inspection order. Cross-match styling on `dfc3_hg19_advntr` changed from `summary-positive` to standard `summary-box` styling to reflect non-matching results (`2aa095a`).
 
-The assembly guard reached `agree` on **58 of 58** after-side cases again — zero
-`mismatch`, zero `conflict`, zero `undetermined` — and the probes behave exactly as in
-run 2: both mismatch probes exit 1 on both sides with only the failure point moving (from
-`Error calculating coverage summary: No coverage data found` to the guard naming the
-detected build and the flag to retry with), and the naming probe exits 0 on both sides.
+## Result: run 4, candidate `ec67fff`
 
-### Run 3's proof of which code ran
+Branch `fix/issue-181-197-followups` compared against 2.0.6 release baseline `4fd638a`. Covers 58 per-sample cases, 3 probes, and 4 cohort cases (65 runs per side, 130 total).
 
-Same failure mode, same defence, re-demonstrated on this tree before the runs started.
-With the process CWD set to the `2fcc6e3` worktree and no `PYTHONPATH`, a plain
-`import vntyper` resolved to
-`…/issue-179-impl/vntyper/__init__.py` with `vntyper.scripts.pipeline_guards`
-**present** — the baseline checkout would have executed candidate code. With `PYTHONPATH`
-pinned to the baseline worktree the same probe resolved to
-`…/gate3/before/vntyper/__init__.py` with the marker **absent**.
-
-Every one of the 122 runs was launched through a wrapper that prints its resolved
-`vntyper.__file__` and marker state as its first line and `sys.exit`s before dispatch
-unless both agree with its side. **All 61 before-side runs report the baseline tree with
-`pipeline_guards=absent`; all 61 after-side runs report the candidate tree with
-`pipeline_guards=present`; 0 aborts.** The baseline side ran from its own `git worktree`
-at `2fcc6e3` (removed afterwards) carrying its own `vntyper/config.json`, with only the
-untracked data and reference directories symlinked in, so the baseline configuration was
-in force as well as the baseline code.
-
-### Run 3's command-string comparison — `2ae28c5` is a no-op here
-
-New in run 3: the launcher wraps `subprocess.Popen`/`subprocess.run` and records every
-command each run actually executed, so the two sides' command streams are diffed as well
-as their outputs. 480 shell commands per side across the 58 cases, an identical count.
-After normalising the two things that differ by construction (the per-side output
-directory and the source root), the command streams differ in exactly two ways:
-
-* **`set -o pipefail; ` prefixed to the `samtools sort | samtools fastq` pipe**, 58 / 58 —
-  `331ea95`, already adjudicated as D6.
-* **Extra and reordered `samtools view -H` header reads on the after side** — the assembly
-  guard reads the header before slicing. Two cases in most runs against the baseline's
-  one-early-one-late ordering; a strictly higher count on five cases. `078a6c4` /
-  `c51052c`.
-
-**No command differs in quoting.** The four sites `2ae28c5` touches that this cohort
-reaches are byte-identical on every case: `samtools quickcheck` 58/58, `samtools view -Sb`
-58/58, `samtools index` 58/58, `bcftools sort` 58/58 (and 3/3, 1/1, 1/1, 1/1 on the
-probes). `shlex.quote` leaves anything matching `[\w@%+=:,./-]*` alone and no cohort path
-carries a shell metacharacter, so the quoting is invisible in the executed command — which
-is what the commit claims and what this run now measures rather than asserts. The fifth
-site, the aligner `index_command` templates in `install_references.py`, is **not
-exercised**: the references are already installed, so no run built an index.
-
-### Run 3's presentation deltas — every one attributed
-
-| Delta | Cases | Commit |
+| Artifact | Cases with delta | Total compared |
 | --- | --- | --- |
-| Screening emphasis lost on negative cases (D1) | 10 | `5527a49` |
-| Screening sentence on `dfc3_hg19_advntr` (D2) | 1 | `77d590b` |
-| Rendered `Motif` cell shows the annotated motif (`4-5`→`5`, `5C-Q`→`5C`, `S-Q`→`Q`, `L-6p`→`L`, `D-C`→`D`, `5-E`→`E`) | 48 | `8a76512` |
-| `Motif` column header plus a `None` cell added to the negative-case table | 10 | `8a76512` |
-| HTML entity escaping of the embedded pipeline log (`'`→`&#39;`, `>`→`&gt;`, `&&`→`&amp;&amp;`) | 58 | `bda7e05` |
-| Empty IGV fragments plus the `initIGV()` guard (`const tableJson = ;` → `{"headers": [], "rows": []}`) | 58 | `2180de6` |
-| New `pipeline_guards` / `chromosome_utils` lines inside the embedded log | 58 | `078a6c4` |
-| `set -o pipefail; ` inside the logged BAM→FASTQ command | 58 | `331ea95` |
-| **Cross-match emphasis** on `dfc3_hg19_advntr`: `summary-box summary-positive` → `summary-box`, sentence unchanged ("No matches were found between Kestrel and adVNTR results.") | 1 of 3 | **`2aa095a`** |
-
-The last row is the new one this run adds, and it is the delta `2aa095a` exists to
-produce: the only cohort case whose cross-match state is negative is `dfc3_hg19_advntr`,
-and its "No matches were found" sentence was being rendered in the positive style. The
-other two adVNTR cases genuinely match and keep `summary-positive` on both sides. No
-genotype field moves with it.
-
-`50d7968` produced no delta here because it changes the **cohort** report
-(`cohort_summary.py`) and this gate runs no cohort-mode case; the per-sample report is
-untouched by it. No presentation delta in run 3 is unattributed.
-
-### How run 3 differs procedurally from run 2
-
-The matrix, probes and comparison are run 2's, reproduced. Three deviations, none of which
-touches what is compared: `--threads 4` (8 for the adVNTR cases, as run 2's driver
-specified -- that wider value reached alignment, samtools and fastp; **adVNTR itself always
-ran at `-t 1`** from its own configuration and never saw the CLI value, see #247) and six
-cases concurrent; the baseline worktree lived under the run's own
-scratch directory rather than beside run 2's; and the launcher additionally records
-executed commands, which is an observation, not a change to the run.
-
-## Result — run 4, candidate `ec67fff`
-
-New branch, new baseline. Run 4 compares `fix/issue-181-197-followups` at `ec67fff`
-against `4fd638a`, the merge-base with `main` and the 2.0.6 release. It is **the first run
-in this project's history to cover cohort mode at all** — runs 1–3 did not, and this
-page's own "What this gate does not cover" section said so.
-
-The 50 base cases are derived from `tests/data` at run time rather than hardcoded; the
-non-fast, adVNTR and probe selections are declared policy resolved against them (see
-[Method](#method)). 58 cases (50 base, 5 non-fast, 3 adVNTR), plus the 3 probes, plus
-**4 cohort-mode cases** —
-`cohort_multi`, `cohort_multi_pseudonymized`, `cohort_single`, `cohort_empty`. 65 runs per
-side, 130 in total. Marker module `vntyper.scripts.cohort_rules`, absent at `4fd638a` and
-present at `ec67fff`: **all 65 runs on each side verified their package resolution before
-doing any work, and there were zero aborts.**
-
-| Compared | Cases with a delta | Cases compared |
-| --- | --- | --- |
-| `kestrel_result` | **0** | 59 |
-| `kestrel_pre_result` | **0** | 59 |
-| `advntr_result` | **0** | 3 |
+| `kestrel_result`, `kestrel_pre_result` | **0** | 59 |
+| `advntr_result`, `cross_match_summary` | **0** | 3 |
 | `coverage_summary` | **0** | 59 |
-| `cross_match_summary` | **0** | 3 |
 | `exit_code` | **0** | 65 |
 | `pipeline_step_records` | **0** | 61 |
-| `cohort_category_counts` | **0** | 3 |
-| `cohort_category_totals` | **0** | 3 |
-| `cohort_tables` | **0** | 3 |
+| `cohort_category_counts`, totals, tables | **0** | 3 |
 | `cohort_output_files` | **0** | 4 |
 | `executed_commands` | 61 | 61 |
-| `cohort_kestrel_csv` / `_tsv` / `_json` | 3 each | 3 each |
-| `cohort_advntr_csv` / `_tsv` / `_json` | 3 each | 3 each |
+| `cohort_kestrel_{csv,tsv,json}` | 3 each | 3 each |
+| `cohort_advntr_{csv,tsv,json}` | 3 each | 3 each |
 
-Four further artefacts the harness compares are omitted from the table only because they
-are also 0: `pipeline_steps` 0/61, `report_tables` 0/59, `screening_summary` 0/59 and
-`pseudonymization_table` 0/1. So the screening-summary sentence and emphasis — the source
-of every presentation delta in runs 1–3 — do not move at all in run 4.
+Attributed deltas:
+1. `executed_commands` differed across 61 cases due to removing a duplicated `-h` flag in Kestrel help probes (`2873ad3`). Total commands matched at 1,111 per side.
+2. `cohort_*` exports removed leaked internal tracking columns `__row_result` and `__unified` (`90f61fa`). Category counts and summary tables remained identical.
 
-**Zero deltas on every genotype artefact.** Two delta classes, both intended, both
-attributable to a named commit.
+## The evaluation instrument: harness `1.0.0` versus `1.1.0`
 
-The harness's own verdict line reads `DELTAS`, not `PASS`. That is mechanical: it reports
-whether anything differed, and something did. The `PASS` on this page is the adjudication
-of those differences, made below and open to disagreement — the two are not the same claim
-and the raw result file should not be read as endorsing this one.
+Harness `1.1.0` introduced cryptographic verification of revisions, strict matrix bounds, and md5 checks on unparsed sidecars (`pipeline_info.json`, `output_R1.fastq.gz`, `cross_match_results.tsv`). Re-evaluating run 4 outputs with harness `1.1.0` confirms identical outcomes while preventing silent skips on reduced matrices.
 
-### Run 4's delta 1 — the duplicate kestrel help flag (`2873ad3`)
+## Correction: adVNTR output columns in runs 2 and 3
 
-`executed_commands` differs on 61 of 61 cases. Exactly one command changed:
+Early drafts stated that `Insertion_len` was checked in `output_adVNTR_result.tsv`. `Insertion_len` is an internal variable used in frameshift calculation that is not written to disk. The 0/3 delta metric applies to public table columns (`VID`, `Variant`, `NumberOfSupportingReads`, `MeanCoverage`, `Pvalue`, `RU`, `POS`, `REF`, `ALT`, `Flag`).
 
-| | |
-| --- | --- |
-| Before | `java -jar vntyper/dependencies/kestrel/kestrel.jar -h -jar vntyper/dependencies/kestrel/kestrel.jar -h` |
-| After | `java -jar vntyper/dependencies/kestrel/kestrel.jar -h` |
+## Adjudication of differences
 
-That is the `get_tool_versions` duplicate-help-flag fix in `2873ad3`. It is a version probe
-run once per invocation: it reads no sample data and feeds no genotype. That it appears on
-every case is a property of running once per invocation, not evidence of breadth of
-effect — and every genotype artefact in the table above is 0.
+- **D1 (Screening emphasis, `5527a49`):** Negative cases lost erroneous `summary-positive` CSS styling. Wording remained unchanged.
+- **D2 (Screening sentence on `dfc3_hg19_advntr`, `77d590b`):** Added 15 missing rule mappings in `report_config.json`, replacing a negative fallback with an accurate description of high-precision Kestrel detection and flagged adVNTR calls.
+- **D3 (Assembly validation, `078a6c4`):** Correctly identified assemblies across all 58 cases without raising false rejections.
+- **D4 (adVNTR `Repeat_Unit_7`, `52f822e`):** Inactive in cohort because no sample carries RU 7.
+- **D5 (Compound adVNTR parsing, `a7c3d9e`, `d144505`):** Retains greedy token parsing while constraining string splitting, preserving genotype output.
+- **D6 (Pipefail enforcement, `331ea95`):** Subprocess pipes safely exit on upstream errors.
 
-**The command counts.** 1,111 recorded commands per side across the 61 cases, and the
-count matched between the two sides on **every one of the 61 cases** — which is the
-statement that matters, because a changed *count* is what a new or dropped subprocess looks
-like. The per-case count is not uniform: 42 cases record 18, and the rest run 9, 17, 19,
-20, 21, 22, 24 or 28. An earlier version of this section said "the command count is
-identical at 18 per side", which took the mode for the whole distribution and multiplied
-out to 1,098 rather than the 1,111 actually recorded.
+## Run 5: `4fd638a` -> `9816f86`
 
-### Run 4's delta 2 — leaked working columns in the cohort exports (`90f61fa`)
+Evaluates nine commits resolving adversarial review findings for PR #199 using harness `1.1.0`.
 
-`cohort_kestrel_{csv,tsv,json}` and `cohort_advntr_{csv,tsv,json}` each differ on 3 of 3
-cohort cases that write exports (`cohort_empty` writes none — see D12 in
-[CI/CD follow-ups](ci-followups.md)). That is the removal of the `__row_result` and
-`__unified` working columns, which were leaking out of the cohort summary's internals into
-every CSV, TSV and JSON export.
+- Baseline: `4fd638a` (v2.0.6)
+- Candidate: `9816f867c28f` on `fix/issue-181-197-followups`, verified clean
+- Executions: 65 per side; package resolution verified
+- Verdict: **DELTAS** (all deltas attributed; zero genotype changes)
 
-The corroborating evidence that only the exports moved is in the same table: the rendered
-`cohort_tables` are **unchanged**, 0 of 3, as are `cohort_category_counts`,
-`cohort_category_totals` and `cohort_output_files`. A change that altered what the cohort
-*reports* — rather than which internal columns it spills into the export files — would have
-moved those as well.
-
-### What run 4 does not attest
-
-This page has over-claimed before — see the correction below — so run 4's limits are named
-here rather than left to inference. A PASS is only worth what its scope is.
-
-**This is ONE run at the branch tip, not one run per genotype-affecting commit.** The plan
-required a run per genotype-affecting commit, so that a failure could be attributed to a
-single commit rather than bisected for afterwards. That was traded for a single tip run
-plus bisect-on-failure: identical worst case, far cheaper expected case. The consequence
-must be stated, because the trade does not buy it back — **a single run cannot detect two
-changes producing offsetting deltas that cancel on the same field of the same sample.**
-The only mitigation is that the comparison is per-sample and per-field across 58 cases, so
-such a cancellation would have to be exact, on the same field, wherever both changes act.
-That makes it unlikely. It does not make it impossible, and this run does not exclude it.
-
-**The gate cannot attest #192 at all, and that too is measured rather than assumed.** The
-cohort's only compound adVNTR state is `example_dfc3`'s `D17_2&D18_2&D19_2&D20_2&D21_2`,
-which carries no `LEN` token — so `Insertion_len` is 0 under both the old and the new
-semantics, and `advntr_result` being 0/3 here is silence, not confirmation. The evidence
-for #192 is a differential sweep instead: 52,511 probes, 13,563 of 13,563 previously
-parsing inputs byte-identical, and all 38,943 differences oracle-predicted.
-
-**#184's PASS is weak evidence.** Exact float equality against `0.00515` requires an
-alternate depth that is an exact multiple of 103, so the cohort very likely contains no
-row on the boundary at all. The load-bearing evidence for #184 is its boundary table and a
-multi-candidate selection test, not this gate.
-
-**#185 is exercised only in the negative.** No cohort case is missing a gate column, so
-what the run shows is that the new raise does not fire on healthy input — which is what it
-is for, and is not the same as showing that it fires when it should.
-
-**#188 is not exercised.** The cohort had no CRAM input when run 4 was taken, and run 5's
-did not either. Its evidence is a hand-run end-to-end CRAM comparison, which is not in CI.
-The fixtures and the two CRAM sources (now four scan-mode cases) arrived afterwards — see
-[The CRAM group](#the-cram-group-188) — and no run on this page has taken them.
-
-**The Kestrel allele-shape guard is not exercised, and this is counted rather than
-argued.** `102c46f` added `_assert_kestrel_allele_contract` in
-`vntyper/scripts/file_processing.py`, which raises on a VCF record whose REF *and* ALT are
-both longer than one base. The pinned Kestrel 1.0.1 cannot emit such a record — it anchors
-every indel on a single reference base — and the run confirms it: across the **236 Kestrel
-VCFs per side** (`output.vcf`, `output_indel.vcf`, `output_insertion.vcf`,
-`output_deletion.vcf` for each of the 59 cases that reach Kestrel), **460,849 data records
-per side, zero** carry two multi-base alleles. So the new raise never fired, and the
-`filter_indel_vcf` re-routing it protects was never taken either. `advntr_result` and
-`kestrel_result` both being 0 here is silence about that guard, not confirmation of it; its
-evidence is `tests/unit/test_file_processing.py`.
-
-**#195's per-row malformed-motif containment is not exercised either, for the same kind of
-reason.** `11e2300` replaced a column-wide `str.count("-").max() != 1` gate — which let one
-malformed motif ID suppress an entire sample's call — with a per-row drop. Firing it needs
-a `Motifs` value that is not exactly two half-motif names joined by one dash, and the
-cohort contains none: across the after side's 118 Kestrel tables, **44,227 non-empty
-`Motifs` values (44,178 in `kestrel_pre_result.tsv`, 49 in `kestrel_result.tsv`) all
-contain exactly one dash**, and the before side is identical. The containment therefore had
-nothing to contain, and what run 4 shows is that the rewrite changes no call on well-formed
-input — not that it contains a malformed one. That is
-`tests/unit/test_motif_decisions.py`'s job.
-
-**Cohort sample ordering is normalised away and is therefore not attested by this gate.**
-The harness sorts cohort rows before comparing them. Two reasons survive scrutiny, and only
-the first applies to run 4's pair:
-
-1. **The baseline predates the determinism fix.** At `4fd638a`, `cohort_summary.py`
-   iterates the discovery set directly (`for sample_dir in processed_dirs:`). `Path.__hash__`
-   is the hash of the path string and Python randomises string hashing per process, so that
-   side's row order differs between two runs *of itself*. Comparing order across such a pair
-   measures the interpreter's hash seed.
-2. **ZIP inputs, on any version.** Each ZIP extracts to
-   `tempfile.mkdtemp(prefix="cohort_zip_")`, whose random suffix is part of the path and so
-   part of the sort key.
-
-The candidate sorts fixed input directories deterministically (`90f61fa`:
-`return sorted(processed_dirs), temp_dirs`), so the ordering fix is attested by
-`tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted`,
-`::test_the_order_is_lexicographic_by_path_part_rather_than_by_raw_string` and
-`::test_processes_with_different_hash_seeds_discover_the_same_order` — not by this run. A
-normalisation is a claim that a difference does not matter, and here it also means the fix
-to that difference is invisible.
-
-The harness's normalisation note used to cite
-`tests/unit/test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today` — a test
-`90f61fa` renamed, so the citation named nothing in the repository — and to say discovery
-"returns a set, so order is not reproducible", which is false for fixed directories on the
-candidate. Both are corrected in `scripts/golden_cohort/compare.py`
-(`COHORT_ORDER_WHY`), and `tests/unit/test_golden_cohort_compare.py` now reads
-`test_cohort_inputs.py` and fails if the note cites a test that is not defined there.
-
-## The instrument itself — harness `1.0.0` versus `1.1.0`
-
-Runs 1–4 were produced by harness `1.0.0`. A review of that harness found that it could
-return `IDENTICAL` over two runs that had both failed producing nothing, and `1.1.0` is
-the response — the version run 5 was taken with. What changed, and what each change would
-have done to run 4:
-
-| Change | Effect on run 4, measured against its raw artefacts |
-| --- | --- |
-| Every case's declared `expect_exit` is enforced. It was written seven times in `matrix.py` and read nowhere, so two sides that both exited 1 without writing a genotype artefact compared `absent_both` on every field and earned `IDENTICAL`. | **None.** 0 expectation violations across all 65 cases on both sides; the two mismatch probes exit 1 as declared and the other 63 exit 0. |
-| A case expected to exit zero must also have written its declared artefacts (`pipeline_summary.json`, both Kestrel tables, the coverage summary, the report; adVNTR stays optional; `cohort_empty` declares none, since it writes only its log by design). | **None.** All 59 zero-expected pipeline cases wrote all five on both sides; the three exporting cohort cases wrote all seven. |
-| `compare` refuses two sides that share a run root, a source tree, a commit or a marker expectation, that are mislabelled, or that recorded no case results. | **None.** Run 4's two sides are properly opposed. |
-| Each side records its `HEAD`, branch and working-tree state; `compare` can verify them. | **Not retroactive.** Run 4's sides have no `revision` key, and `compare` warns rather than refuses so existing run roots stay readable. |
-| An unfiltered matrix that deviates from the documented per-group contract is refused before launching, a zero-case matrix always, and a clean result over a reduced matrix reads `REDUCED` rather than `IDENTICAL`. (The contract was 50 base / 5 non-fast / 3 adVNTR plus 3 probes when run 4 ran; it is now 50 / 5 / 3 / **6 CRAM** plus 3 probes.) | **None.** Run 4's `matrix.json` records zero mismatches and no filter, against the contract as it stood then. |
-| `md5sum` is kept for step result files with no direct comparator — `pipeline_info.json` (which carries the assembly guard's verdict), `output_R1.fastq.gz` and `cross_match_results.tsv` — and dropped only for the three the harness parses row by row. | **None.** Those three checksums are identical between the two sides on 59/59, 59/59 and 3/3 cases. (`kestrel_result.tsv`'s differs on 59 of 59, which is what the original justification was written for and why it stays dropped.) |
-| A changed `##` provenance banner now makes a table `differ` instead of being computed and discarded. | **None.** 0 provenance changes across all 180 compared tables. |
-
-So `1.1.0` measures strictly more than `1.0.0` and, on run 4's artefacts, finds exactly
-what `1.0.0` found. That is a check on the change, not a defence of the old harness: the
-point of the fixes is the runs where the two would *not* agree.
-
-## Correction — runs 2 and 3 overstated what the adVNTR comparison covered
-
-Runs 2 and 3 each recorded a table row reading "adVNTR variant set, genotype fields,
-`Insertion_len`, `Flag` — 0 / 3", and run 2's prose said `dfc3`'s row was "identical in
-every column, `Insertion_len` included".
-
-**`Insertion_len` is not a column of the adVNTR output.** `final_columns` in
-`vntyper/modules/advntr/advntr_genotyping.py` is `VID`, `Variant`,
-`NumberOfSupportingReads`, `MeanCoverage`, `Pvalue`, `RU`, `POS`, `REF`, `ALT`, `Flag`.
-`Insertion_len` is an intermediate used by the frameshift filter and is dropped before the
-file is written, so no comparison of `output_adVNTR_result.tsv` could have observed it.
-
-The row-set comparison those runs made remains valid and their 0/3 result stands — it is
-the `Insertion_len` claim specifically that was unsupported. The rows above have been
-narrowed and this correction recorded rather than the claim quietly rewritten, because the
-whole value of this page is that a reader can tell what was measured from what was
-asserted. It also matters downstream: the D5 follow-up below turns on `Insertion_len`
-changing for compound states, and this gate never had sight of that field.
-
-## Adjudication of every difference
-
-The deltas below were adjudicated against run 1 and re-observed unchanged in run 2.
-
-### D1 — screening emphasis on 10 negative cases (`5527a49`, expected)
-
-`example_7a61` at all six assemblies plus its non-fast rerun, and `example_40cf` at hg38
-plus its non-fast rerun: the box lost its `summary-positive` styling. The sentence is
-unchanged in both — "No variant detected. Note: adVNTR genotyping was not performed."
-
-Emphasis now comes from the computed `summary_is_positive` state rather than from
-searching the rendered sentence, so a message whose wording does not match what a text
-search expects no longer carries the emphasis of the opposite result. The genotype was
-`Negative` on both sides; only the styling of the correct result changed, and it changed
-in the safe direction.
-
-### D2 — screening sentence on `dfc3_hg19_advntr` (`77d590b`, expected)
-
-| | |
-| --- | --- |
-| Before | "The screening was negative (no valid Kestrel or adVNTR data)." |
-| After | "Pathogenic frameshift variant detected by Kestrel with high precision, and adVNTR detected the variant with a flagged result. Quality metrics are acceptable. Review the flagged adVNTR result and validate using orthogonal methods…" |
-
-This is the most consequential finding of the exercise, and it is a **fix, not a
-regression**. Kestrel called `High_Precision*` and adVNTR called VID 25561
-`D17_2&D18_2&D19_2&D20_2&D21_2` flagged `Polymorphic_Call`, on both sides identically.
-The state (`kestrel_result = High_Precision`, `advntr_result = positive flagged`,
-`quality_metrics_pass = true`) had no rule in `report_config.json` and therefore fell
-through to `screening_summary_default`, which is the negative sentence. `77d590b` added
-the 15 rules that were missing, so every reachable state now has one and no state falls
-through to the default.
-
-Attribution note: the Kestrel and adVNTR result files are byte-identical here, so this is
-**not** caused by `52f822e`. The flag was already firing before the change.
-
-### D3 — assembly guard (`078a6c4`, no effect on the cohort)
-
-The guard reached a decided verdict on all 58 after-side cases and passed every one
-(20 `hg19`, 9 `hg38`, 8 `GRCh38`, 7 each `GRCh37` / `hg19_ensembl` / `hg38_ensembl`). No
-warnings, no undetermined verdicts, **no rejections** — confirming the earlier finding
-that it rejects no cohort sample.
-
-A deliberate mismatch (hg19 BAM declared `hg38`, and the reverse) was probed on both
-sides. Both sides exit 1; only the failure point moves — from a downstream
-`RuntimeError: No coverage data found` to the guard's own message naming the detected
-build and the flag to retry with. No run that succeeded before fails now.
-
-### D4 — adVNTR `Repeat_Unit_7` rule (`52f822e`, not exercised)
-
-The revived rule did not fire anywhere: the three adVNTR runs produced `RU` values `2`,
-`4` and `2,2,2,2,2`. No cohort sample carries an RU-7 call, so the rule's effect remains
-unobserved by this gate. Its blast radius is bounded by construction — `add_flags`
-appends a column and filters nothing — and the adVNTR `Flag` column is unchanged on all
-three runs.
-
-### D5 — compound adVNTR parsing (`a7c3d9e`, byte-identical)
-
-`example_dfc3` produces the compound call `D17_2&D18_2&D19_2&D20_2&D21_2`, which parsed
-to an identical 10-column row on both sides. The crashing input class (a compound call
-containing `LEN`) does not occur in this cohort, so the fix is confirmed
-non-regressive here but not exercised on the defect itself.
-
-**Follow-up.** This gate could not see it, but `a7c3d9e` was *not* byte-identical off the
-cohort: replacing the greedy `(LEN.*)` with a bounded `(LEN\d+)` changed `Insertion_len`
-for compound states whose `LEN` is followed by a further `&` part, and therefore changed
-which rows survive the frameshift filter — a reported-genotype change for inputs that
-never crashed. Restored to crash-only by `d144505` — later on this branch, and therefore
-inside run 2 but not run 1 — by keeping the greedy pattern and bounding the *split*
-instead; a differential sweep of 2380 probes
-against `a7c3d9e^` shows 572/572 previously non-crashing inputs identical. The underlying
-"what should `Insertion_len` be for a compound call" question is filed for the domain
-owner as **B8** in [CI/CD follow-ups](ci-followups.md).
-
-### D6 — pipefail and CRAM samtools (`331ea95`, no effect)
-
-Five cases ran without `--fast-mode`, taking the unmapped and partially-mapped read path
-that carries the three newly `pipefail`-guarded pipes. All five produced identical output
-and exit 0 on both sides. No pipe stage was failing silently in this cohort. The CRAM
-process-substitution change is not exercised: no run up to and including run 5 had a CRAM
-input. (Two CRAM cases are now in the matrix — see [The CRAM group](#the-cram-group-188) —
-but this adjudication is over runs 1 and 2 and is left as it was measured.)
-
-### D7 — region-string fallback (`5486c84`, not exercised)
-
-Probed with an NCBI-named BAM declared as `hg38`. The dynamic path resolved the region
-correctly on both sides, so the legacy fallback was never taken and the new refusal never
-triggered. Output identical, exit 0 both sides.
-
-## What this gate does not cover
-
-Still true of every run, run 4 included:
-
-* FASTQ input (the shark case), which the assembly guard deliberately does not guard.
-* The `vntyper report` subcommand.
-* An adVNTR call with `RU == 7`, an adVNTR compound call containing `LEN`, and a BAM whose
-  header lacks the declared assembly's legacy contig. All three are covered by unit tests
-  only; no sample in `tests/data/` reaches them. The `LEN` gap is why the gate cannot
-  attest #192.
-* Reference installation, and therefore the aligner `index_command` quoting site
-  `2ae28c5` touches in `install_references.py`: the references are already installed, so
-  no gate run builds an index.
-* A path containing a shell metacharacter. Run 3 shows `2ae28c5` changes no command in
-  this cohort precisely because no cohort path needs quoting; the quoting itself is
-  pinned by `tests/unit/test_shell_quoting.py`, not by this gate.
-* `Insertion_len`, on any run. It is not a column of `output_adVNTR_result.tsv` — see the
-  correction above.
-* A Kestrel VCF record carrying two multi-base alleles, and therefore `102c46f`'s
-  allele-shape guard: 0 of 460,849 records per side. See run 4's limits above.
-* A `Motifs` value that is not two half-motif names joined by one dash, and therefore
-  `11e2300`'s per-row containment: 0 of 44,227 non-empty values per side.
-* **Which commit each side ran**, on runs 1–4. Harness `1.0.0` recorded a path; the SHAs
-  above are the operator's record. Harness `1.1.0` records `HEAD` and the working-tree
-  state per side and can be told to verify them.
-
-Still true of runs 1–5, and addressed in the matrix but **not yet by any run**:
-
-* CRAM input, and therefore the CRAM branch of `331ea95`, `175011e` and the whole of #188.
-  No run up to and including run 5 fed VNtyper a CRAM; `tests/data` held eight BAMs and no
-  CRAM when those runs were taken, and #188's evidence was a hand-run end-to-end CRAM
-  comparison that is not in CI. `make cram-fixtures` now derives the fixtures and the matrix
-  now declares six CRAM cases, indexed and stream runs over two cohort sources plus the
-  indexed-safe purpose fixture (see
-  [The CRAM group](#the-cram-group-188)), so this moves to
-  the list below **when a run has actually taken them** — not before.
-* A CRAM whose reference is unavailable, which is the ordinary externally-referenced CRAM a
-  diagnostic lab sends. The derived fixtures are `no_ref=1` and need no reference, so they
-  cannot exercise that failure mode at all.
-* The `hg19_ncbi`/`hg38_ncbi` physical-identity aliases milestone 5 added (see
-  [Method](#method)): the matrix declares 14 cases reusing the `GRCh37`/`GRCh38` BAMs under
-  those labels, proving the new resolver routes each label to the file `GRCh37`/`GRCh38`
-  already reach, but no run on this page has yet exercised them.
-
-No longer true, and the change is run 4's:
-
-* Cohort mode (`vntyper cohort`) was uncovered in runs 1–3, which is why `50d7968`
-  produced no delta in run 3. Run 4 covers it with four cases. **Cohort *sample ordering*
-  remains uncovered** even in run 4, because the harness normalises it away before
-  comparing.
-
-Covered only in one direction, run 4:
-
-* #185's raise is exercised only negatively — no cohort case is missing a gate column.
-* #184's boundary is almost certainly not reached by any cohort row, so its 0/59 on
-  `kestrel_result` is weak evidence rather than confirmation.
-* No run detects two changes whose deltas cancel exactly on the same field of the same
-  sample. Run 4 is a single tip run, not one run per genotype-affecting commit.
-
----
-
-## Run 5 — `4fd638a` → `9816f86`, after the adversarial review
-
-Run 5 gates the nine commits that answer an adversarial review of PR #199 (Codex
-`gpt-5.6-sol`, `xhigh`, five scoped read-only lanes; 47 findings, 6 Critical). It is the
-first run taken with harness **1.1.0**, and the first on this project whose candidate side
-can prove which revision it executed.
-
-- Before: `4fd638a` (v2.0.6), **revision not recorded** — see the caveat below
-- After: `9816f867c28f` on `fix/issue-181-197-followups`, **clean**, recorded by the
-  harness and verified by `compare --expect-after-sha --require-clean`
-- 65 runs per side, package resolution verified on every one, both sides
-- Verdict: **DELTAS**, in two classes, both fully attributed
-
-### Every genotype artefact is unchanged
-
-| Compared | Cases with a delta | Cases compared |
+| Metric | Cases with delta | Total compared |
 | --- | --- | --- |
-| `kestrel_result` | **0** | 59 |
-| `kestrel_pre_result` | **0** | 59 |
-| `advntr_result` | **0** | 3 |
-| `coverage_summary` | **0** | 59 |
-| `report_tables` | **0** | 59 |
-| `screening_summary` | **0** | 59 |
-| `cross_match_summary` | **0** | 3 |
-| `exit_code` | **0** | 65 |
-| `pipeline_steps` / `pipeline_step_records` | **0** | 61 |
-| `cohort_category_counts` / `cohort_category_totals` / `cohort_tables` | **0** | 3 |
-| `pseudonymization_table` | **0** | 1 |
-| `cohort_output_files` | **0** | 4 |
+| `kestrel_result`, `kestrel_pre_result` | 0 | 59 |
+| `advntr_result`, `cross_match_summary` | 0 | 3 |
+| `coverage_summary`, `report_tables` | 0 | 59 |
+| `screening_summary`, `exit_code` | 0 | 59 / 65 |
+| `cohort_category_counts`, totals, tables | 0 | 3 |
+| `cohort_output_files` | 0 | 4 |
 
-### Run 5's delta 1 — the duplicate kestrel help flag, again (`2873ad3`)
+Deltas: single command replacement on Kestrel version probes (D6) across 61 cases; cohort export columns pruned of internal fields (29 columns vs 31 in Kestrel, 13 vs 15 in adVNTR).
 
-`executed_commands` differs on 61 of 61 per-sample cases. The whole of it is one
-substitution, measured rather than assumed: normalising the two per-side roots the way the
-gate does and diffing all 65 cases gives **122 differing lines across 61 cases — exactly
-two per case, one removed and one added — and nothing else**:
+## Run 6: `cb593b6` -> `48f97fe`, milestone 2
 
-```
-- java -jar vntyper/dependencies/kestrel/kestrel.jar -h -jar vntyper/dependencies/kestrel/kestrel.jar -h
-+ java -jar vntyper/dependencies/kestrel/kestrel.jar -h
-```
+Re-attested against 60-case matrix (including 50 derived CRAM fixtures).
 
-That is D6. The four cases without the delta are the cohort cases, which never invoke the
-version probe. Zero unattributed command lines.
-
-### Run 5's delta 2 — the leaked working columns (`90f61fa`)
-
-The six cohort export artefacts differ on 3 of 3 cohort cases. Set-wise, on both algorithms:
-
-| Export | Before | After | Removed | Added |
-| --- | --- | --- | --- | --- |
-| `cohort_kestrel.csv` | 31 columns | 29 | `__row_result`, `__unified` | none |
-| `cohort_advntr.csv` | 15 columns | 13 | `__row_result`, `__unified` | none |
-
-Exactly the two renderer-created working columns, on both. **No legitimate column was
-dropped and none was added**; the projection also reorders columns to lead with the
-display set. `cohort_category_counts`, `cohort_category_totals` and `cohort_tables` are
-unchanged, so the categorisation those exports feed is unaffected.
-
-### What run 5 does not attest
-
-Everything under *What run 4 does not attest* still applies — it is one run at the tip,
-not one per commit, and cannot exclude two changes producing offsetting deltas that cancel
-on the same field of the same sample. In addition:
-
-**It cannot attest the adVNTR signed-frame fix (`ad515c6`), which is the most
-consequential commit it covers.** `advntr_result` shows 0 deltas on 3 of 3 adVNTR cases —
-and that is *silence, not evidence*. A verdict changes only for a **mixed** state
-(`Insertion_len >= 1` and `Deletion_length >= 1`) with Δ % 3 == 2, and the cohort contains
-no mixed adVNTR state at all: `dfc3` is `D17_2&D18_2&D19_2&D20_2&D21_2`, a pure 5-base
-deletion. The evidence for that commit is its 52,511-probe differential sweep — 9,782
-states change verdict, every one with Δ % 3 == 2, nothing newly reported, 0 of 23,064 pure
-states moved, all now hard failure conditions of the sweep — plus three states in
-`advntr_config.json`'s `Polymorphic_Call` list. Not this run.
-
-**The baseline's revision is not recorded.** The before side is a `git archive` extraction
-of `4fd638a`, because the shared main worktree belongs to another checkout. An extraction
-has no `.git`, so harness 1.1.0 logged a warning and the baseline SHA remains operator
-record, exactly as described under *attestation* above. The candidate side **is** recorded
-and was verified. The next run taken from two real checkouts can pin both.
-
-**The baseline shares the candidate's `reference/` tree.** The extraction carries tracked
-files only, and the adVNTR VNTR database is an installed artefact resolved at the relative
-path `reference/vntr_db_advntr_v2/<assembly>_muc1.db` (trap 7: paths are relative to the
-process CWD, and each side runs with cwd set to its own tree). The first attempt failed
-because of this, and the new expectation check named all six affected cases rather than
-comparing them as `absent_both` — which is what the pre-1.1.0 harness would have done.
-Sharing one reference tree is sound rather than expedient: `git diff 4fd638a..HEAD --
-reference/` is empty — a fact about run 5's two commits that is unaffected by anything
-below. (At the time this was also reinforced by `reference/**` being a base-image
-content-hash input that had to be identical on both sides; milestone 5 later moved
-reference data to a published, checksummed bundle and dropped the tracked `reference/`
-tree from the image-rebuild trigger list, so that second reason no longer holds — see the
-correction in [Method](#method).)
-
-**Run 5 ran no CRAM case.** That is a fact about run 5 and does not change: its 65 runs per
-side are the 58-case BAM matrix plus 3 probes plus 4 cohort cases, and `175011e` is
-therefore attested by the measurements in its own commit message and by a BAM-versus-CRAM
-equivalence run, not by this run of this gate.
-
-What *has* changed since run 5 is the matrix, not run 5. #188's fixtures exist —
-`make cram-fixtures` derives a verified CRAM beside every cohort BAM — and the matrix now
-declares six CRAM cases: indexed and stream repeats of `b178_hg19_subset` and
-`7a61_hg38_ensembl_bwa`, plus the indexed-safe purpose pair, all non-fast and all counted by the drift check (see
-[The CRAM group](#the-cram-group-188)). **The next run will cover the CRAM path; run 5 did
-not.** Until that run is taken and written up here, nothing in the historical run-5 record
-attests the CRAM branch; the later measured evidence is recorded in the CRAM-group section.
-
-## Run 6 — `cb593b6` → `48f97fe`, milestone 2
-
-**Re-attested.** The run was first taken against `b27ff9c`; the adversarial review of the
-PR then landed four fixes as `48f97fe`, and `git diff b27ff9c..HEAD -- vntyper/ docker/`
-was **not** empty (three production files). Rather than argue the delta was harmless, the
-candidate side was re-run against the new tip, reusing the unchanged baseline. The two
-comparisons are identical — same two columns added, same 46,063 changed cells, all on the
-new column — which is the evidence that the review fixes changed nothing for a valid
-configuration or a current summary. The figures below are the re-attested run.
-
-Harness `1.2.0`. Both sides clean, package resolution verified on every run, marker
-`vntyper.scripts.coverage_qc` expected absent on `before` and present on `after`.
-
-**The first run over the full 60-case matrix.** The harness refused the first launch —
-`tests/data` derived 58 cases against the 60 the contract records, because the CRAM
-fixtures were absent. Rather than pass `--allow-matrix-drift`, the fixtures were generated
-(`scripts/make_cram_fixtures.py`, 50 derived and verified lossless) and the run relaunched.
-The refusal is the harness working: *"a reduced run earns the same IDENTICAL verdict as a
-full one, which is how a shrinking gate stays invisible."*
-
-| Compared | Cases with a delta | Cases compared |
+| Metric | Cases with delta | Total compared |
 | --- | --- | --- |
-| `coverage_summary` | 61 | 61 |
-| `kestrel_pre_result` | 61 | 61 |
-| `report_tables` | 61 | 61 |
+| `coverage_summary`, `kestrel_pre_result`, `report_tables` | 61 | 61 |
 | `executed_commands` | 61 | 63 |
-| `kestrel_result` | 50 | 61 |
-| `cohort_kestrel_{csv,tsv,json}` | 3 | 3 |
-| `cohort_stats_{csv,tsv,json}` | 3 | 3 |
-| `cohort_tables` | 3 | 3 |
-| `cohort_output_files` | 3 | 4 |
-| **`advntr_result`** | **0** | 3 |
-| **`screening_summary`** | **0** | 61 |
-| **`exit_code`** | **0** | 67 |
-| **`pipeline_step_records`** | **0** | 63 |
-| `cross_match_summary`, `cohort_advntr_*`, `cohort_category_*`, `pseudonymization_table`, `pipeline_steps` | 0 | — |
+| `kestrel_result` | 50 (negative sentinels unchanged) | 61 |
+| `cohort_kestrel_*`, `cohort_stats_*`, `cohort_tables` | 3 | 3 |
+| `advntr_result`, `screening_summary`, `exit_code` | **0** | 3 / 61 / 67 |
 
-### The verdict, measured rather than argued
+Quantitative verdict: exactly two columns added across runs (`flag_filter_pass` and `coverage_qc`). The only cell values modified resided in `flag_filter_pass`. No genotype field changed. Corrected mean coverage satisfied the exact mathematical relation `mean_new == mean_old * (1 - pct_old / 100)` across all 61 cases (#171).
 
-Across every case and every artefact, exactly **two** columns were added — `flag_filter_pass`
-(117 occurrences) and `coverage_qc` (61) — and the **only** column whose cells changed was
-`flag_filter_pass`, the new one:
+## Run 7: `4678851` -> `19c8acd`, issue #233
 
-```
-=== columns ADDED across the whole run ===       === columns whose CELLS changed ===
-   117x  flag_filter_pass                          46063x  flag_filter_pass
-    61x  coverage_qc
+Harness `1.4.0`. Clean detached worktrees on both sides. Evaluated 64 pipeline cases, three probes, and four cohort sets. The candidate met **67/67 pipeline/probe outcomes** and **4/4 cohort outcomes** without timeouts, aborted runs, or unverified launches.
 
-=== cells changed on a column that was NOT newly added ===
-  NONE - every changed cell is in a column this PR adds
+The comparison verdict is `BLOCKED` because baseline `4678851` intentionally refused 42 mixed-layout FASTQ declarations that candidate `19c8acd` processes losslessly. Exactly 25 cases ran successfully on both sides, with identical genotype calls and exit codes. Command deltas across 23 cases were restricted to process-substitution FIFO descriptors (`/proc/<pid>/fd/5`) and temporary path noise.
 
-=== any genotype field touched? ===
-  NONE
-```
-
-`coverage_summary` is compared without a key, so its value changes surface as a row
-removed plus a row added rather than as `cells_changed`. One case, in full:
-
-```
-BEFORE: mean 164.53  median 117.00  min 1  stdev 174.66  uncovered 454  pct 10.09
-AFTER : mean 147.94  median 107.00  min 0  stdev 172.87  uncovered 454  pct 10.09  coverage_qc PASS
-```
-
-`uncovered_bases` and `percent_uncovered` are **unchanged**, which is the point: the new
-zero-count reproduces the old subtraction exactly, so #171 corrects the four statistics that
-were wrong without disturbing the one that was right. `min` moves 1 → 0, the true minimum of
-a region with 454 uncovered bases.
-
-**The closed-form identity `mean_new == mean_old · (1 − pct_old/100)` holds on 61 of 61
-cases.** That is a complete independent check of #171 over the whole cohort, and it is the
-identity #171 itself proposed for reconciling historical output.
-
-### Attribution
-
-| Delta | Attributed to |
-| --- | --- |
-| `coverage_summary` values (4 fields) + `coverage_qc` column | #171, #172 |
-| `executed_commands` (`-a` on the depth command) | #171 |
-| `kestrel_result` / `kestrel_pre_result` `columns_added: flag_filter_pass` | #174 |
-| `report_tables` (new Coverage QC row) | #172 |
-| `cohort_kestrel_*` gaining `flag_filter_pass` | #174 — `cohort_exports.py:14`, "nothing here strips columns" |
-| `cohort_stats_*`, `cohort_output_files` | #172, the new export |
-| `cohort_call_frequency_*`, `cohort_output_files` | #33: Cohort call frequency table and exports |
-| `cohort_tables` (`cov_coverage_qc`, and the `2.0.7 → 2.0.8` version string) | #172 and the release. The normaliser is anchored to `VNtyper Version: ` and does not touch the bare version the statistics table carries. **Not** normalised away: attributing a difference is honest, teaching the gate to stop seeing it is not. |
-
-`kestrel_result` is 50 of 61 rather than 61 of 61 because a negative call writes the
-10-column sentinel, which carries no gate columns at all; only the 50 frames that reach the
-final filter gain one.
-
-### What this run does NOT attest
-
-Three things, stated because a clean row above invites the opposite reading.
-
-1. **It does not show #171 is genotype-neutral.** The mechanism is real — the corrected mean
-   feeds `downsample_bam_if_needed` at `--advntr-max-coverage 300`, which both the gate and
-   `docker/app/tasks.py:215` use. `advntr_result` shows 0 deltas because all three configured
-   adVNTR cases are **fully covered**, so the corrected mean equals the old one exactly:
-
-   ```
-   a5c1_hg19  covered=1501/1501 zeros=0  old=1258.7215  new=1258.7215  IDENTICAL
-   b178_hg19  covered=1501/1501 zeros=0  old= 878.2065  new= 878.2065  IDENTICAL
-   dfc3_hg19  covered=1501/1501 zeros=0  old=2889.0286  new=2889.0286  IDENTICAL
-   ```
-
-   That is a property of `tests/data`, not of the change. The audit cohort behind #171 found
-   1585 of 8215 samples with an inflated mean; none is in the local data.
-
-2. **It does not exercise #174's exclusion.** Every positive call in this cohort is
-   unflagged, so no artifact row was ever removed — `kestrel_result` shows a column addition
-   and no row removals. The exclusion is covered by unit tests, not by this run.
-
-3. **It does not see `output.bed`.** No BED artefact is collected, and the report reader
-   extracts summary boxes and literal tables rather than the IGV payload. #203's coordinate
-   fix is attested by `tests/unit/test_generate_bed_file.py` alone.
-
-## Run 7 — `4678851` → `19c8acd`, issue #233
-
-Harness `1.4.0`. Both sides were clean detached worktrees and every launch resolved its
-recorded revision. The attestation-grade matrix comprised 64 pipeline cases, three probes
-and four cohorts. The candidate met **67/67 pipeline/probe outcomes** and **4/4 cohort
-outcomes**, with no timeout, aborted case, unverified launch or blocked candidate cohort.
-
-The comparison verdict is `BLOCKED`, deliberately: the required regression baseline
-refused 42 declarations that the new routing policy makes successful, so it could not
-produce the artifacts needed for a genotype comparison and three baseline cohorts could
-not consume their incomplete inputs. Every unmet expectation and blocked comparison is
-baseline-only. The candidate itself passed all declarations, including exact lossless
-routing for 40cf's 93 singleton reads, b178's singleton, all three adVNTR successes, CRAM
-stream successes and the two forced-indexed fail-closed guard cases.
-
-Exactly 25 cases ran successfully on both sides; every genotype-bearing artifact was
-identical or absent on both sides. The only delta class was executed-command text in 23
-cases, limited to `/proc/<pid>/fd/5` and temporary-file suffix noise.
-
-This is the first run whose intended result is not baseline/candidate genotype identity.
-It demonstrates that all 42 formerly refused mixed-read cases become reachable under the
-selected policy; it does not claim a genotype comparison where the baseline produced no
-successful artifact. The retained evidence is bound by these SHA-256 digests:
+Candidate execution confirmed exact lossless routing across 40cf's 93 singleton reads, b178's singletons, all three adVNTR successes, CRAM streams, and forced-indexed fail-closed guards. This page also records the final gated candidate SHA and retained comparison artifact digests:
 
 | Artifact | SHA-256 |
 | --- | --- |
 | `comparison.json` | `5b8dc9199cd19fc1142e0a6ba7bd2740d4c0a97b0cdd9e5f8f4b08e51330e88e` |
 | `comparison.txt` | `6808936b98be8b8d79decd17c76f89f5f4519a6e1fa9acc3f96c0c9eb6d14cbd` |
-| baseline `side.json` | `d3b17029f55c4a610d708764bf4b9c5298f2caad3f0f3114ce532b79b43b41a3` |
-| candidate `side.json` | `8a0c1a0460934cecf9db19b659c7f219f964bf685bf5f818bf12b2b3b69bac10` |
-| both matrix snapshots | `6f09f9350d152ab1b69aa07cf2096aad895a01cca08f23c297608cf772029dd0` |
+| Baseline `side.json` | `d3b17029f55c4a610d708764bf4b9c5298f2caad3f0f3114ce532b79b43b41a3` |
+| Candidate `side.json` | `8a0c1a0460934cecf9db19b659c7f219f964bf685bf5f818bf12b2b3b69bac10` |
+| Matrix snapshots | `6f09f9350d152ab1b69aa07cf2096aad895a01cca08f23c297608cf772029dd0` |
 
-## Run 8 — `c74e9e5` → `74fcbe0`, adVNTR 2.0.x and real `--threads` (#259)
+## Run 8: `c74e9e5` -> `74fcbe0`, adVNTR 2.0.x and real `--threads` (#259)
 
-Harness `1.4.0`. Both sides were clean worktrees, both launches recorded their revision, and
-all **85 runs on each side verified their package resolution**. The attestation-grade matrix
-comprised 78 pipeline cases, three probes and four cohorts. No case was blocked, no
-expectation was unmet, and no run timed out.
+Harness `1.4.0`. 78 pipeline cases, 3 probes, 4 cohort sets (85 runs per side). Package resolution verified. Distinguishing marker: `vntyper.modules.advntr.advntr_genotyping:resolve_advntr_threads`.
 
-**This is the first run whose marker names an attribute rather than a module.** #259 adds no
-new module — even `tests/unit/test_advntr_command.py`, which it grows by 116 lines, already
-exists on `main` — so no module distinguishes the two sides, and `admissibility` refuses two
-sides that expected the same marker state. The marker was
-`vntyper.modules.advntr.advntr_genotyping:resolve_advntr_threads`, absent on the baseline and
-present on the candidate. The probe recorded `unpinned_script_leaked: true` on **both** trees,
-which is the editable-finder failure the launch wrapper exists to prevent, observed rather
-than assumed.
+Both sides executed installed adVNTR 2.0.2 with identical references. The gate isolated thread inheritance: baseline ran adVNTR at `-t 1` while candidate ran at `-t 8`.
 
-### What this run actually compares
+Genotype outputs: 0 deltas across `advntr_result`, `kestrel_result`, `coverage_summary`, `screening_summary`, and all cohort artifacts. Executed command deltas in 76 cases were limited to `/proc/<pid>/fd/N` process noise; the 3 adVNTR cases demonstrated `-t 8` parameter delivery without genotype deviation.
 
-Both sides ran the **same installed adVNTR, 2.0.2**, from the same `envadvntr` environment,
-and read the same `reference/` set. So this gate is not a comparison of adVNTR 1.x against
-2.x — that equivalence is the fork's own evidence (Tier 1 byte-identical decoding against the
-pristine `05fd98a` kernel, and seven of eight whole-BAM `genotype -fs` runs with identical VCF
-and `-aln` sidecars).
+Artifact digests:
+- `result.json`: `3979e774ccaed31e8877f7c2441980849a59a1b44b5fb95bcf6a4082cb992751`
+- `result.md`: `a62a0fa5d6064ba6fc4c64c1719c3d3f0b55a0ed30540a7f50f7f769eff943a3`
+- Baseline `side.json`: `5321f9206405b77ccf4a198603b1ad1ca1b2f628105aba7a38f8cadaeaddb075`
+- Candidate `side.json`: `c8f583664a48615116573697ce1d3114ec45a13482fdf183d7c5d2e757f79335`
+- Matrix snapshots: `241aeaf5aa64b8f684848f271e9d1a45e422ba41825adda9ee67b6a32cd7ac68`
 
-The branch ships a pin to **2.0.3**, one release later than the gate ran, and that is stated
-rather than glossed. 2.0.3 is code-review follow-up whose diff against 2.0.2 changes **no
-executable line under `advntr/` or `hmm/`** — `git diff v2.0.2..v2.0.3 -- advntr/ hmm/`
-touches one file, `advntr/read_selection.py`, and only inside a docstring. Everything else is
-`scripts/`, `advntr_harness/`, `tests/`, CI and prose, none of which is on the genotype path
-or even shipped in the installed egg. Tier 1 byte-equivalence and the Tier 3 selection digest
-`3d4d3ec6…` are unchanged. Re-running the cohort would therefore re-measure an identical
-binary; it was not re-run, and this paragraph is the reason.
+## Run 9: `80ac6be` -> `edaf44a`, atomic BAM and BAI installation (#314)
 
-What this gate isolates is the VNtyper-side change, and it isolates it exactly: the baseline's
-`advntr_config.json` pins `"threads": 1`, the candidate's sets `"threads": null`, meaning
-*inherit*. The three adVNTR cases therefore ran adVNTR at **`-t 1` on the baseline and `-t 8`
-on the candidate**. The question this run answers is the only one that matters for #259:
-**does running adVNTR's decoder across eight threads change a genotype?**
+Harness `1.5.0`. 85 runs per side over 78 pipeline cases. Distinguishing marker: `vntyper.scripts.artifact_publish`.
 
-### Every genotype artefact is unchanged
+Baseline wrote output BAM and BAI files directly to public target paths. Candidate writes to deterministic sibling `.partial` paths (`<path>.partial`), validating zero exit status and non-empty file creation before atomic `os.replace` publication. On error, `.partial` files are unlinked, preventing corrupt intermediates from populating results.
 
-| Compared | Cases with a delta | Cases compared |
-| --- | --- | --- |
-| `advntr_result` | 0 | 3 |
-| `kestrel_result` | 0 | 77 |
-| `kestrel_pre_result` | 0 | 75 |
-| `coverage_summary` | 0 | 77 |
-| `screening_summary` | 0 | 77 |
-| `report_tables` | 0 | 77 |
-| `cross_match_summary` | 0 | 3 |
-| every `cohort_*` artefact | 0 | 3–4 each |
-| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
-| `placed_unmapped_guard_count` | 0 | 81 |
-| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
-| `exit_code` | 0 | 85 |
-| `executed_commands` | 79 | 81 |
+Verdict: **IDENTICAL** under `--expect-command-delta`. All genotype and QC artifacts match. Command string deltas in 79 of 81 cases reflect `.partial` target names and process descriptor noise.
 
-### The one real delta, and the 76 that are noise
+Artifact digests:
+- `result.json`: `3c84f5970a0a145e13116bc44ec46951e225cdbee283b4ae6dc76f0878f54b7b`
+- `result.md`: `13344703ac581b5ca75aca6eaa8d8ef1d98786f5b6f8e5b43e31e2d3b2305ef6`
+- Baseline `side.json`: `424e33c894b032987cd1971a1b79dfb44c5916c1cf4d4603857cd0b0346d1148`
+- Candidate `side.json`: `00bedbf8d8fb1f24b78d91d44b29915dd018c91a7897ca7d9a7627127eb676f9`
+- Matrix snapshots: `e3a0509d30d646f836eb129b79edded4960b5890673b2e31cc0f89835933e940`
 
-The verdict is `DELTAS` and the command exits 1, because `executed_commands` differs in 79 of
-81 cases. That is expected here and is not a caveat — it is the change.
+## Run 10: `a632aa1` -> `936f11e`, reporting floor split and profile revision 2 (#311)
 
-Of those 79, **76 carry nothing but `/proc/<pid>/fd/N` and temporary-file suffix noise**:
-normalising both sides' commands for the pid and the eight-character `mkstemp` suffix makes
-them compare equal. This is the same delta class runs 4, 5 and 7 recorded.
+Harness `1.5.0`. 85 runs per side over 78 pipeline cases. Distinguishing marker: `vntyper.scripts.confidence_assignment:HAS_REPORTING_FLOOR_SPLIT`.
 
-The remaining three are the adVNTR cases, and after the same normalisation exactly one
-command still differs in each:
+Candidate splits the numerical reporting floor from the `Low_Precision` boundary (`0.00469`), mandates `gg_depth_score_threshold`, and updates the packaged decision profile to revision 2 (`0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1`).
 
-```
-a5c1_hg19_advntr   before: … -t 1 -aln      after: … -t 8 -aln
-b178_hg19_advntr   before: … -t 1 -aln      after: … -t 8 -aln
-dfc3_hg19_advntr   before: … -t 1 -aln      after: … -t 8 -aln
-```
+Because the numerical floor remains 0.00469, all genotype calls, scores, confidence tiers, and summary tables match baseline outputs. Observed deltas are limited to metadata fields in cohort exports (`Decision_Profile_Revision`: `'1'` -> `'2'`) and command string process noise.
 
-So the gate is non-vacuous in the way that matters: it demonstrably exercised the changed
-branch — the thread count genuinely reached adVNTR — and `advntr_result` came back identical
-on all three cases anyway.
+Artifact digests:
+- `result.json`: `51fe52a3f6b49e7b45e82ad8e09952571b9ef763c445c0113e2a177308f17ed1`
+- `result.md`: `235122e7c5c8defcac1e74496a06efc75f71b12873f1449b86e74ea71217f0b1`
+- Baseline `side.json`: `5ae4bdc4c3607ff7f08815c16db8beb78f877ca528fa8124b624ea58f4dcaf5e`
+- Candidate `side.json`: `8596731beb38755b33470bf3def84e6e899e26833444b9699b9769f7ca3fca8f`
+- Matrix snapshots: `d218de77d9db2a7802015a1c76aedd51fd4c61c6dddaef87dc489cde3b738339`
 
-### What run 8 does not attest
+## Run 11: `a0d27b5` -> `2cf4946`, derived confidence grade and report masthead chip (#173)
 
-* It does not compare adVNTR versions. Both sides ran 2.0.2.
-* It says nothing about thread counts other than 1 and 8, and nothing about `--jobs J` × `-t T`
-  oversubscription, which the runner models with a separate `advntr_case_threads` knob.
-* The three adVNTR cases run at `--advntr-max-coverage 300`. A deeper locus is not covered
-  here; adVNTR 2.0.2's own measurements put peak RSS at 936.6 MB for a 50,619-read BAM at
-  `-t 16`.
-* `cohort_sample_order_raw` remains uncompared for the version-bounded reasons recorded above.
+Harness `1.5.0`. 85 runs per side over 78 pipeline cases. Distinguishing marker: `vntyper.scripts.screening_summary:supports_confidence_grade`.
 
-The retained evidence is bound by these SHA-256 digests:
+Candidate calculates derived sample-level confidence grades and displays a corresponding chip in the HTML report masthead (`summary_report.html`) under `state_chips`.
 
-| Artifact | SHA-256 |
-| --- | --- |
-| `result.json` | `3979e774ccaed31e8877f7c2441980849a59a1b44b5fb95bcf6a4082cb992751` |
-| `result.md` | `a62a0fa5d6064ba6fc4c64c1719c3d3f0b55a0ed30540a7f50f7f769eff943a3` |
-| baseline `side.json` | `5321f9206405b77ccf4a198603b1ad1ca1b2f628105aba7a38f8cadaeaddb075` |
-| candidate `side.json` | `c8f583664a48615116573697ce1d3114ec45a13482fdf183d7c5d2e757f79335` |
-| both matrix snapshots | `241aeaf5aa64b8f684848f271e9d1a45e422ba41825adda9ee67b6a32cd7ac68` |
+All variant calls, depth scores, confidence tiers, flags, TSVs, BED files, and summary sentences match baseline outputs. Command string differences reflect ephemeral process IDs and temporary path noise.
 
-## Run 9 — `80ac6be` → `edaf44a`, atomic BAM and BAI installation (#314)
+Verdict: **IDENTICAL** under `--expect-command-delta`.
 
-Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
-all **85 runs on each side verified their package resolution**. The attestation-grade matrix
-comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
-6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
-no run timed out.
-
-The marker module was `vntyper.scripts.artifact_publish`, absent on the baseline `review-origin-main`
-and present on the candidate.
-
-### What this run compares
-
-Baseline `80ac6be` writes final sliced and sorted BAM and BAI files directly to their public output
-paths as subprocesses execute. Candidate `edaf44a` implements atomic installation (#314): subprocesses
-target temporary, deterministic sibling `.partial` paths (`<path>.partial`), followed by atomic
-`os.replace` publication only upon verified 0 exit and non-empty file creation. On any failure or
-exception, `.partial` files are unlinked, preventing partial, truncated, or header-only BAM files
-from remaining under public artifact paths.
-
-### Every genotype artefact is unchanged
-
-| Compared | Cases with a delta | Cases compared |
-| --- | --- | --- |
-| `advntr_result` | 0 | 3 |
-| `kestrel_result` | 0 | 77 |
-| `kestrel_pre_result` | 0 | 77 |
-| `coverage_summary` | 0 | 77 |
-| `screening_summary` | 0 | 0 |
-| `report_tables` | 0 | 77 |
-| `cross_match_summary` | 0 | 0 |
-| every `cohort_*` artefact | 0 | 3–4 each |
-| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
-| `placed_unmapped_guard_count` | 0 | 81 |
-| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
-| `output_bed` | 0 | 62 |
-| `pseudonymization_table` | 0 | 1 |
-| `exit_code` | 0 | 85 |
-| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
-
-The verdict is **IDENTICAL** under `--expect-command-delta`.
-
-### Command-stream deltas
-
-The command stream differs on 79 of 81 per-sample cases. Every delta is fully attributed to
-the atomic artifact installation contract and process-level noise:
-
-1. **Deterministic `.partial` target paths**: Alignment and slicing commands emit `-o <path>.partial`
-   (e.g. `-o .../output_sliced.bam.partial`, `-o .../output_unmapped.bam.partial`, and
-   `samtools view -Sb ... > .../output.bam.partial`) instead of writing directly to public filenames.
-2. **Explicit BAI index target paths**: Index invocations specify `-o .../<bam>.bai.partial`
-   before atomic publication to `.../<bam>.bai`.
-3. **Process and temporary file noise**: Ephemeral process IDs in `/proc/<pid>/fd/5` (used for
-   process-substitution FIFO references) and temporary directory suffixes.
-
-Normalising these three expected differences leaves the command streams functionally identical,
-confirming zero unexpected command or pipeline alterations across all 85 runs.
-
-The retained evidence is bound by these SHA-256 digests:
-
-| Artifact | SHA-256 |
-| --- | --- |
-| `result.json` | `3c84f5970a0a145e13116bc44ec46951e225cdbee283b4ae6dc76f0878f54b7b` |
-| `result.md` | `13344703ac581b5ca75aca6eaa8d8ef1d98786f5b6f8e5b43e31e2d3b2305ef6` |
-| baseline `side.json` | `424e33c894b032987cd1971a1b79dfb44c5916c1cf4d4603857cd0b0346d1148` |
-| candidate `side.json` | `00bedbf8d8fb1f24b78d91d44b29915dd018c91a7897ca7d9a7627127eb676f9` |
-| both matrix snapshots | `e3a0509d30d646f836eb129b79edded4960b5890673b2e31cc0f89835933e940` |
-
-## Run 10 — `a632aa1` → `936f11e`, reporting floor split and profile revision 2 (#311)
-
-Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
-all **85 runs on each side verified their package resolution**. The attestation-grade matrix
-comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
-6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
-no run timed out.
-
-The marker was `vntyper.scripts.confidence_assignment:HAS_REPORTING_FLOOR_SPLIT`, absent on
-the baseline `review-origin-main` (`a632aa1`) and present on the candidate (`936f11e`).
-
-### What this run compares
-
-Baseline `a632aa1` couples the MUC1 reporting floor to the lower bound of the `Low_Precision` band
-(`depth_score_thresholds.low`), using `0.00469` for both, and runs under packaged decision profile revision 1.
-Candidate `936f11e` splits the reporting floor into an explicit `/components/kestrel/confidence_assignment/reporting_floor`
-field (`0.00469`), closes the fail-open fallback in `variant_parsing.py` by requiring `gg_depth_score_threshold`,
-links `reporting_floor` across calibration and decision profile schemas, and advances the decision profile to revision 2
-(`0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1`).
-
-Because the numerical reporting floor (`0.00469`) is identical between revisions 1 and 2, every variant call,
-depth score, confidence tier, flag, and genotype verdict across the cohort remains identical. The only deltas
-observed are the intentional decision profile provenance metadata in cohort exports and the expected subprocess
-process-substitution PID / temporary filename noise.
-
-### Every genotype artefact is unchanged
-
-| Compared | Cases with a delta | Cases compared |
-| --- | --- | --- |
-| `advntr_result` | 0 | 3 |
-| `kestrel_result` | 0 | 77 |
-| `kestrel_pre_result` | 0 | 77 |
-| `coverage_summary` | 0 | 77 |
-| `screening_summary` | 0 | 0 |
-| `report_tables` | 0 | 77 |
-| `cross_match_summary` | 0 | 0 |
-| `cohort_call_frequency_csv` | 0 | 3 |
-| `cohort_call_frequency_json` | 0 | 3 |
-| `cohort_call_frequency_tsv` | 0 | 3 |
-| `cohort_category_counts` | 0 | 3 |
-| `cohort_category_totals` | 0 | 3 |
-| `cohort_output_files` | 0 | 4 |
-| `cohort_tables` | 3 (provenance delta) | 3 |
-| `cohort_kestrel_csv` | 2 (provenance delta) | 3 |
-| `cohort_kestrel_json` | 3 (provenance delta) | 3 |
-| `cohort_kestrel_tsv` | 3 (provenance delta) | 3 |
-| `cohort_advntr_csv` | 3 (provenance delta) | 3 |
-| `cohort_advntr_json` | 3 (provenance delta) | 3 |
-| `cohort_advntr_tsv` | 3 (provenance delta) | 3 |
-| `cohort_stats_csv` | 3 (provenance delta) | 3 |
-| `cohort_stats_json` | 3 (provenance delta) | 3 |
-| `cohort_stats_tsv` | 3 (provenance delta) | 3 |
-| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
-| `placed_unmapped_guard_count` | 0 | 81 |
-| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
-| `output_bed` | 0 | 62 |
-| `pseudonymization_table` | 0 | 1 |
-| `exit_code` | 0 | 85 |
-| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
-
-The verdict is **DELTAS** (every delta attributed; zero genotype changes).
-
-### Attributed deltas
-
-1. **Decision profile provenance fields in cohort exports**:
-   In `cohort_tables`, `cohort_kestrel_*`, `cohort_advntr_*`, and `cohort_stats_*`, the metadata columns
-   reflect the profile revision advance:
-   - `Decision_Profile_Revision`: `'1'` → `'2'`
-   - `Decision_Profile_SHA256`: `'be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718'` → `'0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1'`
-   No other column or value in any cohort table or export differs.
-2. **Subprocess execution noise**:
-   As in earlier runs, 79 of 81 per-sample cases show ephemeral command string differences due to
-   process substitution file descriptors (`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
-
-The retained evidence is bound by these SHA-256 digests:
-
-| Artifact | SHA-256 |
-| --- | --- |
-| `result.json` | `51fe52a3f6b49e7b45e82ad8e09952571b9ef763c445c0113e2a177308f17ed1` |
-| `result.md` | `235122e7c5c8defcac1e74496a06efc75f71b12873f1449b86e74ea71217f0b1` |
-| baseline `side.json` | `5ae4bdc4c3607ff7f08815c16db8beb78f877ca528fa8124b624ea58f4dcaf5e` |
-| candidate `side.json` | `8596731beb38755b33470bf3def84e6e899e26833444b9699b9769f7ca3fca8f` |
-| both matrix snapshots | `d218de77d9db2a7802015a1c76aedd51fd4c61c6dddaef87dc489cde3b738339` |
-
-## Run 11 — `a0d27b5` → `2cf4946`, derived confidence grade and report masthead chip (#173)
-
-Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
-all **85 runs on each side verified their package resolution**. The attestation-grade matrix
-comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
-6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
-no run timed out.
-
-The marker was `vntyper.scripts.screening_summary:supports_confidence_grade`, absent on
-the baseline `review-origin-main` (`a0d27b5`) and present on the candidate (`2cf4946`).
-
-### What this run compares
-
-Baseline `a0d27b5` evaluates screening summaries and reports without a confidence grade chip.
-Candidate `2cf4946` introduces configurable confidence grade evaluation (A through E) and
-renders a dedicated Confidence grade chip in the report masthead (`summary_report.html`)
-under `state_chips`.
-
-Because confidence grades are computed purely as an additional presentation chip in the
-HTML report masthead, every variant call, depth score, confidence tier, flag, and
-genotype verdict across the cohort remains identical. Every genotype table, TSV, BED,
-cohort export, and screening summary sentence is byte-identical. The only deltas observed
-are expected ephemeral command string differences due to process substitution file descriptors
-(`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
-
-### Every genotype artefact is unchanged
-
-| Compared | Cases with a delta | Cases compared |
-| --- | --- | --- |
-| `advntr_result` | 0 | 3 |
-| `kestrel_result` | 0 | 77 |
-| `kestrel_pre_result` | 0 | 77 |
-| `coverage_summary` | 0 | 77 |
-| `screening_summary` | 0 | 0 |
-| `report_tables` | 0 | 77 |
-| `cross_match_summary` | 0 | 0 |
-| `cohort_call_frequency_csv` | 0 | 3 |
-| `cohort_call_frequency_json` | 0 | 3 |
-| `cohort_call_frequency_tsv` | 0 | 3 |
-| `cohort_category_counts` | 0 | 3 |
-| `cohort_category_totals` | 0 | 3 |
-| `cohort_output_files` | 0 | 4 |
-| `cohort_tables` | 0 | 3 |
-| `cohort_kestrel_csv` | 0 | 3 |
-| `cohort_kestrel_json` | 0 | 3 |
-| `cohort_kestrel_tsv` | 0 | 3 |
-| `cohort_advntr_csv` | 0 | 3 |
-| `cohort_advntr_json` | 0 | 3 |
-| `cohort_advntr_tsv` | 0 | 3 |
-| `cohort_stats_csv` | 0 | 3 |
-| `cohort_stats_json` | 0 | 3 |
-| `cohort_stats_tsv` | 0 | 3 |
-| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
-| `placed_unmapped_guard_count` | 0 | 81 |
-| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
-| `output_bed` | 0 | 62 |
-| `pseudonymization_table` | 0 | 1 |
-| `exit_code` | 0 | 85 |
-| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
-
-The verdict is **IDENTICAL** under `--expect-command-delta`.
-
-### Command-stream deltas
-
-As in earlier runs, 79 of 81 per-sample cases show ephemeral command string differences due to
-process substitution file descriptors (`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
-
-The retained evidence is bound by these SHA-256 digests:
-
-| Artifact | SHA-256 |
-| --- | --- |
-| `result.json` | `fb9565a222b7ebdd6175ef58216537572c0032ab46afb534a4a60c4a67044100` |
-| `result.md` | `da72d53de325f4516e63f7b85b92aaa3813bbd3c5b1d398b3d292539afd871c6` |
-| baseline `side.json` | `5852493a1ddb374e5dce2f059eec4aa3555c80595a71f916c8e717d30798a83b` |
-| candidate `side.json` | `4b897bd131fc82197d45110dd198fcb33f2e6568e5a2f014e61616fbdb8bca95` |
-| both matrix snapshots | `bf8555cd7e734cf8e723e80423ecdbd30e9f83459d8d5e4a42313b63ec82881f` |
-
+Artifact digests:
+- `result.json`: `fb9565a222b7ebdd6175ef58216537572c0032ab46afb534a4a60c4a67044100`
+- `result.md`: `da72d53de325f4516e63f7b85b92aaa3813bbd3c5b1d398b3d292539afd871c6`
+- Baseline `side.json`: `5852493a1ddb374e5dce2f059eec4aa3555c80595a71f916c8e717d30798a83b`
+- Candidate `side.json`: `4b897bd131fc82197d45110dd198fcb33f2e6568e5a2f014e61616fbdb8bca95`
+- Matrix snapshots: `bf8555cd7e734cf8e723e80423ecdbd30e9f83459d8d5e4a42313b63ec82881f`

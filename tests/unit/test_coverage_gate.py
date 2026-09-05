@@ -288,44 +288,12 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert "three untested lines moved it 0.03" not in agents
     assert "dedicated ratchet change" in normalized_agents
     assert "sustained by the Python 3.10–3.13 matrix" in normalized_agents
-    # `docs/` is strictly the published site. The #295 program directly requires exactly
-    # these reviewed Phase 1 pages and the umbrella design; every other planning artifact
-    # remains in the untracked `.planning/` workspace. Equality is deliberate: a
-    # directory-wide exception would let an unrelated page ship without review.
+    # `docs/` is strictly the published site. Planning artifacts remain in the
+    # untracked `.planning/` workspace.
     assert not any(line.startswith("exclude_docs:") for line in mkdocs.splitlines()), (
         "docs/ must contain nothing that is excluded from the site"
     )
     repo_root = Path(__file__).resolve().parents[2]
     docs_root = repo_root / "docs"
-    approved_planning_pages = {
-        "docs/superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md": (
-            "Kestrel BAM Evidence Semantics Design",
-            "superpowers/specs/2026-08-31-kestrel-bam-evidence-semantics-design.md",
-        ),
-        "docs/superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md": (
-            "Kestrel BAM Evidence Semantics Plan",
-            "superpowers/plans/2026-08-31-kestrel-bam-evidence-semantics.md",
-        ),
-        "docs/superpowers/specs/2026-08-31-issue-295-completion-program-design.md": (
-            "Issue 295 Completion Program Design",
-            "superpowers/specs/2026-08-31-issue-295-completion-program-design.md",
-        ),
-        "docs/superpowers/plans/2026-08-31-issue-295-completion-program.md": (
-            "Issue 295 Completion Program Plan",
-            "superpowers/plans/2026-08-31-issue-295-completion-program.md",
-        ),
-    }
-    published_planning_pages = {
-        path.relative_to(repo_root).as_posix()
-        for directory in (docs_root / "superpowers", docs_root / "plans")
-        if directory.exists()
-        for path in directory.rglob("*")
-        if path.is_file()
-    }
-    assert published_planning_pages == set(approved_planning_pages)
-    for repo_relative, (title, docs_relative) in approved_planning_pages.items():
-        assert f"- {title}: {docs_relative}" in mkdocs
-        page = (repo_root / repo_relative).read_text(encoding="utf-8")
-        assert all(delimiter not in page for delimiter in ("{{", "{%", "{#"))
-        assert "/home/" not in page, f"{repo_relative} exposes a contributor-specific absolute path"
-    assert not (docs_root / "plans").exists()
+    for directory in (docs_root / "superpowers", docs_root / "plans", docs_root / "specs"):
+        assert not directory.exists(), f"{directory} must not exist under docs/"

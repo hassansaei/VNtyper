@@ -12,7 +12,7 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
 
     - Sorted and indexed (`.bam.bai` or `.bai` must exist alongside the BAM)
     - Aligned to a [supported reference assembly](reference-assemblies.md)
-    - VNtyper 2 validates the file with `samtools quickcheck` before processing
+    - VNtyper 2 validates file integrity with `samtools quickcheck` before processing
 
 === "CRAM"
 
@@ -22,12 +22,12 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
 
     Requirements:
 
-    - Sorted and indexed (`.cram.crai` must exist)
+    - Sorted and indexed (`.cram.crai` or `.crai` must exist alongside the CRAM)
     - Aligned to a supported reference assembly
-    - The original reference FASTA must be accessible (CRAM files are reference-dependent)
-    - A local reference named by the CRAM header must resolve inside the directory containing
-      the CRAM. For a reference elsewhere, pass `--reference-fasta` or configure it explicitly.
-    - Validated with `samtools quickcheck`
+    - Reference FASTA must be accessible (CRAM compression depends on reference sequence)
+    - A local reference named in the CRAM header must resolve inside the directory containing
+      the CRAM. For a reference elsewhere, specify `--reference-fasta` or configure it in `config.json`.
+    - Validated with `samtools quickcheck` before processing
 
 === "FASTQ"
 
@@ -39,27 +39,26 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
 
     - Paired-end reads: both `--fastq1` and `--fastq2` are required
     - Gzipped (`.fastq.gz`) or uncompressed (`.fastq`) accepted
-    - VNtyper 2 validates FASTQ format (checks first 4 lines for correct structure)
-    - Reads are processed through fastp for quality control, then aligned with BWA
+    - Validates format by verifying first 4 lines follow standard FASTQ structure
+    - Reads are quality-controlled via fastp, then aligned with BWA
 
-!!! note "SHARK module requires FASTQ input"
-    The SHARK filtering module (`--extra-modules shark`) only works with FASTQ input.
-    With BAM or CRAM input, the SHARK module is silently skipped even if specified.
+!!! warning "SHARK requires FASTQ input"
+    The SHARK read-filtering module (`--extra-modules shark`) requires paired-end FASTQ input.
+    If specified with BAM or CRAM input, the pipeline logs an error and exits immediately (`sys.exit(1)`).
 
 !!! important "Keep alignment inputs and outputs in separate trees"
-    For BAM or CRAM input, the output root must stay outside the directory containing the
-    alignment and all descendants of that directory. A BAM at `sample.bam` and output at
-    `results/` are both under the same current-directory input tree and the run is rejected.
-    Use a layout such as `inputs/sample.bam` and `results/sample/`, as shown above, or put
-    the output root elsewhere.
+    For BAM or CRAM input, the output root directory must stay outside the directory containing the
+    alignment file and all descendants of that directory. A BAM at `sample.bam` with output at
+    `results/` shares the current working directory as a common root, causing the run to be rejected.
+    Use distinct directory paths such as `inputs/sample.bam` and `results/sample/`.
 
 ## Input Validation
 
-VNtyper 2 performs automatic validation before starting the pipeline:
+VNtyper 2 performs automated validation before executing any pipeline stage:
 
 | Input Type | Validation Method |
 |------------|-------------------|
-| BAM / CRAM | `samtools quickcheck` -- verifies file integrity and EOF marker |
-| FASTQ      | Format check -- verifies the first 4 lines follow FASTQ structure |
+| BAM / CRAM | `samtools quickcheck`: verifies file integrity, BAM/CRAM headers, and EOF markers |
+| FASTQ      | Format verification: validates record structure across first 4 lines |
 
-If validation fails, the pipeline exits immediately with a descriptive error message.
+If validation fails, the pipeline aborts immediately with an informative diagnostic error.

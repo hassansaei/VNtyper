@@ -1,16 +1,16 @@
 # Report Generation
 
-VNtyper 2 produces two types of reports: a per-sample HTML summary report with embedded IGV visualization, and an optional multi-sample cohort summary report with aggregated statistics.
+VNtyper produces two report types: a per-sample HTML summary report with embedded IGV visualization, and an optional multi-sample cohort summary report with aggregated statistics.
 
 ## Sample Report
 
-The sample report (`summary_report.html`) is generated at the end of each pipeline run using a Jinja2 HTML template. It integrates results from all pipeline stages into a single document.
+The sample report (`summary_report.html`) is generated at the end of each run via a Jinja2 template, compiling results from all pipeline stages into a single document.
 
 ### Report Contents
 
 **Variant Summary Table**
 
-The Kestrel results are displayed in a sortable table with columns for motif, variant type, position, REF/ALT alleles, depth metrics, depth score, confidence level, flag status, the mutation-naming record, and motif sequence. The naming record includes the reconciled MUC1 name, confidence tier and flags, both callers' own names, ambiguity interval, repeat form and naming note; it is not collapsed to the reconciled name because caller disagreement is evidence the reader needs. See [MUC1 Nomenclature](nomenclature.md).
+Displays Kestrel results in a sortable table with columns for motif, variant type, position, REF/ALT alleles, depth metrics, depth score, confidence level, flag status, full nomenclature records, and motif sequences. The nomenclature record includes the reconciled MUC1 name, confidence tier, explanatory flags, caller-specific names, ambiguity interval, repeat form, and notes. See [MUC1 Nomenclature](nomenclature.md).
 
 The reading key under the result tables includes this concise artifact clarification:
 Kestrel `output.bam` contains resolved haplotype records, not sequencing reads. Its
@@ -18,50 +18,48 @@ record counts are haplotype-record support; `XD` is minimum k-mer depth and does
 weight votes or alter names or tiers. This clarification remains visible when the
 alignment browser is off or no BAM is available.
 
-Confidence is written as a labelled pill rather than encoded only by an alert colour:
+Confidence is displayed as a labelled indicator:
 
-- High_Precision / High_Precision* -- high-precision call
-- Low_Precision -- lower-precision call
-- Negative -- no variant detected
+- High_Precision / High_Precision*: High-confidence call.
+- Low_Precision: Marginal-confidence call.
+- Negative: No variant detected.
 
 If adVNTR was run, its results appear in a separate table showing VID, variant state, supporting read count, mean coverage, p-value, repeat unit, REF/ALT, flag status and the same complete mutation-naming record.
 
 **Screening Summary**
 
-The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The chips state the Kestrel result, adVNTR result, concordance, Confidence grade, Coverage QC, Mean coverage, and Flank depth; an unmatched configuration also gets a **Screening rule: Not configured** chip. They use existing pipeline and configured vocabulary such as **High precision**, **Not performed**, **Not assessable**, **Finding**, **Finding corroborated**, **No finding**, **PASS** and **FAIL**.
+The masthead displays sample metadata, computed result chips, and interpretive text. Chips indicate Kestrel status, adVNTR status, concordance, confidence grade, coverage QC, mean coverage, and flank depth. Unmatched configurations display `Screening rule: Not configured`. Vocabularies use standard tokens: **High precision**, **Not performed**, **Not assessable**, **Finding**, **Finding corroborated**, **No finding**, **PASS**, and **FAIL**.
 
-The **Confidence grade** chip conveys the sample-level confidence derived from `confidence_grade_rules` in `report_config.json`:
+The **Confidence grade** chip conveys sample-level confidence from `confidence_grade_rules` in `report_config.json`:
 
-- **Finding tone** (amber highlight): `Finding`, `Finding corroborated`
-- **Caution tone** (warning highlight): `Finding limited`, `No finding limited`, `Not established`
-- **Neutral tone**: `No finding`
+- **Finding tone** (amber highlight): `Finding`, `Finding corroborated`.
+- **Caution tone** (warning highlight): `Finding limited`, `No finding limited`, `Not established`.
+- **Neutral tone**: `No finding`.
 
-If a custom report configuration omits `confidence_grade_rules`, the confidence grade is not established and the chip is gracefully omitted from the masthead without error.
+When custom configurations omit `confidence_grade_rules`, the chip is omitted without error.
 
-**The masthead produces no verdict word.** Its internal `finding`, `no-finding` and `indeterminate` emphasis states select styling only and are never printed as labels. The words a reader sees come from the pipeline state, the configured confidence grade, and the configured interpretive message.
-
-The text is generated from a rule-based system defined in `report_config.json` that considers:
+The masthead prints no arbitrary verdict text. Styling reflects internal states (`finding`, `no-finding`, `indeterminate`), while text is populated from configuration rules based on:
 
 - Kestrel result category (High_Precision, Low_Precision, flagged variants, negative)
 - adVNTR result category (positive, negative, not performed)
-- Quality metrics pass/fail status
+- Quality metric pass/fail thresholds
 
-The screening summary states what the combined evidence supports, including where orthogonal validation is recommended. Each configured message is stored both verbatim (`message`) and as the ordered parts it is rendered in (`segments`); the two are kept in step by a round-trip check, and a configuration supplying only `message` still renders.
+Interpretive text explains whether orthogonal validation is recommended. Each message is tracked both verbatim (`message`) and as segmented units (`segments`).
 
-A stage that ran without producing a readable result is reported as neither a positive nor a negative. When either genotyping stage is in that state, the configured message is withheld -- it was selected by matching a state the run never established -- and the masthead is drawn in its indeterminate state instead.
+Stages that fail to produce readable results are treated as indeterminate rather than negative, withholding interpretive text and drawing the masthead in neutral style.
 
-Immediately after the message, a screening-provenance line repeats the raw evidence in words: Kestrel state, adVNTR state and Coverage QC. The report's separate **Provenance** block records the requested and detected assemblies, analysed region and summary schema version. For an older run that did not persist one of those fields, the value is **not recorded by this run**; VNtyper does not guess from the current configuration.
+A screening provenance line reports raw caller findings and Coverage QC. The **Provenance** block records requested and detected assemblies, analysed target coordinates, and schema versions. Missing legacy fields display `not recorded by this run`.
 
 **Cross-Match Summary**
 
-When both Kestrel and adVNTR results are available, the report indicates whether at least one concordant variant was found between the two methods.
+When both callers run, reports indicate whether concordant variants were detected.
 
 ### QC Metrics
 
-The report includes quality metrics from multiple sources:
+Quality metrics are evaluated across tools:
 
-| Metric | Source | Configured threshold | Inclusive comparison |
-|--------|--------|----------------------|----------------------|
+| Metric | Source | Configured threshold | Evaluation rule |
+|--------|--------|----------------------|-----------------|
 | Mean VNTR coverage | samtools depth | `thresholds.mean_vntr_coverage` | measured >= configured value |
 | Percent VNTR uncovered | samtools depth | `thresholds.percent_vntr_uncovered` | measured <= configured value |
 | Duplication rate | fastp | `thresholds.duplication_rate` | measured <= configured value |
@@ -69,71 +67,47 @@ The report includes quality metrics from multiple sources:
 | Q30 rate | fastp | `thresholds.q30_rate` | measured >= configured value |
 | Passed filter rate | fastp | `thresholds.passed_filter_reads_rate` | measured >= configured value |
 
-Each metric is displayed with a color-coded indicator (green check or red warning) based on its configured threshold. The four configured fastp cutoffs are required finite numeric fractions from 0 through 1; a missing, malformed, non-finite, or out-of-range cutoff is logged and raises `ValueError` while the report is rendered. Each nonmissing measured fastp rate from `output.json` must also be a finite numeric fraction from 0 through 1; malformed, non-finite, and out-of-range rates are logged and raise `ValueError` with their metric key. A `None` rate remains missing and renders as `N/A` with no status icon. JSON fractions enter this decision boundary as exact decimal values, without first being rounded through a binary float. Each measured rate and configured cutoff is rounded half-up on its exact decimal value to two decimal places of percent before display and comparison, and equality passes.
+Each metric is displayed with a status indicator based on its configured threshold. The four configured fastp cutoffs are required finite numeric fractions from 0 through 1; a missing, malformed, non-finite, or out-of-range cutoff is logged and raises `ValueError` during report rendering. Each nonmissing measured fastp rate from `output.json` must also be a finite numeric fraction from 0 through 1; malformed, non-finite, and out-of-range rates are logged and raise `ValueError` with their metric key. A `None` rate remains missing and renders as `N/A` with no status icon. JSON fractions enter this decision boundary as exact decimal values, without first being rounded through a binary float. Each measured rate and configured cutoff is rounded half-up on its exact decimal value to two decimal places of percent before display and comparison, and equality passes.
 
-The passed-filter rate uses exact division of `filtering_result.passed_filter_reads` by `summary.before_filtering.total_reads`. Both sources must be finite non-negative integer counts, passed reads cannot exceed total reads, and a zero total is accepted only with zero passed reads; that empty case renders as unavailable. A genuinely absent optional `output.json` also renders fastp as unavailable. If the file is present but unreadable, malformed JSON, or structurally invalid, report generation logs the failure and raises `ValueError` instead of describing corrupt evidence as absent.
+The passed-filter rate divides `filtering_result.passed_filter_reads` by `summary.before_filtering.total_reads`. Total reads must be non-negative integers. An absent `output.json` marks fastp metrics as unavailable; corrupt files raise `ValueError`.
 
-The two coverage rows also decide a verdict. The report shows it as a **Coverage QC** row reading `PASS` or `FAIL`, and the same value is written to `coverage_summary.tsv` as a `coverage_qc` column and reaches the cohort exports as `cov_coverage_qc`. `FAIL` on either metric is what makes the screening summary report the sample's quality metrics as below threshold.
-
-Before VNtyper 2.0.8 the uncovered row was displayed and never enforced: only the mean decided the quality gate, so a sample with acceptable mean coverage and half the VNTR uncovered passed. The table above now describes what the code does.
+Coverage metrics determine the **Coverage QC** status (`PASS` or `FAIL`), written to `coverage_summary.tsv` as `coverage_qc` and exported to cohorts as `cov_coverage_qc`. A `FAIL` on mean coverage or uncovered percentage flags the run.
 
 **BAM Header Information**
 
-For BAM/CRAM input, the report displays the detected reference assembly (from both text and contig matching), alignment pipeline, and any associated warnings.
+Displays detected reference assembly, alignment software, and associated warnings.
 
 ### IGV Integration
 
-The report embeds an interactive IGV genome browser view using the [igv-reports](https://github.com/igvteam/igv-reports) library. The IGV view is generated from:
+Embeds interactive IGV genome browser views via [igv-reports](https://github.com/igvteam/igv-reports):
 
-- **BAM track** -- Kestrel's resolved haplotype-record alignment output (`output.bam`),
-  not an alignment of the input sequencing reads
-- **VCF track** -- filtered INDEL variants (`output_indel.vcf.gz` or `.vcf`)
-- **BED track** -- variant position file (`output.bed`)
-- **FASTA reference** -- MUC1 VNTR reference sequence
+- **BAM track**: Kestrel's resolved haplotype records in `output.bam`, not sequencing reads.
+- **VCF track**: Filtered INDEL variants (`output_indel.vcf.gz` or `.vcf`).
+- **BED track**: Variant locus file (`output.bed`).
+- **FASTA reference**: MUC1 VNTR reference sequence.
 
-The flanking region parameter (default: 50 bp) controls how much sequence context is shown around each variant position. This is configurable in `config.json` under `default_values.flanking`.
+The flanking display window defaults to 50 bp (`default_values.flanking`).
 
-`--report-igv` controls how this view is packaged:
+Configured via `--report-igv`:
 
-| Mode | Result |
-|------|--------|
-| `embedded` (default) | The verified, compressed igv.js library and the alignment session are carried in `summary_report.html`. |
-| `sidecar` | The summary stays small and a self-contained `igv_report.html` is written beside it. |
-| `off` | No alignment browser is generated; the result tables remain complete. |
+| Mode | Behavior |
+|------|----------|
+| `embedded` (default) | Compresses igv.js library and alignment session directly within `summary_report.html`. |
+| `sidecar` | Writes an external self-contained `igv_report.html` file alongside the report. |
+| `off` | Omits the genome browser while retaining tabular results. |
 
-In the last verification specimen, the self-contained report measured **78,486 bytes without alignment data** and **575,762 bytes with embedded alignment data**. The old report fetched **2,002,405 bytes** over 11 CDN tags in addition to its file. These figures describe the measured specimen rather than a fixed size guarantee; sample content changes the final byte count.
+Self-contained reports without alignments measure ~78 KB; embedded alignments measure ~576 KB. Decompression uses native browser `DecompressionStream` (Chrome 80+, Safari 16.4+, Firefox 113+).
 
-The embedded library is expanded with `DecompressionStream`. This sets a 2023 cross-browser floor for the alignment panel: Chrome 80+, Safari 16.4+ or Firefox 113+. An older browser receives an authored explanation, while the tables and all variant evidence remain available.
+### Printing and Archiving
 
-!!! info "VCF compression"
-    If bcftools is installed, the INDEL VCF is compressed and sorted for optimal IGV performance. If bcftools is unavailable, the uncompressed VCF is used. The report generation handles both cases gracefully.
-
-### Printing and archiving
-
-The report is written to be printed: the printed sheet is the artefact that gets filed, forwarded and read years later, so it carries its own identity. **Every** page repeats the sample, the assay, the reference assembly, the VNtyper version and the time the run started in the page margin, and is numbered `Page N of M` so a print that lost a sheet is visible as one — a sheet separated from the rest still says what it is a sheet of. The detailed coverage table prints in place of the basic view, results tables print in full rather than clipped to the screen's column widths, and the on-screen switches are omitted because paper has no switches.
-
-The running header is a paged-CSS feature that only Chromium implements, so the first page additionally states the same identity as an ordinary line of the document. In Chromium that line is redundant with the margin; in Firefox and WebKit, which drop page margin boxes silently, it is the only identity the printed record has.
-
-The pipeline log is the deliberate exception. It prints as a one-line pointer back to the HTML original rather than as pages of DEBUG output, whether or not the reader had it expanded.
-
-!!! warning "One thing a collapsed section costs a reader with JavaScript disabled"
-    Sections such as **Variants** are collapsible. The report is served with them **open**, so an ordinary print carries them; if a reader collapses one and then prints, a small script reopens it for the duration of the print and closes it again afterwards.
-
-    That script is the only mechanism that works. Measured in Chromium 151: a section the reader collapsed prints its heading and **none of its contents** when JavaScript is disabled, and no stylesheet can change that — `open` is an HTML attribute rather than a style, and the browser hides a closed section's contents in a way an author stylesheet cannot reach. Firefox and WebKit ignore the paged-CSS features this report relies on altogether.
-
-    So with scripting off, print the report **as it opens** — do not collapse a section first. If a print is missing a section, its heading will still be on the page where the contents should have been.
+The print stylesheet includes running margin headers with sample ID, assay name, reference build, VNtyper version, and timestamp. Pages are numbered `Page N of M` so a print that lost a sheet is visible as one: a sheet separated from the rest still identifies what it belongs to. Result tables print in full width without scrollbars. Collapsible sections print open. Pipeline execution logs print as a single-line reference back to the digital file.
 
 ### Custom template context compatibility
 
-`paths.template_dir` may point at a custom Jinja template directory, so the values
-VNtyper passes to `report_template.html` are a public compatibility interface. VNtyper
-2.x continues to provide the deprecated keys below even though the shipped template no
-longer reads them. They remain available throughout 2.x and may be removed in
-**VNtyper 3.0.0**, not before:
+Custom Jinja template directories configured via `paths.template_dir` interact with a public compatibility interface. VNtyper 2.x provides the deprecated keys below even though the shipped template no longer reads them. They remain available throughout VNtyper 2.x and may be removed in **VNtyper 3.0.0**, not before:
 
-- `percent_vntr_uncovered_color`, `mean_vntr_coverage_color`,
-  `duplication_rate_color`, `q20_color`, `q30_color`, and `passed_filter_color`;
-- raw fastp fractions and the display values new templates should use instead:
+- Color keys: `percent_vntr_uncovered_color`, `mean_vntr_coverage_color`, `duplication_rate_color`, `q20_color`, `q30_color`, `passed_filter_color`.
+- Raw fastp fractions and display replacements:
 
   | Deprecated raw key (available through 2.x) | Display replacement |
   | --- | --- |
@@ -142,52 +116,33 @@ longer reads them. They remain available throughout 2.x and may be removed in
   | `q30_rate` | `q30_rate_display` |
   | `passed_filter_rate` | `passed_filter_rate_display` |
 
-- `igv_content`;
-- `screening_state.kestrel_result` and `screening_state.advntr_result`.
-
-For new custom templates, use the accessible `*_icon` fragments and the semantic state
-tokens in `_report_base.html` instead of raw colour names. Build alignment presentation
-from the structured IGV/session values used by the shipped template rather than
-`igv_content`. Use `screening_state.kestrel_state_text` and
-`screening_state.advntr_state_text` for reader-facing algorithm state: unlike the raw
-result fields, those values distinguish a negative result from a stage that was not
-performed or failed to produce readable evidence.
+- Alignment and state keys: `igv_content`, `screening_state.kestrel_result`, and `screening_state.advntr_result`.
 
 ## Cohort Report
 
-The cohort summary module (`cohort_summary.py`) aggregates results from multiple pipeline runs into a single report. It scans a directory structure for `pipeline_summary.json` files and constructs:
+The cohort module (`cohort_summary.py`) aggregates runs across directories:
 
-- **Sample result table** -- aggregated variant calls, confidence levels, flags and complete mutation-naming records across all samples
-- **Donut charts** -- interactive Plotly visualizations showing the distribution of results (positive/negative/low precision) across the cohort
-- **Coverage statistics** -- per-sample VNTR coverage metrics
-- **Runtime statistics** -- pipeline execution times
-- **Version and assembly tracking** -- VNtyper 2 versions and detected reference assemblies
-- **Call frequency table** -- variant calls grouped across the cohort, indicating which calls fall at or below the configured frequency threshold
+- **Sample result table**: Aggregated calls, confidence tiers, and nomenclature.
+- **Donut charts**: Plotly visualizations of call distributions.
+- **Coverage statistics**: Multi-sample VNTR coverage metrics.
+- **Runtime metrics**: Step execution times.
+- **Call frequency table**: Variant frequencies across the cohort.
 
-When a cohort contains a BAM-specific nomenclature flag, its reading key gives the same
-resolved-haplotype-record and `XD` explanation as the sample report. CSV, TSV and JSON keep
-the stable `Nomenclature_Flags` column and token values without adding prose rows.
+When a cohort contains a BAM-specific nomenclature flag, its reading key gives the same resolved haplotype records and `XD` minimum k-mer depth explanation as the sample report, noting that it does not weight votes or alter names or tiers.
 
 ### Cohort Call Frequency
 
-The cohort report includes an interactive call frequency table summarizing the distribution of variant calls across the entire cohort roster:
+Aggregates variants across the cohort:
 
-- **Grouping key**: Calls with a valid, unique or legacy-selected `Molecular_Identity` are grouped by identity; unresolved or legacy calls fall back to caller representation `(Motifs, POS, REF, ALT)`.
-- **Grouping key kind**: The `Grouping_Key_Kind` column records `molecular-identity` or `caller-representation` to ensure distinct representations and identities never collapse together.
-- **Roster denominator**: Frequencies are calculated against the total cohort size, counting samples with negative results or unestablished runs in the denominator.
-- **Below cutoff indicator**: Calls with `Frequency <= rare_allele_max_frequency` are marked as `Below_Cutoff = "yes"` (`"no"` otherwise). All calls remain visible in the table and exports; no calls are filtered out.
-- **Escaped display**: The HTML table is fully HTML-escaped and supports client-side sorting and searching.
+- **Grouping key**: Grouped by canonical `Molecular_Identity` when resolved; unresolved variants fall back to caller representation `(Motifs, POS, REF, ALT)`.
+- **Grouping key kind**: Tracked as `molecular-identity` or `caller-representation` in `Grouping_Key_Kind`.
+- **Denominator**: Total sample roster, including negative and indeterminate runs.
+- **Rare variant flag**: Calls with `Frequency <= rare_allele_max_frequency` set `Below_Cutoff = "yes"`.
 
 ### Pseudonymization
 
-The cohort report can replace sample identifiers with a digest, which keeps names out of the tables an aggregated result is read from. It is obfuscation for readability, **not** de-identification -- the digest is unsalted and unkeyed, so a shared report must still be treated as identifying; see [what it does not protect against](../user-guide/cohort-analysis.md#what-pseudonymization-does-not-protect-against). Each sample name is replaced with a prefix (default `sample_`) followed by the first 12 hex characters of its SHA-256 digest. Both the algorithm and the width are configurable under `cohort.pseudonym` in `config.json`.
-
-The mapping is injective by construction: if two samples would share a reported name, the run raises an error naming both rather than merging their genotypes into one row. See [Cohort Analysis](../user-guide/cohort-analysis.md#pseudonymization) for the configuration block and what to do about a collision.
+Anonymizes sample identifiers for presentation using the prefix and first 12 hex characters of their unsalted SHA-256 digest (for example, `sample_a1b2c3d4e5f6`). Configurable via `cohort.pseudonym`. The mapping is strictly injective: identifier collisions raise an error.
 
 ### Report Configuration
 
-Report behavior is controlled by `report_config.json`, which defines:
-
-- **Algorithm logic rules** -- how Kestrel and adVNTR results map to categorical outcomes (e.g., "High_Precision" + "Not flagged" = positive)
-- **Screening summary rules** -- condition-to-message mappings for the interpretive summary text
-- **Default messages** -- fallback text when no rule matches
+Behavior is controlled via `report_config.json`, defining algorithm logic mappings, screening summary text rules, and fallback messages.

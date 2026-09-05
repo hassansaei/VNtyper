@@ -7,8 +7,8 @@ BSD 3-Clause License
 The Regents of the Université Paris Cité (Imagine Institute)
 Berlin Institute of Health at Charité, Universitätsmedizin Berlin
 
-Copyright (c) 2024, Hassan Saei
-Copyright (c) 2024, Bernt Popp
+Copyright (c) 2023-2026, Hassan Saei
+Copyright (c) 2023-2026, Bernt Popp
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:

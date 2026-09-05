@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-VNtyper 2 requires the following to be installed on your system:
+VNtyper 2 requires the following external tools on your system:
 
 | Dependency   | Minimum Version | Purpose                          |
 |-------------|-----------------|----------------------------------|
@@ -13,31 +13,13 @@ VNtyper 2 requires the following to be installed on your system:
 | fastp       | 0.23+           | FASTQ quality control            |
 
 !!! warning "External tools required"
-    External tools (BWA, samtools, fastp, Java 11) must be installed separately when using pip or source installation. The Docker image includes all dependencies.
+    External tools (BWA, samtools, fastp, Java 11) must be installed separately when using pip or source installation. The Docker image and Conda environment bundle all dependencies.
 
 ## Install VNtyper 2
 
-=== "pip"
-
-    Install directly from GitHub:
-
-    ```bash
-    pip install git+https://github.com/hassansaei/VNtyper.git
-    ```
-
-=== "From Source"
-
-    Clone the repository and install in editable mode:
-
-    ```bash
-    git clone https://github.com/hassansaei/vntyper.git
-    cd vntyper
-    pip install -e .
-    ```
-
 === "Conda"
 
-    Use the provided environment file to create a Conda environment with all dependencies (including external tools):
+    Use the provided environment file to create a Conda environment with all dependencies (including external binaries):
 
     ```bash
     git clone https://github.com/hassansaei/vntyper.git
@@ -51,12 +33,12 @@ VNtyper 2 requires the following to be installed on your system:
     pip install -e .
     ```
 
-    The `environment_vntyper.yml` pins Python 3.12.13 and includes BWA, samtools, fastp, OpenJDK 11, and all Python dependencies. That pin is what the Docker image runs; the package itself declares `requires-python = ">=3.10"`, and CI tests 3.10 through 3.13.
+    `environment_vntyper.yml` pins Python 3.12.13 and includes BWA, samtools, fastp, OpenJDK 11, and all Python dependencies. That pin matches what the Docker image runs; the package itself declares `requires-python = ">=3.10"`, and CI tests 3.10 through 3.13.
 
     Additional environment files are available for optional modules:
 
-    - `conda/environment_envadvntr.yml` --- adVNTR genotyping module
-    - `conda/environment_shark.yml` --- SHARK read filtering module
+    - `conda/environment_envadvntr.yml`: adVNTR genotyping module
+    - `conda/environment_shark.yml`: SHARK read filtering module
 
 === "Docker"
 
@@ -78,6 +60,24 @@ VNtyper 2 requires the following to be installed on your system:
     git clone https://github.com/hassansaei/VNtyper.git
     cd VNtyper
     DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t vntyper:latest .
+    ```
+
+=== "pip"
+
+    Install directly from GitHub:
+
+    ```bash
+    pip install git+https://github.com/hassansaei/VNtyper.git
+    ```
+
+=== "From Source"
+
+    Clone the repository and install in editable mode:
+
+    ```bash
+    git clone https://github.com/hassansaei/vntyper.git
+    cd vntyper
+    pip install -e .
     ```
 
 ## Verify Installation

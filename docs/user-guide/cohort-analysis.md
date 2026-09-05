@@ -38,25 +38,25 @@ This scans each directory for `pipeline_summary.json`, extracts Kestrel and adVN
     /data/archived/sample3.zip
     ```
 
-    Zip files are automatically extracted to temporary directories for processing.
+    Zip files extract to temporary staging directories during processing.
 
 ## Pseudonymization
 
-Replace directory names with pseudonyms, so identifiers do not appear in the report tables:
+Replace directory names with pseudonyms to mask identifiers in report tables:
 
 ```bash
 vntyper cohort -i results/sample1/ results/sample2/ -o cohort_output/ \
     --pseudonymize-samples
 ```
 
-This uses the default prefix `sample_` followed by the first 12 hex characters of a SHA-256 digest of the original name. Specify a custom prefix:
+This prefixes the first 12 hex characters of a SHA-256 digest of the original name with `sample_`. Specify a custom prefix if needed:
 
 ```bash
 vntyper cohort -i results/* -o cohort_output/ \
     --pseudonymize-samples "patient_"
 ```
 
-The digest and its width are configuration, not code. They live under `cohort.pseudonym` in `vntyper/config.json`:
+Digest parameters are configured under `cohort.pseudonym` in `vntyper/config.json`:
 
 ```json
 "cohort": {
@@ -67,43 +67,39 @@ The digest and its width are configuration, not code. They live under `cohort.ps
 }
 ```
 
-Override them with `--config-path`, remembering that a config file **replaces** the shipped one rather than merging into it. An algorithm your Python's `hashlib` does not offer is refused by name rather than silently substituted.
+Override them with `--config-path`. A custom config file replaces default configuration rather than merging. Unsupported hash algorithms raise configuration errors immediately.
 
-A `pseudonymization_table.tsv` mapping pseudonyms to original names is saved in the output directory.
+A `pseudonymization_table.tsv` file mapping pseudonyms to original names is written to the output directory.
 
 ### What pseudonymization does not protect against
 
-The digest is **unsalted and unkeyed**, and nothing but the sample's own identity enters it. Anyone holding a report *without* its `pseudonymization_table.tsv` can hash candidate names and match them against the pseudonyms, at a cost of one hash per candidate. Where sample names are drawn from a guessable set -- `sample_1`, `patient_03`, a barcode or plate-position series -- that is a dictionary attack, and it succeeds.
+The digest is unsalted and unkeyed: only the sample identity enters the calculation. Anyone possessing the report without `pseudonymization_table.tsv` can recover guessable names (such as `sample_1` or sequential barcodes) by dictionary attack at one hash per candidate.
 
-That is precisely the reader the flag exists for: a collaborator, a manuscript supplement, a screenshot in a slide deck. When the report and the mapping table travel together the table already maps pseudonym to original, so nothing was hidden in the first place.
+Pseudonymization provides visual obfuscation for presentations and collaborative sharing, not cryptographic de-identification. Treat pseudonymized reports as identifiable patient data. Restrict access to `pseudonymization_table.tsv`.
 
-**So: this is obfuscation for readability, not a privacy control.** It keeps identifiers out of a table someone reads over your shoulder and keeps the mapping in one file you control. It is not a de-identification measure, and a pseudonymized report must still be treated as identifying. Share `pseudonymization_table.tsv` only with people entitled to the names.
-
-A pseudonym is stable for a given identity, so the same sample carries the same pseudonym in every cohort where its name does not collide. Where it *does* collide the identity becomes `namespace/name` (see [Sample Identity](#sample-identity) below) and the pseudonym changes with it -- stability is a property of the identity that was hashed, not a guarantee across every report.
+Pseudonyms remain stable for an invariant sample identity. If sample names collide, identities expand to `namespace/name` format (see [Sample Identity](#sample-identity)), altering the resulting digest.
 
 ## Sample Identity
 
-A sample's name is only half of its identity. The other half is the **namespace** it came from: the name of the input that produced it -- `job_a` for an archive `job_a.zip`, `run1` for `-i /data/run1`. Uniqueness belongs to the pair, following HL7 FHIR's `Identifier` datatype, where a value is only ever "unique within the context of the system" that issued it. Two web jobs that each uploaded a file called `sample.bam` are therefore the same *value* in two different systems -- two patients, not a collision.
+Sample identity comprises both the sample name and its input namespace: the archive stem for `job_a.zip`, or the directory name for `-i /data/run1`. Identity pairs reflect HL7 FHIR `Identifier` conventions, where uniqueness is evaluated within the issuing system. Two web jobs each processing `sample.bam` represent distinct patients from separate namespaces.
 
-So when two or more discovered samples share a name, **those samples only** are reported as `namespace/name` -- `job_a/sample` and `job_b/sample` -- and the cohort runs to completion with both patients in it. A sample whose name is already unique keeps it untouched, so neither its row nor its pseudonym moves because some other pair of samples in the cohort happened to collide.
+When discovered samples share identical names, those specific records expand to `namespace/name` format (such as `job_a/sample` and `job_b/sample`). Unique sample names remain unmodified.
 
-The run stops only where the inputs leave an ambiguity that cannot be reduced:
+Execution halts when ambiguity cannot be resolved:
 
-- **Two inputs with the same name.** Two archives both called `job.zip`, or two directory inputs both called `sample`, are one namespace, so qualification yields `job/sample` twice and nothing is left to tell the two apart. The error names both input paths; rename one of them, or give the two runs distinct recorded input files.
-- **A digest collision.** Two distinct identities whose pseudonyms come out equal. Here the names are perfectly good and only the digest is too narrow, so the fix is to widen `cohort.pseudonym.digest_characters` rather than to rename anything. At 12 hex characters this is a tripwire rather than a practical risk (about 1.8e-9 for a 1,000-sample cohort).
-
-Either way, refusing to run beats merging two patients' genotypes into one row.
+- **Identical input names:** Two archives named `job.zip` or two input directories named `sample` create identical `job/sample` namespaces. Rename one input source to proceed.
+- **Digest collisions:** Distinct identities yielding identical truncated hashes. Resolve by increasing `cohort.pseudonym.digest_characters`. At 12 hex characters, collision probability remains negligible (approximately 1.8e-9 across 1,000 samples).
 
 ## Output Formats
 
-HTML is always generated. Request additional machine-readable formats:
+HTML reports generate automatically. Additional formats are requested via `--summary-formats`:
 
 ```bash
 vntyper cohort -i results/* -o cohort_output/ \
     --summary-formats csv,tsv,json
 ```
 
-This produces:
+Outputs written to the destination directory:
 
 | File | Content |
 |------|---------|
@@ -121,26 +117,25 @@ This produces:
 | `cohort_call_frequency.tsv` | Cohort call frequency summary in TSV |
 | `cohort_call_frequency.json` | Cohort call frequency summary in JSON |
 
-`cohort_stats_*` carries the same rows as the report's additional statistics table: runtime, version, assembly and alignment pipeline per sample, plus every coverage metric under a `cov_` prefix -- `cov_mean`, `cov_percent_uncovered` and `cov_coverage_qc` among them. It is the only machine-readable cohort output carrying a coverage figure; before VNtyper 2.0.8 that table reached the HTML report and nothing else.
+`cohort_stats_*` exports sample runtime, version, assembly, alignment details, and coverage metrics prefixed with `cov_` (including `cov_mean`, `cov_percent_uncovered`, and `cov_coverage_qc`).
 
 ## HTML Report Contents
 
-The cohort summary report includes:
+The cohort report includes:
 
-- **Donut charts** showing the distribution of Positive, Positive (Flagged), and Negative results for both Kestrel and adVNTR
-- **Kestrel results table** with per-sample variant calls, confidence levels, and flags
-- **adVNTR results table** (if adVNTR data is present)
-- **Additional statistics** including runtime, coverage metrics, pipeline version, reference assembly, and alignment pipeline for each sample
-- **Call frequency table** showing variant calls grouped across the cohort, sorted ascending by frequency, indicating calls at or below the configured maximum frequency threshold in the `Below_Cutoff` column
+- **Donut charts** displaying Positive, Positive (Flagged), and Negative proportions for Kestrel and adVNTR.
+- **Kestrel results table** containing per-sample calls, confidence assignments, and flags.
+- **adVNTR results table** (when adVNTR results exist).
+- **Additional statistics** recording runtime, coverage QC, pipeline versions, reference assemblies, and aligners.
+- **Call frequency table** aggregating variant calls across the cohort, sorted ascending by frequency, marking calls at or below threshold in the `Below_Cutoff` column.
 
 ## Cohort Call Frequency
 
-The cohort call frequency table aggregates variant calls across all samples in the cohort to summarize call distribution:
+The call frequency table aggregates variant calls across all cohort samples:
 
-- **Grouping key**: When `Molecular_Identity_Status` is `unique` or `legacy-selected-among-multiple` and a non-empty molecular identity is recorded, calls are grouped by `Molecular_Identity`. Otherwise, calls fall back to caller representation `(Motifs, POS, REF, ALT)` formatted as `<Motifs>:<POS>:<REF>:<ALT>`.
-- **Grouping key kind**: The `Grouping_Key_Kind` column records `molecular-identity` or `caller-representation` so that unresolved or legacy rows never collapse with distinct molecular identities.
-- **Cohort denominator**: Call frequency is calculated relative to the total cohort roster (`cohort_size`), including samples without positive calls or unestablished samples.
-- **Placeholder exclusion**: Empty-result negative placeholders are excluded and never form a call group.
-- **Threshold marking**: Calls with `Frequency <= rare_allele_max_frequency` are marked as `Below_Cutoff = "yes"` (`"no"` otherwise). No calls are omitted or filtered out from the table or export files.
-- **Configurable cutoff**: The threshold defaults to `0.05` via `cohort.rare_allele_max_frequency` in `config.json` and can be overridden via the `--rare-allele-max-frequency` CLI option.
-
+- **Grouping key:** For `Molecular_Identity_Status` values of `unique` or `legacy-selected-among-multiple` with defined molecular identities, calls group by `Molecular_Identity`. Otherwise, grouping falls back to caller format `<Motifs>:<POS>:<REF>:<ALT>`.
+- **Grouping key kind:** The `Grouping_Key_Kind` column records `molecular-identity` or `caller-representation` to separate distinct identity tiers.
+- **Cohort denominator:** Frequencies are calculated relative to total cohort size (`cohort_size`), including negative and uncalled samples.
+- **Placeholder exclusion:** Negative placeholder records are excluded from call frequency groups.
+- **Threshold marking:** Calls with `Frequency <= rare_allele_max_frequency` receive `Below_Cutoff = "yes"` (`"no"` otherwise). All calls remain visible in exports.
+- **Configurable cutoff:** The cutoff defaults to `0.05` via `cohort.rare_allele_max_frequency` in `config.json` and can be overridden with `--rare-allele-max-frequency`.

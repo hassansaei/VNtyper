@@ -6,13 +6,13 @@
 vntyper pipeline --bam inputs/sample.bam -o results/sample/
 ```
 
-This uses default settings: hg19 assembly, 4 threads, Kestrel genotyping only.
+This uses default settings: hg19 assembly, 4 threads, Kestrel genotyping engine.
 
 !!! important "Keep alignment inputs and outputs in separate trees"
     For BAM or CRAM input, the output root cannot be the directory containing the
     alignment or any of its descendants. A BAM at `sample.bam` with `-o results/` is
-    rejected because both are rooted in the current directory. Use separate roots such
-    as `inputs/sample.bam` and `results/sample/`, as the examples on this page do.
+    rejected because both resolve to the current directory root. Use separate trees
+    such as `inputs/sample.bam` and `results/sample/`.
 
 ## Common Options
 
@@ -25,11 +25,11 @@ vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
 
 | Option | Effect |
 |--------|--------|
-| `--threads N` | Number of threads (default: 4) |
-| `--fast-mode` | Skip filtering for unmapped and partially mapped reads (faster) |
+| `--threads N` | Number of threads to use (default: 4) |
+| `--fast-mode` | Skip filtering for unmapped and partially mapped reads (faster execution) |
 | `--reference-assembly` | Assembly used for alignment (default: hg19). See [Reference Assemblies](reference-assemblies.md) |
 | `--sample-name` | Label for results. Defaults to input filename stem |
-| `--output-name` | Base name for intermediate output files. Fixed at `output`; any other value is rejected. Use `--output-dir` to separate runs |
+| `--output-name` | Base name for intermediate files. Fixed at `output`; any other value is rejected. Use `--output-dir` to separate runs |
 
 ## With adVNTR Module
 
@@ -38,7 +38,7 @@ vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --extra-modules advntr
 ```
 
-adVNTR provides independent VNTR genotyping. Results are cross-matched with Kestrel calls. Use `--advntr-max-coverage 300` for faster adVNTR runs on high-coverage samples.
+adVNTR provides independent Profile-HMM VNTR genotyping. Results are cross-matched with Kestrel calls. Use `--advntr-max-coverage 300` for faster adVNTR processing on high-coverage sequencing runs.
 
 ## With SHARK Module (FASTQ Only)
 
@@ -47,12 +47,12 @@ vntyper pipeline --fastq1 R1.fastq.gz --fastq2 R2.fastq.gz -o results/ \
     --extra-modules shark
 ```
 
-!!! warning
-    SHARK only works with FASTQ input. Using `--extra-modules shark` with `--bam` or `--cram` will cause an error.
+!!! warning "SHARK requires FASTQ input"
+    SHARK read filtering only functions with paired-end FASTQ input. Supplying `--extra-modules shark` with `--bam` or `--cram` causes the pipeline to abort with an error.
 
 ## Custom Regions
 
-Override the default MUC1 VNTR region coordinates:
+Override default MUC1 VNTR coordinates:
 
 === "Inline regions"
 
@@ -79,7 +79,7 @@ vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --archive-results --archive-format tar.gz
 ```
 
-Creates a compressed archive of the output directory after the pipeline completes. Supported formats: `zip` (default) and `tar.gz`.
+Creates a compressed archive of the output directory after pipeline completion. Supported formats: `zip` (default) and `tar.gz`.
 
 ## Additional Summary Formats
 
@@ -88,19 +88,18 @@ vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --summary-formats csv,tsv
 ```
 
-Each requested format writes two files beside the default JSON summary:
-`pipeline_summary.csv` / `.tsv`, one row per pipeline step with the run's provenance in
-leading `run_*` columns, and `pipeline_summary_rows.csv` / `.tsv`, one row per step,
-result row and field, which carries the multi-row adVNTR and cross-match results in full.
-Format names other than `csv` and `tsv` are ignored without a message. See
-[Output Files](output-files.md) for the column groups.
+Each requested format writes two tabular files alongside `pipeline_summary.json`:
+`pipeline_summary.csv` / `.tsv` (one row per pipeline step, with run provenance in
+leading `run_*` columns), and `pipeline_summary_rows.csv` / `.tsv` (one row per step,
+result row, and field, capturing full multi-row adVNTR and cross-match results).
+Unsupported formats are ignored. See [Output Files](output-files.md) for column definitions.
 
 ## Intermediate Files
 
 | Option | Effect |
 |--------|--------|
-| `--keep-intermediates` | Compatibility flag: intermediate files are already kept by default, so this flag changes nothing. Use `--delete-intermediates` to remove them. |
-| `--delete-intermediates` | Delete intermediate files after processing (wins when `--keep-intermediates` is also given). |
+| `--keep-intermediates` | Compatibility flag: intermediate files are kept by default, so this flag changes nothing. Use `--delete-intermediates` to remove them. |
+| `--delete-intermediates` | Delete intermediate files after processing (takes precedence when `--keep-intermediates` is also supplied). |
 
 ## Custom Configuration
 
@@ -109,7 +108,7 @@ vntyper --config-path /path/to/custom/config.json pipeline \
     --bam inputs/sample.bam -o results/sample/
 ```
 
-Note that `--config-path` is a global option and must appear before the subcommand. See [Configuration](configuration.md) for details.
+`--config-path` is a global option and must appear before the subcommand. See [Configuration](configuration.md) for details.
 
 ## Logging
 
@@ -117,11 +116,11 @@ Note that `--config-path` is a global option and must appear before the subcomma
 vntyper -l DEBUG pipeline --bam inputs/sample.bam -o results/sample/
 ```
 
-Log levels: `DEBUG`, `INFO` (default), `WARNING`, `ERROR`, `CRITICAL`. The pipeline log is automatically written to `<output-dir>/pipeline.log`. Override with `-f /path/to/logfile`.
+Global log levels: `DEBUG`, `INFO` (default), `WARNING`, `ERROR`, `CRITICAL`. Global options must precede the subcommand. Pipeline logs write automatically to `<output-dir>/pipeline.log`. Override with `-f /path/to/logfile`.
 
 ## Resuming Execution
 
-When a pipeline run is interrupted or when re-running an existing analysis with additional downstream reporting options, pass `--resume` to avoid recomputing expensive stages:
+When a pipeline run is interrupted or when re-running an analysis with new reporting options, pass `--resume` to reuse completed stage outputs:
 
 ```bash
 vntyper pipeline --bam inputs/sample.bam -o results/sample/ --resume
@@ -130,19 +129,19 @@ vntyper pipeline --bam inputs/sample.bam -o results/sample/ --resume
 ### Reusable Stages
 
 Resumption evaluates checkpoint integrity from `pipeline_summary.json` and reuses completed outputs for:
-- **Alignment and conversion**: BAM/CRAM to FASTQ extraction or FASTQ alignment.
+- **Alignment and extraction**: BAM/CRAM to FASTQ extraction or FASTQ alignment.
 - **Kestrel genotyping**: Reuses `kestrel_result.tsv`, `output.vcf`, `output.bam`, and `kestrel_pre_result.tsv`.
 - **adVNTR genotyping**: Reuses `output_adVNTR_result.tsv`.
 
-Lightweight stages (BAM header parsing, coverage calculation, cross-match comparison, nomenclature determination, and HTML/PDF report rendering) always recompute to ensure up-to-date reporting.
+Lightweight stages (BAM header parsing, coverage calculation, cross-match comparison, nomenclature determination, and HTML report rendering) always recompute to ensure up-to-date reporting.
 
 ### Run Identity Invariants and Refusals
 
-Resumption refuses to run and exits with an error if the run identity does not match the prior summary checkpoint:
-- Pipeline version mismatch
+Resumption aborts with an error if run identity diverges from the prior summary checkpoint:
+- Pipeline version changes
 - Input file path changes
 - Sample name changes
 - Reference key or assembly changes
 - Decision profile checksum changes
 
-If an output artifact from a reusable stage has been deleted or modified (MD5 mismatch), only that stage and its dependents are recomputed.
+If an output artifact from a reusable stage is missing or fails MD5 verification, that stage and all dependent downstream stages are recomputed.
