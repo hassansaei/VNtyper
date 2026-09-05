@@ -457,7 +457,13 @@ def run_pipeline(
                     custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                 )
                 shark_step_file = os.path.join(dirs["fastq_bam_processing"], f"{run_sample_name}_shark_step.json")
-                write_shark_step_summary(fastq1, fastq2, shark_step_file)
+                write_shark_step_summary(
+                    fastq1,
+                    fastq2,
+                    shark_step_file,
+                    config=run_configuration.shark_runtime,
+                    shark_version=tool_versions.get("shark", "unknown"),
+                )
                 # Counting and sidecar creation are part of this stage. Capture its end
                 # only after both succeed, so a recorded duration cannot exclude work
                 # required to make the step readable.

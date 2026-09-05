@@ -241,8 +241,42 @@ class TestStepSummaryArtifact:
             "filtered_fastq_2": str(r2),
             "kept_reads_r1": "3",
             "kept_reads_r2": "3",
+            "shark_version": "unknown",
+            "shark_k": "17",
+            "shark_c": "0.6",
         }
         assert json.loads(out.read_text(encoding="utf-8")) == payload
+
+    def test_unequal_read_counts_raises_value_error_without_recording(self, tmp_path):
+        """A mismatch between R1 and R2 kept reads fails closed before summary creation (#312)."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        self.write_fastq(r1, 3)
+        self.write_fastq(r2, 2)
+        out = tmp_path / "sample_shark_step.json"
+
+        with pytest.raises(
+            ValueError,
+            match=r"SHARK kept read counts do not match between paired FASTQ files: R1=3, R2=2",
+        ):
+            shark.write_shark_step_summary(r1, r2, out)
+
+        assert not out.exists()
+
+    def test_write_shark_step_summary_records_custom_config_and_version(self, tmp_path):
+        """Passed config and version string are written to the step payload."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        self.write_fastq(r1, 5)
+        self.write_fastq(r2, 5)
+        out = tmp_path / "sample_shark_step.json"
+        config = {"shark_settings": {"kmer_size": 19, "confidence": 0.75}}
+
+        payload = shark.write_shark_step_summary(r1, r2, out, config=config, shark_version="1.2.0+h077b44d_5")
+
+        assert payload["shark_version"] == "1.2.0+h077b44d_5"
+        assert payload["shark_k"] == "19"
+        assert payload["shark_c"] == "0.75"
 
     def test_a_filter_that_kept_nothing_records_string_zero(self, tmp_path):
         """An empty but valid FASTQ is a zero count, not a failed stage."""

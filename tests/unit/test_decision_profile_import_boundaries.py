@@ -143,6 +143,7 @@ def test_shark_has_no_independent_decision_constant_or_literal_comparison() -> N
     assert comparisons == {
         "config_path is None",
         "key in settings",
+        "kept_reads_r1 != kept_reads_r2",
         "legacy_key in settings",
         "resolved is not None",
     }
