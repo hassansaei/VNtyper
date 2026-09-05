@@ -371,6 +371,17 @@ def _record_stage_artifact_md5s(summary: dict[str, Any], step_name: str, result_
         if replay_hash is not None:
             sibling_md5s["bam_identity_replay.v1.json"] = replay_hash
 
+    if step_name in (
+        summary_steps.STEP_BAM_TO_FASTQ,
+        summary_steps.STEP_CRAM_TO_FASTQ,
+        summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+    ):
+        bai_path = stage_dir / "output_sliced.bam.bai"
+        if bai_path.is_file():
+            bai_hash = md5sum(str(bai_path))
+            if bai_hash is not None:
+                sibling_md5s["output_sliced.bam.bai"] = bai_hash
+
     if step_name == summary_steps.STEP_KESTREL:
         for extra_vcf in ("output_indel.vcf.gz", "output_indel.vcf.gz.tbi"):
             extra_path = stage_dir / extra_vcf

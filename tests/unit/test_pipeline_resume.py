@@ -15,6 +15,8 @@ import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import summary_steps
+from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
+from vntyper.scripts.pipeline_kestrel import resolve_kestrel_counting_mode
 from vntyper.scripts.resume import fingerprint_file, fingerprint_runtime
 from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.version import __version__ as VERSION
@@ -37,12 +39,26 @@ def _make_prior_summary(
     shark_reference_path: str | None = None,
     shark_reference_fingerprint: str | None = None,
     shark_runtime_fingerprint: str | None = None,
+    kestrel_runtime_fingerprint: str | None = None,
+    kestrel_counting_mode: str | None = None,
 ) -> dict[str, Any]:
     resolved_modules = sorted(extra_modules or [])
     advntr_model = None
     if "advntr" in resolved_modules:
         advntr_ref = MINIMAL_CONFIG.get("reference_data", {}).get(f"advntr_reference_vntr_{reference_assembly}")
         advntr_model = str(Path(advntr_ref).resolve()) if advntr_ref else None
+
+    default_counting_mode = kestrel_counting_mode or resolve_kestrel_counting_mode(
+        resolve_run_configuration().kestrel_runtime,
+        MINIMAL_CONFIG,
+    )
+    default_kestrel_rt_fp = fingerprint_runtime(
+        {
+            **dict(resolve_run_configuration().kestrel_runtime),
+            "kestrel_counting_mode": default_counting_mode,
+            "kanalyze": MINIMAL_CONFIG.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH),
+        }
+    )
 
     default_settings = {
         "reference_assembly": reference_assembly,
@@ -83,7 +99,10 @@ def _make_prior_summary(
         "reference_key_used": reference_key_used,
         "kestrel_reference_path": kestrel_ref_path,
         "decision_profile_sha256": decision_profile_sha256 or resolve_run_configuration().decision_profile.digest,
-        "kestrel_runtime_fingerprint": fingerprint_runtime(resolve_run_configuration().kestrel_runtime),
+        "kestrel_runtime_fingerprint": (
+            kestrel_runtime_fingerprint if kestrel_runtime_fingerprint is not None else default_kestrel_rt_fp
+        ),
+        "kestrel_counting_mode": default_counting_mode,
         "advntr_runtime_fingerprint": fingerprint_runtime(resolve_run_configuration().advntr_runtime)
         if "advntr" in resolved_modules
         else None,
@@ -2368,3 +2387,130 @@ def test_resume_reruns_alignment_and_callers_when_shark_runtime_changes(tmp_path
     assert h.error is None
     # Because SHARK runtime changed, alignment is rerun rather than skipped
     assert h.stages["align_and_sort_fastq"].call_count == 1
+
+
+def test_resume_reruns_kestrel_when_cram_reference_changes_even_without_explicit_cli_flag(
+    tmp_path: Path,
+) -> None:
+    """Removing explicit CRAM reference invalidates prior conversion and callers (#20 / P2)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    inp = tmp_path / "in"
+    inp.mkdir()
+    cram = inp / "sample.cram"
+    cram.touch()
+    kd = out / "kestrel"
+    kd.mkdir()
+    ref = tmp_path / "old.fa"
+    ref.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+    for name in ("kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+        (kd / name).write_text("data", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"cram": cram.name},
+        canonical_input_files={"cram": str(cram.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kd / "kestrel_result.tsv"),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"data").hexdigest(),
+            }
+        ],
+    )
+    prior.update(
+        reference_path=str(ref),
+        persistent_reference_path=str(ref),
+        reference_fingerprint=hashlib.sha256(ref.read_bytes()).hexdigest(),
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    h = run_pipeline_under_harness(output_dir=out, cram=str(cram), resume=True)
+    assert h.error is None
+    # Because resolved CRAM reference differs from prior summary's explicit reference,
+    # Kestrel is rerun rather than skipped
+    assert h.stages["run_kestrel"].call_count == 1
+    result = json.loads((out / "pipeline_summary.json").read_text(encoding="utf-8"))
+    assert result["reference_path"] != str(ref)
+
+
+def test_resume_refuses_conversion_reuse_when_advntr_active_and_sliced_bai_missing(
+    tmp_path: Path,
+) -> None:
+    """When adVNTR is enabled, conversion reuse requires output_sliced.bam.bai (#20 / P2)."""
+    from vntyper.scripts.resume import step_is_reusable
+
+    out = tmp_path / "out"
+    out.mkdir()
+    fq = out / "fastq_bam_processing"
+    fq.mkdir()
+    for name in (
+        "output_R1.fastq.gz",
+        "output_R2.fastq.gz",
+        "output_single.fastq.gz",
+        "output_other.fastq.gz",
+        "output_sliced.bam",
+    ):
+        (fq / name).write_bytes(b"data")
+
+    prior = _make_prior_summary(
+        input_files={"bam": "sample.bam"},
+        extra_modules=["advntr"],
+        steps=[
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ,
+                "result_file": str(fq / "output_R1.fastq.gz"),
+                "file_type": "fastq",
+                "md5sum": hashlib.md5(b"data").hexdigest(),
+            }
+        ],
+    )
+    # With missing BAI, conversion step is NOT reusable when adVNTR is active
+    assert step_is_reusable(prior, summary_steps.STEP_BAM_TO_FASTQ, out, needs_advntr=True) is False
+
+    # Once BAI is present, conversion step is reusable
+    (fq / "output_sliced.bam.bai").write_bytes(b"bai_data")
+    assert step_is_reusable(prior, summary_steps.STEP_BAM_TO_FASTQ, out, needs_advntr=True) is True
+
+
+def test_resume_reruns_kestrel_when_kanalyze_path_changes_counting_mode(tmp_path: Path) -> None:
+    """Disabling kanalyze switches counting mode and invalidates prior Kestrel checkpoint (#20 / P2)."""
+    import copy
+
+    out = tmp_path / "out"
+    out.mkdir()
+    inp = tmp_path / "in"
+    inp.mkdir()
+    bam = inp / "sample.bam"
+    bam.touch()
+    kd = out / "kestrel"
+    kd.mkdir()
+
+    for name in ("kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+        (kd / name).write_text("data", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        kestrel_counting_mode="split",
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kd / "kestrel_result.tsv"),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"data").hexdigest(),
+            }
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    config = copy.deepcopy(MINIMAL_CONFIG)
+    config["tools"]["kanalyze"] = ""
+
+    h = run_pipeline_under_harness(output_dir=out, bam=str(bam), resume=True, config=config)
+    assert h.error is None
+    # Because counting mode changed from split to internal, Kestrel is rerun
+    assert h.stages["run_kestrel"].call_count == 1
+    result = json.loads((out / "pipeline_summary.json").read_text(encoding="utf-8"))
+    assert result["kestrel_counting_mode"] == "internal"

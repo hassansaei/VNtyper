@@ -83,8 +83,9 @@ def caller_kestrel_matches(
     kestrel_motifs_path: str | None = None,
     kestrel_motifs_fingerprint: str | None = None,
     kestrel_runtime_fingerprint: str | None = None,
+    kestrel_counting_mode: str | None = None,
 ) -> bool:
-    """Return whether prior summary Kestrel reference, motifs, and runtime match current run."""
+    """Return whether prior summary Kestrel reference, motifs, runtime, and counting mode match current run."""
     if prior_summary is None:
         return True
 
@@ -115,6 +116,11 @@ def caller_kestrel_matches(
         prior_k_motifs_fp is not None or kestrel_motifs_fingerprint is not None
     ) and prior_k_motifs_fp != kestrel_motifs_fingerprint:
         return False
+
+    if kestrel_counting_mode is not None:
+        prior_mode = prior_summary.get("kestrel_counting_mode")
+        if prior_mode is not None and prior_mode != kestrel_counting_mode:
+            return False
 
     prior_k_rt_fp = prior_summary.get("kestrel_runtime_fingerprint")
     return prior_k_rt_fp == kestrel_runtime_fingerprint
@@ -477,6 +483,8 @@ def step_is_reusable(
     prior: dict[str, Any],
     step_name: str,
     output_root: str | Path,
+    *,
+    needs_advntr: bool = False,
 ) -> bool:
     """Determine whether a step from a prior run is valid for reuse.
 
@@ -491,6 +499,7 @@ def step_is_reusable(
         prior: Prior summary dictionary.
         step_name: Step name to evaluate.
         output_root: Root directory of the output.
+        needs_advntr: Whether adVNTR is active in the current run.
 
     Returns:
         bool: True if all artifacts exist and are uncorrupted; False otherwise.
@@ -575,6 +584,18 @@ def step_is_reusable(
                 expected_md5,
                 actual_sib_md5,
             )
+            return False
+
+    prior_extra = prior.get("analysis_settings", {}).get("extra_modules") or []
+    advntr_active = needs_advntr or ("advntr" in prior_extra)
+    if advntr_active and step_name in (
+        summary_steps.STEP_BAM_TO_FASTQ,
+        summary_steps.STEP_CRAM_TO_FASTQ,
+        summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+    ):
+        bai_path = stage_dir / "output_sliced.bam.bai"
+        if not bai_path.is_file():
+            logger.debug("Required adVNTR index %s for step %r does not exist", bai_path, step_name)
             return False
 
     # For Kestrel, validate retained BAM replay artifact if present or if result is identity-aware

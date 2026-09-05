@@ -106,6 +106,7 @@ from vntyper.scripts.summary_steps import (
 from vntyper.scripts.utils import (
     create_output_directories,
     get_tool_versions,
+    run_command,
     validate_bam_file,
     validate_fastq_file,
 )
@@ -400,7 +401,16 @@ def run_pipeline(
         advntr_rus_fingerprint = (
             fingerprint_file(Path(advntr_rus_path)) if advntr_rus_path and Path(advntr_rus_path).is_file() else None
         )
-        kestrel_runtime_fingerprint = fingerprint_runtime(run_configuration.kestrel_runtime)
+        from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
+        from vntyper.scripts.pipeline_kestrel import resolve_kestrel_counting_mode
+
+        kestrel_counting_mode = resolve_kestrel_counting_mode(run_configuration.kestrel_runtime, config)
+        effective_kestrel_runtime = {
+            **dict(run_configuration.kestrel_runtime),
+            "kestrel_counting_mode": kestrel_counting_mode,
+            "kanalyze": config.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH),
+        }
+        kestrel_runtime_fingerprint = fingerprint_runtime(effective_kestrel_runtime)
         advntr_runtime_fingerprint = (
             fingerprint_runtime(run_configuration.advntr_runtime) if "advntr" in extra_modules else None
         )
@@ -602,6 +612,12 @@ def run_pipeline(
             bwa_reference_source=reference_source_effective,
             alignment_plan=alignment_plan,
         )
+        if input_type == "CRAM" and reference_provenance.path:
+            effective_reference_path = reference_provenance.path
+            effective_reference_fingerprint = (
+                fingerprint_file(Path(effective_reference_path)) if Path(effective_reference_path).is_file() else None
+            )
+
         summary = start_summary(
             version=VERSION,
             input_files=input_files,
@@ -639,6 +655,7 @@ def run_pipeline(
             kestrel_motifs_path=kestrel_motifs_path,
             kestrel_motifs_fingerprint=kestrel_motifs_fingerprint,
             kestrel_runtime_fingerprint=kestrel_runtime_fingerprint,
+            kestrel_counting_mode=kestrel_counting_mode,
         )
 
         advntr_model_matches = caller_advntr_matches(
@@ -659,8 +676,27 @@ def run_pipeline(
             prior_summary,
             reference_fingerprint=effective_reference_fingerprint,
         )
+        cram_ref_matches = True
+        if input_type == "CRAM" and prior_summary is not None:
+            prior_ref_fp = prior_summary.get("reference_fingerprint")
+            prior_ref_path = prior_summary.get("persistent_reference_path") or prior_summary.get("reference_path")
+            if (
+                (prior_ref_fp is not None or effective_reference_fingerprint is not None)
+                and prior_ref_fp != effective_reference_fingerprint
+                or (
+                    prior_ref_path is not None
+                    and effective_reference_path is not None
+                    and str(Path(prior_ref_path).resolve()) != str(Path(effective_reference_path).resolve())
+                )
+            ):
+                cram_ref_matches = False
+
         inval_align = not shark_ref_matches or not bwa_ref_matches
+        inval_cram = not cram_ref_matches
         if input_type == "FASTQ" and inval_align:
+            kestrel_ref_matches = False
+            advntr_model_matches = False
+        if input_type == "CRAM" and inval_cram:
             kestrel_ref_matches = False
             advntr_model_matches = False
 
@@ -671,7 +707,7 @@ def run_pipeline(
                     shutil.copy2(summary_file_path, donor_summary_path)
             for s in prior_summary.get("steps", []):
                 st = s.get("step")
-                if not st or not step_is_reusable(prior_summary, st, output_dir):
+                if not st or not step_is_reusable(prior_summary, st, output_dir, needs_advntr=needs_advntr):
                     continue
                 if (
                     st
@@ -682,6 +718,8 @@ def run_pipeline(
                     )
                     and inval_align
                 ):
+                    continue
+                if st == STEP_CRAM_TO_FASTQ and inval_cram:
                     continue
                 if st == STEP_KESTREL and not kestrel_ref_matches:
                     continue
@@ -745,7 +783,15 @@ def run_pipeline(
 
             conversion_step = STEP_BAM_TO_FASTQ if input_type == "BAM" else STEP_CRAM_TO_FASTQ
             can_reuse_conversion = (
-                resume and prior_summary is not None and step_is_reusable(prior_summary, conversion_step, output_dir)
+                resume
+                and prior_summary is not None
+                and not (input_type == "CRAM" and inval_cram)
+                and step_is_reusable(
+                    prior_summary,
+                    conversion_step,
+                    output_dir,
+                    needs_advntr=needs_advntr,
+                )
             )
             fq_dir = Path(dirs["fastq_bam_processing"])
             candidate_fastqs = (
@@ -863,7 +909,12 @@ def run_pipeline(
                 and prior_summary is not None
                 and not inval_align
                 and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir)
-                and step_is_reusable(prior_summary, STEP_BAM_TO_FASTQ_POST_ALIGNMENT, output_dir)
+                and step_is_reusable(
+                    prior_summary,
+                    STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                    output_dir,
+                    needs_advntr=needs_advntr,
+                )
             )
             fq_dir = Path(dirs["fastq_bam_processing"])
             candidate_post_fastqs = (
@@ -1217,6 +1268,15 @@ def run_pipeline(
                 max_cov = module_args.get("advntr", {}).get("max_coverage")
                 sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
                 if sorted_bam and sorted_bam.exists():
+                    sorted_bai = Path(f"{sorted_bam}.bai")
+                    if sorted_bam.stat().st_size > 0 and (not sorted_bai.exists() or sorted_bai.stat().st_size == 0):
+                        logger.info("Rebuilding missing or empty sliced BAM index for adVNTR: %s", sorted_bai)
+                        index_cmd = f"{config['tools']['samtools']} index -@ {threads} {sorted_bam}"
+                        run_command(
+                            index_cmd,
+                            str(Path(dirs["fastq_bam_processing"]) / "reindex_sliced_bam.log"),
+                            critical=False,
+                        )
                     if max_cov:
                         logger.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
                         sorted_bam = downsample_bam_if_needed(
