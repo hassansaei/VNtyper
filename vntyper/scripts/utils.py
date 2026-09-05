@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from vntyper.scripts.command_builders import quote_path
+from vntyper.scripts.shark_version import build_shark_version_command, parse_shark_conda_list_json
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,15 @@ def get_tool_version(command, version_flag):
         str: The parsed version string or 'unknown' if parsing fails.
     """
     try:
+        if "shark" in command:
+            conda_cmd = build_shark_version_command(command)
+            if conda_cmd is not None:
+                list_result = subprocess.run(conda_cmd, capture_output=True, text=True, check=False)
+                parsed = parse_shark_conda_list_json(list_result.stdout)
+                if parsed:
+                    return parsed
+            return "unknown"
+
         # Split the command properly in case it's a compound command like "mamba run ..."
         full_command = shlex.split(command) + shlex.split(version_flag)
         result = subprocess.run(full_command, capture_output=True, text=True, check=False)
@@ -227,12 +237,7 @@ def get_tool_version(command, version_flag):
 #: ``kanalyze`` is a JAR with no version flag of its own. It ships beside ``kestrel.jar``
 #: and is versioned with it, so kestrel's probe already covers it; probing it would
 #: execute the JAR.
-#:
-#: ``shark`` has no branch in :func:`get_tool_version`, which therefore returns
-#: ``"unknown"`` for it unconditionally. Gating a probe that cannot answer would spend
-#: 36 ms per run to learn nothing, so it is dropped rather than gated. Reporting a real
-#: SHARK version needs a parser here, not an entry in the caller's set.
-UNPROBED_TOOLS = frozenset({"kanalyze", "shark"})
+UNPROBED_TOOLS = frozenset({"kanalyze"})
 
 
 def get_tool_versions(config, *, tools_in_use, version_overrides=None):
@@ -268,6 +273,7 @@ def get_tool_versions(config, *, tools_in_use, version_overrides=None):
         "samtools": "",
         "bwa": "",
         "advntr": "",
+        "shark": "",
         "java_path": "--version",
         "kestrel": '-jar "{kestrel_path}" -h'.format(
             kestrel_path=tools.get("kestrel", ""),
