@@ -4,7 +4,21 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Flattened pipeline summary tables
+
+- **`pipeline_summary.csv` and `.tsv` carry the run's provenance and no longer embed
+  JSON text** ([#316](https://github.com/hassansaei/VNtyper/pull/316), Refs
+  [#119](https://github.com/hassansaei/VNtyper/issues/119)). Every
+  row now starts with `run_*` columns (schema version, decision policy, the six
+  `decision_profile_*` fields, version, inputs, sample name, reference selection,
+  resolved region, Kestrel counting mode and the adVNTR model); a single-row result
+  explodes into `parsed_result_data_<column>` cells, any other row count is recorded as
+  `parsed_result_n_rows`, and banner comments join into `parsed_result_comments`. A new
+  `pipeline_summary_rows.<csv|tsv>` long table (`step`, `row_index`, `field`, `value`)
+  is written beside each requested format and lists every result row, including the
+  multi-row adVNTR and cross-match results. This is a user-visible change to the shape
+  of two operator-facing files that no VNtyper code reads. `--summary-formats` still
+  accepts unknown format names silently; validating them is out of scope here.
 
 ## 2.0.27 (Current)
 

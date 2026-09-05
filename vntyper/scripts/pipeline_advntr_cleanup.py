@@ -22,6 +22,8 @@ _PUBLIC_OUTPUTS = (
     Path("pipeline_summary.json"),
     Path("pipeline_summary.csv"),
     Path("pipeline_summary.tsv"),
+    Path("pipeline_summary_rows.csv"),
+    Path("pipeline_summary_rows.tsv"),
     Path("summary_report.html"),
 )
 
