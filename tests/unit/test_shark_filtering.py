@@ -75,7 +75,8 @@ class TestTheCommandLine:
         assert captured_command[0]["command"] == (
             "mamba run -n shark_env shark -r reference/muc1_region_hg19.fa "
             "-1 /data/sample_R1.fastq.gz -2 /data/sample_R2.fastq.gz "
-            f"-o {tmp_path}/sample_shark_R1.fastq -p {tmp_path}/sample_shark_R2.fastq -t 4"
+            f"-o {tmp_path}/sample_shark_R1.fastq -p {tmp_path}/sample_shark_R2.fastq "
+            "-t 4 -k 17 -c 0.6"
         )
 
     def test_the_two_filtered_fastqs_are_named_after_the_sample(self, tmp_path, captured_command):
@@ -103,7 +104,34 @@ class TestTheCommandLine:
     def test_threads_are_passed_through(self, tmp_path, captured_command):
         filter_with(tmp_path, threads=16)
 
-        assert captured_command[0]["command"].endswith("-t 16")
+        assert "-t 16" in captured_command[0]["command"]
+        assert captured_command[0]["command"].endswith("-t 16 -k 17 -c 0.6")
+
+    def test_search_parameters_sourced_from_sidecar(self, tmp_path, captured_command):
+        """Custom k and c values in shark_settings are interpolated into the command line."""
+        custom_config = {
+            "shark_settings": {
+                "muc1_region_fasta_hg19": "reference/muc1_region_hg19.fa",
+                "kmer_size": 21,
+                "confidence": 0.8,
+            }
+        }
+        filter_with(tmp_path, config=custom_config)
+
+        assert "-k 21 -c 0.8" in captured_command[0]["command"]
+
+    def test_search_parameters_are_shell_quoted(self, tmp_path, captured_command):
+        """Search parameters pass through quote_path to protect against injection."""
+        custom_config = {
+            "shark_settings": {
+                "muc1_region_fasta_hg19": "reference/muc1_region_hg19.fa",
+                "kmer_size": "19; rm -rf /",
+                "confidence": "0.7",
+            }
+        }
+        filter_with(tmp_path, config=custom_config)
+
+        assert "-k '19; rm -rf /' -c 0.7" in captured_command[0]["command"]
 
     def test_the_tool_name_falls_back_to_a_bare_shark(self, tmp_path, captured_command):
         filter_with(tmp_path, main_config={})

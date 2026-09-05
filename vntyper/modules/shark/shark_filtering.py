@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from vntyper.scripts.command_builders import quote_path
@@ -81,6 +82,39 @@ def select_muc1_region_fasta(config: dict, main_config: dict, reference_assembly
     )
 
 
+@dataclass(frozen=True)
+class SharkSearchParameters:
+    """Runtime search parameters for SHARK filtering (#312)."""
+
+    kmer_size: int | str = 17
+    confidence: float | str = 0.6
+
+    @property
+    def k_str(self) -> str:
+        """String representation of k-mer size."""
+        return str(self.kmer_size)
+
+    @property
+    def c_str(self) -> str:
+        """String representation of confidence threshold."""
+        return str(self.confidence)
+
+
+def shark_search_parameters(config: dict | None) -> SharkSearchParameters:
+    """Resolve the effective SHARK search parameters from the runtime sidecar.
+
+    Args:
+        config: The shark_config or runtime sidecar dictionary.
+
+    Returns:
+        Resolved SharkSearchParameters with defaults k=17, c=0.6.
+    """
+    settings = (config or {}).get("shark_settings", {})
+    raw_k = settings.get("kmer_size", 17)
+    raw_c = settings.get("confidence", 0.6)
+    return SharkSearchParameters(kmer_size=raw_k, confidence=raw_c)
+
+
 def run_shark_filter(
     fastq_1,
     fastq_2,
@@ -135,6 +169,8 @@ def run_shark_filter(
     filtered_fastq_1 = os.path.join(output_dir, f"{sample_name}_shark_R1.fastq")
     filtered_fastq_2 = os.path.join(output_dir, f"{sample_name}_shark_R2.fastq")
 
+    search_params = shark_search_parameters(config)
+
     # `run_command` runs this as one string under bash (trap 9), so quoting can only
     # happen here. Every operand is a path or a thread count and is quoted;
     # `shark_path` is not, because config.json holds a command *prefix* there --
@@ -144,7 +180,9 @@ def run_shark_filter(
         f"{shark_path} -r {quote_path(muc1_region_fasta)} "
         f"-1 {quote_path(fastq_1)} -2 {quote_path(fastq_2)} "
         f"-o {quote_path(filtered_fastq_1)} -p {quote_path(filtered_fastq_2)} "
-        f"-t {quote_path(threads)}"
+        f"-t {quote_path(threads)} "
+        f"-k {quote_path(search_params.k_str)} "
+        f"-c {quote_path(search_params.c_str)}"
     )
 
     log_file = Path(output_dir) / f"{sample_name}_shark.log"
