@@ -108,3 +108,63 @@ def run_columns(summary: Mapping[str, Any]) -> dict[str, str]:
         never a run column, even when it is empty.
     """
     return _flatten({key: value for key, value in summary.items() if key != _STEPS_KEY}, RUN_PREFIX)
+
+
+def _step_records(summary: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    steps = summary.get(_STEPS_KEY, [])
+    if not isinstance(steps, list):
+        return []
+    return [step for step in steps if isinstance(step, Mapping)]
+
+
+def _data_cells(data: list[Any]) -> dict[str, str]:
+    """A single result row explodes into columns; any other row count is a count."""
+    if len(data) == 1 and isinstance(data[0], Mapping):
+        return _flatten(data[0], f"{PARSED_RESULT_PREFIX}{KEY_SEPARATOR}data")
+    return {f"{PARSED_RESULT_PREFIX}{KEY_SEPARATOR}n_rows": str(len(data))}
+
+
+def _parsed_result_cells(parsed_result: Any) -> dict[str, str]:
+    """``comments`` and ``data`` have their own rules; every other key flattens with ``_``."""
+    if not isinstance(parsed_result, Mapping):
+        return {}
+    cells: dict[str, str] = {}
+    rest: dict[str, Any] = {}
+    for key, value in parsed_result.items():
+        if key == "comments" and isinstance(value, list):
+            cells[f"{PARSED_RESULT_PREFIX}{KEY_SEPARATOR}comments"] = COMMENT_SEPARATOR.join(_cell(c) for c in value)
+        elif key == "data" and isinstance(value, list):
+            cells.update(_data_cells(value))
+        else:
+            rest[key] = value
+    cells.update(_flatten(rest, PARSED_RESULT_PREFIX))
+    return cells
+
+
+def _step_row(record: Mapping[str, Any]) -> dict[str, str]:
+    row = {column: _cell(record.get(column)) for column in STEP_COLUMNS if column != "result_file_missing"}
+    # ``record_step`` adds the key only when the file was absent (#212); the table says
+    # so explicitly either way, because a blank cell here would read as "unknown".
+    row["result_file_missing"] = str(bool(record.get("result_file_missing", False)))
+    row.update(_parsed_result_cells(record.get("parsed_result")))
+    return row
+
+
+def step_rows(summary: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Return one row per recorded step, in recording order.
+
+    Each row carries :data:`STEP_COLUMNS` first, then the ``parsed_result_*`` cells:
+    ``parsed_result_comments`` (the result file's ``#`` lines joined with ``" | "``),
+    either ``parsed_result_data_<field>`` for a result with exactly one row or
+    ``parsed_result_n_rows`` for any other row count, and every other key of a mapping
+    result (a json-typed step such as BAM header parsing or SHARK) flattened with ``_``.
+    A step whose result was never parsed carries only the fixed columns.
+
+    Args:
+        summary: A ``pipeline_summary.json`` mapping.
+
+    Returns:
+        list[dict[str, str]]: The rows; column sets differ between steps, and the writer
+        fills the union with blanks.
+    """
+    return [_step_row(record) for record in _step_records(summary)]

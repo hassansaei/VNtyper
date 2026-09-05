@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from vntyper.scripts import summary_steps
-from vntyper.scripts.summary_flattening import run_columns
+from vntyper.scripts.summary_flattening import STEP_COLUMNS, run_columns, step_rows
 
 pytestmark = pytest.mark.unit
 
@@ -271,3 +271,147 @@ def test_the_flattening_rules(mapping: dict[str, Any], expected: dict[str, str])
 
 def test_no_run_cell_is_embedded_json() -> None:
     assert [cell for cell in run_columns(_summary()).values() if '{"' in cell or cell.startswith("[")] == []
+
+
+# ---------------------------------------------------------------------------
+# step_rows
+# ---------------------------------------------------------------------------
+
+
+def _row_of(step_name: str) -> dict[str, str]:
+    rows = [row for row in step_rows(_summary()) if row["step"] == step_name]
+    assert len(rows) == 1, step_name
+    return rows[0]
+
+
+def test_one_row_per_step_in_recording_order() -> None:
+    assert [row["step"] for row in step_rows(_summary())] == [
+        summary_steps.STEP_BAM_HEADER,
+        summary_steps.STEP_COVERAGE,
+        summary_steps.STEP_KESTREL,
+        summary_steps.STEP_ADVNTR,
+    ]
+
+
+def test_the_fixed_step_columns_carry_the_record_s_values_in_order() -> None:
+    row = _row_of(summary_steps.STEP_KESTREL)
+
+    assert list(row)[: len(STEP_COLUMNS)] == list(STEP_COLUMNS)
+    assert row["start"] == "2026-09-05T10:15:01.000000"
+    assert row["end"] == "2026-09-05T10:15:02.000000"
+    assert row["command"] == "run_kestrel(...)"
+    assert row["result_file"] == "/work/results/kestrel/kestrel_result.tsv"
+    assert row["file_type"] == "tsv"
+    assert row["md5sum"] == "d41d8cd98f00b204e9800998ecf8427e"
+    assert row["result_file_missing"] == "False"
+
+
+def test_a_missing_result_file_is_reported_true_and_its_md5_is_blank() -> None:
+    row = _row_of(summary_steps.STEP_COVERAGE)
+
+    assert row["result_file_missing"] == "True"
+    assert row["md5sum"] == ""
+
+
+def test_a_single_row_result_explodes_into_data_columns() -> None:
+    row = _row_of(summary_steps.STEP_KESTREL)
+
+    assert row["parsed_result_data_Motifs"] == "X-X"
+    assert row["parsed_result_data_Depth_Score"] == "0.01"
+    assert row["parsed_result_data_Nomenclature"] == "59dupC"
+    assert {column for column in row if column.startswith("parsed_result_data_")} == {
+        f"parsed_result_data_{field}" for field in KESTREL_ROW
+    }
+    assert "parsed_result_n_rows" not in row
+    assert "parsed_result_data" not in row
+
+
+def test_comment_lines_join_with_a_pipe() -> None:
+    assert _row_of(summary_steps.STEP_KESTREL)["parsed_result_comments"] == (
+        "VNtyper Kestrel result | VNtyper Version: 2.0.27 | "
+        "Analysis date: 2026-09-05 10:15:42 | Reference file: reference/MUC1_motifs.fa"
+    )
+    assert _row_of(summary_steps.STEP_ADVNTR)["parsed_result_comments"] == ""
+
+
+def test_a_multi_row_result_records_only_its_row_count() -> None:
+    row = _row_of(summary_steps.STEP_ADVNTR)
+
+    assert row["parsed_result_n_rows"] == "2"
+    assert [column for column in row if column.startswith("parsed_result_data")] == []
+
+
+def test_a_comments_only_result_records_zero_rows() -> None:
+    row = _row_of(summary_steps.STEP_COVERAGE)
+
+    assert row["parsed_result_n_rows"] == "0"
+    assert row["parsed_result_comments"] == COVERAGE_ERROR
+
+
+def test_a_json_typed_result_flattens_with_an_underscore() -> None:
+    row = _row_of(summary_steps.STEP_BAM_HEADER)
+
+    assert row["parsed_result_assembly_text"] == "hg19"
+    assert row["parsed_result_assembly_contig"] == "chr1"
+    assert row["parsed_result_alignment_pipeline"] == "bwa"
+    assert "parsed_result_comments" not in row
+    assert "parsed_result_n_rows" not in row
+
+
+def test_the_shark_json_step_shape_flattens_to_its_four_fields() -> None:
+    """The four-key payload ``tests/unit/test_pipeline_shark_step.py`` pins."""
+    shark = _step(
+        "SHARK Filtering",
+        "/work/results/fastq_bam_processing/sample_shark_step.json",
+        "json",
+        "shark(...)",
+        {
+            "filtered_fastq_1": "/work/results/fastq_bam_processing/sample_shark_R1.fastq",
+            "filtered_fastq_2": "/work/results/fastq_bam_processing/sample_shark_R2.fastq",
+            "kept_reads_r1": "3",
+            "kept_reads_r2": "3",
+        },
+    )
+
+    (row,) = step_rows(_summary(steps=[shark]))
+
+    assert row["parsed_result_filtered_fastq_1"] == "/work/results/fastq_bam_processing/sample_shark_R1.fastq"
+    assert row["parsed_result_kept_reads_r1"] == "3"
+    assert row["parsed_result_kept_reads_r2"] == "3"
+    assert set(row) == set(STEP_COLUMNS) | {
+        "parsed_result_filtered_fastq_1",
+        "parsed_result_filtered_fastq_2",
+        "parsed_result_kept_reads_r1",
+        "parsed_result_kept_reads_r2",
+    }
+
+
+def test_an_error_result_keeps_its_message() -> None:
+    failed = _step(
+        summary_steps.STEP_BAM_HEADER,
+        "/work/results/fastq_bam_processing/pipeline_info.xml",
+        "xml",
+        "parse_header_pipeline_info(...)",
+        {"error": "Unsupported file type for result parsing: xml"},
+    )
+
+    (row,) = step_rows(_summary(steps=[failed]))
+
+    assert row["parsed_result_error"] == "Unsupported file type for result parsing: xml"
+
+
+def test_an_unparsed_step_has_only_the_fixed_columns() -> None:
+    unparsed = _step(summary_steps.STEP_COVERAGE, "/work/results/coverage/coverage_summary.tsv", "tsv", "x(...)", None)
+
+    (row,) = step_rows(_summary(steps=[unparsed]))
+
+    assert set(row) == set(STEP_COLUMNS)
+
+
+def test_a_summary_with_no_steps_has_no_rows() -> None:
+    assert step_rows(_summary(steps=[])) == []
+    assert step_rows({"version": "2.0.27"}) == []
+
+
+def test_no_step_cell_is_embedded_json() -> None:
+    assert [cell for row in step_rows(_summary()) for cell in row.values() if '{"' in cell] == []
