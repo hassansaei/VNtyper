@@ -80,6 +80,8 @@ def start_summary(
     kestrel_motifs_fingerprint: str | None = None,
     advntr_rus_path: str | None = None,
     advntr_rus_fingerprint: str | None = None,
+    kestrel_runtime_fingerprint: str | None = None,
+    advntr_runtime_fingerprint: str | None = None,
     persistent_reference_path: str | None = None,
     reference_consumer_path: str | None = None,
 ):
@@ -147,6 +149,8 @@ def start_summary(
         kestrel_reference_path: Resolved absolute path to the reference VNTR fasta
             used by Kestrel, or None if not configured.
         input_fingerprints: Mapping of canonical input keys to content fingerprints.
+        kestrel_runtime_fingerprint: Canonical digest of Kestrel runtime configuration.
+        advntr_runtime_fingerprint: Canonical digest of adVNTR runtime configuration.
 
     Returns:
         dict: A summary dictionary with its schema version, decision policy, pipeline
@@ -182,6 +186,8 @@ def start_summary(
         "kestrel_motifs_fingerprint": kestrel_motifs_fingerprint,
         "advntr_rus_path": advntr_rus_path,
         "advntr_rus_fingerprint": advntr_rus_fingerprint,
+        "kestrel_runtime_fingerprint": kestrel_runtime_fingerprint,
+        "advntr_runtime_fingerprint": advntr_runtime_fingerprint,
         "stage_artifact_md5s": {},
         "sample_name": sample_name,
         "sample_name_is_explicit": bool(sample_name_is_explicit),

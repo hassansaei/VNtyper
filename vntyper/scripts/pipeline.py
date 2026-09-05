@@ -62,7 +62,10 @@ from vntyper.scripts.reference_resolution_environment import restore_reference_r
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 from vntyper.scripts.resume import (
+    caller_advntr_matches,
+    caller_kestrel_matches,
     fingerprint_file,
+    fingerprint_runtime,
     load_prior_summary,
     make_reused_step_record,
     resume_refusals,
@@ -370,6 +373,10 @@ def run_pipeline(
         advntr_rus_fingerprint = (
             fingerprint_file(Path(advntr_rus_path)) if advntr_rus_path and Path(advntr_rus_path).is_file() else None
         )
+        kestrel_runtime_fingerprint = fingerprint_runtime(run_configuration.kestrel_runtime)
+        advntr_runtime_fingerprint = (
+            fingerprint_runtime(run_configuration.advntr_runtime) if "advntr" in extra_modules else None
+        )
 
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         prior_summary = None
@@ -572,6 +579,8 @@ def run_pipeline(
             kestrel_motifs_fingerprint=kestrel_motifs_fingerprint,
             advntr_rus_path=advntr_rus_path,
             advntr_rus_fingerprint=advntr_rus_fingerprint,
+            kestrel_runtime_fingerprint=kestrel_runtime_fingerprint,
+            advntr_runtime_fingerprint=advntr_runtime_fingerprint,
             sample_name=sample_name,
             sample_name_is_explicit=sample_name_is_explicit,
             reference_assembly_requested=reference_assembly,
@@ -584,53 +593,22 @@ def run_pipeline(
             decision_profile=run_configuration.decision_profile,
         )
 
-        kestrel_ref_matches = True
-        if prior_summary:
-            prior_k_ref = prior_summary.get("kestrel_reference_path")
-            if (prior_k_ref is None) != (kestrel_reference_path is None) or (
-                prior_k_ref is not None
-                and kestrel_reference_path is not None
-                and str(Path(prior_k_ref).resolve()) != str(Path(kestrel_reference_path).resolve())
-            ):
-                kestrel_ref_matches = False
-            prior_k_fp = prior_summary.get("kestrel_reference_fingerprint")
-            if (
-                prior_k_fp is not None or kestrel_reference_fingerprint is not None
-            ) and prior_k_fp != kestrel_reference_fingerprint:
-                kestrel_ref_matches = False
+        kestrel_ref_matches = caller_kestrel_matches(
+            prior_summary,
+            kestrel_reference_path=kestrel_reference_path,
+            kestrel_reference_fingerprint=kestrel_reference_fingerprint,
+            kestrel_motifs_path=kestrel_motifs_path,
+            kestrel_motifs_fingerprint=kestrel_motifs_fingerprint,
+            kestrel_runtime_fingerprint=kestrel_runtime_fingerprint,
+        )
 
-            prior_k_motifs = prior_summary.get("kestrel_motifs_path")
-            if (prior_k_motifs is None) != (kestrel_motifs_path is None) or (
-                prior_k_motifs is not None
-                and kestrel_motifs_path is not None
-                and str(Path(prior_k_motifs).resolve()) != str(Path(kestrel_motifs_path).resolve())
-            ):
-                kestrel_ref_matches = False
-            prior_k_motifs_fp = prior_summary.get("kestrel_motifs_fingerprint")
-            if (
-                prior_k_motifs_fp is not None or kestrel_motifs_fingerprint is not None
-            ) and prior_k_motifs_fp != kestrel_motifs_fingerprint:
-                kestrel_ref_matches = False
-
-        advntr_model_matches = True
-        if prior_summary:
-            if advntr_context:
-                prior_model_sha = prior_summary.get("advntr_model", {}).get("sha256")
-                curr_model_sha = advntr_context.model.get("sha256")
-                if prior_model_sha and curr_model_sha and prior_model_sha != curr_model_sha:
-                    advntr_model_matches = False
-            prior_rus_path = prior_summary.get("advntr_rus_path")
-            if (prior_rus_path is None) != (advntr_rus_path is None) or (
-                prior_rus_path is not None
-                and advntr_rus_path is not None
-                and str(Path(prior_rus_path).resolve()) != str(Path(advntr_rus_path).resolve())
-            ):
-                advntr_model_matches = False
-            prior_rus_fp = prior_summary.get("advntr_rus_fingerprint")
-            if (
-                prior_rus_fp is not None or advntr_rus_fingerprint is not None
-            ) and prior_rus_fp != advntr_rus_fingerprint:
-                advntr_model_matches = False
+        advntr_model_matches = caller_advntr_matches(
+            prior_summary,
+            curr_model_sha=advntr_context.model.get("sha256") if advntr_context else None,
+            advntr_rus_path=advntr_rus_path,
+            advntr_rus_fingerprint=advntr_rus_fingerprint,
+            advntr_runtime_fingerprint=advntr_runtime_fingerprint,
+        )
 
         if resume and prior_summary:
             donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
@@ -650,6 +628,12 @@ def run_pipeline(
                 ):
                     continue
                 _record_reused_step(summary, make_reused_step_record(s, prior_summary.get("pipeline_start")))
+            if (
+                advntr_model_matches
+                and any(s.get("step") == STEP_ADVNTR for s in summary.get("steps", []))
+                and prior_summary.get("advntr_model")
+            ):
+                summary["advntr_model"] = dict(prior_summary["advntr_model"])
             if prior_summary.get("stage_artifact_md5s"):
                 for st, md5s in prior_summary["stage_artifact_md5s"].items():
                     if st == STEP_KESTREL and not kestrel_ref_matches:
@@ -1106,8 +1090,6 @@ def run_pipeline(
                 advntr_model["genomic_interval"],
             )
 
-            prior_model_sha = prior_summary.get("advntr_model", {}).get("sha256") if prior_summary else None
-            curr_model_sha = advntr_model.get("sha256")
             if (
                 resume
                 and prior_summary

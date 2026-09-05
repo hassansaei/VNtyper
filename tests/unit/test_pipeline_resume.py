@@ -6,13 +6,15 @@ import copy
 import hashlib
 import json
 import logging
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import summary_steps
+from vntyper.scripts.resume import fingerprint_runtime
 from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.version import __version__ as VERSION
 
@@ -76,6 +78,10 @@ def _make_prior_summary(
         "reference_key_used": reference_key_used,
         "kestrel_reference_path": kestrel_ref_path,
         "decision_profile_sha256": decision_profile_sha256 or resolve_run_configuration().decision_profile.digest,
+        "kestrel_runtime_fingerprint": fingerprint_runtime(resolve_run_configuration().kestrel_runtime),
+        "advntr_runtime_fingerprint": fingerprint_runtime(resolve_run_configuration().advntr_runtime)
+        if "advntr" in resolved_modules
+        else None,
         "pipeline_start": "2026-09-05T08:00:00.000000",
         "analysis_settings": analysis_settings if analysis_settings is not None else default_settings,
         "steps": steps or [],
@@ -2011,3 +2017,151 @@ def test_resume_reruns_advntr_when_code_advntr_rus_reference_changes(tmp_path: P
     )
     assert harness.error is None
     harness.stages["run_advntr"].assert_called_once()
+
+
+def test_resume_reruns_kestrel_when_kestrel_runtime_changes(tmp_path: Path) -> None:
+    """Changing Kestrel runtime settings reruns Kestrel while preserving conversion (#20)."""
+    from dataclasses import replace
+
+    out = tmp_path / "out"
+    out.mkdir()
+    bam = tmp_path / "input" / "sample.bam"
+    bam.parent.mkdir(parents=True)
+    bam.touch()
+
+    # Pre-populate converted FASTQs
+    fq_dir = out / "fastq_bam_processing"
+    fq_dir.mkdir()
+    for name in (
+        "output_sliced.bam",
+        "output_R1.fastq.gz",
+        "output_R2.fastq.gz",
+        "output_single.fastq.gz",
+        "output_other.fastq.gz",
+    ):
+        (fq_dir / name).write_text("dummy", encoding="utf-8")
+
+    kd = out / "kestrel"
+    kd.mkdir()
+    for name in ("kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+        (kd / name).write_text("data", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ,
+                "result_file": str(fq_dir / "output_R1.fastq.gz"),
+                "file_type": "fastq",
+                "md5sum": hashlib.md5(b"dummy").hexdigest(),
+            },
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kd / "kestrel_result.tsv"),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"data").hexdigest(),
+            },
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    rc = resolve_run_configuration()
+    new_settings = dict(cast(Mapping[str, Any], rc.kestrel_runtime["kestrel_settings"]))
+    new_settings["kmer_sizes"] = [31]
+    rc_modified = replace(rc, kestrel_runtime={**rc.kestrel_runtime, "kestrel_settings": new_settings})
+
+    h = run_pipeline_under_harness(output_dir=out, bam=str(bam), resume=True, run_configuration=rc_modified)
+    assert h.error is None
+    # Kestrel must rerun because kmer_sizes changed
+    assert h.stages["run_kestrel"].call_count == 1
+    # BAM to FASTQ conversion was reused
+    assert h.stages["process_bam_to_fastq"].call_count == 0
+
+
+def test_resume_reruns_advntr_when_advntr_runtime_changes(tmp_path: Path) -> None:
+    """Changing adVNTR runtime settings reruns adVNTR (#20)."""
+    from dataclasses import replace
+
+    out = tmp_path / "out"
+    out.mkdir()
+    bam = tmp_path / "input" / "sample.bam"
+    bam.parent.mkdir(parents=True)
+    bam.touch()
+
+    adv_dir = out / "advntr"
+    adv_dir.mkdir()
+    adv_tsv = adv_dir / "advntr_genotype.tsv"
+    adv_tsv.write_text("advntr result", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        extra_modules=["advntr"],
+        steps=[
+            {
+                "step": summary_steps.STEP_ADVNTR,
+                "result_file": str(adv_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"advntr result").hexdigest(),
+                "parsed_result": {"data": []},
+            }
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    rc = resolve_run_configuration()
+    new_settings = dict(cast(Mapping[str, Any], rc.advntr_runtime["settings"]))
+    new_settings["additional_commands"] = "--modified-command"
+    rc_modified = replace(rc, advntr_runtime={**rc.advntr_runtime, "settings": new_settings})
+
+    h = run_pipeline_under_harness(
+        output_dir=out,
+        bam=str(bam),
+        extra_modules=["advntr"],
+        resume=True,
+        run_configuration=rc_modified,
+    )
+    assert h.error is None
+    assert h.stages["run_advntr"].call_count == 1
+
+
+def test_resume_rejects_advntr_reuse_when_prior_lacks_model_provenance(tmp_path: Path) -> None:
+    """If prior checkpoint has STEP_ADVNTR but lacks advntr_model, adVNTR is rerun (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    bam = tmp_path / "input" / "sample.bam"
+    bam.parent.mkdir(parents=True)
+    bam.touch()
+
+    adv_dir = out / "advntr"
+    adv_dir.mkdir()
+    adv_tsv = adv_dir / "advntr_genotype.tsv"
+    adv_tsv.write_text("advntr result", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        extra_modules=["advntr"],
+        steps=[
+            {
+                "step": summary_steps.STEP_ADVNTR,
+                "result_file": str(adv_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"advntr result").hexdigest(),
+                "parsed_result": {"data": []},
+            }
+        ],
+    )
+    # Strip advntr_model to simulate missing model provenance
+    prior.pop("advntr_model", None)
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    h = run_pipeline_under_harness(
+        output_dir=out,
+        bam=str(bam),
+        extra_modules=["advntr"],
+        resume=True,
+    )
+    assert h.error is None
+    assert h.stages["run_advntr"].call_count == 1

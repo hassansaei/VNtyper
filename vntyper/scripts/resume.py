@@ -16,6 +16,7 @@ import contextlib
 import hashlib
 import json
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
@@ -79,6 +80,95 @@ def fingerprint_file(path: str | Path) -> str:
             tail = handle.read(65536)
             hasher.update(tail)
     return hasher.hexdigest()
+
+
+def fingerprint_runtime(settings: Mapping[str, Any] | None) -> str | None:
+    """Compute canonical sha256 digest of thawed runtime configuration settings."""
+    if settings is None:
+        return None
+    from vntyper.scripts.canonical_json import canonical_sha256
+    from vntyper.scripts.decision_profile import _thaw
+
+    return canonical_sha256(_thaw(settings))
+
+
+def caller_kestrel_matches(
+    prior_summary: Mapping[str, Any] | None,
+    *,
+    kestrel_reference_path: str | None = None,
+    kestrel_reference_fingerprint: str | None = None,
+    kestrel_motifs_path: str | None = None,
+    kestrel_motifs_fingerprint: str | None = None,
+    kestrel_runtime_fingerprint: str | None = None,
+) -> bool:
+    """Return whether prior summary Kestrel reference, motifs, and runtime match current run."""
+    if not prior_summary:
+        return True
+
+    prior_k_ref = prior_summary.get("kestrel_reference_path")
+    if (prior_k_ref is None) != (kestrel_reference_path is None) or (
+        prior_k_ref is not None
+        and kestrel_reference_path is not None
+        and str(Path(prior_k_ref).resolve()) != str(Path(kestrel_reference_path).resolve())
+    ):
+        return False
+
+    prior_k_fp = prior_summary.get("kestrel_reference_fingerprint")
+    if (
+        prior_k_fp is not None or kestrel_reference_fingerprint is not None
+    ) and prior_k_fp != kestrel_reference_fingerprint:
+        return False
+
+    prior_k_motifs = prior_summary.get("kestrel_motifs_path")
+    if (prior_k_motifs is None) != (kestrel_motifs_path is None) or (
+        prior_k_motifs is not None
+        and kestrel_motifs_path is not None
+        and str(Path(prior_k_motifs).resolve()) != str(Path(kestrel_motifs_path).resolve())
+    ):
+        return False
+
+    prior_k_motifs_fp = prior_summary.get("kestrel_motifs_fingerprint")
+    if (
+        prior_k_motifs_fp is not None or kestrel_motifs_fingerprint is not None
+    ) and prior_k_motifs_fp != kestrel_motifs_fingerprint:
+        return False
+
+    prior_k_rt_fp = prior_summary.get("kestrel_runtime_fingerprint")
+    return prior_k_rt_fp == kestrel_runtime_fingerprint
+
+
+def caller_advntr_matches(
+    prior_summary: Mapping[str, Any] | None,
+    *,
+    curr_model_sha: str | None = None,
+    advntr_rus_path: str | None = None,
+    advntr_rus_fingerprint: str | None = None,
+    advntr_runtime_fingerprint: str | None = None,
+) -> bool:
+    """Return whether prior summary adVNTR model, repeat units, and runtime match current run."""
+    if not prior_summary:
+        return True
+
+    prior_has_advntr = any(s.get("step") == summary_steps.STEP_ADVNTR for s in prior_summary.get("steps", []))
+    if prior_has_advntr:
+        prior_model_sha = prior_summary.get("advntr_model", {}).get("sha256")
+        if not prior_model_sha or not curr_model_sha or prior_model_sha != curr_model_sha:
+            return False
+
+    prior_rus_path = prior_summary.get("advntr_rus_path")
+    if (prior_rus_path is None) != (advntr_rus_path is None) or (
+        prior_rus_path is not None
+        and advntr_rus_path is not None
+        and str(Path(prior_rus_path).resolve()) != str(Path(advntr_rus_path).resolve())
+    ):
+        return False
+
+    prior_rus_fp = prior_summary.get("advntr_rus_fingerprint")
+    if (prior_rus_fp is not None or advntr_rus_fingerprint is not None) and prior_rus_fp != advntr_rus_fingerprint:
+        return False
+
+    prior_adv_rt_fp = prior_summary.get("advntr_runtime_fingerprint")
+    return prior_adv_rt_fp == advntr_runtime_fingerprint
 
 
 def _compute_md5(path: Path) -> str | None:
@@ -148,18 +238,20 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                     if not donor_matches:
                         logger.warning("Ignoring incompatible donor checkpoint at %s", donor_path)
                     else:
-                        k_ref_matches = (
-                            donor_data.get("kestrel_reference_path") == data.get("kestrel_reference_path")
-                            and donor_data.get("kestrel_reference_fingerprint")
-                            == data.get("kestrel_reference_fingerprint")
-                            and donor_data.get("kestrel_motifs_path") == data.get("kestrel_motifs_path")
-                            and donor_data.get("kestrel_motifs_fingerprint") == data.get("kestrel_motifs_fingerprint")
+                        k_ref_matches = caller_kestrel_matches(
+                            donor_data,
+                            kestrel_reference_path=data.get("kestrel_reference_path"),
+                            kestrel_reference_fingerprint=data.get("kestrel_reference_fingerprint"),
+                            kestrel_motifs_path=data.get("kestrel_motifs_path"),
+                            kestrel_motifs_fingerprint=data.get("kestrel_motifs_fingerprint"),
+                            kestrel_runtime_fingerprint=data.get("kestrel_runtime_fingerprint"),
                         )
-                        adv_model_matches = (
-                            donor_data.get("advntr_model", {}).get("sha256")
-                            == data.get("advntr_model", {}).get("sha256")
-                            and donor_data.get("advntr_rus_path") == data.get("advntr_rus_path")
-                            and donor_data.get("advntr_rus_fingerprint") == data.get("advntr_rus_fingerprint")
+                        adv_model_matches = caller_advntr_matches(
+                            donor_data,
+                            curr_model_sha=data.get("advntr_model", {}).get("sha256"),
+                            advntr_rus_path=data.get("advntr_rus_path"),
+                            advntr_rus_fingerprint=data.get("advntr_rus_fingerprint"),
+                            advntr_runtime_fingerprint=data.get("advntr_runtime_fingerprint"),
                         )
                         existing_steps = {s.get("step") for s in data.get("steps", [])}
                         for s in donor_data.get("steps", []):

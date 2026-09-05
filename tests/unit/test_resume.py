@@ -13,6 +13,9 @@ from vntyper.scripts import summary_steps
 from vntyper.scripts.resume import (
     STEP_OUTPUT_SIBLINGS,
     _compute_md5,
+    caller_advntr_matches,
+    caller_kestrel_matches,
+    fingerprint_runtime,
     load_prior_summary,
     make_reused_step_record,
     resume_refusals,
@@ -477,3 +480,174 @@ def test_step_is_reusable_verifies_all_four_conversion_fastqs(tmp_path: Path) ->
     other.write_text("other", encoding="utf-8")
     single.write_text("tampered single", encoding="utf-8")
     assert step_is_reusable(prior, summary_steps.STEP_BAM_TO_FASTQ, tmp_path) is False
+
+
+def test_fingerprint_runtime() -> None:
+    assert fingerprint_runtime(None) is None
+    fp1 = fingerprint_runtime({"kmer_sizes": [20]})
+    assert fp1 is not None and len(fp1) == 64
+    fp2 = fingerprint_runtime({"kmer_sizes": [31]})
+    assert fp2 != fp1
+
+
+def test_caller_kestrel_matches() -> None:
+    assert caller_kestrel_matches(None) is True
+
+    prior: dict[str, Any] = {
+        "kestrel_reference_path": "/path/ref.fa",
+        "kestrel_reference_fingerprint": "100:1",
+        "kestrel_motifs_path": "/path/motifs.fa",
+        "kestrel_motifs_fingerprint": "200:2",
+        "kestrel_runtime_fingerprint": "a" * 64,
+    }
+    # Exact match
+    assert (
+        caller_kestrel_matches(
+            prior,
+            kestrel_reference_path="/path/ref.fa",
+            kestrel_reference_fingerprint="100:1",
+            kestrel_motifs_path="/path/motifs.fa",
+            kestrel_motifs_fingerprint="200:2",
+            kestrel_runtime_fingerprint="a" * 64,
+        )
+        is True
+    )
+    # Runtime fingerprint mismatch
+    assert (
+        caller_kestrel_matches(
+            prior,
+            kestrel_reference_path="/path/ref.fa",
+            kestrel_reference_fingerprint="100:1",
+            kestrel_motifs_path="/path/motifs.fa",
+            kestrel_motifs_fingerprint="200:2",
+            kestrel_runtime_fingerprint="b" * 64,
+        )
+        is False
+    )
+    # Reference path mismatch
+    assert (
+        caller_kestrel_matches(
+            prior,
+            kestrel_reference_path="/other/ref.fa",
+            kestrel_reference_fingerprint="100:1",
+            kestrel_motifs_path="/path/motifs.fa",
+            kestrel_motifs_fingerprint="200:2",
+            kestrel_runtime_fingerprint="a" * 64,
+        )
+        is False
+    )
+    # Reference fingerprint mismatch
+    assert (
+        caller_kestrel_matches(
+            prior,
+            kestrel_reference_path="/path/ref.fa",
+            kestrel_reference_fingerprint="100:999",
+            kestrel_motifs_path="/path/motifs.fa",
+            kestrel_motifs_fingerprint="200:2",
+            kestrel_runtime_fingerprint="a" * 64,
+        )
+        is False
+    )
+    # Motifs path mismatch
+    assert (
+        caller_kestrel_matches(
+            prior,
+            kestrel_reference_path="/path/ref.fa",
+            kestrel_reference_fingerprint="100:1",
+            kestrel_motifs_path="/other/motifs.fa",
+            kestrel_motifs_fingerprint="200:2",
+            kestrel_runtime_fingerprint="a" * 64,
+        )
+        is False
+    )
+    # Motifs fingerprint mismatch
+    assert (
+        caller_kestrel_matches(
+            prior,
+            kestrel_reference_path="/path/ref.fa",
+            kestrel_reference_fingerprint="100:1",
+            kestrel_motifs_path="/path/motifs.fa",
+            kestrel_motifs_fingerprint="200:999",
+            kestrel_runtime_fingerprint="a" * 64,
+        )
+        is False
+    )
+
+
+def test_caller_advntr_matches() -> None:
+    assert caller_advntr_matches(None) is True
+
+    prior: dict[str, Any] = {
+        "steps": [{"step": summary_steps.STEP_ADVNTR}],
+        "advntr_model": {"sha256": "c" * 64},
+        "advntr_rus_path": "/path/rus.fa",
+        "advntr_rus_fingerprint": "300:3",
+        "advntr_runtime_fingerprint": "d" * 64,
+    }
+    # Exact match
+    assert (
+        caller_advntr_matches(
+            prior,
+            curr_model_sha="c" * 64,
+            advntr_rus_path="/path/rus.fa",
+            advntr_rus_fingerprint="300:3",
+            advntr_runtime_fingerprint="d" * 64,
+        )
+        is True
+    )
+    # Model SHA mismatch
+    assert (
+        caller_advntr_matches(
+            prior,
+            curr_model_sha="e" * 64,
+            advntr_rus_path="/path/rus.fa",
+            advntr_rus_fingerprint="300:3",
+            advntr_runtime_fingerprint="d" * 64,
+        )
+        is False
+    )
+    # Prior lacks model sha
+    prior_no_sha = dict(prior, advntr_model={})
+    assert (
+        caller_advntr_matches(
+            prior_no_sha,
+            curr_model_sha="c" * 64,
+            advntr_rus_path="/path/rus.fa",
+            advntr_rus_fingerprint="300:3",
+            advntr_runtime_fingerprint="d" * 64,
+        )
+        is False
+    )
+    # RUS path mismatch
+    assert (
+        caller_advntr_matches(
+            prior,
+            curr_model_sha="c" * 64,
+            advntr_rus_path="/other/rus.fa",
+            advntr_rus_fingerprint="300:3",
+            advntr_runtime_fingerprint="d" * 64,
+        )
+        is False
+    )
+    # RUS fingerprint mismatch
+    assert (
+        caller_advntr_matches(
+            prior,
+            curr_model_sha="c" * 64,
+            advntr_rus_path="/path/rus.fa",
+            advntr_rus_fingerprint="300:999",
+            advntr_runtime_fingerprint="d" * 64,
+        )
+        is False
+    )
+    # Runtime fingerprint mismatch
+    assert (
+        caller_advntr_matches(
+            prior,
+            curr_model_sha="c" * 64,
+            advntr_rus_path="/path/rus.fa",
+            advntr_rus_fingerprint="300:3",
+            advntr_runtime_fingerprint="e" * 64,
+        )
+        is False
+    )
