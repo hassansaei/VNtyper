@@ -117,6 +117,9 @@ This produces:
 | `cohort_stats.csv` | Per-sample statistics in CSV |
 | `cohort_stats.tsv` | Per-sample statistics in TSV |
 | `cohort_stats.json` | Per-sample statistics in JSON |
+| `cohort_call_frequency.csv` | Cohort call frequency summary in CSV |
+| `cohort_call_frequency.tsv` | Cohort call frequency summary in TSV |
+| `cohort_call_frequency.json` | Cohort call frequency summary in JSON |
 
 `cohort_stats_*` carries the same rows as the report's additional statistics table: runtime, version, assembly and alignment pipeline per sample, plus every coverage metric under a `cov_` prefix -- `cov_mean`, `cov_percent_uncovered` and `cov_coverage_qc` among them. It is the only machine-readable cohort output carrying a coverage figure; before VNtyper 2.0.8 that table reached the HTML report and nothing else.
 
@@ -128,3 +131,16 @@ The cohort summary report includes:
 - **Kestrel results table** with per-sample variant calls, confidence levels, and flags
 - **adVNTR results table** (if adVNTR data is present)
 - **Additional statistics** including runtime, coverage metrics, pipeline version, reference assembly, and alignment pipeline for each sample
+- **Call frequency table** showing variant calls grouped across the cohort, sorted ascending by frequency, indicating calls at or below the configured maximum frequency threshold in the `Below_Cutoff` column
+
+## Cohort Call Frequency
+
+The cohort call frequency table aggregates variant calls across all samples in the cohort to summarize call distribution:
+
+- **Grouping key**: When `Molecular_Identity_Status` is `unique` or `legacy-selected-among-multiple` and a non-empty molecular identity is recorded, calls are grouped by `Molecular_Identity`. Otherwise, calls fall back to caller representation `(Motifs, POS, REF, ALT)` formatted as `<Motifs>:<POS>:<REF>:<ALT>`.
+- **Grouping key kind**: The `Grouping_Key_Kind` column records `molecular-identity` or `caller-representation` so that unresolved or legacy rows never collapse with distinct molecular identities.
+- **Cohort denominator**: Call frequency is calculated relative to the total cohort roster (`cohort_size`), including samples without positive calls or unestablished samples.
+- **Placeholder exclusion**: Empty-result negative placeholders are excluded and never form a call group.
+- **Threshold marking**: Calls with `Frequency <= rare_allele_max_frequency` are marked as `Below_Cutoff = "yes"` (`"no"` otherwise). No calls are omitted or filtered out from the table or export files.
+- **Configurable cutoff**: The threshold defaults to `0.05` via `cohort.rare_allele_max_frequency` in `config.json` and can be overridden via the `--rare-allele-max-frequency` CLI option.
+

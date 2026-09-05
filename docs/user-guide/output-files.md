@@ -240,3 +240,38 @@ Molecular-identity publication is additive to summary schema 2; it does not intr
 schema 3. Current summaries record the packaged selection policy as
 `decision_policy: legacy-selection-v1`. Older summaries without that provenance remain
 readable and are labelled as not recorded rather than being assigned the current policy.
+
+## Cohort Output Files
+
+When running `vntyper cohort`, the following files can be generated in the output directory:
+
+| File | Format | Description |
+|------|--------|-------------|
+| `cohort_summary.html` | HTML | Interactive standalone summary report with distribution charts and tables |
+| `cohort_kestrel.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated Kestrel variant calls across all cohort samples |
+| `cohort_advntr.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated adVNTR variant calls across all cohort samples (if adVNTR present) |
+| `cohort_stats.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated per-sample execution, reference, and coverage statistics |
+| `cohort_call_frequency.<csv\|tsv\|json>` | CSV/TSV/JSON | Grouped variant call frequency table across the cohort |
+| `pseudonymization_table.tsv` | TSV | Sample name to pseudonym mapping table (when `--pseudonymize-samples` is used) |
+
+### cohort_call_frequency Columns
+
+The `cohort_call_frequency.<csv|tsv|json>` export contains exactly 14 columns detailing variant call distribution:
+
+| Column | Description |
+|--------|-------------|
+| `Grouping_Key` | Molecular identity or caller representation used to group the call |
+| `Grouping_Key_Kind` | Either `molecular-identity` or `caller-representation` |
+| `Molecular_Identity` | Canonical molecular identity serialization, or empty if unresolved |
+| `Motifs` | Repeat motif identifier(s) from caller |
+| `POS` | Locus position |
+| `REF` | Reference sequence |
+| `ALT` | Alternate sequence |
+| `Variant` | Variant type (e.g., insertion, deletion, SNV) |
+| `Sample_Count` | Number of distinct cohort samples carrying this variant call |
+| `Frequency` | Call frequency computed as `Sample_Count / cohort_size` |
+| `Below_Cutoff` | `yes` if `Frequency <= rare_allele_max_frequency`, `no` otherwise |
+| `Samples` | Semicolon-separated list of sample names (or pseudonyms) carrying the call |
+| `Min_Depth_Score` | Minimum numeric depth score observed among samples with this call |
+| `Max_Depth_Score` | Maximum numeric depth score observed among samples with this call |
+
