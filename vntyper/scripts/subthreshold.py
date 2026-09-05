@@ -6,7 +6,7 @@ The below-reporting-floor signal (#266).
 `filter_final_dataframe` ANDs six boolean gates. Five encode a *structural or artifact*
 judgement -- "this row is not a candidate variant". The sixth, :data:`DEPTH_GATE`, encodes
 a *magnitude* one: it is ``Confidence != "Negative"``, which reduces to
-``Depth_Score >= depth_score_thresholds.low``. A row that fails **only** that gate is a
+``Depth_Score >= reporting_floor``. A row that fails **only** that gate is a
 well-formed pathogenic-frame candidate that was too faint to call, and until #266 it left
 no trace at all: the sample rendered identically to one where nothing was ever found.
 

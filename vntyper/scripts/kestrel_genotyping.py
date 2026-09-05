@@ -587,10 +587,10 @@ def _subthreshold_note(output_dir, config, filter_columns=FILTER_COLUMNS):
     # (`calculate_depth_score_and_assign_confidence` raises KeyError on one), but this is an
     # annotation: a config without the floor should lose the note, not the run.
     try:
-        floor = config["confidence_assignment"]["depth_score_thresholds"]["low"]
+        floor = config["confidence_assignment"]["reporting_floor"]
     except (KeyError, TypeError):
         logger.warning(
-            "No confidence_assignment.depth_score_thresholds.low in the Kestrel config; "
+            "No confidence_assignment.reporting_floor in the Kestrel config; "
             "no subthreshold note will be written."
         )
         return None

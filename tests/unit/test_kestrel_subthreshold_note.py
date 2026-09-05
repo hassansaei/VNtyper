@@ -135,7 +135,7 @@ class TestTheNoteHelper:
         settings = {"enabled": True, "template": "{marker} {events} {noun} at {best_depth_score}/{floor}"}
         settings.update(overrides)
         return {
-            "confidence_assignment": {"depth_score_thresholds": {"low": 0.00469}},
+            "confidence_assignment": {"reporting_floor": 0.00469},
             "subthreshold_note": settings,
         }
 
@@ -180,6 +180,22 @@ class TestTheNoteHelper:
         config["confidence_assignment"] = {}
 
         assert kg._subthreshold_note(str(tmp_path), config) is None
+
+    def test_a_config_without_reporting_floor_loses_the_note_not_the_run(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A config without reporting_floor logs a warning and degrades cleanly (#311)."""
+        import logging
+
+        pre_result(tmp_path / "kestrel_pre_result.tsv", [{}])
+        config = self.config()
+        config["confidence_assignment"] = {"depth_score_thresholds": {"low": 0.00469}}
+
+        with caplog.at_level(logging.WARNING):
+            note = kg._subthreshold_note(str(tmp_path), config)
+
+        assert note is None
+        assert "No confidence_assignment.reporting_floor in the Kestrel config" in caplog.text
 
     def test_a_missing_pre_result_yields_no_note(self, tmp_path: Path):
         assert kg._subthreshold_note(str(tmp_path), self.config()) is None
@@ -260,7 +276,7 @@ class TestTheScoredEmptyBranch:
 
     def config(self) -> dict:
         return {
-            "confidence_assignment": {"depth_score_thresholds": {"low": 0.00469}},
+            "confidence_assignment": {"reporting_floor": 0.00469},
             "subthreshold_note": {"enabled": True, "template": "{marker} {events} {noun} at {best_depth_score}"},
         }
 
