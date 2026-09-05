@@ -4,7 +4,17 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Atomic installation of BAM and BAI files
+
+- **Atomic subprocess writes** (Refs [#314](https://github.com/hassansaei/VNtyper/issues/314)).
+  Every BAM and BAI file produced by `samtools` or `bwa` subprocesses is now written to a
+  deterministic sibling `.partial` path and atomically moved into place with `os.replace`
+  only upon verified completion. Interrupted or failing subprocesses no longer leave
+  corrupt, truncated, or header-only BAM files under final names. In non-fast mode, the
+  slice remains at `.partial` until merged, ensuring the public name never holds the
+  uncompressed unmapped-free slice mid-run. Sliced BAM indexing is decoupled from the
+  slice command and converges fast and normal modes. Destination validation contracts
+  in `alignment_target_io.py` are widened to include all partial names.
 
 ## 2.0.27 (Current)
 
