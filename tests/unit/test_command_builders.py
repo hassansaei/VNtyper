@@ -47,6 +47,7 @@ from vntyper.scripts.command_builders import (
     build_samtools_index_command,
     build_samtools_merge_command,
     build_samtools_slice_command,
+    build_threaded_samtools_index_argv,
 )
 
 # Mark all tests in this module as unit tests
@@ -287,6 +288,25 @@ def test_the_threaded_index_argv_is_pinned():
     )
 
     assert argv == ["/opt/vntyper/bin/samtools", "index", "-@", "6", "/out/output.bam"]
+
+
+def test_threaded_samtools_index_argv_supports_output_bai():
+    """Explicit-thread index argv accepts -o when output_bai is passed."""
+    argv = build_threaded_samtools_index_argv(
+        samtools_path="samtools",
+        bam_file="/data/sample.bam",
+        threads=4,
+        output_bai="/data/sample.bam.bai.partial",
+    )
+    assert argv == [
+        "samtools",
+        "index",
+        "-@",
+        "4",
+        "-o",
+        "/data/sample.bam.bai.partial",
+        "/data/sample.bam",
+    ]
 
 
 def test_the_index_command_takes_an_output_path():

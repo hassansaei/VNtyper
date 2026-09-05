@@ -542,6 +542,7 @@ def downsample_bam_if_needed(
 
     samtools_path = config["tools"]["samtools"]
     downsampled_bam = bam_path.parent / (bam_path.stem + "_downsampled.bam")
+    partial_downsampled_bam = partial_path(downsampled_bam)
     seed = 42
     subsample_param = f"{seed}.{int(fraction * 1000):03d}"
 
@@ -554,36 +555,51 @@ def downsample_bam_if_needed(
         str(threads),
         "-b",
         "-o",
-        str(downsampled_bam),
+        str(partial_downsampled_bam),
         str(bam_path),
     ]
     logger.info(f"Downsampling BAM with command: {' '.join(cmd_view)}")
+    discard_partial(partial_downsampled_bam)
     try:
         subprocess.run(cmd_view, check=True)
-    except subprocess.CalledProcessError as err:
+        publish_partial(partial_downsampled_bam, downsampled_bam)
+    except (subprocess.CalledProcessError, OSError) as err:
+        discard_partial(partial_downsampled_bam)
         logger.error(f"Downsampling failed: {err}")
         return bam_path
 
     sorted_down_bam = downsampled_bam.with_suffix(".sorted.bam")
+    partial_sorted_down_bam = partial_path(sorted_down_bam)
     cmd_sort = [
         samtools_path,
         "sort",
         "-@",
         str(threads),
         "-o",
-        str(sorted_down_bam),
+        str(partial_sorted_down_bam),
         str(downsampled_bam),
     ]
+    discard_partial(partial_sorted_down_bam)
+    final_down_bai = Path(f"{sorted_down_bam}.bai")
+    partial_down_bai = partial_path(final_down_bai)
+    discard_partial(partial_down_bai)
     try:
         subprocess.run(cmd_sort, check=True)
-        downsampled_bam.unlink()
+        publish_partial(partial_sorted_down_bam, sorted_down_bam)
+        downsampled_bam.unlink(missing_ok=True)
         cmd_index = build_threaded_samtools_index_argv(
             samtools_path=samtools_path,
             bam_file=sorted_down_bam,
             threads=threads,
+            output_bai=partial_down_bai,
         )
         subprocess.run(cmd_index, check=True)
-    except subprocess.CalledProcessError as err:
+        if not partial_down_bai.exists() or partial_down_bai.stat().st_size == 0:
+            raise OSError(f"Downsampled index file {partial_down_bai} not created or empty.")
+        publish_partial(partial_down_bai, final_down_bai)
+    except (subprocess.CalledProcessError, OSError) as err:
+        discard_partial(partial_sorted_down_bam)
+        discard_partial(partial_down_bai)
         logger.error(f"Sorting/indexing failed after downsampling: {err}")
         return bam_path
 

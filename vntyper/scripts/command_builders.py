@@ -274,18 +274,29 @@ def build_sam_to_bam_command(
     return f"{samtools_path} view -Sb {_thread_flag(threads)}{quote_path(sam_file)} > {quote_path(bam_file)}"
 
 
-def build_threaded_samtools_index_argv(*, samtools_path: str, bam_file: str | Path, threads: int) -> list[str]:
+def build_threaded_samtools_index_argv(
+    *,
+    samtools_path: str,
+    bam_file: str | Path,
+    threads: int,
+    output_bai: str | Path | None = None,
+) -> list[str]:
     """Build the explicit-thread index argv used by the downsample path.
 
     Args:
         samtools_path: Configured samtools executable.
         bam_file: BAM to index.
         threads: Samtools thread count.
+        output_bai: Optional index destination path passed via ``-o``.
 
     Returns:
         The argv list for ``subprocess.run``.
     """
-    return [samtools_path, "index", "-@", str(threads), str(bam_file)]
+    argv = [samtools_path, "index", "-@", str(threads)]
+    if output_bai is not None:
+        argv.extend(["-o", str(output_bai)])
+    argv.append(str(bam_file))
+    return argv
 
 
 def build_cram_unmapped_filter_command(
