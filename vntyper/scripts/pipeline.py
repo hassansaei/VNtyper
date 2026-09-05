@@ -56,20 +56,23 @@ from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
+from vntyper.scripts.pipeline_resume_planning import (
+    build_analysis_settings,
+    build_canonical_inputs_and_fingerprints,
+    evaluate_resume_compatibility,
+    initial_stage_carry_forward,
+    record_reused_stage,
+    resolve_effective_kestrel_runtime,
+)
 from vntyper.scripts.profile_provenance import snapshot_decision_profile
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 from vntyper.scripts.resume import (
-    caller_advntr_matches,
-    caller_kestrel_matches,
-    caller_shark_matches,
     fingerprint_file,
     fingerprint_runtime,
     load_prior_summary,
-    make_reused_step_record,
-    reference_content_matches,
     resume_refusals,
     step_is_reusable,
 )
@@ -302,52 +305,20 @@ def run_pipeline(
         needs_advntr = advntr_preflight.enabled
         advntr_reference = advntr_preflight.reference
         additional_operator_paths = (advntr_reference,) if advntr_reference is not None else ()
-        canonical_input_files: dict[str, str] = {}
-        input_fingerprints: dict[str, str] = {}
-        if bam is not None:
-            bam_path = Path(bam).resolve()
-            canonical_input_files["bam"] = str(bam_path)
-            if bam_path.is_file():
-                input_fingerprints["bam"] = fingerprint_file(bam_path)
-        elif cram is not None:
-            cram_path = Path(cram).resolve()
-            canonical_input_files["cram"] = str(cram_path)
-            if cram_path.is_file():
-                input_fingerprints["cram"] = fingerprint_file(cram_path)
-        elif fastq1 is not None:
-            f1_path = Path(fastq1).resolve()
-            canonical_input_files["fastq1"] = str(f1_path)
-            if f1_path.is_file():
-                input_fingerprints["fastq1"] = fingerprint_file(f1_path)
-            if fastq2 is not None:
-                f2_path = Path(fastq2).resolve()
-                canonical_input_files["fastq2"] = str(f2_path)
-                if f2_path.is_file():
-                    input_fingerprints["fastq2"] = fingerprint_file(f2_path)
+        canonical_input_files, input_fingerprints = build_canonical_inputs_and_fingerprints(
+            input_type, fastq1, fastq2, bam, cram, bed_file
+        )
 
-        if bed_file is not None:
-            bed_path = Path(bed_file).resolve()
-            if bed_path.is_file():
-                input_fingerprints["bed_file"] = fingerprint_file(bed_path)
-
-        advntr_max_coverage = None
-        if isinstance(module_args, dict) and "advntr" in module_args and isinstance(module_args["advntr"], dict):
-            advntr_max_coverage = module_args["advntr"].get("max_coverage")
-
-        bam_processing_settings = None
-        if isinstance(config, dict) and "bam_processing" in config and isinstance(config["bam_processing"], dict):
-            bam_processing_settings = dict(config["bam_processing"])
-
-        analysis_settings: dict[str, Any] = {
-            "reference_assembly": reference_assembly,
-            "fast_mode": bool(fast_mode),
-            "custom_regions": str(custom_regions) if custom_regions else None,
-            "bed_file": str(Path(bed_file).resolve()) if bed_file else None,
-            "advntr_model": str(Path(advntr_reference).resolve()) if advntr_reference else None,
-            "advntr_max_coverage": advntr_max_coverage,
-            "bam_processing": bam_processing_settings,
-            "extra_modules": sorted(extra_modules),
-        }
+        analysis_settings = build_analysis_settings(
+            reference_assembly=reference_assembly,
+            fast_mode=fast_mode,
+            custom_regions=custom_regions,
+            bed_file=bed_file,
+            advntr_reference=advntr_reference,
+            module_args=module_args,
+            config=config,
+            extra_modules=extra_modules,
+        )
 
         effective_reference_path = None
         if input_type == "FASTQ" and bwa_reference:
@@ -401,16 +372,11 @@ def run_pipeline(
         advntr_rus_fingerprint = (
             fingerprint_file(Path(advntr_rus_path)) if advntr_rus_path and Path(advntr_rus_path).is_file() else None
         )
-        from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
-        from vntyper.scripts.pipeline_kestrel import resolve_kestrel_counting_mode
-
-        kestrel_counting_mode = resolve_kestrel_counting_mode(run_configuration.kestrel_runtime, config)
-        effective_kestrel_runtime = {
-            **dict(run_configuration.kestrel_runtime),
-            "kestrel_counting_mode": kestrel_counting_mode,
-            "kanalyze": config.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH),
-        }
-        kestrel_runtime_fingerprint = fingerprint_runtime(effective_kestrel_runtime)
+        (
+            kestrel_counting_mode,
+            effective_kestrel_runtime,
+            kestrel_runtime_fingerprint,
+        ) = resolve_effective_kestrel_runtime(run_configuration, config, project_root)
         advntr_runtime_fingerprint = (
             fingerprint_runtime(run_configuration.advntr_runtime) if "advntr" in extra_modules else None
         )
@@ -648,115 +614,39 @@ def run_pipeline(
             decision_profile=run_configuration.decision_profile,
         )
 
-        kestrel_ref_matches = caller_kestrel_matches(
+        compatibility = evaluate_resume_compatibility(
             prior_summary,
+            input_type=input_type,
             kestrel_reference_path=kestrel_reference_path,
             kestrel_reference_fingerprint=kestrel_reference_fingerprint,
             kestrel_motifs_path=kestrel_motifs_path,
             kestrel_motifs_fingerprint=kestrel_motifs_fingerprint,
             kestrel_runtime_fingerprint=kestrel_runtime_fingerprint,
             kestrel_counting_mode=kestrel_counting_mode,
-        )
-
-        advntr_model_matches = caller_advntr_matches(
-            prior_summary,
-            curr_model_sha=advntr_context.model.get("sha256") if advntr_context else None,
+            advntr_model_sha=advntr_context.model.get("sha256") if advntr_context else None,
             advntr_rus_path=advntr_rus_path,
             advntr_rus_fingerprint=advntr_rus_fingerprint,
             advntr_runtime_fingerprint=advntr_runtime_fingerprint,
-        )
-
-        shark_ref_matches = caller_shark_matches(
-            prior_summary,
             shark_reference_path=shark_reference_path,
             shark_reference_fingerprint=shark_reference_fingerprint,
             shark_runtime_fingerprint=shark_runtime_fingerprint,
+            effective_reference_path=effective_reference_path,
+            effective_reference_fingerprint=effective_reference_fingerprint,
         )
-        bwa_ref_matches = reference_content_matches(
-            prior_summary,
-            reference_fingerprint=effective_reference_fingerprint,
-        )
-        cram_ref_matches = True
-        if input_type == "CRAM" and prior_summary is not None:
-            prior_ref_fp = prior_summary.get("reference_fingerprint")
-            prior_ref_path = prior_summary.get("persistent_reference_path") or prior_summary.get("reference_path")
-            if (
-                (prior_ref_fp is not None or effective_reference_fingerprint is not None)
-                and prior_ref_fp != effective_reference_fingerprint
-                or (
-                    prior_ref_path is not None
-                    and effective_reference_path is not None
-                    and str(Path(prior_ref_path).resolve()) != str(Path(effective_reference_path).resolve())
-                )
-            ):
-                cram_ref_matches = False
-
-        inval_align = not shark_ref_matches or not bwa_ref_matches
-        inval_cram = not cram_ref_matches
-        if input_type == "FASTQ" and inval_align:
-            kestrel_ref_matches = False
-            advntr_model_matches = False
-        if input_type == "CRAM" and inval_cram:
-            kestrel_ref_matches = False
-            advntr_model_matches = False
 
         if resume and prior_summary:
             donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
             if not donor_summary_path.is_file() and os.path.isfile(summary_file_path):
                 with contextlib.suppress(OSError):
                     shutil.copy2(summary_file_path, donor_summary_path)
-            for s in prior_summary.get("steps", []):
-                st = s.get("step")
-                if not st or not step_is_reusable(prior_summary, st, output_dir, needs_advntr=needs_advntr):
-                    continue
-                if (
-                    st
-                    in (
-                        STEP_FASTQ_ALIGNMENT,
-                        STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
-                        STEP_SHARK,
-                    )
-                    and inval_align
-                ):
-                    continue
-                if st == STEP_CRAM_TO_FASTQ and inval_cram:
-                    continue
-                if st == STEP_KESTREL and not kestrel_ref_matches:
-                    continue
-                if st == STEP_ADVNTR and ("advntr" not in extra_modules or not advntr_model_matches):
-                    continue
-                if st == STEP_CROSS_MATCH and (
-                    not kestrel_ref_matches or "advntr" not in extra_modules or not advntr_model_matches
-                ):
-                    continue
-                _record_reused_step(summary, make_reused_step_record(s, prior_summary.get("pipeline_start")))
-            if (
-                advntr_model_matches
-                and any(s.get("step") == STEP_ADVNTR for s in summary.get("steps", []))
-                and prior_summary.get("advntr_model")
-            ):
-                summary["advntr_model"] = dict(prior_summary["advntr_model"])
-            if prior_summary.get("stage_artifact_md5s"):
-                for st, md5s in prior_summary["stage_artifact_md5s"].items():
-                    if (
-                        st
-                        in (
-                            STEP_FASTQ_ALIGNMENT,
-                            STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
-                            STEP_SHARK,
-                        )
-                        and inval_align
-                    ):
-                        continue
-                    if st == STEP_KESTREL and not kestrel_ref_matches:
-                        continue
-                    if st == STEP_ADVNTR and ("advntr" not in extra_modules or not advntr_model_matches):
-                        continue
-                    if st == STEP_CROSS_MATCH and (
-                        not kestrel_ref_matches or "advntr" not in extra_modules or not advntr_model_matches
-                    ):
-                        continue
-                    summary.setdefault("stage_artifact_md5s", {})[st] = dict(md5s)
+            initial_stage_carry_forward(
+                summary,
+                prior_summary,
+                output_dir,
+                compatibility=compatibility,
+                needs_advntr=needs_advntr,
+                extra_modules=extra_modules,
+            )
         else:
             donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
             if donor_summary_path.is_file():
@@ -785,7 +675,7 @@ def run_pipeline(
             can_reuse_conversion = (
                 resume
                 and prior_summary is not None
-                and not (input_type == "CRAM" and inval_cram)
+                and not (input_type == "CRAM" and compatibility.inval_cram)
                 and step_is_reusable(
                     prior_summary,
                     conversion_step,
@@ -810,12 +700,7 @@ def run_pipeline(
 
             if kestrel_fastq_files is not None:
                 logger.info("Reusing previous %s step results.", conversion_step)
-                prior_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == conversion_step)
-                _record_reused_step(summary, make_reused_step_record(prior_step, prior_summary.get("pipeline_start")))
-                if prior_summary.get("stage_artifact_md5s", {}).get(conversion_step):
-                    summary.setdefault("stage_artifact_md5s", {})[conversion_step] = dict(
-                        prior_summary["stage_artifact_md5s"][conversion_step]
-                    )
+                record_reused_stage(summary, prior_summary, conversion_step)
                 write_summary(summary, summary_file_path)
 
             else:
@@ -907,7 +792,7 @@ def run_pipeline(
             can_reuse_alignment_and_conv = (
                 resume
                 and prior_summary is not None
-                and not inval_align
+                and not compatibility.inval_align
                 and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir)
                 and step_is_reusable(
                     prior_summary,
@@ -933,32 +818,14 @@ def run_pipeline(
 
             if kestrel_fastq_files is not None:
                 logger.info("Reusing previous alignment and post-alignment conversion.")
-                for st_name in (STEP_FASTQ_ALIGNMENT, STEP_BAM_TO_FASTQ_POST_ALIGNMENT):
-                    prior_st = next((s for s in prior_summary.get("steps", []) if s.get("step") == st_name), None)
-                    if prior_st is not None:
-                        _record_reused_step(
-                            summary, make_reused_step_record(prior_st, prior_summary.get("pipeline_start"))
-                        )
-                    if prior_summary.get("stage_artifact_md5s", {}).get(st_name):
-                        summary.setdefault("stage_artifact_md5s", {})[st_name] = dict(
-                            prior_summary["stage_artifact_md5s"][st_name]
-                        )
+                record_reused_stage(summary, prior_summary, STEP_FASTQ_ALIGNMENT)
+                record_reused_stage(summary, prior_summary, STEP_BAM_TO_FASTQ_POST_ALIGNMENT)
                 can_reuse_qc = (
                     resume and prior_summary is not None and step_is_reusable(prior_summary, STEP_FASTQ_QC, output_dir)
                 )
                 if can_reuse_qc:
                     logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
-                    prior_qc_st = next(
-                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_QC), None
-                    )
-                    if prior_qc_st is not None:
-                        _record_reused_step(
-                            summary, make_reused_step_record(prior_qc_st, prior_summary.get("pipeline_start"))
-                        )
-                    if prior_summary.get("stage_artifact_md5s", {}).get(STEP_FASTQ_QC):
-                        summary.setdefault("stage_artifact_md5s", {})[STEP_FASTQ_QC] = dict(
-                            prior_summary["stage_artifact_md5s"][STEP_FASTQ_QC]
-                        )
+                    record_reused_stage(summary, prior_summary, STEP_FASTQ_QC)
                 else:
                     _run_and_record_fastq_qc(
                         fastq1, fastq2, threads, dirs, config, summary, summary_file_path, qc_only=True
@@ -989,22 +856,12 @@ def run_pipeline(
                 can_reuse_alignment = (
                     resume
                     and prior_summary is not None
-                    and not inval_align
+                    and not compatibility.inval_align
                     and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir)
                 )
                 if can_reuse_alignment:
                     logger.info("Reusing previous %s step results.", STEP_FASTQ_ALIGNMENT)
-                    prior_align_st = next(
-                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
-                    )
-                    if prior_align_st is not None:
-                        _record_reused_step(
-                            summary, make_reused_step_record(prior_align_st, prior_summary.get("pipeline_start"))
-                        )
-                    if prior_summary.get("stage_artifact_md5s", {}).get(STEP_FASTQ_ALIGNMENT):
-                        summary.setdefault("stage_artifact_md5s", {})[STEP_FASTQ_ALIGNMENT] = dict(
-                            prior_summary["stage_artifact_md5s"][STEP_FASTQ_ALIGNMENT]
-                        )
+                    record_reused_stage(summary, prior_summary, STEP_FASTQ_ALIGNMENT)
                     can_reuse_qc = (
                         resume
                         and prior_summary is not None
@@ -1012,22 +869,15 @@ def run_pipeline(
                     )
                     if can_reuse_qc:
                         logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
-                        prior_qc_st = next(
-                            (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_QC), None
-                        )
-                        if prior_qc_st is not None:
-                            _record_reused_step(
-                                summary, make_reused_step_record(prior_qc_st, prior_summary.get("pipeline_start"))
-                            )
-                        if prior_summary.get("stage_artifact_md5s", {}).get(STEP_FASTQ_QC):
-                            summary.setdefault("stage_artifact_md5s", {})[STEP_FASTQ_QC] = dict(
-                                prior_summary["stage_artifact_md5s"][STEP_FASTQ_QC]
-                            )
+                        record_reused_stage(summary, prior_summary, STEP_FASTQ_QC)
                     else:
                         _run_and_record_fastq_qc(
                             fastq1, fastq2, threads, dirs, config, summary, summary_file_path, qc_only=True
                         )
                     write_summary(summary, summary_file_path)
+                    prior_align_st = next(
+                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
+                    )
                     sorted_bam = (
                         Path(prior_align_st["result_file"])
                         if prior_align_st and prior_align_st.get("result_file")
@@ -1149,20 +999,13 @@ def run_pipeline(
         if (
             resume
             and prior_summary
-            and kestrel_ref_matches
+            and compatibility.kestrel_ref_matches
             and step_is_reusable(prior_summary, STEP_KESTREL, output_dir)
         ):
             logger.info("Reusing previous %s step results.", STEP_KESTREL)
-            prior_kestrel_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_KESTREL)
-            _record_reused_step(
-                summary, make_reused_step_record(prior_kestrel_step, prior_summary.get("pipeline_start"))
-            )
+            record_reused_stage(summary, prior_summary, STEP_KESTREL)
             if "kestrel_counting_mode" in prior_summary:
                 summary["kestrel_counting_mode"] = prior_summary["kestrel_counting_mode"]
-            if prior_summary.get("stage_artifact_md5s", {}).get(STEP_KESTREL):
-                summary.setdefault("stage_artifact_md5s", {})[STEP_KESTREL] = dict(
-                    prior_summary["stage_artifact_md5s"][STEP_KESTREL]
-                )
             write_summary(summary, summary_file_path)
 
         else:
@@ -1222,18 +1065,11 @@ def run_pipeline(
             if (
                 resume
                 and prior_summary
-                and advntr_model_matches
+                and compatibility.advntr_model_matches
                 and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir)
             ):
                 logger.info("Reusing previous %s step results.", STEP_ADVNTR)
-                prior_advntr_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_ADVNTR)
-                _record_reused_step(
-                    summary, make_reused_step_record(prior_advntr_step, prior_summary.get("pipeline_start"))
-                )
-                if prior_summary.get("stage_artifact_md5s", {}).get(STEP_ADVNTR):
-                    summary.setdefault("stage_artifact_md5s", {})[STEP_ADVNTR] = dict(
-                        prior_summary["stage_artifact_md5s"][STEP_ADVNTR]
-                    )
+                record_reused_stage(summary, prior_summary, STEP_ADVNTR)
                 write_summary(summary, summary_file_path)
 
             else:

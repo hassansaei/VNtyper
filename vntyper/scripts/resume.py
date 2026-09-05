@@ -217,6 +217,19 @@ def _compute_md5(path: Path) -> str | None:
         return None
 
 
+def _extract_profile_digest(summary: Mapping[str, Any]) -> str | None:
+    """Extract decision profile digest from top-level summary or nested profile mapping."""
+    digest = summary.get("decision_profile_sha256")
+    if digest:
+        return str(digest)
+    dp = summary.get("decision_profile")
+    if isinstance(dp, dict):
+        d = dp.get("digest") or dp.get("sha256")
+        if d:
+            return str(d)
+    return None
+
+
 def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
     """Load a prior pipeline summary from a file or directory path.
 
@@ -249,22 +262,16 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                 if data is None:
                     data = donor_data
                 else:
-                    donor_profile = (
-                        donor_data.get("decision_profile", {}).get("digest")
-                        if isinstance(donor_data.get("decision_profile"), dict)
-                        else None
-                    )
-                    data_profile = (
-                        data.get("decision_profile", {}).get("digest")
-                        if isinstance(data.get("decision_profile"), dict)
-                        else None
-                    )
+                    donor_profile = _extract_profile_digest(donor_data)
+                    data_profile = _extract_profile_digest(data)
                     donor_matches = (
-                        donor_data.get("sample_name") == data.get("sample_name")
+                        donor_profile is not None
+                        and data_profile is not None
+                        and donor_profile == data_profile
+                        and donor_data.get("sample_name") == data.get("sample_name")
                         and donor_data.get("input_files") == data.get("input_files")
                         and donor_data.get("canonical_input_files") == data.get("canonical_input_files")
                         and donor_data.get("reference_assembly_requested") == data.get("reference_assembly_requested")
-                        and donor_profile == data_profile
                     )
                     if not donor_matches:
                         logger.warning("Ignoring incompatible donor checkpoint at %s", donor_path)

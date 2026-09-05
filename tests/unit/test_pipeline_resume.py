@@ -16,7 +16,6 @@ import pytest
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import summary_steps
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
-from vntyper.scripts.pipeline_kestrel import resolve_kestrel_counting_mode
 from vntyper.scripts.resume import fingerprint_file, fingerprint_runtime
 from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.version import __version__ as VERSION
@@ -48,17 +47,34 @@ def _make_prior_summary(
         advntr_ref = MINIMAL_CONFIG.get("reference_data", {}).get(f"advntr_reference_vntr_{reference_assembly}")
         advntr_model = str(Path(advntr_ref).resolve()) if advntr_ref else None
 
-    default_counting_mode = kestrel_counting_mode or resolve_kestrel_counting_mode(
-        resolve_run_configuration().kestrel_runtime,
+    project_root = str(Path(__file__).resolve().parent.parent.parent)
+    from vntyper.scripts.pipeline_resume_planning import resolve_effective_kestrel_runtime
+
+    default_mode, _, default_kestrel_rt_fp = resolve_effective_kestrel_runtime(
+        resolve_run_configuration(),
         MINIMAL_CONFIG,
+        project_root,
     )
-    default_kestrel_rt_fp = fingerprint_runtime(
-        {
-            **dict(resolve_run_configuration().kestrel_runtime),
-            "kestrel_counting_mode": default_counting_mode,
-            "kanalyze": MINIMAL_CONFIG.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH),
-        }
-    )
+    default_counting_mode = kestrel_counting_mode or default_mode
+    if kestrel_counting_mode and kestrel_counting_mode != default_mode:
+        import os
+
+        raw_kestrel = MINIMAL_CONFIG.get("tools", {}).get("kestrel")
+        kestrel_path = (
+            str(Path(os.path.join(project_root, raw_kestrel)).resolve())
+            if raw_kestrel and not os.path.isabs(raw_kestrel)
+            else (str(Path(raw_kestrel).resolve()) if raw_kestrel else None)
+        )
+        kestrel_fp = fingerprint_file(Path(kestrel_path)) if kestrel_path and Path(kestrel_path).is_file() else None
+        default_kestrel_rt_fp = fingerprint_runtime(
+            {
+                **dict(resolve_run_configuration().kestrel_runtime),
+                "kestrel_counting_mode": kestrel_counting_mode,
+                "kanalyze": MINIMAL_CONFIG.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH),
+                "kestrel_executable": kestrel_path,
+                "kestrel_executable_fingerprint": kestrel_fp,
+            }
+        )
 
     default_settings = {
         "reference_assembly": reference_assembly,
@@ -2514,3 +2530,107 @@ def test_resume_reruns_kestrel_when_kanalyze_path_changes_counting_mode(tmp_path
     assert h.stages["run_kestrel"].call_count == 1
     result = json.loads((out / "pipeline_summary.json").read_text(encoding="utf-8"))
     assert result["kestrel_counting_mode"] == "internal"
+
+
+def test_load_prior_summary_rejects_donor_with_mismatched_decision_profile(tmp_path: Path) -> None:
+    """When a donor checkpoint has a different decision profile digest, its steps are not merged (#20)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    bam = input_dir / "sample.bam"
+    bam.touch()
+
+    # Primary summary has profile digest A
+    primary = _make_prior_summary(
+        sample_name="sample",
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        decision_profile_sha256="a" * 64,
+        steps=[],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(primary), encoding="utf-8")
+
+    # Donor checkpoint has profile digest B and a Kestrel step
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("donor kestrel", encoding="utf-8")
+    for name in ("output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+        (kestrel_dir / name).write_text("data", encoding="utf-8")
+
+    donor = _make_prior_summary(
+        sample_name="sample",
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        decision_profile_sha256="b" * 64,
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"donor kestrel").hexdigest(),
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.donor.json").write_text(json.dumps(donor), encoding="utf-8")
+
+    from vntyper.scripts.resume import load_prior_summary
+
+    loaded = load_prior_summary(output_dir)
+    assert loaded is not None
+    assert loaded["decision_profile_sha256"] == "a" * 64
+    # Donor Kestrel step must NOT have been merged into the primary summary
+    assert not any(s.get("step") == summary_steps.STEP_KESTREL for s in loaded.get("steps", []))
+
+
+def test_resume_reruns_kestrel_when_configured_kestrel_executable_changes(tmp_path: Path) -> None:
+    """When config['tools']['kestrel'] changes, Kestrel is rerun on resume (#20)."""
+    import copy
+
+    out = tmp_path / "out"
+    out.mkdir()
+    inp = tmp_path / "in"
+    inp.mkdir()
+    bam = inp / "sample.bam"
+    bam.touch()
+    kd = out / "kestrel"
+    kd.mkdir()
+
+    for name in ("kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+        (kd / name).write_text("data", encoding="utf-8")
+
+    jar_v1 = tmp_path / "kestrel_v1.jar"
+    jar_v1.write_text("jar v1", encoding="utf-8")
+    jar_v2 = tmp_path / "kestrel_v2.jar"
+    jar_v2.write_text("jar v2", encoding="utf-8")
+
+    project_root = str(Path(__file__).resolve().parent.parent.parent)
+    from vntyper.scripts.pipeline_resume_planning import resolve_effective_kestrel_runtime
+
+    cfg_v1 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg_v1["tools"]["kestrel"] = str(jar_v1)
+    _, _, rt_fp_v1 = resolve_effective_kestrel_runtime(resolve_run_configuration(), cfg_v1, project_root)
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        kestrel_runtime_fingerprint=rt_fp_v1,
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kd / "kestrel_result.tsv"),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"data").hexdigest(),
+            }
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    cfg_v2 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg_v2["tools"]["kestrel"] = str(jar_v2)
+
+    h = run_pipeline_under_harness(output_dir=out, bam=str(bam), resume=True, config=cfg_v2)
+    assert h.error is None
+    # Changing kestrel jar executable causes Kestrel to be rerun instead of reused
+    assert h.stages["run_kestrel"].call_count == 1
