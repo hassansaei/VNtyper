@@ -212,6 +212,15 @@
       {{ additional_stats | safe }}
     </div>
     {% endif %}
+
+    <h2>Call frequency</h2>
+    <p class="call-frequency-help">
+      Grouped variant calls across the cohort, sorted ascending by frequency.
+      Calls with frequency at or below the configured threshold are marked in the Below_Cutoff column; no calls are filtered.
+    </p>
+    <div class="table-container">
+      {{ call_frequency_table | safe }}
+    </div>
   </main>
 
   <script>
