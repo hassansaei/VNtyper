@@ -1262,3 +1262,24 @@ class TestNonFindingResults:
         assert ss.is_finding("anything", "negative")
         assert not ss.is_finding("negative", "negative")
         assert not ss.is_finding(ss.NOT_PERFORMED, "negative")
+
+
+def test_report_config_declares_confidence_grade_rules_and_vocabulary(report_config) -> None:
+    """Issue #173 part 2: report_config.json must declare confidence_grade_rules and default."""
+    assert "confidence_grade_rules" in report_config, "report_config.json lacks confidence_grade_rules"
+    assert "confidence_grade_default" in report_config, "report_config.json lacks confidence_grade_default"
+    assert report_config["confidence_grade_default"] == "not-established"
+
+    rules = report_config["confidence_grade_rules"]
+    assert isinstance(rules, list) and len(rules) >= 6
+
+    expected_vocabulary = {
+        "not-established",
+        "no-finding-limited",
+        "no-finding",
+        "finding-limited",
+        "finding",
+        "finding-corroborated",
+    }
+    configured_grades = {rule["grade"] for rule in rules}
+    assert configured_grades == expected_vocabulary
