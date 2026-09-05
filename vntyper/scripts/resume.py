@@ -12,12 +12,46 @@ Provides:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
+
+from vntyper.scripts import summary_steps
 
 logger = logging.getLogger(__name__)
+
+#: Table of required extra sibling files per reusable stage
+STEP_OUTPUT_SIBLINGS: Final[dict[str, tuple[str, ...]]] = {
+    summary_steps.STEP_KESTREL: (
+        "output.vcf",
+        "output.bam",
+        "kestrel_pre_result.tsv",
+    ),
+    summary_steps.STEP_ADVNTR: (),
+    summary_steps.STEP_BAM_TO_FASTQ: ("output_sliced.bam",),
+    summary_steps.STEP_CRAM_TO_FASTQ: ("output_sliced.bam",),
+    summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT: ("output_sliced.bam",),
+    summary_steps.STEP_FASTQ_ALIGNMENT: (),
+}
+
+_REUSABLE_STEPS: Final[frozenset[str]] = frozenset(STEP_OUTPUT_SIBLINGS.keys())
+
+
+def _compute_md5(path: Path) -> str | None:
+    """Compute the MD5 checksum of a file in 64 KiB chunks."""
+    if not path.is_file():
+        return None
+    md5 = hashlib.md5()
+    try:
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                md5.update(chunk)
+        return md5.hexdigest()
+    except Exception as exc:
+        logger.warning("Error calculating MD5 for %s: %s", path, exc)
+        return None
 
 
 def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
@@ -98,3 +132,107 @@ def resume_refusals(
         )
 
     return refusals
+
+
+def step_is_reusable(
+    prior: dict[str, Any],
+    step_name: str,
+    output_root: str | Path,
+) -> bool:
+    """Determine whether a step from a prior run is valid for reuse.
+
+    Checks:
+    1. The stage is in the reusable set (conversion/alignment, Kestrel, adVNTR).
+    2. The step was recorded in the prior summary without result_file_missing.
+    3. The recorded result_file exists on disk.
+    4. The file's current MD5 matches the recorded checksum.
+    5. Every required sibling output file exists on disk.
+
+    Args:
+        prior: Prior summary dictionary.
+        step_name: Step name to evaluate.
+        output_root: Root directory of the output.
+
+    Returns:
+        bool: True if all artifacts exist and are uncorrupted; False otherwise.
+    """
+    if step_name not in _REUSABLE_STEPS:
+        return False
+
+    prior_steps = prior.get("steps", [])
+    step_record = next((s for s in prior_steps if isinstance(s, dict) and s.get("step") == step_name), None)
+    if step_record is None:
+        logger.debug("Step %r was not recorded in prior summary", step_name)
+        return False
+
+    if step_record.get("result_file_missing"):
+        logger.debug("Step %r recorded a missing result file in prior summary", step_name)
+        return False
+
+    raw_result_file = step_record.get("result_file")
+    if not raw_result_file:
+        logger.debug("Step %r has no result_file recorded", step_name)
+        return False
+
+    recorded_md5 = step_record.get("md5sum")
+    if not recorded_md5:
+        logger.debug("Step %r has no md5sum recorded", step_name)
+        return False
+
+    result_path = Path(raw_result_file)
+    if not result_path.is_file():
+        # Fallback relative to output_root if directory was relocated
+        candidate = Path(output_root) / result_path.name
+        if candidate.is_file():
+            result_path = candidate
+        else:
+            logger.debug("Result file %s for step %r does not exist", result_path, step_name)
+            return False
+
+    actual_md5 = _compute_md5(result_path)
+    if actual_md5 != recorded_md5:
+        logger.warning(
+            "MD5 mismatch for step %r (%s): recorded %s, current %s",
+            step_name,
+            result_path,
+            recorded_md5,
+            actual_md5,
+        )
+        return False
+
+    # Check required sibling files
+    stage_dir = result_path.parent
+    for sibling in STEP_OUTPUT_SIBLINGS.get(step_name, ()):
+        sibling_path = stage_dir / sibling
+        if not sibling_path.is_file():
+            logger.debug("Required sibling %s for step %r does not exist", sibling_path, step_name)
+            return False
+
+    # Check mate FASTQ for BAM/CRAM conversion if R1 is present
+    if "_R1" in result_path.name:
+        mate_name = result_path.name.replace("_R1", "_R2")
+        mate_path = stage_dir / mate_name
+        # If mate was created in the stage, it must still exist
+        if not mate_path.is_file():
+            logger.debug("Expected mate FASTQ %s for step %r does not exist", mate_path, step_name)
+            return False
+
+    return True
+
+
+def make_reused_step_record(
+    prior_step: dict[str, Any],
+    prior_pipeline_start: str | None,
+) -> dict[str, Any]:
+    """Construct a carry-forward step record with reused_from provenance.
+
+    Args:
+        prior_step: The exact step record from the prior summary.
+        prior_pipeline_start: The pipeline_start timestamp of the donor run.
+
+    Returns:
+        dict[str, Any]: Verbatim copy with reused_from set.
+    """
+    record = dict(prior_step)
+    record["reused_from"] = prior_pipeline_start
+    return record
