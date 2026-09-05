@@ -15,6 +15,7 @@ Pins the pure decision logic:
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import numpy as np
@@ -70,7 +71,7 @@ def _make_frame(
 
 
 def test_confidence_rule_dataclass_structure() -> None:
-    """ConfidenceRule must expose name, predicate, and label attributes."""
+    """ConfidenceRule must expose name, predicate, and label attributes and be frozen."""
     rule = ConfidenceRule(
         name="test_rule",
         predicate=lambda df, th: pd.Series(True, index=df.index),
@@ -80,6 +81,21 @@ def test_confidence_rule_dataclass_structure() -> None:
     assert rule.label == "Test_Label"
     df = _make_frame(0.01, 50, 5000)
     assert bool(rule.predicate(df, _SHIPPED_THRESHOLDS).iloc[0]) is True
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        rule.name = "other"  # type: ignore[misc]
+
+
+def test_assign_confidence_labels_with_flat_thresholds() -> None:
+    """Flat threshold configurations (without nested sections) must be supported."""
+    flat_config = {
+        "low": 0.00469,
+        "high": 0.00515,
+        "mid_low": 21,
+        "mid_high": 100,
+        "var_active_region_threshold": 200,
+    }
+    df = _make_frame(0.010, 50, 5000)
+    assert assign_confidence_labels(df, flat_config).iloc[0] == HIGH_PRECISION_LABEL
 
 
 def test_assign_confidence_labels_empty_frame() -> None:
@@ -251,3 +267,35 @@ def test_cosmetic_confidence_levels_override() -> None:
 
     df_mid = _make_frame(0.0050, 50, 10000)
     assert assign_confidence_labels(df_mid, custom_config).iloc[0] == "Custom_Low"
+
+
+def test_evaluation_breaks_early_when_all_rows_assigned() -> None:
+    """Predicate evaluation must terminate as soon as all rows have been assigned."""
+
+    class CountingTuple(tuple):  # type: ignore[type-arg]
+        def __iter__(self):
+            self.yielded = getattr(self, "yielded", 0)
+            for item in super().__iter__():
+                self.yielded += 1
+                yield item
+
+    counting_rules = CountingTuple(CONFIDENCE_RULES)
+    counting_rules.yielded = 0
+    df = _make_frame(None, 50, 0)
+    assign_confidence_labels(df, _SHIPPED_THRESHOLDS, rules=counting_rules)
+    assert counting_rules.yielded == 2
+
+
+def test_non_mapping_confidence_levels_falls_back_to_empty_label_map() -> None:
+    """Non-mapping confidence_levels in thresholds should use canonical rule labels."""
+    cfg = dict(_SHIPPED_THRESHOLDS)
+    cfg["confidence_levels"] = "invalid_not_a_mapping"
+    df = _make_frame(0.010, 50, 5000)
+    assert assign_confidence_labels(df, cfg).iloc[0] == HIGH_PRECISION_LABEL
+
+
+def test_unassigned_rows_fallback_to_negative() -> None:
+    """If custom rules leave unassigned rows, they must fall back to Negative."""
+    empty_rules: tuple[ConfidenceRule, ...] = ()
+    df = _make_frame(0.010, 50, 5000)
+    assert assign_confidence_labels(df, _SHIPPED_THRESHOLDS, rules=empty_rules).iloc[0] == NEGATIVE_LABEL

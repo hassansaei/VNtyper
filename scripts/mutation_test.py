@@ -156,6 +156,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "tests/unit/test_scoring.py",
         "tests/unit/test_builders.py",
     ),
+    # The pure decision layer extracted out of confidence_assignment.
+    # Registered in the same change as the extraction so decisions do not leave
+    # mutation measurement.
+    "vntyper/scripts/confidence_rules.py": (
+        "tests/unit/test_confidence_rules.py",
+        "tests/unit/test_confidence_assignment.py",
+        "tests/unit/test_confidence_boundaries.py",
+        "tests/unit/test_calibration_consistency.py",
+        "tests/unit/test_scoring.py",
+        "tests/unit/test_builders.py",
+    ),
     "vntyper/scripts/scoring.py": (
         "tests/unit/test_scoring.py",
         "tests/unit/test_calibration_consistency.py",
