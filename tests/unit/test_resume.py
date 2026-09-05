@@ -12,6 +12,7 @@ import pytest
 from vntyper.scripts import summary_steps
 from vntyper.scripts.resume import (
     STEP_OUTPUT_SIBLINGS,
+    _compute_md5,
     load_prior_summary,
     make_reused_step_record,
     resume_refusals,
@@ -308,3 +309,90 @@ def test_make_reused_step_record_preserves_fields_and_adds_reused_from() -> None
     assert reused["reused_from"] == prior_start
     for k, v in original.items():
         assert reused[k] == v
+
+
+def test_compute_md5_returns_none_for_non_file(tmp_path: Path) -> None:
+    assert _compute_md5(tmp_path / "non_existent") is None
+
+
+def test_compute_md5_returns_none_on_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    f = tmp_path / "file.txt"
+    f.touch()
+
+    def mock_open(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(Path, "open", mock_open)
+    assert _compute_md5(f) is None
+
+
+def test_load_prior_summary_returns_none_when_data_is_not_dict(tmp_path: Path) -> None:
+    p = tmp_path / "pipeline_summary.json"
+    p.write_text("[1, 2, 3]", encoding="utf-8")
+    assert load_prior_summary(p) is None
+
+
+def test_step_is_reusable_returns_false_for_unregistered_step(tmp_path: Path) -> None:
+    prior: dict[str, Any] = {"steps": []}
+    assert step_is_reusable(prior, "Unregistered Step", tmp_path) is False
+
+
+def test_step_is_reusable_returns_false_when_result_file_missing_flag_set(tmp_path: Path) -> None:
+    prior: dict[str, Any] = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file_missing": True,
+                "result_file": str(tmp_path / "out.tsv"),
+                "md5sum": "abc",
+            }
+        ]
+    }
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is False
+
+
+def test_step_is_reusable_returns_false_when_no_result_file(tmp_path: Path) -> None:
+    prior: dict[str, Any] = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": None,
+                "md5sum": "abc",
+            }
+        ]
+    }
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is False
+
+
+def test_step_is_reusable_returns_false_when_no_md5sum(tmp_path: Path) -> None:
+    prior: dict[str, Any] = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(tmp_path / "out.tsv"),
+                "md5sum": None,
+            }
+        ]
+    }
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is False
+
+
+def test_step_is_reusable_relocated_relative_to_output_root(tmp_path: Path) -> None:
+    relocated_tsv = tmp_path / "kestrel_result.tsv"
+    relocated_tsv.write_text("dummy", encoding="utf-8")
+    expected_md5 = _md5(b"dummy")
+
+    for sibling in STEP_OUTPUT_SIBLINGS[summary_steps.STEP_KESTREL]:
+        (tmp_path / sibling).write_text("sibling data", encoding="utf-8")
+
+    prior: dict[str, Any] = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": "/old/path/kestrel/kestrel_result.tsv",
+                "md5sum": expected_md5,
+            }
+        ]
+    }
+
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is True

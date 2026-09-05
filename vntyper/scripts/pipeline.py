@@ -443,7 +443,7 @@ def run_pipeline(
 
                 r1_path = Path(prior_step["result_file"])
                 mate_path = r1_path.parent / r1_path.name.replace("_R1", "_R2")
-                kestrel_fastq_files = (r1_path, mate_path) if mate_path.is_file() else (r1_path,)
+                kestrel_fastq_files = (str(r1_path), str(mate_path)) if mate_path.is_file() else (str(r1_path),)
             else:
                 logger.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
                 conversion_start = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -565,7 +565,28 @@ def run_pipeline(
                 write_summary(summary, summary_file_path)
                 r1_path = Path(dirs["fastq_bam_processing"]) / "output_R1.fastq.gz"
                 r2_path = Path(dirs["fastq_bam_processing"]) / "output_R2.fastq.gz"
-                kestrel_fastq_files = (r1_path, r2_path) if r2_path.is_file() else (r1_path,)
+                kestrel_fastq_files = (str(r1_path), str(r2_path)) if r2_path.is_file() else (str(r1_path),)
+                prior_align_st = next(
+                    (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
+                )
+                sorted_bam = (
+                    Path(prior_align_st["result_file"])
+                    if prior_align_st and prior_align_st.get("result_file")
+                    else Path(dirs["alignment_processing"]) / "output_sorted.bam"
+                )
+                alignment_plan = run_preflight(
+                    **build_alignment_preflight_kwargs(
+                        in_path=str(sorted_bam),
+                        output_dir=Path(output_dir) / "fastq_bam_processing",
+                        output_name="post_alignment",
+                        file_format="bam",
+                        config=config,
+                        threads=threads,
+                        bed_file=bed_file_path,
+                        reference_assembly=reference_assembly,
+                        fast_mode=fast_mode,
+                    )
+                )
             else:
                 fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
                 fastq2 = (
