@@ -137,6 +137,36 @@ def resolve_effective_kestrel_runtime(
     return kestrel_counting_mode, effective_kestrel_runtime, cast(str, kestrel_runtime_fingerprint)
 
 
+def resolve_effective_advntr_runtime(
+    run_configuration: RunConfiguration,
+    config: Mapping[str, Any],
+    advntr_version: str | tuple[int, int, int] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Resolve effective adVNTR runtime mapping and fingerprint including command and tool identity."""
+    raw_advntr = config.get("tools", {}).get("advntr")
+    advntr_command = str(raw_advntr).strip() if raw_advntr is not None else None
+    advntr_fp = None
+    if advntr_command:
+        p = Path(advntr_command)
+        if p.is_file():
+            advntr_fp = fingerprint_file(p)
+
+    ver_str = None
+    if advntr_version is not None:
+        ver_str = (
+            ".".join(str(part) for part in advntr_version) if isinstance(advntr_version, tuple) else str(advntr_version)
+        )
+
+    effective_advntr_runtime = {
+        **dict(run_configuration.advntr_runtime),
+        "advntr_command": advntr_command,
+        "advntr_command_fingerprint": advntr_fp,
+        "advntr_version": ver_str,
+    }
+    advntr_runtime_fingerprint = fingerprint_runtime(effective_advntr_runtime)
+    return effective_advntr_runtime, cast(str, advntr_runtime_fingerprint)
+
+
 @dataclass(frozen=True)
 class ResumeCompatibility:
     """Structured compatibility assessment across pipeline stages."""
@@ -169,6 +199,7 @@ def evaluate_resume_compatibility(
     shark_runtime_fingerprint: str | None,
     effective_reference_path: str | None,
     effective_reference_fingerprint: str | None,
+    advntr_version: str | None = None,
 ) -> ResumeCompatibility:
     """Evaluate whether callers, references, and alignments match prior checkpoint."""
     kestrel_ref_matches = caller_kestrel_matches(
@@ -187,6 +218,7 @@ def evaluate_resume_compatibility(
         advntr_rus_path=advntr_rus_path,
         advntr_rus_fingerprint=advntr_rus_fingerprint,
         advntr_runtime_fingerprint=advntr_runtime_fingerprint,
+        advntr_version=advntr_version,
     )
 
     shark_ref_matches = caller_shark_matches(

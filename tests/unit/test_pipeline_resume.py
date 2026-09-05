@@ -48,13 +48,17 @@ def _make_prior_summary(
         advntr_model = str(Path(advntr_ref).resolve()) if advntr_ref else None
 
     project_root = str(Path(__file__).resolve().parent.parent.parent)
-    from vntyper.scripts.pipeline_resume_planning import resolve_effective_kestrel_runtime
+    from vntyper.scripts.pipeline_resume_planning import (
+        resolve_effective_advntr_runtime,
+        resolve_effective_kestrel_runtime,
+    )
 
-    default_mode, _, default_kestrel_rt_fp = resolve_effective_kestrel_runtime(
+    default_mode, _, resolved_kestrel_fp = resolve_effective_kestrel_runtime(
         resolve_run_configuration(),
         MINIMAL_CONFIG,
         project_root,
     )
+    default_kestrel_rt_fp: str | None = resolved_kestrel_fp
     default_counting_mode = kestrel_counting_mode or default_mode
     if kestrel_counting_mode and kestrel_counting_mode != default_mode:
         import os
@@ -119,9 +123,15 @@ def _make_prior_summary(
             kestrel_runtime_fingerprint if kestrel_runtime_fingerprint is not None else default_kestrel_rt_fp
         ),
         "kestrel_counting_mode": default_counting_mode,
-        "advntr_runtime_fingerprint": fingerprint_runtime(resolve_run_configuration().advntr_runtime)
-        if "advntr" in resolved_modules
-        else None,
+        "advntr_runtime_fingerprint": (
+            resolve_effective_advntr_runtime(
+                resolve_run_configuration(),
+                MINIMAL_CONFIG,
+                advntr_version="2.0.4",
+            )[1]
+            if "advntr" in resolved_modules
+            else None
+        ),
         "reference_fingerprint": reference_fingerprint,
         "shark_reference_path": shark_reference_path,
         "shark_reference_fingerprint": shark_reference_fingerprint,
@@ -132,6 +142,8 @@ def _make_prior_summary(
         "analysis_settings": analysis_settings if analysis_settings is not None else default_settings,
         "steps": steps or [],
     }
+    if "advntr" in resolved_modules:
+        res["tool_versions"] = {"advntr": "2.0.4"}
     if "advntr" in resolved_modules and advntr_model:
         model_path = Path(advntr_model)
         sha = hashlib.sha256(model_path.read_bytes()).hexdigest() if model_path.is_file() else "0" * 64
@@ -342,6 +354,7 @@ def test_resume_skips_kestrel_and_advntr_when_reusable(tmp_path: Path) -> None:
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     kestrel_md5 = hashlib.md5(b"kestrel tsv data").hexdigest()
@@ -416,6 +429,7 @@ def test_resume_forces_kestrel_rerun_when_corrupted(tmp_path: Path) -> None:
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     prior_summary = _make_prior_summary(
@@ -957,6 +971,7 @@ def test_resume_refuses_reused_stage_when_sibling_artifact_md5_differs(tmp_path:
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     output_bam = kestrel_dir / "output.bam"
     output_bam.write_text("corrupted bam content", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     kestrel_md5 = hashlib.md5(b"kestrel tsv data").hexdigest()
@@ -976,6 +991,7 @@ def test_resume_refuses_reused_stage_when_sibling_artifact_md5_differs(tmp_path:
     prior_summary["stage_artifact_md5s"] = {
         summary_steps.STEP_KESTREL: {
             "output.bam": "original_bam_md5_that_differs",
+            "output.bam.bai": hashlib.md5(b"bai").hexdigest(),
             "output.vcf": hashlib.md5(b"vcf").hexdigest(),
             "output_indel.vcf": hashlib.md5(b"indel vcf").hexdigest(),
             "kestrel_pre_result.tsv": hashlib.md5(b"pre").hexdigest(),
@@ -1042,6 +1058,8 @@ def test_resume_preserves_sibling_checksums_across_consecutive_resumes(tmp_path:
     kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
     output_bam = kestrel_dir / "output.bam"
     output_bam.write_text("bam data", encoding="utf-8")
+    output_bai = kestrel_dir / "output.bam.bai"
+    output_bai.write_text("bai data", encoding="utf-8")
     output_vcf = kestrel_dir / "output.vcf"
     output_vcf.write_text("vcf data", encoding="utf-8")
     indel_vcf = kestrel_dir / "output_indel.vcf"
@@ -1051,6 +1069,7 @@ def test_resume_preserves_sibling_checksums_across_consecutive_resumes(tmp_path:
 
     tsv_md5 = hashlib.md5(b"kestrel tsv data").hexdigest()
     bam_md5 = hashlib.md5(b"bam data").hexdigest()
+    bai_md5 = hashlib.md5(b"bai data").hexdigest()
     vcf_md5 = hashlib.md5(b"vcf data").hexdigest()
     indel_md5 = hashlib.md5(b"indel data").hexdigest()
     pre_md5 = hashlib.md5(b"pre data").hexdigest()
@@ -1070,6 +1089,7 @@ def test_resume_preserves_sibling_checksums_across_consecutive_resumes(tmp_path:
     prior_summary["stage_artifact_md5s"] = {
         summary_steps.STEP_KESTREL: {
             "output.bam": bam_md5,
+            "output.bam.bai": bai_md5,
             "output.vcf": vcf_md5,
             "output_indel.vcf": indel_md5,
             "kestrel_pre_result.tsv": pre_md5,
@@ -1117,6 +1137,7 @@ def test_resume_reruns_advntr_when_model_digest_changes(tmp_path: Path) -> None:
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     advntr_dir = output_dir / "advntr"
@@ -1175,6 +1196,7 @@ def test_resume_reruns_kestrel_when_reference_path_changes(tmp_path: Path) -> No
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     prior_summary = _make_prior_summary(
@@ -1327,6 +1349,7 @@ def test_resume_reruns_kestrel_when_identity_aware_and_replay_missing_or_corrupt
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     prior_summary = _make_prior_summary(
@@ -1585,6 +1608,7 @@ def test_resume_reruns_kestrel_when_reference_fingerprint_changes(tmp_path: Path
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     prior_summary = _make_prior_summary(
@@ -1765,6 +1789,7 @@ def test_resume_preserves_caller_records_when_interrupted_via_donor(tmp_path: Pa
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     # A donor summary with a valid Kestrel step exists from an interrupted run
@@ -1816,6 +1841,7 @@ def test_interrupted_resume_with_reference_change_does_not_reuse_kestrel(tmp_pat
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     prior_summary = _make_prior_summary(
@@ -1881,6 +1907,7 @@ def test_load_prior_summary_rejects_incompatible_donor_and_fresh_run_clears_it(t
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
     (kestrel_dir / "output_indel.vcf").write_text("indel", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     donor = _make_prior_summary(
@@ -1987,7 +2014,14 @@ def test_resume_reruns_kestrel_when_additional_motifs_reference_changes(tmp_path
 
     k_dir = out / "kestrel"
     k_dir.mkdir()
-    for name in ["kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"]:
+    for name in [
+        "kestrel_result.tsv",
+        "output.vcf",
+        "output_indel.vcf",
+        "output.bam",
+        "output.bam.bai",
+        "kestrel_pre_result.tsv",
+    ]:
         (k_dir / name).write_text("x", encoding="utf-8")
 
     prior = _make_prior_summary(
@@ -2089,7 +2123,14 @@ def test_resume_reruns_kestrel_when_kestrel_runtime_changes(tmp_path: Path) -> N
 
     kd = out / "kestrel"
     kd.mkdir()
-    for name in ("kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+    for name in (
+        "kestrel_result.tsv",
+        "output.vcf",
+        "output_indel.vcf",
+        "output.bam",
+        "output.bam.bai",
+        "kestrel_pre_result.tsv",
+    ):
         (kd / name).write_text("data", encoding="utf-8")
 
     prior = _make_prior_summary(
@@ -2420,7 +2461,14 @@ def test_resume_reruns_kestrel_when_cram_reference_changes_even_without_explicit
     ref = tmp_path / "old.fa"
     ref.write_text(">chr1\nACGT\n", encoding="utf-8")
 
-    for name in ("kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+    for name in (
+        "kestrel_result.tsv",
+        "output.vcf",
+        "output_indel.vcf",
+        "output.bam",
+        "output.bam.bai",
+        "kestrel_pre_result.tsv",
+    ):
         (kd / name).write_text("data", encoding="utf-8")
 
     prior = _make_prior_summary(
@@ -2503,7 +2551,14 @@ def test_resume_reruns_kestrel_when_kanalyze_path_changes_counting_mode(tmp_path
     kd = out / "kestrel"
     kd.mkdir()
 
-    for name in ("kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+    for name in (
+        "kestrel_result.tsv",
+        "output.vcf",
+        "output_indel.vcf",
+        "output.bam",
+        "output.bam.bai",
+        "kestrel_pre_result.tsv",
+    ):
         (kd / name).write_text("data", encoding="utf-8")
 
     prior = _make_prior_summary(
@@ -2556,7 +2611,7 @@ def test_load_prior_summary_rejects_donor_with_mismatched_decision_profile(tmp_p
     kestrel_dir.mkdir()
     kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
     kestrel_tsv.write_text("donor kestrel", encoding="utf-8")
-    for name in ("output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+    for name in ("output.vcf", "output_indel.vcf", "output.bam", "output.bam.bai", "kestrel_pre_result.tsv"):
         (kestrel_dir / name).write_text("data", encoding="utf-8")
 
     donor = _make_prior_summary(
@@ -2597,7 +2652,14 @@ def test_resume_reruns_kestrel_when_configured_kestrel_executable_changes(tmp_pa
     kd = out / "kestrel"
     kd.mkdir()
 
-    for name in ("kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+    for name in (
+        "kestrel_result.tsv",
+        "output.vcf",
+        "output_indel.vcf",
+        "output.bam",
+        "output.bam.bai",
+        "kestrel_pre_result.tsv",
+    ):
         (kd / name).write_text("data", encoding="utf-8")
 
     jar_v1 = tmp_path / "kestrel_v1.jar"

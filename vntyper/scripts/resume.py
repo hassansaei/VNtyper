@@ -38,6 +38,7 @@ STEP_OUTPUT_SIBLINGS: Final[dict[str, tuple[str, ...]]] = {
         "output.vcf",
         "output_indel.vcf",
         "output.bam",
+        "output.bam.bai",
         "kestrel_pre_result.tsv",
     ),
     summary_steps.STEP_ADVNTR: (),
@@ -133,8 +134,9 @@ def caller_advntr_matches(
     advntr_rus_path: str | None = None,
     advntr_rus_fingerprint: str | None = None,
     advntr_runtime_fingerprint: str | None = None,
+    advntr_version: str | None = None,
 ) -> bool:
-    """Return whether prior summary adVNTR model, repeat units, and runtime match current run."""
+    """Return whether prior summary adVNTR model, repeat units, runtime, and version match current run."""
     if prior_summary is None:
         return True
 
@@ -157,7 +159,15 @@ def caller_advntr_matches(
         return False
 
     prior_adv_rt_fp = prior_summary.get("advntr_runtime_fingerprint")
-    return prior_adv_rt_fp == advntr_runtime_fingerprint
+    if prior_adv_rt_fp != advntr_runtime_fingerprint:
+        return False
+
+    if advntr_version is not None:
+        prior_ver = prior_summary.get("tool_versions", {}).get("advntr")
+        if prior_ver is not None and prior_ver != advntr_version:
+            return False
+
+    return True
 
 
 def caller_shark_matches(
@@ -607,6 +617,24 @@ def step_is_reusable(
 
     # For Kestrel, validate retained BAM replay artifact if present or if result is identity-aware
     if step_name == summary_steps.STEP_KESTREL:
+        bai_path = stage_dir / "output.bam.bai"
+        if not bai_path.is_file():
+            logger.debug("Required Kestrel BAM index %s does not exist", bai_path)
+            return False
+
+        has_variants = False
+        try:
+            with result_path.open("r", encoding="utf-8") as handle:
+                lines = [line.strip() for line in handle if line.strip()]
+            has_variants = len(lines) > 1
+        except (OSError, UnicodeDecodeError):
+            has_variants = False
+
+        bed_recorded = "output.bed" in recorded_siblings
+        if (bed_recorded or has_variants) and not (stage_dir / "output.bed").is_file():
+            logger.debug("Required Kestrel BED file %s does not exist", stage_dir / "output.bed")
+            return False
+
         replay_path = stage_dir / "bam_identity_replay.v1.json"
         if replay_path.is_file():
             try:

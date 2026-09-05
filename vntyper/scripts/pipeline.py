@@ -62,6 +62,7 @@ from vntyper.scripts.pipeline_resume_planning import (
     evaluate_resume_compatibility,
     initial_stage_carry_forward,
     record_reused_stage,
+    resolve_effective_advntr_runtime,
     resolve_effective_kestrel_runtime,
 )
 from vntyper.scripts.profile_provenance import snapshot_decision_profile
@@ -377,9 +378,10 @@ def run_pipeline(
             effective_kestrel_runtime,
             kestrel_runtime_fingerprint,
         ) = resolve_effective_kestrel_runtime(run_configuration, config, project_root)
-        advntr_runtime_fingerprint = (
-            fingerprint_runtime(run_configuration.advntr_runtime) if "advntr" in extra_modules else None
-        )
+        (
+            effective_advntr_runtime,
+            advntr_runtime_fingerprint,
+        ) = resolve_effective_advntr_runtime(run_configuration, config) if "advntr" in extra_modules else ({}, None)
         shark_runtime_fingerprint = (
             fingerprint_runtime(run_configuration.shark_runtime)
             if input_type == "FASTQ" and "shark" in extra_modules
@@ -475,6 +477,14 @@ def run_pipeline(
                 revoke_published=resume,
             )
             advntr_version_overrides["advntr"] = ".".join(str(part) for part in advntr_context.version)
+            (
+                effective_advntr_runtime,
+                advntr_runtime_fingerprint,
+            ) = resolve_effective_advntr_runtime(
+                run_configuration,
+                config,
+                advntr_version=advntr_context.version,
+            )
         out_path = Path(output_dir)
         if not resume and out_path.exists() and any(out_path.iterdir()):
             logger.warning("Output directory %s is non-empty; prior results may be overwritten.", output_dir)
@@ -632,6 +642,7 @@ def run_pipeline(
             shark_runtime_fingerprint=shark_runtime_fingerprint,
             effective_reference_path=effective_reference_path,
             effective_reference_fingerprint=effective_reference_fingerprint,
+            advntr_version=advntr_version_overrides.get("advntr"),
         )
 
         if resume and prior_summary:

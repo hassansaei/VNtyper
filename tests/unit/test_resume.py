@@ -246,6 +246,81 @@ def test_step_is_reusable_returns_false_when_sibling_missing(tmp_path: Path) -> 
     assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is False
 
 
+def test_step_is_reusable_kestrel_returns_false_when_bam_index_missing(tmp_path: Path) -> None:
+    kestrel_dir = tmp_path / "kestrel"
+    kestrel_dir.mkdir()
+    result_tsv = kestrel_dir / "kestrel_result.tsv"
+    result_tsv.write_text("dummy tsv content\n", encoding="utf-8")
+
+    for sibling in STEP_OUTPUT_SIBLINGS[summary_steps.STEP_KESTREL]:
+        if sibling != "output.bam.bai":
+            (kestrel_dir / sibling).write_text("sibling data", encoding="utf-8")
+
+    prior = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(result_tsv),
+                "md5sum": _md5(b"dummy tsv content\n"),
+            }
+        ]
+    }
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is False
+
+
+def test_step_is_reusable_kestrel_returns_false_when_bed_missing_with_variants(tmp_path: Path) -> None:
+    kestrel_dir = tmp_path / "kestrel"
+    kestrel_dir.mkdir()
+    result_tsv = kestrel_dir / "kestrel_result.tsv"
+    result_tsv.write_text("Motif\tPOS\tREF\tALT\n1\t50\tC\tT\n", encoding="utf-8")
+    for sibling in STEP_OUTPUT_SIBLINGS[summary_steps.STEP_KESTREL]:
+        (kestrel_dir / sibling).write_text("sibling data", encoding="utf-8")
+
+    prior = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(result_tsv),
+                "md5sum": _md5(b"Motif\tPOS\tREF\tALT\n1\t50\tC\tT\n"),
+            }
+        ]
+    }
+    # output.bed is not present, but variants exist in kestrel_result.tsv -> reject reuse
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is False
+
+    # Once output.bed is present, reuse succeeds
+    (kestrel_dir / "output.bed").write_text("1\t49\t50\n", encoding="utf-8")
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is True
+
+
+def test_step_is_reusable_kestrel_returns_false_when_recorded_bed_deleted(tmp_path: Path) -> None:
+    kestrel_dir = tmp_path / "kestrel"
+    kestrel_dir.mkdir()
+    result_tsv = kestrel_dir / "kestrel_result.tsv"
+    result_tsv.write_text("header\n", encoding="utf-8")
+    for sibling in STEP_OUTPUT_SIBLINGS[summary_steps.STEP_KESTREL]:
+        (kestrel_dir / sibling).write_text("sibling data", encoding="utf-8")
+    (kestrel_dir / "output.bed").write_text("bed", encoding="utf-8")
+
+    prior = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(result_tsv),
+                "md5sum": _md5(b"header\n"),
+            }
+        ],
+        "stage_artifact_md5s": {
+            summary_steps.STEP_KESTREL: {
+                "output.bed": _md5(b"bed"),
+            }
+        },
+    }
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is True
+    (kestrel_dir / "output.bed").unlink()
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is False
+
+
 def test_step_is_reusable_advntr_requires_only_result_file(tmp_path: Path) -> None:
     advntr_dir = tmp_path / "advntr"
     advntr_dir.mkdir()
@@ -650,6 +725,18 @@ def test_caller_advntr_matches() -> None:
             advntr_rus_path="/path/rus.fa",
             advntr_rus_fingerprint="300:3",
             advntr_runtime_fingerprint="e" * 64,
+        )
+        is False
+    )
+    # Version mismatch
+    assert (
+        caller_advntr_matches(
+            {**prior, "tool_versions": {"advntr": "2.0.4"}},
+            curr_model_sha="c" * 64,
+            advntr_rus_path="/path/rus.fa",
+            advntr_rus_fingerprint="300:3",
+            advntr_runtime_fingerprint="d" * 64,
+            advntr_version="2.1.0",
         )
         is False
     )

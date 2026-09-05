@@ -383,7 +383,7 @@ def _record_stage_artifact_md5s(summary: dict[str, Any], step_name: str, result_
                 sibling_md5s["output_sliced.bam.bai"] = bai_hash
 
     if step_name == summary_steps.STEP_KESTREL:
-        for extra_vcf in ("output_indel.vcf.gz", "output_indel.vcf.gz.tbi"):
+        for extra_vcf in ("output_indel.vcf.gz", "output_indel.vcf.gz.tbi", "output.bed"):
             extra_path = stage_dir / extra_vcf
             if extra_path.is_file():
                 extra_hash = md5sum(str(extra_path))

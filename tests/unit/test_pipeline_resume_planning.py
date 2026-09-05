@@ -16,6 +16,7 @@ from vntyper.scripts.pipeline_resume_planning import (
     evaluate_resume_compatibility,
     initial_stage_carry_forward,
     record_reused_stage,
+    resolve_effective_advntr_runtime,
     resolve_effective_kestrel_runtime,
 )
 from vntyper.scripts.resume import fingerprint_file, fingerprint_runtime
@@ -224,7 +225,7 @@ def test_initial_stage_carry_forward(tmp_path: Path) -> None:
     kd.mkdir(parents=True)
     k_tsv = kd / "kestrel_result.tsv"
     k_tsv.write_text("data", encoding="utf-8")
-    for name in ("output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"):
+    for name in ("output.vcf", "output_indel.vcf", "output.bam", "output.bam.bai", "kestrel_pre_result.tsv"):
         (kd / name).write_text("data", encoding="utf-8")
 
     summary: dict[str, Any] = {"steps": []}
@@ -274,3 +275,56 @@ def test_initial_stage_carry_forward(tmp_path: Path) -> None:
     assert summary["stage_artifact_md5s"][summary_steps.STEP_KESTREL] == {
         "kestrel_result.tsv": hashlib.md5(b"data").hexdigest()
     }
+
+
+def test_resolve_effective_advntr_runtime(tmp_path: Path) -> None:
+    """Resolve effective adVNTR runtime including command, file fingerprint, and version."""
+    bin_file = tmp_path / "advntr"
+    bin_file.write_text("binary content", encoding="utf-8")
+
+    run_config = resolve_run_configuration()
+    config1 = {"tools": {"advntr": str(bin_file)}}
+    rt1, fp1 = resolve_effective_advntr_runtime(run_config, config1, advntr_version="2.0.4")
+    assert rt1["advntr_command"] == str(bin_file)
+    assert rt1["advntr_command_fingerprint"] == fingerprint_file(bin_file)
+    assert rt1["advntr_version"] == "2.0.4"
+    assert fp1 == fingerprint_runtime(rt1)
+
+    # Changing tool command changes fingerprint
+    config2 = {"tools": {"advntr": "/different/advntr"}}
+    rt2, fp2 = resolve_effective_advntr_runtime(run_config, config2, advntr_version="2.0.4")
+    assert fp2 != fp1
+
+    # Changing version changes fingerprint
+    rt3, fp3 = resolve_effective_advntr_runtime(run_config, config1, advntr_version=(2, 1, 0))
+    assert rt3["advntr_version"] == "2.1.0"
+    assert fp3 != fp1
+
+
+def test_evaluate_resume_compatibility_advntr_version_mismatch() -> None:
+    """adVNTR step is not reusable when tool version differs from prior summary."""
+    prior = {
+        "advntr_runtime_fingerprint": "adv_rt_fp",
+        "tool_versions": {"advntr": "2.0.4"},
+    }
+    compat = evaluate_resume_compatibility(
+        prior,
+        input_type="BAM",
+        kestrel_reference_path=None,
+        kestrel_reference_fingerprint=None,
+        kestrel_motifs_path=None,
+        kestrel_motifs_fingerprint=None,
+        kestrel_runtime_fingerprint=None,
+        kestrel_counting_mode=None,
+        advntr_model_sha=None,
+        advntr_rus_path=None,
+        advntr_rus_fingerprint=None,
+        advntr_runtime_fingerprint="adv_rt_fp",
+        shark_reference_path=None,
+        shark_reference_fingerprint=None,
+        shark_runtime_fingerprint=None,
+        effective_reference_path=None,
+        effective_reference_fingerprint=None,
+        advntr_version="2.1.0",
+    )
+    assert compat.advntr_model_matches is False
