@@ -51,6 +51,26 @@ def _revoke_prior_outputs(
         )
 
 
+def _revoke_published_outputs(
+    cleanup_plan: AdvntrCleanupPlan,
+    *,
+    protected_paths: Iterable[str | Path],
+) -> None:
+    """Withdraw published reports and archives without mutating stage checkpoints."""
+    from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
+
+    for destination in cleanup_plan.published_reports:
+        invalidate_advntr_artifact(destination)
+    if cleanup_plan.archive is not None:
+        if not os.path.lexists(cleanup_plan.archive.destination.parent):
+            return
+        revoke_public_archive(
+            cleanup_plan.archive.base_name,
+            cleanup_plan.archive.shutil_format,
+            protected_paths=protected_paths,
+        )
+
+
 def _snapshot_model(source: str | Path, destination: str | Path) -> dict[str, Any]:
     """Copy, validate, hash, and atomically install one run-owned model snapshot."""
     source_path = Path(source)
@@ -105,6 +125,7 @@ def prepare_advntr_run_context(
     archive_format: str,
     protected_paths: Iterable[str | Path] = (),
     revoke_outputs: bool = True,
+    revoke_published: bool = False,
 ) -> AdvntrRunContext:
     """Prepare the exact adVNTR model, command, and version used by this run.
 
@@ -120,6 +141,8 @@ def prepare_advntr_run_context(
         archive_format: Selected public archive format, ``zip`` or ``tar.gz``.
         protected_paths: Operator-owned paths the selected archive cannot revoke.
         revoke_outputs: Whether to revoke prior outputs before starting.
+        revoke_published: Whether to revoke only published reports and archives
+            (used during resume to avoid invalidating stage checkpoints).
 
     Returns:
         Frozen run context binding the validated snapshot and verified command.
@@ -136,6 +159,9 @@ def prepare_advntr_run_context(
     )
     if revoke_outputs:
         _revoke_prior_outputs(cleanup_plan, protected_paths=protected_paths)
+    elif revoke_published:
+        _revoke_published_outputs(cleanup_plan, protected_paths=protected_paths)
+
     snapshot_path = cleanup_plan.model_snapshot
     model = _snapshot_model(model_source, snapshot_path)
 

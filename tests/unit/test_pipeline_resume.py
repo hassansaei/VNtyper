@@ -50,11 +50,19 @@ def _make_prior_summary(
     }
     raw_muc1 = MINIMAL_CONFIG.get("reference_data", {}).get("muc1_reference_vntr")
     kestrel_ref_path = str(Path(raw_muc1).resolve()) if raw_muc1 else None
+    input_fingerprints = None
+    if canonical_input_files:
+        from vntyper.scripts.resume import fingerprint_file
+
+        input_fingerprints = {
+            k: fingerprint_file(Path(v)) for k, v in canonical_input_files.items() if Path(v).is_file()
+        }
     res = {
         "schema_version": 3,
         "version": VERSION,
         "input_files": input_files,
         "canonical_input_files": canonical_input_files,
+        "input_fingerprints": input_fingerprints,
         "sample_name": sample_name,
         "reference_assembly_requested": reference_assembly,
         "reference_key_used": reference_key_used,
@@ -1193,3 +1201,178 @@ def test_resume_preserves_fastq_conversion_sibling_hashes(tmp_path: Path) -> Non
         new_summary["stage_artifact_md5s"][summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT]["output_R2.fastq.gz"]
         == hashlib.md5(b"r2_data").hexdigest()
     )
+
+
+def test_resume_refuses_when_input_file_content_is_modified_in_place(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Refuses resume when input file path is unchanged but content was modified (#20)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "input_dir"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.write_bytes(b"original alignment contents")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    # Modify the input file in place
+    input_bam.write_bytes(b"replaced different alignment contents")
+
+    with caplog.at_level(logging.ERROR), pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            bam=str(input_bam),
+            resume=True,
+            expect_failure=False,
+        )
+
+    assert any("input file contents differ from checkpoint" in record.message for record in caplog.records)
+
+
+def test_resume_reruns_kestrel_when_identity_aware_and_replay_missing_or_corrupted(tmp_path: Path) -> None:
+    """Identity-aware positive Kestrel result cannot be reused without valid replay artifact (#20)."""
+    output_dir = tmp_path / "kestrel_replay_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "input_dir"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    tsv_content = "Motif\tVariant\t__Identity_Molecular_Identity\n1\tins\tmol1\n"
+    kestrel_tsv.write_text(tsv_content, encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(tsv_content.encode("utf-8")).hexdigest(),
+                "parsed_result": {
+                    "comments": [],
+                    "data": [{"Motif": "1", "__Identity_Molecular_Identity": "mol1", "Variant": "ins"}],
+                },
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    # Missing replay file: Kestrel must be rerun!
+    harness1 = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+    harness1.stages["run_kestrel"].assert_called_once()
+
+    # Now write a corrupted replay file
+    (kestrel_dir / "bam_identity_replay.v1.json").write_text("invalid json content", encoding="utf-8")
+    harness2 = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+    harness2.stages["run_kestrel"].assert_called_once()
+
+
+def test_resume_revokes_stale_published_reports_and_exports(tmp_path: Path) -> None:
+    """Resume execution immediately revokes stale report and export tables from donor run (#20)."""
+    output_dir = tmp_path / "stale_reports_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "input_dir"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    # Stale files from previous run
+    stale_report = output_dir / "summary_report.html"
+    stale_report.write_text("old report", encoding="utf-8")
+    stale_csv = output_dir / "pipeline_summary.csv"
+    stale_csv.write_text("old csv", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    # Simulate an error right after preflight/resume start
+    from unittest.mock import patch
+
+    from vntyper.scripts import pipeline as pipeline_module
+
+    with (
+        patch.object(pipeline_module, "protect_pipeline_input_ownership", side_effect=RuntimeError("simulated abort")),
+        pytest.raises(AssertionError, match="run_pipeline exited"),
+    ):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            bam=str(input_bam),
+            resume=True,
+        )
+
+    # Stale report and CSV must have been revoked even though the pipeline aborted early!
+    assert not stale_report.exists()
+    assert not stale_csv.exists()
+
+
+def test_resume_incompatible_advntr_model_preserves_existing_model_snapshot(tmp_path: Path) -> None:
+    """Incompatible adVNTR model refusal on resume preserves existing model snapshot (#20)."""
+    output_dir = tmp_path / "advntr_preserve_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "input_dir"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir()
+    snapshot = advntr_dir / "advntr_model.db"
+    snapshot.write_bytes(b"original preserved model snapshot")
+
+    # Create an invalid/incompatible model source
+    bad_model_dir = tmp_path / "bad_model"
+    bad_model_dir.mkdir()
+    bad_model = bad_model_dir / "bad_model.db"
+    bad_model.write_bytes(b"incompatible model")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        extra_modules=["advntr"],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    custom_config = {
+        **MINIMAL_CONFIG,
+        "reference_data": {
+            **MINIMAL_CONFIG["reference_data"],
+            "advntr_reference_vntr_hg19": str(bad_model),
+        },
+    }
+
+    with pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            extra_modules=["advntr"],
+            bam=str(input_bam),
+            config=custom_config,
+            resume=True,
+        )
+
+    # Destination snapshot must NOT have been replaced by the bad candidate!
+    assert snapshot.read_bytes() == b"original preserved model snapshot"

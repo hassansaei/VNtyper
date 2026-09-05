@@ -74,6 +74,7 @@ def start_summary(
     canonical_input_files: dict[str, str] | None = None,
     analysis_settings: dict[str, Any] | None = None,
     kestrel_reference_path: str | None = None,
+    input_fingerprints: dict[str, str] | None = None,
 ):
     """
     Initializes a new pipeline summary.
@@ -138,6 +139,7 @@ def start_summary(
         analysis_settings: Complete dictionary of result-affecting settings.
         kestrel_reference_path: Resolved absolute path to the reference VNTR fasta
             used by Kestrel, or None if not configured.
+        input_fingerprints: Mapping of canonical input keys to content fingerprints.
 
     Returns:
         dict: A summary dictionary with its schema version, decision policy, pipeline
@@ -165,6 +167,7 @@ def start_summary(
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
         "canonical_input_files": canonical_input_files,
+        "input_fingerprints": input_fingerprints,
         "analysis_settings": analysis_settings,
         "kestrel_reference_path": kestrel_reference_path,
         "stage_artifact_md5s": {},
@@ -329,6 +332,12 @@ def _record_stage_artifact_md5s(summary: dict[str, Any], step_name: str, result_
             mate_hash = md5sum(str(mate_path))
             if mate_hash is not None:
                 sibling_md5s[mate_name] = mate_hash
+
+    replay_path = stage_dir / "bam_identity_replay.v1.json"
+    if replay_path.is_file():
+        replay_hash = md5sum(str(replay_path))
+        if replay_hash is not None:
+            sibling_md5s["bam_identity_replay.v1.json"] = replay_hash
 
     if sibling_md5s:
         if "stage_artifact_md5s" not in summary:

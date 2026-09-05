@@ -59,6 +59,7 @@ from vntyper.scripts.reference_resolution_environment import restore_reference_r
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 from vntyper.scripts.resume import (
+    fingerprint_file,
     load_prior_summary,
     make_reused_step_record,
     resume_refusals,
@@ -234,14 +235,27 @@ def run_pipeline(
         advntr_reference = advntr_preflight.reference
         additional_operator_paths = (advntr_reference,) if advntr_reference is not None else ()
         canonical_input_files: dict[str, str] = {}
+        input_fingerprints: dict[str, str] = {}
         if bam is not None:
-            canonical_input_files["bam"] = str(Path(bam).resolve())
+            bam_path = Path(bam).resolve()
+            canonical_input_files["bam"] = str(bam_path)
+            if bam_path.is_file():
+                input_fingerprints["bam"] = fingerprint_file(bam_path)
         elif cram is not None:
-            canonical_input_files["cram"] = str(Path(cram).resolve())
+            cram_path = Path(cram).resolve()
+            canonical_input_files["cram"] = str(cram_path)
+            if cram_path.is_file():
+                input_fingerprints["cram"] = fingerprint_file(cram_path)
         elif fastq1 is not None:
-            canonical_input_files["fastq1"] = str(Path(fastq1).resolve())
+            f1_path = Path(fastq1).resolve()
+            canonical_input_files["fastq1"] = str(f1_path)
+            if f1_path.is_file():
+                input_fingerprints["fastq1"] = fingerprint_file(f1_path)
             if fastq2 is not None:
-                canonical_input_files["fastq2"] = str(Path(fastq2).resolve())
+                f2_path = Path(fastq2).resolve()
+                canonical_input_files["fastq2"] = str(f2_path)
+                if f2_path.is_file():
+                    input_fingerprints["fastq2"] = fingerprint_file(f2_path)
 
         advntr_max_coverage = None
         if isinstance(module_args, dict) and "advntr" in module_args and isinstance(module_args["advntr"], dict):
@@ -291,6 +305,7 @@ def run_pipeline(
                 reference_assembly=reference_assembly,
                 analysis_settings=analysis_settings,
                 reference_path=effective_reference_path,
+                input_fingerprints=input_fingerprints,
             )
 
             if refusals:
@@ -298,6 +313,19 @@ def run_pipeline(
                     logger.error("Resume refused: %s", refusal)
                 raise ValueError(f"Cannot resume pipeline: {'; '.join(refusals)}")
             logger.info("Resuming execution from prior summary (started %s)", prior_summary.get("pipeline_start"))
+
+            # On resume, revoke published reports and export tables from prior run so
+            # an early failure during re-execution does not leave stale public outputs.
+            for stale_name in (
+                "summary_report.html",
+                "pipeline_summary.csv",
+                "pipeline_summary.tsv",
+                "pipeline_summary_rows.csv",
+                "pipeline_summary_rows.tsv",
+            ):
+                stale_path = Path(output_dir) / stale_name
+                if stale_path.is_file():
+                    stale_path.unlink()
 
         protect_pipeline_input_ownership(
             output_dir,
@@ -338,6 +366,7 @@ def run_pipeline(
                 archive_format=archive_format,
                 protected_paths=(*archive_protected_paths, *additional_operator_paths),
                 revoke_outputs=not resume,
+                revoke_published=resume,
             )
             advntr_version_overrides["advntr"] = ".".join(str(part) for part in advntr_context.version)
         out_path = Path(output_dir)
@@ -447,6 +476,7 @@ def run_pipeline(
             version=VERSION,
             input_files=input_files,
             canonical_input_files=canonical_input_files,
+            input_fingerprints=input_fingerprints,
             analysis_settings=analysis_settings,
             kestrel_reference_path=kestrel_reference_path,
             sample_name=sample_name,

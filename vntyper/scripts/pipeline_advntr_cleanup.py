@@ -58,6 +58,20 @@ class AdvntrCleanupPlan:
         return (*self.public_outputs, self.archive.destination)
 
     @property
+    def published_reports(self) -> tuple[Path, ...]:
+        """Return only published report and exported summary table destinations."""
+        published_names = frozenset(
+            {
+                "pipeline_summary.csv",
+                "pipeline_summary.tsv",
+                "pipeline_summary_rows.csv",
+                "pipeline_summary_rows.tsv",
+                "summary_report.html",
+            }
+        )
+        return tuple(p for p in self.public_outputs if p.name in published_names)
+
+    @property
     def destructive_destinations(self) -> tuple[Path, ...]:
         """Return every preflight name that may be unlinked or replaced."""
         return (*self.cleanup_destinations, self.model_snapshot)

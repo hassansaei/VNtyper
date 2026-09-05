@@ -58,6 +58,27 @@ STEP_OUTPUT_SIBLINGS: Final[dict[str, tuple[str, ...]]] = {
 _REUSABLE_STEPS: Final[frozenset[str]] = frozenset(STEP_OUTPUT_SIBLINGS.keys())
 
 
+def fingerprint_file(path: str | Path) -> str:
+    """Compute a lightweight, deterministic content fingerprint of an input file.
+
+    Combines file size with SHA-256 of the initial 64 KB and trailing 64 KB of the
+    file. Fast on multi-gigabyte BAM/CRAM files while detecting in-place modifications
+    or content replacements.
+    """
+    p = Path(path)
+    size = p.stat().st_size
+    hasher = hashlib.sha256()
+    hasher.update(str(size).encode("utf-8"))
+    with p.open("rb") as handle:
+        head = handle.read(65536)
+        hasher.update(head)
+        if size > 65536:
+            handle.seek(max(0, size - 65536))
+            tail = handle.read(65536)
+            hasher.update(tail)
+    return hasher.hexdigest()
+
+
 def _compute_md5(path: Path) -> str | None:
     """Compute the MD5 checksum of a file in 64 KiB chunks."""
     if not path.is_file():
@@ -113,6 +134,7 @@ def resume_refusals(
     reference_assembly: str | None = None,
     analysis_settings: dict[str, Any] | None = None,
     reference_path: str | None = None,
+    input_fingerprints: dict[str, str] | None = None,
 ) -> list[str]:
     """Validate that run identity invariants match the prior summary.
 
@@ -152,6 +174,15 @@ def resume_refusals(
         elif prior_canonical != canonical_input_files:
             refusals.append(
                 f"canonical input files differ (prior: {prior_canonical!r}, current: {canonical_input_files!r})"
+            )
+
+    if input_fingerprints is not None:
+        prior_fingerprints = prior.get("input_fingerprints")
+        if prior_fingerprints is None:
+            refusals.append("checkpoint lacks input content fingerprints (legacy checkpoint)")
+        elif prior_fingerprints != input_fingerprints:
+            refusals.append(
+                f"input file contents differ from checkpoint (prior: {prior_fingerprints!r}, current: {input_fingerprints!r})"
             )
 
     prior_sample = prior.get("sample_name")
@@ -281,6 +312,52 @@ def step_is_reusable(
                     actual_sib_md5,
                 )
                 return False
+
+    # Check all recorded sibling checksums and existence
+    for sibling, expected_md5 in recorded_siblings.items():
+        sibling_path = stage_dir / sibling
+        if not sibling_path.is_file():
+            logger.debug("Recorded sibling %s for step %r does not exist", sibling_path, step_name)
+            return False
+        actual_sib_md5 = _compute_md5(sibling_path)
+        if actual_sib_md5 != expected_md5:
+            logger.warning(
+                "MD5 mismatch for recorded sibling %s of step %r: recorded %s, current %s",
+                sibling,
+                step_name,
+                expected_md5,
+                actual_sib_md5,
+            )
+            return False
+
+    # For Kestrel, validate retained BAM replay artifact if present or if result is identity-aware
+    if step_name == summary_steps.STEP_KESTREL:
+        replay_path = stage_dir / "bam_identity_replay.v1.json"
+        if replay_path.is_file():
+            try:
+                from vntyper.scripts.nomenclature_bam_replay import read_bam_replay_artifact
+
+                read_bam_replay_artifact(stage_dir)
+            except (OSError, ValueError) as err:
+                logger.warning("BAM replay artifact corrupted or invalid in %s: %s", stage_dir, err)
+                return False
+        is_identity = False
+        parsed_data = step_record.get("parsed_result", {}).get("data", [])
+        if parsed_data:
+            from vntyper.scripts.nomenclature_dominance_runtime import rows_carry_identity_metadata
+
+            is_identity = rows_carry_identity_metadata(parsed_data)
+        if not is_identity and result_path.is_file():
+            try:
+                with result_path.open("r", encoding="utf-8") as handle:
+                    header = handle.readline()
+                    if any(col in header for col in ("__Identity_", "ReconciledHaplotype")):
+                        is_identity = True
+            except (OSError, UnicodeDecodeError):
+                pass
+        if is_identity and not replay_path.is_file():
+            logger.warning("Identity-aware Kestrel result missing required replay artifact %s", replay_path)
+            return False
 
     # Check mate FASTQ for BAM/CRAM conversion if R1 is present
     if "_R1" in result_path.name:
