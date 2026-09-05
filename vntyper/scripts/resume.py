@@ -34,6 +34,7 @@ STEP_OUTPUT_SIBLINGS: Final[dict[str, tuple[str, ...]]] = {
     summary_steps.STEP_CRAM_TO_FASTQ: ("output_sliced.bam",),
     summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT: ("output_sliced.bam",),
     summary_steps.STEP_FASTQ_ALIGNMENT: (),
+    summary_steps.STEP_FASTQ_QC: (),
 }
 
 _REUSABLE_STEPS: Final[frozenset[str]] = frozenset(STEP_OUTPUT_SIBLINGS.keys())
@@ -90,19 +91,25 @@ def resume_refusals(
     sample_name: str,
     reference_key_used: str | None,
     decision_profile_sha256: str,
+    canonical_input_files: dict[str, str] | None = None,
+    reference_assembly: str | None = None,
+    analysis_settings: dict[str, Any] | None = None,
 ) -> list[str]:
     """Validate that run identity invariants match the prior summary.
 
     Refusals concern run identity only: version, input files, sample name,
-    reference key, or decision-profile digest.
+    reference key, decision-profile digest, reference assembly, and analysis settings.
 
     Args:
         prior: Prior summary dictionary.
         version: Pipeline version for the current run.
-        input_files: Input file paths mapping for the current run.
+        input_files: Input file paths mapping for the current run (display basenames).
         sample_name: Resolved sample name for the current run.
         reference_key_used: Reference key used for the current run.
         decision_profile_sha256: SHA256 digest of the resolved decision profile.
+        canonical_input_files: Optional canonical resolved input file paths mapping.
+        reference_assembly: Optional requested reference assembly.
+        analysis_settings: Optional result-affecting analysis settings dictionary.
 
     Returns:
         list[str]: Descriptions of all detected mismatches; empty if allowed.
@@ -117,9 +124,23 @@ def resume_refusals(
     if prior_inputs != input_files:
         refusals.append(f"input files differ (prior: {prior_inputs!r}, current: {input_files!r})")
 
+    if canonical_input_files is not None:
+        prior_canonical = prior.get("canonical_input_files")
+        if prior_canonical is None:
+            refusals.append("checkpoint lacks canonical input identities (legacy or incomplete checkpoint)")
+        elif prior_canonical != canonical_input_files:
+            refusals.append(
+                f"canonical input files differ (prior: {prior_canonical!r}, current: {canonical_input_files!r})"
+            )
+
     prior_sample = prior.get("sample_name")
     if prior_sample != sample_name:
         refusals.append(f"sample name differs (prior: {prior_sample!r}, current: {sample_name!r})")
+
+    if reference_assembly is not None:
+        prior_assembly = prior.get("reference_assembly_requested")
+        if prior_assembly is not None and prior_assembly != reference_assembly:
+            refusals.append(f"reference assembly differs (prior: {prior_assembly!r}, current: {reference_assembly!r})")
 
     prior_ref_key = prior.get("reference_key_used")
     if prior_ref_key != reference_key_used:
@@ -130,6 +151,17 @@ def resume_refusals(
         refusals.append(
             f"decision profile digest differs (prior: {prior_profile_sha!r}, current: {decision_profile_sha256!r})"
         )
+
+    if analysis_settings is not None:
+        prior_settings = prior.get("analysis_settings")
+        if prior_settings is None:
+            refusals.append("checkpoint lacks recorded analysis settings")
+        elif prior_settings != analysis_settings:
+            for k, v in analysis_settings.items():
+                if prior_settings.get(k) != v:
+                    refusals.append(
+                        f"analysis setting {k!r} differs (prior: {prior_settings.get(k)!r}, current: {v!r})"
+                    )
 
     return refusals
 

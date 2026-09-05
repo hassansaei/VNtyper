@@ -70,6 +70,8 @@ def start_summary(
     reference_source_effective=None,
     advntr_evidence_digest=None,
     decision_profile: ResolvedDecisionProfile | None = None,
+    canonical_input_files: dict[str, str] | None = None,
+    analysis_settings: dict[str, Any] | None = None,
 ):
     """
     Initializes a new pipeline summary.
@@ -159,6 +161,8 @@ def start_summary(
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
+        "canonical_input_files": canonical_input_files,
+        "analysis_settings": analysis_settings,
         "sample_name": sample_name,
         "sample_name_is_explicit": bool(sample_name_is_explicit),
         "reference_assembly_requested": reference_assembly_requested,

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 from vntyper.scripts.alignment_preflight import run_preflight
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
@@ -232,6 +233,51 @@ def run_pipeline(
         needs_advntr = advntr_preflight.enabled
         advntr_reference = advntr_preflight.reference
         additional_operator_paths = (advntr_reference,) if advntr_reference is not None else ()
+        canonical_input_files: dict[str, str] = {}
+        if bam is not None:
+            canonical_input_files["bam"] = str(Path(bam).resolve())
+        elif cram is not None:
+            canonical_input_files["cram"] = str(Path(cram).resolve())
+        elif fastq1 is not None:
+            canonical_input_files["fastq1"] = str(Path(fastq1).resolve())
+            if fastq2 is not None:
+                canonical_input_files["fastq2"] = str(Path(fastq2).resolve())
+
+        analysis_settings: dict[str, Any] = {
+            "reference_assembly": reference_assembly,
+            "fast_mode": bool(fast_mode),
+            "custom_regions": str(custom_regions) if custom_regions else None,
+            "bed_file": str(Path(bed_file).resolve()) if bed_file else None,
+            "advntr_model": str(Path(advntr_reference).resolve()) if advntr_reference else None,
+            "extra_modules": sorted(extra_modules),
+        }
+
+        summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
+        prior_summary = None
+        if resume:
+            prior_summary = load_prior_summary(summary_file_path)
+            if prior_summary is None:
+                msg = f"Cannot resume: prior summary not found or invalid at {summary_file_path}"
+                logger.error(msg)
+                raise ValueError(msg)
+
+            refusals = resume_refusals(
+                prior_summary,
+                version=VERSION,
+                input_files=input_files,
+                sample_name=sample_name,
+                reference_key_used=reference_key_used if input_type == "FASTQ" else None,
+                decision_profile_sha256=run_configuration.decision_profile.digest,
+                canonical_input_files=canonical_input_files,
+                reference_assembly=reference_assembly,
+                analysis_settings=analysis_settings,
+            )
+            if refusals:
+                for refusal in refusals:
+                    logger.error("Resume refused: %s", refusal)
+                raise ValueError(f"Cannot resume pipeline: {'; '.join(refusals)}")
+            logger.info("Resuming execution from prior summary (started %s)", prior_summary.get("pipeline_start"))
+
         protect_pipeline_input_ownership(
             output_dir,
             input_type,
@@ -379,11 +425,8 @@ def run_pipeline(
         summary = start_summary(
             version=VERSION,
             input_files=input_files,
-            # The same string Kestrel embeds below, so the report and the VCF cannot
-            # name the same run differently (#242). `start_summary` runs before any
-            # step, so this is on disk from the first `record_step` onwards. The
-            # provenance flag travels with it because the string alone cannot say
-            # whether it is a name or a `Path.stem` still to be derived.
+            canonical_input_files=canonical_input_files,
+            analysis_settings=analysis_settings,
             sample_name=sample_name,
             sample_name_is_explicit=sample_name_is_explicit,
             reference_assembly_requested=reference_assembly,
@@ -393,28 +436,6 @@ def run_pipeline(
             advntr_evidence_digest=advntr_evidence.digest if advntr_evidence is not None else None,
             decision_profile=run_configuration.decision_profile,
         )
-        summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
-        prior_summary = None
-        if resume:
-            prior_summary = load_prior_summary(summary_file_path)
-            if prior_summary is None:
-                msg = f"Cannot resume: prior summary not found or invalid at {summary_file_path}"
-                logger.error(msg)
-                raise ValueError(msg)
-
-            refusals = resume_refusals(
-                prior_summary,
-                version=VERSION,
-                input_files=input_files,
-                sample_name=sample_name,
-                reference_key_used=reference_provenance.key_used,
-                decision_profile_sha256=run_configuration.decision_profile.digest,
-            )
-            if refusals:
-                for refusal in refusals:
-                    logger.error("Resume refused: %s", refusal)
-                raise ValueError(f"Cannot resume pipeline: {'; '.join(refusals)}")
-            logger.info("Resuming execution from prior summary (started %s)", prior_summary.get("pipeline_start"))
 
         if input_type in ["BAM", "CRAM"]:
             if input_type == "BAM":
@@ -435,15 +456,29 @@ def run_pipeline(
                 )
 
             conversion_step = STEP_BAM_TO_FASTQ if input_type == "BAM" else STEP_CRAM_TO_FASTQ
-            if resume and prior_summary and step_is_reusable(prior_summary, conversion_step, output_dir):
+            can_reuse_conversion = (
+                resume and prior_summary is not None and step_is_reusable(prior_summary, conversion_step, output_dir)
+            )
+            fq_dir = Path(dirs["fastq_bam_processing"])
+            candidate_fastqs = (
+                str(fq_dir / "output_R1.fastq.gz"),
+                str(fq_dir / "output_R2.fastq.gz"),
+                str(fq_dir / "output_other.fastq.gz"),
+                str(fq_dir / "output_single.fastq.gz"),
+            )
+            kestrel_fastq_files = None
+            if can_reuse_conversion and all(os.path.isfile(p) for p in candidate_fastqs):
+                try:
+                    kestrel_fastq_files = route_converted_fastqs(candidate_fastqs, config)
+                except (ValueError, OSError) as err:
+                    logger.warning("Existing converted FASTQs failed routing on resume: %s", err)
+                    kestrel_fastq_files = None
+
+            if kestrel_fastq_files is not None:
                 logger.info("Reusing previous %s step results.", conversion_step)
                 prior_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == conversion_step)
                 summary["steps"].append(make_reused_step_record(prior_step, prior_summary.get("pipeline_start")))
                 write_summary(summary, summary_file_path)
-
-                r1_path = Path(prior_step["result_file"])
-                mate_path = r1_path.parent / r1_path.name.replace("_R1", "_R2")
-                kestrel_fastq_files = (str(r1_path), str(mate_path)) if mate_path.is_file() else (str(r1_path),)
             else:
                 logger.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
                 conversion_start = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -532,40 +567,34 @@ def run_pipeline(
             logger.info("Starting FASTQ quality control.")
             qc_start = datetime.now(timezone.utc).replace(tzinfo=None)
             paired_fastq_input = fastq2 is not None
-            process_fastq(
-                fastq1,
-                fastq2,
-                threads,
-                dirs["fastq_bam_processing"],
-                "output",
-                config,
-            )
-            qc_end = datetime.now(timezone.utc).replace(tzinfo=None)
-            record_step(
-                summary,
-                STEP_FASTQ_QC,
-                os.path.join(dirs["fastq_bam_processing"], "output.json"),
-                "json",
-                "process_fastq(...)",
-                qc_start,
-                qc_end,
-                write_summary_path=summary_file_path,
-            )
-            logger.info("FASTQ quality control completed.")
-            if (
+            can_reuse_alignment_and_conv = (
                 resume
-                and prior_summary
+                and prior_summary is not None
+                and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir)
                 and step_is_reusable(prior_summary, STEP_BAM_TO_FASTQ_POST_ALIGNMENT, output_dir)
-            ):
-                logger.info("Reusing previous FASTQ alignment and post-alignment conversion.")
-                for st_name in (STEP_FASTQ_ALIGNMENT, STEP_BAM_TO_FASTQ_POST_ALIGNMENT):
+            )
+            fq_dir = Path(dirs["fastq_bam_processing"])
+            candidate_post_fastqs = (
+                str(fq_dir / "output_R1.fastq.gz"),
+                str(fq_dir / "output_R2.fastq.gz"),
+                str(fq_dir / "output_other.fastq.gz"),
+                str(fq_dir / "output_single.fastq.gz"),
+            )
+            kestrel_fastq_files = None
+            if can_reuse_alignment_and_conv and all(os.path.isfile(p) for p in candidate_post_fastqs):
+                try:
+                    kestrel_fastq_files = route_converted_fastqs(candidate_post_fastqs, config)
+                except (ValueError, OSError) as err:
+                    logger.warning("Existing post-alignment FASTQs failed routing: %s", err)
+                    kestrel_fastq_files = None
+
+            if kestrel_fastq_files is not None:
+                logger.info("Reusing previous FASTQ QC, alignment, and post-alignment conversion.")
+                for st_name in (STEP_FASTQ_QC, STEP_FASTQ_ALIGNMENT, STEP_BAM_TO_FASTQ_POST_ALIGNMENT):
                     prior_st = next((s for s in prior_summary.get("steps", []) if s.get("step") == st_name), None)
                     if prior_st is not None:
                         summary["steps"].append(make_reused_step_record(prior_st, prior_summary.get("pipeline_start")))
                 write_summary(summary, summary_file_path)
-                r1_path = Path(dirs["fastq_bam_processing"]) / "output_R1.fastq.gz"
-                r2_path = Path(dirs["fastq_bam_processing"]) / "output_R2.fastq.gz"
-                kestrel_fastq_files = (str(r1_path), str(r2_path)) if r2_path.is_file() else (str(r1_path),)
                 prior_align_st = next(
                     (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
                 )
@@ -588,53 +617,103 @@ def run_pipeline(
                     )
                 )
             else:
-                fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
-                fastq2 = (
-                    os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz") if paired_fastq_input else None
-                )
-                logger.info("Starting FASTQ alignment.")
-                align_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                sorted_bam = align_and_sort_fastq(
-                    fastq1,
-                    fastq2,
-                    bwa_reference,
-                    dirs["alignment_processing"],
-                    "output",
-                    threads,
-                    config,
-                )
-                align_end = datetime.now(timezone.utc).replace(tzinfo=None)
-                record_step(
-                    summary,
-                    STEP_FASTQ_ALIGNMENT,
-                    sorted_bam,
-                    "bam",
-                    "align_and_sort_fastq(...)",
-                    align_start,
-                    align_end,
-                    write_summary_path=summary_file_path,
-                )
-                if not sorted_bam:
-                    logger.error(
-                        "Alignment failed: BWA index files for the provided reference "
-                        "are missing or incomplete. Please run 'bwa index <reference.fa>' "
-                        "to generate them."
+                if resume and prior_summary and step_is_reusable(prior_summary, STEP_FASTQ_QC, output_dir):
+                    logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
+                    prior_qc_st = next(
+                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_QC), None
                     )
-                    raise RuntimeError("Alignment failed due to missing or incomplete BWA reference indices.")
-                logger.info("FASTQ alignment completed.")
-                alignment_plan = run_preflight(
-                    **build_alignment_preflight_kwargs(
-                        in_path=str(sorted_bam),
-                        output_dir=Path(output_dir) / "fastq_bam_processing",
-                        output_name="post_alignment",
-                        file_format="bam",
-                        config=config,
-                        threads=threads,
-                        bed_file=bed_file_path,
-                        reference_assembly=reference_assembly,
-                        fast_mode=fast_mode,
+                    if prior_qc_st is not None:
+                        summary["steps"].append(
+                            make_reused_step_record(prior_qc_st, prior_summary.get("pipeline_start"))
+                        )
+                    write_summary(summary, summary_file_path)
+                else:
+                    logger.info("Starting FASTQ quality control.")
+                    qc_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                    process_fastq(
+                        fastq1,
+                        fastq2,
+                        threads,
+                        dirs["fastq_bam_processing"],
+                        "output",
+                        config,
                     )
-                )
+                    qc_end = datetime.now(timezone.utc).replace(tzinfo=None)
+                    record_step(
+                        summary,
+                        STEP_FASTQ_QC,
+                        os.path.join(dirs["fastq_bam_processing"], "output.json"),
+                        "json",
+                        "process_fastq(...)",
+                        qc_start,
+                        qc_end,
+                        write_summary_path=summary_file_path,
+                    )
+                    logger.info("FASTQ quality control completed.")
+
+                if resume and prior_summary and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir):
+                    logger.info("Reusing previous %s step results.", STEP_FASTQ_ALIGNMENT)
+                    prior_align_st = next(
+                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
+                    )
+                    if prior_align_st is not None:
+                        summary["steps"].append(
+                            make_reused_step_record(prior_align_st, prior_summary.get("pipeline_start"))
+                        )
+                    write_summary(summary, summary_file_path)
+                    sorted_bam = (
+                        Path(prior_align_st["result_file"])
+                        if prior_align_st and prior_align_st.get("result_file")
+                        else Path(dirs["alignment_processing"]) / "output_sorted.bam"
+                    )
+                else:
+                    fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
+                    fastq2 = (
+                        os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz") if paired_fastq_input else None
+                    )
+                    logger.info("Starting FASTQ alignment.")
+                    align_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                    sorted_bam = align_and_sort_fastq(
+                        fastq1,
+                        fastq2,
+                        bwa_reference,
+                        dirs["alignment_processing"],
+                        "output",
+                        threads,
+                        config,
+                    )
+                    align_end = datetime.now(timezone.utc).replace(tzinfo=None)
+                    record_step(
+                        summary,
+                        STEP_FASTQ_ALIGNMENT,
+                        sorted_bam,
+                        "bam",
+                        "align_and_sort_fastq(...)",
+                        align_start,
+                        align_end,
+                        write_summary_path=summary_file_path,
+                    )
+                    if not sorted_bam:
+                        logger.error(
+                            "Alignment failed: BWA index files for the provided reference "
+                            "are missing or incomplete. Please run 'bwa index <reference.fa>' "
+                            "to generate them."
+                        )
+                        raise RuntimeError("Alignment failed due to missing or incomplete BWA reference indices.")
+                    logger.info("FASTQ alignment completed.")
+                    alignment_plan = run_preflight(
+                        **build_alignment_preflight_kwargs(
+                            in_path=str(sorted_bam),
+                            output_dir=Path(output_dir) / "fastq_bam_processing",
+                            output_name="post_alignment",
+                            file_format="bam",
+                            config=config,
+                            threads=threads,
+                            bed_file=bed_file_path,
+                            reference_assembly=reference_assembly,
+                            fast_mode=fast_mode,
+                        )
+                    )
                 logger.info("Starting BAM to FASTQ conversion (Post-alignment).")
                 conv2_start = datetime.now(timezone.utc).replace(tzinfo=None)
                 produced_fastqs = process_bam_to_fastq(
@@ -825,34 +904,6 @@ def run_pipeline(
                         nomenclature_component=run_configuration.nomenclature,
                         custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
                     )
-                    # Tier A needs two independent callers agreeing, which no single
-                    # caller stage can see. Without this step production could never
-                    # emit a tier-A name however well the two agreed (#nomenclature).
-                    reconciliation_outcome = reconcile_caller_outputs(
-                        os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
-                        os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
-                        artifact_evidence=advntr_evidence,
-                        resolved_component=run_configuration.nomenclature,
-                        dominance_component=run_configuration.dominance,
-                        custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
-                    )
-                    if run_configuration.dominance.get("enabled") is True and (
-                        not isinstance(reconciliation_outcome, DominanceSeamOutcome)
-                        or not reconciliation_outcome.evaluated
-                    ):
-                        raise RuntimeError("enabled dominance seam did not evaluate the selected run policy")
-                    if (
-                        isinstance(reconciliation_outcome, DominanceSeamOutcome) and reconciliation_outcome.rewritten
-                    ) or reconciliation_outcome is True:
-                        # The Kestrel step was recorded before this ran, so the summary
-                        # still holds the pre-reconciliation row -- and the HTML report
-                        # and cohort tables are built from the summary, not the TSV. Its
-                        # checksum no longer matched the rewritten file either.
-                        refresh_step(
-                            summary,
-                            STEP_KESTREL,
-                            write_summary_path=summary_file_path,
-                        )
                     advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)
                     record_step(
                         summary,
@@ -868,6 +919,34 @@ def run_pipeline(
                 else:
                     logger.error("Sorted BAM required for adVNTR not provided.")
                     raise ValueError("Sorted BAM required for adVNTR not provided.")
+
+            # Tier A needs two independent callers agreeing, which no single
+            # caller stage can see. Without this step production could never
+            # emit a tier-A name however well the two agreed (#nomenclature).
+            # Runs whenever adVNTR is requested, ensuring caller results are reconciled
+            # even when adVNTR was reused (#20).
+            kestrel_tsv = os.path.join(dirs["kestrel"], "kestrel_result.tsv")
+            advntr_tsv = os.path.join(dirs["advntr"], "output_adVNTR_result.tsv")
+            reconciliation_outcome = reconcile_caller_outputs(
+                kestrel_tsv,
+                advntr_tsv,
+                artifact_evidence=advntr_evidence,
+                resolved_component=run_configuration.nomenclature,
+                dominance_component=run_configuration.dominance,
+                custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
+            )
+            if run_configuration.dominance.get("enabled") is True and (
+                not isinstance(reconciliation_outcome, DominanceSeamOutcome) or not reconciliation_outcome.evaluated
+            ):
+                raise RuntimeError("enabled dominance seam did not evaluate the selected run policy")
+            if (
+                isinstance(reconciliation_outcome, DominanceSeamOutcome) and reconciliation_outcome.rewritten
+            ) or reconciliation_outcome is True:
+                refresh_step(
+                    summary,
+                    STEP_KESTREL,
+                    write_summary_path=summary_file_path,
+                )
 
             # --- Cross-Match Variant Comparison ---
             logger.info("Starting cross-match of Kestrel and adVNTR variant calls.")

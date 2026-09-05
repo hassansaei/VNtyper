@@ -6,15 +6,57 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from tests.support.pipeline_harness import run_pipeline_under_harness
+from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import summary_steps
 from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.version import __version__ as VERSION
 
 pytestmark = pytest.mark.unit
+
+
+def _make_prior_summary(
+    *,
+    input_files: dict[str, str],
+    canonical_input_files: dict[str, str] | None = None,
+    sample_name: str = "sample",
+    reference_assembly: str = "hg19",
+    reference_key_used: str | None = None,
+    decision_profile_sha256: str | None = None,
+    extra_modules: list[str] | None = None,
+    analysis_settings: dict[str, Any] | None = None,
+    steps: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    resolved_modules = sorted(extra_modules or [])
+    advntr_model = None
+    if "advntr" in resolved_modules:
+        advntr_ref = MINIMAL_CONFIG.get("reference_data", {}).get(f"advntr_reference_vntr_{reference_assembly}")
+        advntr_model = str(Path(advntr_ref).resolve()) if advntr_ref else None
+
+    default_settings = {
+        "reference_assembly": reference_assembly,
+        "fast_mode": False,
+        "custom_regions": None,
+        "bed_file": None,
+        "advntr_model": advntr_model,
+        "extra_modules": resolved_modules,
+    }
+    return {
+        "schema_version": 3,
+        "version": VERSION,
+        "input_files": input_files,
+        "canonical_input_files": canonical_input_files,
+        "sample_name": sample_name,
+        "reference_assembly_requested": reference_assembly,
+        "reference_key_used": reference_key_used,
+        "decision_profile_sha256": decision_profile_sha256 or resolve_run_configuration().decision_profile.digest,
+        "pipeline_start": "2026-09-05T08:00:00.000000",
+        "analysis_settings": analysis_settings if analysis_settings is not None else default_settings,
+        "steps": steps or [],
+    }
 
 
 def test_warning_emitted_when_output_dir_non_empty_without_resume(
@@ -86,16 +128,10 @@ def test_resume_fatal_refusal_on_input_files_mismatch(
     input_bam = input_dir / "sample.bam"
     input_bam.touch()
 
-    prior_summary = {
-        "schema_version": 3,
-        "version": VERSION,
-        "input_files": {"bam": "other_sample.bam"},
-        "sample_name": "sample",
-        "reference_key_used": None,
-        "decision_profile_sha256": resolve_run_configuration().decision_profile.digest,
-        "pipeline_start": "2026-09-05T09:00:00.000000",
-        "steps": [],
-    }
+    prior_summary = _make_prior_summary(
+        input_files={"bam": "other_sample.bam"},
+        canonical_input_files={"bam": str((input_dir / "other_sample.bam").resolve())},
+    )
     (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
 
     with caplog.at_level(logging.ERROR), pytest.raises(AssertionError, match="run_pipeline exited"):
@@ -107,6 +143,103 @@ def test_resume_fatal_refusal_on_input_files_mismatch(
         )
 
     assert any("Resume refused: input files differ" in record.message for record in caplog.records)
+
+
+def test_resume_refusal_when_basename_matches_but_canonical_path_differs(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Refuses resume when two different inputs share the same display basename (#20 / P1)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    patient_a = tmp_path / "patient_a"
+    patient_a.mkdir()
+    bam_a = patient_a / "sample.bam"
+    bam_a.touch()
+
+    patient_b = tmp_path / "patient_b"
+    patient_b.mkdir()
+    bam_b = patient_b / "sample.bam"
+    bam_b.touch()
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": "sample.bam"},
+        canonical_input_files={"bam": str(bam_a.resolve())},
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR), pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            bam=str(bam_b),
+            resume=True,
+            expect_failure=False,
+        )
+
+    assert any("canonical input files differ" in record.message for record in caplog.records)
+
+
+def test_resume_refusal_when_checkpoint_lacks_canonical_identities(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Refuses legacy checkpoints that cannot establish canonical identity (#20 / P1)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_bam = tmp_path / "sample.bam"
+    input_bam.touch()
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": "sample.bam"},
+        canonical_input_files=None,  # Legacy checkpoint
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR), pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            bam=str(input_bam),
+            resume=True,
+            expect_failure=False,
+        )
+
+    assert any("checkpoint lacks canonical input identities" in record.message for record in caplog.records)
+
+
+def test_resume_refusal_on_analysis_settings_mismatch(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Refuses resume when result-affecting settings differ from prior run (#20 / P1)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_bam = tmp_path / "sample.bam"
+    input_bam.touch()
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        analysis_settings={
+            "reference_assembly": "hg19",
+            "fast_mode": True,  # Prior ran fast_mode=True
+            "custom_regions": None,
+            "bed_file": None,
+            "advntr_model": None,
+            "extra_modules": [],
+        },
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR), pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            bam=str(input_bam),
+            resume=True,
+            fast_mode=False,  # Current runs fast_mode=False
+            expect_failure=False,
+        )
+
+    assert any("analysis setting 'fast_mode' differs" in record.message for record in caplog.records)
 
 
 def test_resume_skips_kestrel_and_advntr_when_reusable(tmp_path: Path) -> None:
@@ -133,15 +266,11 @@ def test_resume_skips_kestrel_and_advntr_when_reusable(tmp_path: Path) -> None:
     advntr_tsv.write_text("advntr data", encoding="utf-8")
     advntr_md5 = hashlib.md5(b"advntr data").hexdigest()
 
-    prior_summary = {
-        "schema_version": 3,
-        "version": VERSION,
-        "input_files": {"bam": input_bam.name},
-        "sample_name": "sample",
-        "reference_key_used": None,
-        "decision_profile_sha256": resolve_run_configuration().decision_profile.digest,
-        "pipeline_start": "2026-09-05T08:00:00.000000",
-        "steps": [
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        extra_modules=["advntr"],
+        steps=[
             {
                 "step": summary_steps.STEP_KESTREL,
                 "start": "2026-09-05T08:05:00",
@@ -163,7 +292,7 @@ def test_resume_skips_kestrel_and_advntr_when_reusable(tmp_path: Path) -> None:
                 "parsed_result": {"comments": [], "data": []},
             },
         ],
-    }
+    )
     (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
 
     harness = run_pipeline_under_harness(
@@ -202,15 +331,10 @@ def test_resume_forces_kestrel_rerun_when_corrupted(tmp_path: Path) -> None:
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
-    prior_summary = {
-        "schema_version": 3,
-        "version": VERSION,
-        "input_files": {"bam": input_bam.name},
-        "sample_name": "sample",
-        "reference_key_used": None,
-        "decision_profile_sha256": resolve_run_configuration().decision_profile.digest,
-        "pipeline_start": "2026-09-05T08:00:00.000000",
-        "steps": [
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
             {
                 "step": summary_steps.STEP_KESTREL,
                 "start": "2026-09-05T08:05:00",
@@ -222,7 +346,7 @@ def test_resume_forces_kestrel_rerun_when_corrupted(tmp_path: Path) -> None:
                 "parsed_result": {"comments": [], "data": []},
             }
         ],
-    }
+    )
     (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
 
     harness = run_pipeline_under_harness(
@@ -245,22 +369,21 @@ def test_resume_skips_bam_conversion_when_reusable(tmp_path: Path) -> None:
     fastq_dir.mkdir()
     r1 = fastq_dir / "output_R1.fastq.gz"
     r2 = fastq_dir / "output_R2.fastq.gz"
+    other = fastq_dir / "output_other.fastq.gz"
+    single = fastq_dir / "output_single.fastq.gz"
     sliced = fastq_dir / "output_sliced.bam"
     r1.write_bytes(b"r1")
     r2.write_bytes(b"r2")
+    other.write_bytes(b"")
+    single.write_bytes(b"")
     sliced.write_bytes(b"sliced")
 
     r1_md5 = hashlib.md5(b"r1").hexdigest()
 
-    prior_summary = {
-        "schema_version": 3,
-        "version": VERSION,
-        "input_files": {"bam": input_bam.name},
-        "sample_name": "sample",
-        "reference_key_used": None,
-        "decision_profile_sha256": resolve_run_configuration().decision_profile.digest,
-        "pipeline_start": "2026-09-05T08:00:00.000000",
-        "steps": [
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
             {
                 "step": summary_steps.STEP_BAM_TO_FASTQ,
                 "start": "2026-09-05T08:01:00",
@@ -271,7 +394,7 @@ def test_resume_skips_bam_conversion_when_reusable(tmp_path: Path) -> None:
                 "md5sum": r1_md5,
             }
         ],
-    }
+    )
     (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
 
     harness = run_pipeline_under_harness(
@@ -297,30 +420,35 @@ def test_resume_skips_fastq_alignment_when_reusable(tmp_path: Path) -> None:
     fastq_dir.mkdir()
     r1 = fastq_dir / "output_R1.fastq.gz"
     r2 = fastq_dir / "output_R2.fastq.gz"
+    other = fastq_dir / "output_other.fastq.gz"
+    single = fastq_dir / "output_single.fastq.gz"
     sliced = fastq_dir / "output_sliced.bam"
     r1.write_bytes(b"r1")
     r2.write_bytes(b"r2")
+    other.write_bytes(b"")
+    single.write_bytes(b"")
     sliced.write_bytes(b"sliced")
+
+    align_dir = output_dir / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.write_bytes(b"sorted_bam")
+    bam_md5 = hashlib.md5(b"sorted_bam").hexdigest()
 
     r1_md5 = hashlib.md5(b"r1").hexdigest()
 
-    prior_summary = {
-        "schema_version": 3,
-        "version": VERSION,
-        "input_files": {"fastq1": f1.name, "fastq2": f2.name},
-        "sample_name": "sample",
-        "reference_key_used": None,
-        "decision_profile_sha256": resolve_run_configuration().decision_profile.digest,
-        "pipeline_start": "2026-09-05T08:00:00.000000",
-        "steps": [
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        steps=[
             {
                 "step": summary_steps.STEP_FASTQ_ALIGNMENT,
                 "start": "2026-09-05T08:01:00",
                 "end": "2026-09-05T08:03:00",
                 "command": "align_and_sort_fastq(...)",
-                "result_file": str(output_dir / "alignment_processing" / "output_sorted.bam"),
+                "result_file": str(sorted_bam),
                 "file_type": "bam",
-                "md5sum": "any",
+                "md5sum": bam_md5,
             },
             {
                 "step": summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
@@ -332,7 +460,7 @@ def test_resume_skips_fastq_alignment_when_reusable(tmp_path: Path) -> None:
                 "md5sum": r1_md5,
             },
         ],
-    }
+    )
     (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
 
     harness = run_pipeline_under_harness(
@@ -343,3 +471,248 @@ def test_resume_skips_fastq_alignment_when_reusable(tmp_path: Path) -> None:
     )
 
     harness.stages["align_and_sort_fastq"].assert_not_called()
+
+
+def test_resume_restores_complete_routed_fastq_set_including_other_and_single(
+    tmp_path: Path,
+) -> None:
+    """Restores complete routed FASTQ tuple including other and single outputs (#20 / P1)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    fastq_dir = output_dir / "fastq_bam_processing"
+    fastq_dir.mkdir()
+    r1 = fastq_dir / "output_R1.fastq.gz"
+    r2 = fastq_dir / "output_R2.fastq.gz"
+    other = fastq_dir / "output_other.fastq.gz"
+    single = fastq_dir / "output_single.fastq.gz"
+    sliced = fastq_dir / "output_sliced.bam"
+    r1.write_bytes(b"r1")
+    r2.write_bytes(b"r2")
+    other.write_bytes(b"other")
+    single.write_bytes(b"single")
+    sliced.write_bytes(b"sliced")
+
+    r1_md5 = hashlib.md5(b"r1").hexdigest()
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ,
+                "result_file": str(r1),
+                "file_type": "fastq",
+                "md5sum": r1_md5,
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+        stage_side_effects={
+            "route_converted_fastqs": lambda paths, config: (str(r1), str(r2), str(other), str(single))
+        },
+    )
+    harness.stages["process_bam_to_fastq"].assert_not_called()
+    assert harness.stages["run_kestrel"].call_count == 1
+    call_kwargs = harness.stages["run_kestrel"].call_args.kwargs
+    assert len(call_kwargs["fastq_files"]) == 4
+
+
+def test_resume_reconciles_callers_when_advntr_is_reused(tmp_path: Path) -> None:
+    """Ensures cross-caller reconciliation runs when adVNTR results are reused (#20 / P1)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir()
+    advntr_tsv = advntr_dir / "output_adVNTR_result.tsv"
+    advntr_tsv.write_text("advntr data", encoding="utf-8")
+    advntr_md5 = hashlib.md5(b"advntr data").hexdigest()
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel fresh data", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        extra_modules=["advntr"],
+        steps=[
+            {
+                "step": summary_steps.STEP_ADVNTR,
+                "result_file": str(advntr_tsv),
+                "file_type": "tsv",
+                "md5sum": advntr_md5,
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    h = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        extra_modules=["advntr"],
+        resume=True,
+    )
+    h.stages["run_advntr"].assert_not_called()
+    h.stages["reconcile_caller_outputs"].assert_called_once()
+
+
+def test_resume_preserves_conversion_checkpoint_without_overwriting_by_fastq_qc(
+    tmp_path: Path,
+) -> None:
+    """Preserves conversion checkpoints before rerunning FASTQ QC (#20 / P2)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    f1 = tmp_path / "in_R1.fastq.gz"
+    f2 = tmp_path / "in_R2.fastq.gz"
+    f1.touch()
+    f2.touch()
+
+    fastq_dir = output_dir / "fastq_bam_processing"
+    fastq_dir.mkdir()
+    r1 = fastq_dir / "output_R1.fastq.gz"
+    r2 = fastq_dir / "output_R2.fastq.gz"
+    other = fastq_dir / "output_other.fastq.gz"
+    single = fastq_dir / "output_single.fastq.gz"
+    sliced = fastq_dir / "output_sliced.bam"
+    r1.write_bytes(b"extracted reads")
+    r2.write_bytes(b"extracted reads 2")
+    other.write_bytes(b"")
+    single.write_bytes(b"")
+    sliced.write_bytes(b"sliced")
+
+    align_dir = output_dir / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.write_bytes(b"sorted_bam")
+    bam_md5 = hashlib.md5(b"sorted_bam").hexdigest()
+    r1_md5 = hashlib.md5(b"extracted reads").hexdigest()
+
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": bam_md5,
+            },
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                "result_file": str(r1),
+                "file_type": "fastq",
+                "md5sum": r1_md5,
+            },
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        resume=True,
+    )
+    harness.stages["process_fastq"].assert_not_called()
+    harness.stages["align_and_sort_fastq"].assert_not_called()
+    assert r1.read_bytes() == b"extracted reads"
+
+
+def test_resume_validates_alignment_artifact_before_skipping_alignment(tmp_path: Path) -> None:
+    """Reruns alignment when alignment artifact is missing or corrupted (#20 / P2)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    f1 = tmp_path / "in_R1.fastq.gz"
+    f2 = tmp_path / "in_R2.fastq.gz"
+    f1.touch()
+    f2.touch()
+
+    fastq_dir = output_dir / "fastq_bam_processing"
+    fastq_dir.mkdir()
+    r1 = fastq_dir / "output_R1.fastq.gz"
+    r2 = fastq_dir / "output_R2.fastq.gz"
+    sliced = fastq_dir / "output_sliced.bam"
+    r1.write_bytes(b"extracted reads")
+    r2.write_bytes(b"extracted reads 2")
+    sliced.write_bytes(b"sliced")
+
+    align_dir = output_dir / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.write_bytes(b"corrupted_bam")
+
+    r1_md5 = hashlib.md5(b"extracted reads").hexdigest()
+
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": "recorded_md5_that_differs",
+            },
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                "result_file": str(r1),
+                "file_type": "fastq",
+                "md5sum": r1_md5,
+            },
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        resume=True,
+    )
+    harness.stages["align_and_sort_fastq"].assert_called_once()
+
+
+def test_incompatible_resume_refuses_before_replacing_provenance_snapshots(
+    tmp_path: Path,
+) -> None:
+    """Incompatible resume rejects before touching provenance snapshots (#20 / P2)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_bam = tmp_path / "sample.bam"
+    input_bam.touch()
+
+    profile_snapshot = output_dir / "decision_profile.json"
+    profile_snapshot.write_text("pre-existing profile snapshot", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+    )
+    prior_summary["version"] = "1.0.0"
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            bam=str(input_bam),
+            resume=True,
+            expect_failure=False,
+        )
+
+    assert profile_snapshot.read_text(encoding="utf-8") == "pre-existing profile snapshot"
