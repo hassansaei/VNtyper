@@ -4,7 +4,12 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Ordered confidence rule table (Issue #173 part 1)
+
+- **Pure confidence decision layer**: Refactored `confidence_assignment.py` to delegate confidence level assignment to a new pure module `vntyper/scripts/confidence_rules.py` (Refs [#173](https://github.com/hassansaei/VNtyper/issues/173)).
+- **First-match rule table**: Replaced six sequential, overwriting masked writes with an ordered, first-match rule table (`ConfidenceRule`, `CONFIDENCE_RULES`, `assign_confidence_labels`) implementing verified empirical semantics (rows 0 to 6) with the reporting floor as an outer precondition.
+- **Behaviour-preserving**: All 54 cells in the confidence boundary matrix, mid-band demotion at `Depth_Score == 0.00515`, the `#183` precedence of high tiers over active-region demotion, and the `#184` fractional-depth gap fallback remain byte-identical.
+- **Mutation testing**: Registered `confidence_rules.py` in `scripts/mutation_test.py` targets with pure unit tests pinning every row, the outer precondition, and rule ordering.
 
 ## 2.0.27 (Current)
 

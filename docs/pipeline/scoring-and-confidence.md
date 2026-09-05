@@ -146,28 +146,23 @@ outcome for any of these cells — see the warning below for why.
 
 ### Assignment Logic
 
-The confidence assignment follows a layered rule system where conditions are applied in sequence and **later conditions overwrite earlier assignments**. All variants start as "Negative", and a variant whose Depth Score is below the low threshold (0.00469) — or whose Depth Score is undefined, because the active-region depth is 0 — stays Negative no matter which conditions match. The six conditions are applied in this order, and each is transcribed here exactly as `confidence_assignment.py` writes it:
+The confidence assignment evaluates an ordered, first-match rule table in `vntyper/scripts/confidence_rules.py` with the reporting floor as an outer precondition. All candidate rows are evaluated against the rules in sequence, and the first matching rule assigns the confidence label:
 
-1. `cond1` — Depth Score **exactly** 0.00469, **or** region depth <= 200 -> Low_Precision
-2. `cond2` — Alt depth >= 100 **and** Depth Score >= 0.00515 -> High_Precision*
-3. `cond3` — Alt depth 21--99 **and** Depth Score between 0.00469 and 0.00515 inclusive -> Low_Precision
-4. `cond4` — Alt depth <= 20 -> Low_Precision
-5. `cond5` — Alt depth 21--99 **and** Depth Score >= 0.00515 -> High_Precision
-6. `cond_midband` — Depth Score between 0.00469 and 0.00515 **inclusive at both ends** -> Low_Precision
+| Order | Condition | Confidence Label | Rationale |
+|-------|-----------|------------------|-----------|
+| 0 | `Depth_Score` is NaN or `< 0.00469` | `Negative` | Reporting floor outer precondition: filters unsequenced or subthreshold candidates. |
+| 1 | `0.00469 <= Depth_Score <= 0.00515` | `Low_Precision` | Mid-band demotion (#184): covers the closed calibration band at all alternate depths. Satisfies former `cond3` intent. |
+| 2 | `Depth_Score > 0.00515` and alt depth `>= 100` | `High_Precision*` | Ample depth above calibrated high threshold. |
+| 3 | `Depth_Score > 0.00515` and `21 <=` alt depth `< 100` | `High_Precision` | Confirmed alt depth above calibrated high threshold. |
+| 4 | `Depth_Score > 0.00515` and alt depth `<= 20` | `Low_Precision` | Low alternate depth demotion. |
+| 5 | `Depth_Score > 0.00515` and `20 <` alt depth `< 21` and region depth `<= 200` | `Low_Precision` | Narrow gap between integer alt thresholds with shallow active region. |
+| 6 | Otherwise | `Negative` | Silent fallback for fractional alt depth in gap `(20, 21)` with deep active region. |
 
-Three consequences of the ordering, none of them a property of any single rule:
+Three key properties of this ordered table:
 
-- **Rules 2 and 5 are written with `>=` but behave like `>`.** Rule 6 runs last and its
-  band is closed at the top, so it takes back every row that rules 2 and 5 promoted at
-  exactly 0.00515. That is why the criteria table above states the High tiers with a
-  strict `>`.
-- **Rule 1's region-depth demotion is overwritten by rules 2 and 5** whenever either
-  applies.
-- **Rule 3 never decides a row.** Rule 6 covers the same closed Depth Score band at
-  *every* alternate depth, writes the same label, and runs after it, so rule 3 is
-  wholly subsumed. It is retained deliberately because it names the intent — see the
-  comment on it in `confidence_assignment.py` and
-  [#184](https://github.com/hassansaei/VNtyper/issues/184).
+- **Row 1 covers the closed interval `[0.00469, 0.00515]` at all alternate depths**, subsuming the former `cond3` (`alt depth in [21, 100)` and `Depth_Score in [0.00469, 0.00515]`). As documented by @hassansaei on [#184](https://github.com/hassansaei/VNtyper/issues/184): "do not remove this intent" -- the mid-range Depth_Score demotion applies across all alternate depths, so `cond3`'s intent is fully preserved by Row 1.
+- **High tiers precede active-region depth demotion**: A source-order first-match table is strictly forbidden because evaluating the active-region check (`region depth <= 200`) first would restore the v1.3 region-depth cap that was explicitly rejected on [#183](https://github.com/hassansaei/VNtyper/issues/183).
+- **Row 0 is load-bearing**: Because Rows 4 and 5 carry no lower `Depth_Score` bound in their alt/region clauses, evaluating them without Row 0 would classify sub-floor variants as `Low_Precision`, violating [#147](https://github.com/hassansaei/VNtyper/issues/147).
 
 A boolean column `depth_confidence_pass` is set to `True` for all non-Negative variants, enabling downstream filtering.
 
