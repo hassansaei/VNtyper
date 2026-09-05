@@ -126,6 +126,7 @@ def run_pipeline(
     summary_formats=None,  # New parameter: list of additional summary output formats (e.g., ['csv', 'tsv'])
     report_igv=DEFAULT_REPORT_IGV,
     run_configuration=None,
+    resume=False,
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -264,9 +265,11 @@ def run_pipeline(
                 archive_format=archive_format,
                 protected_paths=(*archive_protected_paths, *additional_operator_paths),
             )
-            advntr_version_overrides["advntr"] = ".".join(str(part) for part in advntr_context.version)
+        out_path = Path(output_dir)
+        if not resume and out_path.exists() and any(out_path.iterdir()):
+            logger.warning("Output directory %s is non-empty; prior results may be overwritten.", output_dir)
 
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        out_path.mkdir(parents=True, exist_ok=True)
         if input_type == "FASTQ":
             validate_fastq_file(fastq1)
             if fastq2:

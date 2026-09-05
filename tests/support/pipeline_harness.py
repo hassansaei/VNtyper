@@ -308,6 +308,8 @@ def run_pipeline_under_harness(
         "sample_name": "sample",
     }
     kwargs.update(run_pipeline_kwargs)
+    if "run_pipeline_kwargs" in kwargs and isinstance(kwargs["run_pipeline_kwargs"], dict):
+        kwargs.update(kwargs.pop("run_pipeline_kwargs"))
     if not any(kwargs.get(key) for key in ("bam", "cram", "fastq1", "fastq2")):
         input_root = output_dir.parent / f"{output_dir.name}_input"
         input_root.mkdir()
