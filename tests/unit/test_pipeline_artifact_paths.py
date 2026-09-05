@@ -553,6 +553,17 @@ def test_the_fastq_run_artefact_set_is_unchanged(tmp_path: Path) -> None:
     )
 
 
+def test_no_partial_artifacts_persist_after_successful_execution(tmp_path: Path) -> None:
+    """Successful runs clean up all .partial artifacts; none remain on disk (#314).
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    out = tmp_path / "out"
+    run_pipeline_under_harness(out, extra_modules=["advntr"])
+    assert list(out.rglob("*.partial")) == []
+
+
 def test_the_declaration_is_exactly_the_enumerated_surface(tmp_path: Path) -> None:
     """The declaration partitions into the two documented halves and nothing else.
 

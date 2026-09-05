@@ -211,7 +211,7 @@ def test_every_fastp_flag_combination_is_pinned(
 
 
 def test_the_slice_command_with_a_region_is_pinned():
-    """The region branch: ``view -P -b`` then ``index``, joined by ``&&``."""
+    """The region branch: ``view -P -b`` without chained index."""
     command = build_samtools_slice_command(
         samtools_path=SAMTOOLS,
         in_bam="/data/sample.bam",
@@ -219,10 +219,7 @@ def test_the_slice_command_with_a_region_is_pinned():
         region="chr1:155158000-155163000",
     )
 
-    assert command == (
-        "samtools view -P -b /data/sample.bam chr1:155158000-155163000 -o /out/output_sliced.bam && "
-        "samtools index /out/output_sliced.bam"
-    )
+    assert command == "samtools view -P -b /data/sample.bam chr1:155158000-155163000 -o /out/output_sliced.bam"
 
 
 def test_the_slice_command_with_a_bed_file_is_pinned():
@@ -234,10 +231,7 @@ def test_the_slice_command_with_a_bed_file_is_pinned():
         bed_file="/data/regions.bed",
     )
 
-    assert command == (
-        "samtools view -P -b /data/sample.bam -L /data/regions.bed -o /out/output_sliced.bam && "
-        "samtools index /out/output_sliced.bam"
-    )
+    assert command == "samtools view -P -b /data/sample.bam -L /data/regions.bed -o /out/output_sliced.bam"
 
 
 def test_the_slice_command_needs_either_a_region_or_a_bed_file():
@@ -407,13 +401,14 @@ def test_slice_uses_the_exact_custom_index_operand() -> None:
     assert tokens[position + 1 : position + 3] == ["/o/view.bam", "/proc/123/fd/9"]
 
 
-def test_slice_indexes_by_default():
-    """Ordinary conversion keeps creating the index expected by downstream stages."""
+def test_slice_indexes_when_explicitly_requested():
+    """Chained indexing is produced when caller explicitly requests index_output=True."""
     command = build_samtools_slice_command(
         samtools_path=SAMTOOLS,
         in_bam="/o/view.cram",
         output_bam="/o/s.bam",
         region="chr1:1-2",
+        index_output=True,
     )
 
     assert "&& samtools index /o/s.bam" in command

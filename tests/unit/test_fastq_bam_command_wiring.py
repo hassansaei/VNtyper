@@ -69,6 +69,12 @@ class _Recorder:
         self.commands.append(command)
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         Path(log_file).write_text("")
+        if "samtools index" in command and " -o " in command:
+            tokens = shlex.split(command)
+            if "-o" in tokens:
+                bai_path = Path(tokens[tokens.index("-o") + 1])
+                bai_path.parent.mkdir(parents=True, exist_ok=True)
+                bai_path.write_bytes(b"BAI\x01")
         return True
 
 
@@ -103,6 +109,7 @@ def _run_bam_to_fastq(tmp_path, **overrides):
         patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
         patch.object(fastq_bam_processing.os, "replace"),
+        patch.object(fastq_bam_processing, "publish_partial"),
     ):
         fastq_bam_processing.process_bam_to_fastq(**kwargs)
 
@@ -212,7 +219,7 @@ def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
     commands = _run_bam_to_fastq(tmp_path)
 
     assert commands == [
-        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} -o {tmp_path}/output_sliced.bam",
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} -o {tmp_path}/output_sliced.bam.partial",
         f"set -o pipefail; samtools sort -n -@ 4 -T {tmp_path}/output_sort_tmp {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
@@ -234,10 +241,10 @@ def test_the_bam_normal_path_extracts_merges_and_converts(tmp_path):
 
     assert commands == [
         f"samtools view -P -b -u -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
-        f"-o {tmp_path}/output_sliced.bam",
-        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
-        f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
-        f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
+        f"-o {tmp_path}/output_sliced.bam.partial",
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam.partial",
+        f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam.partial "
+        f"{tmp_path}/output_sliced.bam.partial {tmp_path}/output_unmapped.bam",
         f"set -o pipefail; samtools sort -n -@ 4 -T {tmp_path}/output_sort_tmp {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
@@ -251,11 +258,11 @@ def test_the_bam_normal_path_indexes_the_merge_for_advntr(tmp_path):
 
     assert commands == [
         f"samtools view -P -b -u -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
-        f"-o {tmp_path}/output_sliced.bam",
-        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
-        f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
-        f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
-        f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
+        f"-o {tmp_path}/output_sliced.bam.partial",
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam.partial",
+        f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam.partial "
+        f"{tmp_path}/output_sliced.bam.partial {tmp_path}/output_unmapped.bam",
+        f"samtools index -@ 4 -o {tmp_path}/output_sliced.bam.bai.partial {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 -T {tmp_path}/output_sort_tmp {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
@@ -287,7 +294,7 @@ def test_indexed_bam_recovery_uses_the_htslib_literal_star_command(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert [command for command in commands if "-f 4" in command] == [
-        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam"
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam.partial"
     ]
 
 
@@ -380,6 +387,7 @@ def test_indexed_bam_recovery_uses_the_plan_view_and_exact_index_without_a_refer
         patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
         patch.object(fastq_bam_processing.os, "replace"),
+        patch.object(fastq_bam_processing, "publish_partial"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
             output=str(tmp_path),
@@ -392,7 +400,7 @@ def test_indexed_bam_recovery_uses_the_plan_view_and_exact_index_without_a_refer
 
     (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
     assert unmapped_command == (
-        f"samtools view -b -f 4 -u -@ 4 -X {plan.view_path} {plan.index_path} '*' -o {tmp_path}/output_unmapped.bam"
+        f"samtools view -b -f 4 -u -@ 4 -X {plan.view_path} {plan.index_path} '*' -o {tmp_path}/output_unmapped.bam.partial"
     )
     assert " -T " not in unmapped_command
 
@@ -414,6 +422,7 @@ def test_indexed_bam_recovery_uses_the_plan_index_operand(tmp_path, index_path):
         patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
         patch.object(fastq_bam_processing.os, "replace"),
+        patch.object(fastq_bam_processing, "publish_partial"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
             output=str(output_dir),
@@ -501,7 +510,7 @@ def test_the_cram_unmapped_command_is_pinned_as_a_single_process(tmp_path):
     registered CRAM fixtures, with and without an explicit ``-T``.
     """
     assert _cram_unmapped_command(tmp_path) == (
-        f"/envs/vntyper/bin/samtools view -b -f 4 -u -@ 4 /data/sample.cram -o {tmp_path}/output_unmapped.bam"
+        f"/envs/vntyper/bin/samtools view -b -f 4 -u -@ 4 /data/sample.cram -o {tmp_path}/output_unmapped.bam.partial"
     )
 
 
@@ -566,7 +575,7 @@ def test_the_cram_unmapped_extraction_is_one_process_that_writes_the_output(tmp_
     assert "|" not in command, f"expected a single process, got a pipeline: {command}"
     assert ">(" not in command, "a process substitution is not waited for; the merge would race it"
     assert command.startswith("/envs/vntyper/bin/samtools view -b -f 4"), f"not a flag-4 extraction: {command}"
-    assert command.endswith(f"-o {tmp_path}/output_unmapped.bam"), f"must write the unmapped BAM: {command}"
+    assert command.endswith(f"-o {tmp_path}/output_unmapped.bam.partial"), f"must write the unmapped BAM: {command}"
 
 
 def test_the_cram_unmapped_command_does_not_set_pipefail(tmp_path):
@@ -617,7 +626,7 @@ def test_a_hostile_cram_path_survives_both_stages_of_the_pipe(tmp_path):
     tokens = shlex.split(command.removeprefix("set -o pipefail; "))
 
     assert hostile_cram in tokens, f"the input CRAM did not survive as one operand: {command}"
-    assert str(output_dir / "output_unmapped.bam") in tokens, (
+    assert str(output_dir / "output_unmapped.bam.partial") in tokens, (
         f"the output BAM did not survive as one operand: {command}"
     )
 
@@ -637,8 +646,8 @@ def test_the_merge_runs_immediately_after_the_cram_unmapped_extraction(tmp_path)
 
     extraction = next(i for i, c in enumerate(commands) if "-f 4" in c)
     assert commands[extraction + 1] == (
-        f"/envs/vntyper/bin/samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
-        f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam"
+        f"/envs/vntyper/bin/samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam.partial "
+        f"{tmp_path}/output_sliced.bam.partial {tmp_path}/output_unmapped.bam"
     ), f"the merge must be the very next command: {commands[extraction + 1]}"
 
 
@@ -650,7 +659,7 @@ def test_the_bed_file_branch_passes_minus_l_instead_of_a_region(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, bed_file=bed)
 
     assert commands[0] == (
-        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai -L {bed} -o {tmp_path}/output_sliced.bam"
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai -L {bed} -o {tmp_path}/output_sliced.bam.partial"
     )
     assert REGION not in commands[0]
 
@@ -1093,6 +1102,8 @@ def test_downsample_index_carries_the_thread_flag(tmp_path, monkeypatch):
         "index",
         "-@",
         "4",
+        "-o",
+        str(tmp_path / "sample_downsampled.sorted.bam.bai.partial"),
         str(tmp_path / "sample_downsampled.sorted.bam"),
     ]
     assert result.name == "sample_downsampled.sorted.bam"
@@ -1136,7 +1147,9 @@ def test_the_merged_bam_is_indexed_when_advntr_is_requested(tmp_path):
     """adVNTR reads output_sliced.bam through its index, so the gate is not "never"."""
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False, needs_advntr=True)
 
-    assert _indexes(commands) == [f"samtools index -@ 4 {tmp_path}/output_sliced.bam"]
+    assert _indexes(commands) == [
+        f"samtools index -@ 4 -o {tmp_path}/output_sliced.bam.bai.partial {tmp_path}/output_sliced.bam"
+    ]
 
 
 def test_fast_mode_also_skips_the_slice_index_without_advntr(tmp_path):
@@ -1155,7 +1168,9 @@ def test_fast_mode_still_indexes_the_slice_for_advntr(tmp_path):
     """The gate is needs_advntr, not fast_mode."""
     commands = _run_bam_to_fastq(tmp_path, fast_mode=True, needs_advntr=True)
 
-    assert any(" && samtools index " in command for command in commands)
+    assert _indexes(commands) == [
+        f"samtools index -@ 4 -o {tmp_path}/output_sliced.bam.bai.partial {tmp_path}/output_sliced.bam"
+    ]
 
 
 def test_the_fast_mode_slice_is_compressed_because_it_survives_the_run(tmp_path):

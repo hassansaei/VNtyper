@@ -175,7 +175,7 @@ def build_samtools_slice_command(
     reference_path: str | Path | None = None,
     index_path: str | Path | None = None,
     threads: int = 1,
-    index_output: bool = True,
+    index_output: bool = False,
     exclude_unmapped: bool = False,
     uncompressed: bool = False,
 ) -> str:
