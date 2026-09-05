@@ -480,3 +480,53 @@ def test_failed_atomic_snapshot_leaves_no_destination_or_temporary_file(tmp_path
 
     assert not destination.exists()
     assert list(destination.parent.iterdir()) == []
+
+
+def test_verify_profile_snapshot_accepts_historical_revision_1_packaged_profile(tmp_path: Path) -> None:
+    from vntyper.scripts.canonical_json import load_strict_json_object
+    from vntyper.scripts.profile_provenance import HISTORICAL_REVISION_1_PACKAGED_SHA256
+
+    packaged = load_packaged_decision_profile()
+    rev1 = load_strict_json_object(packaged.canonical_bytes)
+    rev1["profile_revision"] = "1"
+    del rev1["inventory"]["/components/kestrel/confidence_assignment/reporting_floor"]
+
+    snapshot = tmp_path / "provenance" / "decision_profile.json"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    raw = canonical_json_bytes(rev1)
+    snapshot.write_bytes(raw)
+
+    provenance = DecisionProfileProvenance(
+        profile_id="vntyper-packaged-default",
+        profile_revision="1",
+        profile_kind="packaged",
+        source="package",
+        sha256=HISTORICAL_REVISION_1_PACKAGED_SHA256,
+        snapshot_path=str(snapshot),
+    )
+
+    verified = verify_profile_snapshot(provenance, snapshot)
+    assert verified == provenance
+
+    # Tampered byte verification against HISTORICAL_REVISION_1_PACKAGED_SHA256
+    tampered = dict(rev1)
+    tampered["inventory"] = dict(rev1["inventory"])
+    tampered["inventory"]["/components/kestrel/duplicate_flagging/flag_name"] = {
+        "class": "explicit-custom",
+        "value": "Changed_Name",
+    }
+    tampered_bytes = canonical_json_bytes(tampered)
+    tampered_digest = hashlib.sha256(tampered_bytes).hexdigest()
+    snapshot.write_bytes(tampered_bytes)
+    tampered_prov = DecisionProfileProvenance(
+        profile_id="vntyper-packaged-default",
+        profile_revision="1",
+        profile_kind="packaged",
+        source="package",
+        sha256=tampered_digest,
+        snapshot_path=str(snapshot),
+    )
+    with pytest.raises(
+        ValueError, match="recorded package-source snapshot does not match the checked-in packaged profile"
+    ):
+        verify_profile_snapshot(tampered_prov, snapshot)

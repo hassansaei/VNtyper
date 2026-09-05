@@ -103,7 +103,7 @@ def test_cohort_loader_rejects_a_tampered_schema_three_snapshot(
         flag="Not flagged",
     )
     snapshot = sample / "provenance" / "decision_profile.json"
-    snapshot.write_bytes(profile.canonical_bytes.replace(b'"profile_revision":"1"', b'"profile_revision":"9"'))
+    snapshot.write_bytes(profile.canonical_bytes.replace(b'"profile_revision":"2"', b'"profile_revision":"9"'))
 
     with pytest.raises(ValueError, match="decision profile"):
         load_pipeline_summary_for_sample(sample)

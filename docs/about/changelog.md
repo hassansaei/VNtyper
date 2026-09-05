@@ -4,6 +4,13 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+### Reporting floor split and decision profile revision 2 (#311)
+
+- Split the MUC1 reporting floor (`confidence_assignment.reporting_floor`, 0.00469) from the lower edge of the `Low_Precision` band (`confidence_assignment.depth_score_thresholds.low`, 0.00469) and linked the GG depth-score threshold (`alt_filtering.gg_depth_score_threshold`) to the reporting floor.
+- Closed a fail-open path in `variant_parsing.py` by requiring `gg_depth_score_threshold` in `alt_filtering`.
+- Bumped decision profile revision to `"2"` and regenerated canonical profile and projection artifacts.
+- **Breaking change for custom decision profiles:** Profiles generated under revision 1 fail closed with `inventory fields differ` because the schema validates exact inventory key equality; revision-1 profiles must be re-issued with `vntyper calibrate`.
+
 ### Ordered confidence rule table (Issue #173 part 1)
 
 - **Pure confidence decision layer**: Refactored `confidence_assignment.py` to delegate confidence level assignment to a new pure module `vntyper/scripts/confidence_rules.py` ([#319](https://github.com/hassansaei/VNtyper/pull/319), Refs [#173](https://github.com/hassansaei/VNtyper/issues/173)).

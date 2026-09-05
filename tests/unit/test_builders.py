@@ -76,6 +76,7 @@ def test_stage_frame_rows_are_distinguishable() -> None:
 
 def test_kestrel_config_returns_the_real_values_by_default() -> None:
     conf = kestrel_config()
+    assert conf["confidence_assignment"]["reporting_floor"] == 0.00469
     assert conf["confidence_assignment"]["depth_score_thresholds"]["low"] == 0.00469
 
 

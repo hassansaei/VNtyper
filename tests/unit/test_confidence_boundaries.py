@@ -605,3 +605,35 @@ def test_production_depths_arrive_as_whole_numbers():
         values = pd.to_numeric(frame[column], errors="coerce").dropna()
         assert not values.empty, f"{column} produced no usable depths"
         assert (values == values.astype(int)).all(), f"{column} carries a fractional depth"
+
+
+def _make_df(alt_depth: float, region_depth: float) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Estimated_Depth_AlternateVariant": [alt_depth],
+            "Estimated_Depth_Variant_ActiveRegion": [region_depth],
+        }
+    )
+
+
+def test_moving_reporting_floor_alone_leaves_low_precision_band_edge_intact() -> None:
+    """Lowering reporting_floor alone admits variants without widening Low_Precision band (#311)."""
+    conf = kestrel_config()
+    conf["confidence_assignment"]["reporting_floor"] = 0.00200
+    # Depth_Score between 0.00200 and 0.00469:
+    # Above reporting floor (0.003 >= 0.002), but below Low_Precision band (0.00469).
+    # With alt=10, region=3333 -> Depth_Score = 0.00300
+    df = _make_df(10, 3333)
+    scored = calculate_depth_score_and_assign_confidence(df, conf)
+    assert scored.loc[0, "Depth_Score"] < conf["confidence_assignment"]["depth_score_thresholds"]["low"]
+    assert scored.loc[0, "Confidence"] == NEGATIVE_LABEL
+
+
+def test_moving_low_precision_band_edge_alone_leaves_reporting_floor_intact() -> None:
+    """Raising depth_score_thresholds.low alone preserves reporting floor guard (#311)."""
+    conf = kestrel_config()
+    conf["confidence_assignment"]["depth_score_thresholds"]["low"] = 0.00490
+    # Variant with Depth_Score 0.00460: below reporting floor (0.00469) -> remains Negative
+    df = _make_df(46, 10000)
+    scored = calculate_depth_score_and_assign_confidence(df, conf)
+    assert scored.loc[0, "Confidence"] == NEGATIVE_LABEL

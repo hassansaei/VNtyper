@@ -15,6 +15,13 @@
       "bounds": [30, 50],
       "changed_by": "40397da"
     },
+    "confidence_assignment.reporting_floor": {
+      "value": 0.00469,
+      "source": "issue #311",
+      "rationale": "Empirical noise floor. Below this a variant is reported Negative. Separated from Low_Precision band edge (depth_score_thresholds.low) in issue #311.",
+      "bounds": [0.001, 0.01],
+      "changed_by": "b97d4a6"
+    },
     "confidence_assignment.depth_score_thresholds.low": {
       "value": 0.00469,
       "source": "Saei et al., iScience 26, 107171 (2023)",
@@ -74,7 +81,7 @@
   },
   "linked": [
     [
-      "confidence_assignment.depth_score_thresholds.low",
+      "confidence_assignment.reporting_floor",
       "alt_filtering.gg_depth_score_threshold"
     ]
   ]

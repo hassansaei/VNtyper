@@ -36,6 +36,7 @@ pytestmark = pytest.mark.unit
 
 # Shipped threshold constants used for tests
 _SHIPPED_THRESHOLDS: dict[str, Any] = {
+    "reporting_floor": 0.00469,
     "depth_score_thresholds": {
         "low": 0.00469,
         "high": 0.00515,
@@ -88,6 +89,7 @@ def test_confidence_rule_dataclass_structure() -> None:
 def test_assign_confidence_labels_with_flat_thresholds() -> None:
     """Flat threshold configurations (without nested sections) must be supported."""
     flat_config = {
+        "reporting_floor": 0.00469,
         "low": 0.00469,
         "high": 0.00515,
         "mid_low": 21,
@@ -245,12 +247,22 @@ def test_reversing_adjacent_rules_changes_labels() -> None:
 def test_missing_required_threshold_raises_keyerror() -> None:
     """Missing required calibration key must raise KeyError."""
     incomplete_config: dict[str, Any] = {
+        "reporting_floor": 0.00469,
         "depth_score_thresholds": {"low": 0.00469},
         "alt_depth_thresholds": {"low": 20, "mid_low": 21, "mid_high": 100},
         "var_active_region_threshold": 200,
     }
     df = _make_frame(0.010, 50, 5000)
     with pytest.raises(KeyError, match="high"):
+        assign_confidence_labels(df, incomplete_config)
+
+
+def test_missing_reporting_floor_raises_keyerror() -> None:
+    """Missing reporting_floor calibration key must raise KeyError."""
+    incomplete_config = dict(_SHIPPED_THRESHOLDS)
+    del incomplete_config["reporting_floor"]
+    df = _make_frame(0.010, 50, 5000)
+    with pytest.raises(KeyError, match="reporting_floor"):
         assign_confidence_labels(df, incomplete_config)
 
 

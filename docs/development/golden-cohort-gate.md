@@ -40,6 +40,7 @@ the harness change, so only the "after" side can prove its revision.
 | 7 | `19c8acd` | `4678851` | CANDIDATE PASS; comparison BLOCKED only by baseline-refused successes | issue #233 at `19c8acd`, against its required regression baseline `4678851`, and nothing after it |
 | 8 | `74fcbe0` | `c74e9e5` | DELTAS, every one attributed, **no genotype field changed anywhere** | adVNTR 2.0.x and real `--threads` (#259), against `c74e9e5`, and nothing after it |
 | 9 | `edaf44a` | `80ac6be` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | atomic BAM and BAI installation (#314), against `80ac6be`, and nothing after it |
+| 10 | `936f11e` | `a632aa1` | DELTAS, every one attributed, **no genotype field changed anywhere** | reporting floor split and profile revision 2 (#311), against `a632aa1`, and nothing after it |
 
 Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
 *different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
@@ -1286,3 +1287,88 @@ The retained evidence is bound by these SHA-256 digests:
 | baseline `side.json` | `424e33c894b032987cd1971a1b79dfb44c5916c1cf4d4603857cd0b0346d1148` |
 | candidate `side.json` | `00bedbf8d8fb1f24b78d91d44b29915dd018c91a7897ca7d9a7627127eb676f9` |
 | both matrix snapshots | `e3a0509d30d646f836eb129b79edded4960b5890673b2e31cc0f89835933e940` |
+
+## Run 10 — `a632aa1` → `936f11e`, reporting floor split and profile revision 2 (#311)
+
+Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
+all **85 runs on each side verified their package resolution**. The attestation-grade matrix
+comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
+6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
+no run timed out.
+
+The marker was `vntyper.scripts.confidence_assignment:HAS_REPORTING_FLOOR_SPLIT`, absent on
+the baseline `review-origin-main` (`a632aa1`) and present on the candidate (`936f11e`).
+
+### What this run compares
+
+Baseline `a632aa1` couples the MUC1 reporting floor to the lower bound of the `Low_Precision` band
+(`depth_score_thresholds.low`), using `0.00469` for both, and runs under packaged decision profile revision 1.
+Candidate `936f11e` splits the reporting floor into an explicit `/components/kestrel/confidence_assignment/reporting_floor`
+field (`0.00469`), closes the fail-open fallback in `variant_parsing.py` by requiring `gg_depth_score_threshold`,
+links `reporting_floor` across calibration and decision profile schemas, and advances the decision profile to revision 2
+(`0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1`).
+
+Because the numerical reporting floor (`0.00469`) is identical between revisions 1 and 2, every variant call,
+depth score, confidence tier, flag, and genotype verdict across the cohort remains identical. The only deltas
+observed are the intentional decision profile provenance metadata in cohort exports and the expected subprocess
+process-substitution PID / temporary filename noise.
+
+### Every genotype artefact is unchanged
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `advntr_result` | 0 | 3 |
+| `kestrel_result` | 0 | 77 |
+| `kestrel_pre_result` | 0 | 77 |
+| `coverage_summary` | 0 | 77 |
+| `screening_summary` | 0 | 0 |
+| `report_tables` | 0 | 77 |
+| `cross_match_summary` | 0 | 0 |
+| `cohort_call_frequency_csv` | 0 | 3 |
+| `cohort_call_frequency_json` | 0 | 3 |
+| `cohort_call_frequency_tsv` | 0 | 3 |
+| `cohort_category_counts` | 0 | 3 |
+| `cohort_category_totals` | 0 | 3 |
+| `cohort_output_files` | 0 | 4 |
+| `cohort_tables` | 3 (provenance delta) | 3 |
+| `cohort_kestrel_csv` | 2 (provenance delta) | 3 |
+| `cohort_kestrel_json` | 3 (provenance delta) | 3 |
+| `cohort_kestrel_tsv` | 3 (provenance delta) | 3 |
+| `cohort_advntr_csv` | 3 (provenance delta) | 3 |
+| `cohort_advntr_json` | 3 (provenance delta) | 3 |
+| `cohort_advntr_tsv` | 3 (provenance delta) | 3 |
+| `cohort_stats_csv` | 3 (provenance delta) | 3 |
+| `cohort_stats_json` | 3 (provenance delta) | 3 |
+| `cohort_stats_tsv` | 3 (provenance delta) | 3 |
+| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
+| `placed_unmapped_guard_count` | 0 | 81 |
+| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
+| `output_bed` | 0 | 62 |
+| `pseudonymization_table` | 0 | 1 |
+| `exit_code` | 0 | 85 |
+| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
+
+The verdict is **DELTAS** (every delta attributed; zero genotype changes).
+
+### Attributed deltas
+
+1. **Decision profile provenance fields in cohort exports**:
+   In `cohort_tables`, `cohort_kestrel_*`, `cohort_advntr_*`, and `cohort_stats_*`, the metadata columns
+   reflect the profile revision advance:
+   - `Decision_Profile_Revision`: `'1'` → `'2'`
+   - `Decision_Profile_SHA256`: `'be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718'` → `'0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1'`
+   No other column or value in any cohort table or export differs.
+2. **Subprocess execution noise**:
+   As in earlier runs, 79 of 81 per-sample cases show ephemeral command string differences due to
+   process substitution file descriptors (`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
+
+The retained evidence is bound by these SHA-256 digests:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `result.json` | `51fe52a3f6b49e7b45e82ad8e09952571b9ef763c445c0113e2a177308f17ed1` |
+| `result.md` | `235122e7c5c8defcac1e74496a06efc75f71b12873f1449b86e74ea71217f0b1` |
+| baseline `side.json` | `5ae4bdc4c3607ff7f08815c16db8beb78f877ca528fa8124b624ea58f4dcaf5e` |
+| candidate `side.json` | `8596731beb38755b33470bf3def84e6e899e26833444b9699b9769f7ca3fca8f` |
+| both matrix snapshots | `d218de77d9db2a7802015a1c76aedd51fd4c61c6dddaef87dc489cde3b738339` |
+

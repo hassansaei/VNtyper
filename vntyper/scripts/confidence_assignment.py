@@ -18,6 +18,8 @@ from vntyper.scripts.confidence_rules import (
 
 logger = logging.getLogger(__name__)
 
+HAS_REPORTING_FLOOR_SPLIT = True
+
 
 def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config: dict) -> pd.DataFrame:
     """Calculate Depth_Score and assign confidence levels to variants based on Kestrel config.
@@ -48,6 +50,7 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
 
     # Enforce required calibration keys (fails loudly with KeyError if missing)
     conf_assign = kestrel_config["confidence_assignment"]
+    _ = conf_assign["reporting_floor"]
     thresholds = conf_assign["depth_score_thresholds"]
     alt_thresholds = conf_assign["alt_depth_thresholds"]
     var_region_threshold = conf_assign["var_active_region_threshold"]

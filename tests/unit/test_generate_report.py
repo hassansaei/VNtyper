@@ -3885,7 +3885,7 @@ def test_standalone_report_rejects_a_tampered_recorded_profile_snapshot(tmp_path
     summary.write_summary(current, tmp_path / "pipeline_summary.json")
     snapshot = tmp_path / "provenance" / "decision_profile.json"
     snapshot_decision_profile(profile, snapshot)
-    snapshot.write_bytes(profile.canonical_bytes.replace(b'"profile_revision":"1"', b'"profile_revision":"9"'))
+    snapshot.write_bytes(profile.canonical_bytes.replace(b'"profile_revision":"2"', b'"profile_revision":"9"'))
 
     with pytest.raises(ValueError, match="canonical|digest mismatch|metadata"):
         render(tmp_path)
