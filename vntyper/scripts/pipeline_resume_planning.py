@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -64,17 +64,21 @@ def resolve_effective_tool_identity(
 def resolve_effective_preprocessing_tools(
     config: Mapping[str, Any] | None,
     input_type: str | None,
+    extra_modules: tuple[str, ...] | Sequence[str] = (),
 ) -> dict[str, Any] | None:
-    """Resolve effective tool identities for FASTQ preprocessing (fastp and bwa)."""
+    """Resolve effective tool identities for FASTQ preprocessing (fastp, bwa, and optionally shark)."""
     if input_type != "FASTQ" or not isinstance(config, Mapping):
         return None
     tools = config.get("tools", {})
     if not isinstance(tools, Mapping):
         return None
-    return {
+    res: dict[str, Any] = {
         "fastp": resolve_effective_tool_identity(tools.get("fastp")),
         "bwa": resolve_effective_tool_identity(tools.get("bwa")),
     }
+    if "shark" in extra_modules:
+        res["shark"] = resolve_effective_tool_identity(tools.get("shark", "shark"))
+    return res
 
 
 def build_analysis_settings(
@@ -98,7 +102,7 @@ def build_analysis_settings(
     if isinstance(config, dict) and "bam_processing" in config and isinstance(config["bam_processing"], dict):
         bam_processing_settings = dict(config["bam_processing"])
 
-    preprocessing_tools = resolve_effective_preprocessing_tools(config, input_type)
+    preprocessing_tools = resolve_effective_preprocessing_tools(config, input_type, extra_modules)
 
     return {
         "reference_assembly": reference_assembly,
@@ -223,6 +227,23 @@ def resolve_effective_advntr_runtime(
     return effective_advntr_runtime, cast(str, advntr_runtime_fingerprint)
 
 
+def resolve_effective_shark_runtime(
+    run_configuration: RunConfiguration,
+    config: Mapping[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Resolve effective SHARK runtime mapping and fingerprint including command and tool identity."""
+    raw_shark = config.get("tools", {}).get("shark", "shark") if isinstance(config.get("tools"), Mapping) else "shark"
+    shark_tool = resolve_effective_tool_identity(raw_shark)
+    effective_shark_runtime = {
+        **dict(run_configuration.shark_runtime),
+        "shark_command": shark_tool["command"],
+        "shark_executable": shark_tool["executable"],
+        "shark_executable_fingerprint": shark_tool["fingerprint"],
+    }
+    shark_runtime_fingerprint = fingerprint_runtime(effective_shark_runtime)
+    return effective_shark_runtime, cast(str, shark_runtime_fingerprint)
+
+
 @dataclass(frozen=True)
 class ResumeCompatibility:
     """Structured compatibility assessment across pipeline stages."""
@@ -306,14 +327,23 @@ def evaluate_resume_compatibility(
 
     fastp_matches = True
     bwa_tool_matches = True
+    shark_tool_matches = True
     if input_type == "FASTQ" and prior_summary is not None:
         prior_tools = prior_summary.get("analysis_settings", {}).get("preprocessing_tools")
         if prior_tools is not None and current_preprocessing_tools is not None:
             fastp_matches = prior_tools.get("fastp") == current_preprocessing_tools.get("fastp")
             bwa_tool_matches = prior_tools.get("bwa") == current_preprocessing_tools.get("bwa")
+            if "shark" in prior_tools or "shark" in current_preprocessing_tools:
+                shark_tool_matches = prior_tools.get("shark") == current_preprocessing_tools.get("shark")
 
-    inval_qc = not fastp_matches
-    inval_align = not shark_ref_matches or not bwa_ref_matches or not fastp_matches or not bwa_tool_matches
+    inval_qc = not fastp_matches or not shark_tool_matches
+    inval_align = (
+        not shark_ref_matches
+        or not shark_tool_matches
+        or not bwa_ref_matches
+        or not fastp_matches
+        or not bwa_tool_matches
+    )
     inval_cram = not cram_ref_matches
     if input_type == "FASTQ" and inval_align:
         kestrel_ref_matches = False

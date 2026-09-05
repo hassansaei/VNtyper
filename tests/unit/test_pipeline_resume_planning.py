@@ -18,6 +18,7 @@ from vntyper.scripts.pipeline_resume_planning import (
     record_reused_stage,
     resolve_effective_advntr_runtime,
     resolve_effective_kestrel_runtime,
+    resolve_effective_shark_runtime,
 )
 from vntyper.scripts.resume import fingerprint_file, fingerprint_runtime
 from vntyper.scripts.run_configuration import resolve_run_configuration
@@ -458,3 +459,70 @@ def test_evaluate_resume_compatibility_preprocessing_tools() -> None:
     assert compat_bwa.inval_qc is False
     assert compat_bwa.inval_align is True
     assert compat_bwa.kestrel_ref_matches is False
+
+
+def test_resolve_effective_shark_runtime() -> None:
+    """Resolve effective SHARK runtime captures command, executable, and fingerprint."""
+    import copy
+
+    from tests.unit.test_pipeline_resume import MINIMAL_CONFIG
+
+    rc = resolve_run_configuration()
+    cfg = copy.deepcopy(MINIMAL_CONFIG)
+    cfg["tools"]["shark"] = "different-shark-v2"
+
+    rt, fp = resolve_effective_shark_runtime(rc, cfg)
+    assert rt["shark_command"] == "different-shark-v2"
+    assert "shark_executable" in rt
+    assert "shark_executable_fingerprint" in rt
+    assert fp is not None
+
+    # Changing shark command alters the fingerprint
+    cfg2 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg2["tools"]["shark"] = "shark-v3"
+    _, fp2 = resolve_effective_shark_runtime(rc, cfg2)
+    assert fp2 != fp
+
+
+def test_evaluate_resume_compatibility_shark_tool_mismatch() -> None:
+    """Changing shark tool invalidates FASTQ QC, alignment, and downstream callers."""
+    prior_tools = {
+        "fastp": {"command": "fastp", "executable": "/bin/fastp", "fingerprint": "fp_fastp_1"},
+        "bwa": {"command": "bwa", "executable": "/bin/bwa", "fingerprint": "fp_bwa_1"},
+        "shark": {"command": "shark_v1", "executable": "/bin/shark_v1", "fingerprint": "fp_shark_1"},
+    }
+    prior = {
+        "analysis_settings": {"preprocessing_tools": prior_tools},
+    }
+    base_kwargs: dict[str, Any] = {
+        "input_type": "FASTQ",
+        "kestrel_reference_path": None,
+        "kestrel_reference_fingerprint": None,
+        "kestrel_motifs_path": None,
+        "kestrel_motifs_fingerprint": None,
+        "kestrel_runtime_fingerprint": None,
+        "kestrel_counting_mode": None,
+        "advntr_model_sha": None,
+        "advntr_rus_path": None,
+        "advntr_rus_fingerprint": None,
+        "advntr_runtime_fingerprint": None,
+        "shark_reference_path": None,
+        "shark_reference_fingerprint": None,
+        "shark_runtime_fingerprint": None,
+        "effective_reference_path": None,
+        "effective_reference_fingerprint": None,
+    }
+
+    shark_changed = {
+        "fastp": prior_tools["fastp"],
+        "bwa": prior_tools["bwa"],
+        "shark": {"command": "shark_v2", "executable": "/bin/shark_v2", "fingerprint": "fp_shark_2"},
+    }
+    compat_shark = evaluate_resume_compatibility(
+        prior,
+        current_preprocessing_tools=shark_changed,
+        **base_kwargs,
+    )
+    assert compat_shark.inval_qc is True
+    assert compat_shark.inval_align is True
+    assert compat_shark.kestrel_ref_matches is False

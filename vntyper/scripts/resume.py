@@ -315,16 +315,25 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                         curr_tools = data.get("analysis_settings", {}).get("preprocessing_tools")
                         fastp_matches = True
                         bwa_tool_matches = True
+                        shark_tool_matches = True
                         if donor_tools is not None and curr_tools is not None:
                             fastp_matches = donor_tools.get("fastp") == curr_tools.get("fastp")
                             bwa_tool_matches = donor_tools.get("bwa") == curr_tools.get("bwa")
+                            if "shark" in donor_tools or "shark" in curr_tools:
+                                shark_tool_matches = donor_tools.get("shark") == curr_tools.get("shark")
                         existing_steps = {s.get("step") for s in data.get("steps", [])}
-                        inval_align = not shark_matches or not bwa_matches or not fastp_matches or not bwa_tool_matches
+                        inval_align = (
+                            not shark_matches
+                            or not shark_tool_matches
+                            or not bwa_matches
+                            or not fastp_matches
+                            or not bwa_tool_matches
+                        )
                         for s in donor_data.get("steps", []):
                             st = s.get("step")
                             if not st or st in existing_steps:
                                 continue
-                            if st == summary_steps.STEP_FASTQ_QC and not fastp_matches:
+                            if st == summary_steps.STEP_FASTQ_QC and (not fastp_matches or not shark_tool_matches):
                                 continue
                             if (
                                 st
@@ -586,15 +595,25 @@ def step_is_reusable(
         logger.debug("Step %r has no md5sum recorded", step_name)
         return False
 
-    result_path = Path(raw_result_file)
-    if not result_path.is_file():
-        # Fallback relative to output_root if directory was relocated
-        candidate = Path(output_root) / result_path.name
-        if candidate.is_file():
-            result_path = candidate
-        else:
-            logger.debug("Result file %s for step %r does not exist", result_path, step_name)
-            return False
+    out_root = Path(output_root).resolve()
+    raw_path = Path(raw_result_file)
+    candidate_stage = out_root / raw_path.parent.name / raw_path.name
+    candidate_flat = out_root / raw_path.name
+    try:
+        rel = raw_path.resolve().relative_to(out_root)
+        candidate_rel: Path | None = out_root / rel
+    except (ValueError, RuntimeError):
+        candidate_rel = None
+
+    if candidate_stage.is_file():
+        result_path = candidate_stage
+    elif candidate_flat.is_file():
+        result_path = candidate_flat
+    elif candidate_rel is not None and candidate_rel.is_file():
+        result_path = candidate_rel
+    else:
+        logger.debug("Result file %s for step %r does not exist in %s", raw_result_file, step_name, out_root)
+        return False
 
     actual_md5 = _compute_md5(result_path)
     if actual_md5 != recorded_md5:

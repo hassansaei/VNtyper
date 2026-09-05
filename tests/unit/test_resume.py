@@ -1066,3 +1066,102 @@ def test_donor_summary_filters_steps_on_preprocessing_tools_change(tmp_path: Pat
     assert summary_steps.STEP_FASTQ_QC not in loaded_steps
     assert summary_steps.STEP_FASTQ_ALIGNMENT not in loaded_steps
     assert summary_steps.STEP_KESTREL not in loaded_steps
+
+
+def test_step_is_reusable_validates_artifacts_in_current_output_root_not_original(tmp_path: Path) -> None:
+    """Artifacts are validated inside current output root, ignoring pre-existing files in original directory (#20 / P2)."""
+    orig_dir = tmp_path / "original"
+    orig_kestrel = orig_dir / "kestrel"
+    orig_kestrel.mkdir(parents=True)
+    orig_res = orig_kestrel / "kestrel_result.tsv"
+    orig_res.write_text("result data", encoding="utf-8")
+    expected_md5 = _md5(b"result data")
+
+    for sibling in STEP_OUTPUT_SIBLINGS[summary_steps.STEP_KESTREL]:
+        (orig_kestrel / sibling).write_text(f"content of {sibling}", encoding="utf-8")
+
+    prior: dict[str, Any] = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(orig_res),
+                "md5sum": expected_md5,
+            }
+        ],
+        "stage_artifact_md5s": {
+            summary_steps.STEP_KESTREL: {
+                sibling: _md5(f"content of {sibling}".encode())
+                for sibling in STEP_OUTPUT_SIBLINGS[summary_steps.STEP_KESTREL]
+            }
+        },
+    }
+
+    # Copied output root
+    copied_dir = tmp_path / "copied"
+    copied_kestrel = copied_dir / "kestrel"
+    copied_kestrel.mkdir(parents=True)
+    (copied_kestrel / "kestrel_result.tsv").write_text("result data", encoding="utf-8")
+    for sibling in STEP_OUTPUT_SIBLINGS[summary_steps.STEP_KESTREL]:
+        (copied_kestrel / sibling).write_text(f"content of {sibling}", encoding="utf-8")
+
+    # When all files exist in copied_dir, reusable is True
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, copied_dir) is True
+
+    # When output.bam is deleted from copied_dir, reusable must be False
+    # even though orig_dir still has output.bam
+    (copied_kestrel / "output.bam").unlink()
+    assert (orig_kestrel / "output.bam").is_file()
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, copied_dir) is False
+
+
+def test_donor_summary_filters_steps_on_shark_tool_change(tmp_path: Path) -> None:
+    """Changing shark tool in preprocessing tools invalidates downstream stages from donor (#20 / P2)."""
+    main_summary = tmp_path / "pipeline_summary.json"
+    donor_summary = tmp_path / "pipeline_summary.donor.json"
+
+    primary_data: dict[str, Any] = {
+        "version": "2.0.27",
+        "sample_name": "s1",
+        "input_files": {"fastq_1": "r1.fq"},
+        "analysis_settings": {
+            "preprocessing_tools": {
+                "fastp": {"command": "fastp", "fingerprint": "fp_fastp"},
+                "bwa": {"command": "bwa", "fingerprint": "fp_bwa"},
+                "shark": {"command": "shark_v2", "fingerprint": "fp_shark_v2"},
+            }
+        },
+        "reference_fingerprint": "ref_fp_current",
+        "shark_reference_fingerprint": "shark_fp_current",
+        "steps": [],
+    }
+    donor_data: dict[str, Any] = {
+        "version": "2.0.27",
+        "sample_name": "s1",
+        "input_files": {"fastq_1": "r1.fq"},
+        "analysis_settings": {
+            "preprocessing_tools": {
+                "fastp": {"command": "fastp", "fingerprint": "fp_fastp"},
+                "bwa": {"command": "bwa", "fingerprint": "fp_bwa"},
+                "shark": {"command": "shark_v1", "fingerprint": "fp_shark_v1"},
+            }
+        },
+        "reference_fingerprint": "ref_fp_current",
+        "shark_reference_fingerprint": "shark_fp_current",
+        "steps": [
+            {"step": summary_steps.STEP_SHARK, "result_file": "/path/shark_r1.fq"},
+            {"step": summary_steps.STEP_FASTQ_QC, "result_file": "/path/qc.json"},
+            {"step": summary_steps.STEP_FASTQ_ALIGNMENT, "result_file": "/path/bam"},
+            {"step": summary_steps.STEP_KESTREL, "result_file": "/path/res.tsv"},
+        ],
+    }
+
+    main_summary.write_text(json.dumps(primary_data), encoding="utf-8")
+    donor_summary.write_text(json.dumps(donor_data), encoding="utf-8")
+
+    loaded = load_prior_summary(main_summary)
+    assert loaded is not None
+    loaded_steps = [s.get("step") for s in loaded.get("steps", [])]
+    assert summary_steps.STEP_SHARK not in loaded_steps
+    assert summary_steps.STEP_FASTQ_QC not in loaded_steps
+    assert summary_steps.STEP_FASTQ_ALIGNMENT not in loaded_steps
+    assert summary_steps.STEP_KESTREL not in loaded_steps

@@ -64,6 +64,7 @@ from vntyper.scripts.pipeline_resume_planning import (
     record_reused_stage,
     resolve_effective_advntr_runtime,
     resolve_effective_kestrel_runtime,
+    resolve_effective_shark_runtime,
 )
 from vntyper.scripts.profile_provenance import snapshot_decision_profile
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
@@ -72,7 +73,6 @@ from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 from vntyper.scripts.resume import (
     fingerprint_file,
-    fingerprint_runtime,
     load_prior_summary,
     resume_refusals,
     step_is_reusable,
@@ -383,10 +383,13 @@ def run_pipeline(
             effective_advntr_runtime,
             advntr_runtime_fingerprint,
         ) = resolve_effective_advntr_runtime(run_configuration, config) if "advntr" in extra_modules else ({}, None)
-        shark_runtime_fingerprint = (
-            fingerprint_runtime(run_configuration.shark_runtime)
+        (
+            effective_shark_runtime,
+            shark_runtime_fingerprint,
+        ) = (
+            resolve_effective_shark_runtime(run_configuration, config)
             if input_type == "FASTQ" and "shark" in extra_modules
-            else None
+            else ({}, None)
         )
 
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")

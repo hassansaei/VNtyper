@@ -51,6 +51,7 @@ def _make_prior_summary(
     from vntyper.scripts.pipeline_resume_planning import (
         resolve_effective_advntr_runtime,
         resolve_effective_kestrel_runtime,
+        resolve_effective_shark_runtime,
     )
 
     default_mode, _, resolved_kestrel_fp = resolve_effective_kestrel_runtime(
@@ -134,10 +135,13 @@ def _make_prior_summary(
         ),
         "reference_fingerprint": reference_fingerprint,
         "shark_reference_path": shark_reference_path,
-        "shark_reference_fingerprint": shark_reference_fingerprint,
         "shark_runtime_fingerprint": shark_runtime_fingerprint
         if shark_runtime_fingerprint is not None
-        else (fingerprint_runtime(resolve_run_configuration().shark_runtime) if "shark" in resolved_modules else None),
+        else (
+            resolve_effective_shark_runtime(resolve_run_configuration(), MINIMAL_CONFIG)[1]
+            if "shark" in resolved_modules
+            else None
+        ),
         "pipeline_start": "2026-09-05T08:00:00.000000",
         "analysis_settings": analysis_settings if analysis_settings is not None else default_settings,
         "steps": steps or [],
@@ -2922,4 +2926,161 @@ def test_resume_reruns_alignment_when_bwa_tool_changes(tmp_path: Path) -> None:
     )
     assert h.error is None
     # Changing bwa reruns alignment, while QC can be reused
+    h.stages["align_and_sort_fastq"].assert_called_once()
+
+
+def test_resume_reruns_kestrel_when_copied_results_dir_lacks_bam_while_original_exists(tmp_path: Path) -> None:
+    """When a results directory is copied and output.bam is missing in the copy, Kestrel reruns (#20 / P2)."""
+    orig_dir = tmp_path / "original_out"
+    orig_dir.mkdir()
+    inp = tmp_path / "in"
+    inp.mkdir()
+    bam = inp / "sample.bam"
+    bam.touch()
+
+    orig_kestrel = orig_dir / "kestrel"
+    orig_kestrel.mkdir()
+    for name in (
+        "kestrel_result.tsv",
+        "output.vcf",
+        "output_indel.vcf",
+        "output.bam",
+        "output.bam.bai",
+        "output.bed",
+        "kestrel_pre_result.tsv",
+    ):
+        (orig_kestrel / name).write_text("data", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(orig_kestrel / "kestrel_result.tsv"),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"data").hexdigest(),
+            }
+        ],
+    )
+    prior["stage_artifact_md5s"] = {
+        summary_steps.STEP_KESTREL: {
+            "output.bam": hashlib.md5(b"data").hexdigest(),
+            "output.bam.bai": hashlib.md5(b"data").hexdigest(),
+            "output.vcf": hashlib.md5(b"data").hexdigest(),
+            "output_indel.vcf": hashlib.md5(b"data").hexdigest(),
+            "output.bed": hashlib.md5(b"data").hexdigest(),
+            "kestrel_pre_result.tsv": hashlib.md5(b"data").hexdigest(),
+        }
+    }
+    (orig_dir / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    # Copy to new output directory
+    copied_dir = tmp_path / "copied_out"
+    copied_kestrel = copied_dir / "kestrel"
+    copied_kestrel.mkdir(parents=True)
+    (copied_dir / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+    for name in (
+        "kestrel_result.tsv",
+        "output.vcf",
+        "output_indel.vcf",
+        # output.bam intentionally omitted in copied dir!
+        "output.bam.bai",
+        "output.bed",
+        "kestrel_pre_result.tsv",
+    ):
+        (copied_kestrel / name).write_text("data", encoding="utf-8")
+
+    # Original still has output.bam
+    assert (orig_kestrel / "output.bam").is_file()
+    assert not (copied_kestrel / "output.bam").is_file()
+
+    h = run_pipeline_under_harness(output_dir=copied_dir, bam=str(bam), resume=True)
+    assert h.error is None
+    # Because output.bam is missing in copied_dir, Kestrel is rerun rather than reused
+    assert h.stages["run_kestrel"].call_count == 1
+
+
+def test_resume_reruns_alignment_and_callers_when_shark_tool_changes(tmp_path: Path) -> None:
+    """Changing shark tool executable invalidates alignment and downstream callers on resume (#20 / P2)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    inp = tmp_path / "in"
+    inp.mkdir()
+    f1 = inp / "r1.fq.gz"
+    f2 = inp / "r2.fq.gz"
+    f1.touch()
+    f2.touch()
+
+    ref_file = tmp_path / "ref.fa"
+    ref_file.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+    align_dir = out / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.touch()
+
+    shark_v1 = tmp_path / "shark_v1"
+    shark_v1.write_bytes(b"shark_v1")
+    shark_v2 = tmp_path / "shark_v2"
+    shark_v2.write_bytes(b"shark_v2")
+
+    cfg_v1 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg_v1["tools"]["shark"] = str(shark_v1)
+    from vntyper.scripts.pipeline_resume_planning import resolve_effective_shark_runtime
+
+    _, shark_fp_v1 = resolve_effective_shark_runtime(resolve_run_configuration(), cfg_v1)
+
+    prior = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        extra_modules=["shark"],
+        shark_runtime_fingerprint=shark_fp_v1,
+        analysis_settings={
+            "reference_assembly": "hg19",
+            "fast_mode": False,
+            "custom_regions": None,
+            "bed_file": None,
+            "advntr_model": None,
+            "advntr_max_coverage": None,
+            "bam_processing": copy.deepcopy(MINIMAL_CONFIG["bam_processing"]),
+            "extra_modules": ["shark"],
+            "preprocessing_tools": {
+                "fastp": {"command": "fastp", "executable": "/bin/fastp", "fingerprint": "fp_fastp"},
+                "bwa": {"command": "bwa", "executable": "/bin/bwa", "fingerprint": "fp_bwa"},
+                "shark": {"command": str(shark_v1), "executable": str(shark_v1.resolve()), "fingerprint": "fp_v1"},
+            },
+        },
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": hashlib.md5(b"").hexdigest(),
+            },
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    cfg_v2 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg_v2["tools"]["shark"] = str(shark_v2)
+
+    with (
+        mock.patch(
+            "vntyper.modules.shark.shark_filtering.run_shark_filter",
+            return_value=(str(f1), str(f2)),
+        ),
+        mock.patch("vntyper.modules.shark.shark_filtering.write_shark_step_summary"),
+    ):
+        h = run_pipeline_under_harness(
+            output_dir=out,
+            fastq1=str(f1),
+            fastq2=str(f2),
+            bwa_reference=str(ref_file),
+            extra_modules=["shark"],
+            config=cfg_v2,
+            resume=True,
+        )
+    assert h.error is None
+    # Changing shark executable causes alignment to rerun
     h.stages["align_and_sort_fastq"].assert_called_once()
