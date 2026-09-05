@@ -26,7 +26,7 @@ PACKAGE_ROOT = Path(__file__).parents[2] / "vntyper"
 PROFILE_PATH = PACKAGE_ROOT / "profiles" / "decision_profile.json"
 DIGEST_PATH = PACKAGE_ROOT / "profiles" / "decision_profile.sha256"
 PROJECTION_PATH = PACKAGE_ROOT / "profiles" / "decision_projection.json"
-EXPECTED_PACKAGED_PROFILE_SHA256 = "be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718"
+EXPECTED_PACKAGED_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
 
 
 def _packaged_profile() -> dict[str, object]:

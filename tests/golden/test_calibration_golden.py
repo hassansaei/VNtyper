@@ -24,8 +24,8 @@ from vntyper.scripts.run_configuration import resolve_run_configuration
 pytestmark = pytest.mark.golden
 
 REPO_ROOT = Path(__file__).parents[2]
-PACKAGED_PROFILE_SHA256 = "be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718"
-PACKAGED_PROJECTION_SHA256 = "338fe05d010f623e794dcf93393904fa13bd8713e2d074c8a5b6c72d6efd96fd"
+PACKAGED_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
+PACKAGED_PROJECTION_SHA256 = "cfa5ec402a3a20096b76273c4347ff8b5975db942aa6dccf9f2d99474260236d"
 FITTED_PROFILE_SHA256 = "7fc772512eee789cd0a909fa939fd87305b4eb14a6769bcbf15b340afc7ce6f8"
 SOURCE_SHA256 = {
     "simulation/experiment1_dupC/ground_truth.csv": "007026c594f2182a4385aa49a9cd2892b5729c6e4c9b6441cb0e6e10b1458a73",

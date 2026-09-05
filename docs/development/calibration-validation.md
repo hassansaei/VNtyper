@@ -22,9 +22,9 @@ trees. It currently pins:
   while no name reaches Tier A on this corpus;
 - zero control findings;
 - packaged profile SHA-256
-  `be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718`; and
+  `0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1`; and
 - packaged projection SHA-256
-  `338fe05d010f623e794dcf93393904fa13bd8713e2d074c8a5b6c72d6efd96fd`.
+  `cfa5ec402a3a20096b76273c4347ff8b5975db942aa6dccf9f2d99474260236d`.
 
 `tests/golden/calibration_oracle.py` is recursively guarded against production decision,
 canonicalization, serialization, grouping, and calibration imports. These figures must
