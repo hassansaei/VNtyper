@@ -62,7 +62,7 @@ STEP_NAME_MODULES = (
 #: `MODULES_MATCHING_NO_STEP_NAME` below rather than being listed here with a zero,
 #: because a zero is a passing assertion about nothing.
 MINIMUM_CONSTANT_REFERENCES = {
-    "pipeline.py": 4,
+    "pipeline.py": 9,
     "pipeline_kestrel.py": 1,
     "generate_report.py": 5,
     "cohort_inputs.py": 4,
@@ -163,6 +163,9 @@ def _resolve_step_name(node: ast.expr) -> set[str]:
     if isinstance(node, ast.Attribute) and hasattr(summary_steps, node.attr):
         return {getattr(summary_steps, node.attr)}
 
+    if isinstance(node, ast.IfExp):
+        return _resolve_step_name(node.body) | _resolve_step_name(node.orelse)
+
     if isinstance(node, ast.JoinedStr):
         template = ""
         for part in node.values:
@@ -220,6 +223,12 @@ def _recorded_step_names() -> set[str]:
         ("STEP_KESTREL", "Kestrel Genotyping"),
         ("STEP_ADVNTR", "adVNTR Genotyping"),
         ("STEP_CROSS_MATCH", "Cross-Match Variant Comparison"),
+        ("STEP_BAM_TO_FASTQ", "BAM to FASTQ Conversion"),
+        ("STEP_CRAM_TO_FASTQ", "CRAM to FASTQ Conversion"),
+        ("STEP_SHARK", "SHARK Filtering"),
+        ("STEP_FASTQ_QC", "FASTQ Quality Control"),
+        ("STEP_FASTQ_ALIGNMENT", "FASTQ Alignment"),
+        ("STEP_BAM_TO_FASTQ_POST_ALIGNMENT", "BAM to FASTQ Conversion (Post-alignment)"),
     ],
 )
 def test_each_step_constant_has_its_exact_value(constant: str, value: str) -> None:

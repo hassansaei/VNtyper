@@ -35,6 +35,12 @@ STEP_COVERAGE: Final[str] = "Coverage Calculation"
 STEP_KESTREL: Final[str] = "Kestrel Genotyping"
 STEP_ADVNTR: Final[str] = "adVNTR Genotyping"
 STEP_CROSS_MATCH: Final[str] = "Cross-Match Variant Comparison"
+STEP_BAM_TO_FASTQ: Final[str] = "BAM to FASTQ Conversion"
+STEP_CRAM_TO_FASTQ: Final[str] = "CRAM to FASTQ Conversion"
+STEP_SHARK: Final[str] = "SHARK Filtering"
+STEP_FASTQ_QC: Final[str] = "FASTQ Quality Control"
+STEP_FASTQ_ALIGNMENT: Final[str] = "FASTQ Alignment"
+STEP_BAM_TO_FASTQ_POST_ALIGNMENT: Final[str] = "BAM to FASTQ Conversion (Post-alignment)"
 
 STEP_NAMES: Final[frozenset[str]] = frozenset(
     {
@@ -43,6 +49,17 @@ STEP_NAMES: Final[frozenset[str]] = frozenset(
         STEP_KESTREL,
         STEP_ADVNTR,
         STEP_CROSS_MATCH,
+    }
+)
+
+INFORMATIONAL_STEP_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        STEP_BAM_TO_FASTQ,
+        STEP_CRAM_TO_FASTQ,
+        STEP_SHARK,
+        STEP_FASTQ_QC,
+        STEP_FASTQ_ALIGNMENT,
+        STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
     }
 )
 

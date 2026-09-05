@@ -18,6 +18,20 @@ from vntyper.scripts.summary_steps import STEP_KESTREL
 logger = logging.getLogger(__name__)
 
 
+def resolve_kestrel_counting_mode(
+    runtime_component: Mapping[str, Any] | None,
+    config: Mapping[str, Any],
+) -> str:
+    """Determine effective Kestrel counting mode ('split' or 'internal') from settings and tools."""
+    from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
+
+    runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
+    settings = cast(Mapping[str, Any], runtime.get("kestrel_settings", {}))
+    kanalyze_path = config.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH)
+    splitting = bool(settings.get("split_counting", True)) and bool(kanalyze_path)
+    return "split" if splitting else "internal"
+
+
 def run_kestrel_stage(
     *,
     fastq_files: tuple[str, ...],
@@ -79,7 +93,6 @@ def run_kestrel_stage(
     # `command` string is compared by the golden-cohort gate as `pipeline_step_records`,
     # and trap 5 forbids inventing a new step name.
     #
-    from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
 
     explicit_context = (
         resolved_component is not None
@@ -88,7 +101,7 @@ def run_kestrel_stage(
         or runtime_component is not None
         or custom_context_active
     )
-    decision = resolve_compatibility_component(
+    kestrel_decision = resolve_compatibility_component(
         "kestrel",
         resolved_component,
         custom_context_active=custom_context_active,
@@ -105,16 +118,7 @@ def run_kestrel_stage(
     )
     runtime = resolve_compatibility_runtime_component("kestrel", runtime_component)
 
-    # Both conditions, not just the setting. `plan_kestrel_invocations` splits only when
-    # `split_counting` is true **and** a kanalyze path is configured, so a replacement
-    # config with `"kanalyze": ""` counts internally while `split_counting` is still
-    # true. Reading only the setting would record "split" for a run that did not split,
-    # which is worse than recording nothing: the field exists to attribute a result to
-    # the code that produced it.
-    settings = cast(Mapping[str, Any], runtime.get("kestrel_settings", {}))
-    kanalyze_path = config.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH)
-    splitting = bool(settings.get("split_counting", True)) and bool(kanalyze_path)
-    summary["kestrel_counting_mode"] = "split" if splitting else "internal"
+    summary["kestrel_counting_mode"] = resolve_kestrel_counting_mode(runtime_component, config)
 
     kestrel_dir = Path(dirs["kestrel"])
     tools = cast(Mapping[str, Any], config["tools"])
@@ -134,7 +138,7 @@ def run_kestrel_stage(
     }
     if explicit_context:
         runner_kwargs.update(
-            resolved_component=decision,
+            resolved_component=kestrel_decision,
             nomenclature_component=nomenclature_decision,
             dominance_component=dominance_decision,
             runtime_component=runtime,

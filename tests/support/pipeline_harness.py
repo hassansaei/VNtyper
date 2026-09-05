@@ -243,7 +243,9 @@ def _alignment_plan(*args: Any, **kwargs: Any) -> AlignmentPlan:
         view_path=str(view_path),
         file_format=file_format,
         index_path=f"{view_path}.{index_suffix}",
-        reference_path="/refs/hg19.fa" if file_format == "cram" else None,
+        reference_path=str(Path(kwargs["reference_fasta"]).resolve())
+        if kwargs.get("reference_fasta")
+        else ("/refs/hg19.fa" if file_format == "cram" else None),
         reference_source="harness",
         uncovered_contigs=(),
         unmapped_scan="indexed",
@@ -308,6 +310,8 @@ def run_pipeline_under_harness(
         "sample_name": "sample",
     }
     kwargs.update(run_pipeline_kwargs)
+    if "run_pipeline_kwargs" in kwargs and isinstance(kwargs["run_pipeline_kwargs"], dict):
+        kwargs.update(kwargs.pop("run_pipeline_kwargs"))
     if not any(kwargs.get(key) for key in ("bam", "cram", "fastq1", "fastq2")):
         input_root = output_dir.parent / f"{output_dir.name}_input"
         input_root.mkdir()

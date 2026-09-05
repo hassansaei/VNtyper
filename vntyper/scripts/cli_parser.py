@@ -246,6 +246,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Format of the archive: 'zip' or 'tar.gz'.",
     )
     parser_pipeline.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume pipeline execution from a previous run in --output-dir, reusing completed expensive stages.",
+    )
+    parser_pipeline.add_argument(
         "-n",
         "--output-name",
         type=str,

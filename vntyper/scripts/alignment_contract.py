@@ -122,6 +122,13 @@ class AlignmentPlan:
     reference_binding: ReferenceLifetime | None = field(default=None, repr=False, compare=False)
 
     @property
+    def persistent_reference(self) -> str | None:
+        """Return the persistent candidate reference path, before run-local binding."""
+        if self.reference_binding is not None:
+            return getattr(self.reference_binding, "input_path", self.reference_path)
+        return self.reference_path
+
+    @property
     def stable_index_path(self) -> str:
         """Return the exact retained index view, or the legacy path for manual plans."""
         if self.binding is not None and self.binding.index_view_path is not None:

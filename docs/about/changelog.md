@@ -11,6 +11,14 @@ All notable changes to VNtyper 2 are documented on this page.
 - Bumped decision profile revision to `"2"` and regenerated canonical profile and projection artifacts.
 - **Breaking change for custom decision profiles:** Profiles generated under revision 1 fail closed with `inventory fields differ` because the schema validates exact inventory key equality; revision-1 profiles must be re-issued with `vntyper calibrate`.
 
+### Pipeline execution resume
+
+- **Checkpoint resumption with `--resume`.** `vntyper pipeline` supports `--resume` to continue an interrupted run or re-render reports without repeating expensive computation (Refs [#20](https://github.com/hassansaei/VNtyper/issues/20)).
+  - BAM/CRAM conversion, FASTQ alignment, Kestrel genotyping, and adVNTR genotyping steps are reused when their result files, checksums, and required sibling outputs are intact.
+  - Run-identity invariants (version, inputs, sample name, reference selection, and decision profile digest) are strictly verified before execution; any discrepancy causes a fatal refusal before running stages.
+  - Reused step records are carried forward into `pipeline_summary.json` with `reused_from` provenance recording the donor run's start timestamp.
+  - Default runs now emit a warning when `--output-dir` already contains files. `--keep-intermediates` remains an accepted compatibility flag.
+
 ### Ordered confidence rule table (Issue #173 part 1)
 
 - **Pure confidence decision layer**: Refactored `confidence_assignment.py` to delegate confidence level assignment to a new pure module `vntyper/scripts/confidence_rules.py` ([#319](https://github.com/hassansaei/VNtyper/pull/319), Refs [#173](https://github.com/hassansaei/VNtyper/issues/173)).
