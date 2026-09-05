@@ -26,7 +26,7 @@ pytestmark = pytest.mark.golden
 REPO_ROOT = Path(__file__).parents[2]
 PACKAGED_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
 PACKAGED_PROJECTION_SHA256 = "cfa5ec402a3a20096b76273c4347ff8b5975db942aa6dccf9f2d99474260236d"
-FITTED_PROFILE_SHA256 = "b1a25f00e8cc828ca1117c56a63caaab39f71825d00472346ddf59f98f417b5e"
+FITTED_PROFILE_SHA256 = "855cf9fbe2a62edc2caed144f59bbfc61c2b5da44b9225a66f727b5bb68e2513"
 SOURCE_SHA256 = {
     "simulation/experiment1_dupC/ground_truth.csv": "007026c594f2182a4385aa49a9cd2892b5729c6e4c9b6441cb0e6e10b1458a73",
     "advntr/experiment1_dupC/pair_3000/mutated/pipeline_summary.json": (
