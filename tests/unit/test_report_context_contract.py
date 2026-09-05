@@ -198,3 +198,8 @@ def test_published_fastp_contract_names_the_exact_rounding_rule() -> None:
     for relative_path in ("pipeline/reports.md", "user-guide/configuration.md"):
         documentation = (docs_root / relative_path).read_text(encoding="utf-8")
         assert required_contract in " ".join(documentation.split())
+
+
+def test_declared_context_paths_include_confidence_grade() -> None:
+    """screening_state.confidence_grade is declared as a public context path."""
+    assert "screening_state.confidence_grade" in contract.DECLARED_CONTEXT_KEYS
