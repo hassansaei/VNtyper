@@ -127,8 +127,20 @@ pytestmark = pytest.mark.unit
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
 #:
-#: It has moved nine times, and each reason is recorded here because a changed
+#: It has moved ten times, and each reason is recorded here because a changed
 #: fingerprint with no explanation should be read as the worst case.
+#:
+#: Move 10 (#33 - Cohort call frequency section and exports)
+#: ---------------------------------------------------------
+#: * **Old**: ``1310197cbd932002cd03fec807b786ebaceb0f1908e8dc5ade54d3b609e52e3e``
+#: * **New**: ``a0b0d32a43778937677bc53d156c386416aabd32679c2f24258814af073f99b0``
+#:
+#: **Cause: new call frequency table and section appended after Additional Statistics.**
+#: The cohort report gained an interactive call frequency table section. In this two-sample
+#: oracle fixture (one positive call, one empty placeholder), one call frequency row is
+#: displayed and filtered/sorted, moving the canonical table and skeleton sections.
+#: The machine-readable exports are outside the HTML fingerprint and are pinned in the
+#: export assertion below.
 #:
 #: Move 9 (#295 - nomenclature evidence reading key)
 #: ------------------------------------------------
@@ -398,7 +410,7 @@ pytestmark = pytest.mark.unit
 # skeleton moves only because the new false Jinja branches contribute surrounding
 # whitespace. Mixed-profile content is pinned separately in
 # ``test_cohort_profile_provenance.py``.
-EXPECTED_FINGERPRINT = "1310197cbd932002cd03fec807b786ebaceb0f1908e8dc5ade54d3b609e52e3e"
+EXPECTED_FINGERPRINT = "a0b0d32a43778937677bc53d156c386416aabd32679c2f24258814af073f99b0"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid
@@ -1066,6 +1078,9 @@ def test_a_cohort_run_writes_the_report_and_every_requested_export(tmp_path) -> 
         "cohort_stats.csv",
         "cohort_stats.tsv",
         "cohort_stats.json",
+        "cohort_call_frequency.csv",
+        "cohort_call_frequency.tsv",
+        "cohort_call_frequency.json",
     }
 
 

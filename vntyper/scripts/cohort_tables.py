@@ -254,6 +254,23 @@ def stats_table_html(additional_stats_df: pd.DataFrame) -> str:
     return escaped_table_html(_normalize_display_cells(additional_stats_df), TABLE_CLASSES)
 
 
+def call_frequency_table_html(call_frequency_df: pd.DataFrame) -> str:
+    """Render the cohort's call frequency results table.
+
+    Nothing constructs markup for this table, so it has no escaping exemption.
+
+    Args:
+        call_frequency_df (pandas.DataFrame): The call frequency summary frame.
+
+    Returns:
+        str: The table markup, or "" when there are no rows to display.
+    """
+    if call_frequency_df.empty:
+        return ""
+    display_df = _normalize_display_cells(call_frequency_df)
+    return escaped_table_html(display_df, TABLE_CLASSES)
+
+
 def additional_stats_frame(additional_stats_list: list[dict[str, Any]]) -> pd.DataFrame:
     """Assemble the per-sample statistics rows into the frame the table renders.
 

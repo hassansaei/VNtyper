@@ -38,6 +38,7 @@ from vntyper.scripts.cohort_exports import (
     write_cohort_frame,
     write_pseudonymization_table,
 )
+from vntyper.scripts.cohort_frequency import call_frequency_frame
 from vntyper.scripts.cohort_inputs import (
     cleanup_temp_dirs,
     discover_sample_directories,
@@ -46,12 +47,14 @@ from vntyper.scripts.cohort_inputs import (
 )
 from vntyper.scripts.cohort_profiles import PROFILE_EXPORT_COLUMNS, group_decision_profiles
 from vntyper.scripts.cohort_pseudonyms import (
+    _mapping_at,
     pseudonym_settings,
     pseudonymized_sample_name,
 )
 from vntyper.scripts.cohort_tables import (
     additional_stats_frame,
     advntr_table_html,
+    call_frequency_table_html,
     kestrel_table_html,
     stats_table_html,
 )
@@ -137,6 +140,8 @@ def generate_cohort_summary_report(
     sample_names=None,
     advntr_evidence_provenance=None,
     decision_profile_provenance=None,
+    call_frequency_df=None,
+    rare_allele_max_frequency=None,
 ):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results along with
@@ -277,6 +282,14 @@ def generate_cohort_summary_report(
     # tables state that per column rather than per table; see cohort_tables.
     kestrel_html = kestrel_table_html(kestrel_df)
     advntr_html = advntr_table_html(advntr_df)
+    if call_frequency_df is None:
+        effective_cutoff = 0.05 if rare_allele_max_frequency is None else rare_allele_max_frequency
+        call_frequency_df = call_frequency_frame(
+            kestrel_df=kestrel_df,
+            cohort_size=len(sample_names or ()),
+            max_frequency=effective_cutoff,
+        )
+    call_frequency_html = call_frequency_table_html(call_frequency_df)
     legend = nomenclature_legend(kestrel_df, advntr_df)
     bam_evidence_flags = {FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT, FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT}
 
@@ -314,6 +327,7 @@ def generate_cohort_summary_report(
         "nomenclature_legend": legend,
         "show_kestrel_bam_semantics": any(entry["term"] in bam_evidence_flags for entry in legend),
         "additional_stats": additional_stats_html,
+        "call_frequency_table": call_frequency_html,
         "advntr_evidence_provenance": advntr_evidence_provenance or (),
         "decision_profile_groups": profile_group_context,
         "pooled_decision_metrics_suppressed": pooled_metrics_suppressed,
@@ -343,6 +357,7 @@ def aggregate_cohort(
     config,
     additional_formats="",
     pseudonymize_samples=False,
+    rare_allele_max_frequency=None,
 ):
     """
     Aggregate outputs from multiple runs into a single summary file.
@@ -405,6 +420,7 @@ def aggregate_cohort(
     kestrel_list = []
     advntr_list = []
     cohort_samples: list[str] = []
+    call_frequency_df = pd.DataFrame()
     # The `try` opens here, immediately after discovery, and not at the sample loop: every
     # zip input has already been extracted into a `tempfile.mkdtemp` directory by this
     # point, so anything raising between the two leaks one directory per archive. That was
@@ -530,6 +546,16 @@ def aggregate_cohort(
             additional_stats_df = pd.DataFrame()
             additional_stats_html = ""
 
+        if rare_allele_max_frequency is None:
+            cohort_cfg = _mapping_at(config, "cohort", "cohort")
+            rare_allele_max_frequency = cohort_cfg.get("rare_allele_max_frequency", 0.05)
+
+        call_frequency_df = call_frequency_frame(
+            kestrel_df=kestrel_df,
+            cohort_size=len(cohort_samples),
+            max_frequency=rare_allele_max_frequency,
+        )
+
         generate_cohort_summary_report(
             output_dir=output_dir,
             kestrel_df=kestrel_df,
@@ -550,6 +576,8 @@ def aggregate_cohort(
                 {"Sample": stats["Sample"], **{column: stats[column] for column in PROFILE_EXPORT_COLUMNS}}
                 for stats in additional_stats_list
             ],
+            call_frequency_df=call_frequency_df,
+            rare_allele_max_frequency=rare_allele_max_frequency,
         )
     finally:
         # In a `finally` because everything above - the config read, the two identity
@@ -569,6 +597,7 @@ def aggregate_cohort(
         # Until now it reached the HTML table only, so no machine-readable cohort output
         # carried a coverage figure at all.
         write_cohort_frame(additional_stats_df, output_dir, "cohort_stats", "Statistics", formats)
+        write_cohort_frame(call_frequency_df, output_dir, "cohort_call_frequency", "Call frequency", formats)
 
     # If pseudonymization was enabled, output the pseudonymization table.
     if pseudonymize_samples and sample_mapping:

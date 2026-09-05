@@ -154,10 +154,21 @@ The cohort summary module (`cohort_summary.py`) aggregates results from multiple
 - **Coverage statistics** -- per-sample VNTR coverage metrics
 - **Runtime statistics** -- pipeline execution times
 - **Version and assembly tracking** -- VNtyper 2 versions and detected reference assemblies
+- **Call frequency table** -- variant calls grouped across the cohort, indicating which calls fall at or below the configured frequency threshold
 
 When a cohort contains a BAM-specific nomenclature flag, its reading key gives the same
 resolved-haplotype-record and `XD` explanation as the sample report. CSV, TSV and JSON keep
 the stable `Nomenclature_Flags` column and token values without adding prose rows.
+
+### Cohort Call Frequency
+
+The cohort report includes an interactive call frequency table summarizing the distribution of variant calls across the entire cohort roster:
+
+- **Grouping key**: Calls with a valid, unique or legacy-selected `Molecular_Identity` are grouped by identity; unresolved or legacy calls fall back to caller representation `(Motifs, POS, REF, ALT)`.
+- **Grouping key kind**: The `Grouping_Key_Kind` column records `molecular-identity` or `caller-representation` to ensure distinct representations and identities never collapse together.
+- **Roster denominator**: Frequencies are calculated against the total cohort size, counting samples with negative results or unestablished runs in the denominator.
+- **Below cutoff indicator**: Calls with `Frequency <= rare_allele_max_frequency` are marked as `Below_Cutoff = "yes"` (`"no"` otherwise). All calls remain visible in the table and exports; no calls are filtered out.
+- **Escaped display**: The HTML table is fully HTML-escaped and supports client-side sorting and searching.
 
 ### Pseudonymization
 

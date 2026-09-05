@@ -1055,6 +1055,7 @@ identity #171 itself proposed for reconciling historical output.
 | `report_tables` (new Coverage QC row) | #172 |
 | `cohort_kestrel_*` gaining `flag_filter_pass` | #174 — `cohort_exports.py:14`, "nothing here strips columns" |
 | `cohort_stats_*`, `cohort_output_files` | #172, the new export |
+| `cohort_call_frequency_*`, `cohort_output_files` | #33: Cohort call frequency table and exports |
 | `cohort_tables` (`cov_coverage_qc`, and the `2.0.7 → 2.0.8` version string) | #172 and the release. The normaliser is anchored to `VNtyper Version: ` and does not touch the bare version the statistics table carries. **Not** normalised away: attributing a difference is honest, teaching the gate to stop seeing it is not. |
 
 `kestrel_result` is 50 of 61 rather than 61 of 61 because a negative call writes the

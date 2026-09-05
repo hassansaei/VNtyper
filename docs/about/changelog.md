@@ -4,6 +4,15 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+### Cohort call frequency table and exports
+
+- **Cohort-wide call frequency and rare-allele flag** ([#318](https://github.com/hassansaei/VNtyper/pull/318), Refs [#33](https://github.com/hassansaei/VNtyper/issues/33)).
+  Added pure module `cohort_frequency.py` generating cohort-wide call frequency tables with 14 descriptive columns.
+  Variant calls are grouped by `Molecular_Identity` (when status is unique or legacy-selected-among-multiple) or caller representation `(Motifs, POS, REF, ALT)`.
+  Denominator evaluates the full cohort roster (including samples without positive calls).
+  Configurable cutoff via `cohort.rare_allele_max_frequency` in `config.json` (0.05) and CLI `--rare-allele-max-frequency`.
+  Rendered as an interactive, fully escaped table in the cohort HTML report and exported as `cohort_call_frequency.<csv|tsv|json>`.
+
 ### Atomic installation of BAM and BAI files
 
 - **Atomic subprocess writes** ([#320](https://github.com/hassansaei/VNtyper/pull/320), Refs [#314](https://github.com/hassansaei/VNtyper/issues/314)).
@@ -49,6 +58,7 @@ All notable changes to VNtyper 2 are documented on this page.
   multi-row adVNTR and cross-match results. This is a user-visible change to the shape
   of two operator-facing files that no VNtyper code reads. `--summary-formats` still
   accepts unknown format names silently; validating them is out of scope here.
+>>>>>>> origin/main
 
 ## 2.0.27 (Current)
 

@@ -617,3 +617,38 @@ def _cells(html: str) -> list[str]:
     import re
 
     return re.findall(r"<td>(.*?)</td>", html, flags=re.DOTALL)
+
+
+def test_call_frequency_table_html_renders_table_and_escapes() -> None:
+    from vntyper.scripts.cohort_frequency import CALL_FREQUENCY_COLUMNS
+    from vntyper.scripts.cohort_tables import call_frequency_table_html
+
+    row = {col: f"val_{col}" for col in CALL_FREQUENCY_COLUMNS}
+    df = pd.DataFrame([row])
+    html = call_frequency_table_html(df)
+
+    assert f'class="dataframe {TABLE_CLASSES}"' in html
+    for col in CALL_FREQUENCY_COLUMNS:
+        assert f"<th>{col}</th>" in html
+        assert f"<td>val_{col}</td>" in html
+
+
+def test_call_frequency_table_html_empty_returns_empty_string() -> None:
+    from vntyper.scripts.cohort_tables import call_frequency_table_html
+
+    empty_df = pd.DataFrame()
+    assert call_frequency_table_html(empty_df) == ""
+
+
+def test_the_call_frequency_table_escapes_every_column() -> None:
+    """Every column of the call frequency table must be HTML-escaped."""
+    from vntyper.scripts.cohort_frequency import CALL_FREQUENCY_COLUMNS
+    from vntyper.scripts.cohort_tables import call_frequency_table_html
+
+    probe_row = {col: _probe(col) for col in CALL_FREQUENCY_COLUMNS}
+    df = pd.DataFrame([probe_row])
+    html = call_frequency_table_html(df)
+
+    for col in CALL_FREQUENCY_COLUMNS:
+        assert _escaped_probe(col) in html, f"Column {col} was not escaped"
+        assert _probe(col) not in html, f"Column {col} unescaped probe reached HTML"
