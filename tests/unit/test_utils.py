@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+from unittest import mock
 from unittest.mock import MagicMock, mock_open, patch
 
 import pandas as pd
@@ -17,6 +18,7 @@ import pytest
 
 from vntyper.scripts import utils
 from vntyper.scripts.utils import (
+    UNPROBED_TOOLS,
     create_output_directories,
     get_tool_version,
     get_tool_versions,
@@ -399,6 +401,42 @@ def test_tool_version_unexpected_failure_returns_unknown(caplog):
     with patch("vntyper.scripts.utils.subprocess.run", side_effect=OSError("exec failed")):
         assert get_tool_version("fastp", "--version") == "unknown"
     assert _logged(caplog.records, "Failed to get version for fastp: exec failed")
+
+
+def test_get_tool_version_parses_shark_conda_package():
+    """SHARK version is parsed from conda listing metadata (#312)."""
+    probe_json = '[{"name": "shark", "version": "1.2.0", "build_string": "h077b44d_5"}]'
+    mock_proc = mock.Mock(returncode=0, stdout=probe_json, stderr="")
+    with patch("vntyper.scripts.utils.subprocess.run", return_value=mock_proc) as mock_run:
+        version = get_tool_version("mamba run -n shark_env shark", "")
+    assert version == "1.2.0+h077b44d_5"
+    mock_run.assert_called_once_with(
+        ["mamba", "list", "-n", "shark_env", "shark", "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_get_tool_version_shark_probe_failure_falls_back_to_unknown():
+    """When conda query fails or returns empty stdout, shark version is 'unknown'."""
+    mock_proc = mock.Mock(returncode=1, stdout="", stderr="error: No prefix found")
+    with patch("vntyper.scripts.utils.subprocess.run", return_value=mock_proc):
+        assert get_tool_version("mamba run -n shark_env shark", "") == "unknown"
+
+
+def test_get_tool_version_bare_shark_binary_returns_unknown():
+    """A bare shark command with no conda environment prefix returns 'unknown'."""
+    assert get_tool_version("shark", "") == "unknown"
+
+
+def test_get_tool_version_non_shark_tool_with_shark_in_path_is_not_intercepted():
+    """Commands for other tools whose paths contain 'shark' are not intercepted by the shark probe."""
+    mock_proc = mock.Mock(returncode=0, stdout="kestrel version: 1.0.1\n", stderr="")
+    with patch("vntyper.scripts.utils.subprocess.run", return_value=mock_proc) as mock_run:
+        version = get_tool_version("java -jar /opt/shark-pipeline/kestrel.jar -h", "")
+    assert version == "1.0.1"
+    assert mock_run.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1053,16 +1091,24 @@ def test_kanalyze_is_never_probed_even_when_it_is_in_use():
     assert "kanalyze" not in versions
 
 
-def test_shark_is_never_probed_even_when_it_is_in_use():
-    """get_tool_version has no SHARK branch and returns "unknown" unconditionally.
+def test_shark_is_probed_when_it_is_in_use():
+    """SHARK is now probed when declared in tools_in_use and configured (#312)."""
+    tools = {
+        "samtools": "samtools",
+        "shark": "mamba run -n shark_env shark",
+    }
+    with patch("vntyper.scripts.utils.get_tool_version", return_value="1.2.0+h077b44d_5") as mock_get:
+        versions = get_tool_versions(
+            {"tools": tools},
+            tools_in_use={"samtools", "shark"},
+        )
+    assert versions["shark"] == "1.2.0+h077b44d_5"
+    mock_get.assert_any_call("mamba run -n shark_env shark", "")
 
-    Gating a probe that can only ever answer "unknown" would spend 36 ms to learn
-    nothing. Dropping it is the honest choice; a real answer needs a parser, not a gate.
-    """
-    commands, versions = _probed(ALL_TOOLS, {"samtools", "shark"})
 
-    assert not any("shark" in command for command in commands)
-    assert "shark" not in versions
+def test_unprobed_tools_contains_only_kanalyze():
+    """kanalyze alone remains in UNPROBED_TOOLS; shark is probed via conda (#312)."""
+    assert frozenset({"kanalyze"}) == UNPROBED_TOOLS
 
 
 def test_advntr_is_probed_when_it_is_in_use():

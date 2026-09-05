@@ -143,16 +143,22 @@ def test_shark_has_no_independent_decision_constant_or_literal_comparison() -> N
     assert comparisons == {
         "config_path is None",
         "key in settings",
+        "kept_reads_r1 != kept_reads_r2",
         "legacy_key in settings",
         "resolved is not None",
     }
 
 
 def test_shark_sidecar_contains_runtime_references_only() -> None:
-    """An empty SHARK profile remains complete while its sidecar has paths only."""
+    """An empty SHARK profile remains complete while its sidecar has paths and runtime parameters only."""
     sidecar = json.loads((REPOSITORY_ROOT / "vntyper/modules/shark/shark_config.json").read_text(encoding="utf-8"))
 
     assert set(sidecar) == {"shark_settings"}
-    assert sidecar["shark_settings"]
-    assert all(key.startswith("muc1_region_fasta_") for key in sidecar["shark_settings"])
-    assert all(isinstance(value, str) and value for value in sidecar["shark_settings"].values())
+    settings = sidecar["shark_settings"]
+    assert settings
+    fasta_keys = {key for key in settings if key.startswith("muc1_region_fasta_")}
+    assert fasta_keys == {"muc1_region_fasta_hg19", "muc1_region_fasta_hg38"}
+    assert all(isinstance(settings[key], str) and settings[key] for key in fasta_keys)
+    assert settings["kmer_size"] == 17
+    assert settings["confidence"] == 0.6
+    assert isinstance(settings.get("_comment_search_parameters"), str)

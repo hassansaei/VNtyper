@@ -73,12 +73,17 @@ def _run_conversion(
         commands.append(command)
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         Path(log_file).write_text("")
+        if "samtools index" in command and " -o " in command:
+            bai_path = Path(command.split(" -o ")[1].split()[0])
+            bai_path.parent.mkdir(parents=True, exist_ok=True)
+            bai_path.write_bytes(b"BAI\x01")
         return True
 
     with (
         patch.object(fastq_bam_processing, "run_command", record),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
         patch.object(fastq_bam_processing.os, "replace"),
+        patch.object(fastq_bam_processing, "publish_partial"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
             output=str(tmp_path / "run"),
@@ -99,11 +104,10 @@ def test_conversion_api_has_one_authoritative_alignment_input() -> None:
 @pytest.mark.parametrize(
     ("fast_mode", "needs_advntr", "expects_index"),
     [
-        # The slice only survives the run in fast mode, so only fast mode can index it
-        # at all -- and even then its single consumer is adVNTR (#262). Coverage reads
-        # the alignment plan's own view, never this file.
+        # adVNTR is the single consumer that requires indexing (#262, #314).
+        # Sliced BAM indexing is now converged across fast and non-fast modes (#314).
         (False, False, False),
-        (False, True, False),
+        (False, True, True),
         (True, False, False),
         (True, True, True),
     ],
@@ -121,7 +125,8 @@ def test_slice_uses_the_view_reference_threads_and_consumer_specific_indexing(
     assert f"-T '{plan.reference_path}'" in slice_command
     assert "-@ 4" in slice_command
     assert f"-X {plan.view_path} {plan.index_path}" in slice_command
-    assert ("&& samtools index" in slice_command) is expects_index
+    assert "&& samtools index" not in slice_command
+    assert any("samtools index" in command for command in commands) is expects_index
 
 
 def test_non_fast_indexed_bam_uses_the_plan_view_and_htslib_star_fetch(tmp_path: Path) -> None:
@@ -133,7 +138,7 @@ def test_non_fast_indexed_bam_uses_the_plan_view_and_htslib_star_fetch(tmp_path:
     (unmapped_command,) = [command for command in commands if "-f 4" in command]
     assert unmapped_command == (
         f"samtools view -b -f 4 -u -@ 4 -X {plan.view_path} {plan.index_path} '*' "
-        f"-o {tmp_path / 'run' / 'output_unmapped.bam'}"
+        f"-o {tmp_path / 'run' / 'output_unmapped.bam.partial'}"
     )
 
 
@@ -312,8 +317,11 @@ def test_reference_alias_of_the_slice_is_rejected_before_conversion_work(tmp_pat
     "destination_name",
     [
         "output_sliced.bam",
+        "output_sliced.bam.partial",
         "output_unmapped.bam",
+        "output_unmapped.bam.partial",
         "output_sliced_unmapped.bam",
+        "output_sliced_unmapped.bam.partial",
         "output_R1.fastq.gz",
         "output_R2.fastq.gz",
         "output_other.fastq.gz",
@@ -324,9 +332,13 @@ def test_reference_alias_of_the_slice_is_rejected_before_conversion_work(tmp_pat
         "output_index.log",
         "output_sort_fastq.log",
         "output_sliced.bam.bai",
+        "output_sliced.bam.bai.partial",
         "output_sliced.bam.csi",
+        "output_sliced.bam.csi.partial",
         "output_sliced.bai",
+        "output_sliced.bai.partial",
         "output_sliced.csi",
+        "output_sliced.csi.partial",
     ],
 )
 def test_operator_bed_alias_of_any_conversion_destination_is_rejected_before_work(
@@ -346,6 +358,24 @@ def test_operator_bed_alias_of_any_conversion_destination_is_rejected_before_wor
     )
 
     assert bed_file.read_bytes() == b"chr1\t1\t2\n"
+
+
+def test_preplanted_symlink_at_partial_destination_is_rejected_before_work(tmp_path: Path) -> None:
+    """A pre-planted symlink at a .partial output is rejected by destination validation (#314)."""
+    plan = _plan(tmp_path, "bam")
+    partial_slice = tmp_path / "run" / "output_sliced.bam.partial"
+    target = tmp_path / "victim.txt"
+    target.write_text("protected")
+    partial_slice.parent.mkdir(parents=True, exist_ok=True)
+    partial_slice.symlink_to(target)
+
+    _assert_rejected_before_conversion_work(
+        tmp_path,
+        plan,
+        fast_mode=True,
+        error_match="is a symlink",
+    )
+    assert target.read_text() == "protected"
 
 
 @pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
@@ -517,7 +547,7 @@ def test_successful_rerun_removes_every_stale_slice_index_before_regenerating_th
         commands.append(command)
         if len(commands) == 1:
             assert all(not os.path.lexists(candidate) for candidate in index_candidates)
-            sliced_bam.write_bytes(b"fresh-slice")
+            (run_dir / "output_sliced.bam.partial").write_bytes(b"fresh-slice")
             index_candidates[0].write_bytes(b"fresh-default-bai")
         return True
 

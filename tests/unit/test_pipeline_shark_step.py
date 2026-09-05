@@ -38,7 +38,9 @@ def shark_step(output_dir: Path) -> dict:
     return steps[0]
 
 
-def run_with_shark(tmp_path: Path, kept_r1: int = 2, kept_r2: int = 2) -> tuple[Path, dict]:
+def run_with_shark(
+    tmp_path: Path, kept_r1: int = 2, kept_r2: int = 2, *, stage_side_effects: dict | None = None
+) -> tuple[Path, dict]:
     """Run the real orchestration with only the SHARK binary call replaced."""
     out = tmp_path / "out"
     with mock.patch(
@@ -51,6 +53,7 @@ def run_with_shark(tmp_path: Path, kept_r1: int = 2, kept_r2: int = 2) -> tuple[
             fastq1="/in/r1.fastq.gz",
             fastq2="/in/r2.fastq.gz",
             extra_modules=["shark"],
+            stage_side_effects=stage_side_effects,
         )
     return out, shark_step(out)
 
@@ -67,7 +70,7 @@ def test_the_step_records_a_readable_file_the_run_wrote(tmp_path) -> None:
 
 
 def test_the_step_records_exact_fastq_paths_and_string_counts(tmp_path) -> None:
-    """The metadata points at the actual uncompressed SHARK outputs."""
+    """The metadata points at the actual uncompressed SHARK outputs and records provenance."""
     out, step = run_with_shark(tmp_path, kept_r1=3, kept_r2=3)
 
     fastq_dir = out / "fastq_bam_processing"
@@ -76,6 +79,9 @@ def test_the_step_records_exact_fastq_paths_and_string_counts(tmp_path) -> None:
         "filtered_fastq_2": str(fastq_dir / "sample_shark_R2.fastq"),
         "kept_reads_r1": "3",
         "kept_reads_r2": "3",
+        "shark_version": "unknown",
+        "shark_k": "17",
+        "shark_c": "0.6",
     }
 
 
@@ -180,3 +186,43 @@ def test_pipeline_forwards_the_resolved_empty_policy_and_runtime_references(tmp_
     assert seen["resolved_component"] == run.shark == {}
     assert seen["config"] == run.shark_runtime
     assert seen["custom_context_active"] is False
+
+
+def test_pipeline_shark_mismatch_fails_closed_before_recording_step(tmp_path) -> None:
+    """When kept R1 and R2 counts differ, pipeline fails and the step is never recorded (#312)."""
+    out = tmp_path / "out"
+
+    def mismatched_filter(*, output_dir, sample_name, **_kwargs):
+        r1 = Path(output_dir) / f"{sample_name}_shark_R1.fastq"
+        r2 = Path(output_dir) / f"{sample_name}_shark_R2.fastq"
+        r1.write_text("@r0\nACGT\n+\nFFFF\n@r1\nACGT\n+\nFFFF\n@r2\nACGT\n+\nFFFF\n", encoding="utf-8")
+        r2.write_text("@r0\nACGT\n+\nFFFF\n@r1\nACGT\n+\nFFFF\n", encoding="utf-8")
+        return str(r1), str(r2)
+
+    with mock.patch("vntyper.modules.shark.shark_filtering.run_shark_filter", side_effect=mismatched_filter):
+        harness = run_pipeline_under_harness(
+            out,
+            bam=None,
+            fastq1="/in/r1.fastq.gz",
+            fastq2="/in/r2.fastq.gz",
+            extra_modules=["shark"],
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    step_file = out / "fastq_bam_processing" / "sample_shark_step.json"
+    assert not step_file.exists()
+
+
+def test_pipeline_forwards_probed_shark_version(tmp_path) -> None:
+    """Pipeline forwards probed SHARK version from tool_versions to write_shark_step_summary."""
+    out = tmp_path / "out"
+    _out, step = run_with_shark(
+        out,
+        kept_r1=2,
+        kept_r2=2,
+        stage_side_effects={"get_tool_versions": lambda *a, **k: {"shark": "1.2.0+h077b44d_5"}},
+    )
+
+    assert step["parsed_result"]["shark_version"] == "1.2.0+h077b44d_5"

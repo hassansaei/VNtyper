@@ -19,6 +19,7 @@ from vntyper.scripts.alignment_target_io import (
     validate_alignment_conversion_destinations,
     validate_fastq_processing_destinations,
 )
+from vntyper.scripts.artifact_publish import discard_partial, partial_path, publish_partial
 from vntyper.scripts.command_builders import (
     build_fastp_command,
     build_samtools_depth_command,
@@ -146,11 +147,12 @@ def process_bam_to_fastq(
         logger.debug(f"BAM region set to: {bam_region}")
 
     final_bam = Path(output) / f"{output_name}_sliced.bam"
+    partial_slice = partial_path(final_bam)
 
     command_slice = build_plan_slice_command(
         samtools_path=samtools_path,
         plan=plan,
-        output_bam=final_bam,
+        output_bam=partial_slice,
         region=None if bed_file else bam_region,
         bed_file=bed_file,
         threads=threads,
@@ -160,80 +162,116 @@ def process_bam_to_fastq(
     log_file_slice = Path(output) / f"{output_name}_slice.log"
     logger.info(f"Executing region slicing with command: {command_slice}")
 
-    success = run_command(str(command_slice), str(log_file_slice), critical=True)
-    if not success:
-        logger.error(f"{plan.file_format.upper()} region slicing failed.")
-        raise RuntimeError(f"{plan.file_format.upper()} region slicing failed.")
+    discard_partial(partial_slice)
+    try:
+        success = run_command(str(command_slice), str(log_file_slice), critical=True)
+        if not success:
+            logger.error(f"{plan.file_format.upper()} region slicing failed.")
+            discard_partial(partial_slice)
+            raise RuntimeError(f"{plan.file_format.upper()} region slicing failed.")
+    except BaseException:
+        discard_partial(partial_slice)
+        raise
+
+    if fast_mode:
+        publish_partial(partial_slice, final_bam)
     logger.info("BAM/CRAM region slicing completed.")
 
     # Extract & merge unmapped reads if not in fast_mode
     if not fast_mode:
         unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
+        partial_unmapped = partial_path(unmapped_bam)
 
         command_filter = build_plan_unmapped_command(
             samtools_path=samtools_path,
             plan=plan,
-            output_bam=unmapped_bam,
+            output_bam=partial_unmapped,
             threads=threads,
-            # Only when it is genuinely throwaway. The merge consumes it on the next
-            # line, but the removal below is gated on `delete_intermediates`, which
-            # defaults to False all the way up to the CLI -- so in an ordinary run this
-            # file survives in the output directory and goes into the archive. Writing
-            # a surviving file at BGZF level 0 would ship a roughly 3x larger BAM, the
-            # same regression the merge output is left compressed to avoid.
             uncompressed=delete_intermediates,
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
         logger.info(f"Executing filtering with command: {command_filter}")
 
-        success = run_command(str(command_filter), str(log_file_filter), critical=True)
-        if not success:
-            logger.error("BAM/CRAM filtering failed.")
-            raise RuntimeError("BAM/CRAM filtering failed.")
+        discard_partial(partial_unmapped)
+        try:
+            success = run_command(str(command_filter), str(log_file_filter), critical=True)
+            if not success:
+                logger.error("BAM/CRAM filtering failed.")
+                discard_partial(partial_unmapped)
+                raise RuntimeError("BAM/CRAM filtering failed.")
+        except BaseException:
+            discard_partial(partial_unmapped)
+            raise
+
+        publish_partial(partial_unmapped, unmapped_bam)
 
         # Merge sliced + unmapped
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
+        partial_merged = partial_path(merged_bam)
         command_merge = build_samtools_merge_command(
             samtools_path=samtools_path,
-            merged_bam=merged_bam,
-            sliced_bam=final_bam,
+            merged_bam=partial_merged,
+            sliced_bam=partial_slice,
             unmapped_bam=unmapped_bam,
             threads=threads,
         )
         log_file_merge = Path(output) / f"{output_name}_merge.log"
         logger.info(f"Executing BAM merging with command: {command_merge}")
 
-        success = run_command(str(command_merge), str(log_file_merge), critical=True)
-        if not success:
-            logger.error("BAM merging failed.")
-            raise RuntimeError("BAM merging failed.")
+        discard_partial(partial_merged)
+        try:
+            success = run_command(str(command_merge), str(log_file_merge), critical=True)
+            if not success:
+                logger.error("BAM merging failed.")
+                discard_partial(partial_merged)
+                raise RuntimeError("BAM merging failed.")
+        except BaseException:
+            discard_partial(partial_merged)
+            raise
+        finally:
+            discard_partial(partial_slice)
 
+        publish_partial(partial_merged, merged_bam)
         final_bam = merged_bam
         logger.info("BAM/CRAM filtering and merging completed.")
 
-        # Rename merged BAM for adVNTR consistency and re-index
+        # Rename merged BAM for adVNTR consistency
         final_bam_renamed = Path(output) / f"{output_name}_sliced.bam"
         os.replace(final_bam, final_bam_renamed)
         final_bam = final_bam_renamed
         logger.info(f"Renamed merged BAM file to {final_bam}")
 
-        # #162 kept the index beside the merged BAM inside `output`, and no output_bai
-        # is passed for exactly that reason: samtools' default destination is already
-        # inside the output directory. Its only consumers are run_advntr and
-        # downsample_bam_if_needed, both behind --extra-modules advntr; coverage reads
-        # the alignment plan's own view, not this file. Writing it in Kestrel-only mode
-        # is dead work -- 58 ms at --threads 4, 244 ms at --threads 1.
-        if needs_advntr:
-            command_index = build_samtools_index_command(
-                samtools_path=samtools_path,
-                bam_file=final_bam,
-                threads=threads,
-            )
-            log_file_index = Path(output) / f"{output_name}_index.log"
-            logger.info(f"Re-indexing BAM file with command: {command_index}")
+    # Sliced BAM indexing: required only when adVNTR will read the alignment.
+    # Converged across fast_mode and non-fast mode.
+    if needs_advntr:
+        final_bai = Path(f"{final_bam}.bai")
+        partial_bai = partial_path(final_bai)
+        command_index = build_samtools_index_command(
+            samtools_path=samtools_path,
+            bam_file=final_bam,
+            output_bai=partial_bai,
+            threads=threads,
+        )
+        log_file_index = Path(output) / f"{output_name}_index.log"
+        logger.info(f"Re-indexing BAM file with command: {command_index}")
+
+        discard_partial(partial_bai)
+        try:
             if not run_command(command_index, str(log_file_index), critical=True):
                 logger.error("Re-indexing BAM file failed.")
+                discard_partial(partial_bai)
                 raise RuntimeError("Re-indexing BAM file failed.")
+        except BaseException:
+            discard_partial(partial_bai)
+            raise
+
+        if not partial_bai.exists() or partial_bai.stat().st_size == 0:
+            logger.error(f"BAM index file {partial_bai} not created or empty.")
+            discard_partial(partial_bai)
+            raise RuntimeError(f"BAM index file {partial_bai} not created or empty.")
+
+        publish_partial(partial_bai, final_bai)
+        logger.info(f"Published BAM index to {final_bai}")
 
     paths = plan_alignment_fastq_conversion(output=output, output_name=output_name)
     conversion_result = run_alignment_fastq_conversion(
@@ -504,6 +542,7 @@ def downsample_bam_if_needed(
 
     samtools_path = config["tools"]["samtools"]
     downsampled_bam = bam_path.parent / (bam_path.stem + "_downsampled.bam")
+    partial_downsampled_bam = partial_path(downsampled_bam)
     seed = 42
     subsample_param = f"{seed}.{int(fraction * 1000):03d}"
 
@@ -516,36 +555,51 @@ def downsample_bam_if_needed(
         str(threads),
         "-b",
         "-o",
-        str(downsampled_bam),
+        str(partial_downsampled_bam),
         str(bam_path),
     ]
     logger.info(f"Downsampling BAM with command: {' '.join(cmd_view)}")
+    discard_partial(partial_downsampled_bam)
     try:
         subprocess.run(cmd_view, check=True)
-    except subprocess.CalledProcessError as err:
+        publish_partial(partial_downsampled_bam, downsampled_bam)
+    except (subprocess.CalledProcessError, OSError) as err:
+        discard_partial(partial_downsampled_bam)
         logger.error(f"Downsampling failed: {err}")
         return bam_path
 
     sorted_down_bam = downsampled_bam.with_suffix(".sorted.bam")
+    partial_sorted_down_bam = partial_path(sorted_down_bam)
     cmd_sort = [
         samtools_path,
         "sort",
         "-@",
         str(threads),
         "-o",
-        str(sorted_down_bam),
+        str(partial_sorted_down_bam),
         str(downsampled_bam),
     ]
+    discard_partial(partial_sorted_down_bam)
+    final_down_bai = Path(f"{sorted_down_bam}.bai")
+    partial_down_bai = partial_path(final_down_bai)
+    discard_partial(partial_down_bai)
     try:
         subprocess.run(cmd_sort, check=True)
-        downsampled_bam.unlink()
+        publish_partial(partial_sorted_down_bam, sorted_down_bam)
+        downsampled_bam.unlink(missing_ok=True)
         cmd_index = build_threaded_samtools_index_argv(
             samtools_path=samtools_path,
             bam_file=sorted_down_bam,
             threads=threads,
+            output_bai=partial_down_bai,
         )
         subprocess.run(cmd_index, check=True)
-    except subprocess.CalledProcessError as err:
+        if not partial_down_bai.exists() or partial_down_bai.stat().st_size == 0:
+            raise OSError(f"Downsampled index file {partial_down_bai} not created or empty.")
+        publish_partial(partial_down_bai, final_down_bai)
+    except (subprocess.CalledProcessError, OSError) as err:
+        discard_partial(partial_sorted_down_bam)
+        discard_partial(partial_down_bai)
         logger.error(f"Sorting/indexing failed after downsampling: {err}")
         return bam_path
 

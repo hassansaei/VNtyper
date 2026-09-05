@@ -276,6 +276,17 @@ def test_decision_fails_closed_without_an_observed_extraction_command() -> None:
             "-o /run/fastq_bam_processing/output_unmapped.bam",
             "indexed",
         ),
+        # Atomic partial installation forms (#314).
+        (
+            "samtools view -@ 4 -b -f 4 -T reference.fa input.cram '*' "
+            "-o /run/fastq_bam_processing/output_unmapped.bam.partial",
+            "indexed",
+        ),
+        (
+            "samtools view -b -f 4 -u -T reference.fa -@ 4 input.cram "
+            "-o /run/fastq_bam_processing/output_unmapped.bam.partial",
+            "stream",
+        ),
     ],
 )
 def test_command_log_records_the_executed_scan(tmp_path: Path, command: str, expected_mode: str) -> None:

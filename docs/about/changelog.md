@@ -6,12 +6,59 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ### Cohort call frequency table and exports
 
-- Added pure module `cohort_frequency.py` generating cohort-wide call frequency tables with 14 descriptive columns.
-- Variant calls are grouped by `Molecular_Identity` (when status is unique or legacy-selected-among-multiple) or caller representation `(Motifs, POS, REF, ALT)`.
-- Denominator evaluates the full cohort roster (including samples without positive calls).
-- Configurable cutoff via `cohort.rare_allele_max_frequency` in `config.json` (0.05) and CLI `--rare-allele-max-frequency`.
-- Rendered as an interactive, fully escaped table in the cohort HTML report and exported as `cohort_call_frequency.<csv|tsv|json>`.
+- **Cohort-wide call frequency and rare-allele flag** ([#318](https://github.com/hassansaei/VNtyper/pull/318), Refs [#33](https://github.com/hassansaei/VNtyper/issues/33)).
+  Added pure module `cohort_frequency.py` generating cohort-wide call frequency tables with 14 descriptive columns.
+  Variant calls are grouped by `Molecular_Identity` (when status is unique or legacy-selected-among-multiple) or caller representation `(Motifs, POS, REF, ALT)`.
+  Denominator evaluates the full cohort roster (including samples without positive calls).
+  Configurable cutoff via `cohort.rare_allele_max_frequency` in `config.json` (0.05) and CLI `--rare-allele-max-frequency`.
+  Rendered as an interactive, fully escaped table in the cohort HTML report and exported as `cohort_call_frequency.<csv|tsv|json>`.
 
+### Atomic installation of BAM and BAI files
+
+- **Atomic subprocess writes** ([#320](https://github.com/hassansaei/VNtyper/pull/320), Refs [#314](https://github.com/hassansaei/VNtyper/issues/314)).
+  Every BAM and BAI file produced by `samtools` or `bwa` subprocesses is now written to a
+  deterministic sibling `.partial` path and atomically moved into place with `os.replace`
+  only upon verified completion. Interrupted or failing subprocesses no longer leave
+  corrupt, truncated, or header-only BAM files under final names. In non-fast mode, the
+  slice remains at `.partial` until merged, ensuring the public name never holds the
+  uncompressed unmapped-free slice mid-run. Sliced BAM indexing is decoupled from the
+  slice command and converges fast and normal modes. Destination validation contracts
+  in `alignment_target_io.py` are widened to include all partial names.
+
+### SHARK provenance and read pairing
+
+- **SHARK stage records tool version, search parameters, and pairing verification ([#317](https://github.com/hassansaei/VNtyper/pull/317), Refs #312).**
+  The command line explicitly specifies `-k 17 -c 0.6` sourced from the runtime sidecar
+  `shark_config.json`, matching SHARK 1.2.0's implicit defaults without modifying the
+  empty `/components/shark` decision profile component.
+- **Tool version is probed via conda environment listing.** Because SHARK 1.2.0 prints no
+  version from `--version` or `--help`, `vntyper.scripts.utils.get_tool_version` probes
+  `mamba list -n shark_env shark --json` and records `<version>+<build>` (e.g. `1.2.0+h077b44d_5`),
+  falling back to `unknown` without aborting if the probe is unavailable. `shark` is removed
+  from `UNPROBED_TOOLS`.
+- **Step summary payload records provenance.** `pipeline_summary.json`'s `parsed_result`
+  for SHARK Filtering gains `shark_version`, `shark_k`, and `shark_c` alongside the FASTQ
+  paths and read counts.
+- **Asymmetric read retention fails closed.** `write_shark_step_summary` verifies that
+  `kept_reads_r1 == kept_reads_r2` before building the payload, raising `ValueError` naming
+  both counts and preventing incomplete step records on pairing divergence.
+
+### Flattened pipeline summary tables
+
+- **`pipeline_summary.csv` and `.tsv` carry the run's provenance and no longer embed
+  JSON text** ([#316](https://github.com/hassansaei/VNtyper/pull/316), Refs
+  [#119](https://github.com/hassansaei/VNtyper/issues/119)). Every
+  row now starts with `run_*` columns (schema version, decision policy, the six
+  `decision_profile_*` fields, version, inputs, sample name, reference selection,
+  resolved region, Kestrel counting mode and the adVNTR model); a single-row result
+  explodes into `parsed_result_data_<column>` cells, any other row count is recorded as
+  `parsed_result_n_rows`, and banner comments join into `parsed_result_comments`. A new
+  `pipeline_summary_rows.<csv|tsv>` long table (`step`, `row_index`, `field`, `value`)
+  is written beside each requested format and lists every result row, including the
+  multi-row adVNTR and cross-match results. This is a user-visible change to the shape
+  of two operator-facing files that no VNtyper code reads. `--summary-formats` still
+  accepts unknown format names silently; validating them is out of scope here.
+>>>>>>> origin/main
 
 ## 2.0.27 (Current)
 

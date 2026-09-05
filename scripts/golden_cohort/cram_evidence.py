@@ -46,6 +46,7 @@ def observe_unmapped_scan(commands_log: Path, output_bam: Path) -> tuple[str | N
         return None, None, ["A-178-2 command log is not valid UTF-8"]
 
     target = str(output_bam)
+    target_partial = f"{target}.partial"
     observed: list[tuple[str, str]] = []
     target_referenced = False
     for line_number, line in enumerate(lines, start=1):
@@ -70,7 +71,9 @@ def observe_unmapped_scan(commands_log: Path, output_bam: Path) -> tuple[str | N
             tokens = shlex.split(command)
         except ValueError:
             return None, None, [f"A-178-2 command log is malformed at line {line_number}"]
-        writes_target = any(tokens[index : index + 2] == ["-o", target] for index in range(len(tokens) - 1))
+        writes_target = any(
+            tokens[index : index + 2] in (["-o", target], ["-o", target_partial]) for index in range(len(tokens) - 1)
+        )
         filters_unmapped = any(tokens[index : index + 2] == ["-f", "4"] for index in range(len(tokens) - 1))
         if not writes_target or not filters_unmapped:
             continue
