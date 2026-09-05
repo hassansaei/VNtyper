@@ -4,7 +4,7 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-### Confidence grade (Issue #173 part 2)
+### Confidence grade ([#324](https://github.com/hassansaei/VNtyper/pull/324), Refs [#173](https://github.com/hassansaei/VNtyper/issues/173))
 
 - **Derived sample-level confidence grade**: Added a derived, configuration-driven `confidence_grade` field to `ScreeningSummary` and configured `confidence_grade_rules` in `report_config.json` covering the ordered vocabulary (`not-established`, `no-finding-limited`, `no-finding`, `finding-limited`, `finding`, `finding-corroborated`).
 - **Masthead confidence grade chip**: Rendered the computed confidence grade as a `Confidence grade` chip in the per-sample HTML report masthead via `state_chips`, with opt-in fallback preserving legacy report configuration compatibility.
