@@ -543,7 +543,7 @@ def test_a_failed_bam_index_raises(tmp_path, monkeypatch):
 
     def run(command, log_file=None, **kwargs):
         calls.append(command)
-        (tmp_path / "output.bam").write_text("bam", encoding="utf-8")
+        (tmp_path / "output.bam.partial").write_text("bam", encoding="utf-8")
         # Keyed off the samtools subcommand, not a substring of the whole line: pytest's
         # tmp_path embeds the test name, which contains "index", so a naive `in` test made
         # the *view* command look like the index one.
@@ -563,8 +563,10 @@ def test_a_successful_conversion_still_deletes_the_sam(tmp_path, monkeypatch):
     sam.write_text("@HD\tVN:1.6\n", encoding="utf-8")
 
     def run(command, log_file=None, **kwargs):
-        (tmp_path / "output.bam").write_text("bam", encoding="utf-8")
-        (tmp_path / "output.bam.bai").write_text("bai", encoding="utf-8")
+        if not command.startswith("samtools index"):
+            (tmp_path / "output.bam.partial").write_text("bam", encoding="utf-8")
+        else:
+            (tmp_path / "output.bam.bai.partial").write_text("bai", encoding="utf-8")
         return True
 
     monkeypatch.setattr(kg, "run_command", run)

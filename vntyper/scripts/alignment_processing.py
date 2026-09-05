@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from vntyper.scripts.alignment_target_io import bwa_index_paths
+from vntyper.scripts.artifact_publish import discard_partial, partial_path, publish_partial
 from vntyper.scripts.command_builders import (
     build_bwa_align_sort_command,
     build_samtools_index_command,
@@ -81,6 +82,7 @@ def align_and_sort_fastq(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     sorted_bam_out = output_dir / f"{output_name}_sorted.bam"
+    partial_sorted_bam = partial_path(sorted_bam_out)
 
     if not check_bwa_index(reference, config):
         logger.error(
@@ -96,45 +98,56 @@ def align_and_sort_fastq(
         reference=reference,
         fastq1=fastq1,
         fastq2=fastq2,
-        sorted_bam=sorted_bam_out,
+        sorted_bam=partial_sorted_bam,
     )
     log_file_alignment = output_dir / f"{output_name}_alignment.log"
     logger.info(f"Executing alignment and sorting with command: {full_command}")
 
-    if not run_command(str(full_command), str(log_file_alignment), critical=True):
-        logger.error("BWA alignment and Samtools sorting failed.")
-        return None
+    discard_partial(partial_sorted_bam)
+    try:
+        if not run_command(str(full_command), str(log_file_alignment), critical=True):
+            logger.error("BWA alignment and Samtools sorting failed.")
+            discard_partial(partial_sorted_bam)
+            return None
+    except BaseException:
+        discard_partial(partial_sorted_bam)
+        raise
 
-    if not sorted_bam_out.exists():
+    if not partial_sorted_bam.exists():
         logger.error(
-            f"Sorted BAM file {sorted_bam_out} not created. BWA alignment or Samtools sorting might have failed."
+            f"Sorted BAM file {partial_sorted_bam} not created. BWA alignment or Samtools sorting might have failed."
         )
         return None
 
+    publish_partial(partial_sorted_bam, sorted_bam_out)
     logger.info("BWA alignment and Samtools sorting completed successfully.")
 
     logger.info(f"Indexing sorted BAM file: {sorted_bam_out}")
-    # No output_bai here, deliberately: sorted_bam_out is the BAM this function just
-    # wrote inside output_dir, so samtools' default destination beside it is already
-    # inside the run's output directory. `output_bai` exists for the one caller that
-    # indexes the user's *input* alignment, whose directory is routinely mounted
-    # read-only (#162, #210). The index still receives the caller's configured
-    # thread count like every other samtools stage.
+    final_bai = sorted_bam_out.with_suffix(".bam.bai")
+    partial_bai = partial_path(final_bai)
     samtools_index_command = build_samtools_index_command(
         samtools_path=str(samtools_path),
         bam_file=sorted_bam_out,
+        output_bai=partial_bai,
         threads=threads,
     )
     log_file_index = output_dir / f"{output_name}_index.log"
 
-    if not run_command(str(samtools_index_command), str(log_file_index), critical=True):
-        logger.error("Samtools indexing failed.")
+    discard_partial(partial_bai)
+    try:
+        if not run_command(str(samtools_index_command), str(log_file_index), critical=True):
+            logger.error("Samtools indexing failed.")
+            discard_partial(partial_bai)
+            return None
+    except BaseException:
+        discard_partial(partial_bai)
+        raise
+
+    if not partial_bai.exists() or partial_bai.stat().st_size == 0:
+        logger.error(f"BAM index file {partial_bai} not created or empty. Samtools indexing might have failed.")
+        discard_partial(partial_bai)
         return None
 
-    index_file = sorted_bam_out.with_suffix(".bam.bai")
-    if not index_file.exists():
-        logger.error(f"BAM index file {index_file} not created. Samtools indexing might have failed.")
-        return None
-
+    publish_partial(partial_bai, final_bai)
     logger.info("Samtools indexing completed successfully.")
     return str(sorted_bam_out)

@@ -38,6 +38,8 @@ the harness change, so only the "after" side can prove its revision.
 | 5 | `9816f86` | `4fd638a` | DELTAS, both classes fully attributed, every genotype artefact unchanged | the `fix/issue-181-197-followups` branch at `9816f86`, against the 2.0.6 release, and nothing after it |
 | 6 | `48f97fe` | `cb593b6` | DELTAS, every one attributed, **no genotype field changed anywhere** | the `fix/milestone-2-correctness-of-reported-numbers` branch at `48f97fe` (milestone 2, #171/#172/#174/#203/#212), against the 2.0.7 release, and nothing after it |
 | 7 | `19c8acd` | `4678851` | CANDIDATE PASS; comparison BLOCKED only by baseline-refused successes | issue #233 at `19c8acd`, against its required regression baseline `4678851`, and nothing after it |
+| 8 | `74fcbe0` | `c74e9e5` | DELTAS, every one attributed, **no genotype field changed anywhere** | adVNTR 2.0.x and real `--threads` (#259), against `c74e9e5`, and nothing after it |
+| 9 | `edaf44a` | `80ac6be` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | atomic BAM and BAI installation (#314), against `80ac6be`, and nothing after it |
 
 Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
 *different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
@@ -1215,3 +1217,71 @@ The retained evidence is bound by these SHA-256 digests:
 | baseline `side.json` | `5321f9206405b77ccf4a198603b1ad1ca1b2f628105aba7a38f8cadaeaddb075` |
 | candidate `side.json` | `c8f583664a48615116573697ce1d3114ec45a13482fdf183d7c5d2e757f79335` |
 | both matrix snapshots | `241aeaf5aa64b8f684848f271e9d1a45e422ba41825adda9ee67b6a32cd7ac68` |
+
+## Run 9 — `80ac6be` → `edaf44a`, atomic BAM and BAI installation (#314)
+
+Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
+all **85 runs on each side verified their package resolution**. The attestation-grade matrix
+comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
+6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
+no run timed out.
+
+The marker module was `vntyper.scripts.artifact_publish`, absent on the baseline `review-origin-main`
+and present on the candidate.
+
+### What this run compares
+
+Baseline `80ac6be` writes final sliced and sorted BAM and BAI files directly to their public output
+paths as subprocesses execute. Candidate `edaf44a` implements atomic installation (#314): subprocesses
+target temporary, deterministic sibling `.partial` paths (`<path>.partial`), followed by atomic
+`os.replace` publication only upon verified 0 exit and non-empty file creation. On any failure or
+exception, `.partial` files are unlinked, preventing partial, truncated, or header-only BAM files
+from remaining under public artifact paths.
+
+### Every genotype artefact is unchanged
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `advntr_result` | 0 | 3 |
+| `kestrel_result` | 0 | 77 |
+| `kestrel_pre_result` | 0 | 77 |
+| `coverage_summary` | 0 | 77 |
+| `screening_summary` | 0 | 0 |
+| `report_tables` | 0 | 77 |
+| `cross_match_summary` | 0 | 0 |
+| every `cohort_*` artefact | 0 | 3–4 each |
+| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
+| `placed_unmapped_guard_count` | 0 | 81 |
+| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
+| `output_bed` | 0 | 62 |
+| `pseudonymization_table` | 0 | 1 |
+| `exit_code` | 0 | 85 |
+| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
+
+The verdict is **IDENTICAL** under `--expect-command-delta`.
+
+### Command-stream deltas
+
+The command stream differs on 79 of 81 per-sample cases. Every delta is fully attributed to
+the atomic artifact installation contract and process-level noise:
+
+1. **Deterministic `.partial` target paths**: Alignment and slicing commands emit `-o <path>.partial`
+   (e.g. `-o .../output_sliced.bam.partial`, `-o .../output_unmapped.bam.partial`, and
+   `samtools view -Sb ... > .../output.bam.partial`) instead of writing directly to public filenames.
+2. **Explicit BAI index target paths**: Index invocations specify `-o .../<bam>.bai.partial`
+   before atomic publication to `.../<bam>.bai`.
+3. **Process and temporary file noise**: Ephemeral process IDs in `/proc/<pid>/fd/5` (used for
+   process-substitution FIFO references) and temporary directory suffixes.
+
+Normalising these three expected differences leaves the command streams functionally identical,
+confirming zero unexpected command or pipeline alterations across all 85 runs.
+
+The retained evidence is bound by these SHA-256 digests:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `result.json` | `3c84f5970a0a145e13116bc44ec46951e225cdbee283b4ae6dc76f0878f54b7b` |
+| `result.md` | `13344703ac581b5ca75aca6eaa8d8ef1d98786f5b6f8e5b43e31e2d3b2305ef6` |
+| baseline `side.json` | `424e33c894b032987cd1971a1b79dfb44c5916c1cf4d4603857cd0b0346d1148` |
+| candidate `side.json` | `00bedbf8d8fb1f24b78d91d44b29915dd018c91a7897ca7d9a7627127eb676f9` |
+| both matrix snapshots | `e3a0509d30d646f836eb129b79edded4960b5890673b2e31cc0f89835933e940` |
