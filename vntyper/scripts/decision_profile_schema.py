@@ -251,18 +251,27 @@ def _validate_profile_metadata(profile: Mapping[str, object]) -> str:
     return kind
 
 
-def _validate_critical_fields(fields: Mapping[str, DecisionField]) -> None:
-    for pointer, expected in _CRITICAL_NUMERIC_METADATA.items():
+def _validate_critical_fields(fields: Mapping[str, DecisionField], *, revision: str = "2") -> None:
+    expected_critical = dict(_CRITICAL_NUMERIC_METADATA)
+    if revision == "1":
+        expected_critical.pop("/components/kestrel/confidence_assignment/reporting_floor", None)
+    for pointer, expected in expected_critical.items():
         field = fields.get(pointer)
         if field is None:
             raise ValueError(f"decision profile is missing critical fixed-safety field {pointer}")
         actual = (field.value, field.unit, field.comparator, field.inclusive)
         if field.validation_class is not ValidationClass.FIXED_SAFETY or actual != expected:
             raise ValueError(f"decision profile critical fixed-safety field differs: {pointer}")
-    floor = fields["/components/kestrel/confidence_assignment/reporting_floor"]
-    gg = fields["/components/kestrel/alt_filtering/gg_depth_score_threshold"]
-    if floor.value != gg.value:
-        raise ValueError("independent GG depth-score minimum must equal the reporting floor")
+    if revision == "1":
+        low = fields["/components/kestrel/confidence_assignment/depth_score_thresholds/low"]
+        gg = fields["/components/kestrel/alt_filtering/gg_depth_score_threshold"]
+        if low.value != gg.value:
+            raise ValueError("independent GG depth-score minimum must equal the reporting floor")
+    else:
+        floor = fields["/components/kestrel/confidence_assignment/reporting_floor"]
+        gg = fields["/components/kestrel/alt_filtering/gg_depth_score_threshold"]
+        if floor.value != gg.value:
+            raise ValueError("independent GG depth-score minimum must equal the reporting floor")
 
 
 def _same_json_type(left: object, right: object) -> bool:
@@ -368,7 +377,7 @@ def validate_complete_inventory(
             ):
                 raise ValueError(f"generated profile must copy explicit-custom field: {pointer}")
 
-    _validate_critical_fields(fields)
+    _validate_critical_fields(fields, revision=str(profile.get("profile_revision", "2")))
     generated_pointers = {
         pointer for pointer, field in fields.items() if field.validation_class is ValidationClass.GENERATED_MUTABLE
     }
