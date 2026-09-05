@@ -311,11 +311,20 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                             donor_data,
                             reference_fingerprint=data.get("reference_fingerprint"),
                         )
+                        donor_tools = donor_data.get("analysis_settings", {}).get("preprocessing_tools")
+                        curr_tools = data.get("analysis_settings", {}).get("preprocessing_tools")
+                        fastp_matches = True
+                        bwa_tool_matches = True
+                        if donor_tools is not None and curr_tools is not None:
+                            fastp_matches = donor_tools.get("fastp") == curr_tools.get("fastp")
+                            bwa_tool_matches = donor_tools.get("bwa") == curr_tools.get("bwa")
                         existing_steps = {s.get("step") for s in data.get("steps", [])}
-                        inval_align = not shark_matches or not bwa_matches
+                        inval_align = not shark_matches or not bwa_matches or not fastp_matches or not bwa_tool_matches
                         for s in donor_data.get("steps", []):
                             st = s.get("step")
                             if not st or st in existing_steps:
+                                continue
+                            if st == summary_steps.STEP_FASTQ_QC and not fastp_matches:
                                 continue
                             if (
                                 st
@@ -338,6 +347,8 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                             data.setdefault("steps", []).append(s)
                         if donor_data.get("stage_artifact_md5s"):
                             for st, md5s in donor_data["stage_artifact_md5s"].items():
+                                if st == summary_steps.STEP_FASTQ_QC and not fastp_matches:
+                                    continue
                                 if (
                                     st
                                     in (
@@ -488,12 +499,43 @@ def resume_refusals(
             refusals.append("checkpoint lacks recorded analysis settings")
         elif prior_settings != analysis_settings:
             for k, v in analysis_settings.items():
+                if k == "preprocessing_tools":
+                    continue
                 if prior_settings.get(k) != v:
                     refusals.append(
                         f"analysis setting {k!r} differs (prior: {prior_settings.get(k)!r}, current: {v!r})"
                     )
 
     return refusals
+
+
+def _kestrel_has_variants(step_record: Mapping[str, Any] | None, result_path: Path) -> bool:
+    """Return True if Kestrel result contains real variant calls rather than negative placeholder."""
+    from vntyper.scripts.report_formatting import is_empty_result_row
+
+    if step_record is not None:
+        parsed_data = step_record.get("parsed_result", {}).get("data")
+        if isinstance(parsed_data, list):
+            return any(not is_empty_result_row(row) for row in parsed_data if isinstance(row, dict))
+
+    if result_path.is_file():
+        try:
+            with result_path.open("r", encoding="utf-8") as handle:
+                header_cols: list[str] | None = None
+                for line in handle:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split("\t")
+                    if header_cols is None:
+                        header_cols = parts
+                    else:
+                        row_dict = dict(zip(header_cols, parts, strict=False))
+                        if not is_empty_result_row(row_dict):
+                            return True
+        except (OSError, UnicodeDecodeError):
+            return False
+    return False
 
 
 def step_is_reusable(
@@ -622,14 +664,7 @@ def step_is_reusable(
             logger.debug("Required Kestrel BAM index %s does not exist", bai_path)
             return False
 
-        has_variants = False
-        try:
-            with result_path.open("r", encoding="utf-8") as handle:
-                lines = [line.strip() for line in handle if line.strip()]
-            has_variants = len(lines) > 1
-        except (OSError, UnicodeDecodeError):
-            has_variants = False
-
+        has_variants = _kestrel_has_variants(step_record, result_path)
         bed_recorded = "output.bed" in recorded_siblings
         if (bed_recorded or has_variants) and not (stage_dir / "output.bed").is_file():
             logger.debug("Required Kestrel BED file %s does not exist", stage_dir / "output.bed")

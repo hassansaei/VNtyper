@@ -932,3 +932,137 @@ def test_donor_summary_filters_steps_on_shark_or_bwa_change(tmp_path: Path) -> N
     assert summary_steps.STEP_FASTQ_QC in loaded_step_names
     assert summary_steps.STEP_FASTQ_QC in loaded.get("stage_artifact_md5s", {})
     assert summary_steps.STEP_FASTQ_ALIGNMENT not in loaded.get("stage_artifact_md5s", {})
+
+
+def test_step_is_reusable_kestrel_allows_negative_result_without_bed(tmp_path: Path) -> None:
+    """A negative Kestrel result placeholder does not require output.bed for reuse (#20)."""
+    from vntyper.scripts.kestrel_result_artifacts import write_empty_kestrel_artifacts
+
+    kestrel_dir = tmp_path / "kestrel"
+    kestrel_dir.mkdir()
+    res_path = write_empty_kestrel_artifacts(kestrel_dir, ["## Header"])
+    (kestrel_dir / "output.bam").touch()
+    (kestrel_dir / "output.bam.bai").touch()
+    (kestrel_dir / "output.vcf").touch()
+    (kestrel_dir / "output_indel.vcf").touch()
+
+    prior: dict[str, Any] = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(res_path),
+                "md5sum": _md5(res_path.read_bytes()),
+                "parsed_result": {
+                    "data": [
+                        {
+                            "Motif": "None",
+                            "Variant": "None",
+                            "POS": "None",
+                            "REF": "None",
+                            "ALT": "None",
+                            "Motif_sequence": "None",
+                            "Estimated_Depth_AlternateVariant": "None",
+                            "Estimated_Depth_Variant_ActiveRegion": "None",
+                            "Depth_Score": "None",
+                            "Confidence": "Negative",
+                        }
+                    ]
+                },
+            }
+        ],
+        "stage_artifact_md5s": {
+            summary_steps.STEP_KESTREL: {
+                "output.bam": _md5(b""),
+                "output.bam.bai": _md5(b""),
+                "output.vcf": _md5(b""),
+                "output_indel.vcf": _md5(b""),
+                "kestrel_pre_result.tsv": _md5((kestrel_dir / "kestrel_pre_result.tsv").read_bytes()),
+            }
+        },
+    }
+    # Reusable even though output.bed does not exist
+    assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is True
+
+    # If output.bed is recorded in stage_artifact_md5s, it is required
+    prior_with_bed_recorded = dict(prior)
+    prior_with_bed_recorded["stage_artifact_md5s"] = {
+        summary_steps.STEP_KESTREL: {
+            **prior["stage_artifact_md5s"][summary_steps.STEP_KESTREL],
+            "output.bed": "some_md5",
+        }
+    }
+    assert step_is_reusable(prior_with_bed_recorded, summary_steps.STEP_KESTREL, tmp_path) is False
+
+    # If result has real variants (not Negative placeholder), output.bed is required
+    res_with_variant = kestrel_dir / "kestrel_result.tsv"
+    res_with_variant.write_text(
+        "Motif\tVariant\tPOS\tREF\tALT\tMotif_sequence\tEstimated_Depth_AlternateVariant\t"
+        "Estimated_Depth_Variant_ActiveRegion\tDepth_Score\tConfidence\n"
+        "1\tinsC\t155161000\tA\tAC\tseq\t10\t20\t0.5\tHigh\n",
+        encoding="utf-8",
+    )
+    prior_variant: dict[str, Any] = {
+        "steps": [
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(res_with_variant),
+                "md5sum": _md5(res_with_variant.read_bytes()),
+            }
+        ],
+        "stage_artifact_md5s": prior["stage_artifact_md5s"],
+    }
+    assert step_is_reusable(prior_variant, summary_steps.STEP_KESTREL, tmp_path) is False
+
+
+def test_donor_summary_filters_steps_on_preprocessing_tools_change(tmp_path: Path) -> None:
+    main_summary = tmp_path / "pipeline_summary.json"
+    donor_summary = tmp_path / "pipeline_summary.donor.json"
+
+    primary_data: dict[str, Any] = {
+        "version": "2.0.27",
+        "sample_name": "s1",
+        "input_files": {"fastq_1": "r1.fq"},
+        "analysis_settings": {
+            "preprocessing_tools": {
+                "fastp": {"command": "fastp", "fingerprint": "fp_fastp_new"},
+                "bwa": {"command": "bwa", "fingerprint": "fp_bwa_current"},
+            }
+        },
+        "reference_fingerprint": "ref_fp_current",
+        "shark_reference_fingerprint": "shark_fp_current",
+        "steps": [],
+    }
+    donor_data: dict[str, Any] = {
+        "version": "2.0.27",
+        "sample_name": "s1",
+        "input_files": {"fastq_1": "r1.fq"},
+        "analysis_settings": {
+            "preprocessing_tools": {
+                "fastp": {"command": "fastp", "fingerprint": "fp_fastp_old"},
+                "bwa": {"command": "bwa", "fingerprint": "fp_bwa_current"},
+            }
+        },
+        "reference_fingerprint": "ref_fp_current",
+        "shark_reference_fingerprint": "shark_fp_current",
+        "steps": [
+            {"step": summary_steps.STEP_FASTQ_QC, "result_file": "/path/qc.json"},
+            {"step": summary_steps.STEP_FASTQ_ALIGNMENT, "result_file": "/path/bam"},
+            {"step": summary_steps.STEP_KESTREL, "result_file": "/path/res.tsv"},
+        ],
+        "stage_artifact_md5s": {
+            summary_steps.STEP_FASTQ_QC: {"qc.json": "md5"},
+            summary_steps.STEP_FASTQ_ALIGNMENT: {"out.bam": "md5"},
+            summary_steps.STEP_KESTREL: {"output.vcf": "md5"},
+        },
+    }
+
+    main_summary.write_text(json.dumps(primary_data), encoding="utf-8")
+    donor_summary.write_text(json.dumps(donor_data), encoding="utf-8")
+
+    loaded = load_prior_summary(main_summary)
+    assert loaded is not None
+    loaded_steps = [s.get("step") for s in loaded.get("steps", [])]
+    # Differing fastp should invalidate FASTQ_QC and alignment and Kestrel
+    assert summary_steps.STEP_FASTQ_QC not in loaded_steps
+    assert summary_steps.STEP_FASTQ_ALIGNMENT not in loaded_steps
+    assert summary_steps.STEP_KESTREL not in loaded_steps

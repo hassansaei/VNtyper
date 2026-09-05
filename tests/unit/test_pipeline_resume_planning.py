@@ -51,6 +51,39 @@ def test_build_analysis_settings(tmp_path: Path) -> None:
     assert settings["advntr_max_coverage"] == 100
     assert settings["bam_processing"] == {"threads": 4}
     assert settings["extra_modules"] == ["advntr", "shark"]
+    assert settings["preprocessing_tools"] is None
+
+
+def test_build_analysis_settings_fastq_preprocessing_tools(tmp_path: Path) -> None:
+    """Build canonical analysis settings captures FASTQ preprocessing tools and fingerprints."""
+    fastp_bin = tmp_path / "fastp"
+    fastp_bin.write_bytes(b"fastp executable")
+    bwa_bin = tmp_path / "bwa"
+    bwa_bin.write_bytes(b"bwa executable")
+
+    config = {
+        "tools": {
+            "fastp": str(fastp_bin),
+            "bwa": str(bwa_bin),
+        }
+    }
+    settings = build_analysis_settings(
+        reference_assembly="hg19",
+        fast_mode=False,
+        custom_regions=None,
+        bed_file=None,
+        advntr_reference=None,
+        module_args=None,
+        config=config,
+        extra_modules=(),
+        input_type="FASTQ",
+    )
+    tools = settings["preprocessing_tools"]
+    assert tools is not None
+    assert tools["fastp"]["executable"] == str(fastp_bin.resolve())
+    assert tools["fastp"]["fingerprint"] == fingerprint_file(fastp_bin)
+    assert tools["bwa"]["executable"] == str(bwa_bin.resolve())
+    assert tools["bwa"]["fingerprint"] == fingerprint_file(bwa_bin)
 
 
 def test_build_canonical_inputs_and_fingerprints_bam(tmp_path: Path) -> None:
@@ -109,6 +142,37 @@ def test_resolve_effective_kestrel_runtime(tmp_path: Path) -> None:
     assert runtime["kestrel_executable"] == str(jar.resolve())
     assert runtime["kestrel_executable_fingerprint"] == fingerprint_file(jar)
     assert fp == fingerprint_runtime(runtime)
+
+
+def test_resolve_effective_kestrel_runtime_kanalyze_content_change(tmp_path: Path) -> None:
+    """Replacing kanalyze.jar content in place changes Kestrel runtime fingerprint (#20)."""
+    kestrel_jar = tmp_path / "kestrel.jar"
+    kestrel_jar.write_text("kestrel v1", encoding="utf-8")
+    kanalyze_jar = tmp_path / "kanalyze.jar"
+    kanalyze_jar.write_text("kanalyze v1", encoding="utf-8")
+
+    config = {
+        "tools": {
+            "kestrel": str(kestrel_jar),
+            "kanalyze": str(kanalyze_jar),
+        }
+    }
+    mode1, rt1, fp1 = resolve_effective_kestrel_runtime(
+        resolve_run_configuration(),
+        config,
+        str(tmp_path),
+    )
+    assert rt1["kanalyze_fingerprint"] == fingerprint_file(kanalyze_jar)
+
+    # Modify kanalyze.jar in place
+    kanalyze_jar.write_text("kanalyze v2 (modified)", encoding="utf-8")
+    mode2, rt2, fp2 = resolve_effective_kestrel_runtime(
+        resolve_run_configuration(),
+        config,
+        str(tmp_path),
+    )
+    assert rt2["kanalyze_fingerprint"] == fingerprint_file(kanalyze_jar)
+    assert fp2 != fp1
 
 
 def test_evaluate_resume_compatibility_matches() -> None:
@@ -328,3 +392,69 @@ def test_evaluate_resume_compatibility_advntr_version_mismatch() -> None:
         advntr_version="2.1.0",
     )
     assert compat.advntr_model_matches is False
+
+
+def test_evaluate_resume_compatibility_preprocessing_tools() -> None:
+    """Changing fastp invalidates QC and alignment; changing bwa invalidates alignment (#20)."""
+    prior_tools = {
+        "fastp": {"command": "fastp", "executable": "/bin/fastp", "fingerprint": "fp_fastp_1"},
+        "bwa": {"command": "bwa", "executable": "/bin/bwa", "fingerprint": "fp_bwa_1"},
+    }
+    prior = {
+        "analysis_settings": {"preprocessing_tools": prior_tools},
+    }
+    base_kwargs: dict[str, Any] = {
+        "input_type": "FASTQ",
+        "kestrel_reference_path": None,
+        "kestrel_reference_fingerprint": None,
+        "kestrel_motifs_path": None,
+        "kestrel_motifs_fingerprint": None,
+        "kestrel_runtime_fingerprint": None,
+        "kestrel_counting_mode": None,
+        "advntr_model_sha": None,
+        "advntr_rus_path": None,
+        "advntr_rus_fingerprint": None,
+        "advntr_runtime_fingerprint": None,
+        "shark_reference_path": None,
+        "shark_reference_fingerprint": None,
+        "shark_runtime_fingerprint": None,
+        "effective_reference_path": None,
+        "effective_reference_fingerprint": None,
+    }
+
+    # All tools match
+    compat_match = evaluate_resume_compatibility(
+        prior,
+        current_preprocessing_tools=prior_tools,
+        **base_kwargs,
+    )
+    assert compat_match.inval_qc is False
+    assert compat_match.inval_align is False
+
+    # fastp changes -> inval_qc and inval_align
+    fastp_changed = {
+        "fastp": {"command": "fastp", "executable": "/bin/fastp", "fingerprint": "fp_fastp_2"},
+        "bwa": prior_tools["bwa"],
+    }
+    compat_fastp = evaluate_resume_compatibility(
+        prior,
+        current_preprocessing_tools=fastp_changed,
+        **base_kwargs,
+    )
+    assert compat_fastp.inval_qc is True
+    assert compat_fastp.inval_align is True
+    assert compat_fastp.kestrel_ref_matches is False
+
+    # bwa changes -> inval_align, but inval_qc is False
+    bwa_changed = {
+        "fastp": prior_tools["fastp"],
+        "bwa": {"command": "bwa", "executable": "/bin/bwa", "fingerprint": "fp_bwa_2"},
+    }
+    compat_bwa = evaluate_resume_compatibility(
+        prior,
+        current_preprocessing_tools=bwa_changed,
+        **base_kwargs,
+    )
+    assert compat_bwa.inval_qc is False
+    assert compat_bwa.inval_align is True
+    assert compat_bwa.kestrel_ref_matches is False

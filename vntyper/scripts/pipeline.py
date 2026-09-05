@@ -319,6 +319,7 @@ def run_pipeline(
             module_args=module_args,
             config=config,
             extra_modules=extra_modules,
+            input_type=input_type,
         )
 
         effective_reference_path = None
@@ -643,6 +644,7 @@ def run_pipeline(
             effective_reference_path=effective_reference_path,
             effective_reference_fingerprint=effective_reference_fingerprint,
             advntr_version=advntr_version_overrides.get("advntr"),
+            current_preprocessing_tools=analysis_settings.get("preprocessing_tools"),
         )
 
         if resume and prior_summary:
@@ -832,7 +834,10 @@ def run_pipeline(
                 record_reused_stage(summary, prior_summary, STEP_FASTQ_ALIGNMENT)
                 record_reused_stage(summary, prior_summary, STEP_BAM_TO_FASTQ_POST_ALIGNMENT)
                 can_reuse_qc = (
-                    resume and prior_summary is not None and step_is_reusable(prior_summary, STEP_FASTQ_QC, output_dir)
+                    resume
+                    and prior_summary is not None
+                    and not compatibility.inval_qc
+                    and step_is_reusable(prior_summary, STEP_FASTQ_QC, output_dir)
                 )
                 if can_reuse_qc:
                     logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
@@ -876,6 +881,7 @@ def run_pipeline(
                     can_reuse_qc = (
                         resume
                         and prior_summary is not None
+                        and not compatibility.inval_qc
                         and step_is_reusable(prior_summary, STEP_FASTQ_QC, output_dir)
                     )
                     if can_reuse_qc:

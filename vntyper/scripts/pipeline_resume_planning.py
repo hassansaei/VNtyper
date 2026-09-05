@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,45 @@ def _record_reused_step(summary: dict[str, Any], record: dict[str, Any]) -> None
         summary["steps"].append(record)
 
 
+def resolve_effective_tool_identity(
+    raw_command: str | None,
+) -> dict[str, str | None]:
+    """Resolve command, executable path, and content fingerprint for a tool command."""
+    if not raw_command:
+        return {"command": None, "executable": None, "fingerprint": None}
+    cmd = str(raw_command).strip()
+    exe_path: str | None = None
+    p = Path(cmd)
+    if p.is_file():
+        exe_path = str(p.resolve())
+    else:
+        which = shutil.which(cmd)
+        if which:
+            exe_path = str(Path(which).resolve())
+    fp = fingerprint_file(Path(exe_path)) if exe_path and Path(exe_path).is_file() else None
+    return {
+        "command": cmd,
+        "executable": exe_path,
+        "fingerprint": fp,
+    }
+
+
+def resolve_effective_preprocessing_tools(
+    config: Mapping[str, Any] | None,
+    input_type: str | None,
+) -> dict[str, Any] | None:
+    """Resolve effective tool identities for FASTQ preprocessing (fastp and bwa)."""
+    if input_type != "FASTQ" or not isinstance(config, Mapping):
+        return None
+    tools = config.get("tools", {})
+    if not isinstance(tools, Mapping):
+        return None
+    return {
+        "fastp": resolve_effective_tool_identity(tools.get("fastp")),
+        "bwa": resolve_effective_tool_identity(tools.get("bwa")),
+    }
+
+
 def build_analysis_settings(
     *,
     reference_assembly: str | None,
@@ -47,6 +87,7 @@ def build_analysis_settings(
     module_args: Mapping[str, Any] | None,
     config: Mapping[str, Any] | None,
     extra_modules: tuple[str, ...],
+    input_type: str | None = None,
 ) -> dict[str, Any]:
     """Build canonical analysis settings dictionary for run identity tracking."""
     advntr_max_coverage = None
@@ -57,6 +98,8 @@ def build_analysis_settings(
     if isinstance(config, dict) and "bam_processing" in config and isinstance(config["bam_processing"], dict):
         bam_processing_settings = dict(config["bam_processing"])
 
+    preprocessing_tools = resolve_effective_preprocessing_tools(config, input_type)
+
     return {
         "reference_assembly": reference_assembly,
         "fast_mode": bool(fast_mode),
@@ -66,6 +109,7 @@ def build_analysis_settings(
         "advntr_max_coverage": advntr_max_coverage,
         "bam_processing": bam_processing_settings,
         "extra_modules": sorted(extra_modules),
+        "preprocessing_tools": preprocessing_tools,
     }
 
 
@@ -126,10 +170,22 @@ def resolve_effective_kestrel_runtime(
         else (str(Path(raw_kestrel).resolve()) if raw_kestrel else None)
     )
     kestrel_fp = fingerprint_file(Path(kestrel_path)) if kestrel_path and Path(kestrel_path).is_file() else None
+    raw_kanalyze = config.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH)
+    kanalyze_path = (
+        str(Path(os.path.join(project_root, raw_kanalyze)).resolve())
+        if raw_kanalyze and not os.path.isabs(raw_kanalyze)
+        else (str(Path(raw_kanalyze).resolve()) if raw_kanalyze else None)
+    )
+    kanalyze_fp = (
+        fingerprint_file(Path(kanalyze_path))
+        if kanalyze_path and Path(kanalyze_path).is_file() and kestrel_counting_mode == "split"
+        else None
+    )
     effective_kestrel_runtime = {
         **dict(run_configuration.kestrel_runtime),
         "kestrel_counting_mode": kestrel_counting_mode,
-        "kanalyze": config.get("tools", {}).get("kanalyze", DEFAULT_KANALYZE_PATH),
+        "kanalyze": kanalyze_path,
+        "kanalyze_fingerprint": kanalyze_fp,
         "kestrel_executable": kestrel_path,
         "kestrel_executable_fingerprint": kestrel_fp,
     }
@@ -178,6 +234,7 @@ class ResumeCompatibility:
     cram_ref_matches: bool
     inval_align: bool
     inval_cram: bool
+    inval_qc: bool = False
 
 
 def evaluate_resume_compatibility(
@@ -200,6 +257,7 @@ def evaluate_resume_compatibility(
     effective_reference_path: str | None,
     effective_reference_fingerprint: str | None,
     advntr_version: str | None = None,
+    current_preprocessing_tools: Mapping[str, Any] | None = None,
 ) -> ResumeCompatibility:
     """Evaluate whether callers, references, and alignments match prior checkpoint."""
     kestrel_ref_matches = caller_kestrel_matches(
@@ -246,7 +304,16 @@ def evaluate_resume_compatibility(
         ):
             cram_ref_matches = False
 
-    inval_align = not shark_ref_matches or not bwa_ref_matches
+    fastp_matches = True
+    bwa_tool_matches = True
+    if input_type == "FASTQ" and prior_summary is not None:
+        prior_tools = prior_summary.get("analysis_settings", {}).get("preprocessing_tools")
+        if prior_tools is not None and current_preprocessing_tools is not None:
+            fastp_matches = prior_tools.get("fastp") == current_preprocessing_tools.get("fastp")
+            bwa_tool_matches = prior_tools.get("bwa") == current_preprocessing_tools.get("bwa")
+
+    inval_qc = not fastp_matches
+    inval_align = not shark_ref_matches or not bwa_ref_matches or not fastp_matches or not bwa_tool_matches
     inval_cram = not cram_ref_matches
     if input_type == "FASTQ" and inval_align:
         kestrel_ref_matches = False
@@ -263,6 +330,7 @@ def evaluate_resume_compatibility(
         cram_ref_matches=cram_ref_matches,
         inval_align=inval_align,
         inval_cram=inval_cram,
+        inval_qc=inval_qc,
     )
 
 
@@ -292,6 +360,8 @@ def initial_stage_carry_forward(
     for s in prior_summary.get("steps", []):
         st = s.get("step")
         if not st or not step_is_reusable(prior_summary, st, output_dir, needs_advntr=needs_advntr):
+            continue
+        if st == summary_steps.STEP_FASTQ_QC and compatibility.inval_qc:
             continue
         if (
             st
@@ -328,6 +398,8 @@ def initial_stage_carry_forward(
 
     if prior_summary.get("stage_artifact_md5s"):
         for st, md5s in prior_summary["stage_artifact_md5s"].items():
+            if st == summary_steps.STEP_FASTQ_QC and compatibility.inval_qc:
+                continue
             if (
                 st
                 in (

@@ -355,6 +355,7 @@ def test_resume_skips_kestrel_and_advntr_when_reusable(tmp_path: Path) -> None:
     (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
     (kestrel_dir / "output.bam.bai").write_text("bai", encoding="utf-8")
+    (kestrel_dir / "output.bed").write_text("bed", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
     kestrel_md5 = hashlib.md5(b"kestrel tsv data").hexdigest()
@@ -2696,3 +2697,229 @@ def test_resume_reruns_kestrel_when_configured_kestrel_executable_changes(tmp_pa
     assert h.error is None
     # Changing kestrel jar executable causes Kestrel to be rerun instead of reused
     assert h.stages["run_kestrel"].call_count == 1
+
+
+def test_resume_reruns_kestrel_when_kanalyze_content_changes(tmp_path: Path) -> None:
+    """Changing kanalyze.jar content invalidates Kestrel checkpoint on resume (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    inp = tmp_path / "in"
+    inp.mkdir()
+    bam = inp / "sample.bam"
+    bam.touch()
+    kd = out / "kestrel"
+    kd.mkdir()
+
+    for name in (
+        "kestrel_result.tsv",
+        "output.vcf",
+        "output_indel.vcf",
+        "output.bam",
+        "output.bam.bai",
+        "kestrel_pre_result.tsv",
+    ):
+        (kd / name).write_text("data", encoding="utf-8")
+
+    kestrel_jar = tmp_path / "kestrel.jar"
+    kestrel_jar.write_text("kestrel content", encoding="utf-8")
+    kanalyze_jar_v1 = tmp_path / "kanalyze_v1.jar"
+    kanalyze_jar_v1.write_text("kanalyze v1", encoding="utf-8")
+    kanalyze_jar_v2 = tmp_path / "kanalyze_v2.jar"
+    kanalyze_jar_v2.write_text("kanalyze v2", encoding="utf-8")
+
+    project_root = str(Path(__file__).resolve().parent.parent.parent)
+    from vntyper.scripts.pipeline_resume_planning import resolve_effective_kestrel_runtime
+
+    cfg_v1 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg_v1["tools"]["kestrel"] = str(kestrel_jar)
+    cfg_v1["tools"]["kanalyze"] = str(kanalyze_jar_v1)
+    _, _, rt_fp_v1 = resolve_effective_kestrel_runtime(resolve_run_configuration(), cfg_v1, project_root)
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        kestrel_runtime_fingerprint=rt_fp_v1,
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kd / "kestrel_result.tsv"),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"data").hexdigest(),
+            }
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    cfg_v2 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg_v2["tools"]["kestrel"] = str(kestrel_jar)
+    cfg_v2["tools"]["kanalyze"] = str(kanalyze_jar_v2)
+
+    h = run_pipeline_under_harness(output_dir=out, bam=str(bam), resume=True, config=cfg_v2)
+    assert h.error is None
+    # Replacing kanalyze jar causes Kestrel to be rerun instead of reused
+    assert h.stages["run_kestrel"].call_count == 1
+
+
+def test_resume_reruns_qc_and_alignment_when_fastp_changes(tmp_path: Path) -> None:
+    """Changing fastp tool invalidates FASTQ QC and alignment on resume (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    inp = tmp_path / "in"
+    inp.mkdir()
+    f1 = inp / "r1.fq.gz"
+    f2 = inp / "r2.fq.gz"
+    f1.touch()
+    f2.touch()
+
+    fq_dir = out / "fastq_bam_processing"
+    fq_dir.mkdir()
+    qc_json = fq_dir / "output.json"
+    qc_json.write_text("{}", encoding="utf-8")
+    r1 = fq_dir / "output_R1.fastq.gz"
+    r2 = fq_dir / "output_R2.fastq.gz"
+    r1.touch()
+    r2.touch()
+
+    align_dir = out / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.touch()
+
+    fastp_v1 = tmp_path / "fastp_v1"
+    fastp_v1.write_bytes(b"fastp_v1")
+    fastp_v2 = tmp_path / "fastp_v2"
+    fastp_v2.write_bytes(b"fastp_v2")
+    bwa_bin = tmp_path / "bwa"
+    bwa_bin.write_bytes(b"bwa")
+
+    prior = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        analysis_settings={
+            "reference_assembly": "hg19",
+            "fast_mode": False,
+            "custom_regions": None,
+            "bed_file": None,
+            "advntr_model": None,
+            "advntr_max_coverage": None,
+            "bam_processing": copy.deepcopy(MINIMAL_CONFIG["bam_processing"]),
+            "extra_modules": [],
+            "preprocessing_tools": {
+                "fastp": {"command": str(fastp_v1), "executable": str(fastp_v1.resolve()), "fingerprint": "fp_v1"},
+                "bwa": {"command": str(bwa_bin), "executable": str(bwa_bin.resolve()), "fingerprint": "fp_bwa"},
+            },
+        },
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_QC,
+                "result_file": str(qc_json),
+                "file_type": "json",
+                "md5sum": hashlib.md5(b"{}").hexdigest(),
+            },
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": hashlib.md5(b"").hexdigest(),
+            },
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    cfg_v2 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg_v2["tools"]["fastp"] = str(fastp_v2)
+    cfg_v2["tools"]["bwa"] = str(bwa_bin)
+
+    h = run_pipeline_under_harness(
+        output_dir=out,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        resume=True,
+        config=cfg_v2,
+    )
+    assert h.error is None
+    # Changing fastp reruns QC and alignment
+    h.stages["process_fastq"].assert_called_once()
+    h.stages["align_and_sort_fastq"].assert_called_once()
+
+
+def test_resume_reruns_alignment_when_bwa_tool_changes(tmp_path: Path) -> None:
+    """Changing bwa tool invalidates alignment and downstream callers on resume (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    inp = tmp_path / "in"
+    inp.mkdir()
+    f1 = inp / "r1.fq.gz"
+    f2 = inp / "r2.fq.gz"
+    f1.touch()
+    f2.touch()
+
+    fq_dir = out / "fastq_bam_processing"
+    fq_dir.mkdir()
+    qc_json = fq_dir / "output.json"
+    qc_json.write_text("{}", encoding="utf-8")
+    r1 = fq_dir / "output_R1.fastq.gz"
+    r2 = fq_dir / "output_R2.fastq.gz"
+    r1.touch()
+    r2.touch()
+
+    align_dir = out / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.touch()
+
+    fastp_bin = tmp_path / "fastp"
+    fastp_bin.write_bytes(b"fastp")
+    bwa_v1 = tmp_path / "bwa_v1"
+    bwa_v1.write_bytes(b"bwa_v1")
+    bwa_v2 = tmp_path / "bwa_v2"
+    bwa_v2.write_bytes(b"bwa_v2")
+
+    prior = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        analysis_settings={
+            "reference_assembly": "hg19",
+            "fast_mode": False,
+            "custom_regions": None,
+            "bed_file": None,
+            "advntr_model": None,
+            "advntr_max_coverage": None,
+            "bam_processing": copy.deepcopy(MINIMAL_CONFIG["bam_processing"]),
+            "extra_modules": [],
+            "preprocessing_tools": {
+                "fastp": {"command": str(fastp_bin), "executable": str(fastp_bin.resolve()), "fingerprint": "fp_fastp"},
+                "bwa": {"command": str(bwa_v1), "executable": str(bwa_v1.resolve()), "fingerprint": "fp_v1"},
+            },
+        },
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_QC,
+                "result_file": str(qc_json),
+                "file_type": "json",
+                "md5sum": hashlib.md5(b"{}").hexdigest(),
+            },
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": hashlib.md5(b"").hexdigest(),
+            },
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    cfg_v2 = copy.deepcopy(MINIMAL_CONFIG)
+    cfg_v2["tools"]["fastp"] = str(fastp_bin)
+    cfg_v2["tools"]["bwa"] = str(bwa_v2)
+
+    h = run_pipeline_under_harness(
+        output_dir=out,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        resume=True,
+        config=cfg_v2,
+    )
+    assert h.error is None
+    # Changing bwa reruns alignment, while QC can be reused
+    h.stages["align_and_sort_fastq"].assert_called_once()
