@@ -901,3 +901,107 @@ def test_resume_refuses_reused_stage_when_sibling_artifact_md5_differs(tmp_path:
 
     # Kestrel stage must have rerun because output.bam checksum differed
     harness.stages["run_kestrel"].assert_called_once()
+
+
+def test_resume_refuses_when_bwa_reference_changes(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Changing bwa_reference to a different file path refuses resume and requires rerun."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    f1 = in_dir / "in_R1.fastq.gz"
+    f2 = in_dir / "in_R2.fastq.gz"
+    f1.write_bytes(b"fq1")
+    f2.write_bytes(b"fq2")
+
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+    )
+    prior_summary["reference_path"] = "/original/ref.fa"
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR), pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            fastq1=str(f1),
+            fastq2=str(f2),
+            bwa_reference="/different/ref.fa",
+            resume=True,
+            expect_failure=False,
+        )
+
+    assert any("Resume refused: reference path differs" in record.message for record in caplog.records)
+
+
+def test_resume_preserves_sibling_checksums_across_consecutive_resumes(tmp_path: Path) -> None:
+    """A resumed run preserves stage_artifact_md5s so subsequent resumes continue to verify sibling integrity."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_bam = in_dir / "sample.bam"
+    input_bam.write_bytes(b"bam content")
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
+    output_bam = kestrel_dir / "output.bam"
+    output_bam.write_text("bam data", encoding="utf-8")
+    output_vcf = kestrel_dir / "output.vcf"
+    output_vcf.write_text("vcf data", encoding="utf-8")
+    pre_tsv = kestrel_dir / "kestrel_pre_result.tsv"
+    pre_tsv.write_text("pre data", encoding="utf-8")
+
+    tsv_md5 = hashlib.md5(b"kestrel tsv data").hexdigest()
+    bam_md5 = hashlib.md5(b"bam data").hexdigest()
+    vcf_md5 = hashlib.md5(b"vcf data").hexdigest()
+    pre_md5 = hashlib.md5(b"pre data").hexdigest()
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": tsv_md5,
+            }
+        ],
+    )
+    prior_summary["stage_artifact_md5s"] = {
+        summary_steps.STEP_KESTREL: {
+            "output.bam": bam_md5,
+            "output.vcf": vcf_md5,
+            "kestrel_pre_result.tsv": pre_md5,
+        }
+    }
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    # First resume: reuses Kestrel
+    harness1 = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+    harness1.stages["run_kestrel"].assert_not_called()
+
+    # Verify that the new summary has preserved stage_artifact_md5s
+    resumed_summary = json.loads((output_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
+    assert summary_steps.STEP_KESTREL in resumed_summary.get("stage_artifact_md5s", {})
+    assert resumed_summary["stage_artifact_md5s"][summary_steps.STEP_KESTREL]["output.bam"] == bam_md5
+
+    # Tamper with output.bam and perform a second resume
+    output_bam.write_text("corrupted after resume", encoding="utf-8")
+    harness2 = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+    # The second resume must detect tampered sibling and rerun Kestrel!
+    harness2.stages["run_kestrel"].assert_called_once()

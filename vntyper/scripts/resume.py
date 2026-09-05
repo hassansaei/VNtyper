@@ -30,9 +30,27 @@ STEP_OUTPUT_SIBLINGS: Final[dict[str, tuple[str, ...]]] = {
         "kestrel_pre_result.tsv",
     ),
     summary_steps.STEP_ADVNTR: (),
-    summary_steps.STEP_BAM_TO_FASTQ: ("output_sliced.bam",),
-    summary_steps.STEP_CRAM_TO_FASTQ: ("output_sliced.bam",),
-    summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT: ("output_sliced.bam",),
+    summary_steps.STEP_BAM_TO_FASTQ: (
+        "output_sliced.bam",
+        "output_R1.fastq.gz",
+        "output_R2.fastq.gz",
+        "output_single.fastq.gz",
+        "output_other.fastq.gz",
+    ),
+    summary_steps.STEP_CRAM_TO_FASTQ: (
+        "output_sliced.bam",
+        "output_R1.fastq.gz",
+        "output_R2.fastq.gz",
+        "output_single.fastq.gz",
+        "output_other.fastq.gz",
+    ),
+    summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT: (
+        "output_sliced.bam",
+        "output_R1.fastq.gz",
+        "output_R2.fastq.gz",
+        "output_single.fastq.gz",
+        "output_other.fastq.gz",
+    ),
     summary_steps.STEP_FASTQ_ALIGNMENT: (),
     summary_steps.STEP_FASTQ_QC: (),
 }
@@ -94,11 +112,13 @@ def resume_refusals(
     canonical_input_files: dict[str, str] | None = None,
     reference_assembly: str | None = None,
     analysis_settings: dict[str, Any] | None = None,
+    reference_path: str | None = None,
 ) -> list[str]:
     """Validate that run identity invariants match the prior summary.
 
     Refusals concern run identity only: version, input files, sample name,
-    reference key, decision-profile digest, reference assembly, and analysis settings.
+    reference key, decision-profile digest, reference assembly, analysis settings,
+    and effective reference path.
 
     Args:
         prior: Prior summary dictionary.
@@ -110,6 +130,7 @@ def resume_refusals(
         canonical_input_files: Optional canonical resolved input file paths mapping.
         reference_assembly: Optional requested reference assembly.
         analysis_settings: Optional result-affecting analysis settings dictionary.
+        reference_path: Optional effective canonical reference path for alignment or decoding.
 
     Returns:
         list[str]: Descriptions of all detected mismatches; empty if allowed.
@@ -145,6 +166,14 @@ def resume_refusals(
     prior_ref_key = prior.get("reference_key_used")
     if prior_ref_key != reference_key_used:
         refusals.append(f"reference key differs (prior: {prior_ref_key!r}, current: {reference_key_used!r})")
+
+    if reference_path is not None:
+        prior_ref_path = prior.get("reference_path")
+        if prior_ref_path is not None:
+            prior_resolved = str(Path(prior_ref_path).resolve()) if prior_ref_path else None
+            curr_resolved = str(Path(reference_path).resolve()) if reference_path else None
+            if prior_resolved != curr_resolved:
+                refusals.append(f"reference path differs (prior: {prior_ref_path!r}, current: {reference_path!r})")
 
     prior_profile_sha = prior.get("decision_profile_sha256")
     if prior_profile_sha != decision_profile_sha256:

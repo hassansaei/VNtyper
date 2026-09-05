@@ -262,6 +262,12 @@ def run_pipeline(
             "extra_modules": sorted(extra_modules),
         }
 
+        effective_reference_path = None
+        if input_type == "FASTQ" and bwa_reference:
+            effective_reference_path = str(Path(os.path.join(project_root, bwa_reference)).resolve())
+        elif input_type == "CRAM" and reference_fasta:
+            effective_reference_path = str(Path(os.path.join(project_root, reference_fasta)).resolve())
+
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         prior_summary = None
         if resume:
@@ -281,7 +287,9 @@ def run_pipeline(
                 canonical_input_files=canonical_input_files,
                 reference_assembly=reference_assembly,
                 analysis_settings=analysis_settings,
+                reference_path=effective_reference_path,
             )
+
             if refusals:
                 for refusal in refusals:
                     logger.error("Resume refused: %s", refusal)
@@ -488,7 +496,12 @@ def run_pipeline(
                 logger.info("Reusing previous %s step results.", conversion_step)
                 prior_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == conversion_step)
                 summary["steps"].append(make_reused_step_record(prior_step, prior_summary.get("pipeline_start")))
+                if prior_summary.get("stage_artifact_md5s", {}).get(conversion_step):
+                    summary.setdefault("stage_artifact_md5s", {})[conversion_step] = dict(
+                        prior_summary["stage_artifact_md5s"][conversion_step]
+                    )
                 write_summary(summary, summary_file_path)
+
             else:
                 logger.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
                 conversion_start = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -795,7 +808,12 @@ def run_pipeline(
             summary["steps"].append(make_reused_step_record(prior_kestrel_step, prior_summary.get("pipeline_start")))
             if "kestrel_counting_mode" in prior_summary:
                 summary["kestrel_counting_mode"] = prior_summary["kestrel_counting_mode"]
+            if prior_summary.get("stage_artifact_md5s", {}).get(STEP_KESTREL):
+                summary.setdefault("stage_artifact_md5s", {})[STEP_KESTREL] = dict(
+                    prior_summary["stage_artifact_md5s"][STEP_KESTREL]
+                )
             write_summary(summary, summary_file_path)
+
         else:
             logger.info("Starting Kestrel genotyping.")
             run_kestrel_stage(
@@ -854,7 +872,12 @@ def run_pipeline(
                 logger.info("Reusing previous %s step results.", STEP_ADVNTR)
                 prior_advntr_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_ADVNTR)
                 summary["steps"].append(make_reused_step_record(prior_advntr_step, prior_summary.get("pipeline_start")))
+                if prior_summary.get("stage_artifact_md5s", {}).get(STEP_ADVNTR):
+                    summary.setdefault("stage_artifact_md5s", {})[STEP_ADVNTR] = dict(
+                        prior_summary["stage_artifact_md5s"][STEP_ADVNTR]
+                    )
                 write_summary(summary, summary_file_path)
+
             else:
                 try:
                     from vntyper.modules.advntr.advntr_genotyping import (

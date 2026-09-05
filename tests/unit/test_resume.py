@@ -266,6 +266,10 @@ def test_step_is_reusable_bam_conversion_requires_sliced_bam_and_mate(tmp_path: 
     r1.write_text("r1", encoding="utf-8")
     r2 = conv_dir / "output_R2.fastq.gz"
     r2.write_text("r2", encoding="utf-8")
+    single = conv_dir / "output_single.fastq.gz"
+    single.write_text("single", encoding="utf-8")
+    other = conv_dir / "output_other.fastq.gz"
+    other.write_text("other", encoding="utf-8")
     sliced_bam = conv_dir / "output_sliced.bam"
     sliced_bam.write_text("sliced bam", encoding="utf-8")
 
@@ -396,3 +400,80 @@ def test_step_is_reusable_relocated_relative_to_output_root(tmp_path: Path) -> N
     }
 
     assert step_is_reusable(prior, summary_steps.STEP_KESTREL, tmp_path) is True
+
+
+def test_resume_refusals_detects_reference_path_difference() -> None:
+    base = {
+        "version": "2.0.28",
+        "input_files": {"fastq1": "f1.fq.gz"},
+        "sample_name": "s1",
+        "reference_path": "/path/to/ref1.fa",
+    }
+    # Matching reference path
+    refusals = resume_refusals(
+        base,
+        version="2.0.28",
+        input_files={"fastq1": "f1.fq.gz"},
+        sample_name="s1",
+        reference_key_used=None,
+        decision_profile_sha256="abc",
+        reference_path="/path/to/ref1.fa",
+    )
+    assert not any("reference path" in r for r in refusals)
+
+    # Differing reference path
+    refusals = resume_refusals(
+        base,
+        version="2.0.28",
+        input_files={"fastq1": "f1.fq.gz"},
+        sample_name="s1",
+        reference_key_used=None,
+        decision_profile_sha256="abc",
+        reference_path="/different/ref2.fa",
+    )
+    assert any("reference path differs" in r for r in refusals)
+
+
+def test_step_is_reusable_verifies_all_four_conversion_fastqs(tmp_path: Path) -> None:
+    conv_dir = tmp_path / "fastq_bam_processing"
+    conv_dir.mkdir()
+    r1 = conv_dir / "output_R1.fastq.gz"
+    r1.write_text("r1", encoding="utf-8")
+    r2 = conv_dir / "output_R2.fastq.gz"
+    r2.write_text("r2", encoding="utf-8")
+    single = conv_dir / "output_single.fastq.gz"
+    single.write_text("single", encoding="utf-8")
+    other = conv_dir / "output_other.fastq.gz"
+    other.write_text("other", encoding="utf-8")
+    sliced_bam = conv_dir / "output_sliced.bam"
+    sliced_bam.write_text("sliced bam", encoding="utf-8")
+
+    prior = {
+        "input_files": {"bam": "/data/in.bam"},
+        "stage_artifact_md5s": {
+            summary_steps.STEP_BAM_TO_FASTQ: {
+                "output_sliced.bam": _md5(b"sliced bam"),
+                "output_R1.fastq.gz": _md5(b"r1"),
+                "output_R2.fastq.gz": _md5(b"r2"),
+                "output_single.fastq.gz": _md5(b"single"),
+                "output_other.fastq.gz": _md5(b"other"),
+            }
+        },
+        "steps": [
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ,
+                "result_file": str(r1),
+                "md5sum": _md5(b"r1"),
+            }
+        ],
+    }
+    assert step_is_reusable(prior, summary_steps.STEP_BAM_TO_FASTQ, tmp_path) is True
+
+    # Tamper with output_other.fastq.gz -> must refuse
+    other.write_text("tampered other", encoding="utf-8")
+    assert step_is_reusable(prior, summary_steps.STEP_BAM_TO_FASTQ, tmp_path) is False
+
+    # Restore other, tamper with output_single.fastq.gz -> must refuse
+    other.write_text("other", encoding="utf-8")
+    single.write_text("tampered single", encoding="utf-8")
+    assert step_is_reusable(prior, summary_steps.STEP_BAM_TO_FASTQ, tmp_path) is False
