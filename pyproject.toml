@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vntyper"
 dynamic = ["version"]
-description = "VNtyper: A tool for genotyping MUC1-VNTR"
+description = "Mapping-free k-mer genotyping of the MUC1 coding VNTR for ADTKD-MUC1"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "BSD-3-Clause"}
@@ -13,7 +13,18 @@ authors = [
     {name = "Hassan Saei", email = "hassan.saei@inserm.fr"},
     {name = "Bernt Popp", email = "bernt.popp.md@gmail.com"},
 ]
-keywords = ["bioinformatics", "genomics", "VNTR", "MUC1", "genotyping"]
+keywords = [
+    "bioinformatics",
+    "genomics",
+    "genotyping",
+    "vntr",
+    "muc1",
+    "adtkd",
+    "adtkd-muc1",
+    "k-mer",
+    "variant-calling",
+    "short-read-sequencing",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -126,10 +137,11 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hassansaei/vntyper"
-Repository = "https://github.com/hassansaei/vntyper"
-Issues = "https://github.com/hassansaei/vntyper/issues"
+Homepage = "https://vntyper.org/"
 Documentation = "https://hassansaei.github.io/VNtyper/"
+Repository = "https://github.com/hassansaei/VNtyper"
+Issues = "https://github.com/hassansaei/VNtyper/issues"
+Changelog = "https://hassansaei.github.io/VNtyper/about/changelog/"
 
 [project.scripts]
 vntyper = "vntyper.cli:main"

@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: "VNtyper"
-abstract: "A tool to genotype MUC1 coding VNTR in ADTKD"
+abstract: "Mapping-free k-mer genotyping of the MUC1 coding VNTR for ADTKD-MUC1 diagnosis from short-read sequencing data."
 authors:
   - family-names: "Saei"
     given-names: "Hassan"
@@ -11,6 +11,7 @@ authors:
     given-names: "Bernt"
     orcid: "https://orcid.org/0000-0002-3679-1081"
 repository-code: "https://github.com/hassansaei/VNtyper"
+url: "https://vntyper.org"
 license: BSD-3-Clause
 version: "2.0.28"
 date-released: '2026-09-05'
@@ -25,3 +26,8 @@ keywords:
   - ADTKD-MUC1
   - k-mer genotyping
   - bioinformatics
+  - genomics
+  - variant calling
+  - short-read sequencing
+  - Kestrel
+  - adVNTR
