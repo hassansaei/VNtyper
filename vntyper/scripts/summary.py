@@ -73,6 +73,7 @@ def start_summary(
     decision_profile: ResolvedDecisionProfile | None = None,
     canonical_input_files: dict[str, str] | None = None,
     analysis_settings: dict[str, Any] | None = None,
+    kestrel_reference_path: str | None = None,
 ):
     """
     Initializes a new pipeline summary.
@@ -134,8 +135,9 @@ def start_summary(
             For BAM and CRAM, the alignment plan's own source label instead.
         advntr_evidence_digest (str, optional): Full canonical digest of the
             run-snapshotted governed adVNTR evidence, or None when adVNTR was not used.
-        decision_profile: Profile resolved for this run. Direct compatibility callers
-            that have no run context load the packaged profile.
+        analysis_settings: Complete dictionary of result-affecting settings.
+        kestrel_reference_path: Resolved absolute path to the reference VNTR fasta
+            used by Kestrel, or None if not configured.
 
     Returns:
         dict: A summary dictionary with its schema version, decision policy, pipeline
@@ -164,6 +166,7 @@ def start_summary(
         "input_files": input_files if input_files is not None else {},
         "canonical_input_files": canonical_input_files,
         "analysis_settings": analysis_settings,
+        "kestrel_reference_path": kestrel_reference_path,
         "stage_artifact_md5s": {},
         "sample_name": sample_name,
         "sample_name_is_explicit": bool(sample_name_is_explicit),

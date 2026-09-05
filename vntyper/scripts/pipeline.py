@@ -268,6 +268,9 @@ def run_pipeline(
         elif input_type == "CRAM" and reference_fasta:
             effective_reference_path = str(Path(os.path.join(project_root, reference_fasta)).resolve())
 
+        raw_muc1 = config.get("reference_data", {}).get("muc1_reference_vntr")
+        kestrel_reference_path = str(Path(os.path.join(project_root, raw_muc1)).resolve()) if raw_muc1 else None
+
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         prior_summary = None
         if resume:
@@ -445,6 +448,7 @@ def run_pipeline(
             input_files=input_files,
             canonical_input_files=canonical_input_files,
             analysis_settings=analysis_settings,
+            kestrel_reference_path=kestrel_reference_path,
             sample_name=sample_name,
             sample_name_is_explicit=sample_name_is_explicit,
             reference_assembly_requested=reference_assembly,
@@ -617,6 +621,10 @@ def run_pipeline(
                     prior_st = next((s for s in prior_summary.get("steps", []) if s.get("step") == st_name), None)
                     if prior_st is not None:
                         summary["steps"].append(make_reused_step_record(prior_st, prior_summary.get("pipeline_start")))
+                    if prior_summary.get("stage_artifact_md5s", {}).get(st_name):
+                        summary.setdefault("stage_artifact_md5s", {})[st_name] = dict(
+                            prior_summary["stage_artifact_md5s"][st_name]
+                        )
                 write_summary(summary, summary_file_path)
                 prior_align_st = next(
                     (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
@@ -802,7 +810,22 @@ def run_pipeline(
             write_summary_path=summary_file_path,
         )
 
-        if resume and prior_summary and step_is_reusable(prior_summary, STEP_KESTREL, output_dir):
+        kestrel_ref_matches = True
+        if prior_summary:
+            prior_k_ref = prior_summary.get("kestrel_reference_path")
+            if (prior_k_ref is None) != (kestrel_reference_path is None) or (
+                prior_k_ref is not None
+                and kestrel_reference_path is not None
+                and str(Path(prior_k_ref).resolve()) != str(Path(kestrel_reference_path).resolve())
+            ):
+                kestrel_ref_matches = False
+
+        if (
+            resume
+            and prior_summary
+            and kestrel_ref_matches
+            and step_is_reusable(prior_summary, STEP_KESTREL, output_dir)
+        ):
             logger.info("Reusing previous %s step results.", STEP_KESTREL)
             prior_kestrel_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_KESTREL)
             summary["steps"].append(make_reused_step_record(prior_kestrel_step, prior_summary.get("pipeline_start")))
@@ -868,7 +891,11 @@ def run_pipeline(
                 advntr_model["genomic_interval"],
             )
 
-            if resume and prior_summary and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir):
+            prior_model_sha = prior_summary.get("advntr_model", {}).get("sha256") if prior_summary else None
+            curr_model_sha = advntr_model.get("sha256")
+            model_matches = bool(prior_model_sha and curr_model_sha and prior_model_sha == curr_model_sha)
+
+            if resume and prior_summary and model_matches and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir):
                 logger.info("Reusing previous %s step results.", STEP_ADVNTR)
                 prior_advntr_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_ADVNTR)
                 summary["steps"].append(make_reused_step_record(prior_advntr_step, prior_summary.get("pipeline_start")))

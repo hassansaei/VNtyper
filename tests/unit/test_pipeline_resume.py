@@ -48,7 +48,9 @@ def _make_prior_summary(
         else None,
         "extra_modules": resolved_modules,
     }
-    return {
+    raw_muc1 = MINIMAL_CONFIG.get("reference_data", {}).get("muc1_reference_vntr")
+    kestrel_ref_path = str(Path(raw_muc1).resolve()) if raw_muc1 else None
+    res = {
         "schema_version": 3,
         "version": VERSION,
         "input_files": input_files,
@@ -56,11 +58,22 @@ def _make_prior_summary(
         "sample_name": sample_name,
         "reference_assembly_requested": reference_assembly,
         "reference_key_used": reference_key_used,
+        "kestrel_reference_path": kestrel_ref_path,
         "decision_profile_sha256": decision_profile_sha256 or resolve_run_configuration().decision_profile.digest,
         "pipeline_start": "2026-09-05T08:00:00.000000",
         "analysis_settings": analysis_settings if analysis_settings is not None else default_settings,
         "steps": steps or [],
     }
+    if "advntr" in resolved_modules and advntr_model:
+        model_path = Path(advntr_model)
+        sha = hashlib.sha256(model_path.read_bytes()).hexdigest() if model_path.is_file() else "0" * 64
+        res["advntr_model"] = {
+            "sha256": sha,
+            "schema_version": "1.0",
+            "window_bp": 1000,
+            "genomic_interval": "chr1:1-1000",
+        }
+    return res
 
 
 def test_warning_emitted_when_output_dir_non_empty_without_resume(
@@ -1005,3 +1018,178 @@ def test_resume_preserves_sibling_checksums_across_consecutive_resumes(tmp_path:
     )
     # The second resume must detect tampered sibling and rerun Kestrel!
     harness2.stages["run_kestrel"].assert_called_once()
+
+
+def test_resume_reruns_advntr_when_model_digest_changes(tmp_path: Path) -> None:
+    """adVNTR step is re-run if prior checkpoint model digest does not match active model (#20)."""
+    output_dir = tmp_path / "resume_advntr_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "input_dir"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir()
+    advntr_tsv = advntr_dir / "output_adVNTR_result.tsv"
+    advntr_tsv.write_text("advntr data", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        extra_modules=["advntr"],
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"kestrel tsv data").hexdigest(),
+            },
+            {
+                "step": summary_steps.STEP_ADVNTR,
+                "result_file": str(advntr_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"advntr data").hexdigest(),
+            },
+        ],
+    )
+    # Tamper prior summary model sha256
+    prior_summary["advntr_model"] = {"sha256": "0" * 64}
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        extra_modules=["advntr"],
+        bam=str(input_bam),
+        resume=True,
+    )
+    # adVNTR must be rerun because model digest differed!
+    harness.stages["run_advntr"].assert_called_once()
+    # Kestrel should still be skipped
+    harness.stages["run_kestrel"].assert_not_called()
+
+
+def test_resume_reruns_kestrel_when_reference_path_changes(tmp_path: Path) -> None:
+    """Kestrel is re-run when muc1_reference_vntr path changes across runs (#20)."""
+    output_dir = tmp_path / "resume_kestrel_ref_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "input_dir"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"kestrel tsv data").hexdigest(),
+            }
+        ],
+    )
+    # Set a different reference path in prior summary
+    prior_summary["kestrel_reference_path"] = "/different/path/muc1.fa"
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+    # Kestrel must be rerun because reference path differed!
+    harness.stages["run_kestrel"].assert_called_once()
+
+
+def test_resume_preserves_fastq_conversion_sibling_hashes(tmp_path: Path) -> None:
+    """Reused FASTQ conversion stage preserves sibling checksums in new checkpoint (#20)."""
+    output_dir = tmp_path / "resume_fq_hashes_dir"
+    output_dir.mkdir()
+    fq_dir = output_dir / "fastq_bam_processing"
+    fq_dir.mkdir()
+
+    r1 = fq_dir / "output_R1.fastq.gz"
+    r2 = fq_dir / "output_R2.fastq.gz"
+    single = fq_dir / "output_single.fastq.gz"
+    other = fq_dir / "output_other.fastq.gz"
+    sliced = fq_dir / "output_sliced.bam"
+    r1.write_bytes(b"r1_data")
+    r2.write_bytes(b"r2_data")
+    single.write_bytes(b"single_data")
+    other.write_bytes(b"other_data")
+    sliced.write_bytes(b"sliced_data")
+
+    input_dir = tmp_path / "input_dir"
+    input_dir.mkdir()
+    in_f1 = input_dir / "in_1.fastq.gz"
+    in_f2 = input_dir / "in_2.fastq.gz"
+    in_f1.touch()
+    in_f2.touch()
+
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": in_f1.name, "fastq2": in_f2.name},
+        canonical_input_files={"fastq1": str(in_f1.resolve()), "fastq2": str(in_f2.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_QC,
+                "result_file": str(output_dir / "fastp.json"),
+                "file_type": "json",
+            },
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(output_dir / "alignment_processing" / "output_sorted.bam"),
+                "file_type": "bam",
+            },
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                "result_file": str(r1),
+                "file_type": "fastq",
+                "md5sum": hashlib.md5(b"r1_data").hexdigest(),
+            },
+        ],
+    )
+    prior_summary["stage_artifact_md5s"] = {
+        summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT: {
+            "output_R2.fastq.gz": hashlib.md5(b"r2_data").hexdigest(),
+            "output_single.fastq.gz": hashlib.md5(b"single_data").hexdigest(),
+            "output_other.fastq.gz": hashlib.md5(b"other_data").hexdigest(),
+            "output_sliced.bam": hashlib.md5(b"sliced_data").hexdigest(),
+        }
+    }
+    align_dir = output_dir / "alignment_processing"
+    align_dir.mkdir()
+    (align_dir / "output_sorted.bam").touch()
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    run_pipeline_under_harness(
+        output_dir=output_dir,
+        fastq1=str(in_f1),
+        fastq2=str(in_f2),
+        reference_assembly="hg19",
+        resume=True,
+    )
+
+    new_summary = json.loads((output_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
+    assert summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT in new_summary.get("stage_artifact_md5s", {})
+    assert (
+        new_summary["stage_artifact_md5s"][summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT]["output_R2.fastq.gz"]
+        == hashlib.md5(b"r2_data").hexdigest()
+    )
