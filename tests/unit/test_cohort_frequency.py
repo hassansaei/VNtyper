@@ -67,6 +67,50 @@ def test_placeholder_rows_are_completely_excluded() -> None:
     assert row["Max_Depth_Score"] == 25.5
 
 
+def test_annotated_placeholder_rows_with_decision_profile_metadata_are_excluded() -> None:
+    """Empty-result placeholder rows annotated with Decision_Profile metadata are correctly excluded."""
+    rows = [
+        {
+            "Sample": "sample_negative",
+            "Motif": "None",
+            "Variant": "None",
+            "POS": "None",
+            "REF": "None",
+            "ALT": "None",
+            "Motif_sequence": "None",
+            "Estimated_Depth_AlternateVariant": "None",
+            "Estimated_Depth_Variant_ActiveRegion": "None",
+            "Depth_Score": "None",
+            "Confidence": "Negative",
+            "Decision_Profile_ID": "muc1-adtkd-default",
+            "Decision_Profile_Revision": "2",
+            "Decision_Profile_SHA256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        },
+        {
+            "Sample": "sample_positive",
+            "Molecular_Identity": "chr1|155160963|155160963|C|CC",
+            "Molecular_Identity_Status": "unique",
+            "Motifs": "5-5",
+            "POS": "155160963",
+            "REF": "C",
+            "ALT": "CC",
+            "Variant": "insC",
+            "Depth_Score": "30.0",
+            "Confidence": "High_Precision",
+            "Decision_Profile_ID": "muc1-adtkd-default",
+            "Decision_Profile_Revision": "2",
+            "Decision_Profile_SHA256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        },
+    ]
+    df = pd.DataFrame(rows)
+    result = call_frequency_frame(df, cohort_size=2, max_frequency=0.05)
+
+    assert len(result) == 1
+    assert result.iloc[0]["Grouping_Key"] == "chr1|155160963|155160963|C|CC"
+    assert result.iloc[0]["Sample_Count"] == 1
+    assert result.iloc[0]["Frequency"] == 0.5
+
+
 def test_molecular_identity_grouping_when_unique_or_legacy_selected() -> None:
     """Unique and legacy-selected-among-multiple molecular identities are grouped by identity."""
     rows = [

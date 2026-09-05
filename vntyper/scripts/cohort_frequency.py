@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from vntyper.scripts.cohort_profiles import PROFILE_EXPORT_COLUMNS
 from vntyper.scripts.report_formatting import is_empty_result_row
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ CALL_FREQUENCY_COLUMNS: list[str] = [
 _EXCLUDED_CALLER_METADATA = frozenset(
     {
         "Sample",
+        *PROFILE_EXPORT_COLUMNS,
         "decision_profile_name",
         "decision_profile_revision",
         "decision_profile_sha256",
