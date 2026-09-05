@@ -64,10 +64,12 @@ from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
 from vntyper.scripts.resume import (
     caller_advntr_matches,
     caller_kestrel_matches,
+    caller_shark_matches,
     fingerprint_file,
     fingerprint_runtime,
     load_prior_summary,
     make_reused_step_record,
+    reference_content_matches,
     resume_refusals,
     step_is_reusable,
 )
@@ -352,6 +354,31 @@ def run_pipeline(
         elif input_type == "CRAM" and reference_fasta:
             effective_reference_path = str(Path(os.path.join(project_root, reference_fasta)).resolve())
 
+        effective_reference_fingerprint = (
+            fingerprint_file(Path(effective_reference_path))
+            if effective_reference_path and Path(effective_reference_path).is_file()
+            else None
+        )
+
+        shark_reference_path = None
+        shark_reference_fingerprint = None
+        if input_type == "FASTQ" and "shark" in extra_modules:
+            try:
+                from vntyper.modules.shark.shark_filtering import select_muc1_region_fasta
+
+                raw_shark = select_muc1_region_fasta(
+                    dict(run_configuration.shark_runtime),
+                    config,
+                    reference_assembly,
+                )
+                if raw_shark:
+                    shark_p = Path(os.path.join(project_root, raw_shark)).resolve()
+                    shark_reference_path = str(shark_p)
+                    if shark_p.is_file():
+                        shark_reference_fingerprint = fingerprint_file(shark_p)
+            except (ValueError, KeyError, OSError) as err:
+                logger.debug("Could not resolve SHARK reference for fingerprinting: %s", err)
+
         raw_muc1 = config.get("reference_data", {}).get("muc1_reference_vntr")
         kestrel_reference_path = str(Path(os.path.join(project_root, raw_muc1)).resolve()) if raw_muc1 else None
         kestrel_reference_fingerprint = (
@@ -399,6 +426,9 @@ def run_pipeline(
                 analysis_settings=analysis_settings,
                 reference_path=effective_reference_path,
                 input_fingerprints=input_fingerprints,
+                reference_fingerprint=effective_reference_fingerprint,
+                shark_reference_path=shark_reference_path,
+                shark_reference_fingerprint=shark_reference_fingerprint,
             )
 
             if refusals:
@@ -581,6 +611,9 @@ def run_pipeline(
             advntr_rus_fingerprint=advntr_rus_fingerprint,
             kestrel_runtime_fingerprint=kestrel_runtime_fingerprint,
             advntr_runtime_fingerprint=advntr_runtime_fingerprint,
+            reference_fingerprint=effective_reference_fingerprint,
+            shark_reference_path=shark_reference_path,
+            shark_reference_fingerprint=shark_reference_fingerprint,
             sample_name=sample_name,
             sample_name_is_explicit=sample_name_is_explicit,
             reference_assembly_requested=reference_assembly,
@@ -610,6 +643,20 @@ def run_pipeline(
             advntr_runtime_fingerprint=advntr_runtime_fingerprint,
         )
 
+        shark_ref_matches = caller_shark_matches(
+            prior_summary,
+            shark_reference_path=shark_reference_path,
+            shark_reference_fingerprint=shark_reference_fingerprint,
+        )
+        bwa_ref_matches = reference_content_matches(
+            prior_summary,
+            reference_fingerprint=effective_reference_fingerprint,
+        )
+        inval_align = not shark_ref_matches or not bwa_ref_matches
+        if input_type == "FASTQ" and inval_align:
+            kestrel_ref_matches = False
+            advntr_model_matches = False
+
         if resume and prior_summary:
             donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
             if not donor_summary_path.is_file() and os.path.isfile(summary_file_path):
@@ -618,6 +665,16 @@ def run_pipeline(
             for s in prior_summary.get("steps", []):
                 st = s.get("step")
                 if not st or not step_is_reusable(prior_summary, st, output_dir):
+                    continue
+                if (
+                    st
+                    in (
+                        STEP_FASTQ_ALIGNMENT,
+                        STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                        STEP_SHARK,
+                    )
+                    and inval_align
+                ):
                     continue
                 if st == STEP_KESTREL and not kestrel_ref_matches:
                     continue
@@ -636,6 +693,16 @@ def run_pipeline(
                 summary["advntr_model"] = dict(prior_summary["advntr_model"])
             if prior_summary.get("stage_artifact_md5s"):
                 for st, md5s in prior_summary["stage_artifact_md5s"].items():
+                    if (
+                        st
+                        in (
+                            STEP_FASTQ_ALIGNMENT,
+                            STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                            STEP_SHARK,
+                        )
+                        and inval_align
+                    ):
+                        continue
                     if st == STEP_KESTREL and not kestrel_ref_matches:
                         continue
                     if st == STEP_ADVNTR and ("advntr" not in extra_modules or not advntr_model_matches):
@@ -787,6 +854,7 @@ def run_pipeline(
             can_reuse_alignment_and_conv = (
                 resume
                 and prior_summary is not None
+                and not inval_align
                 and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir)
                 and step_is_reusable(prior_summary, STEP_BAM_TO_FASTQ_POST_ALIGNMENT, output_dir)
             )

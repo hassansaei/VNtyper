@@ -24,6 +24,14 @@ from vntyper.scripts import summary_steps
 
 logger = logging.getLogger(__name__)
 
+_FASTQ_SIBLINGS: Final[tuple[str, ...]] = (
+    "output_sliced.bam",
+    "output_R1.fastq.gz",
+    "output_R2.fastq.gz",
+    "output_single.fastq.gz",
+    "output_other.fastq.gz",
+)
+
 #: Table of required extra sibling files per reusable stage
 STEP_OUTPUT_SIBLINGS: Final[dict[str, tuple[str, ...]]] = {
     summary_steps.STEP_KESTREL: (
@@ -33,27 +41,9 @@ STEP_OUTPUT_SIBLINGS: Final[dict[str, tuple[str, ...]]] = {
         "kestrel_pre_result.tsv",
     ),
     summary_steps.STEP_ADVNTR: (),
-    summary_steps.STEP_BAM_TO_FASTQ: (
-        "output_sliced.bam",
-        "output_R1.fastq.gz",
-        "output_R2.fastq.gz",
-        "output_single.fastq.gz",
-        "output_other.fastq.gz",
-    ),
-    summary_steps.STEP_CRAM_TO_FASTQ: (
-        "output_sliced.bam",
-        "output_R1.fastq.gz",
-        "output_R2.fastq.gz",
-        "output_single.fastq.gz",
-        "output_other.fastq.gz",
-    ),
-    summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT: (
-        "output_sliced.bam",
-        "output_R1.fastq.gz",
-        "output_R2.fastq.gz",
-        "output_single.fastq.gz",
-        "output_other.fastq.gz",
-    ),
+    summary_steps.STEP_BAM_TO_FASTQ: _FASTQ_SIBLINGS,
+    summary_steps.STEP_CRAM_TO_FASTQ: _FASTQ_SIBLINGS,
+    summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT: _FASTQ_SIBLINGS,
     summary_steps.STEP_FASTQ_ALIGNMENT: (),
     summary_steps.STEP_FASTQ_QC: (),
 }
@@ -102,7 +92,7 @@ def caller_kestrel_matches(
     kestrel_runtime_fingerprint: str | None = None,
 ) -> bool:
     """Return whether prior summary Kestrel reference, motifs, and runtime match current run."""
-    if not prior_summary:
+    if prior_summary is None:
         return True
 
     prior_k_ref = prior_summary.get("kestrel_reference_path")
@@ -146,7 +136,7 @@ def caller_advntr_matches(
     advntr_runtime_fingerprint: str | None = None,
 ) -> bool:
     """Return whether prior summary adVNTR model, repeat units, and runtime match current run."""
-    if not prior_summary:
+    if prior_summary is None:
         return True
 
     prior_has_advntr = any(s.get("step") == summary_steps.STEP_ADVNTR for s in prior_summary.get("steps", []))
@@ -169,6 +159,43 @@ def caller_advntr_matches(
 
     prior_adv_rt_fp = prior_summary.get("advntr_runtime_fingerprint")
     return prior_adv_rt_fp == advntr_runtime_fingerprint
+
+
+def caller_shark_matches(
+    prior_summary: Mapping[str, Any] | None,
+    *,
+    shark_reference_path: str | None = None,
+    shark_reference_fingerprint: str | None = None,
+) -> bool:
+    """Return whether prior summary SHARK reference path and fingerprint match current run."""
+    if prior_summary is None:
+        return True
+
+    prior_p = prior_summary.get("shark_reference_path")
+    if (prior_p is None) != (shark_reference_path is None) or (
+        prior_p is not None
+        and shark_reference_path is not None
+        and str(Path(prior_p).resolve()) != str(Path(shark_reference_path).resolve())
+    ):
+        return False
+
+    prior_fp = prior_summary.get("shark_reference_fingerprint")
+    return prior_fp == shark_reference_fingerprint
+
+
+def reference_content_matches(
+    prior_summary: Mapping[str, Any] | None,
+    *,
+    reference_fingerprint: str | None = None,
+) -> bool:
+    """Return whether prior summary reference content fingerprint matches current run."""
+    if prior_summary is None:
+        return True
+
+    prior_fp = prior_summary.get("reference_fingerprint")
+    if prior_fp is not None or reference_fingerprint is not None:
+        return prior_fp == reference_fingerprint
+    return True
 
 
 def _compute_md5(path: Path) -> str | None:
@@ -253,26 +280,58 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                             advntr_rus_fingerprint=data.get("advntr_rus_fingerprint"),
                             advntr_runtime_fingerprint=data.get("advntr_runtime_fingerprint"),
                         )
+                        shark_matches = caller_shark_matches(
+                            donor_data,
+                            shark_reference_path=data.get("shark_reference_path"),
+                            shark_reference_fingerprint=data.get("shark_reference_fingerprint"),
+                        )
+                        bwa_matches = reference_content_matches(
+                            donor_data,
+                            reference_fingerprint=data.get("reference_fingerprint"),
+                        )
                         existing_steps = {s.get("step") for s in data.get("steps", [])}
+                        inval_align = not shark_matches or not bwa_matches
                         for s in donor_data.get("steps", []):
                             st = s.get("step")
                             if not st or st in existing_steps:
                                 continue
-                            if st == summary_steps.STEP_KESTREL and not k_ref_matches:
+                            if (
+                                st
+                                in (
+                                    summary_steps.STEP_FASTQ_ALIGNMENT,
+                                    summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                                    summary_steps.STEP_SHARK,
+                                )
+                                and inval_align
+                            ):
                                 continue
-                            if st == summary_steps.STEP_ADVNTR and not adv_model_matches:
+                            if st == summary_steps.STEP_KESTREL and (not k_ref_matches or inval_align):
                                 continue
-                            if st == summary_steps.STEP_CROSS_MATCH and (not k_ref_matches or not adv_model_matches):
+                            if st == summary_steps.STEP_ADVNTR and (not adv_model_matches or inval_align):
+                                continue
+                            if st == summary_steps.STEP_CROSS_MATCH and (
+                                not k_ref_matches or not adv_model_matches or inval_align
+                            ):
                                 continue
                             data.setdefault("steps", []).append(s)
                         if donor_data.get("stage_artifact_md5s"):
                             for st, md5s in donor_data["stage_artifact_md5s"].items():
-                                if st == summary_steps.STEP_KESTREL and not k_ref_matches:
+                                if (
+                                    st
+                                    in (
+                                        summary_steps.STEP_FASTQ_ALIGNMENT,
+                                        summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                                        summary_steps.STEP_SHARK,
+                                    )
+                                    and inval_align
+                                ):
                                     continue
-                                if st == summary_steps.STEP_ADVNTR and not adv_model_matches:
+                                if st == summary_steps.STEP_KESTREL and (not k_ref_matches or inval_align):
+                                    continue
+                                if st == summary_steps.STEP_ADVNTR and (not adv_model_matches or inval_align):
                                     continue
                                 if st == summary_steps.STEP_CROSS_MATCH and (
-                                    not k_ref_matches or not adv_model_matches
+                                    not k_ref_matches or not adv_model_matches or inval_align
                                 ):
                                     continue
                                 data.setdefault("stage_artifact_md5s", {}).setdefault(st, md5s)
@@ -295,12 +354,15 @@ def resume_refusals(
     analysis_settings: dict[str, Any] | None = None,
     reference_path: str | None = None,
     input_fingerprints: dict[str, str] | None = None,
+    reference_fingerprint: str | None = None,
+    shark_reference_path: str | None = None,
+    shark_reference_fingerprint: str | None = None,
 ) -> list[str]:
     """Validate that run identity invariants match the prior summary.
 
     Refusals concern run identity only: version, input files, sample name,
     reference key, decision-profile digest, reference assembly, analysis settings,
-    and effective reference path.
+    effective reference path/content, and SHARK reference identity.
 
     Args:
         prior: Prior summary dictionary.
@@ -313,6 +375,10 @@ def resume_refusals(
         reference_assembly: Optional requested reference assembly.
         analysis_settings: Optional result-affecting analysis settings dictionary.
         reference_path: Optional effective canonical reference path for alignment or decoding.
+        input_fingerprints: Optional content fingerprints of canonical input files.
+        reference_fingerprint: Optional content fingerprint of effective reference.
+        shark_reference_path: Optional resolved path to SHARK region FASTA.
+        shark_reference_fingerprint: Optional content fingerprint of SHARK region FASTA.
 
     Returns:
         list[str]: Descriptions of all detected mismatches; empty if allowed.
@@ -365,6 +431,28 @@ def resume_refusals(
             curr_resolved = str(Path(reference_path).resolve()) if reference_path else None
             if prior_resolved != curr_resolved:
                 refusals.append(f"reference path differs (prior: {prior_ref_path!r}, current: {reference_path!r})")
+
+    if reference_fingerprint is not None:
+        prior_ref_fp = prior.get("reference_fingerprint")
+        if prior_ref_fp is not None and prior_ref_fp != reference_fingerprint:
+            refusals.append(f"reference content differs (prior: {prior_ref_fp!r}, current: {reference_fingerprint!r})")
+
+    if shark_reference_path is not None:
+        prior_shark_path = prior.get("shark_reference_path")
+        if prior_shark_path is not None:
+            prior_s_resolved = str(Path(prior_shark_path).resolve()) if prior_shark_path else None
+            curr_s_resolved = str(Path(shark_reference_path).resolve()) if shark_reference_path else None
+            if prior_s_resolved != curr_s_resolved:
+                refusals.append(
+                    f"SHARK reference path differs (prior: {prior_shark_path!r}, current: {shark_reference_path!r})"
+                )
+
+    if shark_reference_fingerprint is not None:
+        prior_shark_fp = prior.get("shark_reference_fingerprint")
+        if prior_shark_fp is not None and prior_shark_fp != shark_reference_fingerprint:
+            refusals.append(
+                f"SHARK reference content differs (prior: {prior_shark_fp!r}, current: {shark_reference_fingerprint!r})"
+            )
 
     prior_profile_sha = prior.get("decision_profile_sha256")
     if prior_profile_sha != decision_profile_sha256:

@@ -82,6 +82,9 @@ def start_summary(
     advntr_rus_fingerprint: str | None = None,
     kestrel_runtime_fingerprint: str | None = None,
     advntr_runtime_fingerprint: str | None = None,
+    reference_fingerprint: str | None = None,
+    shark_reference_path: str | None = None,
+    shark_reference_fingerprint: str | None = None,
     persistent_reference_path: str | None = None,
     reference_consumer_path: str | None = None,
 ):
@@ -151,6 +154,9 @@ def start_summary(
         input_fingerprints: Mapping of canonical input keys to content fingerprints.
         kestrel_runtime_fingerprint: Canonical digest of Kestrel runtime configuration.
         advntr_runtime_fingerprint: Canonical digest of adVNTR runtime configuration.
+        reference_fingerprint: Canonical content fingerprint of the effective alignment reference.
+        shark_reference_path: Resolved path to the SHARK MUC1 region FASTA.
+        shark_reference_fingerprint: Content fingerprint of the SHARK MUC1 region FASTA.
 
     Returns:
         dict: A summary dictionary with its schema version, decision policy, pipeline
@@ -195,6 +201,9 @@ def start_summary(
         "reference_key_used": reference_key_used,
         "reference_path": reference_path,
         "persistent_reference_path": persistent_reference_path or reference_path,
+        "reference_fingerprint": reference_fingerprint,
+        "shark_reference_path": shark_reference_path,
+        "shark_reference_fingerprint": shark_reference_fingerprint,
         "reference_consumer_path": reference_consumer_path,
         "reference_source_effective": reference_source_effective,
         # The span the coverage stage actually worked over. It is not known yet -

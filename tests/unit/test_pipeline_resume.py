@@ -14,7 +14,7 @@ import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import summary_steps
-from vntyper.scripts.resume import fingerprint_runtime
+from vntyper.scripts.resume import fingerprint_file, fingerprint_runtime
 from vntyper.scripts.run_configuration import resolve_run_configuration
 from vntyper.version import __version__ as VERSION
 
@@ -32,6 +32,9 @@ def _make_prior_summary(
     extra_modules: list[str] | None = None,
     analysis_settings: dict[str, Any] | None = None,
     steps: list[dict[str, Any]] | None = None,
+    reference_fingerprint: str | None = None,
+    shark_reference_path: str | None = None,
+    shark_reference_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     resolved_modules = sorted(extra_modules or [])
     advntr_model = None
@@ -82,6 +85,9 @@ def _make_prior_summary(
         "advntr_runtime_fingerprint": fingerprint_runtime(resolve_run_configuration().advntr_runtime)
         if "advntr" in resolved_modules
         else None,
+        "reference_fingerprint": reference_fingerprint,
+        "shark_reference_path": shark_reference_path,
+        "shark_reference_fingerprint": shark_reference_fingerprint,
         "pipeline_start": "2026-09-05T08:00:00.000000",
         "analysis_settings": analysis_settings if analysis_settings is not None else default_settings,
         "steps": steps or [],
@@ -2165,3 +2171,132 @@ def test_resume_rejects_advntr_reuse_when_prior_lacks_model_provenance(tmp_path:
     )
     assert h.error is None
     assert h.stages["run_advntr"].call_count == 1
+
+
+def test_resume_refuses_when_bwa_reference_content_changes(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When BWA reference content changes in-place, resume is refused (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    f1 = input_dir / "r1.fq.gz"
+    f2 = input_dir / "r2.fq.gz"
+    f1.touch()
+    f2.touch()
+
+    ref_file = tmp_path / "ref.fa"
+    ref_file.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        reference_fingerprint="fp_old_reference",
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        h = run_pipeline_under_harness(
+            output_dir=out,
+            fastq1=str(f1),
+            fastq2=str(f2),
+            bwa_reference=str(ref_file),
+            resume=True,
+            expect_failure=True,
+        )
+    assert h.error is not None
+    assert any("Resume refused: reference content differs" in record.message for record in caplog.records)
+
+
+def test_resume_refuses_when_shark_reference_changes(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When SHARK reference changes, resume is refused (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    f1 = input_dir / "r1.fq.gz"
+    f2 = input_dir / "r2.fq.gz"
+    f1.touch()
+    f2.touch()
+
+    prior = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        extra_modules=["shark"],
+        shark_reference_path="/path/to/old/muc1.fa",
+        shark_reference_fingerprint="fp_old_shark",
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        h = run_pipeline_under_harness(
+            output_dir=out,
+            fastq1=str(f1),
+            fastq2=str(f2),
+            extra_modules=["shark"],
+            resume=True,
+            expect_failure=True,
+        )
+    assert h.error is not None
+    assert any("Resume refused: SHARK reference" in record.message for record in caplog.records)
+
+
+def test_resume_invalidates_alignment_when_donor_has_bwa_fingerprint_mismatch(tmp_path: Path) -> None:
+    """When donor checkpoint has an outdated BWA reference fingerprint, alignment is rerun (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    f1 = input_dir / "r1.fq.gz"
+    f2 = input_dir / "r2.fq.gz"
+    f1.touch()
+    f2.touch()
+
+    ref_file = tmp_path / "ref.fa"
+    ref_file.write_text(">chr1\nACGT\n", encoding="utf-8")
+    ref_fp = fingerprint_file(ref_file)
+
+    align_dir = out / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.write_bytes(b"sorted_bam")
+    bam_md5 = hashlib.md5(b"sorted_bam").hexdigest()
+
+    # Main summary has current reference_fingerprint but no steps completed
+    current_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        reference_fingerprint=ref_fp,
+    )
+    # Donor summary has outdated reference_fingerprint and an alignment step
+    donor_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        reference_fingerprint="fp_outdated_ref",
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": bam_md5,
+            }
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(current_summary), encoding="utf-8")
+    (out / "pipeline_summary.donor.json").write_text(json.dumps(donor_summary), encoding="utf-8")
+
+    h = run_pipeline_under_harness(
+        output_dir=out,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        bwa_reference=str(ref_file),
+        resume=True,
+    )
+    assert h.error is None
+    # Donor's alignment was not grafted; alignment was run
+    assert h.stages["align_and_sort_fastq"].call_count == 1

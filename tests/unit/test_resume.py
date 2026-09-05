@@ -15,9 +15,11 @@ from vntyper.scripts.resume import (
     _compute_md5,
     caller_advntr_matches,
     caller_kestrel_matches,
+    caller_shark_matches,
     fingerprint_runtime,
     load_prior_summary,
     make_reused_step_record,
+    reference_content_matches,
     resume_refusals,
     step_is_reusable,
 )
@@ -651,3 +653,157 @@ def test_caller_advntr_matches() -> None:
         )
         is False
     )
+
+
+def test_caller_shark_matches() -> None:
+    assert caller_shark_matches(None) is True
+
+    prior = {
+        "shark_reference_path": "/path/shark.fa",
+        "shark_reference_fingerprint": "100:abc",
+    }
+    # Matching
+    assert (
+        caller_shark_matches(
+            prior,
+            shark_reference_path="/path/shark.fa",
+            shark_reference_fingerprint="100:abc",
+        )
+        is True
+    )
+    # Neither has shark
+    assert caller_shark_matches({}, shark_reference_path=None, shark_reference_fingerprint=None) is True
+    # Prior has shark, current does not
+    assert caller_shark_matches(prior, shark_reference_path=None, shark_reference_fingerprint=None) is False
+    # Prior has no shark, current does
+    assert (
+        caller_shark_matches(
+            {},
+            shark_reference_path="/path/shark.fa",
+            shark_reference_fingerprint="100:abc",
+        )
+        is False
+    )
+    # Path differs
+    assert (
+        caller_shark_matches(
+            prior,
+            shark_reference_path="/other/shark.fa",
+            shark_reference_fingerprint="100:abc",
+        )
+        is False
+    )
+    # Fingerprint differs
+    assert (
+        caller_shark_matches(
+            prior,
+            shark_reference_path="/path/shark.fa",
+            shark_reference_fingerprint="100:xyz",
+        )
+        is False
+    )
+
+
+def test_reference_content_matches() -> None:
+    assert reference_content_matches(None) is True
+    assert reference_content_matches({}, reference_fingerprint=None) is True
+
+    prior = {"reference_fingerprint": "500:fp1"}
+    assert reference_content_matches(prior, reference_fingerprint="500:fp1") is True
+    assert reference_content_matches(prior, reference_fingerprint="500:fp2") is False
+    assert reference_content_matches(prior, reference_fingerprint=None) is False
+    assert reference_content_matches({}, reference_fingerprint="500:fp1") is False
+
+
+def test_resume_refusals_reference_fingerprint_and_shark() -> None:
+    prior = {
+        "version": "2.0.27",
+        "input_files": {"fastq_1": "r1.fq"},
+        "sample_name": "s1",
+        "reference_key_used": "hg19",
+        "decision_profile_sha256": "p" * 64,
+        "reference_fingerprint": "fp_ref_old",
+        "shark_reference_path": "/path/shark.fa",
+        "shark_reference_fingerprint": "fp_shark_old",
+    }
+    base_kwargs: dict[str, Any] = {
+        "version": "2.0.27",
+        "input_files": {"fastq_1": "r1.fq"},
+        "sample_name": "s1",
+        "reference_key_used": "hg19",
+        "decision_profile_sha256": "p" * 64,
+        "reference_fingerprint": "fp_ref_old",
+        "shark_reference_path": "/path/shark.fa",
+        "shark_reference_fingerprint": "fp_shark_old",
+    }
+    # All match
+    assert resume_refusals(prior, **base_kwargs) == []
+
+    # Reference content mismatch
+    mismatch_ref = dict(base_kwargs, reference_fingerprint="fp_ref_new")
+    refusals = resume_refusals(prior, **mismatch_ref)
+    assert any("reference content differs" in r for r in refusals)
+
+    # SHARK path mismatch
+    mismatch_shark_path = dict(base_kwargs, shark_reference_path="/other/shark.fa")
+    refusals = resume_refusals(prior, **mismatch_shark_path)
+    assert any("SHARK reference path differs" in r for r in refusals)
+
+    # SHARK content mismatch
+    mismatch_shark_fp = dict(base_kwargs, shark_reference_fingerprint="fp_shark_new")
+    refusals = resume_refusals(prior, **mismatch_shark_fp)
+    assert any("SHARK reference content differs" in r for r in refusals)
+
+
+def test_donor_summary_filters_steps_on_shark_or_bwa_change(tmp_path: Path) -> None:
+    main_summary = tmp_path / "pipeline_summary.json"
+    donor_summary = tmp_path / "pipeline_summary.donor.json"
+
+    primary_data: dict[str, Any] = {
+        "version": "2.0.27",
+        "sample_name": "s1",
+        "input_files": {"fastq_1": "r1.fq"},
+        "canonical_input_files": None,
+        "reference_assembly_requested": "hg19",
+        "decision_profile": {"digest": "d" * 64},
+        "reference_fingerprint": "ref_fp_current",
+        "shark_reference_path": "/path/shark.fa",
+        "shark_reference_fingerprint": "shark_fp_current",
+        "steps": [],
+    }
+    donor_data: dict[str, Any] = {
+        "version": "2.0.27",
+        "sample_name": "s1",
+        "input_files": {"fastq_1": "r1.fq"},
+        "canonical_input_files": None,
+        "reference_assembly_requested": "hg19",
+        "decision_profile": {"digest": "d" * 64},
+        "reference_fingerprint": "ref_fp_old",  # Content mismatch
+        "shark_reference_path": "/path/shark.fa",
+        "shark_reference_fingerprint": "shark_fp_current",
+        "steps": [
+            {"step": summary_steps.STEP_FASTQ_ALIGNMENT, "result_file": "/path/bam"},
+            {"step": summary_steps.STEP_SHARK, "result_file": "/path/step.json"},
+            {"step": summary_steps.STEP_KESTREL, "result_file": "/path/res.tsv"},
+            {"step": summary_steps.STEP_FASTQ_QC, "result_file": "/path/qc.json"},
+        ],
+        "stage_artifact_md5s": {
+            summary_steps.STEP_FASTQ_ALIGNMENT: {"out.bam": "md5"},
+            summary_steps.STEP_KESTREL: {"output.vcf": "md5"},
+            summary_steps.STEP_FASTQ_QC: {"qc.json": "md5"},
+        },
+    }
+
+    main_summary.write_text(json.dumps(primary_data), encoding="utf-8")
+    donor_summary.write_text(json.dumps(donor_data), encoding="utf-8")
+
+    loaded = load_prior_summary(main_summary)
+    assert loaded is not None
+    loaded_step_names = [s.get("step") for s in loaded.get("steps", [])]
+    # Invalidation should filter out FASTQ_ALIGNMENT, SHARK, KESTREL, but allow FASTQ_QC
+    assert summary_steps.STEP_FASTQ_ALIGNMENT not in loaded_step_names
+    assert summary_steps.STEP_SHARK not in loaded_step_names
+    assert summary_steps.STEP_KESTREL not in loaded_step_names
+    assert summary_steps.STEP_FASTQ_QC in loaded_step_names
+    assert summary_steps.STEP_FASTQ_QC in loaded.get("stage_artifact_md5s", {})
+    assert summary_steps.STEP_FASTQ_ALIGNMENT not in loaded.get("stage_artifact_md5s", {})
