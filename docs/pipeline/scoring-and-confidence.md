@@ -59,12 +59,19 @@ The thresholds are defined in `kestrel_config.json`:
 
 | Parameter | Config Key | Value |
 |-----------|-----------|-------|
+| Reporting floor | `reporting_floor` | 0.00469 |
 | Depth score (low) | `depth_score_thresholds.low` | 0.00469 |
 | Depth score (high) | `depth_score_thresholds.high` | 0.00515 |
 | Alt depth (low) | `alt_depth_thresholds.low` | 20 |
 | Alt depth (mid_low) | `alt_depth_thresholds.mid_low` | 21 |
 | Alt depth (mid_high) | `alt_depth_thresholds.mid_high` | 100 |
 | Region depth threshold | `var_active_region_threshold` | 200 |
+
+Three distinct calibrated quantities share the baseline value `0.00469`:
+
+1. `confidence_assignment.reporting_floor` (0.00469): The outer noise floor below which any variant is reported as `Negative`.
+2. `confidence_assignment.depth_score_thresholds.low` (0.00469): The lower edge of the `Low_Precision` band (`[low, high]`).
+3. `alt_filtering.gg_depth_score_threshold` (0.00469): The minimum `Depth_Score` required for `ALT == "GG"` variants, linked to `reporting_floor`.
 
 ### Confidence Levels
 
