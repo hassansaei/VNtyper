@@ -39,6 +39,7 @@ import pytest
 from vntyper.scripts import alignment_processing, fastq_bam_processing
 from vntyper.scripts import pipeline as pipeline_module
 from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.artifact_publish import partial_path
 
 # Mark all tests in this module as unit tests
 pytestmark = pytest.mark.unit
@@ -782,13 +783,17 @@ def test_align_and_sort_emits_the_pinned_pipeline_with_pipefail(tmp_path):
     for ext in (".amb", ".ann", ".bwt", ".pac", ".sa"):
         (tmp_path / f"ref.fa{ext}").touch()
     sorted_bam = tmp_path / "out" / "output_sorted.bam"
+    partial_bam = partial_path(sorted_bam)
+    partial_bai = partial_path(sorted_bam.with_suffix(".bam.bai"))
     recorder = _Recorder()
 
     def run_and_create(command, log_file, critical=False, cwd=None):
         recorder(command, log_file, critical, cwd)
         sorted_bam.parent.mkdir(parents=True, exist_ok=True)
-        sorted_bam.touch()
-        sorted_bam.with_suffix(".bam.bai").touch()
+        if str(partial_bam) in command:
+            partial_bam.write_bytes(b"BAM")
+        if str(partial_bai) in command:
+            partial_bai.write_bytes(b"BAI")
         return True
 
     with patch.object(alignment_processing, "run_command", run_and_create):
@@ -806,8 +811,8 @@ def test_align_and_sort_emits_the_pinned_pipeline_with_pipefail(tmp_path):
     assert recorder.commands == [
         f"set -o pipefail; bwa mem -t 4 {reference} /data/r1.fq.gz /data/r2.fq.gz | "
         f"samtools view -@ 4 -b | "
-        f"samtools sort -@ 4 -o {sorted_bam}",
-        f"samtools index -@ 4 {sorted_bam}",
+        f"samtools sort -@ 4 -o {partial_bam}",
+        f"samtools index -@ 4 -o {partial_bai} {sorted_bam}",
     ]
 
 
@@ -817,13 +822,17 @@ def test_align_and_sort_emits_the_single_input_bwa_form(tmp_path):
     for ext in (".amb", ".ann", ".bwt", ".pac", ".sa"):
         (tmp_path / f"ref.fa{ext}").touch()
     sorted_bam = tmp_path / "out" / "output_sorted.bam"
+    partial_bam = partial_path(sorted_bam)
+    partial_bai = partial_path(sorted_bam.with_suffix(".bam.bai"))
     recorder = _Recorder()
 
     def run_and_create(command, log_file, critical=False, cwd=None):
         recorder(command, log_file, critical, cwd)
         sorted_bam.parent.mkdir(parents=True, exist_ok=True)
-        sorted_bam.touch()
-        sorted_bam.with_suffix(".bam.bai").touch()
+        if str(partial_bam) in command:
+            partial_bam.write_bytes(b"BAM")
+        if str(partial_bai) in command:
+            partial_bai.write_bytes(b"BAI")
         return True
 
     with patch.object(alignment_processing, "run_command", run_and_create):
@@ -840,7 +849,7 @@ def test_align_and_sort_emits_the_single_input_bwa_form(tmp_path):
     assert result == str(sorted_bam)
     assert recorder.commands[0] == (
         f"set -o pipefail; bwa mem -t 4 {reference} /data/single.fq.gz | "
-        f"samtools view -@ 4 -b | samtools sort -@ 4 -o {sorted_bam}"
+        f"samtools view -@ 4 -b | samtools sort -@ 4 -o {partial_bam}"
     )
 
 
