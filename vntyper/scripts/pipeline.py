@@ -404,6 +404,11 @@ def run_pipeline(
         advntr_runtime_fingerprint = (
             fingerprint_runtime(run_configuration.advntr_runtime) if "advntr" in extra_modules else None
         )
+        shark_runtime_fingerprint = (
+            fingerprint_runtime(run_configuration.shark_runtime)
+            if input_type == "FASTQ" and "shark" in extra_modules
+            else None
+        )
 
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         prior_summary = None
@@ -614,6 +619,7 @@ def run_pipeline(
             reference_fingerprint=effective_reference_fingerprint,
             shark_reference_path=shark_reference_path,
             shark_reference_fingerprint=shark_reference_fingerprint,
+            shark_runtime_fingerprint=shark_runtime_fingerprint,
             sample_name=sample_name,
             sample_name_is_explicit=sample_name_is_explicit,
             reference_assembly_requested=reference_assembly,
@@ -647,6 +653,7 @@ def run_pipeline(
             prior_summary,
             shark_reference_path=shark_reference_path,
             shark_reference_fingerprint=shark_reference_fingerprint,
+            shark_runtime_fingerprint=shark_runtime_fingerprint,
         )
         bwa_ref_matches = reference_content_matches(
             prior_summary,
@@ -929,7 +936,10 @@ def run_pipeline(
                 )
             else:
                 can_reuse_alignment = (
-                    resume and prior_summary and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir)
+                    resume
+                    and prior_summary is not None
+                    and not inval_align
+                    and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir)
                 )
                 if can_reuse_alignment:
                     logger.info("Reusing previous %s step results.", STEP_FASTQ_ALIGNMENT)

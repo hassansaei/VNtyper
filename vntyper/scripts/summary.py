@@ -85,6 +85,7 @@ def start_summary(
     reference_fingerprint: str | None = None,
     shark_reference_path: str | None = None,
     shark_reference_fingerprint: str | None = None,
+    shark_runtime_fingerprint: str | None = None,
     persistent_reference_path: str | None = None,
     reference_consumer_path: str | None = None,
 ):
@@ -204,6 +205,7 @@ def start_summary(
         "reference_fingerprint": reference_fingerprint,
         "shark_reference_path": shark_reference_path,
         "shark_reference_fingerprint": shark_reference_fingerprint,
+        "shark_runtime_fingerprint": shark_runtime_fingerprint,
         "reference_consumer_path": reference_consumer_path,
         "reference_source_effective": reference_source_effective,
         # The span the coverage stage actually worked over. It is not known yet -

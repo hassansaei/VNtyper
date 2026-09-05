@@ -52,23 +52,16 @@ _REUSABLE_STEPS: Final[frozenset[str]] = frozenset(STEP_OUTPUT_SIBLINGS.keys())
 
 
 def fingerprint_file(path: str | Path) -> str:
-    """Compute a lightweight, deterministic content fingerprint of an input file.
+    """Compute a deterministic SHA-256 content digest of an input or reference file.
 
-    Combines file size with SHA-256 of the initial 64 KB and trailing 64 KB of the
-    file. Fast on multi-gigabyte BAM/CRAM files while detecting in-place modifications
-    or content replacements.
+    Reads the entire file in 64 KiB chunks so any modification anywhere in the file
+    reliably invalidates the fingerprint.
     """
     p = Path(path)
-    size = p.stat().st_size
     hasher = hashlib.sha256()
-    hasher.update(str(size).encode("utf-8"))
     with p.open("rb") as handle:
-        head = handle.read(65536)
-        hasher.update(head)
-        if size > 65536:
-            handle.seek(max(0, size - 65536))
-            tail = handle.read(65536)
-            hasher.update(tail)
+        for chunk in iter(lambda: handle.read(65536), b""):
+            hasher.update(chunk)
     return hasher.hexdigest()
 
 
@@ -166,8 +159,9 @@ def caller_shark_matches(
     *,
     shark_reference_path: str | None = None,
     shark_reference_fingerprint: str | None = None,
+    shark_runtime_fingerprint: str | None = None,
 ) -> bool:
-    """Return whether prior summary SHARK reference path and fingerprint match current run."""
+    """Return whether prior summary SHARK reference and runtime match current run."""
     if prior_summary is None:
         return True
 
@@ -180,7 +174,11 @@ def caller_shark_matches(
         return False
 
     prior_fp = prior_summary.get("shark_reference_fingerprint")
-    return prior_fp == shark_reference_fingerprint
+    if (prior_fp is not None or shark_reference_fingerprint is not None) and prior_fp != shark_reference_fingerprint:
+        return False
+
+    prior_rt_fp = prior_summary.get("shark_runtime_fingerprint")
+    return prior_rt_fp == shark_runtime_fingerprint
 
 
 def reference_content_matches(
@@ -284,6 +282,7 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                             donor_data,
                             shark_reference_path=data.get("shark_reference_path"),
                             shark_reference_fingerprint=data.get("shark_reference_fingerprint"),
+                            shark_runtime_fingerprint=data.get("shark_runtime_fingerprint"),
                         )
                         bwa_matches = reference_content_matches(
                             donor_data,

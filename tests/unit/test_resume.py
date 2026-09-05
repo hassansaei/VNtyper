@@ -702,6 +702,44 @@ def test_caller_shark_matches() -> None:
         )
         is False
     )
+    # Runtime fingerprint matches
+    assert (
+        caller_shark_matches(
+            dict(prior, shark_runtime_fingerprint="rt_fp"),
+            shark_reference_path="/path/shark.fa",
+            shark_reference_fingerprint="100:abc",
+            shark_runtime_fingerprint="rt_fp",
+        )
+        is True
+    )
+    # Runtime fingerprint differs
+    assert (
+        caller_shark_matches(
+            dict(prior, shark_runtime_fingerprint="rt_fp_old"),
+            shark_reference_path="/path/shark.fa",
+            shark_reference_fingerprint="100:abc",
+            shark_runtime_fingerprint="rt_fp_new",
+        )
+        is False
+    )
+
+
+def test_fingerprint_file_detects_middle_byte_changes_in_large_files(tmp_path: Path) -> None:
+    """Fingerprint detects mutations outside the initial and trailing 64 KiB windows (#20 / P1)."""
+    from vntyper.scripts.resume import fingerprint_file
+
+    large_file = tmp_path / "large.fq"
+    # Create 250 KiB file
+    data = bytearray(b"A" * 256000)
+    large_file.write_bytes(data)
+    fp_before = fingerprint_file(large_file)
+
+    # Mutate a single byte in the middle (byte 128,000)
+    data[128000] = ord(b"G")
+    large_file.write_bytes(data)
+    fp_after = fingerprint_file(large_file)
+
+    assert fp_before != fp_after
 
 
 def test_reference_content_matches() -> None:

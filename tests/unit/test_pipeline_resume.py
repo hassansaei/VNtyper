@@ -9,6 +9,7 @@ import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
 
 import pytest
 
@@ -35,6 +36,7 @@ def _make_prior_summary(
     reference_fingerprint: str | None = None,
     shark_reference_path: str | None = None,
     shark_reference_fingerprint: str | None = None,
+    shark_runtime_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     resolved_modules = sorted(extra_modules or [])
     advntr_model = None
@@ -88,6 +90,9 @@ def _make_prior_summary(
         "reference_fingerprint": reference_fingerprint,
         "shark_reference_path": shark_reference_path,
         "shark_reference_fingerprint": shark_reference_fingerprint,
+        "shark_runtime_fingerprint": shark_runtime_fingerprint
+        if shark_runtime_fingerprint is not None
+        else (fingerprint_runtime(resolve_run_configuration().shark_runtime) if "shark" in resolved_modules else None),
         "pipeline_start": "2026-09-05T08:00:00.000000",
         "analysis_settings": analysis_settings if analysis_settings is not None else default_settings,
         "steps": steps or [],
@@ -2299,4 +2304,67 @@ def test_resume_invalidates_alignment_when_donor_has_bwa_fingerprint_mismatch(tm
     )
     assert h.error is None
     # Donor's alignment was not grafted; alignment was run
+    assert h.stages["align_and_sort_fastq"].call_count == 1
+
+
+def test_resume_reruns_alignment_and_callers_when_shark_runtime_changes(tmp_path: Path) -> None:
+    """When SHARK runtime settings change, previous alignment and caller checkpoints are invalidated (#20 / P1)."""
+    from dataclasses import replace
+
+    out = tmp_path / "out"
+    out.mkdir()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    f1 = input_dir / "r1.fq.gz"
+    f2 = input_dir / "r2.fq.gz"
+    f1.touch()
+    f2.touch()
+
+    ref_file = tmp_path / "ref.fa"
+    ref_file.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+    align_dir = out / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.write_bytes(b"sorted_bam")
+    bam_md5 = hashlib.md5(b"sorted_bam").hexdigest()
+
+    prior = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        extra_modules=["shark"],
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": bam_md5,
+            }
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    rc = resolve_run_configuration()
+    new_shark_settings = dict(cast(Mapping[str, Any], rc.shark_runtime["shark_settings"]))
+    new_shark_settings["confidence"] = 0.95
+    rc_modified = replace(rc, shark_runtime={**rc.shark_runtime, "shark_settings": new_shark_settings})
+
+    with (
+        mock.patch(
+            "vntyper.modules.shark.shark_filtering.run_shark_filter",
+            return_value=(str(f1), str(f2)),
+        ),
+        mock.patch("vntyper.modules.shark.shark_filtering.write_shark_step_summary"),
+    ):
+        h = run_pipeline_under_harness(
+            output_dir=out,
+            fastq1=str(f1),
+            fastq2=str(f2),
+            bwa_reference=str(ref_file),
+            extra_modules=["shark"],
+            run_configuration=rc_modified,
+            resume=True,
+        )
+    assert h.error is None
+    # Because SHARK runtime changed, alignment is rerun rather than skipped
     assert h.stages["align_and_sort_fastq"].call_count == 1
