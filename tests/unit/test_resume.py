@@ -179,7 +179,7 @@ def test_step_is_reusable_kestrel_success(tmp_path: Path) -> None:
 
 
 def test_step_is_reusable_returns_false_when_step_absent() -> None:
-    prior = {"steps": []}
+    prior: dict[str, Any] = {"steps": []}
     assert step_is_reusable(prior, summary_steps.STEP_KESTREL, Path("/tmp")) is False
 
 
