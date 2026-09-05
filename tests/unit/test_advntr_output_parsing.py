@@ -876,3 +876,50 @@ class TestRepeatUnitAnnotation:
             ["."],
             ["."],
         )
+
+
+class TestAdvntrV22OutputCompatibility:
+    """Test compatibility with adVNTR v2.2.0 output format."""
+
+    def test_v22_six_column_output_with_context_is_parsed_without_leaking_context(self, tmp_path):
+        header_v22 = "#VID\tState\tNumberOfSupportingReads\tMeanCoverage\tPvalue\tContext\n"
+        row_v22 = (
+            f"25561\t{CANONICAL_VARIANT}\t11\t153.98\t0.0001\t"
+            '{"v":1,"contexts":[{"read":"read_1","unit":2,"offset":22}]}\n'
+        )
+        source = write_advntr_output(tmp_path, header_v22 + row_v22)
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+        df = read_result(tmp_path)
+        assert "Context" not in df.columns
+        assert list(df.columns) == POSITIVE_COLUMNS
+        assert df["VID"].tolist() == ["25561"]
+        assert df["Variant"].tolist() == [CANONICAL_VARIANT]
+        assert df["NumberOfSupportingReads"].tolist() == ["11"]
+
+    def test_row_containing_hash_character_in_context_is_not_truncated(self, tmp_path):
+        header_v22 = "#VID\tState\tNumberOfSupportingReads\tMeanCoverage\tPvalue\tContext\n"
+        row_with_hash = (
+            f"25561\t{CANONICAL_VARIANT}\t11\t153.98\t0.0001\t"
+            '{"v":1,"contexts":[{"read":"illumina#flowcell#123","unit":2}]}\n'
+        )
+        source = write_advntr_output(tmp_path, header_v22 + row_with_hash)
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+        df = read_result(tmp_path)
+        assert df["VID"].tolist() == ["25561"]
+        assert df["Variant"].tolist() == [CANONICAL_VARIANT]
+        assert df["NumberOfSupportingReads"].tolist() == ["11"]
+        assert float(df["Pvalue"].iloc[0]) == 0.0001
+
+    def test_comments_starting_with_double_hash_are_stripped(self, tmp_path):
+        header = "##fileformat=VCFv4.2\n##source=adVNTR\n" + ADVNTR_HEADER
+        source = write_advntr_output(tmp_path, header + CANONICAL_ROW)
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+        df = read_result(tmp_path)
+        assert df["VID"].tolist() == ["25561"]
+        assert df["Variant"].tolist() == [CANONICAL_VARIANT]

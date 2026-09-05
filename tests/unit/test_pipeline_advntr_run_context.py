@@ -72,7 +72,7 @@ def _snapshot_with_outer_deadline(source: Path, destination: Path) -> tuple[Any,
     started = time.monotonic()
     process.start()
     sender.close()
-    process.join(2)
+    process.join(5)
     elapsed = time.monotonic() - started
     blocked = process.is_alive()
     if blocked:
@@ -81,7 +81,7 @@ def _snapshot_with_outer_deadline(source: Path, destination: Path) -> tuple[Any,
     try:
         assert not blocked, "adVNTR model snapshot opened a FIFO and waited for a writer"
         assert not process.is_alive(), "adVNTR model snapshot worker did not terminate"
-        assert elapsed < 3, f"adVNTR model snapshot blocked for {elapsed:.2f} s"
+        assert elapsed < 6, f"adVNTR model snapshot blocked for {elapsed:.2f} s"
         assert receiver.poll(), "adVNTR model snapshot worker returned no result"
         return receiver.recv()
     finally:

@@ -368,3 +368,28 @@ def test_a_success_status_without_current_raw_output_cannot_republish_a_preexist
     assert harness.stages["process_advntr_output"].called
     assert not raw_path.exists(), "the new attempt must invalidate the previous producer artifact"
     assert not result_path.exists(), "the stale raw call must not be republished as this run's derived result"
+
+
+def test_pipeline_forwards_advntr_additional_commands_to_run_advntr(tmp_path: Path) -> None:
+    """The pipeline builds runtime_component with additional_commands and forwards to run_advntr."""
+    output_dir = tmp_path / "out"
+    captured_runtime: list[dict] = []
+
+    def mock_run_advntr(*_args, **kwargs):
+        captured_runtime.append(kwargs.get("runtime_component"))
+        return 0
+
+    harness = run_pipeline_under_harness(
+        output_dir,
+        extra_modules=["advntr"],
+        module_args={"advntr": {"additional_commands": "--prune-reverse"}},
+        expect_failure=True,
+        stage_side_effects={
+            "run_advntr": mock_run_advntr,
+            "process_advntr_output": lambda *_args, **_kwargs: None,
+        },
+    )
+
+    assert harness.stages["run_advntr"].called
+    assert len(captured_runtime) == 1
+    assert captured_runtime[0]["settings"]["additional_commands"] == "--prune-reverse"

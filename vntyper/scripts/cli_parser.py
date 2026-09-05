@@ -287,6 +287,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Max coverage (e.g. 300) for quick adVNTR mode.",
     )
+    parser_pipeline.add_argument(
+        "--advntr-additional-commands",
+        type=str,
+        default=None,
+        help=(
+            "Additional command-line options passed directly to adVNTR genotype "
+            "(e.g. '--prune-reverse --rare-unit-coverage-guard 0.15')."
+        ),
+    )
     # New argument: additional summary output formats (comma-separated list)
     parser_pipeline.add_argument(
         "--summary-formats",

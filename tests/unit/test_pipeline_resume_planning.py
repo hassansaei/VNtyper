@@ -367,6 +367,13 @@ def test_resolve_effective_advntr_runtime(tmp_path: Path) -> None:
     assert rt3["advntr_version"] == "2.1.0"
     assert fp3 != fp1
 
+    # Changing additional_commands changes settings and fingerprint
+    rt4, fp4 = resolve_effective_advntr_runtime(
+        run_config, config1, advntr_version="2.0.4", additional_commands="--prune-reverse"
+    )
+    assert rt4["settings"]["additional_commands"] == "--prune-reverse"
+    assert fp4 != fp1
+
 
 def test_evaluate_resume_compatibility_advntr_version_mismatch() -> None:
     """adVNTR step is not reusable when tool version differs from prior summary."""
