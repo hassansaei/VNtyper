@@ -4,7 +4,23 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### SHARK provenance and read pairing
+
+- **SHARK stage records tool version, search parameters, and pairing verification (Refs #312).**
+  The command line explicitly specifies `-k 17 -c 0.6` sourced from the runtime sidecar
+  `shark_config.json`, matching SHARK 1.2.0's implicit defaults without modifying the
+  empty `/components/shark` decision profile component.
+- **Tool version is probed via conda environment listing.** Because SHARK 1.2.0 prints no
+  version from `--version` or `--help`, `vntyper.scripts.utils.get_tool_version` probes
+  `mamba list -n shark_env shark --json` and records `<version>+<build>` (e.g. `1.2.0+h077b44d_5`),
+  falling back to `unknown` without aborting if the probe is unavailable. `shark` is removed
+  from `UNPROBED_TOOLS`.
+- **Step summary payload records provenance.** `pipeline_summary.json`'s `parsed_result`
+  for SHARK Filtering gains `shark_version`, `shark_k`, and `shark_c` alongside the FASTQ
+  paths and read counts.
+- **Asymmetric read retention fails closed.** `write_shark_step_summary` verifies that
+  `kept_reads_r1 == kept_reads_r2` before building the payload, raising `ValueError` naming
+  both counts and preventing incomplete step records on pairing divergence.
 
 ## 2.0.27 (Current)
 
