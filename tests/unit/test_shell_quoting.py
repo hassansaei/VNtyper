@@ -89,13 +89,22 @@ def test_sam_to_bam_quotes_both_operands_and_the_redirect(tmp_path) -> None:
     sam = _make(tmp_path, "output.sam")
     output_dir = str(tmp_path / HOSTILE)
 
-    with patch.object(kestrel_genotyping, "run_command", return_value=True) as run:
+    def fake_run(command, log_file, critical=False, cwd=None):
+        if "view" in command:
+            Path(output_dir, "output.bam.partial").write_bytes(b"BAM")
+        elif "index" in command:
+            Path(output_dir, "output.bam.bai.partial").write_bytes(b"BAI")
+        return True
+
+    with patch.object(kestrel_genotyping, "run_command", side_effect=fake_run) as run:
         kestrel_genotyping.convert_sam_to_bam_and_index(sam, output_dir)
 
     view, index = run.call_args_list[0][0][0], run.call_args_list[1][0][0]
+    bam_partial = os.path.join(output_dir, "output.bam.partial")
+    bai_partial = os.path.join(output_dir, "output.bam.bai.partial")
     bam = os.path.join(output_dir, "output.bam")
-    assert shlex.split(view) == ["samtools", "view", "-Sb", sam, ">", bam]
-    assert shlex.split(index) == ["samtools", "index", bam]
+    assert shlex.split(view) == ["samtools", "view", "-Sb", sam, ">", bam_partial]
+    assert shlex.split(index) == ["samtools", "index", "-o", bai_partial, bam]
 
 
 def test_sam_to_bam_uses_configured_samtools_and_threads_in_both_commands(tmp_path) -> None:
@@ -103,7 +112,14 @@ def test_sam_to_bam_uses_configured_samtools_and_threads_in_both_commands(tmp_pa
     sam = str(tmp_path / "output.sam")
     Path(sam).write_text("@HD\tVN:1.6\n", encoding="utf-8")
 
-    with patch.object(kestrel_genotyping, "run_command", return_value=True) as run:
+    def fake_run(command, log_file, critical=False, cwd=None):
+        if "view" in command:
+            (tmp_path / "output.bam.partial").write_bytes(b"BAM")
+        elif "index" in command:
+            (tmp_path / "output.bam.bai.partial").write_bytes(b"BAI")
+        return True
+
+    with patch.object(kestrel_genotyping, "run_command", side_effect=fake_run) as run:
         kestrel_genotyping.convert_sam_to_bam_and_index(
             sam,
             str(tmp_path),
@@ -111,9 +127,11 @@ def test_sam_to_bam_uses_configured_samtools_and_threads_in_both_commands(tmp_pa
             threads=7,
         )
 
+    bam_partial = str(tmp_path / "output.bam.partial")
+    bai_partial = str(tmp_path / "output.bam.bai.partial")
     bam = str(tmp_path / "output.bam")
-    assert run.call_args_list[0].args[0] == f"/opt/vntyper/bin/samtools view -Sb -@ 7 {sam} > {bam}"
-    assert run.call_args_list[1].args[0] == f"/opt/vntyper/bin/samtools index -@ 7 {bam}"
+    assert run.call_args_list[0].args[0] == f"/opt/vntyper/bin/samtools view -Sb -@ 7 {sam} > {bam_partial}"
+    assert run.call_args_list[1].args[0] == f"/opt/vntyper/bin/samtools index -@ 7 -o {bai_partial} {bam}"
 
 
 def test_bcftools_sort_quotes_the_vcf_paths(tmp_path) -> None:

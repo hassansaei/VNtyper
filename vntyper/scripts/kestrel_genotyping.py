@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from vntyper.scripts.artifact_publish import discard_partial, partial_path, publish_partial
 from vntyper.scripts.command_builders import build_sam_to_bam_command, build_samtools_index_command, quote_path
 from vntyper.scripts.confidence_assignment import (
     calculate_depth_score_and_assign_confidence,
@@ -176,37 +177,59 @@ def convert_sam_to_bam_and_index(sam_file, output_dir, samtools_path="samtools",
     """
     bam_file = os.path.join(output_dir, "output.bam")
     bam_index = bam_file + ".bai"
+    partial_bam = partial_path(bam_file)
+    partial_bai = partial_path(bam_index)
 
-    # Both results are checked. They used to be discarded, and success was then inferred
-    # from `os.path.exists` on the two outputs -- which conflates "samtools succeeded" with
-    # "a file is present". A failed `view` still leaves a truncated BAM behind, so the SAM
-    # was deleted and the truncated BAM kept, and the only record of the failure was a log
-    # file nobody reads. This BAM is what the report's IGV track shows (#255).
     logger.info(f"Converting SAM to BAM: {sam_file} -> {bam_file}")
-    if not run_command(
-        build_sam_to_bam_command(
-            samtools_path=samtools_path,
-            sam_file=sam_file,
-            bam_file=bam_file,
-            threads=threads,
-        ),
-        log_file=os.path.join(output_dir, "samtools_view.log"),
-    ):
-        msg = f"Converting Kestrel's SAM to BAM failed: {sam_file} -> {bam_file}."
-        logger.error(msg)
-        raise RuntimeError(msg)
+    discard_partial(partial_bam)
+    try:
+        if not run_command(
+            build_sam_to_bam_command(
+                samtools_path=samtools_path,
+                sam_file=sam_file,
+                bam_file=partial_bam,
+                threads=threads,
+            ),
+            log_file=os.path.join(output_dir, "samtools_view.log"),
+        ):
+            msg = f"Converting Kestrel's SAM to BAM failed: {sam_file} -> {bam_file}."
+            logger.error(msg)
+            discard_partial(partial_bam)
+            raise RuntimeError(msg)
+    except BaseException:
+        discard_partial(partial_bam)
+        raise
+
+    publish_partial(partial_bam, bam_file)
 
     logger.info(f"Indexing BAM file: {bam_file}")
-    if not run_command(
-        build_samtools_index_command(samtools_path=samtools_path, bam_file=bam_file, threads=threads),
-        log_file=os.path.join(output_dir, "samtools_index.log"),
-    ):
-        msg = f"Indexing Kestrel's BAM failed: {bam_file}."
+    discard_partial(partial_bai)
+    try:
+        if not run_command(
+            build_samtools_index_command(
+                samtools_path=samtools_path,
+                bam_file=bam_file,
+                output_bai=partial_bai,
+                threads=threads,
+            ),
+            log_file=os.path.join(output_dir, "samtools_index.log"),
+        ):
+            msg = f"Indexing Kestrel's BAM failed: {bam_file}."
+            logger.error(msg)
+            discard_partial(partial_bai)
+            raise RuntimeError(msg)
+    except BaseException:
+        discard_partial(partial_bai)
+        raise
+
+    if not partial_bai.exists() or partial_bai.stat().st_size == 0:
+        msg = f"Indexing Kestrel's BAM produced an empty index: {partial_bai}."
         logger.error(msg)
+        discard_partial(partial_bai)
         raise RuntimeError(msg)
 
-    # Only now is deleting the SAM safe. The existence test is kept as a belt-and-braces
-    # check on what samtools claims to have written, not as the success signal it used to be.
+    publish_partial(partial_bai, bam_index)
+
     if os.path.exists(bam_file) and os.path.exists(bam_index):
         os.remove(sam_file)
         logger.info(f"Deleted SAM file: {sam_file}")

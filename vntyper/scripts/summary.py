@@ -8,9 +8,10 @@ a parsed result (based on file type), and an MD5 checksum for the result file.
 Additionally, the summary object includes the vntyper version, input files,
 and the pipeline end time.
 
-The module also provides functions to convert the summary into CSV/TSV formats.
-These conversion functions now flatten nested data structures (e.g. parsed_result)
-so that all available data is expanded into individual columns.
+The module also writes the operator-facing ``pipeline_summary.<csv|tsv>`` (one row per
+step, the run's provenance first) and ``pipeline_summary_rows.<csv|tsv>`` (one row per
+step, result row and field). The cells are computed by ``summary_flattening.py``; no
+cell is JSON text (#119).
 """
 
 from __future__ import annotations
@@ -21,10 +22,20 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import Any
 
 from vntyper.scripts.decision_profile import ResolvedDecisionProfile, load_packaged_decision_profile
 from vntyper.scripts.profile_provenance import profile_summary_fields
+from vntyper.scripts.summary_flattening import (
+    LONG_COLUMNS,
+    PARSED_RESULT_PREFIX,
+    STEP_COLUMNS,
+    long_rows,
+    run_columns,
+    step_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -446,125 +457,76 @@ def write_summary(summary, output_path):
         json.dump(summary, f, indent=4)
 
 
-def flatten_dict(d, parent_key="", sep="_"):
-    """
-    Recursively flattens a nested dictionary.
+def _summary_table(summary: Mapping[str, Any]) -> tuple[list[str], list[dict[str, str]]]:
+    """Assemble the one-row-per-step table.
 
-    For any nested dictionary, keys are concatenated with the given separator.
-    For lists, if elements are dictionaries, each is flattened and then joined as a JSON string;
-    otherwise, list elements are joined by commas.
+    Columns are the run provenance first, then :data:`STEP_COLUMNS`, then every
+    ``parsed_result_*`` column any step produced, sorted; a cell a step did not produce
+    is blank.
 
     Args:
-        d (dict): The dictionary to flatten.
-        parent_key (str, optional): The base key string for recursive calls.
-        sep (str, optional): Separator between keys.
+        summary: The summary dictionary.
 
     Returns:
-        dict: A flattened dictionary.
+        tuple[list[str], list[dict[str, str]]]: The column names and the rows.
     """
-    items = {}
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.update(flatten_dict(v, new_key, sep=sep))
-        elif isinstance(v, list):
-            if all(isinstance(i, dict) for i in v):
-                # Flatten each dict and join the resulting JSON strings
-                flattened_list = [json.dumps(flatten_dict(i, "", sep=sep)) for i in v]
-                items[new_key] = "; ".join(flattened_list)
-            else:
-                items[new_key] = ", ".join(str(i) for i in v)
-        else:
-            items[new_key] = v
-    return items
+    run = run_columns(summary)
+    rows = step_rows(summary)
+    parsed_columns = sorted({column for row in rows for column in row if column.startswith(PARSED_RESULT_PREFIX)})
+    fieldnames = [*run, *STEP_COLUMNS, *parsed_columns]
+    return fieldnames, [{**run, **row} for row in rows]
+
+
+def _write_delimited(
+    output_path: str | os.PathLike[str], fieldnames: list[str], rows: list[dict[str, str]], delimiter: str
+) -> None:
+    with open(output_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=delimiter, restval="")
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def convert_summary_to_csv(summary, output_csv_path):
     """
-    Converts the summary steps into a CSV file.
+    Writes the summary as a CSV table with one row per pipeline step.
 
-    Each row in the CSV corresponds to a pipeline step.
-    The step records are flattened so that nested data (e.g. parsed_result)
-    are expanded into individual columns.
+    Every row starts with the run's ``run_*`` provenance columns, then the step record,
+    then the ``parsed_result_*`` cells (see :mod:`vntyper.scripts.summary_flattening`).
 
     Args:
         summary (dict): The summary dictionary.
         output_csv_path (str): Path where the CSV file will be written.
     """
-    # Flatten each step record
-    flattened_steps = [flatten_dict(step) for step in summary.get("steps", [])]
-
-    # Determine all keys across the flattened records
-    all_keys = set()
-    for record in flattened_steps:
-        all_keys.update(record.keys())
-    # Use a sorted list of keys for consistent column order
-    all_keys = sorted(all_keys)
-
-    with open(output_csv_path, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=all_keys)
-        writer.writeheader()
-        for record in flattened_steps:
-            writer.writerow({key: record.get(key, "") for key in all_keys})
+    fieldnames, rows = _summary_table(summary)
+    _write_delimited(output_csv_path, fieldnames, rows, ",")
 
 
 def convert_summary_to_tsv(summary, output_tsv_path):
     """
-    Converts the summary steps into a TSV file.
+    Writes the summary as a TSV table with one row per pipeline step.
 
-    Each row in the TSV corresponds to a pipeline step.
-    The step records are flattened so that nested data (e.g. parsed_result)
-    are expanded into individual columns.
+    Same table as :func:`convert_summary_to_csv`, tab-delimited.
 
     Args:
         summary (dict): The summary dictionary.
         output_tsv_path (str): Path where the TSV file will be written.
     """
-    flattened_steps = [flatten_dict(step) for step in summary.get("steps", [])]
-    all_keys = set()
-    for record in flattened_steps:
-        all_keys.update(record.keys())
-    all_keys = sorted(all_keys)
-
-    with open(output_tsv_path, "w", newline="", encoding="utf-8") as tsvfile:
-        writer = csv.DictWriter(tsvfile, fieldnames=all_keys, delimiter="\t")
-        writer.writeheader()
-        for record in flattened_steps:
-            writer.writerow({key: record.get(key, "") for key in all_keys})
+    fieldnames, rows = _summary_table(summary)
+    _write_delimited(output_tsv_path, fieldnames, rows, "\t")
 
 
-# Example usage:
-if __name__ == "__main__":
-    # This example demonstrates how to create a summary, record a step, and write it out.
-    summary = start_summary(version="1.2.3", input_files={"sample": "sample.fastq", "bam": "sample.bam"})
+def convert_summary_rows_to_delimited(summary, output_path, delimiter=","):
+    """
+    Writes every result row of every step as a long table.
 
-    # Simulate a pipeline step with a sample result file (adjust these values as needed)
-    step_name = "Example Step"
-    result_file = "example_results.tsv"  # Path to your result file
-    file_type = "tsv"  # Could be "tsv", "csv", or "json"
-    command = "run_example --option value"
-    start_time = datetime.now(timezone.utc).replace(tzinfo=None)
-    # Simulate some processing delay
-    end_time = datetime.now(timezone.utc).replace(tzinfo=None)
+    The columns are ``step``, ``row_index``, ``field`` and ``value``; a step whose result
+    has several rows (adVNTR, cross-match) is complete here, where the per-step table
+    only records its row count.
 
-    # Record the step (this will calculate the MD5 and parse the file)
-    record_step(
-        summary,
-        step_name,
-        result_file,
-        file_type,
-        command,
-        start_time,
-        end_time,
-        write_summary_path="pipeline_summary.json",
-    )
-
-    # Mark pipeline end
-    end_summary(summary)
-
-    # Write the summary to a JSON file
-    write_summary(summary, "pipeline_summary.json")
-
-    # Optionally, convert the summary to CSV and TSV formats
-    convert_summary_to_csv(summary, "pipeline_summary.csv")
-    convert_summary_to_tsv(summary, "pipeline_summary.tsv")
+    Args:
+        summary (dict): The summary dictionary.
+        output_path (str): Path where the rows file will be written, conventionally
+            ``pipeline_summary_rows.csv`` or ``pipeline_summary_rows.tsv``.
+        delimiter (str, optional): ``","`` (default) or ``"\\t"``.
+    """
+    _write_delimited(output_path, list(LONG_COLUMNS), long_rows(summary), delimiter)

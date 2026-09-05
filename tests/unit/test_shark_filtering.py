@@ -75,7 +75,8 @@ class TestTheCommandLine:
         assert captured_command[0]["command"] == (
             "mamba run -n shark_env shark -r reference/muc1_region_hg19.fa "
             "-1 /data/sample_R1.fastq.gz -2 /data/sample_R2.fastq.gz "
-            f"-o {tmp_path}/sample_shark_R1.fastq -p {tmp_path}/sample_shark_R2.fastq -t 4"
+            f"-o {tmp_path}/sample_shark_R1.fastq -p {tmp_path}/sample_shark_R2.fastq "
+            "-t 4 -k 17 -c 0.6"
         )
 
     def test_the_two_filtered_fastqs_are_named_after_the_sample(self, tmp_path, captured_command):
@@ -103,7 +104,34 @@ class TestTheCommandLine:
     def test_threads_are_passed_through(self, tmp_path, captured_command):
         filter_with(tmp_path, threads=16)
 
-        assert captured_command[0]["command"].endswith("-t 16")
+        assert "-t 16" in captured_command[0]["command"]
+        assert captured_command[0]["command"].endswith("-t 16 -k 17 -c 0.6")
+
+    def test_search_parameters_sourced_from_sidecar(self, tmp_path, captured_command):
+        """Custom k and c values in shark_settings are interpolated into the command line."""
+        custom_config = {
+            "shark_settings": {
+                "muc1_region_fasta_hg19": "reference/muc1_region_hg19.fa",
+                "kmer_size": 21,
+                "confidence": 0.8,
+            }
+        }
+        filter_with(tmp_path, config=custom_config)
+
+        assert "-k 21 -c 0.8" in captured_command[0]["command"]
+
+    def test_search_parameters_are_shell_quoted(self, tmp_path, captured_command):
+        """Search parameters pass through quote_path to protect against injection."""
+        custom_config = {
+            "shark_settings": {
+                "muc1_region_fasta_hg19": "reference/muc1_region_hg19.fa",
+                "kmer_size": "19; rm -rf /",
+                "confidence": "0.7",
+            }
+        }
+        filter_with(tmp_path, config=custom_config)
+
+        assert "-k '19; rm -rf /' -c 0.7" in captured_command[0]["command"]
 
     def test_the_tool_name_falls_back_to_a_bare_shark(self, tmp_path, captured_command):
         filter_with(tmp_path, main_config={})
@@ -213,8 +241,42 @@ class TestStepSummaryArtifact:
             "filtered_fastq_2": str(r2),
             "kept_reads_r1": "3",
             "kept_reads_r2": "3",
+            "shark_version": "unknown",
+            "shark_k": "17",
+            "shark_c": "0.6",
         }
         assert json.loads(out.read_text(encoding="utf-8")) == payload
+
+    def test_unequal_read_counts_raises_value_error_without_recording(self, tmp_path):
+        """A mismatch between R1 and R2 kept reads fails closed before summary creation (#312)."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        self.write_fastq(r1, 3)
+        self.write_fastq(r2, 2)
+        out = tmp_path / "sample_shark_step.json"
+
+        with pytest.raises(
+            ValueError,
+            match=r"SHARK kept read counts do not match between paired FASTQ files: R1=3, R2=2",
+        ):
+            shark.write_shark_step_summary(r1, r2, out)
+
+        assert not out.exists()
+
+    def test_write_shark_step_summary_records_custom_config_and_version(self, tmp_path):
+        """Passed config and version string are written to the step payload."""
+        r1 = tmp_path / "sample_shark_R1.fastq"
+        r2 = tmp_path / "sample_shark_R2.fastq"
+        self.write_fastq(r1, 5)
+        self.write_fastq(r2, 5)
+        out = tmp_path / "sample_shark_step.json"
+        config = {"shark_settings": {"kmer_size": 19, "confidence": 0.75}}
+
+        payload = shark.write_shark_step_summary(r1, r2, out, config=config, shark_version="1.2.0+h077b44d_5")
+
+        assert payload["shark_version"] == "1.2.0+h077b44d_5"
+        assert payload["shark_k"] == "19"
+        assert payload["shark_c"] == "0.75"
 
     def test_a_filter_that_kept_nothing_records_string_zero(self, tmp_path):
         """An empty but valid FASTQ is a zero count, not a failed stage."""

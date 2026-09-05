@@ -600,6 +600,21 @@ def test_the_cohort_statistics_exports_are_compared() -> None:
     assert compare.COHORT_ARTIFACTS["cohort_stats_json"] == ("opaque", ())
 
 
+def test_the_cohort_call_frequency_exports_are_compared() -> None:
+    """``cohort_call_frequency_{csv,tsv,json}`` must be in the compared set, not merely written.
+
+    Issue #33 adds the fourth cohort export carrying call frequencies across the roster.
+    A new output the harness writes but never reads is a gate that narrowed relative to the
+    product.
+    """
+    for name in ("cohort_call_frequency_csv", "cohort_call_frequency_tsv", "cohort_call_frequency_json"):
+        assert name in compare.COHORT_ARTIFACTS, f"{name} is written but not compared"
+
+    assert compare.COHORT_ARTIFACTS["cohort_call_frequency_csv"] == ("table", ("Grouping_Key",))
+    assert compare.COHORT_ARTIFACTS["cohort_call_frequency_tsv"] == ("table", ("Grouping_Key",))
+    assert compare.COHORT_ARTIFACTS["cohort_call_frequency_json"] == ("opaque", ())
+
+
 def test_a_statistics_export_missing_from_one_side_is_a_delta_not_a_skip() -> None:
     """The candidate failing to write the export must fail the gate, not pass it quietly.
 

@@ -10,6 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from vntyper.scripts.alignment_contract import AlignmentPlan, index_candidate_names
+from vntyper.scripts.artifact_publish import partial_path
 from vntyper.scripts.reference_resolution import configured_reference_candidates
 
 logger = logging.getLogger(__name__)
@@ -222,10 +223,15 @@ def _validate_owned_destination(
 def _alignment_conversion_destinations(output: str | Path, output_name: str) -> tuple[Path, ...]:
     output_root = Path(output)
     sliced_bam = output_root / f"{output_name}_sliced.bam"
+    unmapped_bam = output_root / f"{output_name}_unmapped.bam"
+    sliced_unmapped_bam = output_root / f"{output_name}_sliced_unmapped.bam"
     destinations = [
         sliced_bam,
-        output_root / f"{output_name}_unmapped.bam",
-        output_root / f"{output_name}_sliced_unmapped.bam",
+        partial_path(sliced_bam),
+        unmapped_bam,
+        partial_path(unmapped_bam),
+        sliced_unmapped_bam,
+        partial_path(sliced_unmapped_bam),
         output_root / f"{output_name}_R1.fastq.gz",
         output_root / f"{output_name}_R2.fastq.gz",
         output_root / f"{output_name}_other.fastq.gz",
@@ -236,7 +242,10 @@ def _alignment_conversion_destinations(output: str | Path, output_name: str) -> 
         output_root / f"{output_name}_index.log",
         output_root / f"{output_name}_sort_fastq.log",
     ]
-    destinations.extend(Path(candidate) for candidate in index_candidate_names(str(sliced_bam), "bam"))
+    for candidate in index_candidate_names(str(sliced_bam), "bam"):
+        candidate_path = Path(candidate)
+        destinations.append(candidate_path)
+        destinations.append(partial_path(candidate_path))
     return tuple(destinations)
 
 
@@ -469,7 +478,9 @@ def validate_fastq_pipeline_destinations(
     destinations = [
         *_fastq_processing_destinations(fastq_output, "output", paired=fastq_2 is not None),
         sorted_bam,
+        partial_path(sorted_bam),
         sorted_bam.with_suffix(".bam.bai"),
+        partial_path(sorted_bam.with_suffix(".bam.bai")),
         alignment_output / "output_alignment.log",
         alignment_output / "output_index.log",
         post_alignment,

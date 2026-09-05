@@ -11,6 +11,7 @@ vntyper [global-options] cohort
     [--summary-file <name>]
     [--summary-formats <formats>]
     [--pseudonymize-samples [<basename>]]
+    [--rare-allele-max-frequency <float>]
 ```
 
 ## Arguments
@@ -23,6 +24,7 @@ vntyper [global-options] cohort
 | `--summary-file` | string | `cohort_summary.html` | Name of the cohort summary report file |
 | `--summary-formats` | string | `""` | Comma-separated list of additional summary output formats to generate (supported: `csv`, `tsv`, `json`). HTML is always generated |
 | `--pseudonymize-samples` | string (optional value) | — | Replace sample names with a prefix plus a truncated SHA-256 digest. Obfuscation for readability, **not** a privacy control -- the digest is unsalted and unkeyed, so guessable names are recoverable from the report alone; see [Cohort analysis](../user-guide/cohort-analysis.md#what-pseudonymization-does-not-protect-against). Defaults to the basename `sample_`; optionally provide a custom basename |
+| `--rare-allele-max-frequency` | float | `0.05` | Maximum frequency threshold (0 to 1) for marking calls as `Below_Cutoff` in the cohort call frequency table. Calls with frequency above this threshold are not omitted |
 
 One of `-i/--input-dirs` or `--input-file` is required.
 
@@ -84,3 +86,10 @@ Use a custom pseudonymization prefix:
 ```bash
 vntyper cohort -i results/*/ -o cohort_output/ --pseudonymize-samples patient_
 ```
+
+Specify a custom cohort call frequency threshold:
+
+```bash
+vntyper cohort -i results/*/ -o cohort_output/ --rare-allele-max-frequency 0.01
+```
+

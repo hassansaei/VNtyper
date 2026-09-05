@@ -190,6 +190,8 @@ def cohort_argv(case: dict[str, Any], output_dir: Path, input_dirs: list[Path]) 
         argv.extend(["--summary-formats", case["summary_formats"]])
     if case.get("pseudonymize"):
         argv.extend(["--pseudonymize-samples", case["pseudonymize"]])
+    if "rare_allele_max_frequency" in case:
+        argv.extend(["--rare-allele-max-frequency", str(case["rare_allele_max_frequency"])])
     return argv
 
 
