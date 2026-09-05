@@ -36,6 +36,7 @@ from vntyper.scripts.motif_decisions import (
     apply_gg_alt_rule,
     apply_right_motif_exclusions,
     has_gg_alternate,
+    normalise_frameshift_validity,
     split_left_right,
 )
 
@@ -288,7 +289,7 @@ def _prioritize_frameshift_and_dedupe(df: pd.DataFrame) -> pd.DataFrame:
     # Determine sort columns based on whether is_valid_frameshift exists
     if "is_valid_frameshift" in result.columns:
         # Fill missing values with False (variant is not a valid frameshift)
-        result["is_valid_frameshift"] = result["is_valid_frameshift"].fillna(False)
+        result["is_valid_frameshift"] = normalise_frameshift_validity(result["is_valid_frameshift"])
         sort_cols = ["is_valid_frameshift", "Depth_Score", "POS"]
         sort_ascending = [False, False, False]  # True first, highest score, highest POS
     else:
@@ -518,7 +519,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     pass_mask = original_df["original_index"].isin(combined_df.get("original_index", []))
     # Only set motif_filter_pass=True when also a valid frameshift (so pre-result matrix is consistent)
     if "is_valid_frameshift" in original_df.columns:
-        pass_mask = pass_mask & original_df["is_valid_frameshift"].fillna(False)
+        pass_mask = pass_mask & normalise_frameshift_validity(original_df["is_valid_frameshift"])
     original_df["motif_filter_pass"] = pass_mask
 
     # Ensure final columns exist in the main DF even for failing rows

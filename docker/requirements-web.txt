@@ -6,12 +6,12 @@
 # vntyper/ no longer reinstalls fastapi.
 #
 # These are NOT part of the `vntyper` PyPI package; the CLI does not need them.
-fastapi[standard]==0.115.3
-uvicorn[standard]==0.32.0
-redis==5.2.0
-celery==5.4.0
-python-multipart==0.0.31
+fastapi[standard]==0.141.1
+uvicorn[standard]==0.52.4
+redis==8.1.0
+celery==5.6.3
+python-multipart==0.0.32
 fastapi-limiter==0.1.6
-email_validator==2.2.0
+email_validator==2.3.0
 bcrypt==5.0.0
-pydantic==2.10.0
+pydantic==2.13.5

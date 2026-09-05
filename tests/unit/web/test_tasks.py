@@ -2142,3 +2142,90 @@ def test_cohort_worker_logs_a_capacity_release_failure_without_failing_the_resul
     )
 
     assert "Error releasing capacity reservation for analysis: redis unavailable" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# The started-job usage record both tasks write
+# ---------------------------------------------------------------------------
+
+
+def _started_usage_mapping(usage_mock: MagicMock, key: str) -> dict:
+    """Return the mapping of the one `hset(key, mapping=...)` call that starts a job.
+
+    Args:
+        usage_mock: The mocked usage-database client.
+        key: The usage hash key the job writes.
+
+    Returns:
+        dict: The mapping handed to Redis.
+    """
+    started = [c for c in usage_mock.hset.call_args_list if c.args == (key,) and "mapping" in c.kwargs]
+    assert len(started) == 1, usage_mock.hset.call_args_list
+    return dict(started[0].kwargs["mapping"])
+
+
+def test_a_pipeline_job_writes_the_shared_started_usage_record(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """The pipeline job's usage hash is the record `usage_records` builds, and only that.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        redis_mocks: The three mocked Redis clients.
+        no_email_task: The mocked `send_email_task`.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    from app import tasks, usage_records
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    fixed_now = tasks.datetime(2026, 9, 5, 12, 30, 45, tzinfo=tasks.timezone.utc)
+    monkeypatch.setattr(usage_records, "datetime", MagicMock(now=lambda tz=None: fixed_now))
+
+    _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+
+    assert _started_usage_mapping(redis_mocks.usage, "usage:job-1") == {
+        "user_hash": hashlib.sha256(b"127.0.0.1-pytest").hexdigest(),
+        "timestamp": "2026-09-05T12:30:45+00:00",
+        "job_id": "job-1",
+        "status": "started",
+    }
+    redis_mocks.usage.expire.assert_any_call("usage:job-1", tasks.settings.USAGE_DATA_RETENTION_SECONDS)
+
+
+def test_a_cohort_job_writes_the_shared_started_usage_record_with_its_cohort(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """The cohort job's usage hash is the same record plus its analysis type and cohort.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        redis_mocks: The three mocked Redis clients.
+        tmp_path: Scratch directory standing in for the output tree.
+    """
+    from app import tasks, usage_records
+
+    zip_path = tmp_path / "job-a.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("job-a/result.txt", "result data")
+    monkeypatch.setattr(tasks.subprocess, "run", lambda *a, **k: None)
+    fixed_now = tasks.datetime(2026, 9, 5, 12, 30, 45, tzinfo=tasks.timezone.utc)
+    monkeypatch.setattr(usage_records, "datetime", MagicMock(now=lambda tz=None: fixed_now))
+
+    _invoke_cohort_job(
+        tasks,
+        cohort_id="cohort-1",
+        zip_paths=[str(zip_path)],
+        output_dir=str(tmp_path / "analysis"),
+        user_ip="10.0.0.1",
+        user_agent="pytest",
+    )
+
+    assert _started_usage_mapping(redis_mocks.usage, "usage:analysis") == {
+        "user_hash": hashlib.sha256(b"10.0.0.1-pytest").hexdigest(),
+        "timestamp": "2026-09-05T12:30:45+00:00",
+        "job_id": "analysis",
+        "status": "started",
+        "analysis_type": "cohort_analysis",
+        "cohort_id": "cohort-1",
+    }

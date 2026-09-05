@@ -1,11 +1,11 @@
 {
   "reviewed_ruff_version": "ruff 0.16.1",
   "expected_counts": {
-    "normal": 94,
-    "ignore_noqa": 101,
-    "identities": 72,
+    "normal": 97,
+    "ignore_noqa": 104,
+    "identities": 75,
     "categories": {
-      "A": 28,
+      "A": 31,
       "B": 16,
       "C": 28
     }
@@ -58,6 +58,30 @@
       "all_count": 3,
       "category": "C",
       "rationale": "docker/app/failure_reporting.py::report_pipeline_failure: fallback/continuation boundary; failed-status, preflight-metadata, and email-reporting failures are isolated so the worker re-raises the exact pipeline exception, as pinned by tests/unit/web/test_failure_notification_resilience.py::test_failed_status_write_preserves_each_pipeline_exception and the sibling preflight/email resilience tests, with each secondary failure observable via ERROR log"
+    },
+    {
+      "path": "docker/app/lifecycle.py",
+      "symbol": "initialize_rate_limiter",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "docker/app/lifecycle.py::initialize_rate_limiter: terminal startup cleanup boundary; limiter initialization failures close the newly created Redis client and re-raise the exact initialization failure, including when close also fails, as pinned by tests/unit/web/test_lifecycle.py::test_failed_rate_limiter_initialization_closes_the_client_before_propagating and ::test_initialization_failure_remains_primary_when_client_close_also_fails"
+    },
+    {
+      "path": "docker/app/main.py",
+      "symbol": "startup_event",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "docker/app/main.py::startup_event: terminal startup cleanup boundary; an unexpected version-probe failure closes the initialized rate-limiter client and re-raises the exact probe failure, including when close also fails, as pinned by tests/unit/web/test_lifecycle.py::test_startup_closes_the_client_if_the_version_probe_fails and ::test_version_probe_failure_remains_primary_when_startup_cleanup_fails"
+    },
+    {
+      "path": "docker/app/main.py",
+      "symbol": "lifespan",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "docker/app/main.py::lifespan: terminal shutdown cleanup boundary; request-loop failures and cancellations close the owned rate-limiter client and re-raise the exact primary failure even when close also fails, as pinned by tests/unit/web/test_lifecycle.py::test_application_lifespan_closes_the_client_after_an_exception and ::test_lifespan_body_failure_remains_primary_when_shutdown_cleanup_fails"
     },
     {
       "path": "docker/app/tasks.py",

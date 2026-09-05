@@ -82,20 +82,23 @@ dev = [
     # requirements-web.txt disagree. requirements-web.txt is an input to the base
     # image's content hash (AGENTS.md trap 10), so it is the fixed side: change
     # versions there first, then mirror them here.
-    "fastapi[standard]==0.115.3",
-    "uvicorn[standard]==0.32.0",
-    "redis==5.2.0",
-    "celery==5.4.0",
-    "python-multipart==0.0.31",
+    "fastapi[standard]==0.141.1",
+    "uvicorn[standard]==0.52.4",
+    "redis==8.1.0",
+    "celery==5.6.3",
+    "python-multipart==0.0.32",
     # 0.2.0 removed the `FastAPILimiter` class docker/app imports
     # (`from fastapi_limiter import FastAPILimiter`).
     "fastapi-limiter==0.1.6",
-    "email_validator==2.2.0",
+    "email_validator==2.3.0",
     "bcrypt==5.0.0",
-    "pydantic==2.10.0",
-    # The one deliberate exception to the mirror above: test-only, so the image
-    # has no reason to carry it and requirements-web.txt does not list it.
+    "pydantic==2.13.5",
+    # The deliberate exceptions to the mirror above are test-only, so the image
+    # has no reason to carry them and requirements-web.txt does not list them.
     "fakeredis>=2.21",  # pure-Python Redis stand-in, unit-tier only
+    # Starlette 1.2+ supports httpx2 as its current TestClient transport. The
+    # production API does not construct TestClient, so this stays in dev only.
+    "httpx2==2.12.0",
 ]
 web = [
     # Mirrors docker/requirements-web.txt exactly, pin for pin. That file is the
@@ -104,15 +107,15 @@ web = [
     # same versions. The image itself still installs from requirements-web.txt
     # directly, and tests/unit/test_version_consistency.py fails the build if the
     # two ever drift apart.
-    "fastapi[standard]==0.115.3",
-    "uvicorn[standard]==0.32.0",
-    "redis==5.2.0",
-    "celery==5.4.0",
-    "python-multipart==0.0.31",
+    "fastapi[standard]==0.141.1",
+    "uvicorn[standard]==0.52.4",
+    "redis==8.1.0",
+    "celery==5.6.3",
+    "python-multipart==0.0.32",
     "fastapi-limiter==0.1.6",
-    "email_validator==2.2.0",
+    "email_validator==2.3.0",
     "bcrypt==5.0.0",
-    "pydantic==2.10.0",
+    "pydantic==2.13.5",
 ]
 docs = [
     "mkdocs>=1.6,<2",

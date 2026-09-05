@@ -28,6 +28,7 @@ from vntyper.scripts.motif_decisions import (
     apply_gg_alt_rule,
     apply_right_motif_exclusions,
     has_gg_alternate,
+    normalise_frameshift_validity,
     split_left_right,
 )
 from vntyper.scripts.motif_processing import motif_correction_and_annotation
@@ -35,6 +36,24 @@ from vntyper.scripts.motif_processing import motif_correction_and_annotation
 pytestmark = pytest.mark.unit
 
 CONFIG_PATH = Path("vntyper/scripts/kestrel_config.json")
+
+
+class TestNormaliseFrameshiftValidity:
+    """The frameshift gate has one explicit boolean and missing-value contract."""
+
+    def test_missing_values_become_false_and_the_result_is_ordinary_bool(self) -> None:
+        values = pd.Series([True, pd.NA, False, None, 1, 0], dtype=object)
+
+        result = normalise_frameshift_validity(values)
+
+        assert result.tolist() == [True, False, False, False, True, False]
+        assert result.dtype == bool
+
+    def test_a_non_boolean_value_is_rejected_instead_of_becoming_truthy(self) -> None:
+        values = pd.Series([True, "false"], dtype=object)
+
+        with pytest.raises(TypeError, match="bool-like"):
+            normalise_frameshift_validity(values)
 
 
 def _shipped_config():

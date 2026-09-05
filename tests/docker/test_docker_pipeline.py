@@ -81,11 +81,8 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path, ensur
     test_output_dir = output_dir / test_name
     test_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set permissions so container user (appuser, UID 1001) can write
-    # Using chmod 777 is acceptable for isolated pytest tmpdir (see conftest.py for details)
-    import subprocess
-
-    subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
+    # Preserve the host group and setgid inheritance established by the mounted root.
+    test_output_dir.chmod(0o2770)
 
     # Define Docker-specific runner
     def docker_runner(request: PipelineRequest) -> PipelineRunResult:
@@ -97,6 +94,17 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path, ensur
     # Use test-specific subdirectory for isolation
     run_bam_test_case(test_case, docker_runner, test_output_dir)
 
+    assert test_output_dir.stat().st_mode & 0o007 == 0, "isolated Docker output must not be world-accessible"
+    generated_directories = [path for path in test_output_dir.rglob("*") if path.is_dir()]
+    assert generated_directories, "the pipeline produced no directories, so cleanup ownership was not exercised"
+    expected_gid = output_dir.stat().st_gid
+    assert all(path.stat().st_gid == expected_gid for path in generated_directories)
+    assert all(path.stat().st_mode & 0o020 for path in generated_directories)
+
+    cleanup_probe = generated_directories[0] / ".host-cleanup-probe"
+    cleanup_probe.write_text("host can clean container output")
+    cleanup_probe.unlink()
+
 
 # ============================================================================
 # CRAM Pipeline Tests
@@ -107,12 +115,10 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path, ensur
 @pytest.mark.parametrize("test_case", get_cram_test_cases(), ids=get_cram_test_ids())
 def test_docker_cram_pipeline(test_case: dict, vntyper_container, ensure_test_data) -> None:
     """Run each shared CRAM request and validation through Docker's path mapper."""
-    import subprocess
-
     container, output_dir = vntyper_container
     test_output_dir = output_dir / test_case["test_name"]
     test_output_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
+    test_output_dir.chmod(0o2770)
 
     def docker_runner(request: PipelineRequest) -> PipelineRunResult:
         return _docker_runner(container, output_dir, request)
@@ -151,11 +157,7 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path, en
     test_output_dir = output_dir / test_name
     test_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set permissions so container user (appuser, UID 1001) can write
-    # Using chmod 777 is acceptable for isolated pytest tmpdir (see conftest.py for details)
-    import subprocess
-
-    subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
+    test_output_dir.chmod(0o2770)
 
     # Define Docker-specific runner
     def docker_runner(request: PipelineRequest) -> PipelineRunResult:
@@ -171,12 +173,10 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path, en
 @pytest.mark.parametrize("test_case", get_fastq_test_cases(), ids=get_fastq_test_ids())
 def test_docker_fastq_pipeline(test_case: dict, vntyper_container, ensure_test_data) -> None:
     """Run the shared FASTQ request and validation through Docker's path mapper."""
-    import subprocess
-
     container, output_dir = vntyper_container
     test_output_dir = output_dir / test_case["test_name"]
     test_output_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
+    test_output_dir.chmod(0o2770)
 
     def docker_runner(request: PipelineRequest) -> PipelineRunResult:
         return _docker_runner(container, output_dir, request)
