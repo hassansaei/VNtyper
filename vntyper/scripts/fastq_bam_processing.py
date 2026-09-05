@@ -19,6 +19,7 @@ from vntyper.scripts.alignment_target_io import (
     validate_alignment_conversion_destinations,
     validate_fastq_processing_destinations,
 )
+from vntyper.scripts.artifact_publish import discard_partial, partial_path, publish_partial
 from vntyper.scripts.command_builders import (
     build_fastp_command,
     build_samtools_depth_command,
@@ -146,11 +147,12 @@ def process_bam_to_fastq(
         logger.debug(f"BAM region set to: {bam_region}")
 
     final_bam = Path(output) / f"{output_name}_sliced.bam"
+    partial_slice = partial_path(final_bam)
 
     command_slice = build_plan_slice_command(
         samtools_path=samtools_path,
         plan=plan,
-        output_bam=final_bam,
+        output_bam=partial_slice,
         region=None if bed_file else bam_region,
         bed_file=bed_file,
         threads=threads,
@@ -160,58 +162,80 @@ def process_bam_to_fastq(
     log_file_slice = Path(output) / f"{output_name}_slice.log"
     logger.info(f"Executing region slicing with command: {command_slice}")
 
-    success = run_command(str(command_slice), str(log_file_slice), critical=True)
-    if not success:
-        logger.error(f"{plan.file_format.upper()} region slicing failed.")
-        raise RuntimeError(f"{plan.file_format.upper()} region slicing failed.")
+    discard_partial(partial_slice)
+    try:
+        success = run_command(str(command_slice), str(log_file_slice), critical=True)
+        if not success:
+            logger.error(f"{plan.file_format.upper()} region slicing failed.")
+            discard_partial(partial_slice)
+            raise RuntimeError(f"{plan.file_format.upper()} region slicing failed.")
+    except BaseException:
+        discard_partial(partial_slice)
+        raise
+
+    if fast_mode:
+        publish_partial(partial_slice, final_bam)
     logger.info("BAM/CRAM region slicing completed.")
 
     # Extract & merge unmapped reads if not in fast_mode
     if not fast_mode:
         unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
+        partial_unmapped = partial_path(unmapped_bam)
 
         command_filter = build_plan_unmapped_command(
             samtools_path=samtools_path,
             plan=plan,
-            output_bam=unmapped_bam,
+            output_bam=partial_unmapped,
             threads=threads,
-            # Only when it is genuinely throwaway. The merge consumes it on the next
-            # line, but the removal below is gated on `delete_intermediates`, which
-            # defaults to False all the way up to the CLI -- so in an ordinary run this
-            # file survives in the output directory and goes into the archive. Writing
-            # a surviving file at BGZF level 0 would ship a roughly 3x larger BAM, the
-            # same regression the merge output is left compressed to avoid.
             uncompressed=delete_intermediates,
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
         logger.info(f"Executing filtering with command: {command_filter}")
 
-        success = run_command(str(command_filter), str(log_file_filter), critical=True)
-        if not success:
-            logger.error("BAM/CRAM filtering failed.")
-            raise RuntimeError("BAM/CRAM filtering failed.")
+        discard_partial(partial_unmapped)
+        try:
+            success = run_command(str(command_filter), str(log_file_filter), critical=True)
+            if not success:
+                logger.error("BAM/CRAM filtering failed.")
+                discard_partial(partial_unmapped)
+                raise RuntimeError("BAM/CRAM filtering failed.")
+        except BaseException:
+            discard_partial(partial_unmapped)
+            raise
+
+        publish_partial(partial_unmapped, unmapped_bam)
 
         # Merge sliced + unmapped
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
+        partial_merged = partial_path(merged_bam)
         command_merge = build_samtools_merge_command(
             samtools_path=samtools_path,
-            merged_bam=merged_bam,
-            sliced_bam=final_bam,
+            merged_bam=partial_merged,
+            sliced_bam=partial_slice,
             unmapped_bam=unmapped_bam,
             threads=threads,
         )
         log_file_merge = Path(output) / f"{output_name}_merge.log"
         logger.info(f"Executing BAM merging with command: {command_merge}")
 
-        success = run_command(str(command_merge), str(log_file_merge), critical=True)
-        if not success:
-            logger.error("BAM merging failed.")
-            raise RuntimeError("BAM merging failed.")
+        discard_partial(partial_merged)
+        try:
+            success = run_command(str(command_merge), str(log_file_merge), critical=True)
+            if not success:
+                logger.error("BAM merging failed.")
+                discard_partial(partial_merged)
+                raise RuntimeError("BAM merging failed.")
+        except BaseException:
+            discard_partial(partial_merged)
+            raise
+        finally:
+            discard_partial(partial_slice)
 
+        publish_partial(partial_merged, merged_bam)
         final_bam = merged_bam
         logger.info("BAM/CRAM filtering and merging completed.")
 
-        # Rename merged BAM for adVNTR consistency and re-index
+        # Rename merged BAM for adVNTR consistency
         final_bam_renamed = Path(output) / f"{output_name}_sliced.bam"
         os.replace(final_bam, final_bam_renamed)
         final_bam = final_bam_renamed

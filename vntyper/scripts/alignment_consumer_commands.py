@@ -52,7 +52,7 @@ def build_plan_slice_command(
         reference_path=plan.reference_path,
         index_path=plan.stable_index_path,
         threads=threads,
-        index_output=fast_mode and needs_advntr,
+        index_output=False,
         exclude_unmapped=not fast_mode,
         # Not unconditionally True. In fast mode there is no unmapped recovery and no
         # merge, so this slice is never replaced: it *survives* as `<name>_sliced.bam`,
