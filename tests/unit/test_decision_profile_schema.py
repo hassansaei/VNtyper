@@ -26,7 +26,7 @@ PACKAGE_ROOT = Path(__file__).parents[2] / "vntyper"
 PROFILE_PATH = PACKAGE_ROOT / "profiles" / "decision_profile.json"
 DIGEST_PATH = PACKAGE_ROOT / "profiles" / "decision_profile.sha256"
 PROJECTION_PATH = PACKAGE_ROOT / "profiles" / "decision_projection.json"
-EXPECTED_PACKAGED_PROFILE_SHA256 = "be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718"
+EXPECTED_PACKAGED_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
 
 
 def _packaged_profile() -> dict[str, object]:
@@ -121,7 +121,7 @@ def test_every_inventory_leaf_has_exactly_one_validation_class() -> None:
     assert observed == {member.value for member in ValidationClass}
     assert all(isinstance(field["class"], str) for field in inventory.values())
     assert Counter(field["class"] for field in inventory.values()) == {
-        ValidationClass.FIXED_SAFETY.value: 172,
+        ValidationClass.FIXED_SAFETY.value: 173,
         ValidationClass.EXPLICIT_CUSTOM.value: 69,
         ValidationClass.GENERATED_MUTABLE.value: 6,
     }
@@ -219,6 +219,13 @@ def test_packaged_inventory_rejects_an_invalid_fixed_output_format() -> None:
     ("pointer", "value", "unit", "comparator", "inclusive"),
     [
         (
+            "/components/kestrel/confidence_assignment/reporting_floor",
+            0.00469,
+            "depth-score-ratio",
+            "gte",
+            True,
+        ),
+        (
             "/components/kestrel/confidence_assignment/depth_score_thresholds/low",
             0.00469,
             "depth-score-ratio",
@@ -299,13 +306,44 @@ def test_fixed_safety_boundaries_retain_value_unit_and_semantics(
     }
 
 
-def test_low_reporting_floor_and_independent_gg_gate_are_linked() -> None:
+def test_reporting_floor_and_independent_gg_gate_are_linked() -> None:
     profile = _packaged_profile()
-    low = _field(profile, "/components/kestrel/confidence_assignment/depth_score_thresholds/low")
+    floor = _field(profile, "/components/kestrel/confidence_assignment/reporting_floor")
     gg = _field(profile, "/components/kestrel/alt_filtering/gg_depth_score_threshold")
 
-    assert low["value"] == gg["value"] == 0.00469
-    assert low is not gg
+    assert floor["value"] == gg["value"] == 0.00469
+    assert floor is not gg
+
+
+def test_revision_1_profile_lacking_reporting_floor_fails_closed_with_inventory_fields_differ() -> None:
+    """A revision-1 custom profile lacking reporting_floor must fail closed (#311)."""
+    packaged = _packaged_profile()
+    custom = copy.deepcopy(packaged)
+    custom["profile_kind"] = "explicit-custom"
+    custom["profile_id"] = "unit-test-revision-1-lacks-floor"
+    inventory = custom["inventory"]
+    assert isinstance(inventory, dict)
+    inventory.pop("/components/kestrel/confidence_assignment/reporting_floor", None)
+
+    with pytest.raises(ValueError, match="inventory fields differ"):
+        validate_complete_inventory(custom, packaged_profile=packaged)
+
+
+def test_divergent_reporting_floor_and_gg_depth_threshold_raises_in_critical_fields() -> None:
+    """Critical field validation must reject divergent reporting_floor and gg_depth_score_threshold (#311)."""
+    packaged = _packaged_profile()
+    custom = copy.deepcopy(packaged)
+    custom["profile_kind"] = "explicit-custom"
+    custom["profile_id"] = "unit-test-divergent-floor-gg"
+    inventory = custom["inventory"]
+    assert isinstance(inventory, dict)
+    inventory["/components/kestrel/confidence_assignment/reporting_floor"]["value"] = 0.00500
+
+    with pytest.raises(
+        ValueError,
+        match="independent GG depth-score minimum must equal the reporting floor|critical fixed-safety field differs|immutable fixed-safety field differs",
+    ):
+        validate_complete_inventory(custom, packaged_profile=packaged)
 
 
 def test_every_numeric_leaf_declares_unit_comparator_and_inclusivity() -> None:

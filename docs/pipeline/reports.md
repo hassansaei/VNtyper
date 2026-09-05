@@ -28,9 +28,17 @@ If adVNTR was run, its results appear in a separate table showing VID, variant s
 
 **Screening Summary**
 
-The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The chips state the Kestrel result, adVNTR result, concordance and Coverage QC; an unmatched configuration also gets a **Screening rule: Not configured** chip. They use existing pipeline vocabulary such as **High precision**, **Not performed**, **Not assessable**, **PASS** and **FAIL**.
+The report opens with a masthead: who the report is about, the computed state as a row of labelled chips, and then the interpretive text. The chips state the Kestrel result, adVNTR result, concordance, Confidence grade, Coverage QC, Mean coverage, and Flank depth; an unmatched configuration also gets a **Screening rule: Not configured** chip. They use existing pipeline and configured vocabulary such as **High precision**, **Not performed**, **Not assessable**, **Finding**, **Finding corroborated**, **No finding**, **PASS** and **FAIL**.
 
-**The masthead produces no verdict word.** Its internal `finding`, `no-finding` and `indeterminate` emphasis states select styling only and are never printed as labels. The words a reader sees come from the pipeline state and the configured interpretive message.
+The **Confidence grade** chip conveys the sample-level confidence derived from `confidence_grade_rules` in `report_config.json`:
+
+- **Finding tone** (amber highlight): `Finding`, `Finding corroborated`
+- **Caution tone** (warning highlight): `Finding limited`, `No finding limited`, `Not established`
+- **Neutral tone**: `No finding`
+
+If a custom report configuration omits `confidence_grade_rules`, the confidence grade is not established and the chip is gracefully omitted from the masthead without error.
+
+**The masthead produces no verdict word.** Its internal `finding`, `no-finding` and `indeterminate` emphasis states select styling only and are never printed as labels. The words a reader sees come from the pipeline state, the configured confidence grade, and the configured interpretive message.
 
 The text is generated from a rule-based system defined in `report_config.json` that considers:
 
@@ -154,10 +162,21 @@ The cohort summary module (`cohort_summary.py`) aggregates results from multiple
 - **Coverage statistics** -- per-sample VNTR coverage metrics
 - **Runtime statistics** -- pipeline execution times
 - **Version and assembly tracking** -- VNtyper 2 versions and detected reference assemblies
+- **Call frequency table** -- variant calls grouped across the cohort, indicating which calls fall at or below the configured frequency threshold
 
 When a cohort contains a BAM-specific nomenclature flag, its reading key gives the same
 resolved-haplotype-record and `XD` explanation as the sample report. CSV, TSV and JSON keep
 the stable `Nomenclature_Flags` column and token values without adding prose rows.
+
+### Cohort Call Frequency
+
+The cohort report includes an interactive call frequency table summarizing the distribution of variant calls across the entire cohort roster:
+
+- **Grouping key**: Calls with a valid, unique or legacy-selected `Molecular_Identity` are grouped by identity; unresolved or legacy calls fall back to caller representation `(Motifs, POS, REF, ALT)`.
+- **Grouping key kind**: The `Grouping_Key_Kind` column records `molecular-identity` or `caller-representation` to ensure distinct representations and identities never collapse together.
+- **Roster denominator**: Frequencies are calculated against the total cohort size, counting samples with negative results or unestablished runs in the denominator.
+- **Below cutoff indicator**: Calls with `Frequency <= rare_allele_max_frequency` are marked as `Below_Cutoff = "yes"` (`"no"` otherwise). All calls remain visible in the table and exports; no calls are filtered out.
+- **Escaped display**: The HTML table is fully HTML-escaped and supports client-side sorting and searching.
 
 ### Pseudonymization
 

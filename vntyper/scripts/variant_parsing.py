@@ -109,9 +109,9 @@ def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) ->
         logger.error(f"Missing required columns: {missing_columns}")
         raise KeyError(f"Missing required columns: {missing_columns}")
 
-    alt_filter = kestrel_config.get("alt_filtering", {})
+    alt_filter = kestrel_config["alt_filtering"]
     gg_alt_value = alt_filter.get("gg_alt_value", "GG")
-    gg_depth_threshold = alt_filter.get("gg_depth_score_threshold", 0.0)
+    gg_depth_threshold = alt_filter["gg_depth_score_threshold"]
     exclude_alts = alt_filter.get("exclude_alts", [])
 
     # Ensure Depth_Score is float

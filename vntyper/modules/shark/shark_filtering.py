@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from vntyper.scripts.command_builders import quote_path
@@ -81,6 +82,39 @@ def select_muc1_region_fasta(config: dict, main_config: dict, reference_assembly
     )
 
 
+@dataclass(frozen=True)
+class SharkSearchParameters:
+    """Runtime search parameters for SHARK filtering (#312)."""
+
+    kmer_size: int | str = 17
+    confidence: float | str = 0.6
+
+    @property
+    def k_str(self) -> str:
+        """String representation of k-mer size."""
+        return str(self.kmer_size)
+
+    @property
+    def c_str(self) -> str:
+        """String representation of confidence threshold."""
+        return str(self.confidence)
+
+
+def shark_search_parameters(config: dict | None) -> SharkSearchParameters:
+    """Resolve the effective SHARK search parameters from the runtime sidecar.
+
+    Args:
+        config: The shark_config or runtime sidecar dictionary.
+
+    Returns:
+        Resolved SharkSearchParameters with defaults k=17, c=0.6.
+    """
+    settings = (config or {}).get("shark_settings", {})
+    raw_k = settings.get("kmer_size", 17)
+    raw_c = settings.get("confidence", 0.6)
+    return SharkSearchParameters(kmer_size=raw_k, confidence=raw_c)
+
+
 def run_shark_filter(
     fastq_1,
     fastq_2,
@@ -135,6 +169,8 @@ def run_shark_filter(
     filtered_fastq_1 = os.path.join(output_dir, f"{sample_name}_shark_R1.fastq")
     filtered_fastq_2 = os.path.join(output_dir, f"{sample_name}_shark_R2.fastq")
 
+    search_params = shark_search_parameters(config)
+
     # `run_command` runs this as one string under bash (trap 9), so quoting can only
     # happen here. Every operand is a path or a thread count and is quoted;
     # `shark_path` is not, because config.json holds a command *prefix* there --
@@ -144,7 +180,9 @@ def run_shark_filter(
         f"{shark_path} -r {quote_path(muc1_region_fasta)} "
         f"-1 {quote_path(fastq_1)} -2 {quote_path(fastq_2)} "
         f"-o {quote_path(filtered_fastq_1)} -p {quote_path(filtered_fastq_2)} "
-        f"-t {quote_path(threads)}"
+        f"-t {quote_path(threads)} "
+        f"-k {quote_path(search_params.k_str)} "
+        f"-c {quote_path(search_params.c_str)}"
     )
 
     log_file = Path(output_dir) / f"{sample_name}_shark.log"
@@ -162,41 +200,59 @@ def write_shark_step_summary(
     filtered_fastq_1: str | Path,
     filtered_fastq_2: str | Path,
     output_path: str | Path,
+    *,
+    config: dict | None = None,
+    shark_version: str = "unknown",
 ) -> dict[str, str]:
     """Write readable metadata for the FASTQs produced by SHARK.
 
     The pipeline previously recorded a nonexistent ``filtered_R1.fastq.gz`` with an
     unsupported ``fastq`` summary type. This JSON sidecar instead names the two real,
-    uncompressed SHARK outputs and records how many complete reads each contains.
+    uncompressed SHARK outputs, records how many complete reads each contains, and
+    records the tool version and search parameters used (#312).
 
     Args:
         filtered_fastq_1: SHARK's filtered R1 FASTQ.
         filtered_fastq_2: SHARK's filtered R2 FASTQ.
         output_path: Destination for the JSON sidecar.
+        config: Optional SHARK config dictionary (holds search parameters).
+        shark_version: Resolved version string for the SHARK binary.
 
     Returns:
         The string-valued payload written to ``output_path``.
 
     Raises:
-        ValueError: If either FASTQ cannot be counted or has an incomplete record.
+        ValueError: If either FASTQ cannot be counted, has an incomplete record,
+            or if kept read counts differ between R1 and R2.
         OSError: If the summary cannot be written.
     """
     # The configured FASTQ shape is validated elsewhere as exactly four lines per
     # record, so this literal cannot represent a second configurable policy.
     kept_reads_r1 = count_fastq_records(filtered_fastq_1, lines_per_record=4)
     kept_reads_r2 = count_fastq_records(filtered_fastq_2, lines_per_record=4)
+    if kept_reads_r1 != kept_reads_r2:
+        raise ValueError(
+            f"SHARK kept read counts do not match between paired FASTQ files: R1={kept_reads_r1}, R2={kept_reads_r2}"
+        )
+
+    search_params = shark_search_parameters(config)
     payload = {
         "filtered_fastq_1": str(filtered_fastq_1),
         "filtered_fastq_2": str(filtered_fastq_2),
         "kept_reads_r1": str(kept_reads_r1),
         "kept_reads_r2": str(kept_reads_r2),
+        "shark_version": str(shark_version),
+        "shark_k": search_params.k_str,
+        "shark_c": search_params.c_str,
     }
     with open(output_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=4)
     logger.info(
-        "SHARK kept %s R1 / %s R2 reads; recorded in %s",
+        "SHARK kept %s read pairs (version %s, k=%s, c=%s); recorded in %s",
         kept_reads_r1,
-        kept_reads_r2,
+        shark_version,
+        search_params.k_str,
+        search_params.c_str,
         output_path,
     )
     return payload

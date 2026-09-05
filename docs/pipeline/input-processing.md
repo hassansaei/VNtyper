@@ -24,6 +24,12 @@ The extraction process:
 !!! info "Why recover unmapped reads?"
     MUC1 VNTR variants (especially large insertions) can cause reads to fail alignment against the reference. Recovering unmapped reads ensures these variant-carrying reads are not lost before k-mer-based genotyping.
 
+### Atomic Artifact Publication
+
+All intermediate and final alignment files (`.bam`) and their corresponding index files (`.bai`) are created atomically. Commands write to temporary, deterministic partial files ending in `.partial` (e.g. `output_sliced.bam.partial`). Upon successful completion and size verification, files are atomically installed to their permanent names using POSIX `os.replace`.
+
+A leftover `.partial` file in the output directory indicates that an upstream process was killed (such as via `SIGKILL` or an out-of-memory event) or encountered an unhandled crash before completing. Public BAM and BAI files are guaranteed to be complete and fully formed.
+
 ## FASTQ Passthrough
 
 When FASTQ files are provided directly, the pipeline optionally applies SHARK filtering first (if enabled), then runs fastp QC, aligns reads with BWA, and re-extracts the MUC1 region from the resulting BAM.

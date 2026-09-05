@@ -29,6 +29,7 @@ from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_KESTREL
 logger = logging.getLogger(__name__)
 
 LEGACY_DECISION_PROFILE_REVISION = "decision profile not recorded by legacy run"
+HISTORICAL_REVISION_1_PACKAGED_SHA256 = "be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718"
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _PROFILE_FIELDS = frozenset(
@@ -319,9 +320,13 @@ def verify_profile_snapshot(
     if provenance.source == "package":
         validate_complete_inventory(document)
         packaged = load_packaged_decision_profile()
-        if raw != packaged.canonical_bytes:
+        if document.get("profile_revision") == "1":
+            if actual_digest != HISTORICAL_REVISION_1_PACKAGED_SHA256:
+                raise ValueError("recorded package-source snapshot does not match the checked-in packaged profile")
+        elif raw != packaged.canonical_bytes:
             raise ValueError("recorded package-source snapshot does not match the checked-in packaged profile")
         advntr_component = component_projection(document, "advntr")
+
         profile_id = document["profile_id"]
         revision = document["profile_revision"]
         kind = document["profile_kind"]

@@ -5,8 +5,10 @@
 ```
 results/
 ├── pipeline_summary.json        # Machine-readable pipeline summary
-├── pipeline_summary.csv         # Optional (--summary-formats csv)
-├── pipeline_summary.tsv         # Optional (--summary-formats tsv)
+├── pipeline_summary.csv         # Optional (--summary-formats csv): one row per step
+├── pipeline_summary_rows.csv    # Optional (--summary-formats csv): one row per result field
+├── pipeline_summary.tsv         # Optional (--summary-formats tsv): one row per step
+├── pipeline_summary_rows.tsv    # Optional (--summary-formats tsv): one row per result field
 ├── pipeline.log                 # Pipeline execution log
 ├── summary_report.html          # Self-contained HTML report (IGV mode is configurable)
 ├── igv_report.html              # Optional self-contained sidecar (--report-igv sidecar)
@@ -240,3 +242,70 @@ Molecular-identity publication is additive to summary schema 2; it does not intr
 schema 3. Current summaries record the packaged selection policy as
 `decision_policy: legacy-selection-v1`. Older summaries without that provenance remain
 readable and are labelled as not recorded rather than being assigned the current policy.
+
+### Flattened summary tables
+
+`--summary-formats csv,tsv` writes two files per format beside `pipeline_summary.json`.
+No VNtyper code reads them: the pipeline, the cohort mode, the golden gate and the web
+service all read the JSON. They exist for spreadsheets and notebooks.
+
+`pipeline_summary.csv` / `pipeline_summary.tsv` has one row per recorded step. The
+columns come in three groups, in this order:
+
+- **Run provenance, `run_*`** - every top-level field of the JSON summary, repeated on
+  every row: `run_schema_version`, `run_decision_policy`, `run_advntr_evidence_digest`,
+  the six `run_decision_profile_*` fields, `run_pipeline_start`, `run_pipeline_end`,
+  `run_version`, `run_input_files_<kind>`, `run_sample_name`, `run_sample_name_is_explicit`,
+  the four `run_reference_*` fields, `run_region_resolved`, `run_kestrel_counting_mode`
+  and, when adVNTR ran, `run_advntr_model_*`. A nested object flattens with `_`; a list
+  of values joins with `; `; a JSON `null` is a blank cell.
+- **Step record** - `step`, `start`, `end`, `command`, `result_file`, `file_type`,
+  `md5sum`, `result_file_missing` (`True` or `False`), as `pipeline_summary.json`
+  records the step.
+- **Parsed result, `parsed_result_*`**, sorted - a result with exactly one row explodes
+  into `parsed_result_data_<column>` cells; any other row count is recorded as
+  `parsed_result_n_rows`; the result file's `#` banner lines join into
+  `parsed_result_comments`, separated by a pipe; a JSON result (BAM header parsing,
+  SHARK) flattens with `_`. A cell that does not apply to a step is blank.
+
+`pipeline_summary_rows.csv` / `pipeline_summary_rows.tsv` is the long form of every
+tabular result: one row per step, result row and column, with the columns `step`,
+`row_index` (0-based), `field` and `value`. The multi-row adVNTR and cross-match results
+are complete here; pivot on `step` and `row_index` to rebuild a table.
+
+No cell in either file contains JSON text. Earlier releases embedded a multi-row result
+as `; `-joined JSON in one cell and carried no run provenance (#119).
+
+## Cohort Output Files
+
+When running `vntyper cohort`, the following files can be generated in the output directory:
+
+| File | Format | Description |
+|------|--------|-------------|
+| `cohort_summary.html` | HTML | Interactive standalone summary report with distribution charts and tables |
+| `cohort_kestrel.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated Kestrel variant calls across all cohort samples |
+| `cohort_advntr.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated adVNTR variant calls across all cohort samples (if adVNTR present) |
+| `cohort_stats.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated per-sample execution, reference, and coverage statistics |
+| `cohort_call_frequency.<csv\|tsv\|json>` | CSV/TSV/JSON | Grouped variant call frequency table across the cohort |
+| `pseudonymization_table.tsv` | TSV | Sample name to pseudonym mapping table (when `--pseudonymize-samples` is used) |
+
+### cohort_call_frequency Columns
+
+The `cohort_call_frequency.<csv|tsv|json>` export contains exactly 14 columns detailing variant call distribution:
+
+| Column | Description |
+|--------|-------------|
+| `Grouping_Key` | Molecular identity or caller representation used to group the call |
+| `Grouping_Key_Kind` | Either `molecular-identity` or `caller-representation` |
+| `Molecular_Identity` | Canonical molecular identity serialization, or empty if unresolved |
+| `Motifs` | Repeat motif identifier(s) from caller |
+| `POS` | Locus position |
+| `REF` | Reference sequence |
+| `ALT` | Alternate sequence |
+| `Variant` | Variant type (e.g., insertion, deletion, SNV) |
+| `Sample_Count` | Number of distinct cohort samples carrying this variant call |
+| `Frequency` | Call frequency computed as `Sample_Count / cohort_size` |
+| `Below_Cutoff` | `yes` if `Frequency <= rare_allele_max_frequency`, `no` otherwise |
+| `Samples` | Semicolon-separated list of sample names (or pseudonyms) carrying the call |
+| `Min_Depth_Score` | Minimum numeric depth score observed among samples with this call |
+| `Max_Depth_Score` | Maximum numeric depth score observed among samples with this call |

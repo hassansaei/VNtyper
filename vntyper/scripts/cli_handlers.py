@@ -21,6 +21,7 @@ so they can forward them to the stage they invoke.
 
 import argparse
 import logging
+import math
 import sys
 from pathlib import Path
 from typing import Any, Protocol
@@ -34,6 +35,7 @@ from vntyper.scripts.cli_lazy_imports import (
     install_references_main,
     run_online_mode,
 )
+from vntyper.scripts.cohort_pseudonyms import _mapping_at
 from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.reference_registry import get_reference_source, physical_reference_id, reference_keys
 from vntyper.scripts.reference_resolution import ResolvedReference, resolve_from_mapping
@@ -484,6 +486,7 @@ def handle_pipeline(
         # the option (#242).
         report_igv=getattr(args, "report_igv", DEFAULT_REPORT_IGV),
         run_configuration=getattr(args, "run_configuration", None),
+        resume=getattr(args, "resume", False),
     )
 
 
@@ -521,6 +524,20 @@ def handle_cohort(
             input_paths.extend(file_lines)
         logger.debug(f"Added input_file entries: {file_lines}")
 
+    rare_max_freq = args.rare_allele_max_frequency
+    if rare_max_freq is None:
+        cohort_cfg = _mapping_at(config, "cohort", "cohort")
+        raw_val = cohort_cfg.get("rare_allele_max_frequency", 0.05)
+        try:
+            val = float(raw_val)
+            if not (0.0 <= val <= 1.0) or not math.isfinite(val):
+                raise ValueError(f"Value {raw_val!r} is not between 0 and 1.")
+            rare_max_freq = val
+        except (ValueError, TypeError) as e:
+            msg = f"Invalid cohort.rare_allele_max_frequency in config: {raw_val!r} ({e})"
+            logger.error(msg)
+            raise ValueError(msg) from e
+
     aggregate_cohort(
         input_paths=input_paths,
         output_dir=Path(args.output_dir),
@@ -528,6 +545,7 @@ def handle_cohort(
         config=config,
         additional_formats=args.summary_formats,  # Pass the new parameter for extra formats
         pseudonymize_samples=args.pseudonymize_samples,  # Pass the new pseudonymize flag (value or None)
+        rare_allele_max_frequency=rare_max_freq,
     )
 
 

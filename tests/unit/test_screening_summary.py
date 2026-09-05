@@ -35,7 +35,7 @@ import pytest
 from vntyper.scripts import screening_summary as ss
 from vntyper.scripts import summary_steps
 from vntyper.scripts.algorithm_rules import UNESTABLISHED_RESULT
-from vntyper.scripts.coverage_qc import evaluate_coverage_qc
+from vntyper.scripts.coverage_qc import CoverageQC, evaluate_coverage_qc
 
 pytestmark = pytest.mark.unit
 
@@ -1262,3 +1262,270 @@ class TestNonFindingResults:
         assert ss.is_finding("anything", "negative")
         assert not ss.is_finding("negative", "negative")
         assert not ss.is_finding(ss.NOT_PERFORMED, "negative")
+
+
+def test_report_config_declares_confidence_grade_rules_and_vocabulary(report_config) -> None:
+    """Issue #173 part 2: report_config.json must declare confidence_grade_rules and default."""
+    assert "confidence_grade_rules" in report_config, "report_config.json lacks confidence_grade_rules"
+    assert "confidence_grade_default" in report_config, "report_config.json lacks confidence_grade_default"
+    assert report_config["confidence_grade_default"] == "not-established"
+
+    rules = report_config["confidence_grade_rules"]
+    assert isinstance(rules, list) and len(rules) >= 6
+
+    expected_vocabulary = {
+        "not-established",
+        "no-finding-limited",
+        "no-finding",
+        "finding-limited",
+        "finding",
+        "finding-corroborated",
+    }
+    configured_grades = {rule["grade"] for rule in rules}
+    assert configured_grades == expected_vocabulary
+
+
+def test_supports_confidence_grade_predicate(report_config) -> None:
+    """supports_confidence_grade returns True for valid config and False when omitted."""
+    assert ss.supports_confidence_grade(report_config) is True
+    assert ss.supports_confidence_grade({}) is False
+    assert ss.supports_confidence_grade({"confidence_grade_rules": []}) is False
+    assert ss.supports_confidence_grade({"confidence_grade_rules": None}) is False
+
+
+@pytest.mark.parametrize(
+    "token,expected_word",
+    [
+        ("not-established", "Not established"),
+        ("no-finding-limited", "No finding limited"),
+        ("no-finding", "No finding"),
+        ("finding-limited", "Finding limited"),
+        ("finding", "Finding"),
+        ("finding-corroborated", "Finding corroborated"),
+        ("High_Precision", "High precision"),
+        ("negative_subthreshold", "Negative subthreshold"),
+    ],
+)
+def test_result_word_formats_both_hyphens_and_underscores(token: str, expected_word: str) -> None:
+    """result_word turns underscores and hyphens into spaces and sentence-cases."""
+    assert ss.result_word(token) == expected_word
+
+
+@pytest.mark.parametrize(
+    "grade,expected_value,expected_tone",
+    [
+        ("finding-corroborated", "Finding corroborated", ss.TONE_FINDING),
+        ("finding", "Finding", ss.TONE_FINDING),
+        ("finding-limited", "Finding limited", ss.TONE_CAUTION),
+        ("no-finding-limited", "No finding limited", ss.TONE_CAUTION),
+        ("not-established", "Not established", ss.TONE_CAUTION),
+        ("no-finding", "No finding", ss.TONE_NONE),
+    ],
+)
+def test_grade_chip_produces_state_chip_with_correct_tone(grade: str, expected_value: str, expected_tone: str) -> None:
+    """grade_chip assigns the correct tone and formatted value for each grade."""
+    chip = ss.grade_chip(grade)
+    assert chip is not None
+    assert chip.label == ss.CONFIDENCE_GRADE_LABEL
+    assert chip.value == expected_value
+    assert chip.tone == expected_tone
+
+
+def test_grade_chip_returns_none_when_grade_is_none() -> None:
+    """grade_chip returns None when no grade was assigned (e.g. older config)."""
+    assert ss.grade_chip(None) is None
+
+
+def test_screening_summary_dataclass_has_confidence_grade_default_none() -> None:
+    """ScreeningSummary dataclass has confidence_grade defaulting to None."""
+    summary = ss.ScreeningSummary(
+        text="Sample text",
+        is_positive=False,
+        kestrel_result="negative",
+        advntr_result="negative",
+        quality_metrics_pass=True,
+        matched_rule=True,
+    )
+    assert summary.confidence_grade is None
+
+
+VALID_GRADES = frozenset(
+    {
+        "not-established",
+        "no-finding-limited",
+        "no-finding",
+        "finding-limited",
+        "finding",
+        "finding-corroborated",
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "kestrel_state,advntr_state,coverage,cross_match_is_positive",
+    list(
+        itertools.product(
+            KESTREL_FRAMES,
+            list(ADVNTR_FRAMES) + [ss.NOT_PERFORMED],
+            (250.0, 3.0),
+            (False, True),
+        )
+    ),
+)
+def test_every_state_reached_through_the_real_frames_maps_to_exactly_one_grade(
+    kestrel_state, advntr_state, coverage, cross_match_is_positive, report_config
+) -> None:
+    """Issue #173 part 2: every reachable state maps to exactly one valid confidence grade."""
+    advntr_available = advntr_state != ss.NOT_PERFORMED
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES[kestrel_state]),
+        pd.DataFrame(ADVNTR_FRAMES[advntr_state]) if advntr_available else pd.DataFrame(),
+        advntr_available,
+        evaluate_coverage_qc(coverage, 0.0, 100, 50.0),
+        report_config,
+        cross_match_is_positive=cross_match_is_positive,
+    )
+
+    assert summary.confidence_grade is not None
+    assert summary.confidence_grade in VALID_GRADES
+
+
+def test_confidence_grade_not_established_on_failed_or_unperformed_stages(report_config) -> None:
+    """Caller execution failure or omission makes confidence grade not-established."""
+    # Kestrel failed
+    summary_k_failed = ss.build_screening_summary(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+        kestrel_execution=ss.EXECUTION_FAILED,
+    )
+    assert summary_k_failed.confidence_grade == "not-established"
+
+    # Kestrel not performed
+    summary_k_none = ss.build_screening_summary(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+        kestrel_execution=ss.EXECUTION_NOT_PERFORMED,
+    )
+    assert summary_k_none.confidence_grade == "not-established"
+
+    # adVNTR failed
+    summary_a_failed = ss.build_screening_summary(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        True,
+        _passing(),
+        report_config,
+        advntr_execution=ss.EXECUTION_FAILED,
+    )
+    assert summary_a_failed.confidence_grade == "not-established"
+
+
+def test_confidence_grade_not_established_on_unestablished_algorithm_results(report_config) -> None:
+    """Algorithm result token 'unestablished' produces not-established grade."""
+    # Build conditions directly through find_confidence_grade_rule
+    state_k_unest = {
+        "kestrel_result": "unestablished",
+        "advntr_result": "negative",
+        "coverage_qc_status": "PASS",
+        "kestrel_execution": ss.EXECUTION_PERFORMED,
+        "advntr_execution": ss.EXECUTION_PERFORMED,
+        "cross_match_is_positive": False,
+    }
+    rule = ss.find_confidence_grade_rule(report_config, state_k_unest)
+    assert rule is not None and rule["grade"] == "not-established"
+
+    state_a_unest = {
+        "kestrel_result": "negative",
+        "advntr_result": "unestablished",
+        "coverage_qc_status": "PASS",
+        "kestrel_execution": ss.EXECUTION_PERFORMED,
+        "advntr_execution": ss.EXECUTION_PERFORMED,
+        "cross_match_is_positive": False,
+    }
+    rule_a = ss.find_confidence_grade_rule(report_config, state_a_unest)
+    assert rule_a is not None and rule_a["grade"] == "not-established"
+
+
+def test_confidence_grade_no_finding_limited_on_subthreshold_even_with_passing_coverage(report_config) -> None:
+    """A subthreshold candidate is no-finding-limited regardless of good coverage."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+        kestrel_subthreshold=True,
+    )
+    assert summary.kestrel_result == ss.SUBTHRESHOLD_RESULT
+    assert summary.confidence_grade == "no-finding-limited"
+
+
+def test_confidence_grade_distinguishes_not_evaluated_from_pass(report_config) -> None:
+    """Coverage QC NOT_EVALUATED (which has passed=True) yields -limited grades."""
+    qc_not_evaluated = CoverageQC(passed=True, status="NOT_EVALUATED", reasons=("not measured",))
+
+    # Negative call + unmeasured coverage -> no-finding-limited
+    summary_neg = ss.build_screening_summary(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        False,
+        qc_not_evaluated,
+        report_config,
+    )
+    assert summary_neg.quality_metrics_pass is True
+    assert summary_neg.confidence_grade == "no-finding-limited"
+
+    # Finding call + unmeasured coverage -> finding-limited
+    summary_finding = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]),
+        pd.DataFrame(),
+        False,
+        qc_not_evaluated,
+        report_config,
+    )
+    assert summary_finding.quality_metrics_pass is True
+    assert summary_finding.confidence_grade == "finding-limited"
+
+
+def test_confidence_grade_finding_corroborated_versus_finding(report_config) -> None:
+    """A finding with passing coverage is finding-corroborated if cross-match matches, else finding."""
+    # Cross-match positive -> finding-corroborated
+    summary_corr = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]),
+        pd.DataFrame(ADVNTR_FRAMES["positive"]),
+        True,
+        _passing(),
+        report_config,
+        cross_match_is_positive=True,
+    )
+    assert summary_corr.confidence_grade == "finding-corroborated"
+
+    # Cross-match negative / adVNTR absent -> finding
+    summary_uncorr = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision"]),
+        pd.DataFrame(),
+        False,
+        _passing(),
+        report_config,
+        cross_match_is_positive=False,
+    )
+    assert summary_uncorr.confidence_grade == "finding"
+
+
+def test_confidence_grade_finding_limited_on_flagged_kestrel_call(report_config) -> None:
+    """A flagged Kestrel finding produces finding-limited even with passing coverage and positive cross-match."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES["High_Precision_flagged"]),
+        pd.DataFrame(ADVNTR_FRAMES["positive"]),
+        True,
+        _passing(),
+        report_config,
+        cross_match_is_positive=True,
+    )
+    assert summary.confidence_grade == "finding-limited"

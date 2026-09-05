@@ -34,6 +34,8 @@ PUBLIC_OUTPUTS = (
     Path("pipeline_summary.json"),
     Path("pipeline_summary.csv"),
     Path("pipeline_summary.tsv"),
+    Path("pipeline_summary_rows.csv"),
+    Path("pipeline_summary_rows.tsv"),
     Path("summary_report.html"),
 )
 
@@ -527,3 +529,36 @@ def test_model_snapshot_install_failure_aborts_before_probe_or_kestrel(tmp_path:
     assert not snapshot.exists()
     detector.assert_not_called()
     harness.stages["run_kestrel"].assert_not_called()
+
+
+def test_prepare_advntr_run_context_preserves_outputs_when_revoke_outputs_false(tmp_path: Path) -> None:
+    """When revoke_outputs is False, prior outputs are preserved for resume."""
+    output = tmp_path / "out"
+    output.mkdir()
+    prior_summary = output / "pipeline_summary.json"
+    prior_summary.write_text("{}", encoding="utf-8")
+    source = tmp_path / "model.db"
+    source.write_text("model data", encoding="utf-8")
+
+    with (
+        patch.object(
+            pipeline_advntr_run_context,
+            "_snapshot_model",
+            return_value={"schema_version": "v2", "path": str(output / "snapshot.db"), "source_path": str(source)},
+        ),
+        patch.object(
+            pipeline_advntr_run_context.model_provenance,
+            "detect_advntr_version",
+            return_value=AdvntrVersionOutcome(AdvntrProbeStatus.VERIFIED, version=(2, 0, 4)),
+        ),
+    ):
+        pipeline_advntr_run_context.prepare_advntr_run_context(
+            output,
+            source,
+            deepcopy(MINIMAL_CONFIG),
+            archive_results=False,
+            archive_format="zip",
+            revoke_outputs=False,
+        )
+
+    assert prior_summary.exists()

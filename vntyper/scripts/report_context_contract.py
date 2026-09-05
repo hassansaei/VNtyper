@@ -49,6 +49,14 @@ DEPRECATED_KEYS = frozenset(
 #: First release allowed to remove :data:`DEPRECATED_KEYS` from the render context.
 DEPRECATED_KEYS_REMOVAL_RELEASE = "3.0.0"
 
+#: Context paths declared for custom templates and report consumers that are rendered
+#: via composite containers (e.g. state_chips) in the shipped report template.
+DECLARED_CONTEXT_KEYS = frozenset(
+    {
+        "screening_state.confidence_grade",
+    }
+)
+
 
 def _static_access_path(node: nodes.Expr, undeclared_names: set[str]) -> str | None:
     """Return one dotted external path, collapsing non-string indexing to its root."""
@@ -203,26 +211,31 @@ def unreferenced_runtime_context_paths(
     *,
     referenced_paths: Iterable[str],
     deprecated_paths: Iterable[str],
+    declared_paths: Iterable[str] = DECLARED_CONTEXT_KEYS,
 ) -> set[str]:
     """Return nondeprecated runtime paths not consumed by a template graph.
 
     A direct reference to a mapping parent consumes all of that mapping's leaves.
     Deprecation exemptions remain exact: deprecating one dotted member never exempts
-    its siblings or descendants.
+    its siblings or descendants. Declared paths identify public custom-template
+    API extensions rendered via composite structures in the shipped template.
 
     Args:
         context: Top-level mapping passed to ``Template.render``.
         referenced_paths: Static paths collected from the template graph.
         deprecated_paths: Exact compatibility paths exempt from the parity gate.
+        declared_paths: Declared public API paths exempt from the dead-context gate.
 
     Returns:
         set[str]: Runtime paths that represent silent render-context debt.
     """
     referenced = set(referenced_paths)
     deprecated = set(deprecated_paths)
+    declared = set(declared_paths)
     return {
         path
         for path in flatten_runtime_context_paths(context)
         if path not in deprecated
+        and path not in declared
         and not any(path == reference or path.startswith(f"{reference}.") for reference in referenced)
     }

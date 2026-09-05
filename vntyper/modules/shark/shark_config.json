@@ -1,6 +1,9 @@
 {
     "shark_settings": {
-      "muc1_region_fasta_hg19": "reference/muc1_region_hg19.fa",
-      "muc1_region_fasta_hg38": "reference/muc1_region_hg38.fa"
+        "_comment_search_parameters": "SHARK 1.2.0 defaults for MUC1 read filtering (#312). Operating point is fixed; see #288 for study design before altering.",
+        "kmer_size": 17,
+        "confidence": 0.6,
+        "muc1_region_fasta_hg19": "reference/muc1_region_hg19.fa",
+        "muc1_region_fasta_hg38": "reference/muc1_region_hg38.fa"
     }
 }

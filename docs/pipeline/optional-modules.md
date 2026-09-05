@@ -125,7 +125,19 @@ SHARK is invoked with paired-end FASTQ input and produces filtered FASTQ files c
 
 ```
 shark -r <muc1_region.fa> -1 R1.fastq -2 R2.fastq \
-  -o filtered_R1.fastq -p filtered_R2.fastq -t <threads>
+  -o filtered_R1.fastq -p filtered_R2.fastq -t <threads> -k 17 -c 0.6
 ```
 
 The filtered FASTQs replace the original inputs for all subsequent pipeline steps.
+
+### Provenance and read pairing
+
+The SHARK filtering step record in `pipeline_summary.json` captures the exact operating point
+and verified read counts:
+
+* `shark_version`: The conda package version and build string of the SHARK binary (e.g. `1.2.0+h077b44d_5`), probed via conda environment metadata, or `unknown` if probing is unavailable.
+* `shark_k`: The k-mer size used for indexing (default `17`).
+* `shark_c`: The confidence threshold for associating reads (default `0.6`).
+* `kept_reads_r1` and `kept_reads_r2`: The count of reads retained in each mate file.
+
+SHARK filters paired-end reads and requires symmetric output. The stage performs a read-pairing verification check immediately after counting: if `kept_reads_r1` does not equal `kept_reads_r2`, the run fails closed with a `ValueError` naming both counts before the step summary is written or recorded.

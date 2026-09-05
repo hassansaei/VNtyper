@@ -8,9 +8,10 @@ a parsed result (based on file type), and an MD5 checksum for the result file.
 Additionally, the summary object includes the vntyper version, input files,
 and the pipeline end time.
 
-The module also provides functions to convert the summary into CSV/TSV formats.
-These conversion functions now flatten nested data structures (e.g. parsed_result)
-so that all available data is expanded into individual columns.
+The module also writes the operator-facing ``pipeline_summary.<csv|tsv>`` (one row per
+step, the run's provenance first) and ``pipeline_summary_rows.<csv|tsv>`` (one row per
+step, result row and field). The cells are computed by ``summary_flattening.py``; no
+cell is JSON text (#119).
 """
 
 from __future__ import annotations
@@ -21,10 +22,21 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from vntyper.scripts.decision_profile import ResolvedDecisionProfile, load_packaged_decision_profile
 from vntyper.scripts.profile_provenance import profile_summary_fields
+from vntyper.scripts.summary_flattening import (
+    LONG_COLUMNS,
+    PARSED_RESULT_PREFIX,
+    STEP_COLUMNS,
+    long_rows,
+    run_columns,
+    step_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +71,23 @@ def start_summary(
     reference_source_effective=None,
     advntr_evidence_digest=None,
     decision_profile: ResolvedDecisionProfile | None = None,
+    canonical_input_files: dict[str, str] | None = None,
+    analysis_settings: dict[str, Any] | None = None,
+    kestrel_reference_path: str | None = None,
+    input_fingerprints: dict[str, str] | None = None,
+    kestrel_reference_fingerprint: str | None = None,
+    kestrel_motifs_path: str | None = None,
+    kestrel_motifs_fingerprint: str | None = None,
+    advntr_rus_path: str | None = None,
+    advntr_rus_fingerprint: str | None = None,
+    kestrel_runtime_fingerprint: str | None = None,
+    advntr_runtime_fingerprint: str | None = None,
+    reference_fingerprint: str | None = None,
+    shark_reference_path: str | None = None,
+    shark_reference_fingerprint: str | None = None,
+    shark_runtime_fingerprint: str | None = None,
+    persistent_reference_path: str | None = None,
+    reference_consumer_path: str | None = None,
 ):
     """
     Initializes a new pipeline summary.
@@ -120,8 +149,15 @@ def start_summary(
             For BAM and CRAM, the alignment plan's own source label instead.
         advntr_evidence_digest (str, optional): Full canonical digest of the
             run-snapshotted governed adVNTR evidence, or None when adVNTR was not used.
-        decision_profile: Profile resolved for this run. Direct compatibility callers
-            that have no run context load the packaged profile.
+        analysis_settings: Complete dictionary of result-affecting settings.
+        kestrel_reference_path: Resolved absolute path to the reference VNTR fasta
+            used by Kestrel, or None if not configured.
+        input_fingerprints: Mapping of canonical input keys to content fingerprints.
+        kestrel_runtime_fingerprint: Canonical digest of Kestrel runtime configuration.
+        advntr_runtime_fingerprint: Canonical digest of adVNTR runtime configuration.
+        reference_fingerprint: Canonical content fingerprint of the effective alignment reference.
+        shark_reference_path: Resolved path to the SHARK MUC1 region FASTA.
+        shark_reference_fingerprint: Content fingerprint of the SHARK MUC1 region FASTA.
 
     Returns:
         dict: A summary dictionary with its schema version, decision policy, pipeline
@@ -148,11 +184,29 @@ def start_summary(
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
+        "canonical_input_files": canonical_input_files,
+        "input_fingerprints": input_fingerprints,
+        "analysis_settings": analysis_settings,
+        "kestrel_reference_path": kestrel_reference_path,
+        "kestrel_reference_fingerprint": kestrel_reference_fingerprint,
+        "kestrel_motifs_path": kestrel_motifs_path,
+        "kestrel_motifs_fingerprint": kestrel_motifs_fingerprint,
+        "advntr_rus_path": advntr_rus_path,
+        "advntr_rus_fingerprint": advntr_rus_fingerprint,
+        "kestrel_runtime_fingerprint": kestrel_runtime_fingerprint,
+        "advntr_runtime_fingerprint": advntr_runtime_fingerprint,
+        "stage_artifact_md5s": {},
         "sample_name": sample_name,
         "sample_name_is_explicit": bool(sample_name_is_explicit),
         "reference_assembly_requested": reference_assembly_requested,
         "reference_key_used": reference_key_used,
         "reference_path": reference_path,
+        "persistent_reference_path": persistent_reference_path or reference_path,
+        "reference_fingerprint": reference_fingerprint,
+        "shark_reference_path": shark_reference_path,
+        "shark_reference_fingerprint": shark_reference_fingerprint,
+        "shark_runtime_fingerprint": shark_runtime_fingerprint,
+        "reference_consumer_path": reference_consumer_path,
         "reference_source_effective": reference_source_effective,
         # The span the coverage stage actually worked over. It is not known yet -
         # `calculate_alignment_coverage` resolves it mid-run - but the key exists
@@ -279,11 +333,67 @@ def refresh_step(summary, step_name, write_summary_path=None):
         # ``error`` entry rather than raising, so wrapping this would add a blind
         # except that can never fire.
         record["parsed_result"] = _parse_by_type(result_file, record.get("file_type", "tsv"))
+        _record_stage_artifact_md5s(summary, step_name, result_file)
         if write_summary_path:
             write_summary(summary, write_summary_path)
         return True
     logger.debug(f"Cannot refresh step '{step_name}': it is not in the summary.")
     return False
+
+
+def _record_stage_artifact_md5s(summary: dict[str, Any], step_name: str, result_file: str) -> None:
+    """Record MD5 checksums for sibling artifacts of a stage in summary['stage_artifact_md5s']."""
+    try:
+        from vntyper.scripts import summary_steps
+        from vntyper.scripts.resume import STEP_OUTPUT_SIBLINGS
+    except ImportError:
+        return
+
+    stage_dir = Path(result_file).parent
+    sibling_md5s: dict[str, str] = {}
+    for sib in STEP_OUTPUT_SIBLINGS.get(step_name, ()):
+        sib_path = stage_dir / sib
+        if sib_path.is_file():
+            sib_hash = md5sum(str(sib_path))
+            if sib_hash is not None:
+                sibling_md5s[sib] = sib_hash
+    if "_R1" in Path(result_file).name:
+        mate_name = Path(result_file).name.replace("_R1", "_R2")
+        mate_path = stage_dir / mate_name
+        if mate_path.is_file():
+            mate_hash = md5sum(str(mate_path))
+            if mate_hash is not None:
+                sibling_md5s[mate_name] = mate_hash
+
+    replay_path = stage_dir / "bam_identity_replay.v1.json"
+    if replay_path.is_file():
+        replay_hash = md5sum(str(replay_path))
+        if replay_hash is not None:
+            sibling_md5s["bam_identity_replay.v1.json"] = replay_hash
+
+    if step_name in (
+        summary_steps.STEP_BAM_TO_FASTQ,
+        summary_steps.STEP_CRAM_TO_FASTQ,
+        summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+    ):
+        bai_path = stage_dir / "output_sliced.bam.bai"
+        if bai_path.is_file():
+            bai_hash = md5sum(str(bai_path))
+            if bai_hash is not None:
+                sibling_md5s["output_sliced.bam.bai"] = bai_hash
+
+    if step_name == summary_steps.STEP_KESTREL:
+        for extra_vcf in ("output_indel.vcf.gz", "output_indel.vcf.gz.tbi", "output.bed"):
+            extra_path = stage_dir / extra_vcf
+            if extra_path.is_file():
+                extra_hash = md5sum(str(extra_path))
+                if extra_hash is not None:
+                    sibling_md5s[extra_vcf] = extra_hash
+
+    if sibling_md5s:
+        if "stage_artifact_md5s" not in summary:
+            summary["stage_artifact_md5s"] = {}
+        summary["stage_artifact_md5s"][step_name] = sibling_md5s
 
 
 def _parse_by_type(result_file, file_type):
@@ -428,7 +538,12 @@ def record_step(
     except Exception as e:
         record["parsed_result"] = {"error": f"Error parsing file: {e}"}
 
-    summary["steps"].append(record)
+    existing_idx = next((i for i, s in enumerate(summary["steps"]) if s.get("step") == step_name), None)
+    if existing_idx is not None:
+        summary["steps"][existing_idx] = record
+    else:
+        summary["steps"].append(record)
+    _record_stage_artifact_md5s(summary, step_name, result_file)
 
     if write_summary_path is not None:
         write_summary(summary, write_summary_path)
@@ -446,125 +561,76 @@ def write_summary(summary, output_path):
         json.dump(summary, f, indent=4)
 
 
-def flatten_dict(d, parent_key="", sep="_"):
-    """
-    Recursively flattens a nested dictionary.
+def _summary_table(summary: Mapping[str, Any]) -> tuple[list[str], list[dict[str, str]]]:
+    """Assemble the one-row-per-step table.
 
-    For any nested dictionary, keys are concatenated with the given separator.
-    For lists, if elements are dictionaries, each is flattened and then joined as a JSON string;
-    otherwise, list elements are joined by commas.
+    Columns are the run provenance first, then :data:`STEP_COLUMNS`, then every
+    ``parsed_result_*`` column any step produced, sorted; a cell a step did not produce
+    is blank.
 
     Args:
-        d (dict): The dictionary to flatten.
-        parent_key (str, optional): The base key string for recursive calls.
-        sep (str, optional): Separator between keys.
+        summary: The summary dictionary.
 
     Returns:
-        dict: A flattened dictionary.
+        tuple[list[str], list[dict[str, str]]]: The column names and the rows.
     """
-    items = {}
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.update(flatten_dict(v, new_key, sep=sep))
-        elif isinstance(v, list):
-            if all(isinstance(i, dict) for i in v):
-                # Flatten each dict and join the resulting JSON strings
-                flattened_list = [json.dumps(flatten_dict(i, "", sep=sep)) for i in v]
-                items[new_key] = "; ".join(flattened_list)
-            else:
-                items[new_key] = ", ".join(str(i) for i in v)
-        else:
-            items[new_key] = v
-    return items
+    run = run_columns(summary)
+    rows = step_rows(summary)
+    parsed_columns = sorted({column for row in rows for column in row if column.startswith(PARSED_RESULT_PREFIX)})
+    fieldnames = [*run, *STEP_COLUMNS, *parsed_columns]
+    return fieldnames, [{**run, **row} for row in rows]
+
+
+def _write_delimited(
+    output_path: str | os.PathLike[str], fieldnames: list[str], rows: list[dict[str, str]], delimiter: str
+) -> None:
+    with open(output_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=delimiter, restval="")
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def convert_summary_to_csv(summary, output_csv_path):
     """
-    Converts the summary steps into a CSV file.
+    Writes the summary as a CSV table with one row per pipeline step.
 
-    Each row in the CSV corresponds to a pipeline step.
-    The step records are flattened so that nested data (e.g. parsed_result)
-    are expanded into individual columns.
+    Every row starts with the run's ``run_*`` provenance columns, then the step record,
+    then the ``parsed_result_*`` cells (see :mod:`vntyper.scripts.summary_flattening`).
 
     Args:
         summary (dict): The summary dictionary.
         output_csv_path (str): Path where the CSV file will be written.
     """
-    # Flatten each step record
-    flattened_steps = [flatten_dict(step) for step in summary.get("steps", [])]
-
-    # Determine all keys across the flattened records
-    all_keys = set()
-    for record in flattened_steps:
-        all_keys.update(record.keys())
-    # Use a sorted list of keys for consistent column order
-    all_keys = sorted(all_keys)
-
-    with open(output_csv_path, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=all_keys)
-        writer.writeheader()
-        for record in flattened_steps:
-            writer.writerow({key: record.get(key, "") for key in all_keys})
+    fieldnames, rows = _summary_table(summary)
+    _write_delimited(output_csv_path, fieldnames, rows, ",")
 
 
 def convert_summary_to_tsv(summary, output_tsv_path):
     """
-    Converts the summary steps into a TSV file.
+    Writes the summary as a TSV table with one row per pipeline step.
 
-    Each row in the TSV corresponds to a pipeline step.
-    The step records are flattened so that nested data (e.g. parsed_result)
-    are expanded into individual columns.
+    Same table as :func:`convert_summary_to_csv`, tab-delimited.
 
     Args:
         summary (dict): The summary dictionary.
         output_tsv_path (str): Path where the TSV file will be written.
     """
-    flattened_steps = [flatten_dict(step) for step in summary.get("steps", [])]
-    all_keys = set()
-    for record in flattened_steps:
-        all_keys.update(record.keys())
-    all_keys = sorted(all_keys)
-
-    with open(output_tsv_path, "w", newline="", encoding="utf-8") as tsvfile:
-        writer = csv.DictWriter(tsvfile, fieldnames=all_keys, delimiter="\t")
-        writer.writeheader()
-        for record in flattened_steps:
-            writer.writerow({key: record.get(key, "") for key in all_keys})
+    fieldnames, rows = _summary_table(summary)
+    _write_delimited(output_tsv_path, fieldnames, rows, "\t")
 
 
-# Example usage:
-if __name__ == "__main__":
-    # This example demonstrates how to create a summary, record a step, and write it out.
-    summary = start_summary(version="1.2.3", input_files={"sample": "sample.fastq", "bam": "sample.bam"})
+def convert_summary_rows_to_delimited(summary, output_path, delimiter=","):
+    """
+    Writes every result row of every step as a long table.
 
-    # Simulate a pipeline step with a sample result file (adjust these values as needed)
-    step_name = "Example Step"
-    result_file = "example_results.tsv"  # Path to your result file
-    file_type = "tsv"  # Could be "tsv", "csv", or "json"
-    command = "run_example --option value"
-    start_time = datetime.now(timezone.utc).replace(tzinfo=None)
-    # Simulate some processing delay
-    end_time = datetime.now(timezone.utc).replace(tzinfo=None)
+    The columns are ``step``, ``row_index``, ``field`` and ``value``; a step whose result
+    has several rows (adVNTR, cross-match) is complete here, where the per-step table
+    only records its row count.
 
-    # Record the step (this will calculate the MD5 and parse the file)
-    record_step(
-        summary,
-        step_name,
-        result_file,
-        file_type,
-        command,
-        start_time,
-        end_time,
-        write_summary_path="pipeline_summary.json",
-    )
-
-    # Mark pipeline end
-    end_summary(summary)
-
-    # Write the summary to a JSON file
-    write_summary(summary, "pipeline_summary.json")
-
-    # Optionally, convert the summary to CSV and TSV formats
-    convert_summary_to_csv(summary, "pipeline_summary.csv")
-    convert_summary_to_tsv(summary, "pipeline_summary.tsv")
+    Args:
+        summary (dict): The summary dictionary.
+        output_path (str): Path where the rows file will be written, conventionally
+            ``pipeline_summary_rows.csv`` or ``pipeline_summary_rows.tsv``.
+        delimiter (str, optional): ``","`` (default) or ``"\\t"``.
+    """
+    _write_delimited(output_path, list(LONG_COLUMNS), long_rows(summary), delimiter)

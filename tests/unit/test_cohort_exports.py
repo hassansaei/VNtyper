@@ -197,3 +197,16 @@ def test_pseudonym_table_write_failure_is_logged(tmp_path, caplog, monkeypatch) 
     assert len(records) == 1
     assert records[0].levelno == logging.ERROR
     assert "Failed to write pseudonymization table: blocked" in caplog.text
+
+
+def test_the_call_frequency_frame_is_exported_when_formats_requested(tmp_path) -> None:
+    """The call frequency frame is exported as cohort_call_frequency.{csv,tsv,json}."""
+    frame = pd.DataFrame([{"Grouping_Key": "key1", "Frequency": 0.1, "Below_Cutoff": "no"}])
+    write_cohort_frame(frame, tmp_path, "cohort_call_frequency", "Call frequency", ["csv", "tsv", "json"])
+
+    written = {p.name for p in tmp_path.iterdir()}
+    assert written == {
+        "cohort_call_frequency.csv",
+        "cohort_call_frequency.tsv",
+        "cohort_call_frequency.json",
+    }

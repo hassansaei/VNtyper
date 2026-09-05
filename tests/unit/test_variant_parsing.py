@@ -427,3 +427,22 @@ def test_header_only_no_data_rows_returns_a_columnless_empty_dataframe(tmp_path,
         "A header with no data rows must produce a columnless empty DataFrame, not one carrying the header's columns."
     )
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+def test_filter_by_alt_values_missing_alt_filtering_section_raises_key_error() -> None:
+    """A config missing the alt_filtering section must fail closed with KeyError (#311)."""
+    df = pd.DataFrame({"ALT": ["GG"], "Depth_Score": [0.01]})
+    with pytest.raises(KeyError, match="alt_filtering"):
+        filter_by_alt_values_and_finalize(df, {})
+
+
+def test_filter_by_alt_values_missing_gg_depth_threshold_raises_key_error() -> None:
+    """Missing gg_depth_score_threshold must raise KeyError instead of defaulting to 0.0 (#311).
+
+    Defaulting to 0.0 created a fail-open path where uncalibrated configs admitted
+    all GG variants regardless of depth.
+    """
+    df = pd.DataFrame({"ALT": ["GG"], "Depth_Score": [0.01]})
+    config = {"alt_filtering": {"gg_alt_value": "GG", "exclude_alts": []}}
+    with pytest.raises(KeyError, match="gg_depth_score_threshold"):
+        filter_by_alt_values_and_finalize(df, config)

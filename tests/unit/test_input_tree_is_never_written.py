@@ -235,12 +235,17 @@ def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tm
     def _record(command, log_file, critical=False, cwd=None):
         issued.append(command)
         Path(log_file).write_text("")
+        if "samtools index" in command and " -o " in command:
+            bai_path = Path(command.split(" -o ")[1].split()[0])
+            bai_path.parent.mkdir(parents=True, exist_ok=True)
+            bai_path.write_bytes(b"BAI\x01")
         return True
 
     with (
         patch.object(fastq_bam_processing, "run_command", _record),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value="chr1:1-2"),
         patch.object(fastq_bam_processing.os, "replace"),
+        patch.object(fastq_bam_processing, "publish_partial"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
             output=str(output_dir),

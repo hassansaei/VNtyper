@@ -142,7 +142,12 @@ def resolve_summary_reference_provenance(
         return SummaryReferenceProvenance(bwa_reference_key, bwa_reference_path, bwa_reference_source)
     if alignment_plan is None:
         return SummaryReferenceProvenance(None, None, None)
-    return SummaryReferenceProvenance(None, alignment_plan.reference_path, alignment_plan.reference_source)
+    provenance_path = (
+        alignment_plan.persistent_reference
+        if hasattr(alignment_plan, "persistent_reference")
+        else alignment_plan.reference_path
+    )
+    return SummaryReferenceProvenance(None, provenance_path, alignment_plan.reference_source)
 
 
 def format_regions_as_bed(regions: str, *, convert_from_one_based: bool) -> str:

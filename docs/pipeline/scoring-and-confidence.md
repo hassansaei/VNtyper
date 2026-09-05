@@ -59,12 +59,19 @@ The thresholds are defined in `kestrel_config.json`:
 
 | Parameter | Config Key | Value |
 |-----------|-----------|-------|
+| Reporting floor | `reporting_floor` | 0.00469 |
 | Depth score (low) | `depth_score_thresholds.low` | 0.00469 |
 | Depth score (high) | `depth_score_thresholds.high` | 0.00515 |
 | Alt depth (low) | `alt_depth_thresholds.low` | 20 |
 | Alt depth (mid_low) | `alt_depth_thresholds.mid_low` | 21 |
 | Alt depth (mid_high) | `alt_depth_thresholds.mid_high` | 100 |
 | Region depth threshold | `var_active_region_threshold` | 200 |
+
+Three distinct calibrated quantities share the baseline value `0.00469`:
+
+1. `confidence_assignment.reporting_floor` (0.00469): The outer noise floor below which any variant is reported as `Negative`.
+2. `confidence_assignment.depth_score_thresholds.low` (0.00469): The lower edge of the `Low_Precision` band (`[low, high]`).
+3. `alt_filtering.gg_depth_score_threshold` (0.00469): The minimum `Depth_Score` required for `ALT == "GG"` variants, linked to `reporting_floor`.
 
 ### Confidence Levels
 
@@ -146,28 +153,23 @@ outcome for any of these cells — see the warning below for why.
 
 ### Assignment Logic
 
-The confidence assignment follows a layered rule system where conditions are applied in sequence and **later conditions overwrite earlier assignments**. All variants start as "Negative", and a variant whose Depth Score is below the low threshold (0.00469) — or whose Depth Score is undefined, because the active-region depth is 0 — stays Negative no matter which conditions match. The six conditions are applied in this order, and each is transcribed here exactly as `confidence_assignment.py` writes it:
+The confidence assignment evaluates an ordered, first-match rule table in `vntyper/scripts/confidence_rules.py` with the reporting floor as an outer precondition. All candidate rows are evaluated against the rules in sequence, and the first matching rule assigns the confidence label:
 
-1. `cond1` — Depth Score **exactly** 0.00469, **or** region depth <= 200 -> Low_Precision
-2. `cond2` — Alt depth >= 100 **and** Depth Score >= 0.00515 -> High_Precision*
-3. `cond3` — Alt depth 21--99 **and** Depth Score between 0.00469 and 0.00515 inclusive -> Low_Precision
-4. `cond4` — Alt depth <= 20 -> Low_Precision
-5. `cond5` — Alt depth 21--99 **and** Depth Score >= 0.00515 -> High_Precision
-6. `cond_midband` — Depth Score between 0.00469 and 0.00515 **inclusive at both ends** -> Low_Precision
+| Order | Condition | Confidence Label | Rationale |
+|-------|-----------|------------------|-----------|
+| 0 | `Depth_Score` is NaN or `< 0.00469` | `Negative` | Reporting floor outer precondition: filters unsequenced or subthreshold candidates. |
+| 1 | `0.00469 <= Depth_Score <= 0.00515` | `Low_Precision` | Mid-band demotion (#184): covers the closed calibration band at all alternate depths. Satisfies former `cond3` intent. |
+| 2 | `Depth_Score > 0.00515` and alt depth `>= 100` | `High_Precision*` | Ample depth above calibrated high threshold. |
+| 3 | `Depth_Score > 0.00515` and `21 <=` alt depth `< 100` | `High_Precision` | Confirmed alt depth above calibrated high threshold. |
+| 4 | `Depth_Score > 0.00515` and alt depth `<= 20` | `Low_Precision` | Low alternate depth demotion. |
+| 5 | `Depth_Score > 0.00515` and `20 <` alt depth `< 21` and region depth `<= 200` | `Low_Precision` | Narrow gap between integer alt thresholds with shallow active region. |
+| 6 | Otherwise | `Negative` | Silent fallback for fractional alt depth in gap `(20, 21)` with deep active region. |
 
-Three consequences of the ordering, none of them a property of any single rule:
+Three key properties of this ordered table:
 
-- **Rules 2 and 5 are written with `>=` but behave like `>`.** Rule 6 runs last and its
-  band is closed at the top, so it takes back every row that rules 2 and 5 promoted at
-  exactly 0.00515. That is why the criteria table above states the High tiers with a
-  strict `>`.
-- **Rule 1's region-depth demotion is overwritten by rules 2 and 5** whenever either
-  applies.
-- **Rule 3 never decides a row.** Rule 6 covers the same closed Depth Score band at
-  *every* alternate depth, writes the same label, and runs after it, so rule 3 is
-  wholly subsumed. It is retained deliberately because it names the intent — see the
-  comment on it in `confidence_assignment.py` and
-  [#184](https://github.com/hassansaei/VNtyper/issues/184).
+- **Row 1 covers the closed interval `[0.00469, 0.00515]` at all alternate depths**, subsuming the former `cond3` (`alt depth in [21, 100)` and `Depth_Score in [0.00469, 0.00515]`). As documented by @hassansaei on [#184](https://github.com/hassansaei/VNtyper/issues/184): "do not remove this intent" -- the mid-range Depth_Score demotion applies across all alternate depths, so `cond3`'s intent is fully preserved by Row 1.
+- **High tiers precede active-region depth demotion**: A source-order first-match table is strictly forbidden because evaluating the active-region check (`region depth <= 200`) first would restore the v1.3 region-depth cap that was explicitly rejected on [#183](https://github.com/hassansaei/VNtyper/issues/183).
+- **Row 0 is load-bearing**: Because Rows 4 and 5 carry no lower `Depth_Score` bound in their alt/region clauses, evaluating them without Row 0 would classify sub-floor variants as `Low_Precision`, violating [#147](https://github.com/hassansaei/VNtyper/issues/147).
 
 A boolean column `depth_confidence_pass` is set to `True` for all non-Negative variants, enabling downstream filtering.
 
@@ -204,6 +206,29 @@ The confidence level describes how much evidence supports the call:
 - **High_Precision / High_Precision***: Both calibrated thresholds are met. Orthogonal validation (e.g., SNaPshot for dupC, long-read sequencing for complex variants) is recommended before the call is relied on.
 - **Low_Precision**: The depth score falls inside the closed calibration band, or the alternate depth is at or below 20. Independent validation is essential before the call is relied on.
 - **Negative**: No evidence of a pathogenic VNTR variant above the noise floor.
+
+## Sample-Level Confidence Grade
+
+In addition to variant-level confidence scoring, VNtyper derives a sample-level **confidence grade** during screening summary evaluation. The confidence grade provides an overall assessment of the genotyping outcome, synthesizing caller execution states, calling status, subthreshold signals, coverage quality metrics, and cross-caller concordance.
+
+### Vocabulary and Pre-Emption Order
+
+The confidence grade is evaluated against an ordered, first-match rule table (`confidence_grade_rules`) configured in `report_config.json`, falling back to `confidence_grade_default` (`"not-established"`). Rules are evaluated in strict pre-emption order:
+
+| Grade | Evaluated Conditions | Meaning |
+|-------|----------------------|---------|
+| `not-established` | Caller execution failed (`kestrel_execution` or `advntr_execution == "failed"`), required caller not performed, or unestablished result token | Genotyping could not be completed or caller output was invalid; no outcome established. |
+| `no-finding-limited` | Negative call with subthreshold candidate below reporting floor, or negative call with coverage QC `FAIL` or `NOT_EVALUATED` | No pathogenic variant called, but evidence is limited by shallow coverage or an unconfirmed subthreshold candidate. |
+| `no-finding` | Negative call by both callers (or single caller when adVNTR not run) with coverage QC `PASS` | Clean negative result with acceptable coverage depth and breadth across the VNTR array. |
+| `finding-limited` | Any finding call with coverage QC `FAIL` or `NOT_EVALUATED`, or a flagged Kestrel call (`High_Precision_flagged`, `Low_Precision_flagged`) | Variant detected, but confidence is limited by coverage quality or caller-flagged evidence. |
+| `finding-corroborated` | Unflagged Kestrel call (`High_Precision`, `Low_Precision`) with coverage QC `PASS` and positive cross-caller concordance (`cross_match_is_positive == True`) | Variant detected with acceptable coverage and concordantly supported by independent genotyping callers. |
+| `finding` | Unflagged finding call with coverage QC `PASS` without positive cross-caller match (or adVNTR finding with clean coverage) | Variant detected with acceptable coverage metrics. |
+
+### Configuration and Research Use
+
+Confidence grade assignment is entirely configuration-driven in `report_config.json`. The Python pipeline evaluates the rules as opaque strings and applies a pure text transformation (`result_word`) to render human-readable labels (e.g. `Finding corroborated`, `No finding`). Older report configurations omitting `confidence_grade_rules` withhold the grade gracefully (`confidence_grade = None`), omitting the grade chip from the report masthead without error.
+
+All outputs are for research use only. Confidence grades reflect algorithmic concordance and coverage quality metrics rather than diagnostic certainty.
 
 ## Reference
 

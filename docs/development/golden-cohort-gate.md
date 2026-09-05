@@ -38,6 +38,10 @@ the harness change, so only the "after" side can prove its revision.
 | 5 | `9816f86` | `4fd638a` | DELTAS, both classes fully attributed, every genotype artefact unchanged | the `fix/issue-181-197-followups` branch at `9816f86`, against the 2.0.6 release, and nothing after it |
 | 6 | `48f97fe` | `cb593b6` | DELTAS, every one attributed, **no genotype field changed anywhere** | the `fix/milestone-2-correctness-of-reported-numbers` branch at `48f97fe` (milestone 2, #171/#172/#174/#203/#212), against the 2.0.7 release, and nothing after it |
 | 7 | `19c8acd` | `4678851` | CANDIDATE PASS; comparison BLOCKED only by baseline-refused successes | issue #233 at `19c8acd`, against its required regression baseline `4678851`, and nothing after it |
+| 8 | `74fcbe0` | `c74e9e5` | DELTAS, every one attributed, **no genotype field changed anywhere** | adVNTR 2.0.x and real `--threads` (#259), against `c74e9e5`, and nothing after it |
+| 9 | `edaf44a` | `80ac6be` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | atomic BAM and BAI installation (#314), against `80ac6be`, and nothing after it |
+| 10 | `936f11e` | `a632aa1` | DELTAS, every one attributed, **no genotype field changed anywhere** | reporting floor split and profile revision 2 (#311), against `a632aa1`, and nothing after it |
+| 11 | `2cf4946` | `a0d27b5` | IDENTICAL (waived command deltas), **no genotype field changed anywhere** | derived confidence grade and report masthead chip (#173), against `a0d27b5`, and nothing after it |
 
 Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
 *different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
@@ -1053,6 +1057,7 @@ identity #171 itself proposed for reconciling historical output.
 | `report_tables` (new Coverage QC row) | #172 |
 | `cohort_kestrel_*` gaining `flag_filter_pass` | #174 — `cohort_exports.py:14`, "nothing here strips columns" |
 | `cohort_stats_*`, `cohort_output_files` | #172, the new export |
+| `cohort_call_frequency_*`, `cohort_output_files` | #33: Cohort call frequency table and exports |
 | `cohort_tables` (`cov_coverage_qc`, and the `2.0.7 → 2.0.8` version string) | #172 and the release. The normaliser is anchored to `VNtyper Version: ` and does not touch the bare version the statistics table carries. **Not** normalised away: attributing a difference is honest, teaching the gate to stop seeing it is not. |
 
 `kestrel_result` is 50 of 61 rather than 61 of 61 because a negative call writes the
@@ -1215,3 +1220,233 @@ The retained evidence is bound by these SHA-256 digests:
 | baseline `side.json` | `5321f9206405b77ccf4a198603b1ad1ca1b2f628105aba7a38f8cadaeaddb075` |
 | candidate `side.json` | `c8f583664a48615116573697ce1d3114ec45a13482fdf183d7c5d2e757f79335` |
 | both matrix snapshots | `241aeaf5aa64b8f684848f271e9d1a45e422ba41825adda9ee67b6a32cd7ac68` |
+
+## Run 9 — `80ac6be` → `edaf44a`, atomic BAM and BAI installation (#314)
+
+Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
+all **85 runs on each side verified their package resolution**. The attestation-grade matrix
+comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
+6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
+no run timed out.
+
+The marker module was `vntyper.scripts.artifact_publish`, absent on the baseline `review-origin-main`
+and present on the candidate.
+
+### What this run compares
+
+Baseline `80ac6be` writes final sliced and sorted BAM and BAI files directly to their public output
+paths as subprocesses execute. Candidate `edaf44a` implements atomic installation (#314): subprocesses
+target temporary, deterministic sibling `.partial` paths (`<path>.partial`), followed by atomic
+`os.replace` publication only upon verified 0 exit and non-empty file creation. On any failure or
+exception, `.partial` files are unlinked, preventing partial, truncated, or header-only BAM files
+from remaining under public artifact paths.
+
+### Every genotype artefact is unchanged
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `advntr_result` | 0 | 3 |
+| `kestrel_result` | 0 | 77 |
+| `kestrel_pre_result` | 0 | 77 |
+| `coverage_summary` | 0 | 77 |
+| `screening_summary` | 0 | 0 |
+| `report_tables` | 0 | 77 |
+| `cross_match_summary` | 0 | 0 |
+| every `cohort_*` artefact | 0 | 3–4 each |
+| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
+| `placed_unmapped_guard_count` | 0 | 81 |
+| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
+| `output_bed` | 0 | 62 |
+| `pseudonymization_table` | 0 | 1 |
+| `exit_code` | 0 | 85 |
+| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
+
+The verdict is **IDENTICAL** under `--expect-command-delta`.
+
+### Command-stream deltas
+
+The command stream differs on 79 of 81 per-sample cases. Every delta is fully attributed to
+the atomic artifact installation contract and process-level noise:
+
+1. **Deterministic `.partial` target paths**: Alignment and slicing commands emit `-o <path>.partial`
+   (e.g. `-o .../output_sliced.bam.partial`, `-o .../output_unmapped.bam.partial`, and
+   `samtools view -Sb ... > .../output.bam.partial`) instead of writing directly to public filenames.
+2. **Explicit BAI index target paths**: Index invocations specify `-o .../<bam>.bai.partial`
+   before atomic publication to `.../<bam>.bai`.
+3. **Process and temporary file noise**: Ephemeral process IDs in `/proc/<pid>/fd/5` (used for
+   process-substitution FIFO references) and temporary directory suffixes.
+
+Normalising these three expected differences leaves the command streams functionally identical,
+confirming zero unexpected command or pipeline alterations across all 85 runs.
+
+The retained evidence is bound by these SHA-256 digests:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `result.json` | `3c84f5970a0a145e13116bc44ec46951e225cdbee283b4ae6dc76f0878f54b7b` |
+| `result.md` | `13344703ac581b5ca75aca6eaa8d8ef1d98786f5b6f8e5b43e31e2d3b2305ef6` |
+| baseline `side.json` | `424e33c894b032987cd1971a1b79dfb44c5916c1cf4d4603857cd0b0346d1148` |
+| candidate `side.json` | `00bedbf8d8fb1f24b78d91d44b29915dd018c91a7897ca7d9a7627127eb676f9` |
+| both matrix snapshots | `e3a0509d30d646f836eb129b79edded4960b5890673b2e31cc0f89835933e940` |
+
+## Run 10 — `a632aa1` → `936f11e`, reporting floor split and profile revision 2 (#311)
+
+Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
+all **85 runs on each side verified their package resolution**. The attestation-grade matrix
+comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
+6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
+no run timed out.
+
+The marker was `vntyper.scripts.confidence_assignment:HAS_REPORTING_FLOOR_SPLIT`, absent on
+the baseline `review-origin-main` (`a632aa1`) and present on the candidate (`936f11e`).
+
+### What this run compares
+
+Baseline `a632aa1` couples the MUC1 reporting floor to the lower bound of the `Low_Precision` band
+(`depth_score_thresholds.low`), using `0.00469` for both, and runs under packaged decision profile revision 1.
+Candidate `936f11e` splits the reporting floor into an explicit `/components/kestrel/confidence_assignment/reporting_floor`
+field (`0.00469`), closes the fail-open fallback in `variant_parsing.py` by requiring `gg_depth_score_threshold`,
+links `reporting_floor` across calibration and decision profile schemas, and advances the decision profile to revision 2
+(`0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1`).
+
+Because the numerical reporting floor (`0.00469`) is identical between revisions 1 and 2, every variant call,
+depth score, confidence tier, flag, and genotype verdict across the cohort remains identical. The only deltas
+observed are the intentional decision profile provenance metadata in cohort exports and the expected subprocess
+process-substitution PID / temporary filename noise.
+
+### Every genotype artefact is unchanged
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `advntr_result` | 0 | 3 |
+| `kestrel_result` | 0 | 77 |
+| `kestrel_pre_result` | 0 | 77 |
+| `coverage_summary` | 0 | 77 |
+| `screening_summary` | 0 | 0 |
+| `report_tables` | 0 | 77 |
+| `cross_match_summary` | 0 | 0 |
+| `cohort_call_frequency_csv` | 0 | 3 |
+| `cohort_call_frequency_json` | 0 | 3 |
+| `cohort_call_frequency_tsv` | 0 | 3 |
+| `cohort_category_counts` | 0 | 3 |
+| `cohort_category_totals` | 0 | 3 |
+| `cohort_output_files` | 0 | 4 |
+| `cohort_tables` | 3 (provenance delta) | 3 |
+| `cohort_kestrel_csv` | 2 (provenance delta) | 3 |
+| `cohort_kestrel_json` | 3 (provenance delta) | 3 |
+| `cohort_kestrel_tsv` | 3 (provenance delta) | 3 |
+| `cohort_advntr_csv` | 3 (provenance delta) | 3 |
+| `cohort_advntr_json` | 3 (provenance delta) | 3 |
+| `cohort_advntr_tsv` | 3 (provenance delta) | 3 |
+| `cohort_stats_csv` | 3 (provenance delta) | 3 |
+| `cohort_stats_json` | 3 (provenance delta) | 3 |
+| `cohort_stats_tsv` | 3 (provenance delta) | 3 |
+| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
+| `placed_unmapped_guard_count` | 0 | 81 |
+| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
+| `output_bed` | 0 | 62 |
+| `pseudonymization_table` | 0 | 1 |
+| `exit_code` | 0 | 85 |
+| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
+
+The verdict is **DELTAS** (every delta attributed; zero genotype changes).
+
+### Attributed deltas
+
+1. **Decision profile provenance fields in cohort exports**:
+   In `cohort_tables`, `cohort_kestrel_*`, `cohort_advntr_*`, and `cohort_stats_*`, the metadata columns
+   reflect the profile revision advance:
+   - `Decision_Profile_Revision`: `'1'` → `'2'`
+   - `Decision_Profile_SHA256`: `'be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718'` → `'0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1'`
+   No other column or value in any cohort table or export differs.
+2. **Subprocess execution noise**:
+   As in earlier runs, 79 of 81 per-sample cases show ephemeral command string differences due to
+   process substitution file descriptors (`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
+
+The retained evidence is bound by these SHA-256 digests:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `result.json` | `51fe52a3f6b49e7b45e82ad8e09952571b9ef763c445c0113e2a177308f17ed1` |
+| `result.md` | `235122e7c5c8defcac1e74496a06efc75f71b12873f1449b86e74ea71217f0b1` |
+| baseline `side.json` | `5ae4bdc4c3607ff7f08815c16db8beb78f877ca528fa8124b624ea58f4dcaf5e` |
+| candidate `side.json` | `8596731beb38755b33470bf3def84e6e899e26833444b9699b9769f7ca3fca8f` |
+| both matrix snapshots | `d218de77d9db2a7802015a1c76aedd51fd4c61c6dddaef87dc489cde3b738339` |
+
+## Run 11 — `a0d27b5` → `2cf4946`, derived confidence grade and report masthead chip (#173)
+
+Harness `1.5.0`. Both sides were clean worktrees, both launches recorded their revision, and
+all **85 runs on each side verified their package resolution**. The attestation-grade matrix
+comprised 78 pipeline cases (50 base derived from `tests/data`, 5 non-fast, 3 adVNTR, 14 alias,
+6 CRAM), three probes and four cohorts. No case was blocked, no expectation was unmet, and
+no run timed out.
+
+The marker was `vntyper.scripts.screening_summary:supports_confidence_grade`, absent on
+the baseline `review-origin-main` (`a0d27b5`) and present on the candidate (`2cf4946`).
+
+### What this run compares
+
+Baseline `a0d27b5` evaluates screening summaries and reports without a confidence grade chip.
+Candidate `2cf4946` introduces configurable confidence grade evaluation (A through E) and
+renders a dedicated Confidence grade chip in the report masthead (`summary_report.html`)
+under `state_chips`.
+
+Because confidence grades are computed purely as an additional presentation chip in the
+HTML report masthead, every variant call, depth score, confidence tier, flag, and
+genotype verdict across the cohort remains identical. Every genotype table, TSV, BED,
+cohort export, and screening summary sentence is byte-identical. The only deltas observed
+are expected ephemeral command string differences due to process substitution file descriptors
+(`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
+
+### Every genotype artefact is unchanged
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `advntr_result` | 0 | 3 |
+| `kestrel_result` | 0 | 77 |
+| `kestrel_pre_result` | 0 | 77 |
+| `coverage_summary` | 0 | 77 |
+| `screening_summary` | 0 | 0 |
+| `report_tables` | 0 | 77 |
+| `cross_match_summary` | 0 | 0 |
+| `cohort_call_frequency_csv` | 0 | 3 |
+| `cohort_call_frequency_json` | 0 | 3 |
+| `cohort_call_frequency_tsv` | 0 | 3 |
+| `cohort_category_counts` | 0 | 3 |
+| `cohort_category_totals` | 0 | 3 |
+| `cohort_output_files` | 0 | 4 |
+| `cohort_tables` | 0 | 3 |
+| `cohort_kestrel_csv` | 0 | 3 |
+| `cohort_kestrel_json` | 0 | 3 |
+| `cohort_kestrel_tsv` | 0 | 3 |
+| `cohort_advntr_csv` | 0 | 3 |
+| `cohort_advntr_json` | 0 | 3 |
+| `cohort_advntr_tsv` | 0 | 3 |
+| `cohort_stats_csv` | 0 | 3 |
+| `cohort_stats_json` | 0 | 3 |
+| `cohort_stats_tsv` | 0 | 3 |
+| `pipeline_steps`, `pipeline_step_records` | 0 | 81 |
+| `placed_unmapped_guard_count` | 0 | 81 |
+| `raw_indexed_read_set`, `raw_indexed_loss`, `unmapped_read_set` | 0 | 4–6 each |
+| `output_bed` | 0 | 62 |
+| `pseudonymization_table` | 0 | 1 |
+| `exit_code` | 0 | 85 |
+| `executed_commands` | 79 (waived by `--expect-command-delta`) | 81 |
+
+The verdict is **IDENTICAL** under `--expect-command-delta`.
+
+### Command-stream deltas
+
+As in earlier runs, 79 of 81 per-sample cases show ephemeral command string differences due to
+process substitution file descriptors (`/proc/<pid>/fd/5`) and temporary `.tmp` file suffixes.
+
+The retained evidence is bound by these SHA-256 digests:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `result.json` | `fb9565a222b7ebdd6175ef58216537572c0032ab46afb534a4a60c4a67044100` |
+| `result.md` | `da72d53de325f4516e63f7b85b92aaa3813bbd3c5b1d398b3d292539afd871c6` |
+| baseline `side.json` | `5852493a1ddb374e5dce2f059eec4aa3555c80595a71f916c8e717d30798a83b` |
+| candidate `side.json` | `4b897bd131fc82197d45110dd198fcb33f2e6568e5a2f014e61616fbdb8bca95` |
+| both matrix snapshots | `bf8555cd7e734cf8e723e80423ecdbd30e9f83459d8d5e4a42313b63ec82881f` |
+

@@ -71,7 +71,7 @@ def test_linked_constants_hold_the_same_value(calibration, kestrel_config) -> No
     """Constants declared as aliases of one another must not drift.
 
     ``alt_filtering.gg_depth_score_threshold`` and
-    ``confidence_assignment.depth_score_thresholds.low`` are the same calibrated
+    ``confidence_assignment.reporting_floor`` are the same calibrated
     number stored twice; nothing in the config prevents them diverging.
     """
     for group in calibration.get("linked", []):

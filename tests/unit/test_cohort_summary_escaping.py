@@ -272,3 +272,26 @@ def test_an_empty_cohort_still_renders(tmp_path) -> None:
     html = _render(tmp_path)
 
     assert html.lstrip().startswith("<!DOCTYPE html>")
+
+
+def test_the_call_frequency_table_is_escaped(tmp_path) -> None:
+    """Call frequency table in the rendered cohort report escapes malicious input."""
+    frame = pd.DataFrame(
+        [
+            {
+                "Sample": INJECTION,
+                "Molecular_Identity": INJECTION,
+                "Molecular_Identity_Status": "unique",
+                "Motifs": "5-5",
+                "POS": "100",
+                "REF": "A",
+                "ALT": INJECTION,
+                "Variant": INJECTION,
+                "Depth_Score": "15.0",
+            }
+        ]
+    )
+    html = _render(tmp_path, kestrel_df=frame)
+
+    assert INJECTION not in html
+    assert ESCAPED in html
