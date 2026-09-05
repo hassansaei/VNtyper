@@ -1,6 +1,5 @@
 # docker/app/tasks.py
 
-import hashlib
 import os
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -28,6 +27,7 @@ from .pipeline_job_workspace import (
     open_pipeline_job_workspace,
     reclaim_unopened_spool_inputs,
 )
+from .usage_records import started_usage_record
 from .utils import send_email
 
 logger = get_task_logger(__name__)
@@ -308,17 +308,8 @@ def run_vntyper_job(
         clear_preflight_failure(workspace.bound_output_path)
         logger.info(f"Starting VNtyper job for BAM file: {workspace.bound_alignment_path}")
 
-        # Generate a unique hash for the user
-        user_data = f"{client_ip}-{user_agent}"
-        user_hash = hashlib.sha256(user_data.encode("utf-8")).hexdigest()
-
         # Store initial usage data
-        usage_data = {
-            "user_hash": user_hash,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "job_id": job_id,
-            "status": "started",
-        }
+        usage_data = started_usage_record(job_id, client_ip=client_ip, user_agent=user_agent)
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
@@ -617,15 +608,13 @@ def run_cohort_analysis_job(
             heartbeat.start()
         logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
 
-        user_data = f"{user_ip}-{user_agent}"
-        usage_data = {
-            "user_hash": hashlib.sha256(user_data.encode("utf-8")).hexdigest(),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "job_id": job_id,
-            "status": "started",
-            "analysis_type": "cohort_analysis",
-            "cohort_id": cohort_id,
-        }
+        usage_data = started_usage_record(
+            job_id,
+            client_ip=user_ip,
+            user_agent=user_agent,
+            analysis_type="cohort_analysis",
+            cohort_id=cohort_id,
+        )
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 

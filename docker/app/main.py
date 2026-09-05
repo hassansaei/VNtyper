@@ -45,6 +45,7 @@ from .cohorts import (
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
 from .identifiers import canonical_id
 from .job_failures import stored_preflight_message
+from .job_lookup import stored_task_id
 from .job_workspace import job_workspace
 from .lifecycle import AsyncRedisClient, close_rate_limiter_client, initialize_rate_limiter, probe_tool_version
 from .request_limits import RequestSizeLimitMiddleware
@@ -642,7 +643,7 @@ def get_job_status(job_id: str):
     # Retrieve task ID from Redis using job_id, once it is one of ours. The returned
     # value is the canonical form, which is what the key is built from.
     job_id = require_job_id(job_id)
-    task_id = redis_client.get(job_id)
+    task_id = stored_task_id(redis_client, job_id)
     if not task_id:
         logger.warning(f"Job ID {job_id} not found in Redis")
         raise HTTPException(status_code=404, detail="Job ID not found")
@@ -808,7 +809,7 @@ def get_job_queue(
     if job_id:
         try:
             # Retrieve the task ID associated with the provided job_id
-            task_id = redis_client.get(job_id)
+            task_id = stored_task_id(redis_client, job_id)
             if not task_id:
                 logger.warning(f"Job ID {job_id} not found")
                 raise HTTPException(status_code=404, detail="Job ID not found")
@@ -895,7 +896,7 @@ def get_cohort_status(
     # Get status for each job
     job_statuses = []
     for job_id in job_ids:
-        task_id = redis_client.get(job_id)
+        task_id = stored_task_id(redis_client, job_id)
         if not task_id:
             status = "unknown"
         else:
