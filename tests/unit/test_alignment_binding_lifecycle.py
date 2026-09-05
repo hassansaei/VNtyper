@@ -122,7 +122,10 @@ def test_conversion_uses_the_bound_fresh_index_after_the_public_index_is_replace
         return True
 
     try:
-        with patch.object(fastq_bam_processing, "run_command", side_effect=record):
+        with (
+            patch.object(fastq_bam_processing, "run_command", side_effect=record),
+            patch.object(fastq_bam_processing, "publish_partial"),
+        ):
             fastq_bam_processing.process_bam_to_fastq(
                 output=tmp_path / "conversion",
                 output_name="output",

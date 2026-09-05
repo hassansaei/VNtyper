@@ -119,6 +119,7 @@ def test_process_delegates_with_caller_runner_and_cleans_after_success(
     with (
         patch.object(fastq_bam_processing, "run_command", runner),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value="chr1:1-2"),
+        patch.object(fastq_bam_processing, "publish_partial"),
         patch.object(fastq_bam_processing, "run_alignment_fastq_conversion", return_value=expected) as conversion,
     ):
         result = fastq_bam_processing.process_bam_to_fastq(
@@ -146,6 +147,7 @@ def test_conversion_failure_propagates_before_cleanup(tmp_path: Path) -> None:
     with (
         patch.object(fastq_bam_processing, "run_command", return_value=True),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value="chr1:1-2"),
+        patch.object(fastq_bam_processing, "publish_partial"),
         patch.object(fastq_bam_processing, "run_alignment_fastq_conversion", side_effect=failure),
         pytest.raises(RuntimeError, match="conversion failed"),
     ):
