@@ -130,6 +130,19 @@ def test_a_module_the_config_does_not_declare_as_a_tool_is_not_named(tmp_path: P
     assert "shark" not in _tools_in_use(harness)
 
 
+def test_shark_tool_is_named_in_tools_in_use_when_declared_and_requested(tmp_path: Path) -> None:
+    """When config['tools'] declares shark and --extra-modules shark is requested, shark is probed (#312)."""
+    config = deepcopy(MINIMAL_CONFIG)
+    config["tools"]["shark"] = "mamba run -n shark_env shark"
+    harness = run_pipeline_under_harness(
+        tmp_path / "out",
+        config=config,
+        extra_modules=["shark"],
+    )
+
+    assert "shark" in _tools_in_use(harness)
+
+
 def test_the_declared_set_never_contains_kanalyze(tmp_path: Path) -> None:
     """kanalyze is a JAR with no version flag; it is versioned with kestrel."""
     harness = run_pipeline_under_harness(tmp_path / "out")
