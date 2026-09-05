@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import timeit
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -125,17 +126,34 @@ def _run_and_record_fastq_qc(
     config: dict[str, Any],
     summary: dict[str, Any],
     summary_file_path: str,
+    *,
+    qc_only: bool = False,
 ) -> None:
     logger.info("Starting FASTQ quality control.")
     qc_start = datetime.now(timezone.utc).replace(tzinfo=None)
-    process_fastq(
-        fastq1,
-        fastq2,
-        threads,
-        dirs["fastq_bam_processing"],
-        "output",
-        config,
-    )
+    if qc_only:
+        with tempfile.TemporaryDirectory(dir=dirs["fastq_bam_processing"], prefix=".vntyper_qc_") as tmpdir:
+            process_fastq(
+                fastq1,
+                fastq2,
+                threads,
+                tmpdir,
+                "output",
+                config,
+            )
+            for artifact in ("output.json", "output_fastp.html", "output_fastp.log"):
+                src = Path(tmpdir) / artifact
+                if src.is_file():
+                    shutil.copy2(src, Path(dirs["fastq_bam_processing"]) / artifact)
+    else:
+        process_fastq(
+            fastq1,
+            fastq2,
+            threads,
+            dirs["fastq_bam_processing"],
+            "output",
+            config,
+        )
     qc_end = datetime.now(timezone.utc).replace(tzinfo=None)
     record_step(
         summary,
@@ -544,6 +562,28 @@ def run_pipeline(
             kestrel_reference_fingerprint=kestrel_reference_fingerprint,
         )
 
+        kestrel_ref_matches = True
+        if prior_summary:
+            prior_k_ref = prior_summary.get("kestrel_reference_path")
+            if (prior_k_ref is None) != (kestrel_reference_path is None) or (
+                prior_k_ref is not None
+                and kestrel_reference_path is not None
+                and str(Path(prior_k_ref).resolve()) != str(Path(kestrel_reference_path).resolve())
+            ):
+                kestrel_ref_matches = False
+            prior_k_fp = prior_summary.get("kestrel_reference_fingerprint")
+            if (
+                prior_k_fp is not None or kestrel_reference_fingerprint is not None
+            ) and prior_k_fp != kestrel_reference_fingerprint:
+                kestrel_ref_matches = False
+
+        advntr_model_matches = True
+        if prior_summary and advntr_context:
+            prior_model_sha = prior_summary.get("advntr_model", {}).get("sha256")
+            curr_model_sha = advntr_context.model.get("sha256")
+            if prior_model_sha and curr_model_sha and prior_model_sha != curr_model_sha:
+                advntr_model_matches = False
+
         if resume and prior_summary:
             donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
             if not donor_summary_path.is_file() and os.path.isfile(summary_file_path):
@@ -551,10 +591,33 @@ def run_pipeline(
                     shutil.copy2(summary_file_path, donor_summary_path)
             for s in prior_summary.get("steps", []):
                 st = s.get("step")
-                if st and step_is_reusable(prior_summary, st, output_dir):
-                    _record_reused_step(summary, make_reused_step_record(s, prior_summary.get("pipeline_start")))
+                if not st or not step_is_reusable(prior_summary, st, output_dir):
+                    continue
+                if st == STEP_KESTREL and not kestrel_ref_matches:
+                    continue
+                if st == STEP_ADVNTR and ("advntr" not in extra_modules or not advntr_model_matches):
+                    continue
+                if st == STEP_CROSS_MATCH and (
+                    not kestrel_ref_matches or "advntr" not in extra_modules or not advntr_model_matches
+                ):
+                    continue
+                _record_reused_step(summary, make_reused_step_record(s, prior_summary.get("pipeline_start")))
             if prior_summary.get("stage_artifact_md5s"):
-                summary.setdefault("stage_artifact_md5s", {}).update(dict(prior_summary["stage_artifact_md5s"]))
+                for st, md5s in prior_summary["stage_artifact_md5s"].items():
+                    if st == STEP_KESTREL and not kestrel_ref_matches:
+                        continue
+                    if st == STEP_ADVNTR and ("advntr" not in extra_modules or not advntr_model_matches):
+                        continue
+                    if st == STEP_CROSS_MATCH and (
+                        not kestrel_ref_matches or "advntr" not in extra_modules or not advntr_model_matches
+                    ):
+                        continue
+                    summary.setdefault("stage_artifact_md5s", {})[st] = dict(md5s)
+        else:
+            donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
+            if donor_summary_path.is_file():
+                with contextlib.suppress(OSError):
+                    donor_summary_path.unlink()
 
         if input_type in ["BAM", "CRAM"]:
             if input_type == "BAM":
@@ -739,7 +802,9 @@ def run_pipeline(
                             prior_summary["stage_artifact_md5s"][STEP_FASTQ_QC]
                         )
                 else:
-                    _run_and_record_fastq_qc(fastq1, fastq2, threads, dirs, config, summary, summary_file_path)
+                    _run_and_record_fastq_qc(
+                        fastq1, fastq2, threads, dirs, config, summary, summary_file_path, qc_only=True
+                    )
                 write_summary(summary, summary_file_path)
                 prior_align_st = next(
                     (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
@@ -798,7 +863,9 @@ def run_pipeline(
                                 prior_summary["stage_artifact_md5s"][STEP_FASTQ_QC]
                             )
                     else:
-                        _run_and_record_fastq_qc(fastq1, fastq2, threads, dirs, config, summary, summary_file_path)
+                        _run_and_record_fastq_qc(
+                            fastq1, fastq2, threads, dirs, config, summary, summary_file_path, qc_only=True
+                        )
                     write_summary(summary, summary_file_path)
                     sorted_bam = (
                         Path(prior_align_st["result_file"])
@@ -917,21 +984,6 @@ def run_pipeline(
             cov_end,
             write_summary_path=summary_file_path,
         )
-
-        kestrel_ref_matches = True
-        if prior_summary:
-            prior_k_ref = prior_summary.get("kestrel_reference_path")
-            if (prior_k_ref is None) != (kestrel_reference_path is None) or (
-                prior_k_ref is not None
-                and kestrel_reference_path is not None
-                and str(Path(prior_k_ref).resolve()) != str(Path(kestrel_reference_path).resolve())
-            ):
-                kestrel_ref_matches = False
-            prior_k_fp = prior_summary.get("kestrel_reference_fingerprint")
-            if (
-                prior_k_fp is not None or kestrel_reference_fingerprint is not None
-            ) and prior_k_fp != kestrel_reference_fingerprint:
-                kestrel_ref_matches = False
 
         if (
             resume

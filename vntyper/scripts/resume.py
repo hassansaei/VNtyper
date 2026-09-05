@@ -128,14 +128,57 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                 if data is None:
                     data = donor_data
                 else:
-                    existing_steps = {s.get("step") for s in data.get("steps", [])}
-                    for s in donor_data.get("steps", []):
-                        st = s.get("step")
-                        if st and st not in existing_steps:
+                    donor_profile = (
+                        donor_data.get("decision_profile", {}).get("digest")
+                        if isinstance(donor_data.get("decision_profile"), dict)
+                        else None
+                    )
+                    data_profile = (
+                        data.get("decision_profile", {}).get("digest")
+                        if isinstance(data.get("decision_profile"), dict)
+                        else None
+                    )
+                    donor_matches = (
+                        donor_data.get("sample_name") == data.get("sample_name")
+                        and donor_data.get("input_files") == data.get("input_files")
+                        and donor_data.get("canonical_input_files") == data.get("canonical_input_files")
+                        and donor_data.get("reference_assembly_requested") == data.get("reference_assembly_requested")
+                        and donor_profile == data_profile
+                    )
+                    if not donor_matches:
+                        logger.warning("Ignoring incompatible donor checkpoint at %s", donor_path)
+                    else:
+                        k_ref_matches = donor_data.get("kestrel_reference_path") == data.get(
+                            "kestrel_reference_path"
+                        ) and donor_data.get("kestrel_reference_fingerprint") == data.get(
+                            "kestrel_reference_fingerprint"
+                        )
+                        adv_model_matches = donor_data.get("advntr_model", {}).get("sha256") == data.get(
+                            "advntr_model", {}
+                        ).get("sha256")
+                        existing_steps = {s.get("step") for s in data.get("steps", [])}
+                        for s in donor_data.get("steps", []):
+                            st = s.get("step")
+                            if not st or st in existing_steps:
+                                continue
+                            if st == summary_steps.STEP_KESTREL and not k_ref_matches:
+                                continue
+                            if st == summary_steps.STEP_ADVNTR and not adv_model_matches:
+                                continue
+                            if st == summary_steps.STEP_CROSS_MATCH and (not k_ref_matches or not adv_model_matches):
+                                continue
                             data.setdefault("steps", []).append(s)
-                    if donor_data.get("stage_artifact_md5s"):
-                        for st, md5s in donor_data["stage_artifact_md5s"].items():
-                            data.setdefault("stage_artifact_md5s", {}).setdefault(st, md5s)
+                        if donor_data.get("stage_artifact_md5s"):
+                            for st, md5s in donor_data["stage_artifact_md5s"].items():
+                                if st == summary_steps.STEP_KESTREL and not k_ref_matches:
+                                    continue
+                                if st == summary_steps.STEP_ADVNTR and not adv_model_matches:
+                                    continue
+                                if st == summary_steps.STEP_CROSS_MATCH and (
+                                    not k_ref_matches or not adv_model_matches
+                                ):
+                                    continue
+                                data.setdefault("stage_artifact_md5s", {}).setdefault(st, md5s)
 
     if data is None:
         logger.debug("Prior summary not found at %s", p)

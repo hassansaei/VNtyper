@@ -657,11 +657,16 @@ def test_resume_preserves_conversion_checkpoint_without_overwriting_by_fastq_qc(
     )
     (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
 
+    def overwrite_qc(f1, f2, threads, output, name, config):
+        for mate in ("R1", "R2"):
+            (Path(output) / f"{name}_{mate}.fastq.gz").write_bytes(b"whole input QC reads")
+
     harness = run_pipeline_under_harness(
         output_dir=output_dir,
         fastq1=str(f1),
         fastq2=str(f2),
         resume=True,
+        stage_side_effects={"process_fastq": overwrite_qc},
     )
     harness.stages["process_fastq"].assert_called_once()
     harness.stages["align_and_sort_fastq"].assert_not_called()
@@ -1739,4 +1744,119 @@ def test_resume_preserves_caller_records_when_interrupted_via_donor(tmp_path: Pa
     )
     # Kestrel step was restored from donor and reused without rerunning!
     h.stages["run_kestrel"].assert_not_called()
+    assert not (output_dir / "pipeline_summary.donor.json").exists()
+
+
+def test_interrupted_resume_with_reference_change_does_not_reuse_kestrel(tmp_path: Path) -> None:
+    """Interruption before Kestrel does not carry forward invalid old-reference result (#20)."""
+    output_dir = tmp_path / "resume_interrupt_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "input_dir"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
+    (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"kestrel tsv data").hexdigest(),
+            }
+        ],
+    )
+    prior_summary["kestrel_reference_path"] = "/different/path/muc1.fa"
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    # First resume attempt is interrupted during coverage calculation (before Kestrel)
+    h1 = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+        expect_failure=True,
+        stage_side_effects={"calculate_vntr_coverage": RuntimeError("interrupted before Kestrel")},
+    )
+    assert h1.error is not None
+
+    # Second resume attempt runs to completion
+    h2 = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+    # Kestrel MUST be executed because the reference path differed!
+    h2.stages["run_kestrel"].assert_called_once()
+
+
+def test_load_prior_summary_rejects_incompatible_donor_and_fresh_run_clears_it(tmp_path: Path) -> None:
+    """Incompatible donor checkpoint is ignored and fresh runs clear stale donors (#20)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    bam_a = input_dir / "sample_a.bam"
+    bam_b = input_dir / "sample_b.bam"
+    bam_a.touch()
+    bam_b.touch()
+
+    # Create primary summary for sample_b
+    primary = _make_prior_summary(
+        sample_name="sample_b",
+        input_files={"bam": bam_b.name},
+        canonical_input_files={"bam": str(bam_b.resolve())},
+        steps=[],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(primary), encoding="utf-8")
+
+    # Create donor summary from another sample (sample_a) with Kestrel step
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("sample_a kestrel", encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel", encoding="utf-8")
+    (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+
+    donor = _make_prior_summary(
+        sample_name="sample_a",
+        input_files={"bam": bam_a.name},
+        canonical_input_files={"bam": str(bam_a.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"sample_a kestrel").hexdigest(),
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.donor.json").write_text(json.dumps(donor), encoding="utf-8")
+
+    # Resuming sample_b must NOT merge Kestrel from sample_a's donor
+    from vntyper.scripts.resume import load_prior_summary
+
+    loaded = load_prior_summary(output_dir)
+    assert loaded is not None
+    assert loaded["sample_name"] == "sample_b"
+    assert not any(s.get("step") == summary_steps.STEP_KESTREL for s in loaded.get("steps", []))
+
+    # A fresh run on sample_b (resume=False) must clear the stale donor file
+    run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(bam_b),
+        resume=False,
+    )
     assert not (output_dir / "pipeline_summary.donor.json").exists()
