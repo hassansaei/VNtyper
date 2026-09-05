@@ -652,5 +652,3 @@ def test_the_call_frequency_table_escapes_every_column() -> None:
     for col in CALL_FREQUENCY_COLUMNS:
         assert _escaped_probe(col) in html, f"Column {col} was not escaped"
         assert _probe(col) not in html, f"Column {col} unescaped probe reached HTML"
-
-

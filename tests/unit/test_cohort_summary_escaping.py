@@ -295,4 +295,3 @@ def test_the_call_frequency_table_is_escaped(tmp_path) -> None:
 
     assert INJECTION not in html
     assert ESCAPED in html
-

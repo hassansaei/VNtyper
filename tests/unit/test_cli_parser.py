@@ -241,4 +241,3 @@ def test_cohort_parser_rejects_invalid_rare_allele_max_frequency() -> None:
     with pytest.raises(SystemExit) as exc_info:
         parser.parse_args(["cohort", "-i", "d1", "-o", "out", "--rare-allele-max-frequency", "1.5"])
     assert exc_info.value.code == 2
-

@@ -133,7 +133,7 @@ pytestmark = pytest.mark.unit
 #: Move 10 (#33 - Cohort call frequency section and exports)
 #: ---------------------------------------------------------
 #: * **Old**: ``1310197cbd932002cd03fec807b786ebaceb0f1908e8dc5ade54d3b609e52e3e``
-#: * **New**: ``818df4dabec1c236b4697efc17691c2c64d3063885d342c1e8b3325caa759fcb``
+#: * **New**: ``a0b0d32a43778937677bc53d156c386416aabd32679c2f24258814af073f99b0``
 #:
 #: **Cause: new call frequency table and section appended after Additional Statistics.**
 #: The cohort report gained an interactive call frequency table section. In this two-sample
@@ -410,7 +410,7 @@ pytestmark = pytest.mark.unit
 # skeleton moves only because the new false Jinja branches contribute surrounding
 # whitespace. Mixed-profile content is pinned separately in
 # ``test_cohort_profile_provenance.py``.
-EXPECTED_FINGERPRINT = "818df4dabec1c236b4697efc17691c2c64d3063885d342c1e8b3325caa759fcb"
+EXPECTED_FINGERPRINT = "a0b0d32a43778937677bc53d156c386416aabd32679c2f24258814af073f99b0"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid

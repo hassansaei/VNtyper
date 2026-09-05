@@ -40,13 +40,15 @@ CALL_FREQUENCY_COLUMNS: list[str] = [
     "Max_Depth_Score",
 ]
 
-_EXCLUDED_CALLER_METADATA = frozenset({
-    "Sample",
-    "decision_profile_name",
-    "decision_profile_revision",
-    "decision_profile_sha256",
-    "advntr_evidence_digest",
-})
+_EXCLUDED_CALLER_METADATA = frozenset(
+    {
+        "Sample",
+        "decision_profile_name",
+        "decision_profile_revision",
+        "decision_profile_sha256",
+        "advntr_evidence_digest",
+    }
+)
 
 
 def _is_placeholder(row: pd.Series | Mapping[str, Any]) -> bool:
@@ -130,9 +132,7 @@ def call_frequency_frame(
     records: list[dict[str, Any]] = []
     for (key, kind), group in filtered_df.groupby(["_grouping_key", "_grouping_kind"]):
         samples = (
-            sorted({str(s) for s in group["Sample"].dropna() if str(s).strip()})
-            if "Sample" in group.columns
-            else []
+            sorted({str(s) for s in group["Sample"].dropna() if str(s).strip()}) if "Sample" in group.columns else []
         )
         sample_count = len(samples)
         raw_frequency = float(sample_count) / float(cohort_size) if cohort_size > 0 else 0.0
@@ -161,22 +161,24 @@ def call_frequency_frame(
         min_depth = float(numeric_scores.min()) if not numeric_scores.empty else None
         max_depth = float(numeric_scores.max()) if not numeric_scores.empty else None
 
-        records.append({
-            "Grouping_Key": str(key),
-            "Grouping_Key_Kind": str(kind),
-            "Molecular_Identity": mol_id,
-            "Motifs": motifs,
-            "POS": pos,
-            "REF": ref,
-            "ALT": alt,
-            "Variant": variant,
-            "Sample_Count": sample_count,
-            "Frequency": frequency,
-            "Below_Cutoff": below_cutoff,
-            "Samples": "; ".join(samples),
-            "Min_Depth_Score": min_depth,
-            "Max_Depth_Score": max_depth,
-        })
+        records.append(
+            {
+                "Grouping_Key": str(key),
+                "Grouping_Key_Kind": str(kind),
+                "Molecular_Identity": mol_id,
+                "Motifs": motifs,
+                "POS": pos,
+                "REF": ref,
+                "ALT": alt,
+                "Variant": variant,
+                "Sample_Count": sample_count,
+                "Frequency": frequency,
+                "Below_Cutoff": below_cutoff,
+                "Samples": "; ".join(samples),
+                "Min_Depth_Score": min_depth,
+                "Max_Depth_Score": max_depth,
+            }
+        )
 
     result_df = pd.DataFrame(records, columns=CALL_FREQUENCY_COLUMNS)
     result_df = result_df.sort_values(by=["Frequency", "Grouping_Key"], ascending=[True, True]).reset_index(drop=True)
