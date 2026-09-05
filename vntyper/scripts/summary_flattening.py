@@ -168,3 +168,35 @@ def step_rows(summary: Mapping[str, Any]) -> list[dict[str, str]]:
         fills the union with blanks.
     """
     return [_step_row(record) for record in _step_records(summary)]
+
+
+def _long_rows_of(record: Mapping[str, Any]) -> list[dict[str, str]]:
+    parsed_result = record.get("parsed_result")
+    data = parsed_result.get("data") if isinstance(parsed_result, Mapping) else None
+    if not isinstance(data, list):
+        return []
+    step = _cell(record.get("step"))
+    return [
+        {"step": step, "row_index": str(index), "field": str(field), "value": _cell(value)}
+        for index, result_row in enumerate(data)
+        if isinstance(result_row, Mapping)
+        for field, value in result_row.items()
+    ]
+
+
+def long_rows(summary: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Return every result row of every step as ``step``, ``row_index``, ``field``, ``value``.
+
+    All steps alike: a single-row Kestrel result and a multi-row adVNTR or cross-match
+    result are listed the same way, so the whole run pivots on ``step`` and ``row_index``
+    in one line. Steps whose ``parsed_result`` has no ``data`` list (json-typed steps,
+    unparsed steps) contribute nothing.
+
+    Args:
+        summary: A ``pipeline_summary.json`` mapping.
+
+    Returns:
+        list[dict[str, str]]: One record per step, result row and field, keys exactly
+        :data:`LONG_COLUMNS`; ``row_index`` is 0-based.
+    """
+    return [row for record in _step_records(summary) for row in _long_rows_of(record)]

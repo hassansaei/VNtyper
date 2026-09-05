@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from vntyper.scripts import summary_steps
-from vntyper.scripts.summary_flattening import STEP_COLUMNS, run_columns, step_rows
+from vntyper.scripts.summary_flattening import LONG_COLUMNS, STEP_COLUMNS, long_rows, run_columns, step_rows
 
 pytestmark = pytest.mark.unit
 
@@ -415,3 +415,65 @@ def test_a_summary_with_no_steps_has_no_rows() -> None:
 
 def test_no_step_cell_is_embedded_json() -> None:
     assert [cell for row in step_rows(_summary()) for cell in row.values() if '{"' in cell] == []
+
+
+# ---------------------------------------------------------------------------
+# long_rows
+# ---------------------------------------------------------------------------
+
+
+def test_every_result_row_of_every_step_is_listed_all_steps_alike() -> None:
+    rows = long_rows(_summary())
+
+    assert [row["step"] for row in rows] == [summary_steps.STEP_KESTREL] * len(KESTREL_ROW) + [
+        summary_steps.STEP_ADVNTR
+    ] * (len(ADVNTR_ROWS) * len(ADVNTR_ROWS[0]))
+
+
+def test_the_first_long_row_is_the_kestrel_row_s_first_field() -> None:
+    rows = long_rows(_summary())
+
+    assert list(rows[0]) == list(LONG_COLUMNS)
+    assert rows[0] == {"step": summary_steps.STEP_KESTREL, "row_index": "0", "field": "Motifs", "value": "X-X"}
+
+
+def test_the_advntr_rows_carry_their_zero_based_row_index() -> None:
+    rows = long_rows(_summary())
+
+    assert [
+        (row["row_index"], row["value"])
+        for row in rows
+        if row["step"] == summary_steps.STEP_ADVNTR and row["field"] == "Variant"
+    ] == [("0", "I22_2_G_LEN1"), ("1", "D58_2&D59_2")]
+
+
+def test_json_typed_and_comments_only_steps_contribute_no_long_rows() -> None:
+    assert {row["step"] for row in long_rows(_summary())} == {summary_steps.STEP_KESTREL, summary_steps.STEP_ADVNTR}
+
+
+def test_a_summary_with_no_steps_has_no_long_rows() -> None:
+    assert long_rows(_summary(steps=[])) == []
+    assert long_rows({}) == []
+
+
+def test_a_data_list_that_is_not_rows_is_skipped() -> None:
+    odd = _step(
+        summary_steps.STEP_KESTREL, "/work/results/kestrel/kestrel_result.tsv", "tsv", "x(...)", {"data": ["a"]}
+    )
+    unparsed = _step(summary_steps.STEP_ADVNTR, "/work/results/advntr/output_adVNTR_result.tsv", "tsv", "y(...)", None)
+
+    assert long_rows(_summary(steps=[odd, unparsed])) == []
+
+
+def test_a_null_value_in_a_result_row_is_a_blank_cell() -> None:
+    step = _step(
+        summary_steps.STEP_KESTREL,
+        "/work/results/kestrel/kestrel_result.tsv",
+        "tsv",
+        "x(...)",
+        {"data": [{"Flag": None}]},
+    )
+
+    assert long_rows(_summary(steps=[step])) == [
+        {"step": summary_steps.STEP_KESTREL, "row_index": "0", "field": "Flag", "value": ""}
+    ]
