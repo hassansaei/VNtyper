@@ -77,9 +77,15 @@ from vntyper.scripts.summary import (
 from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
     STEP_BAM_HEADER,
+    STEP_BAM_TO_FASTQ,
+    STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
     STEP_COVERAGE,
+    STEP_CRAM_TO_FASTQ,
     STEP_CROSS_MATCH,
+    STEP_FASTQ_ALIGNMENT,
+    STEP_FASTQ_QC,
     STEP_KESTREL,
+    STEP_SHARK,
 )
 from vntyper.scripts.utils import (
     create_output_directories,
@@ -425,7 +431,7 @@ def run_pipeline(
             conversion_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
-                f"{input_type} to FASTQ Conversion",
+                STEP_BAM_TO_FASTQ if input_type == "BAM" else STEP_CRAM_TO_FASTQ,
                 str(kestrel_fastq_files[0]),
                 "fastq",
                 conversion_command,
@@ -471,7 +477,7 @@ def run_pipeline(
                 shark_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,
-                    "SHARK Filtering",
+                    STEP_SHARK,
                     shark_step_file,
                     "json",
                     "run_shark_filter(...), write_shark_step_summary(...)",
@@ -493,7 +499,7 @@ def run_pipeline(
             qc_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
-                "FASTQ Quality Control",
+                STEP_FASTQ_QC,
                 os.path.join(dirs["fastq_bam_processing"], "output.json"),
                 "json",
                 "process_fastq(...)",
@@ -518,7 +524,7 @@ def run_pipeline(
             align_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
-                "FASTQ Alignment",
+                STEP_FASTQ_ALIGNMENT,
                 sorted_bam,
                 "bam",
                 "align_and_sort_fastq(...)",
@@ -567,7 +573,7 @@ def run_pipeline(
             conv2_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
-                "BAM to FASTQ Conversion (Post-alignment)",
+                STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
                 str(kestrel_fastq_files[0]),
                 "fastq",
                 "process_bam_to_fastq(plan=post_alignment_plan, ...)",
