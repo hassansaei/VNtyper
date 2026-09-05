@@ -12,6 +12,7 @@ Provides:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -108,19 +109,37 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
     if p.is_dir():
         p = p / "pipeline_summary.json"
 
-    if not p.is_file():
-        logger.debug("Prior summary not found at %s", p)
-        return None
+    data = None
+    if p.is_file():
+        try:
+            parsed = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                data = parsed
+            else:
+                logger.warning("Prior summary at %s is not a dictionary", p)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to parse prior summary at %s: %s", p, exc)
 
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            logger.warning("Prior summary at %s is not a dictionary", p)
-            return None
-        return data
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to parse prior summary at %s: %s", p, exc)
-        return None
+    donor_path = p.parent / "pipeline_summary.donor.json"
+    if donor_path.is_file():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            donor_data = json.loads(donor_path.read_text(encoding="utf-8"))
+            if isinstance(donor_data, dict):
+                if data is None:
+                    data = donor_data
+                else:
+                    existing_steps = {s.get("step") for s in data.get("steps", [])}
+                    for s in donor_data.get("steps", []):
+                        st = s.get("step")
+                        if st and st not in existing_steps:
+                            data.setdefault("steps", []).append(s)
+                    if donor_data.get("stage_artifact_md5s"):
+                        for st, md5s in donor_data["stage_artifact_md5s"].items():
+                            data.setdefault("stage_artifact_md5s", {}).setdefault(st, md5s)
+
+    if data is None:
+        logger.debug("Prior summary not found at %s", p)
+    return data
 
 
 def resume_refusals(
@@ -358,6 +377,15 @@ def step_is_reusable(
                 pass
         if is_identity and not replay_path.is_file():
             logger.warning("Identity-aware Kestrel result missing required replay artifact %s", replay_path)
+            return False
+
+    if step_name == summary_steps.STEP_FASTQ_QC:
+        try:
+            from vntyper.scripts.generate_report import load_fastp_output
+
+            load_fastp_output(result_path)
+        except (ValueError, OSError, json.JSONDecodeError):
+            logger.warning("QC report %s is corrupted or invalid", result_path)
             return False
 
     # Check mate FASTQ for BAM/CRAM conversion if R1 is present

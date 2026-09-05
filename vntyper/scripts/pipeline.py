@@ -1,5 +1,7 @@
+import contextlib
 import logging
 import os
+import shutil
 import sys
 import timeit
 from collections.abc import Mapping
@@ -104,6 +106,48 @@ from vntyper.scripts.utils import (
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
+
+
+def _record_reused_step(summary: dict[str, Any], record: dict[str, Any]) -> None:
+    st_name = record.get("step")
+    idx = next((i for i, s in enumerate(summary["steps"]) if s.get("step") == st_name), None)
+    if idx is not None:
+        summary["steps"][idx] = record
+    else:
+        summary["steps"].append(record)
+
+
+def _run_and_record_fastq_qc(
+    fastq1: str | Path,
+    fastq2: str | Path | None,
+    threads: int,
+    dirs: Mapping[str, str],
+    config: dict[str, Any],
+    summary: dict[str, Any],
+    summary_file_path: str,
+) -> None:
+    logger.info("Starting FASTQ quality control.")
+    qc_start = datetime.now(timezone.utc).replace(tzinfo=None)
+    process_fastq(
+        fastq1,
+        fastq2,
+        threads,
+        dirs["fastq_bam_processing"],
+        "output",
+        config,
+    )
+    qc_end = datetime.now(timezone.utc).replace(tzinfo=None)
+    record_step(
+        summary,
+        STEP_FASTQ_QC,
+        os.path.join(dirs["fastq_bam_processing"], "output.json"),
+        "json",
+        "process_fastq(...)",
+        qc_start,
+        qc_end,
+        write_summary_path=summary_file_path,
+    )
+    logger.info("FASTQ quality control completed.")
 
 
 def run_pipeline(
@@ -289,6 +333,11 @@ def run_pipeline(
 
         raw_muc1 = config.get("reference_data", {}).get("muc1_reference_vntr")
         kestrel_reference_path = str(Path(os.path.join(project_root, raw_muc1)).resolve()) if raw_muc1 else None
+        kestrel_reference_fingerprint = (
+            fingerprint_file(Path(kestrel_reference_path))
+            if kestrel_reference_path and Path(kestrel_reference_path).is_file()
+            else None
+        )
 
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         prior_summary = None
@@ -492,7 +541,20 @@ def run_pipeline(
             reference_source_effective=reference_provenance.source_effective,
             advntr_evidence_digest=advntr_evidence.digest if advntr_evidence is not None else None,
             decision_profile=run_configuration.decision_profile,
+            kestrel_reference_fingerprint=kestrel_reference_fingerprint,
         )
+
+        if resume and prior_summary:
+            donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
+            if not donor_summary_path.is_file() and os.path.isfile(summary_file_path):
+                with contextlib.suppress(OSError):
+                    shutil.copy2(summary_file_path, donor_summary_path)
+            for s in prior_summary.get("steps", []):
+                st = s.get("step")
+                if st and step_is_reusable(prior_summary, st, output_dir):
+                    _record_reused_step(summary, make_reused_step_record(s, prior_summary.get("pipeline_start")))
+            if prior_summary.get("stage_artifact_md5s"):
+                summary.setdefault("stage_artifact_md5s", {}).update(dict(prior_summary["stage_artifact_md5s"]))
 
         if input_type in ["BAM", "CRAM"]:
             if input_type == "BAM":
@@ -534,7 +596,7 @@ def run_pipeline(
             if kestrel_fastq_files is not None:
                 logger.info("Reusing previous %s step results.", conversion_step)
                 prior_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == conversion_step)
-                summary["steps"].append(make_reused_step_record(prior_step, prior_summary.get("pipeline_start")))
+                _record_reused_step(summary, make_reused_step_record(prior_step, prior_summary.get("pipeline_start")))
                 if prior_summary.get("stage_artifact_md5s", {}).get(conversion_step):
                     summary.setdefault("stage_artifact_md5s", {})[conversion_step] = dict(
                         prior_summary["stage_artifact_md5s"][conversion_step]
@@ -626,8 +688,6 @@ def run_pipeline(
                     shark_end,
                     write_summary_path=summary_file_path,
                 )
-            logger.info("Starting FASTQ quality control.")
-            qc_start = datetime.now(timezone.utc).replace(tzinfo=None)
             paired_fastq_input = fastq2 is not None
             can_reuse_alignment_and_conv = (
                 resume
@@ -651,15 +711,35 @@ def run_pipeline(
                     kestrel_fastq_files = None
 
             if kestrel_fastq_files is not None:
-                logger.info("Reusing previous FASTQ QC, alignment, and post-alignment conversion.")
-                for st_name in (STEP_FASTQ_QC, STEP_FASTQ_ALIGNMENT, STEP_BAM_TO_FASTQ_POST_ALIGNMENT):
+                logger.info("Reusing previous alignment and post-alignment conversion.")
+                for st_name in (STEP_FASTQ_ALIGNMENT, STEP_BAM_TO_FASTQ_POST_ALIGNMENT):
                     prior_st = next((s for s in prior_summary.get("steps", []) if s.get("step") == st_name), None)
                     if prior_st is not None:
-                        summary["steps"].append(make_reused_step_record(prior_st, prior_summary.get("pipeline_start")))
+                        _record_reused_step(
+                            summary, make_reused_step_record(prior_st, prior_summary.get("pipeline_start"))
+                        )
                     if prior_summary.get("stage_artifact_md5s", {}).get(st_name):
                         summary.setdefault("stage_artifact_md5s", {})[st_name] = dict(
                             prior_summary["stage_artifact_md5s"][st_name]
                         )
+                can_reuse_qc = (
+                    resume and prior_summary is not None and step_is_reusable(prior_summary, STEP_FASTQ_QC, output_dir)
+                )
+                if can_reuse_qc:
+                    logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
+                    prior_qc_st = next(
+                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_QC), None
+                    )
+                    if prior_qc_st is not None:
+                        _record_reused_step(
+                            summary, make_reused_step_record(prior_qc_st, prior_summary.get("pipeline_start"))
+                        )
+                    if prior_summary.get("stage_artifact_md5s", {}).get(STEP_FASTQ_QC):
+                        summary.setdefault("stage_artifact_md5s", {})[STEP_FASTQ_QC] = dict(
+                            prior_summary["stage_artifact_md5s"][STEP_FASTQ_QC]
+                        )
+                else:
+                    _run_and_record_fastq_qc(fastq1, fastq2, threads, dirs, config, summary, summary_file_path)
                 write_summary(summary, summary_file_path)
                 prior_align_st = next(
                     (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
@@ -692,19 +772,33 @@ def run_pipeline(
                         (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
                     )
                     if prior_align_st is not None:
-                        summary["steps"].append(
-                            make_reused_step_record(prior_align_st, prior_summary.get("pipeline_start"))
+                        _record_reused_step(
+                            summary, make_reused_step_record(prior_align_st, prior_summary.get("pipeline_start"))
                         )
-                    prior_qc_st = next(
-                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_QC), None
+                    if prior_summary.get("stage_artifact_md5s", {}).get(STEP_FASTQ_ALIGNMENT):
+                        summary.setdefault("stage_artifact_md5s", {})[STEP_FASTQ_ALIGNMENT] = dict(
+                            prior_summary["stage_artifact_md5s"][STEP_FASTQ_ALIGNMENT]
+                        )
+                    can_reuse_qc = (
+                        resume
+                        and prior_summary is not None
+                        and step_is_reusable(prior_summary, STEP_FASTQ_QC, output_dir)
                     )
-                    if prior_qc_st is not None:
-                        summary["steps"].append(
-                            make_reused_step_record(prior_qc_st, prior_summary.get("pipeline_start"))
+                    if can_reuse_qc:
+                        logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
+                        prior_qc_st = next(
+                            (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_QC), None
                         )
-                    for st_name in (STEP_FASTQ_ALIGNMENT, STEP_FASTQ_QC):
-                        if prior_summary.get("stage_artifact_md5s", {}).get(st_name):
-                            summary["stage_artifact_md5s"][st_name] = prior_summary["stage_artifact_md5s"][st_name]
+                        if prior_qc_st is not None:
+                            _record_reused_step(
+                                summary, make_reused_step_record(prior_qc_st, prior_summary.get("pipeline_start"))
+                            )
+                        if prior_summary.get("stage_artifact_md5s", {}).get(STEP_FASTQ_QC):
+                            summary.setdefault("stage_artifact_md5s", {})[STEP_FASTQ_QC] = dict(
+                                prior_summary["stage_artifact_md5s"][STEP_FASTQ_QC]
+                            )
+                    else:
+                        _run_and_record_fastq_qc(fastq1, fastq2, threads, dirs, config, summary, summary_file_path)
                     write_summary(summary, summary_file_path)
                     sorted_bam = (
                         Path(prior_align_st["result_file"])
@@ -712,28 +806,7 @@ def run_pipeline(
                         else Path(dirs["alignment_processing"]) / "output_sorted.bam"
                     )
                 else:
-                    logger.info("Starting FASTQ quality control.")
-                    qc_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                    process_fastq(
-                        fastq1,
-                        fastq2,
-                        threads,
-                        dirs["fastq_bam_processing"],
-                        "output",
-                        config,
-                    )
-                    qc_end = datetime.now(timezone.utc).replace(tzinfo=None)
-                    record_step(
-                        summary,
-                        STEP_FASTQ_QC,
-                        os.path.join(dirs["fastq_bam_processing"], "output.json"),
-                        "json",
-                        "process_fastq(...)",
-                        qc_start,
-                        qc_end,
-                        write_summary_path=summary_file_path,
-                    )
-                    logger.info("FASTQ quality control completed.")
+                    _run_and_record_fastq_qc(fastq1, fastq2, threads, dirs, config, summary, summary_file_path)
 
                     fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
                     fastq2 = (
@@ -854,6 +927,11 @@ def run_pipeline(
                 and str(Path(prior_k_ref).resolve()) != str(Path(kestrel_reference_path).resolve())
             ):
                 kestrel_ref_matches = False
+            prior_k_fp = prior_summary.get("kestrel_reference_fingerprint")
+            if (
+                prior_k_fp is not None or kestrel_reference_fingerprint is not None
+            ) and prior_k_fp != kestrel_reference_fingerprint:
+                kestrel_ref_matches = False
 
         if (
             resume
@@ -863,7 +941,9 @@ def run_pipeline(
         ):
             logger.info("Reusing previous %s step results.", STEP_KESTREL)
             prior_kestrel_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_KESTREL)
-            summary["steps"].append(make_reused_step_record(prior_kestrel_step, prior_summary.get("pipeline_start")))
+            _record_reused_step(
+                summary, make_reused_step_record(prior_kestrel_step, prior_summary.get("pipeline_start"))
+            )
             if "kestrel_counting_mode" in prior_summary:
                 summary["kestrel_counting_mode"] = prior_summary["kestrel_counting_mode"]
             if prior_summary.get("stage_artifact_md5s", {}).get(STEP_KESTREL):
@@ -933,7 +1013,9 @@ def run_pipeline(
             if resume and prior_summary and model_matches and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir):
                 logger.info("Reusing previous %s step results.", STEP_ADVNTR)
                 prior_advntr_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_ADVNTR)
-                summary["steps"].append(make_reused_step_record(prior_advntr_step, prior_summary.get("pipeline_start")))
+                _record_reused_step(
+                    summary, make_reused_step_record(prior_advntr_step, prior_summary.get("pipeline_start"))
+                )
                 if prior_summary.get("stage_artifact_md5s", {}).get(STEP_ADVNTR):
                     summary.setdefault("stage_artifact_md5s", {})[STEP_ADVNTR] = dict(
                         prior_summary["stage_artifact_md5s"][STEP_ADVNTR]
@@ -1138,6 +1220,11 @@ def run_pipeline(
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         write_summary(summary, summary_file_path)
         logger.info(f"Pipeline summary written to: {summary_file_path}")
+
+        donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
+        if donor_summary_path.is_file():
+            with contextlib.suppress(OSError):
+                donor_summary_path.unlink()
 
         # Each requested summary format writes the one-row-per-step table and, beside
         # it, the long rows table (#119). Unknown format names are ignored, as before.

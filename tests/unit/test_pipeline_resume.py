@@ -58,12 +58,12 @@ def _make_prior_summary(
             k: fingerprint_file(Path(v)) for k, v in canonical_input_files.items() if Path(v).is_file()
         }
     bed_candidate = (analysis_settings and analysis_settings.get("bed_file")) or default_settings.get("bed_file")
-    if bed_candidate and Path(bed_candidate).is_file():
+    if bed_candidate and Path(str(bed_candidate)).is_file():
         if input_fingerprints is None:
             input_fingerprints = {}
         from vntyper.scripts.resume import fingerprint_file
 
-        input_fingerprints["bed_file"] = fingerprint_file(Path(bed_candidate))
+        input_fingerprints["bed_file"] = fingerprint_file(Path(str(bed_candidate)))
     res = {
         "schema_version": 3,
         "version": VERSION,
@@ -663,7 +663,7 @@ def test_resume_preserves_conversion_checkpoint_without_overwriting_by_fastq_qc(
         fastq2=str(f2),
         resume=True,
     )
-    harness.stages["process_fastq"].assert_not_called()
+    harness.stages["process_fastq"].assert_called_once()
     harness.stages["align_and_sort_fastq"].assert_not_called()
     assert r1.read_bytes() == b"extracted reads"
 
@@ -1503,3 +1503,240 @@ def test_resume_reruns_kestrel_when_indel_vcf_missing_or_corrupted(tmp_path: Pat
         resume=True,
     )
     assert h.stages["run_kestrel"].called
+
+
+def test_resume_reruns_kestrel_when_reference_fingerprint_changes(tmp_path: Path) -> None:
+    """Kestrel step is re-run if kestrel reference content fingerprint changes (#20)."""
+    output_dir = tmp_path / "kestrel_fp_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    ref_file = tmp_path / "muc1.fa"
+    ref_file.write_text(">muc1\nACGTACGT\n", encoding="utf-8")
+    config = dict(MINIMAL_CONFIG)
+    config["reference_data"] = dict(MINIMAL_CONFIG.get("reference_data", {}))
+    config["reference_data"]["muc1_reference_vntr"] = str(ref_file)
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
+    (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"kestrel tsv data").hexdigest(),
+            }
+        ],
+    )
+    prior_summary["kestrel_reference_path"] = str(ref_file.resolve())
+    prior_summary["kestrel_reference_fingerprint"] = "0" * 64
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    h = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        config=config,
+        resume=True,
+    )
+    assert h.stages["run_kestrel"].called
+
+
+def test_resume_reruns_process_fastq_when_qc_corrupted_while_reusing_alignment(tmp_path: Path) -> None:
+    """Corrupted output.json reruns process_fastq while reusing alignment (#20)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    f1 = tmp_path / "in_R1.fastq.gz"
+    f2 = tmp_path / "in_R2.fastq.gz"
+    f1.touch()
+    f2.touch()
+
+    fastq_dir = output_dir / "fastq_bam_processing"
+    fastq_dir.mkdir()
+    r1 = fastq_dir / "output_R1.fastq.gz"
+    r2 = fastq_dir / "output_R2.fastq.gz"
+    other = fastq_dir / "output_other.fastq.gz"
+    single = fastq_dir / "output_single.fastq.gz"
+    sliced = fastq_dir / "output_sliced.bam"
+    qc_json = fastq_dir / "output.json"
+    r1.write_bytes(b"extracted reads")
+    r2.write_bytes(b"extracted reads 2")
+    other.write_bytes(b"")
+    single.write_bytes(b"")
+    sliced.write_bytes(b"sliced")
+    qc_json.write_text("invalid json {", encoding="utf-8")
+
+    align_dir = output_dir / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.write_bytes(b"sorted_bam")
+    bam_md5 = hashlib.md5(b"sorted_bam").hexdigest()
+    r1_md5 = hashlib.md5(b"extracted reads").hexdigest()
+
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_QC,
+                "result_file": str(qc_json),
+                "file_type": "json",
+                "md5sum": hashlib.md5(b"invalid json {").hexdigest(),
+            },
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": bam_md5,
+            },
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                "result_file": str(r1),
+                "file_type": "fastq",
+                "md5sum": r1_md5,
+            },
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        resume=True,
+    )
+    harness.stages["process_fastq"].assert_called_once()
+    harness.stages["align_and_sort_fastq"].assert_not_called()
+    assert r1.read_bytes() == b"extracted reads"
+
+
+def test_resume_skips_process_fastq_when_qc_is_reusable(tmp_path: Path) -> None:
+    """Valid output.json skips process_fastq when resuming (#20)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    f1 = tmp_path / "in_R1.fastq.gz"
+    f2 = tmp_path / "in_R2.fastq.gz"
+    f1.touch()
+    f2.touch()
+
+    fastq_dir = output_dir / "fastq_bam_processing"
+    fastq_dir.mkdir()
+    r1 = fastq_dir / "output_R1.fastq.gz"
+    r2 = fastq_dir / "output_R2.fastq.gz"
+    other = fastq_dir / "output_other.fastq.gz"
+    single = fastq_dir / "output_single.fastq.gz"
+    sliced = fastq_dir / "output_sliced.bam"
+    qc_json = fastq_dir / "output.json"
+    r1.write_bytes(b"extracted reads")
+    r2.write_bytes(b"extracted reads 2")
+    other.write_bytes(b"")
+    single.write_bytes(b"")
+    sliced.write_bytes(b"sliced")
+    qc_json.write_text("{}", encoding="utf-8")
+
+    align_dir = output_dir / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.write_bytes(b"sorted_bam")
+    bam_md5 = hashlib.md5(b"sorted_bam").hexdigest()
+    r1_md5 = hashlib.md5(b"extracted reads").hexdigest()
+    qc_md5 = hashlib.md5(b"{}").hexdigest()
+
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_QC,
+                "result_file": str(qc_json),
+                "file_type": "json",
+                "md5sum": qc_md5,
+            },
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": bam_md5,
+            },
+            {
+                "step": summary_steps.STEP_BAM_TO_FASTQ_POST_ALIGNMENT,
+                "result_file": str(r1),
+                "file_type": "fastq",
+                "md5sum": r1_md5,
+            },
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        resume=True,
+    )
+    harness.stages["process_fastq"].assert_not_called()
+    harness.stages["align_and_sort_fastq"].assert_not_called()
+    assert r1.read_bytes() == b"extracted reads"
+
+
+def test_resume_preserves_caller_records_when_interrupted_via_donor(tmp_path: Path) -> None:
+    """Interrupted resume preserves prior valid caller records via donor summary (#20)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
+    (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+
+    # A donor summary with a valid Kestrel step exists from an interrupted run
+    donor_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"kestrel tsv data").hexdigest(),
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.donor.json").write_text(json.dumps(donor_summary), encoding="utf-8")
+
+    # The current pipeline_summary.json is truncated or missing Kestrel
+    current_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(current_summary), encoding="utf-8")
+
+    h = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+    # Kestrel step was restored from donor and reused without rerunning!
+    h.stages["run_kestrel"].assert_not_called()
+    assert not (output_dir / "pipeline_summary.donor.json").exists()

@@ -75,6 +75,7 @@ def start_summary(
     analysis_settings: dict[str, Any] | None = None,
     kestrel_reference_path: str | None = None,
     input_fingerprints: dict[str, str] | None = None,
+    kestrel_reference_fingerprint: str | None = None,
 ):
     """
     Initializes a new pipeline summary.
@@ -170,6 +171,7 @@ def start_summary(
         "input_fingerprints": input_fingerprints,
         "analysis_settings": analysis_settings,
         "kestrel_reference_path": kestrel_reference_path,
+        "kestrel_reference_fingerprint": kestrel_reference_fingerprint,
         "stage_artifact_md5s": {},
         "sample_name": sample_name,
         "sample_name_is_explicit": bool(sample_name_is_explicit),
@@ -496,7 +498,11 @@ def record_step(
     except Exception as e:
         record["parsed_result"] = {"error": f"Error parsing file: {e}"}
 
-    summary["steps"].append(record)
+    existing_idx = next((i for i, s in enumerate(summary["steps"]) if s.get("step") == step_name), None)
+    if existing_idx is not None:
+        summary["steps"][existing_idx] = record
+    else:
+        summary["steps"].append(record)
     _record_stage_artifact_md5s(summary, step_name, result_file)
 
     if write_summary_path is not None:
