@@ -1283,3 +1283,67 @@ def test_report_config_declares_confidence_grade_rules_and_vocabulary(report_con
     }
     configured_grades = {rule["grade"] for rule in rules}
     assert configured_grades == expected_vocabulary
+
+
+def test_supports_confidence_grade_predicate(report_config) -> None:
+    """supports_confidence_grade returns True for valid config and False when omitted."""
+    assert ss.supports_confidence_grade(report_config) is True
+    assert ss.supports_confidence_grade({}) is False
+    assert ss.supports_confidence_grade({"confidence_grade_rules": []}) is False
+    assert ss.supports_confidence_grade({"confidence_grade_rules": None}) is False
+
+
+@pytest.mark.parametrize(
+    "token,expected_word",
+    [
+        ("not-established", "Not established"),
+        ("no-finding-limited", "No finding limited"),
+        ("no-finding", "No finding"),
+        ("finding-limited", "Finding limited"),
+        ("finding", "Finding"),
+        ("finding-corroborated", "Finding corroborated"),
+        ("High_Precision", "High precision"),
+        ("negative_subthreshold", "Negative subthreshold"),
+    ],
+)
+def test_result_word_formats_both_hyphens_and_underscores(token: str, expected_word: str) -> None:
+    """result_word turns underscores and hyphens into spaces and sentence-cases."""
+    assert ss.result_word(token) == expected_word
+
+
+@pytest.mark.parametrize(
+    "grade,expected_value,expected_tone",
+    [
+        ("finding-corroborated", "Finding corroborated", ss.TONE_FINDING),
+        ("finding", "Finding", ss.TONE_FINDING),
+        ("finding-limited", "Finding limited", ss.TONE_CAUTION),
+        ("no-finding-limited", "No finding limited", ss.TONE_CAUTION),
+        ("not-established", "Not established", ss.TONE_CAUTION),
+        ("no-finding", "No finding", ss.TONE_NONE),
+    ],
+)
+def test_grade_chip_produces_state_chip_with_correct_tone(grade: str, expected_value: str, expected_tone: str) -> None:
+    """grade_chip assigns the correct tone and formatted value for each grade."""
+    chip = ss.grade_chip(grade)
+    assert chip is not None
+    assert chip.label == ss.CONFIDENCE_GRADE_LABEL
+    assert chip.value == expected_value
+    assert chip.tone == expected_tone
+
+
+def test_grade_chip_returns_none_when_grade_is_none() -> None:
+    """grade_chip returns None when no grade was assigned (e.g. older config)."""
+    assert ss.grade_chip(None) is None
+
+
+def test_screening_summary_dataclass_has_confidence_grade_default_none() -> None:
+    """ScreeningSummary dataclass has confidence_grade defaulting to None."""
+    summary = ss.ScreeningSummary(
+        text="Sample text",
+        is_positive=False,
+        kestrel_result="negative",
+        advntr_result="negative",
+        quality_metrics_pass=True,
+        matched_rule=True,
+    )
+    assert summary.confidence_grade is None
