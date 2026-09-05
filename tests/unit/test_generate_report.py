@@ -1830,9 +1830,17 @@ def test_no_state_word_is_ever_rendered_as_text(tmp_path, emphasis) -> None:
 
     Asserted on extracted visible text rather than on the source, because `data-state`
     puts all three words in the markup and would make a source assertion pass for the
-    wrong reason.
+    wrong reason. The confidence grade chip is stripped here so the emphasis tokens
+    themselves are tested rather than the configured grade chip vocabulary.
     """
-    text = visible_text(render(_summary_for(emphasis, tmp_path))).lower()
+    html = render(_summary_for(emphasis, tmp_path))
+    html_without_grade_chip = re.sub(
+        r'<li class="chip"[^>]*>\s*<span class="chip-label">Confidence grade</span>.*?</li>',
+        "",
+        html,
+        flags=re.DOTALL,
+    )
+    text = visible_text(html_without_grade_chip).lower()
 
     for word in ("finding", "no-finding", "indeterminate"):
         assert word not in text, f"the report renders the state word {word!r} to the reader"
