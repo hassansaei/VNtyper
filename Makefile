@@ -213,12 +213,21 @@ test:
 	pytest -m "not browser"
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
+# Parallel worker count for pytest-xdist in unit test targets.
+# Defaults to 'auto'. Override with PYTEST_WORKERS=1 or run `make test-unit-serial` for single-threaded debugging.
+PYTEST_WORKERS ?= auto
+
 # `-m unit tests/unit` selects by path AND by marker, so tests/browser is already
 # unreachable from here. Do not add `-m "not browser"`: it would be inert, and it would
 # imply browser tests carry the `unit` marker, which they must not - they need a real
 # browser engine and so cannot run on a fresh clone, which is what this tier guarantees.
 test-unit:
 	@echo "$(BLUE)Running unit tests (fast)...$(RESET)"
+	pytest -m unit tests/unit -n $(PYTEST_WORKERS) --dist loadfile -o log_cli=false -o log_file=""
+	@echo "$(GREEN)✓ Unit tests complete$(RESET)"
+
+test-unit-serial:
+	@echo "$(BLUE)Running unit tests (serial)...$(RESET)"
 	pytest -m unit tests/unit -o log_cli=false
 	@echo "$(GREEN)✓ Unit tests complete$(RESET)"
 
@@ -234,7 +243,7 @@ test-browser:
 # Inner dev loop: last-failed first, stop at the first failure.
 test-fast:
 	@echo "$(BLUE)Running unit tests (fail-fast, last-failed first)...$(RESET)"
-	pytest -m unit tests/unit -o log_cli=false -q --ff -x
+	pytest -m unit tests/unit -n $(PYTEST_WORKERS) --dist loadfile -o log_cli=false -o log_file="" -q --ff -x
 
 check-integration-compatibility:
 	python scripts/check_integration_compatibility.py $(if $(strip $(INTEGRATION_COMPAT_BASE)),--base-revision "$(INTEGRATION_COMPAT_BASE)",)
@@ -264,14 +273,14 @@ SCRIPTS_COVERAGE_TARGET ?= 88
 # free in CI: the same measurement feeds both the whole-repo floor and the patch gate.
 test-unit-cov:
 	@echo "$(BLUE)Running unit tests with coverage...$(RESET)"
-	pytest -m unit tests/unit -o log_cli=false --cov --cov-report=term-missing --cov-report=xml
+	pytest -m unit tests/unit -n $(PYTEST_WORKERS) --dist loadfile -o log_cli=false -o log_file="" --cov --cov-report=term-missing --cov-report=xml
 	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Unit coverage complete$(RESET)"
 
 test-scripts-cov:
 	@tmp_dir="$$(mktemp -d)" || exit $$?; test -n "$$tmp_dir" || exit 1; coverage_file="$$tmp_dir/.coverage"; \
 	trap 'rm -rf -- "$$tmp_dir"' EXIT; \
-	COVERAGE_FILE="$$coverage_file" pytest -m unit tests/unit -o log_cli=false \
+	COVERAGE_FILE="$$coverage_file" pytest -m unit tests/unit -n $(PYTEST_WORKERS) --dist loadfile -o log_cli=false -o log_file="" \
 		--cov=scripts --cov-config=pyproject.toml --cov-report=term-missing \
 		--cov-fail-under=$(SCRIPTS_COVERAGE_TARGET)
 
