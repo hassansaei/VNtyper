@@ -10,4 +10,3 @@ This section covers everything you need to run VNtyper 2 and interpret its resul
 - **[Docker](docker.md)** -- Running VNtyper 2 in Docker and Apptainer containers.
 - **[Cohort Analysis](cohort-analysis.md)** -- Aggregating results across multiple samples.
 - **[Online Mode](online-mode.md)** -- Submitting jobs to vntyper.org from the CLI.
-- **[Snakemake](snakemake.md)** -- Batch processing with Snakemake workflows.

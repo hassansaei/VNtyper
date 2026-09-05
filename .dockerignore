@@ -193,6 +193,5 @@ CLAUDE.md
 
 # Docs and workflow sources are not part of the runtime image
 docs/
-snakemake/
 mkdocs.yml
 .github/

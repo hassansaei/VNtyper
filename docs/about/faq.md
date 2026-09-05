@@ -50,10 +50,7 @@ vntyper pipeline --fastq1 R1.fastq.gz --fastq2 R2.fastq.gz \
 
 ## How do I run multiple samples?
 
-There are two approaches:
-
-1. **Cohort command** -- VNtyper 2's built-in `cohort` subcommand processes a directory of samples and produces an aggregated summary. See [Cohort Analysis](../user-guide/cohort-analysis.md).
-2. **Snakemake workflow** -- For large-scale batch processing with parallelization and cluster support, use the provided Snakemake workflow. See [Snakemake](../user-guide/snakemake.md).
+Run individual samples using `vntyper pipeline`, then aggregate the sample run directories with `vntyper cohort` to generate a unified summary report and call frequency tables. See [Cohort Analysis](../user-guide/cohort-analysis.md).
 
 ## Where can I get help?
 
