@@ -1,36 +1,29 @@
 # Variant Flagging
 
-Flagging applies configurable, post-hoc empirical filters to variant calls. Unlike the scoring and confidence system (which determines whether a variant is real), flagging annotates calls with named patterns observed in Kestrel output.
+Flagging applies configurable, post-hoc empirical rules to variant calls. While confidence scoring estimates signal strength, flagging annotates calls with recurring error profiles observed in Kestrel and adVNTR outputs.
 
-There are **two classes of flag**, and they have different consequences:
+There are **two classes of flag**:
 
-| Class | Declared in | Effect on the reported call |
-|-------|-------------|-----------------------------|
-| **Advisory** | `flagging_rules` only | The call is reported. The flag lowers its priority during variant selection, and appears in the `Flag` column of the report. |
-| **Artifact** | `flagging_rules` **and** `artifact_flags` | The call is **excluded** from `kestrel_result.tsv`. It survives in `kestrel_pre_result.tsv` with `flag_filter_pass = False`. |
+| Class | Declared in | Effect on reported call |
+|-------|-------------|-------------------------|
+| **Advisory** | `flagging_rules` only | The variant is reported. The flag lowers selection ranking and appears in the `Flag` column. |
+| **Artifact** | `flagging_rules` **and** `artifact_flags` | The variant is **excluded** from `kestrel_result.tsv`. It is retained in `kestrel_pre_result.tsv` with `flag_filter_pass = False`. |
 
-An advisory flag identifies a call that may be technically valid but warrants additional scrutiny. An artifact flag identifies a call that is not a candidate variant at all --- a known technical artifact of the k-mer genotyping --- so reporting it as a call would be wrong rather than merely cautious.
+An advisory flag highlights a call that may be valid but warrants scrutiny. An artifact flag identifies a technical false positive; reporting it as a call would produce a false finding.
 
-!!! warning "Artifact flags exclude, they do not merely deprioritise (Issue #174)"
-    Before the Issue #174 fix, *every* flag was advisory. A sample whose only call was
-    the 4-bp insertion artifact produced one `High_Precision` row with a non-empty `Flag`,
-    which `report_config.json` maps to the `High_Precision_flagged` screening state ---
-    and `is_finding` treats that as a **positive** MUC1 finding. The HTML report
-    therefore styled a known technical artifact as a positive result.
-
-    Which flags are artifacts is configuration, not code: see
-    [Artifact Flags](#artifact-flags) below.
+!!! warning "Artifact flags exclude rather than deprioritize (Issue #174)"
+    Prior to Issue #174, all flags were advisory. A sample whose sole variant was the 4-bp insertion artifact produced a `High_Precision` row with a flag, which mapped to `High_Precision_flagged` in `report_config.json` and was interpreted by `is_finding` as a positive call. Artifact flags ensure false positives are excluded prior to selection.
 
 ## How Flagging Works
 
-Each flagging rule is a named, structured boolean tree in `kestrel_config.json`. VNtyper validates and compiles the complete rule set against the consumer's declared result schema before any sample-dependent early return, then reuses that immutable tree for every row. Invalid rules therefore abort no-call samples as well as positive samples; they cannot hide behind a negative result. If the tree evaluates to `true`, the corresponding flag name is appended to the variant's `Flag` column. Multiple flags are comma-separated in configuration order. Variants matching no rules receive `Flag = "Not flagged"`.
+Flagging rules are defined as structured boolean trees in `kestrel_config.json`. VNtyper compiles and validates the entire rule set against the result schema prior to processing rows. If the tree evaluates to `true`, the flag name is added to the `Flag` column. Multiple flags are comma-separated in configuration order. Variants matching no rules receive `Flag = "Not flagged"`.
 
-!!! info "Flagging occurs before variant selection"
-    As of VNtyper 2 (Issue #145 fix), flagging is applied **before** the final variant selection step. This ensures that when multiple candidate variants pass all filters, unflagged variants are preferred over flagged ones. Previously, a flagged variant could be selected as the best call because flags were added after selection.
+!!! info "Flagging precedes variant selection"
+    Flagging executes before final variant selection (Issue #145). When multiple candidates pass all filters, unflagged variants take precedence over flagged variants.
 
-## Current Flagging Rules
+## Default Flagging Rules
 
-The default rules in `kestrel_config.json`:
+Configured in `kestrel_config.json`:
 
 ### False_Positive_4bp_Insertion
 
@@ -43,9 +36,9 @@ The default rules in `kestrel_config.json`:
 }
 ```
 
-Flags a specific 4-bp insertion (C > CGGCA) that has been empirically observed as a recurrent false positive in the Kestrel output. This artifact likely arises from k-mer graph ambiguity in GC-rich regions of the VNTR.
+Flags a specific 4-bp insertion (C > CGGCA) that recurs in GC-rich VNTR regions due to k-mer graph ambiguity.
 
-This is the one flag the shipped configuration declares as an **artifact** (see [Artifact Flags](#artifact-flags)), so a row carrying it is excluded from `kestrel_result.tsv`. A sample whose only call is this insertion is reported as **negative**.
+This is the only default flag declared in `artifact_flags`. A row carrying it is excluded from `kestrel_result.tsv`. A sample with only this call reports a negative result.
 
 ### Low_Depth_Conserved_Motifs
 
@@ -62,13 +55,13 @@ This is the one flag the shipped configuration declares as an **artifact** (see 
 }
 ```
 
-Flags variants occurring in conserved repeat unit motifs (numbered motifs 1--9) when the depth score is below 0.4. These motifs are highly conserved across MUC1 VNTR alleles, making true pathogenic variants in these positions unlikely unless strongly supported by sequencing depth.
+Flags variants in conserved repeat unit motifs (motifs 1 to 9) when the depth score is below 0.4. Because these motifs are conserved across alleles, low-depth calls in these positions represent probable artifacts.
 
-This flag is **advisory**: by itself it does not exclude a row, and it only lowers the row's priority if another candidate competes with it. The separate position-based motif gate still excludes right-half calls in the motifs configured by `motif_filtering.exclude_motifs_right`; see [Kestrel Step 6](kestrel.md#step-6-motif-correction-and-annotation).
+This flag is **advisory**: it deprioritizes candidates during selection but does not exclude them.
 
 ## Artifact Flags
 
-`artifact_flags` lists the flag names that disqualify a row from being reported:
+`artifact_flags` lists the flag names that disqualify a candidate:
 
 ```json
 {
@@ -76,41 +69,23 @@ This flag is **advisory**: by itself it does not exclude a row, and it only lowe
 }
 ```
 
-A flag name must appear in **both** `flagging_rules` (which is what raises it) and `artifact_flags` (which is what makes it disqualifying). A name in `artifact_flags` that no rule can raise is inert.
+A flag must appear in both `flagging_rules` (to be evaluated) and `artifact_flags` (to exclude). Names in `artifact_flags` that cannot be triggered are inert.
 
-### How the exclusion works
+### Exclusion mechanics
 
-After flagging, VNtyper derives a boolean column `flag_filter_pass`, which is `False` exactly when the row's `Flag` value contains one of the declared artifact names:
+The pipeline derives `flag_filter_pass`, which is `False` whenever the `Flag` column contains an artifact flag:
 
-- The `Flag` value is comma-separated, so membership is tested **per element**, not as a substring. An artifact named `X` does not match a flag named `XY`.
-- A row carrying both an artifact flag and an advisory flag is excluded --- one artifact is enough.
-- Rows with no `Flag` value, or a missing `Flag` column (a negative run carries none), pass the gate. Absence of evidence is not evidence of an artifact.
+- Membership is evaluated per token in comma-separated flag strings.
+- A row carrying both an artifact flag and an advisory flag is excluded.
+- Rows with no flag pass the gate.
 
-`flag_filter_pass` is then the sixth of the boolean gates that the final filter requires to all be `True`, alongside `is_frameshift`, `is_valid_frameshift`, `depth_confidence_pass`, `alt_filter_pass` and `motif_filter_pass`.
+`flag_filter_pass` is evaluated alongside the other five structural gates in `FILTER_COLUMNS`. Excluded rows are retained in `kestrel_pre_result.tsv` with `flag_filter_pass = False`.
 
-!!! note "Nothing is destroyed"
-    Consistent with the pipeline's "stages mark, they do not filter" contract, the
-    artifact gate **marks**; only the final filter drops rows. Every excluded row is
-    written to `kestrel_pre_result.tsv` with `flag_filter_pass = False` beside the
-    `Flag` value that explains it, so the evidence for a sample is always recoverable.
-
-### Reverting or narrowing the decision
-
-Emptying the list restores the previous behaviour, where every flag was advisory, with no code change:
-
-```json
-{
-  "artifact_flags": []
-}
-```
-
-The artifact decision is never written into Python; `add_artifact_gate` reads the list from `kestrel_config.json`. Narrowing or withdrawing the artifact rule is therefore a configuration edit, made by whoever owns the domain judgement. A separate, flag-name-scoped compatibility map contains the byte-exact previous rule solely to migrate last-release configuration.
+To make all flags advisory, set `"artifact_flags": []`.
 
 ## Duplicate Flagging
 
-A separate mechanism identifies potential duplicate variant calls. When enabled, variants are grouped by `REF` and `ALT` alleles, sorted by depth score (descending), and all but the first (highest-scoring) entry in each group are flagged as `Potential_Duplicate`.
-
-The duplicate flagging configuration:
+Groups calls by `REF` and `ALT`, sorts by `Depth_Score` descending, and flags secondary calls as `Potential_Duplicate`:
 
 ```json
 {
@@ -123,22 +98,11 @@ The duplicate flagging configuration:
 }
 ```
 
-`sort_by` is `Depth_Score` descending only, per [@hassansaei on #197](https://github.com/hassansaei/VNtyper/issues/197):
-"Fall back to the 1.3 Depth_Score-only rule [...] Do not use `Motifs` or `Motif` as a sort key." An earlier
-revision of this config sorted on three keys, including the plural `Motifs`, which does not exist as a column
-by the time flagging runs and raised `KeyError` if the toggle were ever enabled.
+Sorting keys use `Depth_Score` only (Issue #197). Duplicate flagging is disabled by default in shipped configurations.
 
-!!! note
-    Duplicate flagging is **disabled** by default in the current configuration. Per the same decision on #197,
-    it stays disabled in the shipped config ("We have already tested with this setup. I do not know what will
-    happen if we turn it on!"). Enable it by setting `"enabled": true` in `kestrel_config.json`.
+## Rule Schema and Custom Rules
 
-## Rule Schema and Adding Custom Rules
-
-To add a new flagging rule:
-
-1. Open `vntyper/scripts/kestrel_config.json`
-2. Add a new key-value pair under `"flagging_rules"`:
+To add a custom rule:
 
 ```json
 {
@@ -153,158 +117,37 @@ To add a new flagging rule:
 }
 ```
 
-Every rule starts with exactly one boolean key. `all` and `any` contain a non-empty list of child nodes; `not` contains exactly one child. A child can be another boolean node or a predicate, and boolean nesting is capped at 32 nodes. Every predicate has exactly `left`, `operator`, and `right`; each operand contains exactly one `column` or `literal`. A column must be in the consumer's explicit declared-schema allowlist. Common Kestrel columns include `REF`, `ALT`, `POS`, `Motif`, `Variant`, `Depth_Score`, `Confidence`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion`, and `is_valid_frameshift`.
+Rules start with a boolean operator (`all`, `any`, or `not`). Nesting is limited to 32 nodes. Predicates specify `left`, `operator`, and `right`. Operands reference a declared `column` or a `literal`. Supported operators:
 
-The only operators are:
+| Operator | Definition |
+|----------|------------|
+| `eq` | Strict equality. Booleans compare only with booleans. |
+| `lt` | Numeric less-than comparison. |
+| `in` | Scalar membership within a homogeneous literal list. |
+| `casefold_eq` | Case-insensitive string equality. |
 
-| Operator | Meaning |
-|----------|---------|
-| `eq` | Strict same-family equality. Booleans compare only with booleans. |
-| `lt` | Numeric less-than; booleans are not numbers. |
-| `in` | Left scalar membership in a non-empty homogeneous right literal list. |
-| `casefold_eq` | String equality after Unicode case-folding. |
-
-`None`, `pd.NA`, and floating NaN make a predicate false. Configured numbers and non-null runtime numbers must be finite: positive or negative infinity aborts evaluation, while configured NaN is rejected during validation. Values are never coerced: for example, `"7"` is not the number `7`. Missing columns, malformed rules, and incompatible non-null row values abort flagging instead of silently disabling a rule. Flag names must be non-empty strings, cannot contain commas, and cannot use the reserved result values `Not flagged` or `Not applicable`.
-
-Rules are JSON data, never executable source. Calls, attributes, indexing, imports, comprehensions, lambdas, regular expressions, arithmetic, and executable boolean syntax are unsupported. Boolean logic exists only through the explicit `all`, `any`, and `not` JSON nodes. Code-shaped text inside a `literal` remains inert data; a rule supplied as such a string is rejected.
-
-### Migrating a rule from the immediately preceding release
-
-The last-release Kestrel string
-
-```json
-"(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])"
-```
-
-migrates to the structured `Low_Depth_Conserved_Motifs` object shown above. For upgrade compatibility, VNtyper accepts only each flag name's byte-exact string from the release immediately before Issue #286. Whitespace edits, renamed columns, added clauses, custom strings, and another flag's historical expression are rejected. New and edited configurations must use the structured form.
-
-A new rule is **advisory** by default. It becomes an artifact rule only if you also add its name to `artifact_flags`, and you should only do so for a pattern that is not a candidate variant at all.
-
-## Impact on the Reported Call
-
-The two flag classes act at different points in the pipeline, in this order.
-
-### Artifact flags: exclusion, at the final filter
-
-An artifact-flagged row has `flag_filter_pass = False` and is dropped by the final filter, **before** selection runs. It cannot be selected, cannot appear in `kestrel_result.tsv`, and cannot make a sample positive. If it was the sample's only candidate, the sample is reported as negative.
-
-### Advisory flags: priority, during selection
-
-Rows that survive the filter are ranked, and the selection priority is:
-
-1. Highest confidence level
-2. **Unflagged preferred over flagged**
-3. Highest depth score
-4. Highest haplo_count
-5. Lowest genomic position
-
-This means a High_Precision unflagged variant will always be selected over a High_Precision flagged variant, even if the flagged variant has a higher depth score. This behavior ensures that flagged calls do not take priority over cleaner ones.
-
-Step 2 still applies to advisory flags only, since artifact-flagged rows are already gone by the time selection runs.
+Rules are inert JSON data; arbitrary expressions, lambdas, and arithmetic are prohibited.
 
 ## adVNTR Flagging Rules
 
-Everything above describes Kestrel's flags, declared in `kestrel_config.json`. The optional
-adVNTR module has its own three rules in `vntyper/modules/advntr/advntr_config.json`,
-evaluated by the same `add_flags` machinery against adVNTR's result frame.
+Defined in `vntyper/modules/advntr/advntr_config.json`:
 
-None of them is an artifact flag in the `artifact_flags` sense: adVNTR has no equivalent
-gate, so a flagged adVNTR call is still reported. `report_config.json` maps it to
-`positive flagged`, which `is_finding` still counts as a finding — the flag downgrades a
-call visibly, it does not withdraw it.
+| Rule | Condition | Definition |
+|------|-----------|------------|
+| `Low_Coverage` | `NumberOfSupportingReads < 10` | Low supporting read count. |
+| `Repeat_Unit_7` | `RU == '7'` | Call in repeat unit 7, a known recurring artifact. |
+| `Polymorphic_Call` | `Variant in [...24 states...]` | adVNTR state matches recurrent non-specific background. |
 
-| Rule | Condition | What it asserts |
-|------|-----------|-----------------|
-| `Low_Coverage` | `NumberOfSupportingReads < 10` | Too few supporting reads to be confident. A threshold, not a claim about the state. |
-| `Repeat_Unit_7` | `RU == '7'` | A call in repeat unit 7, an established recurrent artifact. |
-| `Polymorphic_Call` | `Variant in [...24 states...]` | The bare State matches governed recurrent evidence and is insufficient for molecular identity. The row remains a finding. |
+adVNTR flags are advisory: they annotate rows and map to `Positive (Flagged)` without withdrawing the call.
 
-### What `Polymorphic_Call` asserts, and where the list came from
+### The `Polymorphic_Call` list
 
-@hassansaei on [#267](https://github.com/hassansaei/VNtyper/issues/267): a polymorphic or
-artifact call is *"a recurrent event observed in positive and/or negative samples, likely
-originating from motif differences at that locus rather than a true pathogenic event"*.
-The entries were derived by running an older adVNTR — pre-2.0.4 — over the `renome`
-cohort and recording the states that recurred across many samples. **No per-entry
-observation count was retained.**
+Derived from historical runs across the `renome` cohort, these 24 states represent recurrent events that do not establish molecular identity. Canonical state signatures are tracked in `vntyper/modules/advntr/advntr_artifact_evidence.json` with an accompanying SHA-256 digest.
 
-That provenance now lives in the canonical governed artifact
-`vntyper/modules/advntr/advntr_artifact_evidence.json`, with its canonical SHA-256 in the
-adjacent `.sha256` file. The artifact is the production source: its 24 distinct active
-entries must equal the reachable live rule inventory. One entry is
-`confirmed_artifact`; the other 23 are `pending_renome_revalidation`.
-
-The approved assertion is deliberately limited and exact:
-
-> A carried-forward recurrent adVNTR State is insufficient for molecular identity.
-
-It does **not** say that a row is benign, non-pathogenic, absent from affected samples,
-or a false positive. It does not assign a cohort frequency or per-State prevalence. The
-unretained count, denominator, frequency, and exact adVNTR revision remain JSON `null`;
-the artifact records only the known exclusive version upper bound `2.0.4`.
-
-Every positive adVNTR row carries `Evidence_Disposition`. An exact match to any active
-governed State is `identity-insufficient`, regardless of whether its evidence status is
-confirmed or pending. The row, `Positive (Flagged)` detection, support, flag, and
-caller-local name remain visible, but that adVNTR observation cannot establish molecular
-agreement, promote a tier-A name, or outvote another molecular identity. A nonmatching
-positive row is `admissible`.
-
-!!! warning "The key cannot separate an artifact from a pathogenic variant"
-    adVNTR's State string records the *shape* of an event — the repeat unit, the length,
-    and the **first inserted base only** (`advntr/vntr_finder.py`: *"If there are run of
-    insertions, the sequence might differ, but we just take the first base"*). It does not
-    record the allele.
-
-    So a recurrent benign single-base insertion and a pathogenic single-base duplication in
-    the same unit produce the **same string**, and no denylist keyed on that string can
-    tell them apart, whatever cohort it was derived from. The MUC1 array carries repeat
-    units with both `TTGGGGGG` and `TGGGGGGG`, so a G inserted into that run is placeable
-    either way — @hassansaei's note on #267, and the same ambiguity seen from the sequence
-    side.
-
-    Measured on the fixed 400-run simulated benchmark: **11 `Polymorphic_Call` rows in
-    8 mutated-sample decisions** collide with the governed State key — every one of the
-    5 `dupA` carriers adVNTR detects, and 3 of 7 `delGCCCA` carriers. No control sample
-    produced any adVNTR call at all. This is a collision measurement, not a benignity
-    classification.
-
-    Keying the flag on something richer than the state string is
-    [#267](https://github.com/hassansaei/VNtyper/issues/267)'s suggestion 4 and is not
-    decided.
-
-### Reachability: why the list is 24 entries and not 32
-
-Flagging runs **after** the pathogenic-frame filter (`advntr_processing_ins` /
-`advntr_processing_del`), which keeps only rows whose signed net indel change Δ satisfies
-`Δ % 3 == 1`. An entry that does not is removed before `add_flags` is ever reached and can
-never fire.
-
-Seven of the 32 shipped entries were in that state, and one was listed twice. They were
-removed in the #267 cleanup with the owner's agreement; replaying both lists over the
-adVNTR output of all 400 simulated samples changes **no** `Flag` value.
-
-The artifact-evidence tests run the production filter arms over an independent literal
-24-State oracle, so a future unreachable entry fails the build. That matters here because
-the historical failure mode was silent: a missing expression name could disable a rule,
-which is how `Polymorphic_Call` shipped misspelled as `Poylmorhic_Call` until `742b872`,
-and loose expression typing allowed `Repeat_Unit_7` to ship as `RU == 7` — comparing a
-string column against an integer — until `52f822e`. Structured validation now rejects
-both defects before processing rows.
-
-### What is still open
-
-23 of the 24 live entries are recorded as `pending_renome_revalidation`. @hassansaei asked
-on #267 for them to be re-measured against the re-analysed renome cohort and decided case
-by case; only `D58_2&D59_2` (and the separate `Repeat_Unit_7` rule) are confirmed. Until
-then they remain flagged and identity-insufficient exactly as shipped. Changing membership
-requires an owner-approved evidence revision with retained counts, denominators, software
-and model provenance, a new canonical digest, and the matching rule edit.
+Positive adVNTR calls record `Evidence_Disposition`:
+- Matching an active state marks the call `identity-insufficient`. The call remains visible but cannot establish cross-caller concordance or promote a tier-A nomenclature call.
+- Non-matching calls are marked `admissible`.
 
 ### Run provenance
 
-An adVNTR-enabled run snapshots the verified canonical artifact at
-`provenance/advntr_artifact_evidence.json` and records its full digest in the additive
-schema-2 `advntr_evidence_digest` field. Standalone reports and cohorts verify that run
-snapshot; they never substitute the artifact shipped by the currently installed package.
-A summary predating this field is shown as `artifact-evidence revision not recorded`.
+Runs record the canonical evidence snapshot at `provenance/advntr_artifact_evidence.json` and log its SHA-256 digest in `advntr_evidence_digest`.

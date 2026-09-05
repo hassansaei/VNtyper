@@ -2,26 +2,26 @@
 
 ## What input coverage do I need?
 
-A minimum of approximately **100x coverage** over the MUC1 VNTR region is recommended for reliable variant detection. Whole-genome sequencing at 30x or higher typically provides sufficient local coverage, while whole-exome sequencing may fall short depending on the capture kit's coverage of the MUC1 VNTR.
+A minimum of approximately **100x local coverage** over the MUC1 VNTR region is recommended for reliable variant detection. Whole-genome sequencing at 30x average depth typically yields sufficient VNTR coverage. Whole-exome sequencing coverage varies according to capture probe efficiency across the GC-rich MUC1 VNTR.
 
-## BAM vs FASTQ -- which is faster?
+## BAM versus FASTQ: which is faster?
 
-**BAM input is faster.** When you provide a BAM or CRAM file, VNtyper 2 extracts only the reads overlapping the MUC1 region before processing. Starting from FASTQ files requires an additional alignment step, which adds runtime.
+**BAM or CRAM input is significantly faster.** With aligned input, VNtyper extracts only reads covering the MUC1 locus and unmapped read pools. FASTQ input requires whole-sample read alignment before downstream processing, substantially increasing runtime.
 
 ## Do I need adVNTR?
 
-No. adVNTR is an **optional** module that provides independent, alignment-based validation of Kestrel calls. Enabling it adds approximately 9 minutes to the runtime. It can be useful for confirmation in research settings but is not required for routine genotyping.
+No. adVNTR is an **optional** module providing independent, alignment-based validation of Kestrel calls. Enabling it adds approximately 9 minutes per sample. It is valuable for orthogonal confirmation in research workflows, but is not required for primary genotyping.
 
 ## What does Low_Precision mean?
 
-A variant classified as **Low_Precision** (also called Low Confidence) was detected but has marginal depth support -- the depth score falls between the low and high thresholds defined in `kestrel_config.json`. These calls may benefit from manual review or independent validation. See [Scoring & Confidence](../pipeline/scoring-and-confidence.md) for detailed threshold definitions.
+A call classified as **Low_Precision** indicates that Kestrel detected a variant, but its depth score falls between the configured low and high confidence thresholds in `kestrel_config.json`. These calls represent borderline read support and benefit from visual inspection in the HTML report or orthogonal validation. See [Scoring & Confidence](../pipeline/scoring-and-confidence.md) for threshold specifications.
 
 ## Can I use GRCh38?
 
-Yes. VNtyper 2 supports both UCSC and NCBI naming conventions. Use the `--reference-assembly` flag with any of the following values:
+Yes. VNtyper 2 supports standard UCSC, NCBI, and Ensembl naming conventions via the `--reference-assembly` argument:
 
-- `hg19` or `GRCh37`
-- `hg38` or `GRCh38`
+- `hg19` or `GRCh37` (including `hg19_ensembl` and `hg19_ncbi`)
+- `hg38` or `GRCh38` (including `hg38_ensembl` and `hg38_ncbi`)
 
 Example:
 
@@ -29,29 +29,29 @@ Example:
 vntyper pipeline --bam inputs/sample.bam --reference-assembly hg38 -o results/sample/
 ```
 
-## Docker vs local install?
+## Docker versus local installation?
 
-**Docker** bundles all external dependencies (BWA, samtools, fastp, Java 11, Kestrel JAR) into a single image, so you do not need to install them yourself. This is the easiest way to get started.
+**Docker** bundles all system dependencies (BWA, samtools, fastp, Java 11, and the Kestrel JAR) within a self-contained image. It provides the most reproducible execution environment.
 
-A **local install** gives you more control and avoids container overhead, but you must ensure that BWA, samtools, fastp, and Java 11 are available on your PATH.
+A **local installation** avoids containerization overhead, but requires that BWA, samtools, fastp, and Java 11 reside on your `PATH`.
 
 ## How do I interpret the HTML report?
 
-The HTML report includes an embedded IGV viewer for visual inspection of variants and a summary table of detected mutations with confidence levels. For a detailed walkthrough, see [Output Files](../user-guide/output-files.md).
+The interactive HTML report displays an executive screening summary, variant calls with confidence tiers, quality control metrics, and an embedded IGV browser for direct read inspection. Refer to [Output Files](../user-guide/output-files.md) for a comprehensive field-by-field breakdown.
 
-## SHARK fails with BAM input
+## Does SHARK support BAM input?
 
-SHARK requires FASTQ input. If you want to use the SHARK module, provide reads with the `--fastq1` and `--fastq2` flags along with `--extra-modules shark`:
+No. SHARK operates directly on paired-end FASTQ reads to extract MUC1-matching reads prior to alignment. If invoked with `--bam` or `--cram`, the pipeline logs a warning and exits. When using `--extra-modules shark`, provide paired FASTQ files:
 
 ```bash
 vntyper pipeline --fastq1 R1.fastq.gz --fastq2 R2.fastq.gz \
     --extra-modules shark -o output/
 ```
 
-## How do I run multiple samples?
+## How do I process multi-sample cohorts?
 
-Run individual samples using `vntyper pipeline`, then aggregate the sample run directories with `vntyper cohort` to generate a unified summary report and call frequency tables. See [Cohort Analysis](../user-guide/cohort-analysis.md).
+Execute individual samples with `vntyper pipeline`, then aggregate the sample output directories with `vntyper cohort`. This generates cohort-wide summary reports, category breakdowns, and allele frequency tables. See [Cohort Analysis](../user-guide/cohort-analysis.md).
 
 ## Where can I get help?
 
-Open an issue on [GitHub](https://github.com/hassansaei/VNtyper/issues). Please search existing issues first to avoid duplicates.
+Open an issue on [GitHub](https://github.com/hassansaei/VNtyper/issues). Search open and resolved issues before creating new tickets.

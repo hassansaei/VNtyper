@@ -18,78 +18,68 @@ vntyper [global-options] cohort
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `-i, --input-dirs` | list | — | List of directories containing output files to aggregate. Mutually exclusive with `--input-file` |
-| `--input-file` | path | — | Path to a newline-separated text file listing directories or zip files to aggregate. Mutually exclusive with `-i` |
-| `-o, --output-dir` | path | (required) | Output directory for the aggregated summary |
-| `--summary-file` | string | `cohort_summary.html` | Name of the cohort summary report file |
-| `--summary-formats` | string | `""` | Comma-separated list of additional summary output formats to generate (supported: `csv`, `tsv`, `json`). HTML is always generated |
-| `--pseudonymize-samples` | string (optional value) | — | Replace sample names with a prefix plus a truncated SHA-256 digest. Obfuscation for readability, **not** a privacy control -- the digest is unsalted and unkeyed, so guessable names are recoverable from the report alone; see [Cohort analysis](../user-guide/cohort-analysis.md#what-pseudonymization-does-not-protect-against). Defaults to the basename `sample_`; optionally provide a custom basename |
-| `--rare-allele-max-frequency` | float | `0.05` | Maximum frequency threshold (0 to 1) for marking calls as `Below_Cutoff` in the cohort call frequency table. Calls with frequency above this threshold are not omitted |
+| `-i, --input-dirs` | list | None | Space-separated list of run directories to aggregate (mutually exclusive with `--input-file`) |
+| `--input-file` | path | None | Text file listing paths to run directories or zip archives, one per line (mutually exclusive with `-i`) |
+| `-o, --output-dir` | path | (required) | Target directory for aggregated cohort files |
+| `--summary-file` | string | `cohort_summary.html` | File name for HTML cohort report |
+| `--summary-formats` | string | `""` | Comma-separated summary formats (`csv`, `tsv`, `json`). HTML generates automatically |
+| `--pseudonymize-samples` | string (optional value) | None | Replace sample identifiers with a prefix and truncated SHA-256 digest. Obfuscation for readability, not a privacy control (guessable names are vulnerable to dictionary matching; see [Cohort analysis](../user-guide/cohort-analysis.md#what-pseudonymization-does-not-protect-against)). Defaults to prefix `sample_` |
+| `--rare-allele-max-frequency` | float | `0.05` | Frequency cutoff (0 to 1) for marking calls as `Below_Cutoff` in call frequency tables. Calls above threshold remain visible |
 
-One of `-i/--input-dirs` or `--input-file` is required.
+Supply either `-i/--input-dirs` or `--input-file`.
 
 ## Decision-profile grouping
 
-For schema-3 inputs, the cohort command verifies each run-local decision-profile
-snapshot and exports `Decision_Profile_ID`, `Decision_Profile_Revision`, and
-`Decision_Profile_SHA256` with every caller row. Samples are grouped by the exact
-profile hash. When more than one hash is present, pooled decision-performance plots are
-suppressed and rendered separately for each profile group, with the member samples
-listed. This prevents unlike policies from being summarized as though they made one set
-of decisions.
+For schema-3 inputs, cohort processing validates each run-local decision-profile snapshot, exporting `Decision_Profile_ID`, `Decision_Profile_Revision`, and `Decision_Profile_SHA256` alongside variant rows. Samples group by matching profile hash. If multiple profile hashes appear, pooled performance plots split into distinct profile cohorts to prevent discordant policies from mixing.
 
-Legacy inputs remain readable and are labeled `decision profile not recorded by legacy
-run`; the cohort never assigns them the currently installed package profile. A malformed
-or tampered schema-3 profile snapshot is rejected. Like `report`, this command has no
-profile-selection option: it describes the profiles already used by its input runs.
+Legacy runs without profile records are designated `decision profile not recorded by legacy run`.
 
 ## Pseudonymization
 
-The `--pseudonymize-samples` flag supports two modes. In both, the pseudonym is the prefix followed by the first 12 hex characters of the SHA-256 digest of the original sample name, so it is stable across runs and machines:
+The `--pseudonymize-samples` option operates in two modes, generating prefixes followed by 12 hex characters of the SHA-256 digest of the sample identifier:
 
-- **Default basename:** `--pseudonymize-samples` (no value) uses `sample_` as the prefix, so `sample1` and `sample2` are reported as `sample_e85130791f31` and `sample_5a9392784e07`.
-- **Custom basename:** `--pseudonymize-samples patient_` uses the provided prefix, giving `patient_e85130791f31` and `patient_5a9392784e07` for the same two samples.
+- **Default prefix:** `--pseudonymize-samples` applies `sample_`, producing identifiers such as `sample_e85130791f31`.
+- **Custom prefix:** `--pseudonymize-samples patient_` applies the specified prefix, producing `patient_e85130791f31`.
 
-The digest algorithm and the number of characters kept are read from `cohort.pseudonym` in `config.json` (`{"algorithm": "sha256", "digest_characters": 12}`), so `--config-path` can change either -- bearing in mind that a supplied config replaces the shipped one rather than merging into it. An algorithm that is not available in the running interpreter's `hashlib` is refused by name.
+Digest algorithm and character length configure under `cohort.pseudonym` in `config.json`.
 
 ## Sample identity
 
-A sample's identity is a namespace and a value. The value is the sample's own name -- its directory name, or the stem of the input file that a zipped run recorded. The namespace is the name of the input it was reached through: the archive stem for `job_a.zip`, the directory name for `-i /data/run1`. The input's *name* is used rather than its path, so `-i /data/run1` and `-i ./run1` are the same namespace and a pseudonym survives the cohort being relocated.
+Sample identity combines the sample name and its input namespace. The value represents the sample name; the namespace reflects the input source (the archive stem for `job_a.zip`, or directory name for `-i /data/run1`).
 
-Uniqueness is a property of the pair, not of the value alone. When two or more discovered samples share a value -- two web jobs that both uploaded `sample.bam`, for instance -- those samples are reported as `namespace/value` (`job_a/sample` and `job_b/sample`) and the cohort completes. Samples whose value is already unique are left exactly as they are, so a collision elsewhere in the cohort never moves their identity or their pseudonym.
+When sample names collide across runs, conflicting rows format as `namespace/value` (e.g. `job_a/sample` and `job_b/sample`). Unique names remain untouched.
 
-The run stops only on ambiguity qualification cannot reduce: two inputs sharing a name (two archives both called `job.zip`, or two directory inputs both called `sample`), which qualify to one identity twice; and a digest collision between two identities that are already distinct, whose fix is a wider `cohort.pseudonym.digest_characters`. Both raise an error naming the two samples and the inputs they came from, instead of silently reporting two patients as one.
+Processing halts when identical namespaces collide (such as two input archives named `job.zip` containing `sample.bam`) or upon hash collisions.
 
 ## Examples
 
-Aggregate results from multiple directories:
+Aggregate multiple run directories:
 
 ```bash
 vntyper cohort -i results/sample1/ results/sample2/ results/sample3/ -o cohort_output/
 ```
 
-Aggregate from a file listing directories:
+Aggregate directories listed in a manifest file:
 
 ```bash
 vntyper cohort --input-file sample_dirs.txt -o cohort_output/
 ```
 
-Generate additional output formats with pseudonymized sample names:
+Export tabular formats with pseudonymized sample names:
 
 ```bash
 vntyper cohort -i results/*/ -o cohort_output/ \
     --summary-formats csv,tsv,json --pseudonymize-samples
 ```
 
-Use a custom pseudonymization prefix:
+Apply a custom pseudonym prefix:
 
 ```bash
 vntyper cohort -i results/*/ -o cohort_output/ --pseudonymize-samples patient_
 ```
 
-Specify a custom cohort call frequency threshold:
+Specify custom allele frequency cutoff:
 
 ```bash
 vntyper cohort -i results/*/ -o cohort_output/ --rare-allele-max-frequency 0.01
 ```
-

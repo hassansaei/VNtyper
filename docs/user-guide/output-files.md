@@ -25,15 +25,25 @@ results/
 ├── fastq_bam_processing/
 │   ├── output_R1.fastq.gz       # Extracted/processed R1 reads
 │   ├── output_R2.fastq.gz       # Extracted/processed R2 reads
+│   ├── output_other.fastq.gz    # Extracted unpaired reads (if present)
+│   ├── output_single.fastq.gz   # Extracted single-end reads (if present)
+│   ├── output_sliced.bam        # Region-sliced BAM extracted from input
+│   ├── output.json              # fastp QC summary metrics
+│   ├── output.html              # fastp QC HTML report
 │   └── pipeline_info.json       # BAM header metadata (BAM/CRAM input)
 ├── alignment_processing/
 │   └── output_sorted.bam        # BWA-aligned BAM (FASTQ input only)
 ├── coverage/
 │   └── coverage_summary.tsv     # VNTR region coverage statistics
-└── advntr/                      # Only when --extra-modules advntr
-    ├── output_adVNTR.tsv         # Raw adVNTR output
-    ├── output_adVNTR_result.tsv  # Processed adVNTR result
-    └── cross_match_results.tsv   # Kestrel vs adVNTR comparison
+├── advntr/                      # Only when --extra-modules advntr
+│   ├── output_adVNTR.tsv        # Raw adVNTR output
+│   ├── output_adVNTR.vcf        # adVNTR variant calls in VCF format
+│   ├── output_adVNTR_result.tsv # Processed adVNTR result
+│   ├── cross_match_results.tsv  # Kestrel vs adVNTR comparison
+│   └── advntr_model.db          # Resolved model database
+└── provenance/                  # Checkpoint and decision profile artifacts
+    ├── advntr_artifact_evidence.json
+    └── decision_profile.json
 ```
 
 ## kestrel_result.tsv Columns
@@ -55,7 +65,7 @@ This is the primary output file. Each row represents a genotyped variant.
 | `Flag` | Quality flag (`Not flagged` or a flag reason) |
 | `haplo_count` | Number of haplotype calls supporting the same variant |
 | `Nomenclature` | Reconciled variant name, e.g. `59dupC` (see [MUC1 Nomenclature](../pipeline/nomenclature.md)) |
-| `Nomenclature_Tier` | `A`, `B` or `C` — how much of the name may be stated |
+| `Nomenclature_Tier` | `A`, `B`, or `C`: how much of the name may be stated |
 | `Nomenclature_Flags` | `;`-separated reasons the tier is what it is |
 | `Ambiguity_Interval` | Span in which every anchor is the same allele, e.g. `53_59`. Empty when the variant cannot shift |
 | `Repeat_Form` | Tract copy-number change, e.g. `53C[7]>53C[8]`. Empty outside a detectable tract |
@@ -67,39 +77,37 @@ This is the primary output file. Each row represents a genotyped variant.
 | `Identity_Hypothesis_Count` | Number of distinct resolved identities considered for this caller result |
 
 `Nomenclature` is the reconciled verdict; the two per-caller columns beside it say
-what each caller reported, so a disagreement stays legible in either result file. Both
-files carry the same values for all three, which is what lets a cohort table merging
-them be read as one.
+what each caller reported, ensuring disagreements remain explicit in either result file. Both
+files carry identical values for all three fields, enabling merged cohort tables.
 
-`Ambiguity_Interval`, `Repeat_Form` and `Nomenclature_adVNTR` are nullable: they are
-written only where they mean something, and are left empty rather than padded with a
-placeholder.
+`Ambiguity_Interval`, `Repeat_Form`, and `Nomenclature_adVNTR` are nullable: they are
+written only where applicable, and left empty rather than padded with placeholders.
 
-A negative run writes a different, narrower schema (first column `Motif`, no depth or
-flag columns) and carries none of these — there is no variant, so there is no name or
+A negative run writes a narrower schema (first column `Motif`, omitting depth and
+flag columns) and carries none of these fields: without a detected variant, there is no name or
 molecular identity row.
 
 Positive adVNTR result rows append the same four molecular-identity columns in the same
-order. Negative adVNTR output retains its existing narrower schema. The Kestrel result
+order. Negative adVNTR output retains its narrower schema. The Kestrel result
 additionally carries `__Identity_*` capture and selection cells, and positive rows in both
 caller result files carry `__Reconciled_Molecular_Identity`: the canonical serialization of
-the whole-locus identity the reconciler selected, or an empty cell after abstention. A run
-under an explicitly selected profile with dominance enabled also writes
-`__Dominance_Abstention_Reason`, the closed abstention token or an empty cell. The
+the whole-locus identity selected by the reconciler, or an empty cell after abstention. A run
+under an explicit profile with dominance enabled also writes
+`__Dominance_Abstention_Reason`, recording the closed abstention token or an empty cell. The
 double-underscore prefix marks internal identity-capture and calibration-replay
-persistence, not public fields: they are copied into `pipeline_summary.json` with the
-other result columns, excluded from the policy projection, not rendered in the HTML
-report, and never written to a negative row. The per-sample HTML
+persistence rather than public fields: they are copied into `pipeline_summary.json` alongside
+other result columns, excluded from policy projections, omitted from HTML
+reports, and never written to negative rows. The sample HTML
 report, `pipeline_summary.json`, and cohort HTML/TSV/CSV/JSON exports carry all four
-recorded values; they never infer them from `POS`, `REF`, `ALT`, `Variant` or
-`Nomenclature`. In a sample HTML report, use the table's column control to show the
-quartet on screen. The printed table folds these width-heavy fields and the labelled
-per-row appendix prints them in the same order, including the full molecular identity.
+recorded identity values directly without inferring them from `POS`, `REF`, `ALT`, `Variant`, or
+`Nomenclature`. In a sample HTML report, use table column controls to display the
+quartet. The printed report folds these wide fields into a labelled
+per-row appendix.
 
-For compatibility, a schema-1 or schema-2 summary row missing any one of the four fields
-renders `legacy identity not recorded` in all four downstream identity cells. A complete
-quartet is copied exactly, including an empty unresolved identity, integer `0`
-representation count, and a nonzero hypothesis count.
+For compatibility, a schema-1 or schema-2 summary row missing any of the four fields
+renders `legacy identity not recorded` across all four downstream identity cells. A complete
+quartet is copied exactly, including empty unresolved identities, integer `0`
+representation counts, and nonzero hypothesis counts.
 
 ## Kestrel output.bam evidence
 
@@ -113,12 +121,12 @@ These units are separate from both Kestrel VCF k-mer-path depth and adVNTR suppo
 read counts. The stable `Nomenclature_Flags` field can therefore contain
 `thin-haplotype-record-support`, `low-haplotype-record-support`,
 `low-kmer-path-support`, `low-read-support`, or `low-evidence-support`; see the
-[authoritative flag table](../pipeline/nomenclature.md#flags) for their source-specific
-meanings.
+[authoritative flag table](../pipeline/nomenclature.md#flags) for source-specific
+definitions.
 
 ## Confidence Levels
 
-Confidence is assigned based on empirically validated depth score thresholds from Saei et al., iScience 26, 107171 (2023).
+Confidence is assigned based on depth score thresholds calibrated from Saei et al., iScience 26, 107171 (2023).
 
 | Level | Meaning |
 |-------|---------|
@@ -128,95 +136,76 @@ Confidence is assigned based on empirically validated depth score thresholds fro
 | **Negative** | No variant passed filtering thresholds |
 
 !!! tip
-    A result with confidence `Negative` means no MUC1-VNTR frameshift variant was detected -- it does not necessarily mean the sample is truly negative.
+    A result with confidence `Negative` indicates no MUC1-VNTR frameshift variant passed filtering thresholds: it does not guarantee the sample is biologically negative.
 
 ## How summary_report.html Displays Numbers
 
-Every numeric column in the per-sample HTML report is now formatted server-side and
+Every numeric column in the per-sample HTML report is formatted server-side and
 written into the file by VNtyper.
-Until the fix for issue #242 the report shipped a small script that rewrote every numeric
-cell of every table with `toFixed(4)` in the reader's browser, so the number on
-screen depended on whether three content delivery networks were reachable -- the archived
-file said one thing to a reader online and another to a reader offline.
+Until issue #242, the report executed a client-side script that reformatted numeric
+cells with `toFixed(4)` in the reader's browser, making on-screen numbers
+dependent on external CDN reachability: the archived
+file presented different precision online than offline.
 
-Removing that script changes the printed form of some columns. **No value changed; only
-its rendering did.** The `kestrel_result.tsv`, `pipeline_summary.json` and adVNTR TSV
-outputs are untouched, and remain the source to parse. If you scrape the HTML report,
-these are the columns whose text differs.
+Removing that script standardized column formatting. **No underlying values changed; only
+rendering was adjusted.** `kestrel_result.tsv`, `pipeline_summary.json`, and adVNTR TSV
+outputs remain untouched as the authoritative sources to parse. For scrapers parsing the HTML report,
+the formatted columns are:
 
-| Table | Column | Displayed before | Displayed now | Why |
-|-------|--------|------------------|---------------|-----|
+| Table | Column | Displayed before | Displayed now | Formatting Rule |
+|-------|--------|------------------|---------------|-----------------|
 | Kestrel | `POS`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion` | `67`, `120`, `12000` | unchanged | Whole numbers, no decimals |
-| Kestrel | `Depth_Score` | `0.01` | `0.010012` | Six decimal places. The confidence calibration is stated to five (0.00469 and 0.00515), so four was coarser than the thresholds the value is judged against, and a score of 0.00001234 printed as `0` |
+| Kestrel | `Depth_Score` | `0.01` | `0.010012` | Six decimal places. Confidence thresholds are calibrated to five decimals (0.00469 and 0.00515), so four decimals obscured threshold boundaries |
 | adVNTR | `VID`, `NumberOfSupportingReads`, `POS` | `25561`, `14`, `67` | unchanged | Whole numbers, no decimals |
-| adVNTR | `MeanCoverage` | `98.5`, `40` | `98.50`, `40.00` | Always two decimal places, so every mean states the same precision |
-| adVNTR | `Pvalue` | `0`, `0.0001` | `1e-09`, `0.000123` | Three significant figures. The old `toFixed(4)` displayed `1e-9` as `0` |
+| adVNTR | `MeanCoverage` | `98.5`, `40` | `98.50`, `40.00` | Exactly two decimal places across all mean values |
+| adVNTR | `Pvalue` | `0`, `0.0001` | `1e-09`, `0.000123` | Three significant figures; prevents tiny probabilities displaying as 0 |
 
-### The Kestrel table's column order changed
+### Column Order Migrations
 
 `Motif_sequence` is now the **last** column of the per-sample report's Kestrel table,
-after the confidence, flag and nomenclature fields. It used to be sixth, between `ALT`
+following confidence, flag, and nomenclature fields. It previously sat sixth, between `ALT`
 and `Estimated_Depth_AlternateVariant`.
 
-Before the field was corrected to the selected 60 bp half, it held the 120 bp pair record.
-In its old sixth position, that long unbroken value pushed `Confidence` and `Flag` off the
-right edge of a 1280px screen, so the two columns a reader opens the report for were the
-ones that scrolled out of sight while the widest and least-scanned column sat in the
-middle. Last, it is the column that scrolls -- which is the correct one to lose.
+Before correction to the selected 60 bp half, it contained the full 120 bp pair record.
+In the sixth position, that long sequence forced `Confidence` and `Flag` off
+standard 1280px displays. Moving it to the final column ensures primary diagnostic fields
+remain visible without horizontal scrolling.
 
-**The column-order migration is display-only.** Separately, the value correction above
-changes `Motif_sequence` from the pair record to its named half in result TSVs and reports;
-no other field changes. If you scrape the HTML report by column *position*, key on the
-heading text instead. The `cohort_summary.html` Kestrel table declares its own column
-order and is **not** affected by the display-order migration.
+**This migration affects display only.** In result TSVs and reports, `Motif_sequence`
+reflects the selected 60 bp half; no other fields changed. When scraping the HTML report by column
+position, key on header text instead. The `cohort_summary.html` table defines its own column
+order and is not affected.
 
-Further display changes in the same release:
+Additional interface refinements:
 
-- **The adVNTR table's headings are English**, matching the Kestrel table above it:
-  `NumberOfSupportingReads` is `Supporting Reads`, `Pvalue` is `P-value`, `RU` is
-  `Repeat Unit`, and the eight naming fields take the same headings the Kestrel table
-  already used -- `Nomenclature` is `MUC1 Name`, `Nomenclature_Tier` is `Tier`,
-  `Ambiguity_Interval` is `Ambiguity`, and so on. The two tables previously named the
-  same field two different ways in one document. `advntr_result.tsv` is unchanged and
-  keeps the source names; if you scrape the HTML, key on the new heading text.
-- **A semicolon-separated list is spaced.** `Nomenclature_Flags` renders as
-  `known-variant; motif-context-diverges; position-ambiguous` rather than with bare
-  semicolons, so a cell narrow enough to wrap breaks between flags instead of inside
-  one. The separator is unchanged; splitting on `;` and stripping is unaffected.
-- **Numbers are aligned on their own axis** and set with tabular figures, and each
-  column heading carries a one-line explanation as hover text. Every coded value the
-  tables print -- the tier letter and each nomenclature flag -- is also spelled out in
-  words in a **reading key printed underneath the tables**, so the explanation is on
-  paper and needs no pointer.
-- **The `Flag` column shows the reason in words**, beside a tick or a cross, instead of a
-  glyph whose reason appeared only in a hover tooltip. The reason is therefore in the
-  printed page, readable by a screen reader, and present when scripts do not run.
-- **Flagged variant rows are never hidden.** The per-sample report's switch is now
-  *Highlight flagged values*: it changes emphasis and removes nothing. A row-count line
-  above each table states how many rows are shown out of how many exist. The
-  [cohort report](cohort-analysis.md) keeps its show/hide filter, where hiding flagged
-  rows across many samples is a triage aid rather than a way to hide one sample's evidence.
-  Note that the cohort report still rounds its numbers in the browser; that is tracked
-  separately.
+- **adVNTR table headings use plain text**, matching the Kestrel layout:
+  `NumberOfSupportingReads` displays as `Supporting Reads`, `Pvalue` as `P-value`, `RU` as
+  `Repeat Unit`, and naming fields mirror Kestrel headings (`Nomenclature` is `MUC1 Name`,
+  `Nomenclature_Tier` is `Tier`, `Ambiguity_Interval` is `Ambiguity`). `advntr_result.tsv`
+  retains raw database names.
+- **Semicolon-separated flags are spaced.** `Nomenclature_Flags` renders as
+  `known-variant; motif-context-diverges; position-ambiguous`, permitting clean line breaks.
+- **Numbers are tabular-aligned**, and column headers include hover definitions. Coded values
+  (tier letters, nomenclature flags) are defined in an explicit **reading key printed beneath the tables**.
+- **The `Flag` column displays full text reasons** beside visual icons rather than relying on tooltip hovers.
+- **Flagged rows remain visible.** The report switch *Highlight flagged values* adjusts visual emphasis
+  without removing rows from view.
 
 ## summary_report.html Artifact Modes
 
-`--report-igv embedded` (the default) produces one self-contained report. `sidecar`
-writes a small summary plus a self-contained `igv_report.html`, and `off` omits the
-alignment browser without removing any table row. The last verification specimen was
+`--report-igv embedded` (default) produces a self-contained report. `sidecar`
+writes a compact summary alongside a standalone `igv_report.html`, and `off` omits the
+browser track while preserving all result tables. Verification benchmarks measure
 **78,486 bytes without alignment data** and **575,762 bytes with embedded alignment
-data**, compared with **2,002,405 bytes** fetched by the previous report's 11 CDN tags.
-These are measured specimen sizes, not fixed limits; the tables and other sample content
-also contribute to the file.
+data**, compared to **2,002,405 bytes** retrieved across external CDN tags.
 
-Embedded alignment viewing uses the browser's `DecompressionStream` support, with a
-2023 cross-browser floor of Chrome 80+, Safari 16.4+ or Firefox 113+. On an older
-browser, the alignment panel explains the limitation and the complete variant tables
-remain readable.
+Embedded alignment viewing utilizes browser `DecompressionStream` support (supported
+across Chrome 80+, Safari 16.4+, Firefox 113+). On older browsers, the alignment panel
+displays a compatibility notice while the tables remain accessible.
 
 ## Pipeline Summary JSON
 
-The `pipeline_summary.json` file records each pipeline step with timestamps, output paths, and parsed results. It is used by the [cohort analysis](cohort-analysis.md) module to aggregate results across samples.
+`pipeline_summary.json` records execution timestamps, input parameters, output paths, and parsed step outputs. It serves as the input format for [cohort analysis](cohort-analysis.md).
 
 Key fields:
 
@@ -238,54 +227,45 @@ Key fields:
 }
 ```
 
-Molecular-identity publication is additive to summary schema 2; it does not introduce
-schema 3. Current summaries record the packaged selection policy as
-`decision_policy: legacy-selection-v1`. Older summaries without that provenance remain
-readable and are labelled as not recorded rather than being assigned the current policy.
+Molecular-identity records are additive to summary schema 2 without altering schema versioning. Current summaries record the packaged selection policy as
+`decision_policy: legacy-selection-v1`. Older summaries lacking this key remain
+supported and are marked as unrecorded.
 
 ### Flattened summary tables
 
-`--summary-formats csv,tsv` writes two files per format beside `pipeline_summary.json`.
-No VNtyper code reads them: the pipeline, the cohort mode, the golden gate and the web
-service all read the JSON. They exist for spreadsheets and notebooks.
+`--summary-formats csv,tsv` writes two flattened files per format alongside `pipeline_summary.json`.
+These files facilitate external analysis in tabular tools without JSON parsing.
 
-`pipeline_summary.csv` / `pipeline_summary.tsv` has one row per recorded step. The
-columns come in three groups, in this order:
+`pipeline_summary.csv` / `pipeline_summary.tsv` contains one row per recorded step:
 
-- **Run provenance, `run_*`** - every top-level field of the JSON summary, repeated on
-  every row: `run_schema_version`, `run_decision_policy`, `run_advntr_evidence_digest`,
-  the six `run_decision_profile_*` fields, `run_pipeline_start`, `run_pipeline_end`,
+- **Run provenance (`run_*`)**: Top-level JSON fields repeated across
+  every row (`run_schema_version`, `run_decision_policy`, `run_advntr_evidence_digest`,
+  six `run_decision_profile_*` fields, `run_pipeline_start`, `run_pipeline_end`,
   `run_version`, `run_input_files_<kind>`, `run_sample_name`, `run_sample_name_is_explicit`,
-  the four `run_reference_*` fields, `run_region_resolved`, `run_kestrel_counting_mode`
-  and, when adVNTR ran, `run_advntr_model_*`. A nested object flattens with `_`; a list
-  of values joins with `; `; a JSON `null` is a blank cell.
-- **Step record** - `step`, `start`, `end`, `command`, `result_file`, `file_type`,
-  `md5sum`, `result_file_missing` (`True` or `False`), as `pipeline_summary.json`
-  records the step.
-- **Parsed result, `parsed_result_*`**, sorted - a result with exactly one row explodes
-  into `parsed_result_data_<column>` cells; any other row count is recorded as
-  `parsed_result_n_rows`; the result file's `#` banner lines join into
-  `parsed_result_comments`, separated by a pipe; a JSON result (BAM header parsing,
-  SHARK) flattens with `_`. A cell that does not apply to a step is blank.
+  four `run_reference_*` fields, `run_region_resolved`, `run_kestrel_counting_mode`,
+  and `run_advntr_model_*` when adVNTR ran). Nested keys flatten with `_`; arrays join with `; `;
+  nulls are blank cells.
+- **Step record**: `step`, `start`, `end`, `command`, `result_file`, `file_type`,
+  `md5sum`, `result_file_missing` (`True` or `False`).
+- **Parsed result (`parsed_result_*`)**: Single-row outputs expand to
+  `parsed_result_data_<column>` cells; multi-row counts are recorded in
+  `parsed_result_n_rows`; `#` comment headers join with pipe delimiters in
+  `parsed_result_comments`; JSON sub-objects flatten with `_`.
 
-`pipeline_summary_rows.csv` / `pipeline_summary_rows.tsv` is the long form of every
-tabular result: one row per step, result row and column, with the columns `step`,
-`row_index` (0-based), `field` and `value`. The multi-row adVNTR and cross-match results
-are complete here; pivot on `step` and `row_index` to rebuild a table.
-
-No cell in either file contains JSON text. Earlier releases embedded a multi-row result
-as `; `-joined JSON in one cell and carried no run provenance (#119).
+`pipeline_summary_rows.csv` / `pipeline_summary_rows.tsv` records long-form tabular
+results: one row per step, result row, and field, with columns `step`, `row_index` (0-based),
+`field`, and `value`. This table captures multi-row adVNTR and cross-match records.
 
 ## Cohort Output Files
 
-When running `vntyper cohort`, the following files can be generated in the output directory:
+When executing `vntyper cohort`, the following summary files are generated in the output directory:
 
 | File | Format | Description |
 |------|--------|-------------|
-| `cohort_summary.html` | HTML | Interactive standalone summary report with distribution charts and tables |
+| `cohort_summary.html` | HTML | Standalone summary report with cohort distributions and interactive tables |
 | `cohort_kestrel.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated Kestrel variant calls across all cohort samples |
 | `cohort_advntr.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated adVNTR variant calls across all cohort samples (if adVNTR present) |
-| `cohort_stats.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated per-sample execution, reference, and coverage statistics |
+| `cohort_stats.<csv\|tsv\|json>` | CSV/TSV/JSON | Aggregated execution parameters, reference files, and coverage statistics |
 | `cohort_call_frequency.<csv\|tsv\|json>` | CSV/TSV/JSON | Grouped variant call frequency table across the cohort |
 | `pseudonymization_table.tsv` | TSV | Sample name to pseudonym mapping table (when `--pseudonymize-samples` is used) |
 

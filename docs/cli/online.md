@@ -1,6 +1,6 @@
 # online
 
-Subset a BAM file and submit it to an online VNtyper 2 instance (vntyper.org) for analysis, then poll for completion and download results.
+Subset a BAM file to the MUC1 region, upload to vntyper.org, poll for completion, and retrieve output files.
 
 ## Synopsis
 
@@ -19,57 +19,50 @@ vntyper [global-options] online
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--bam` | path | (required) | Path to the input BAM file |
-| `-o, --output-dir` | path | `out` | Output directory for results |
-| `--reference-assembly` | choice | `hg19` | Reference assembly used for alignment. Options: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl` |
-| `--threads` | int | `4` | Number of threads to use |
-| `--email` | string | — | Email address to receive notifications (optional) |
-| `--cohort-id` | string | — | Cohort ID to associate the job with (optional). The identifier the service returned when the cohort was created, not its alias |
-| `--passphrase` | string | — | Passphrase for the cohort. Required whenever `--cohort-id` is given; at most 72 bytes once UTF-8 encoded |
-| `--resume` | flag | off | Resume polling a previously submitted job if a `job_id` is found in the output directory |
+| `--bam` | path | (required) | Path to input BAM file |
+| `-o, --output-dir` | path | `out` | Directory for downloaded results |
+| `--reference-assembly` | choice | `hg19` | Reference assembly: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl` |
+| `--threads` | int | `4` | Thread count for local BAM extraction |
+| `--email` | string | None | Email address for job completion notice |
+| `--cohort-id` | string | None | Cohort UUID provided upon cohort creation (not its alias) |
+| `--passphrase` | string | None | Cohort passphrase (mandatory when `--cohort-id` is specified; maximum 72 UTF-8 bytes) |
+| `--resume` | flag | off | Resume polling for an existing job using local `job_id.txt` |
 
 ## Workflow
 
-The `online` command follows a submit-poll-download workflow:
+The command coordinates four stages:
 
-1. **Subset:** The input BAM is subsetted to the MUC1 VNTR region based on the specified reference assembly.
-2. **Submit:** The subsetted BAM is uploaded to the vntyper.org server for analysis.
-3. **Poll:** The command periodically checks the server for job completion.
-4. **Download:** Once complete, results are downloaded to the output directory.
+1. **Subset:** Extracts the MUC1 region using local samtools according to the chosen reference assembly.
+2. **Submit:** Posts the sliced BAM to vntyper.org.
+3. **Poll:** Queries the status endpoint periodically.
+4. **Download:** Retrieves results archive upon completion.
 
-Use `--resume` to skip submission and resume polling a previously submitted job.
+Use `--resume` to reconnect to an in-flight job without repeating upload.
 
 ## Exit codes and polling limits
 
-`vntyper online` exits **1** whenever the remote job does not complete — a failed job, a
-job in an unexpected terminal state, a submission that returns no job id, or a job that
-never reaches a terminal status within the polling window. Before VNtyper 2.0.6 all of
-those logged a message and exited **0**, so a wrapping `subprocess.run(..., check=True)`
-treated a failed genotyping run as a success.
+`vntyper online` exits **1** when a remote job fails, terminates unexpectedly, returns no job ID, or exceeds the polling limit. Before VNtyper 2.0.6 all of those logged a message and exited **0**, so a wrapping `subprocess.run(..., check=True)` treated a failed genotyping run as a success.
 
-Polling is bounded. Two `api` keys in `config.json` control it:
+Polling limits are configured in `config.json`:
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `poll_interval_seconds` | `10` | Seconds between status checks |
-| `poll_timeout_seconds` | `14400` (4 h) | Total time to keep polling before giving up |
+| Key | Default | Description |
+|-----|---------|-------------|
+| `poll_interval_seconds` | `10` | Interval between status requests |
+| `poll_timeout_seconds` | `14400` (4 h) | Polling cutoff before timeout |
 
-Timing out is not the same as failing: the job may still be running on the server. Re-run
-the same command with `--resume` to pick the polling back up.
+A timeout indicates that the remote job is still executing. Re-issue the command with `--resume` to continue monitoring.
 
-The server returns a deliberately generic message for a failed job, because
-`/job-status/` is unauthenticated. Ask the instance operator for the job log if you need
-the detail.
+Job failure details are kept in server logs; reference the job ID when requesting administrative review.
 
 ## Examples
 
-Submit a BAM for online analysis:
+Submit a BAM file:
 
 ```bash
 vntyper online --bam sample.bam -o results/ --reference-assembly hg38
 ```
 
-Submit with email notifications and cohort association:
+Submit with email notification and cohort association:
 
 ```bash
 vntyper online --bam sample.bam -o results/ \
@@ -77,7 +70,7 @@ vntyper online --bam sample.bam -o results/ \
     --cohort-id 4f9c1a72-5e30-4b8d-9a61-7c2e0d5b83fa --passphrase secret123
 ```
 
-Resume polling a previously submitted job:
+Resume polling for an active submission:
 
 ```bash
 vntyper online --bam sample.bam -o results/ --resume

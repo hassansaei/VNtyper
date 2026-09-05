@@ -1,6 +1,6 @@
 # Pipeline Overview
 
-VNtyper 2 implements a multi-stage pipeline for genotyping MUC1 coding Variable Number Tandem Repeat (VNTR) variants associated with Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1). The pipeline accepts BAM, CRAM, or paired-end FASTQ input and produces a genotyping result with confidence-annotated variant calls.
+VNtyper genotypes the MUC1 coding Variable Number Tandem Repeat (VNTR) to diagnose ADTKD-MUC1 from short-read sequencing data. It accepts BAM, CRAM, or paired-end FASTQ inputs and outputs confidence-scored variant calls with an interactive HTML report.
 
 ## Pipeline Architecture
 
@@ -31,27 +31,27 @@ flowchart TD
 
 ### [Input Processing](input-processing.md)
 
-Handles BAM/CRAM region extraction (MUC1 locus), FASTQ quality control via fastp, unmapped read recovery, and coverage calculation over the VNTR region. Detects reference assembly and alignment pipeline from BAM headers.
+Extracts the MUC1 target region from BAM or CRAM files, performs FASTQ quality control via fastp, recovers unmapped read pairs, and computes per-base coverage across the VNTR array. Detects reference assembly and alignment pipeline from BAM headers.
 
 ### [Kestrel Genotyping](kestrel.md)
 
-The core genotyping engine. Kestrel performs mapping-free, k-mer-based variant calling against the MUC1 VNTR reference. The postprocessing pipeline filters, scores, and annotates variants through nine distinct steps. This is the most critical component of VNtyper 2.
+Executes mapping-free, k-mer-based variant calling against the MUC1 VNTR reference sequence. Applies a nine-step postprocessing pipeline that filters, scores, and annotates candidate variants.
 
 ### [Scoring and Confidence Assignment](scoring-and-confidence.md)
 
-Calculates frame scores to identify frameshift mutations, computes depth-based confidence scores, and assigns precision labels (High_Precision*, High_Precision, Low_Precision, Negative) using empirically derived thresholds from Saei et al. (2023).
+Calculates frame scores to detect pathogenic reading-frame shifts (+1 mod 3), evaluates alternate k-mer-path depth ratios against the repeat array, and assigns confidence tiers (High_Precision*, High_Precision, Low_Precision, Negative) using calibrated thresholds.
 
 ### [Flagging](flagging.md)
 
-Applies configurable post-hoc empirical filters to flag potential false positives and duplicate variants. Flags are evaluated before variant selection so that unflagged variants are preferred.
+Evaluates configurable boolean rule trees to tag false positives and recurrent artifacts. Evaluates flags before variant selection so unflagged candidates take precedence. Disqualifying artifact flags remove candidates prior to final selection.
 
 ### [Optional Modules](optional-modules.md)
 
-Two optional modules provide complementary analyses: **adVNTR** (profile-HMM genotyping for independent validation) and **SHARK** (rapid MUC1 read extraction from large FASTQ datasets). Cross-matching logic compares Kestrel and adVNTR calls.
+Integrates complementary tools: adVNTR performs profile-HMM genotyping for independent orthogonal validation, and SHARK extracts MUC1-matching reads directly from unaligned whole-genome or whole-exome FASTQs. Cross-matching evaluates pairwise concordance between Kestrel and adVNTR calls.
 
 ### [Report Generation](reports.md)
 
-Produces an HTML report with variant summary tables, embedded IGV genome browser views, QC metrics, and screening interpretation. Cohort-level reports aggregate results across multiple samples with interactive Plotly charts.
+Emits a self-contained HTML report featuring variant tables, screening interpretations, coverage QC metrics, and embedded IGV views. Generates multi-sample cohort summaries with interactive frequency tables and visualizations.
 
 ## Reference
 

@@ -1,114 +1,62 @@
 # MUC1 Nomenclature
 
 !!! warning "Research use only"
-    VNtyper is a research tool. Nothing on this page is a diagnostic statement.
+    VNtyper is a research tool. Output nomenclature is for investigative use and does not constitute a clinical diagnosis.
 
-Kestrel and adVNTR each report MUC1-VNTR variants in their own internal coordinate
-frame — `POS 67 G>GG`, `I22_2_G_LEN1` — and neither emits the naming the MUC1
-literature uses. VNtyper translates both into a single literature-compatible name,
-with an explicit statement of how much confidence that name carries.
+Kestrel and adVNTR each report MUC1 VNTR variants in their own internal coordinate frames (for example, `POS 67 G>GG` or `I22_2_G_LEN1`), and neither emits standard literature naming. VNtyper translates both into standard literature-compatible shorthand with an explicit confidence tier.
 
 ## The name
 
-Names are the **bare positional shorthand** on a named reference:
+Names use bare positional shorthand anchored to a designated reference sequence:
 
 | Example | Meaning |
 |---|---|
-| `59dupC` | the canonical MUC1 duplication |
-| `60dupA` | duplication of the `A` at position 60 |
-| `58_59insG` | a `G` inserted between positions 58 and 59 |
-| `1_5delGCCCA` | a 5 bp deletion |
-| `54_56delinsAT` | 3 bases replaced by `AT` |
+| `59dupC` | Canonical MUC1 cytosine duplication |
+| `60dupA` | Duplication of the `A` at position 60 |
+| `58_59insG` | Insertion of `G` between positions 58 and 59 |
+| `1_5delGCCCA` | 5 bp deletion |
+| `54_56delinsAT` | 3 bases substituted with `AT` |
 
-The reference is **the canonical MUC1 60 bp repeat unit in coding orientation**, whose
-tract of 7 × C at positions 53–59 is the one Wenzel et al. (2018, PMID:29520014)
-publish.
+The reference is the canonical MUC1 60 bp repeat unit in coding orientation, whose poly-C tract of 7 cytosines at positions 53-59 matches Wenzel et al. (2018, PMID:29520014).
 
 ## Molecular identity and caller representation
 
-The caller's `POS`, `REF`, `ALT`, `Variant` and `Nomenclature` cells are representations
-of its result; they are not used to reconstruct molecular identity in a report or cohort.
-Every current positive Kestrel and adVNTR result records one complete quartet, in this
-order:
+Raw coordinates (`POS`, `REF`, `ALT`, `Variant`, `Nomenclature`) represent internal caller outputs rather than canonical molecular identities. Every positive Kestrel and adVNTR call records a four-field identity record in this order:
 
-1. `Molecular_Identity` — the stable serialized edit, empty when unresolved;
-2. `Molecular_Identity_Status` — `unique`, `legacy-selected-among-multiple`, or
-   `unresolved`;
-3. `Equivalent_Representation_Count` — representations equivalent to the row's selected
-   identity, or integer `0` when unresolved; and
-4. `Identity_Hypothesis_Count` — distinct resolved identities considered for the caller,
-   including a nonzero count beside an unresolved selected row when alternatives resolved.
+1. `Molecular_Identity`: The serialized canonical edit, empty when unresolved.
+2. `Molecular_Identity_Status`: Categorized as `unique`, `legacy-selected-among-multiple`, or `unresolved`.
+3. `Equivalent_Representation_Count`: Count of caller representations matching the selected identity (0 when unresolved).
+4. `Identity_Hypothesis_Count`: Count of distinct resolved candidate identities evaluated for the caller.
 
-Sample and cohort HTML, TSV, CSV and JSON surfaces copy these four recorded values. A
-schema-1 or schema-2 summary row missing any member of the quartet displays the literal
-`legacy identity not recorded` in all four downstream cells. It is never completed from
-plausible legacy alleles or names. Current negative caller TSVs keep their narrower schemas
-and gain no identity fields. In the sample report, the quartet remains in the HTML table
-under the screen column control. It is folded out of the width-limited table on paper and
-printed in exact order as labelled values in the per-row appendix.
+Sample and cohort HTML, TSV, CSV, and JSON outputs propagate these four recorded values. Summary rows missing any member display the literal `legacy identity not recorded` in all four cells.
 
 ### Why there is no `c.` prefix
 
-A `c.` prefix asserts a coding-DNA reference sequence, and **no transcript places this
-tract at positions 53–59**. Emitting `c.59dupC` would claim a coordinate system that
-does not exist for this locus. A real HGVS prefix would require depositing the 60 bp
-unit as an accessioned reference; until then the reference is named in prose rather
-than implied by a prefix that would be wrong.
+A `c.` prefix specifies a coding-DNA reference sequence, and no official transcript places the repeat unit poly-C tract at positions 53-59. Emitting `c.59dupC` would falsely imply reference to an official transcript coordinate system.
 
-### The strand trap
+### Strand orientation
 
-HGVS's "3′-most" rule means 3′ of the **coding** sequence. MUC1 is transcribed from the
-minus strand, so HGVS-3′ is genomic-**left** here. A pipeline that runs `bcftools norm`
-and assumes the result is HGVS-ready happens to be right for MUC1 and would be wrong by
-the full repeat width on a plus-strand gene. VNtyper reverse-complements into the coding
-frame before normalising, so the direction is explicit rather than incidental.
+HGVS rules specify 3-prime positioning relative to the coding sequence. Because MUC1 is transcribed from the negative strand, coding 3-prime corresponds to genomic-left. Running `bcftools norm` directly on genomic coordinates shifts indels in the wrong direction for MUC1. VNtyper reverse-complements variants into coding orientation before applying left-alignment and normalisation.
 
 ## Confidence tiers
 
-The tier is an **emission rule**, not a label: it decides what may be printed.
+Tiers govern emission rules for variant reporting:
 
-| Tier | Condition | What is emitted |
+| Tier | Criteria | Output format |
 |---|---|---|
-| **A** | Two independent callers agree after normalisation, the motif context matches the canonical unit, and each source's evidence support meets the threshold | the name, e.g. `59dupC` |
-| **B** | A name was computed, but something above is missing | the same name, carrying the tier and the flags that say what is missing |
-| **C** | No allele could be determined | `frameshift +1, allele undetermined` — no position at all |
+| **A** | Two independent callers agree after normalisation, motif context matches the canonical unit, and each source meets its support threshold | Bare name, e.g. `59dupC` |
+| **B** | A variant name is resolved, but one or more Tier A conditions are unmet | Variant name annotated with Tier B and disqualifying flags |
+| **C** | Allele sequence cannot be resolved | `frameshift +1, allele undetermined` (no position at all) |
 
-Tier B **does** show its name. Withholding it was the original design and it was measured
-to be a bad trade: of 200 benchmark samples, 129 had the correct name computed and only 46
-were allowed to display it. Suppressing a name that was right 83 times, to avoid showing
-one that was never wrong, discards information a reader can weigh for themselves. The tier
-and the flags travel beside the name and say how far it has been checked; they do not
-decide whether the reader may see it.
+Tier B calls display the candidate name alongside explanatory flags. In benchmark testing of 200 samples, 129 had correct names computed, but only 46 met Tier A criteria. Suppressing accurate names discards actionable investigative evidence; the tier and flags explicitly document confidence.
 
-Evidence support is **unknown-hostile**: a source whose support value is blank or
-non-numeric makes the whole agreement's support unknown, and unknown never clears the
-threshold. One caller's evidence is not evidence about another's.
+Support evaluation is strict: missing or non-numeric support values fail the threshold. Evidence from one caller cannot substitute for another.
 
-**No single caller can reach tier A on its own.** On the benchmark, Kestrel places the
-whole `insG` family one position 3′ of truth; those records look perfectly clean in
-isolation. Only a second, independent source separates them.
+**No single caller can reach Tier A independently.** Kestrel systematically places the `insG` family one base 3-prime of truth; only an independent caller resolves this ambiguity. Kestrel VCF and BAM records originate from the same algorithm and count as one caller.
 
-"Independent" means *a different caller*, not merely a different file. Kestrel's VCF
-and Kestrel's resolved haplotype alignment are two artifacts from one caller, so their
-agreement is one opinion rather than two, and it does not promote anything.
+adVNTR calls matching any of the 24 active governed recurrent states are marked `identity-insufficient`. While visible in caller outputs, they cannot corroborate Tier A calls or outvote alternative identities.
 
-An adVNTR observation is also not independent molecular evidence merely because it is a
-reported finding. For each positive adVNTR row, `Evidence_Disposition` records whether
-the observation may participate in molecular agreement. The governed assertion is:
-
-> A carried-forward recurrent adVNTR State is insufficient for molecular identity.
-
-An exact match to any of the 24 active governed recurrent States is therefore
-`identity-insufficient`. Its row, `Positive (Flagged)` detection, support, flag,
-caller-local name, and identity quartet remain visible. Only its use as molecular
-corroboration is blocked: it cannot promote tier A or outvote another identity. This is
-not a claim that the finding is benign, non-pathogenic, a false positive, or absent from
-affected samples, and it assigns no frequency. A nonmatching positive adVNTR row is
-`admissible`; negative output keeps its narrower historical schema.
-
-Tier C is the point of the whole design. Where a caller's allele is genuinely
-indistinguishable from another, printing a name would be a confident falsehood, and
-`allele undetermined` is the honest answer.
+Tier C reports unresolvable alleles as `frameshift +1, allele undetermined` to prevent publishing speculative names.
 
 ## Flags
 
@@ -122,46 +70,37 @@ unit; it is not a universal read-count threshold.
 
 | Flag | Meaning |
 |---|---|
-| `position-ambiguous` | the variant can shift within a tract; see `Ambiguity_Interval` |
-| `spans-unit-junction` | the span crosses the boundary between two repeat units |
-| `motif-context-diverges` | the assigned motif differs from the canonical unit where the name lands |
-| `allele-unrepresentable-in-vcf` | Kestrel's VCF cannot express the allele shape; the name comes from its resolved haplotype records |
-| `thin-haplotype-record-support` | Kestrel BAM haplotype-record support is below the unchanged thinness threshold |
-| `low-haplotype-record-support` | Kestrel BAM haplotype-record support is below the corroborated tier's source-specific threshold |
-| `low-kmer-path-support` | Kestrel alternate-allele k-mer-path depth is below the corroborated tier's source-specific threshold |
-| `low-read-support` | current adVNTR or legacy scalar sequencing-read support is low; archived pre-Phase-1 Kestrel BAM rows can also carry this token |
-| `low-evidence-support` | support from a source whose evidence unit is undeclared is below the source-specific threshold |
-| `caller-disagreement` | Kestrel and adVNTR do not name the same allele |
-| `length-truncated` | the reported length is a lower bound rather than the full extent |
-| `sequence-undetermined` | a length is known but the inserted or deleted bases are not |
-| `known-variant` | the name matches a MUC1 variant described in the literature; the table checks a name and never produces one |
-| `representation-of-caller-call` | the name represents the caller's report but matches no described variant; it requires validation |
+| `position-ambiguous` | The edit can be written at more than one position in the repeat unit. The ambiguity interval gives the range over which the placements are indistinguishable. |
+| `spans-unit-junction` | The event crosses the boundary between two repeat units, so it cannot be expressed as one span on a single unit. |
+| `motif-context-diverges` | The sequence around the call in the motif the caller assigned differs from the canonical unit where the name lands, so the coordinate projected onto the canonical unit is less certain. |
+| `allele-unrepresentable-in-vcf` | The allele cannot be written in Kestrel's VCF shape. The name comes from Kestrel's resolved haplotype records, which preserve the full allele shape. |
+| `thin-haplotype-record-support` | Resolved Kestrel BAM haplotype-record support is below the unchanged thinness threshold. |
+| `low-haplotype-record-support` | Resolved Kestrel BAM haplotype-record support is below the corroborated tier's source-specific threshold. |
+| `low-kmer-path-support` | Kestrel alternate-allele k-mer-path depth is below the corroborated tier's source-specific threshold. |
+| `low-read-support` | Low source support under the emitting version's rule. Current adVNTR or legacy scalar sequencing-read support is low; archived pre-Phase-1 Kestrel BAM rows can also carry this token. |
+| `low-evidence-support` | Support from a source whose evidence unit is undeclared is below the corroborated tier's source-specific threshold. |
+| `caller-disagreement` | Kestrel and adVNTR did not name the same allele. |
+| `length-truncated` | The reported length is a lower bound rather than the full extent. |
+| `sequence-undetermined` | The inserted or deleted sequence itself could not be determined, so no position is given. |
+| `known-variant` | The name matches a MUC1 variant described in the literature. The table is used to check a name, never to produce one. |
+| `representation-of-caller-call` | The name represents what the caller reported and matches no described variant. It requires validation. |
 
-The shipped configuration calls the BAM thinness key
-`bam_thin_haplotype_record_support` (value 3). Complete custom configurations may still
-use the former `bam_thin_support` key as a compatibility fallback; the canonical key wins
-when both are present, and omitting both remains an error. The broader
-`min_support_for_high_confidence` name stays stable for configuration compatibility even
-though its value is interpreted in the evidence unit of each source.
+The shipped configuration calls the BAM thinness key `bam_thin_haplotype_record_support` (value 3). Complete custom configurations may still supply the former `bam_thin_support` key as a compatibility fallback; the canonical key wins when both are present, and omitting both remains an error. The broader `min_support_for_high_confidence` name stays stable for configuration compatibility even though its value is interpreted in the evidence unit of each source.
 
 ## The two companion fields
 
-`Ambiguity_Interval` states the span in which **every anchor is the same allele**. It is
-what makes `59dupC`, `53dupC` and the older `27dupC` recognisable as one event rather
-than three.
+`Ambiguity_Interval` states the span in which every anchor represents the same biological edit, unifying designations such as `59dupC`, `53dupC`, and legacy `27dupC`.
 
-`Repeat_Form` states what was actually measured — `53C[7]>53C[8]`, the tract went from
-seven copies to eight — instead of implying we know *which* base was added. It also
-scales: an `insCCCC` reads `53C[11]`, considerably clearer than `56_59dupCCCC`.
+`Repeat_Form` states what was actually measured: `53C[7]>53C[8]`, indicating repeat tract expansion from 7 copies to 8, instead of implying base-specific placement.
 
-Both are empty where they do not apply.
+Both fields remain empty when not applicable.
 
 ## Where the resolved haplotype records are consulted
 
 Kestrel's VCF can express 1-vs-1, 1-vs-N and N-vs-1 records and nothing else, so a
 delins has no representation in it. Where a call cannot be resolved from the VCF,
 VNtyper walks the CIGARs in `output.bam` (the resolved haplotype alignment the report's
-IGV track already shows) and merges adjacent non-matching blocks — which is how a `1X1I`
+IGV track already shows) and merges adjacent non-matching blocks: this is how a `1X1I`
 block becomes the delins the VCF had no way to write down. Each BAM record represents a
 Kestrel-resolved haplotype, not a sequencing read.
 
@@ -183,88 +122,34 @@ and unsigned integers above 2,147,483,647 are unavailable. Every resolved haplot
 record still contributes one unweighted vote in all of these cases.
 
 Two consequences worth stating plainly. A locus where the two callers describe
-*different events* is a conflict, not a gap, so a thin haplotype-record consensus is not
+different events is a conflict, not a gap, so a thin haplotype-record consensus is not
 allowed to settle it with a number; `allele undetermined` stands. And because an ordinary
-single-caller call is tier B and therefore not a candidate, a run **without** the optional
-adVNTR module rarely opens the BAM at all — so a delins that Kestrel's VCF could not
+single-caller call is tier B and therefore not a candidate, a run without the optional
+adVNTR module rarely opens the BAM at all: a delins that Kestrel's VCF could not
 express is unlikely to be recovered unless adVNTR also ran.
 
 ## When two sources outvote a third
 
-There is one case where the Kestrel VCF does not have the last word: when **two
-sources spanning two different callers** name the same allele and the VCF names
-another. adVNTR and Kestrel's resolved haplotype records agreeing is genuine
-corroboration across two callers, and it outvotes Kestrel's VCF placement.
+When two sources spanning two different callers name the same allele and Kestrel's VCF names another, the two agreeing sources outvote the VCF call. Specifically, agreement between adVNTR and Kestrel's resolved haplotype records represents genuine cross-caller corroboration that outvotes the Kestrel VCF call.
 
-The independence requirement is doing the work here. Kestrel's VCF agreeing with
-Kestrel's own alignment is *not* two sources, so it never outvotes adVNTR and never
-promotes a tier. Without that distinction, one caller corroborating itself would look
-exactly like the two independent sources tier A asks for.
+The independence requirement is essential: Kestrel's VCF agreeing with Kestrel's own BAM alignment represents one caller, so it never outvotes adVNTR and never promotes a tier.
 
-Measured over the 200-sample benchmark this recovers 6 samples and loses none —
-`insG` goes from 1 to 5 and `insG_pos54` from 0 to 2, while `dupA` and `dupC` are
-unmoved. The narrowness matters: an earlier attempt that simply preferred
-the BAM-derived name whenever it disagreed cost `dupA` 6 correct calls out of 10 and `insCCCC`
-6 out of 10. Requiring a second *caller* to agree is what makes the difference.
+On the 200-sample benchmark, this rule resolves 6 samples without introducing errors: `insG` increases from 1 to 5 calls, and `insG_pos54` increases from 0 to 2 calls, while `dupA` and `dupC` remain unchanged.
 
 ## Both callers' names are kept
 
-Where the two callers disagree, collapsing them into one verdict destroys the evidence
-a reader needs in order to weigh that verdict. Both result files therefore carry
-`Nomenclature_Kestrel` and `Nomenclature_adVNTR` alongside the reconciled
-`Nomenclature`, so either file on its own says what each caller reported and where
-they parted company.
+When callers disagree, collapsing them into one verdict destroys necessary diagnostic evidence. Both result files therefore record `Nomenclature_Kestrel` and `Nomenclature_adVNTR` alongside the reconciled `Nomenclature` string.
 
-The columns are named for the callers rather than relatively ("the other caller"), so
-a row means the same thing in `kestrel_result.tsv`, in `output_adVNTR_result.tsv` and
-in a cohort table that merges the two.
+adVNTR is an optional module. When it has not run, `Nomenclature_adVNTR` is empty and the Kestrel result stands as written.
 
-adVNTR is an optional module. When it has not run, `Nomenclature_adVNTR` is empty and
-the Kestrel result stands exactly as its own stage wrote it.
+Runs snapshot governing evidence at `provenance/advntr_artifact_evidence.json` and log its full SHA-256 digest in `advntr_evidence_digest`.
 
-For reproducibility, an adVNTR-enabled run snapshots the canonical governed evidence and
-records its full SHA-256 digest. Sample reports and cohorts verify and display only that
-run-recorded snapshot. A legacy summary is labeled
-`artifact-evidence revision not recorded`; it is never relabeled with the current
-package's digest.
-
-The nomenclature and reconciliation rules are also part of the run's complete decision
-profile. A normal run uses the verified packaged profile, preserving the rules and
-thresholds described above. `pipeline --decision-profile` may select one complete
-`explicit-custom` or `generated` file; it is never a partial overlay, and generated
-output never activates itself. The resolved canonical file and SHA-256 are recorded in
-schema-3 provenance, then verified by sample reports and cohorts. A legacy run is labeled
-`decision profile not recorded by legacy run` rather than being assigned today's package
-profile.
-
-Fixed safety remains fixed across every profile kind: BAM flank `8`, thin
-resolved-haplotype-record support `3`, Kestrel tier-A alternate k-mer-path depth `5`,
-adVNTR tier-A sequencing-read support `5`, and the packaged Kestrel reporting boundaries
-cannot change. The adVNTR model/window and binary-version compatibility guards from
-Issue 268 are not profile fields, so profile selection cannot waive them.
+Custom decision profiles can be selected via `--decision-profile`. Fixed safety thresholds remain constant across all profiles: BAM flank window 8, thin haplotype record support 3, Kestrel Tier A alternate k-mer-path depth 5, adVNTR Tier A sequencing read support 5.
 
 ## A known limitation
 
-Every name is anchored on the canonical unit, even where the motif the caller
-assigned differs from it there. That projection is what makes the canonical
-duplication resolve correctly on the motifs whose own C-tract is shorter or sits
-elsewhere — anchoring on the assigned motif instead loses roughly a quarter of the
-canonical calls.
-
-The cost is confined to tier B. A projected call always carries
-`motif-context-diverges`, which blocks promotion, so no *confident* name rests on the
-projection. What the projection can get wrong is the tier-B **event word**: an edit
-that is a duplication against the assigned motif may read as an insertion against the
-canonical one. The position and the ambiguity window are unaffected.
+Nomenclature names are projected onto the canonical unit. When the motif assigned by the caller diverges from the canonical unit, the projection may misstate the event word in Tier B calls (for example, reading a duplication as an insertion). Such variants carry `motif-context-diverges`, preventing promotion to Tier A. Positions and ambiguity intervals remain unaffected.
 
 ## What this does and does not fix
 
-Normalisation fixes **description-level** disagreement: two callers describing one
-allele in two coordinate systems. It cannot fix **allele-level** disagreement, where a
-caller's record encodes a sequence that was never present. On the simulated benchmark a
-substantial minority of calls are allele-level disagreements — `ins25bp` is reported as
-a 1 bp event, and the `insG` family lands one position 3′ of truth. That is a finding
-about the callers, not a gap in the naming. Tier C is the response.
-
-Naming *which copy* in the repeat array carries the variant is out of scope: Kestrel is
-alignment-free and cannot know it, and resolving it needs long reads.
+Normalisation fixes description-level discrepancies where callers describe one allele in different coordinate systems. It cannot correct allele-level errors where a caller misidentifies the underlying sequence. Discrepant sequence calls receive Tier C (`allele undetermined`). Assigning variants to specific repeat unit copies within the array requires long-read sequencing.

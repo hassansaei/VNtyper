@@ -9,7 +9,7 @@ hide:
 **Genotype MUC1 coding VNTRs for ADTKD-MUC1 diagnosis using short-read sequencing.**
 
 VNtyper 2 is a bioinformatics pipeline that detects frameshift mutations in the MUC1
-Variable Number Tandem Repeat (VNTR) region — the genetic cause of Autosomal Dominant
+Variable Number Tandem Repeat (VNTR) region, the genetic cause of Autosomal Dominant
 Tubulointerstitial Kidney Disease (ADTKD-MUC1). It combines mapping-free k-mer
 genotyping (Kestrel) with optional Profile-HMM validation (adVNTR) to deliver
 confidence-scored variant calls from BAM, CRAM, or FASTQ input.
@@ -20,8 +20,8 @@ confidence-scored variant calls from BAM, CRAM, or FASTQ input.
 
     ---
 
-    Kestrel's k-mer approach avoids reference bias in repetitive VNTR regions,
-    with empirically validated confidence scoring.
+    Kestrel k-mer assembly avoids reference bias in repetitive VNTR regions,
+    delivering empirically validated confidence scoring.
 
     [:octicons-arrow-right-24: How it works](pipeline/kestrel.md)
 
@@ -29,8 +29,8 @@ confidence-scored variant calls from BAM, CRAM, or FASTQ input.
 
     ---
 
-    Accepts BAM, CRAM, or paired-end FASTQ files with support for hg19, hg38,
-    GRCh37, and GRCh38 reference assemblies.
+    Accepts BAM, CRAM, or paired-end FASTQ files with support for 8 reference
+    assembly conventions across UCSC, NCBI RefSeq, and Ensembl.
 
     [:octicons-arrow-right-24: Input formats](user-guide/input-formats.md)
 
@@ -38,7 +38,7 @@ confidence-scored variant calls from BAM, CRAM, or FASTQ input.
 
     ---
 
-    HTML reports with embedded IGV genome browser, coverage charts,
+    HTML reports with embedded IGV genome browser tracks, coverage metrics,
     and cohort-level summaries with optional pseudonymization.
 
     [:octicons-arrow-right-24: Output guide](user-guide/output-files.md)
@@ -48,8 +48,17 @@ confidence-scored variant calls from BAM, CRAM, or FASTQ input.
 ## Quick Install
 
 ```bash
-pip install git+https://github.com/hassansaei/VNtyper.git
+# Recommended: install with all binary dependencies via Conda
+git clone https://github.com/hassansaei/vntyper.git
+cd vntyper
+conda env create -f conda/environment_vntyper.yml
+conda activate vntyper
+pip install -e .
+
+# Install reference assets
 vntyper install-references -d ./references
+
+# Run pipeline
 vntyper pipeline --bam inputs/sample.bam -o results/sample/
 ```
 

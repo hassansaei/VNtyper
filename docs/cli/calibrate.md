@@ -1,8 +1,6 @@
 # calibrate
 
-Build and evaluate future, explicit opt-in dominance profiles from completed VNtyper
-runs. Calibration never reruns Kestrel or adVNTR, edits the packaged profile, changes a
-shipped cutoff, or activates its output automatically.
+Build and evaluate explicit opt-in dominance profiles from completed VNtyper runs. Calibration never re-executes Kestrel or adVNTR, never modifies the packaged profile, never alters shipped cutoffs, and never activates outputs automatically.
 
 ## Operations
 
@@ -13,86 +11,31 @@ vntyper calibrate validate --profile PROFILE --evidence VALIDATION --output VALI
 vntyper calibrate evaluate --profile PROFILE --evidence LOCKED_HELDOUT --output HELDOUT_ATTESTATION
 ```
 
-These are the complete four commands; there is no command that creates custodian
-authority. All options shown above are required. `fit` has no default objective: the only
-version-1 choice is `lexicographic-safety-v1`, and it must equal the objective already
-hashed into the evidence protocol. argparse usage errors exit 2. A parsed operation that
-cannot complete exits 1 without installing a partial output. A completed failed
-`validate` or `evaluate` also exits 1, but only after installing its complete failed
-attestation, reports, checksums, and retirement record. Every output is built as a sibling
-staging directory and appears at `--output` atomically.
+All options listed above are required. `fit` accepts only `lexicographic-safety-v1`, which must match the objective hashed into the evidence protocol. Argument parsing errors exit 2. Unexecutable operations exit 1 without writing partial outputs. Failed `validate` or `evaluate` runs exit 1 after recording attestations, reports, checksums, and retirement logs. Outputs stage in temporary directories and appear at `--output` atomically.
 
-`extract` accepts a strict study declaration with the finite candidate grid, seed,
-bootstrap and multiplicity rules, four role-bound partitions, and all seven leakage-group
-namespaces. `--truth` is ordinary, nonlocked truth: it contains exactly the canonical
-training, policy-selection, and validation label rows, separately from allowlisted runtime
-features. Supplying a locked label, an unknown field, a duplicate, or a reordered row is
-an error. Runs must retain schema-3 `pipeline_summary.json`,
-`kestrel/kestrel_pre_result.tsv`, `kestrel/bam_identity_replay.v1.json`, fixed caller
-results, and the recorded profile snapshot; callers, BAMs, and CRAMs are never reopened.
-Whether a run contributes its complete Kestrel candidate universe or only its selected
-row is decided by the `dominance.enabled` value in that run's verified
-`provenance/decision_profile.json` snapshot: a packaged snapshot must equal the package
-profile byte for byte, any other snapshot is re-parsed against the packaged base, and the
-recorded profile kind, summary fields, and paths are never used as that switch.
+`extract` parses a study protocol containing candidate grids, seeds, bootstrap rules, role-bound partitions, and seven leakage-group namespaces. `--truth` contains canonical training, policy-selection, and validation label records separated from allowlisted runtime features. Duplicate, reordered, or unknown fields trigger rejection. Input runs must retain schema-3 `pipeline_summary.json`, `kestrel/kestrel_pre_result.tsv`, `kestrel/bam_identity_replay.v1.json`, caller outputs, and profile snapshots. Candidate selection evaluates the `dominance.enabled` flag in the verified `provenance/decision_profile.json` snapshot: packaged snapshots must match package profiles byte-for-byte; alternative snapshots re-parse against the packaged base.
 
-Ordinary extraction does not open the locked run root and does not write locked features,
-labels, baseline, plaintext payload, evidence manifest, or custody claim. Its
-`roles/locked-heldout/` directory contains only the value-free member declaration, exact
-run commitments, and their checksums for a future custodian. A declaration naming an
-external-custodian role is not itself external evidence.
+Standard extraction does not inspect locked run roots and writes no locked features, labels, or manifests. Its `roles/locked-heldout/` folder contains only member declarations, run commitments, and checksums for custodial review.
 
-`fit` can read only training and policy-selection role payloads. It must reproduce the
-shipped aggregate, per-tier, and ordered row projection before evaluating the frozen grid.
-The emitted `decision_profile.json` is complete, generated, and hash-bound to the base
-profile, protocol, dataset, partitions, seed, objective, and generator version.
+`fit` processes training and policy-selection payloads, reproducing aggregate, per-tier, and ordered row projections before searching the grid. The generated `decision_profile.json` binds cryptographically to base profile, protocol, dataset, partitions, seed, objective, and version hashes.
 
-Calibration-v1 grids accept only `disabled` and `missingness` XD vetoes. Concentration
-and discordance remain valid runtime profile modes, but their per-record decisions cannot
-be reproduced losslessly from the retained scalar evidence, so a study that declares
-either mode fails before evidence extraction.
+Calibration grids support only `disabled` and `missingness` XD vetoes. Discordance and concentration modes require scalar record inputs not present in retained evidence and trigger rejection if declared.
 
-`validate` evaluates one fixed generated profile on validation evidence without selecting
-another. The profile must bind the exact study, protocol, partition, dataset, objective,
-and seed. A completed failure retires that profile/evidence pair.
+`validate` scores a generated profile against validation evidence. The profile must match study parameters exactly. Failure retires the profile and evidence pair.
 
-`evaluate --evidence` is not an ordinary extraction directory. It is a separately
-supplied custodian import containing a locked payload, passed validation attestation,
-study binding, named external authority attestation, and checksums that bind the exact
-study, partition, profile, runs, and payload. A locally minted closure-shaped directory is
-rejected. Evaluation writes a durable precommit before opening locked bytes and consumes
-the profile/evidence pair once. Success, completed failure, interruption, and exception
-all reach a durable terminal state before the operation lock is released. Local file
-locks, precommits, receipts, and append-only retirement records prevent accidental local
-reuse; they do not prove that the cohort was independently selected or externally held.
-The operation lock is an advisory POSIX `flock` on the custody directory. It serializes
-cooperating processes on one host and one filesystem with working advisory-lock
-semantics; it is not a distributed or multi-host guarantee, and no portability claim is
-made for non-POSIX platforms or filesystems whose advisory-lock semantics differ.
+`evaluate --evidence` requires an external custodian package containing locked payloads, validated attestations, study bindings, authority signatures, and cryptographic checksums. Evaluation records a precommit before inspecting locked bytes and evaluates the pair once. Execution states finalize before releasing the advisory file lock. POSIX advisory locks serialize cooperating local processes; they do not guarantee cross-host coordination or non-POSIX lock behavior.
 
 ## Using a generated profile
 
-A generated profile changes no run by existing on disk. The verified packaged neutral
-profile remains the default. Select a generated profile explicitly:
+A generated profile remains inactive until explicitly referenced. The neutral packaged profile remains default. To apply a generated profile:
 
 ```bash
 vntyper pipeline --bam sample.bam -o results/ \
   --decision-profile candidate/decision_profile.json
 ```
 
-Only the six dominance/whole-locus-abstention leaves may differ. Fixed safety fields,
-including `0.00469`, `0.00515`, `20`, `21`, `100`, `200`, BAM flank `8`, thin
-haplotype-record support `3`, and both Tier-A support values `5`, remain immutable.
-XD is always an optional minimum k-mer depth: never a sequencing-read or molecule count,
-never a vote weight, and never a tie-break or winner selector.
+Only six dominance and whole-locus-abstention leaves may vary. Fixed safety parameters (`0.00469`, `0.00515`, `20`, `21`, `100`, `200`, BAM flank `8`, thin haplotype support `3`, and Tier-A support `5`) remain immutable. XD acts solely as an optional minimum k-mer depth: never as a read count, molecule metric, vote weight, or winner selector.
 
 ## Evidence status
 
-The available 200-mutated/200-control simulation corpus is classified
-`previously-examined-development-simulation`, with
-`eligible_for_independent_validation=false` and
-`eligible_for_locked_evaluate=false`. It is useful for shipped-profile reproduction and
-regression testing, but it is neither an independent external cohort nor
-custodian-locked heldout evidence. Issue #295 therefore remains blocked on qualifying
-external data and a named external custodian. Reporting an interval is not a clinical
-safety claim.
+The 200-mutated and 200-control simulation dataset is classified as `previously-examined-development-simulation`, with `eligible_for_independent_validation=false` and `eligible_for_locked_evaluate=false`. It supports regression testing and profile reproduction, but does not qualify as an independent external cohort or custodian-held validation set. Issue #295 remains blocked pending qualified external data from an independent custodian. Reporting a confidence interval constitutes no clinical safety claim.
