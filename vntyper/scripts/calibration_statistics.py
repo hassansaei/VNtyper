@@ -112,11 +112,10 @@ def paired_group_bootstrap(
     rng = random.Random(seed)
     samples: list[Fraction] = []
     ordered_strata = tuple(required_strata)
+    strata_data = [(strata[s], tuple(sorted(strata[s]))) for s in ordered_strata]
     for _ in range(iterations):
         stratum_means: list[Fraction] = []
-        for stratum in ordered_strata:
-            groups = strata[stratum]
-            group_ids = tuple(sorted(groups))
+        for groups, group_ids in strata_data:
             drawn = tuple(rng.choice(group_ids) for _ in group_ids)
             values = [value for group_id in drawn for value in groups[group_id]]
             stratum_means.append(sum(values, start=Fraction(0)) / len(values))
