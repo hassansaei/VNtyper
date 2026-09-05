@@ -85,7 +85,7 @@ The `shark` module is not supported in BAM/CRAM mode; use FASTQ mode or remove t
 |--------|------|---------|-------------|
 | `--archive-results` | flag | off | Create an archive of the results folder after pipeline completion |
 | `--archive-format` | choice | `zip` | Format of the archive: `zip` or `tar.gz` |
-| `--summary-formats` | string | `""` | Comma-separated list of additional summary output formats to generate (supported: `csv`, `tsv`). JSON is always generated |
+| `--summary-formats` | string | `""` | Comma-separated list of additional summary output formats (supported: `csv`, `tsv`). Each format writes `pipeline_summary.<fmt>` (one row per step, run provenance first) and `pipeline_summary_rows.<fmt>` (one row per result field). JSON is always generated; unknown names are ignored without a message |
 | `--report-igv` | choice | `embedded` | How the report carries its alignment browser: `embedded`, `sidecar` or `off`. See [Report Options](#report-options) |
 
 ## Report Options
@@ -153,3 +153,7 @@ Generate additional summary formats and clean up intermediate files:
 vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --summary-formats csv,tsv --delete-intermediates
 ```
+
+This writes `pipeline_summary.csv`, `pipeline_summary_rows.csv`, `pipeline_summary.tsv` and
+`pipeline_summary_rows.tsv` beside `pipeline_summary.json`; see
+[Output Files](../user-guide/output-files.md) for their columns.

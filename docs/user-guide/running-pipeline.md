@@ -88,7 +88,12 @@ vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --summary-formats csv,tsv
 ```
 
-Generates `pipeline_summary.csv` and/or `pipeline_summary.tsv` alongside the default JSON summary.
+Each requested format writes two files beside the default JSON summary:
+`pipeline_summary.csv` / `.tsv`, one row per pipeline step with the run's provenance in
+leading `run_*` columns, and `pipeline_summary_rows.csv` / `.tsv`, one row per step,
+result row and field, which carries the multi-row adVNTR and cross-match results in full.
+Format names other than `csv` and `tsv` are ignored without a message. See
+[Output Files](output-files.md) for the column groups.
 
 ## Intermediate Files
 

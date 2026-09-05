@@ -61,6 +61,7 @@ from vntyper.scripts.run_configuration import RunConfiguration, resolve_run_conf
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)
 from vntyper.scripts.summary import (
+    convert_summary_rows_to_delimited,
     convert_summary_to_csv,
     convert_summary_to_tsv,
     end_summary,
@@ -844,16 +845,17 @@ def run_pipeline(
         write_summary(summary, summary_file_path)
         logger.info(f"Pipeline summary written to: {summary_file_path}")
 
-        # Generate additional summary output formats if specified
-        if summary_formats:
-            if "csv" in summary_formats:
-                csv_path = os.path.join(output_dir, "pipeline_summary.csv")
-                convert_summary_to_csv(summary, csv_path)
-                logger.info(f"Pipeline summary CSV written to: {csv_path}")
-            if "tsv" in summary_formats:
-                tsv_path = os.path.join(output_dir, "pipeline_summary.tsv")
-                convert_summary_to_tsv(summary, tsv_path)
-                logger.info(f"Pipeline summary TSV written to: {tsv_path}")
+        # Each requested summary format writes the one-row-per-step table and, beside
+        # it, the long rows table (#119). Unknown format names are ignored, as before.
+        summary_writers = (("csv", ",", convert_summary_to_csv), ("tsv", "\t", convert_summary_to_tsv))
+        for fmt, delimiter, write_table in summary_writers:
+            if fmt not in (summary_formats or ()):
+                continue
+            table_path = os.path.join(output_dir, f"pipeline_summary.{fmt}")
+            write_table(summary, table_path)
+            rows_path = os.path.join(output_dir, f"pipeline_summary_rows.{fmt}")
+            convert_summary_rows_to_delimited(summary, rows_path, delimiter=delimiter)
+            logger.info(f"Pipeline summary {fmt.upper()} written to: {table_path} and {rows_path}")
 
         if archive_results:
             logger.info("Archiving the results folder.")

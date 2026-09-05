@@ -87,7 +87,9 @@ def test_cli_archive_runs_after_all_final_summary_formats_are_written(
         del base_name, archive_format, root_dir, kwargs
         assert (output_dir / "pipeline_summary.json").exists()
         assert (output_dir / "pipeline_summary.csv").exists()
+        assert (output_dir / "pipeline_summary_rows.csv").exists()
         assert (output_dir / "pipeline_summary.tsv").exists()
+        assert (output_dir / "pipeline_summary_rows.tsv").exists()
         return str(output_dir) + ".zip"
 
     monkeypatch.setattr(pipeline_module, "create_safe_archive", assert_final_outputs)
