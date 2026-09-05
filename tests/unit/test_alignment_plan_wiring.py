@@ -312,8 +312,11 @@ def test_reference_alias_of_the_slice_is_rejected_before_conversion_work(tmp_pat
     "destination_name",
     [
         "output_sliced.bam",
+        "output_sliced.bam.partial",
         "output_unmapped.bam",
+        "output_unmapped.bam.partial",
         "output_sliced_unmapped.bam",
+        "output_sliced_unmapped.bam.partial",
         "output_R1.fastq.gz",
         "output_R2.fastq.gz",
         "output_other.fastq.gz",
@@ -324,9 +327,13 @@ def test_reference_alias_of_the_slice_is_rejected_before_conversion_work(tmp_pat
         "output_index.log",
         "output_sort_fastq.log",
         "output_sliced.bam.bai",
+        "output_sliced.bam.bai.partial",
         "output_sliced.bam.csi",
+        "output_sliced.bam.csi.partial",
         "output_sliced.bai",
+        "output_sliced.bai.partial",
         "output_sliced.csi",
+        "output_sliced.csi.partial",
     ],
 )
 def test_operator_bed_alias_of_any_conversion_destination_is_rejected_before_work(
@@ -346,6 +353,25 @@ def test_operator_bed_alias_of_any_conversion_destination_is_rejected_before_wor
     )
 
     assert bed_file.read_bytes() == b"chr1\t1\t2\n"
+
+
+def test_preplanted_symlink_at_partial_destination_is_rejected_before_work(tmp_path: Path) -> None:
+    """A pre-planted symlink at a .partial output is rejected by destination validation (#314)."""
+    plan = _plan(tmp_path, "bam")
+    partial_slice = tmp_path / "run" / "output_sliced.bam.partial"
+    target = tmp_path / "victim.txt"
+    target.write_text("protected")
+    partial_slice.parent.mkdir(parents=True, exist_ok=True)
+    partial_slice.symlink_to(target)
+
+    _assert_rejected_before_conversion_work(
+        tmp_path,
+        plan,
+        fast_mode=True,
+        error_match="is a symlink",
+    )
+    assert target.read_text() == "protected"
+
 
 
 @pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
