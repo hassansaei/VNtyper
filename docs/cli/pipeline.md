@@ -61,6 +61,7 @@ genotype result.
 | `--fast-mode` | flag | off | Enable fast mode (skips filtering for unmapped and partially mapped reads) |
 | `--keep-intermediates` | flag | off | Compatibility flag: intermediate files (BAM slices, temporary files) are already kept by default, so this flag changes nothing. Use `--delete-intermediates` to remove them. |
 | `--delete-intermediates` | flag | off | Delete intermediate files after processing (wins when `--keep-intermediates` is also given). |
+| `--resume` | flag | off | Resume execution from a previous run in `--output-dir`, reusing completed expensive stages if valid checkpoint files exist. |
 | `--decision-profile` | path | packaged profile | Select exactly one complete `explicit-custom` or `generated` decision profile. Partial overlays and a profile whose fixed-safety fields differ from the packaged profile are rejected before pipeline output is created. |
 
 Omitting `--decision-profile` uses the verified packaged profile and preserves the

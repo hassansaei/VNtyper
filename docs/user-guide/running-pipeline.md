@@ -118,3 +118,31 @@ vntyper -l DEBUG pipeline --bam inputs/sample.bam -o results/sample/
 ```
 
 Log levels: `DEBUG`, `INFO` (default), `WARNING`, `ERROR`, `CRITICAL`. The pipeline log is automatically written to `<output-dir>/pipeline.log`. Override with `-f /path/to/logfile`.
+
+## Resuming Execution
+
+When a pipeline run is interrupted or when re-running an existing analysis with additional downstream reporting options, pass `--resume` to avoid recomputing expensive stages:
+
+```bash
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ --resume
+```
+
+### Reusable Stages
+
+Resumption evaluates checkpoint integrity from `pipeline_summary.json` and reuses completed outputs for:
+- **Alignment and conversion**: BAM/CRAM to FASTQ extraction or FASTQ alignment.
+- **Kestrel genotyping**: Reuses `kestrel_result.tsv`, `output.vcf`, `output.bam`, and `kestrel_pre_result.tsv`.
+- **adVNTR genotyping**: Reuses `output_adVNTR_result.tsv`.
+
+Lightweight stages (BAM header parsing, coverage calculation, cross-match comparison, nomenclature determination, and HTML/PDF report rendering) always recompute to ensure up-to-date reporting.
+
+### Run Identity Invariants and Refusals
+
+Resumption refuses to run and exits with an error if the run identity does not match the prior summary checkpoint:
+- Pipeline version mismatch
+- Input file path changes
+- Sample name changes
+- Reference key or assembly changes
+- Decision profile checksum changes
+
+If an output artifact from a reusable stage has been deleted or modified (MD5 mismatch), only that stage and its dependents are recomputed.
