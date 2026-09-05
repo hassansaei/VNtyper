@@ -19,6 +19,7 @@
     "filter_condition": true
   },
   "confidence_assignment": {
+    "reporting_floor": 0.00469,
     "depth_score_thresholds": {
       "low": 0.00469,
       "high": 0.00515

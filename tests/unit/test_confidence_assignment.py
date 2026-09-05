@@ -223,6 +223,7 @@ def test_an_unparseable_region_depth_keeps_a_parseable_alt_negative(kestrel_conf
 #: elsewhere in the pipeline, so a partial config is not supported input and the
 #: right behaviour is to fail loudly here too.
 CALIBRATION_CONSTANTS = {
+    "reporting_floor": (0.00469, 0.0),
     "depth_score_thresholds.low": (0.00469, 0.2),
     "depth_score_thresholds.high": (0.00515, 0.4),
     "alt_depth_thresholds.low": (20, 5),

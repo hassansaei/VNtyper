@@ -85,9 +85,9 @@ class ConfidenceRule:
 
 
 def _predicate_subthreshold_or_nan(df: pd.DataFrame, thresholds: Mapping[str, Any]) -> pd.Series:
-    low = _get_threshold(thresholds, "low", "depth_score_thresholds")
+    floor = _get_threshold(thresholds, "reporting_floor", "confidence_assignment")
     ds = df["Depth_Score"]
-    return ds.isna() | (ds < low)
+    return ds.isna() | (ds < floor)
 
 
 def _predicate_midband(df: pd.DataFrame, thresholds: Mapping[str, Any]) -> pd.Series:
