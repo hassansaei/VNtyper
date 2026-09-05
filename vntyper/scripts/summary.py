@@ -24,6 +24,7 @@ import os
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from vntyper.scripts.decision_profile import ResolvedDecisionProfile, load_packaged_decision_profile
@@ -163,6 +164,7 @@ def start_summary(
         "input_files": input_files if input_files is not None else {},
         "canonical_input_files": canonical_input_files,
         "analysis_settings": analysis_settings,
+        "stage_artifact_md5s": {},
         "sample_name": sample_name,
         "sample_name_is_explicit": bool(sample_name_is_explicit),
         "reference_assembly_requested": reference_assembly_requested,
@@ -294,11 +296,41 @@ def refresh_step(summary, step_name, write_summary_path=None):
         # ``error`` entry rather than raising, so wrapping this would add a blind
         # except that can never fire.
         record["parsed_result"] = _parse_by_type(result_file, record.get("file_type", "tsv"))
+        _record_stage_artifact_md5s(summary, step_name, result_file)
         if write_summary_path:
             write_summary(summary, write_summary_path)
         return True
     logger.debug(f"Cannot refresh step '{step_name}': it is not in the summary.")
     return False
+
+
+def _record_stage_artifact_md5s(summary: dict[str, Any], step_name: str, result_file: str) -> None:
+    """Record MD5 checksums for sibling artifacts of a stage in summary['stage_artifact_md5s']."""
+    try:
+        from vntyper.scripts.resume import STEP_OUTPUT_SIBLINGS
+    except ImportError:
+        return
+
+    stage_dir = Path(result_file).parent
+    sibling_md5s: dict[str, str] = {}
+    for sib in STEP_OUTPUT_SIBLINGS.get(step_name, ()):
+        sib_path = stage_dir / sib
+        if sib_path.is_file():
+            sib_hash = md5sum(str(sib_path))
+            if sib_hash is not None:
+                sibling_md5s[sib] = sib_hash
+    if "_R1" in Path(result_file).name:
+        mate_name = Path(result_file).name.replace("_R1", "_R2")
+        mate_path = stage_dir / mate_name
+        if mate_path.is_file():
+            mate_hash = md5sum(str(mate_path))
+            if mate_hash is not None:
+                sibling_md5s[mate_name] = mate_hash
+
+    if sibling_md5s:
+        if "stage_artifact_md5s" not in summary:
+            summary["stage_artifact_md5s"] = {}
+        summary["stage_artifact_md5s"][step_name] = sibling_md5s
 
 
 def _parse_by_type(result_file, file_type):
@@ -444,6 +476,7 @@ def record_step(
         record["parsed_result"] = {"error": f"Error parsing file: {e}"}
 
     summary["steps"].append(record)
+    _record_stage_artifact_md5s(summary, step_name, result_file)
 
     if write_summary_path is not None:
         write_summary(summary, write_summary_path)

@@ -232,13 +232,26 @@ def step_is_reusable(
         )
         return False
 
-    # Check required sibling files
+    # Check required sibling files and verify checksums if recorded
     stage_dir = result_path.parent
+    recorded_siblings = prior.get("stage_artifact_md5s", {}).get(step_name, {})
     for sibling in STEP_OUTPUT_SIBLINGS.get(step_name, ()):
         sibling_path = stage_dir / sibling
         if not sibling_path.is_file():
             logger.debug("Required sibling %s for step %r does not exist", sibling_path, step_name)
             return False
+        expected_md5 = recorded_siblings.get(sibling)
+        if expected_md5 is not None:
+            actual_sib_md5 = _compute_md5(sibling_path)
+            if actual_sib_md5 != expected_md5:
+                logger.warning(
+                    "MD5 mismatch for sibling %s of step %r: recorded %s, current %s",
+                    sibling,
+                    step_name,
+                    expected_md5,
+                    actual_sib_md5,
+                )
+                return False
 
     # Check mate FASTQ for BAM/CRAM conversion if R1 is present
     if "_R1" in result_path.name:
@@ -248,6 +261,18 @@ def step_is_reusable(
         if not mate_path.is_file():
             logger.debug("Expected mate FASTQ %s for step %r does not exist", mate_path, step_name)
             return False
+        expected_mate_md5 = recorded_siblings.get(mate_name)
+        if expected_mate_md5 is not None:
+            actual_mate_md5 = _compute_md5(mate_path)
+            if actual_mate_md5 != expected_mate_md5:
+                logger.warning(
+                    "MD5 mismatch for mate FASTQ %s of step %r: recorded %s, current %s",
+                    mate_name,
+                    step_name,
+                    expected_mate_md5,
+                    actual_mate_md5,
+                )
+                return False
 
     return True
 

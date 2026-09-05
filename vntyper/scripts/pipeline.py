@@ -243,12 +243,22 @@ def run_pipeline(
             if fastq2 is not None:
                 canonical_input_files["fastq2"] = str(Path(fastq2).resolve())
 
+        advntr_max_coverage = None
+        if isinstance(module_args, dict) and "advntr" in module_args and isinstance(module_args["advntr"], dict):
+            advntr_max_coverage = module_args["advntr"].get("max_coverage")
+
+        bam_processing_settings = None
+        if isinstance(config, dict) and "bam_processing" in config and isinstance(config["bam_processing"], dict):
+            bam_processing_settings = dict(config["bam_processing"])
+
         analysis_settings: dict[str, Any] = {
             "reference_assembly": reference_assembly,
             "fast_mode": bool(fast_mode),
             "custom_regions": str(custom_regions) if custom_regions else None,
             "bed_file": str(Path(bed_file).resolve()) if bed_file else None,
             "advntr_model": str(Path(advntr_reference).resolve()) if advntr_reference else None,
+            "advntr_max_coverage": advntr_max_coverage,
+            "bam_processing": bam_processing_settings,
             "extra_modules": sorted(extra_modules),
         }
 
@@ -617,8 +627,18 @@ def run_pipeline(
                     )
                 )
             else:
-                if resume and prior_summary and step_is_reusable(prior_summary, STEP_FASTQ_QC, output_dir):
-                    logger.info("Reusing previous %s step results.", STEP_FASTQ_QC)
+                can_reuse_alignment = (
+                    resume and prior_summary and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir)
+                )
+                if can_reuse_alignment:
+                    logger.info("Reusing previous %s step results.", STEP_FASTQ_ALIGNMENT)
+                    prior_align_st = next(
+                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
+                    )
+                    if prior_align_st is not None:
+                        summary["steps"].append(
+                            make_reused_step_record(prior_align_st, prior_summary.get("pipeline_start"))
+                        )
                     prior_qc_st = next(
                         (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_QC), None
                     )
@@ -626,7 +646,15 @@ def run_pipeline(
                         summary["steps"].append(
                             make_reused_step_record(prior_qc_st, prior_summary.get("pipeline_start"))
                         )
+                    for st_name in (STEP_FASTQ_ALIGNMENT, STEP_FASTQ_QC):
+                        if prior_summary.get("stage_artifact_md5s", {}).get(st_name):
+                            summary["stage_artifact_md5s"][st_name] = prior_summary["stage_artifact_md5s"][st_name]
                     write_summary(summary, summary_file_path)
+                    sorted_bam = (
+                        Path(prior_align_st["result_file"])
+                        if prior_align_st and prior_align_st.get("result_file")
+                        else Path(dirs["alignment_processing"]) / "output_sorted.bam"
+                    )
                 else:
                     logger.info("Starting FASTQ quality control.")
                     qc_start = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -651,22 +679,6 @@ def run_pipeline(
                     )
                     logger.info("FASTQ quality control completed.")
 
-                if resume and prior_summary and step_is_reusable(prior_summary, STEP_FASTQ_ALIGNMENT, output_dir):
-                    logger.info("Reusing previous %s step results.", STEP_FASTQ_ALIGNMENT)
-                    prior_align_st = next(
-                        (s for s in prior_summary.get("steps", []) if s.get("step") == STEP_FASTQ_ALIGNMENT), None
-                    )
-                    if prior_align_st is not None:
-                        summary["steps"].append(
-                            make_reused_step_record(prior_align_st, prior_summary.get("pipeline_start"))
-                        )
-                    write_summary(summary, summary_file_path)
-                    sorted_bam = (
-                        Path(prior_align_st["result_file"])
-                        if prior_align_st and prior_align_st.get("result_file")
-                        else Path(dirs["alignment_processing"]) / "output_sorted.bam"
-                    )
-                else:
                     fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
                     fastq2 = (
                         os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz") if paired_fastq_input else None
@@ -701,19 +713,20 @@ def run_pipeline(
                         )
                         raise RuntimeError("Alignment failed due to missing or incomplete BWA reference indices.")
                     logger.info("FASTQ alignment completed.")
-                    alignment_plan = run_preflight(
-                        **build_alignment_preflight_kwargs(
-                            in_path=str(sorted_bam),
-                            output_dir=Path(output_dir) / "fastq_bam_processing",
-                            output_name="post_alignment",
-                            file_format="bam",
-                            config=config,
-                            threads=threads,
-                            bed_file=bed_file_path,
-                            reference_assembly=reference_assembly,
-                            fast_mode=fast_mode,
-                        )
+
+                alignment_plan = run_preflight(
+                    **build_alignment_preflight_kwargs(
+                        in_path=str(sorted_bam),
+                        output_dir=Path(output_dir) / "fastq_bam_processing",
+                        output_name="post_alignment",
+                        file_format="bam",
+                        config=config,
+                        threads=threads,
+                        bed_file=bed_file_path,
+                        reference_assembly=reference_assembly,
+                        fast_mode=fast_mode,
                     )
+                )
                 logger.info("Starting BAM to FASTQ conversion (Post-alignment).")
                 conv2_start = datetime.now(timezone.utc).replace(tzinfo=None)
                 produced_fastqs = process_bam_to_fastq(
@@ -945,6 +958,11 @@ def run_pipeline(
                 refresh_step(
                     summary,
                     STEP_KESTREL,
+                    write_summary_path=summary_file_path,
+                )
+                refresh_step(
+                    summary,
+                    STEP_ADVNTR,
                     write_summary_path=summary_file_path,
                 )
 

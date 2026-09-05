@@ -42,6 +42,10 @@ def _make_prior_summary(
         "custom_regions": None,
         "bed_file": None,
         "advntr_model": advntr_model,
+        "advntr_max_coverage": None,
+        "bam_processing": dict(MINIMAL_CONFIG.get("bam_processing", {}))
+        if "bam_processing" in MINIMAL_CONFIG
+        else None,
         "extra_modules": resolved_modules,
     }
     return {
@@ -716,3 +720,184 @@ def test_incompatible_resume_refuses_before_replacing_provenance_snapshots(
         )
 
     assert profile_snapshot.read_text(encoding="utf-8") == "pre-existing profile snapshot"
+
+
+def test_resume_prepares_alignment_plan_when_reusing_sorted_bam(tmp_path: Path) -> None:
+    """Prepares an alignment plan via preflight when reusing only sorted BAM (#20 / P1)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    f1 = input_dir / "r1.fastq.gz"
+    f2 = input_dir / "r2.fastq.gz"
+    f1.touch()
+    f2.touch()
+
+    align_dir = output_dir / "alignment_processing"
+    align_dir.mkdir()
+    sorted_bam = align_dir / "output_sorted.bam"
+    sorted_bam.write_bytes(b"bam content")
+    bam_md5 = hashlib.md5(b"bam content").hexdigest()
+
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_ALIGNMENT,
+                "result_file": str(sorted_bam),
+                "file_type": "bam",
+                "md5sum": bam_md5,
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        resume=True,
+    )
+
+    harness.stages["align_and_sort_fastq"].assert_not_called()
+    assert harness.stages["run_preflight"].call_count >= 1
+    plan = harness.stages["process_bam_to_fastq"].call_args.kwargs["plan"]
+    assert plan is not None
+    assert plan.input_path == str(sorted_bam)
+
+
+def test_resume_forces_qc_rerun_when_alignment_must_rerun(tmp_path: Path) -> None:
+    """Forces fastp QC to rerun when alignment must rerun (#20 / P1)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    f1 = input_dir / "r1.fastq.gz"
+    f2 = input_dir / "r2.fastq.gz"
+    f1.touch()
+    f2.touch()
+
+    fastq_dir = output_dir / "fastq_bam_processing"
+    fastq_dir.mkdir()
+    qc_json = fastq_dir / "output.json"
+    qc_json.write_text("{}", encoding="utf-8")
+    qc_md5 = hashlib.md5(b"{}").hexdigest()
+
+    # QC is recorded, but alignment is absent
+    prior_summary = _make_prior_summary(
+        input_files={"fastq1": f1.name, "fastq2": f2.name},
+        canonical_input_files={"fastq1": str(f1.resolve()), "fastq2": str(f2.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_FASTQ_QC,
+                "result_file": str(qc_json),
+                "file_type": "json",
+                "md5sum": qc_md5,
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        fastq1=str(f1),
+        fastq2=str(f2),
+        resume=True,
+    )
+
+    harness.stages["process_fastq"].assert_called_once()
+    harness.stages["align_and_sort_fastq"].assert_called_once()
+
+
+def test_resume_refusal_on_advntr_max_coverage_mismatch(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Refuses resume when advntr_max_coverage differs from prior run (#20 / P1)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        extra_modules=["advntr"],
+        analysis_settings={
+            "reference_assembly": "hg19",
+            "fast_mode": False,
+            "custom_regions": None,
+            "bed_file": None,
+            "advntr_model": None,
+            "advntr_max_coverage": 500,  # Prior ran with max_coverage=500
+            "bam_processing": None,
+            "extra_modules": ["advntr"],
+        },
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR), pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            bam=str(input_bam),
+            extra_modules=["advntr"],
+            run_pipeline_kwargs={"module_args": {"advntr": {"max_coverage": 1000}}},
+            resume=True,
+            expect_failure=False,
+        )
+
+    assert any("analysis setting 'advntr_max_coverage' differs" in record.message for record in caplog.records)
+
+
+def test_resume_refuses_reused_stage_when_sibling_artifact_md5_differs(tmp_path: Path) -> None:
+    """Rejects reuse when recorded sibling artifact checksum differs (#20 / P2)."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    output_bam = kestrel_dir / "output.bam"
+    output_bam.write_text("corrupted bam content", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+
+    kestrel_md5 = hashlib.md5(b"kestrel tsv data").hexdigest()
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": kestrel_md5,
+            }
+        ],
+    )
+    prior_summary["stage_artifact_md5s"] = {
+        summary_steps.STEP_KESTREL: {
+            "output.bam": "original_bam_md5_that_differs",
+            "output.vcf": hashlib.md5(b"vcf").hexdigest(),
+            "kestrel_pre_result.tsv": hashlib.md5(b"pre").hexdigest(),
+        }
+    }
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    harness = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+
+    # Kestrel stage must have rerun because output.bam checksum differed
+    harness.stages["run_kestrel"].assert_called_once()
