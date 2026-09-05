@@ -24,7 +24,7 @@ import sys
 import pytest
 
 from vntyper.cli import main
-from vntyper.scripts.cli_parser import build_parser
+from vntyper.scripts.cli_parser import build_parser, unit_fraction
 from vntyper.version import __version__ as VERSION
 
 # Mark all tests in this module as unit tests
@@ -206,3 +206,39 @@ def test_main_reads_sys_argv_when_argv_is_none(monkeypatch, capsys):
     with pytest.raises(SystemExit) as excinfo:
         main()
     assert excinfo.value.code == 2
+
+
+def test_unit_fraction_valid() -> None:
+    assert unit_fraction("0") == 0.0
+    assert unit_fraction("0.05") == 0.05
+    assert unit_fraction("1.0") == 1.0
+    assert unit_fraction("0.5") == 0.5
+
+
+def test_unit_fraction_invalid_raises_argument_type_error() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="expected a numeric fraction"):
+        unit_fraction("not-a-number")
+    with pytest.raises(argparse.ArgumentTypeError, match="expected a fraction between 0 and 1"):
+        unit_fraction("-0.01")
+    with pytest.raises(argparse.ArgumentTypeError, match="expected a fraction between 0 and 1"):
+        unit_fraction("1.01")
+
+
+def test_cohort_parser_accepts_rare_allele_max_frequency() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["cohort", "-i", "d1", "-o", "out", "--rare-allele-max-frequency", "0.02"])
+    assert args.rare_allele_max_frequency == 0.02
+
+
+def test_cohort_parser_defaults_rare_allele_max_frequency_to_none() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["cohort", "-i", "d1", "-o", "out"])
+    assert args.rare_allele_max_frequency is None
+
+
+def test_cohort_parser_rejects_invalid_rare_allele_max_frequency() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["cohort", "-i", "d1", "-o", "out", "--rare-allele-max-frequency", "1.5"])
+    assert exc_info.value.code == 2
+

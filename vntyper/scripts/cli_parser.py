@@ -19,6 +19,7 @@ Functions:
 
 import argparse
 import logging
+import math
 from pathlib import Path
 
 from vntyper.scripts.reference_registry import list_assemblies
@@ -47,6 +48,28 @@ def positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}") from error
     if number < 1:
         raise argparse.ArgumentTypeError(f"expected a thread count of at least 1, got {number}")
+    return number
+
+
+def unit_fraction(value: str) -> float:
+    """Parse a unit fraction command-line token between 0 and 1 inclusive.
+
+    Args:
+        value: Raw command-line token.
+
+    Returns:
+        float: The parsed fraction in [0.0, 1.0].
+
+    Raises:
+        argparse.ArgumentTypeError: If the token is not numeric or outside [0, 1].
+            argparse reports this as a usage error with exit code 2.
+    """
+    try:
+        number = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"expected a numeric fraction from 0 to 1, got {value!r}") from error
+    if not (0.0 <= number <= 1.0) or not math.isfinite(number):
+        raise argparse.ArgumentTypeError(f"expected a fraction between 0 and 1, got {number}")
     return number
 
 
@@ -400,6 +423,16 @@ def build_parser() -> argparse.ArgumentParser:
             "unkeyed, so where sample names are drawn from a guessable set anyone holding the "
             "report can recover them by testing candidates at one hash each. Treat a shared "
             "report as identifying."
+        ),
+    )
+    parser_cohort.add_argument(
+        "--rare-allele-max-frequency",
+        type=unit_fraction,
+        default=None,
+        help=(
+            "Maximum frequency threshold (0 to 1) for marking calls in the cohort call "
+            "frequency table as Below_Cutoff (default: 0.05). Calls with frequency above "
+            "this threshold are not omitted."
         ),
     )
 
