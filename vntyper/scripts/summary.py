@@ -313,6 +313,7 @@ def refresh_step(summary, step_name, write_summary_path=None):
 def _record_stage_artifact_md5s(summary: dict[str, Any], step_name: str, result_file: str) -> None:
     """Record MD5 checksums for sibling artifacts of a stage in summary['stage_artifact_md5s']."""
     try:
+        from vntyper.scripts import summary_steps
         from vntyper.scripts.resume import STEP_OUTPUT_SIBLINGS
     except ImportError:
         return
@@ -338,6 +339,14 @@ def _record_stage_artifact_md5s(summary: dict[str, Any], step_name: str, result_
         replay_hash = md5sum(str(replay_path))
         if replay_hash is not None:
             sibling_md5s["bam_identity_replay.v1.json"] = replay_hash
+
+    if step_name == summary_steps.STEP_KESTREL:
+        for extra_vcf in ("output_indel.vcf.gz", "output_indel.vcf.gz.tbi"):
+            extra_path = stage_dir / extra_vcf
+            if extra_path.is_file():
+                extra_hash = md5sum(str(extra_path))
+                if extra_hash is not None:
+                    sibling_md5s[extra_vcf] = extra_hash
 
     if sibling_md5s:
         if "stage_artifact_md5s" not in summary:

@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 STEP_OUTPUT_SIBLINGS: Final[dict[str, tuple[str, ...]]] = {
     summary_steps.STEP_KESTREL: (
         "output.vcf",
+        "output_indel.vcf",
         "output.bam",
         "kestrel_pre_result.tsv",
     ),

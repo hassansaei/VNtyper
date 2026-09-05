@@ -257,6 +257,11 @@ def run_pipeline(
                 if f2_path.is_file():
                     input_fingerprints["fastq2"] = fingerprint_file(f2_path)
 
+        if bed_file is not None:
+            bed_path = Path(bed_file).resolve()
+            if bed_path.is_file():
+                input_fingerprints["bed_file"] = fingerprint_file(bed_path)
+
         advntr_max_coverage = None
         if isinstance(module_args, dict) and "advntr" in module_args and isinstance(module_args["advntr"], dict):
             advntr_max_coverage = module_args["advntr"].get("max_coverage")
@@ -942,9 +947,19 @@ def run_pipeline(
                         process_advntr_output,
                         run_advntr,
                     )
+                    from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
                 except ImportError as exc:
                     logger.error(f"adVNTR module import failed: {exc}")
                     sys.exit(1)
+
+                for stage_rel in (
+                    "output_adVNTR_result.tsv",
+                    "output_adVNTR.tsv",
+                    "output_adVNTR.vcf",
+                    "cross_match_results.tsv",
+                    "output_advntr.log",
+                ):
+                    invalidate_advntr_artifact(Path(dirs["advntr"]) / stage_rel)
 
                 advntr_settings = run_configuration.advntr.get("settings")
                 if not isinstance(advntr_settings, Mapping):

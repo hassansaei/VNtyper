@@ -57,6 +57,13 @@ def _make_prior_summary(
         input_fingerprints = {
             k: fingerprint_file(Path(v)) for k, v in canonical_input_files.items() if Path(v).is_file()
         }
+    bed_candidate = (analysis_settings and analysis_settings.get("bed_file")) or default_settings.get("bed_file")
+    if bed_candidate and Path(bed_candidate).is_file():
+        if input_fingerprints is None:
+            input_fingerprints = {}
+        from vntyper.scripts.resume import fingerprint_file
+
+        input_fingerprints["bed_file"] = fingerprint_file(Path(bed_candidate))
     res = {
         "schema_version": 3,
         "version": VERSION,
@@ -280,6 +287,7 @@ def test_resume_skips_kestrel_and_advntr_when_reusable(tmp_path: Path) -> None:
     kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
     kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
@@ -353,6 +361,7 @@ def test_resume_forces_kestrel_rerun_when_corrupted(tmp_path: Path) -> None:
     kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
     kestrel_tsv.write_text("corrupted content", encoding="utf-8")
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
@@ -887,6 +896,7 @@ def test_resume_refuses_reused_stage_when_sibling_artifact_md5_differs(tmp_path:
     kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
     kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     output_bam = kestrel_dir / "output.bam"
     output_bam.write_text("corrupted bam content", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
@@ -909,6 +919,7 @@ def test_resume_refuses_reused_stage_when_sibling_artifact_md5_differs(tmp_path:
         summary_steps.STEP_KESTREL: {
             "output.bam": "original_bam_md5_that_differs",
             "output.vcf": hashlib.md5(b"vcf").hexdigest(),
+            "output_indel.vcf": hashlib.md5(b"indel vcf").hexdigest(),
             "kestrel_pre_result.tsv": hashlib.md5(b"pre").hexdigest(),
         }
     }
@@ -975,12 +986,15 @@ def test_resume_preserves_sibling_checksums_across_consecutive_resumes(tmp_path:
     output_bam.write_text("bam data", encoding="utf-8")
     output_vcf = kestrel_dir / "output.vcf"
     output_vcf.write_text("vcf data", encoding="utf-8")
+    indel_vcf = kestrel_dir / "output_indel.vcf"
+    indel_vcf.write_text("indel data", encoding="utf-8")
     pre_tsv = kestrel_dir / "kestrel_pre_result.tsv"
     pre_tsv.write_text("pre data", encoding="utf-8")
 
     tsv_md5 = hashlib.md5(b"kestrel tsv data").hexdigest()
     bam_md5 = hashlib.md5(b"bam data").hexdigest()
     vcf_md5 = hashlib.md5(b"vcf data").hexdigest()
+    indel_md5 = hashlib.md5(b"indel data").hexdigest()
     pre_md5 = hashlib.md5(b"pre data").hexdigest()
 
     prior_summary = _make_prior_summary(
@@ -999,6 +1013,7 @@ def test_resume_preserves_sibling_checksums_across_consecutive_resumes(tmp_path:
         summary_steps.STEP_KESTREL: {
             "output.bam": bam_md5,
             "output.vcf": vcf_md5,
+            "output_indel.vcf": indel_md5,
             "kestrel_pre_result.tsv": pre_md5,
         }
     }
@@ -1042,6 +1057,7 @@ def test_resume_reruns_advntr_when_model_digest_changes(tmp_path: Path) -> None:
     kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
     kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
@@ -1099,6 +1115,7 @@ def test_resume_reruns_kestrel_when_reference_path_changes(tmp_path: Path) -> No
     kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
     kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
@@ -1250,6 +1267,7 @@ def test_resume_reruns_kestrel_when_identity_aware_and_replay_missing_or_corrupt
     tsv_content = "Motif\tVariant\t__Identity_Molecular_Identity\n1\tins\tmol1\n"
     kestrel_tsv.write_text(tsv_content, encoding="utf-8")
     (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output_indel.vcf").write_text("indel vcf", encoding="utf-8")
     (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
     (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
 
@@ -1376,3 +1394,112 @@ def test_resume_incompatible_advntr_model_preserves_existing_model_snapshot(tmp_
 
     # Destination snapshot must NOT have been replaced by the bad candidate!
     assert snapshot.read_bytes() == b"original preserved model snapshot"
+
+
+def test_resume_refuses_when_bed_file_content_is_modified_in_place(tmp_path: Path) -> None:
+    """Modifying BED file content in-place causes resume refusal (#20 / adversarial review)."""
+    output_dir = tmp_path / "bed_resume_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.write_bytes(b"bam content")
+    bed = input_dir / "target.bed"
+    bed.write_text("chr1\t100\t200\n", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        analysis_settings={"bed_file": str(bed.resolve())},
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    # In-place modification of BED contents
+    bed.write_text("chr1\t300\t400\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="run_pipeline exited"):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            bam=str(input_bam),
+            bed_file=str(bed),
+            resume=True,
+        )
+
+
+def test_resume_rerun_advntr_invalidates_prior_producer_outputs(tmp_path: Path) -> None:
+    """Rerunning adVNTR invalidates prior producer outputs before execution (#20 / adversarial review)."""
+    output_dir = tmp_path / "advntr_rerun_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    fastq_dir = output_dir / "fastq_bam_processing"
+    fastq_dir.mkdir()
+    sliced = fastq_dir / "output_sliced.bam"
+    sliced.write_bytes(b"sliced bam")
+
+    advntr_dir = output_dir / "advntr"
+    advntr_dir.mkdir()
+    stale_raw_tsv = advntr_dir / "output_adVNTR.tsv"
+    stale_raw_tsv.write_text("stale raw advntr tsv", encoding="utf-8")
+    stale_result = advntr_dir / "output_adVNTR_result.tsv"
+    stale_result.write_text("stale result", encoding="utf-8")
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        extra_modules=["advntr"],
+        steps=[],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    h = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        extra_modules=["advntr"],
+        resume=True,
+    )
+    assert h.stages["run_advntr"].called
+    assert not stale_raw_tsv.exists()
+
+
+def test_resume_reruns_kestrel_when_indel_vcf_missing_or_corrupted(tmp_path: Path) -> None:
+    """Kestrel step is re-run if output_indel.vcf is missing or corrupted (#20 / adversarial review)."""
+    output_dir = tmp_path / "kestrel_indel_dir"
+    output_dir.mkdir()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    input_bam = input_dir / "sample.bam"
+    input_bam.touch()
+
+    kestrel_dir = output_dir / "kestrel"
+    kestrel_dir.mkdir()
+    kestrel_tsv = kestrel_dir / "kestrel_result.tsv"
+    kestrel_tsv.write_text("kestrel tsv data", encoding="utf-8")
+    (kestrel_dir / "output.vcf").write_text("vcf", encoding="utf-8")
+    (kestrel_dir / "output.bam").write_text("bam", encoding="utf-8")
+    (kestrel_dir / "kestrel_pre_result.tsv").write_text("pre", encoding="utf-8")
+    # Note: output_indel.vcf is intentionally omitted
+
+    prior_summary = _make_prior_summary(
+        input_files={"bam": input_bam.name},
+        canonical_input_files={"bam": str(input_bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(kestrel_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"kestrel tsv data").hexdigest(),
+            }
+        ],
+    )
+    (output_dir / "pipeline_summary.json").write_text(json.dumps(prior_summary), encoding="utf-8")
+
+    h = run_pipeline_under_harness(
+        output_dir=output_dir,
+        bam=str(input_bam),
+        resume=True,
+    )
+    assert h.stages["run_kestrel"].called
