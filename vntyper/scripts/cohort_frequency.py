@@ -58,6 +58,15 @@ def _is_placeholder(row: pd.Series | Mapping[str, Any]) -> bool:
     return is_empty_result_row(cells)
 
 
+def _cell_str(row: pd.Series | Mapping[str, Any], key: str) -> str:
+    """Safely extract a non-empty string cell value from a series or mapping."""
+    val = row.get(key)
+    if val is None or pd.isna(val):
+        return ""
+    s = str(val).strip()
+    return "" if s in ("nan", "None") else s
+
+
 def _extract_grouping_key(row: pd.Series | Mapping[str, Any]) -> tuple[str, str]:
     """Determine the grouping key and key kind for one call row.
 
@@ -68,15 +77,15 @@ def _extract_grouping_key(row: pd.Series | Mapping[str, Any]) -> tuple[str, str]
     Returns:
         tuple[str, str]: (Grouping_Key, Grouping_Key_Kind)
     """
-    status = str(row.get("Molecular_Identity_Status") or "").strip()
-    mol_id = str(row.get("Molecular_Identity") or "").strip()
+    status = _cell_str(row, "Molecular_Identity_Status")
+    mol_id = _cell_str(row, "Molecular_Identity")
     if status in ("unique", "legacy-selected-among-multiple") and mol_id and mol_id != "legacy identity not recorded":
         return mol_id, "molecular-identity"
 
-    motifs = str(row.get("Motifs") or row.get("Motif") or "").strip()
-    pos = str(row.get("POS") or "").strip()
-    ref = str(row.get("REF") or "").strip()
-    alt = str(row.get("ALT") or "").strip()
+    motifs = _cell_str(row, "Motifs") or _cell_str(row, "Motif")
+    pos = _cell_str(row, "POS")
+    ref = _cell_str(row, "REF")
+    alt = _cell_str(row, "ALT")
     return f"{motifs}:{pos}:{ref}:{alt}", "caller-representation"
 
 
@@ -146,10 +155,11 @@ def call_frequency_frame(
         else:
             if "Molecular_Identity" in group.columns:
                 for val in group["Molecular_Identity"]:
-                    val_str = str(val or "").strip()
-                    if val_str and val_str not in ("None", "legacy identity not recorded"):
-                        mol_id = val_str
-                        break
+                    if pd.notna(val):
+                        val_str = str(val).strip()
+                        if val_str and val_str not in ("None", "nan", "legacy identity not recorded"):
+                            mol_id = val_str
+                            break
 
         motifs = _first_non_empty(group, "Motifs", "Motif")
         pos = _first_non_empty(group, "POS")

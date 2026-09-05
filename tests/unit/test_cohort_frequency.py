@@ -283,3 +283,50 @@ def test_all_placeholder_rows_returns_empty_frame() -> None:
     result = call_frequency_frame(df, cohort_size=5, max_frequency=0.05)
     assert result.empty
     assert list(result.columns) == CALL_FREQUENCY_COLUMNS
+
+
+def test_mixed_legacy_and_current_schema_motif_fallback() -> None:
+    """When a cohort mixes legacy rows (having only Motif) with newer rows (having Motifs),
+    missing Motifs in legacy rows must not prevent falling back to Motif (Codex review finding)."""
+    rows = [
+        # Newer row with Motifs
+        {
+            "Sample": "sample_new",
+            "Motifs": "5-5",
+            "POS": "67",
+            "REF": "G",
+            "ALT": "GG",
+            "Variant": "insG",
+            "Depth_Score": "30.0",
+        },
+        # Legacy row with Motif 3, but identical POS/REF/ALT
+        {
+            "Sample": "sample_legacy_1",
+            "Motif": "3",
+            "POS": "67",
+            "REF": "G",
+            "ALT": "GG",
+            "Variant": "insG",
+            "Depth_Score": "20.0",
+        },
+        # Legacy row with Motif 7, identical POS/REF/ALT
+        {
+            "Sample": "sample_legacy_2",
+            "Motif": "7",
+            "POS": "67",
+            "REF": "G",
+            "ALT": "GG",
+            "Variant": "insG",
+            "Depth_Score": "25.0",
+        },
+    ]
+    df = pd.DataFrame(rows)
+    result = call_frequency_frame(df, cohort_size=3, max_frequency=0.4)
+
+    # They should form 3 distinct groups: 5-5:67:G:GG, 3:67:G:GG, 7:67:G:GG
+    # None should have Grouping_Key starting with "nan:"
+    assert len(result) == 3
+    keys = sorted(result["Grouping_Key"].tolist())
+    assert keys == ["3:67:G:GG", "5-5:67:G:GG", "7:67:G:GG"]
+    assert all("nan" not in k for k in keys)
+    assert all(r["Sample_Count"] == 1 for _, r in result.iterrows())
