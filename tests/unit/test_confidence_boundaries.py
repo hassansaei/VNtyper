@@ -637,4 +637,3 @@ def test_moving_low_precision_band_edge_alone_leaves_reporting_floor_intact() ->
     df = _make_df(46, 10000)
     scored = calculate_depth_score_and_assign_confidence(df, conf)
     assert scored.loc[0, "Confidence"] == NEGATIVE_LABEL
-

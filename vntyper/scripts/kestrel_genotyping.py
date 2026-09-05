@@ -590,8 +590,7 @@ def _subthreshold_note(output_dir, config, filter_columns=FILTER_COLUMNS):
         floor = config["confidence_assignment"]["reporting_floor"]
     except (KeyError, TypeError):
         logger.warning(
-            "No confidence_assignment.reporting_floor in the Kestrel config; "
-            "no subthreshold note will be written."
+            "No confidence_assignment.reporting_floor in the Kestrel config; no subthreshold note will be written."
         )
         return None
     signal = detect_from_file(os.path.join(output_dir, "kestrel_pre_result.tsv"), filter_columns, floor)

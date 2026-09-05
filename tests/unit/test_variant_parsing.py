@@ -446,4 +446,3 @@ def test_filter_by_alt_values_missing_gg_depth_threshold_raises_key_error() -> N
     config = {"alt_filtering": {"gg_alt_value": "GG", "exclude_alts": []}}
     with pytest.raises(KeyError, match="gg_depth_score_threshold"):
         filter_by_alt_values_and_finalize(df, config)
-
