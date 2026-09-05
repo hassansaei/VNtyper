@@ -4,6 +4,12 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+### Confidence grade (Issue #173 part 2)
+
+- **Derived sample-level confidence grade**: Added a derived, configuration-driven `confidence_grade` field to `ScreeningSummary` and configured `confidence_grade_rules` in `report_config.json` covering the ordered vocabulary (`not-established`, `no-finding-limited`, `no-finding`, `finding-limited`, `finding`, `finding-corroborated`).
+- **Masthead confidence grade chip**: Rendered the computed confidence grade as a `Confidence grade` chip in the per-sample HTML report masthead via `state_chips`, with opt-in fallback preserving legacy report configuration compatibility.
+- **Render context contract declaration**: Declared `screening_state.confidence_grade` in `report_context_contract.py` for custom-template API compatibility while keeping the template recursive parity audit intact.
+
 ### Reporting floor split and decision profile revision 2 (#311)
 
 - Split the MUC1 reporting floor (`confidence_assignment.reporting_floor`, 0.00469) from the lower edge of the `Low_Precision` band (`confidence_assignment.depth_score_thresholds.low`, 0.00469) and linked the GG depth-score threshold (`alt_filtering.gg_depth_score_threshold`) to the reporting floor.
