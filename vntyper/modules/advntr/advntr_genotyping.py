@@ -3,7 +3,6 @@
 import logging
 import os
 import re
-import shlex
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -11,6 +10,24 @@ import numpy as np
 import pandas as pd
 
 from vntyper.modules.advntr.advntr_decision_config import project_advntr_settings
+from vntyper.modules.advntr.advntr_options import (
+    ADVNTR_EXTRA_OPTIONS as ADVNTR_EXTRA_OPTIONS,
+)
+from vntyper.modules.advntr.advntr_options import (
+    ADVNTR_V22_OPTIONS as ADVNTR_V22_OPTIONS,
+)
+from vntyper.modules.advntr.advntr_options import (
+    MANAGED_ADVNTR_OPTION_OWNERS as MANAGED_ADVNTR_OPTION_OWNERS,
+)
+from vntyper.modules.advntr.advntr_options import (
+    MANAGED_ADVNTR_OPTIONS as MANAGED_ADVNTR_OPTIONS,
+)
+from vntyper.modules.advntr.advntr_options import (
+    advntr_option_token as advntr_option_token,
+)
+from vntyper.modules.advntr.advntr_options import (
+    resolve_additional_commands as resolve_additional_commands,
+)
 from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact, publish_advntr_result
 from vntyper.modules.advntr.advntr_variant_annotations import (
     DELETION_PATTERN,
@@ -151,192 +168,6 @@ def resolve_advntr_threads(settings, pipeline_threads):
     return configured
 
 
-#: Every spelling adVNTR declares for an option ``run_advntr`` sets itself
-#: (``advntr/__main__.py`` at the pinned revision: ``-a/--alignment_file``, ``-o/--outfile``,
-#: ``-fs/--frameshift``, ``-m/--models``, ``-t/--threads``, ``-vid/--vntr_id`` and
-#: ``--working_directory``).
-MANAGED_ADVNTR_OPTIONS = frozenset(
-    {
-        "-a",
-        "--alignment_file",
-        "-o",
-        "--outfile",
-        "-fs",
-        "--frameshift",
-        "-m",
-        "--models",
-        "-t",
-        "--threads",
-        "-vid",
-        "--vntr_id",
-        "--working_directory",
-    }
-)
-
-#: What owns each managed option, so a refusal can say what to set instead of only what to
-#: remove.
-MANAGED_ADVNTR_OPTION_OWNERS = {
-    "-t": "advntr_settings['threads']",
-    "--threads": "advntr_settings['threads']",
-    "-vid": "advntr_settings['vid']",
-    "--vntr_id": "advntr_settings['vid']",
-    "-o": "the output directory and sample name run_advntr is called with",
-    "--outfile": "the output directory and sample name run_advntr is called with",
-    "-m": "run_advntr's db_file argument",
-    "--models": "run_advntr's db_file argument",
-    "-a": "run_advntr's sorted_bam argument",
-    "--alignment_file": "run_advntr's sorted_bam argument",
-    "--working_directory": "run_advntr's output argument",
-    "-fs": "the fixed `genotype -fs` mode this module runs",
-    "--frameshift": "the fixed `genotype -fs` mode this module runs",
-}
-
-#: Every other option adVNTR's ``genotype`` subparser declares -- the ones this module does
-#: not set, and which ``additional_commands`` therefore exists to carry.
-#:
-#: ``-h``/``--help`` are deliberately absent: adVNTR would print help and exit zero without
-#: genotyping anything.
-ADVNTR_EXTRA_OPTIONS = frozenset(
-    {
-        "-r",
-        "--reference_filename",
-        "-f",
-        "--fasta",
-        "-p",
-        "--pacbio",
-        "-n",
-        "--nanopore",
-        "--outfmt",
-        "--vid_file",
-        "--append",
-        "--noref_aln",
-        "--min_read_length",
-        "-e",
-        "--expansion",
-        "-c",
-        "--coverage",
-        "--haploid",
-        "-naive",
-        "--naive",
-        "-u",
-        "--update",
-        "--fullru",
-        "-aln",
-        "--aln",
-    }
-)
-
-#: What argparse treats as a negative number rather than an option string.
-_NEGATIVE_NUMBER = re.compile(r"^-\d+$|^-\d*\.\d+$")
-
-
-def advntr_option_token(token):
-    """Return the option spelling ``token`` is, or ``None`` if it is a value.
-
-    Only the exact spelling is returned -- ``--opt=value`` yields ``--opt``, and nothing
-    else is normalised. That is the point: see :func:`resolve_additional_commands` for why
-    this is an allow-list rather than a pattern match.
-
-    Args:
-        token (str): One ``shlex``-split word of ``additional_commands``.
-
-    Returns:
-        str | None: The option spelling, or ``None`` if the word is a value.
-    """
-    if not token.startswith("-") or _NEGATIVE_NUMBER.match(token):
-        return None
-    return token.split("=", 1)[0] if token.startswith("--") else token
-
-
-def resolve_additional_commands(settings):
-    """Return ``additional_commands``, refusing any option this module already sets.
-
-    ``additional_commands`` is interpolated verbatim *after* every option
-    :func:`run_advntr` builds, and adVNTR parses the result with argparse, which lets the
-    last occurrence of an option win. A fragment repeating a managed option therefore
-    replaces a value VNtyper chose, silently and after validation: measured against a
-    parser built from adVNTR's own declarations, each of ``--threads 3``, ``-t3``,
-    ``--threads=3``, ``--thr 3`` and ``--thread 3`` overrides an earlier ``-t 12``.
-
-    That is what made :func:`resolve_advntr_threads` decorative -- it rejects 0, negatives,
-    bools and non-integers, and then a fragment saying ``--threads 0`` hands adVNTR exactly
-    the value it refused. ``-o`` and ``-m`` are worse: ``pipeline.py`` reconstructs the
-    output path independently and reads the file back, so a redirected artefact is a
-    missing result rather than a relocated one.
-
-    The rule is an **allow-list**, and that is not fastidiousness. The first version of this
-    guard pattern-matched against the managed options -- exact spellings, ``--opt=value``,
-    long abbreviations, and a one-character short option carrying an attached value. It
-    therefore had to reimplement argparse's option matching, and it missed two whole
-    classes, both measured against a parser built from adVNTR's own declarations:
-
-    * **single-dash flag groups.** ``consume_optional`` decomposes them, so a zero-argument
-      short option consumes its first character and re-forms ``'-' + tail``. Every one of
-      ``-p``, ``-n``, ``-e``, ``-u`` is a free prefix: ``-pt3`` set threads to 3, and
-      ``-po /elsewhere.vcf`` redirected the artefact.
-    * **single-dash abbreviation.** ``allow_abbrev`` applies to these too, and no ``-v`` is
-      declared, so ``-v 99999`` and ``-vi 99999`` both reach ``-vid``.
-
-    So a word starting with ``-`` must now be an option adVNTR declares *and* one this
-    module does not set. Abbreviations, attached values and flag groups are all refused
-    because none of them is an exact declared spelling -- fail-closed by construction
-    rather than by enumeration. It over-rejects only spellings argparse itself would
-    accept for a permitted option (``-c30``); those fail loudly and are re-spelled.
-
-    Unlike ``threads`` and ``output_format``, a missing key is not an error here. The default
-    is an empty extension. Operators can explicitly opt into adVNTR-owned flags such as
-    ``-aln``, but VNtyper does not consume its alignment sidecar. adVNTR 2.0.4 can finish the
-    genotype VCF and then crash in that optional post-processing path, so enabling it by
-    default turns a completed genotype into a correctly propagated subprocess failure.
-
-    Args:
-        settings (dict): An ``advntr_settings`` mapping.
-
-    Returns:
-        str: The fragment, unchanged. Validated as ``shlex`` reads it -- ``run_command``
-        hands the assembled string to bash, which additionally expands ``$``, backticks and
-        ``$'...'``, so this is not a claim about shell metacharacters. The fragment is
-        operator-controlled configuration, not user input.
-
-    Raises:
-        ValueError: If the fragment does not parse as shell words, if any word is an option
-            :func:`run_advntr` sets itself, or if any word is not an option adVNTR declares.
-    """
-    additional = settings.get("additional_commands", "")
-
-    try:
-        tokens = shlex.split(additional)
-    except ValueError as exc:
-        raise ValueError(
-            f"advntr_settings['additional_commands'] is not a parseable command fragment ({exc}): "
-            f"{additional!r}. It is interpolated into a string run under `bash -c`, so an "
-            "unbalanced quote would surface as a shell syntax error inside adVNTR's log."
-        ) from exc
-
-    for token in tokens:
-        option = advntr_option_token(token)
-        if option is None:
-            continue
-        if option in MANAGED_ADVNTR_OPTIONS:
-            owner = MANAGED_ADVNTR_OPTION_OWNERS[option]
-            raise ValueError(
-                f"advntr_settings['additional_commands'] contains {token!r}, which is adVNTR's "
-                f"{option} -- an option run_advntr already sets. adVNTR parses with argparse, where "
-                f"the last occurrence wins, so this would silently override {owner}. Set that instead, "
-                "and keep additional_commands for flags adVNTR alone owns (such as -aln)."
-            )
-        if option not in ADVNTR_EXTRA_OPTIONS:
-            raise ValueError(
-                f"advntr_settings['additional_commands'] contains {token!r}, which adVNTR's `genotype` "
-                "does not declare as an option. Abbreviations, attached values and single-dash flag "
-                "groups are refused even when argparse would accept them, because each is a way to "
-                "reach an option run_advntr sets -- `-pt3` sets the thread count and `-v` reaches "
-                "-vid. Spell the option out in full, one word per option."
-            )
-
-    return additional
-
-
 def run_advntr(
     db_file,
     sorted_bam,
@@ -349,6 +180,7 @@ def run_advntr(
     resolved_component: Mapping[str, object] | None = None,
     runtime_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
+    advntr_version: tuple[int, int, int] | None = None,
 ):
     """
     Run adVNTR genotyping using explicit resolved decision and runtime settings.
@@ -364,6 +196,7 @@ def run_advntr(
         resolved_component: Immutable adVNTR decision component for this run.
         runtime_component: Immutable excluded adVNTR runtime component.
         custom_context_active: Whether an explicit custom profile owns this run.
+        advntr_version: Optional detected adVNTR version tuple for option capability check.
 
     Returns:
         int: 0 on success, or 1 for the pre-command input-validation failures.
@@ -428,7 +261,7 @@ def run_advntr(
     # is complete. Explicit opt-in remains supported through this extension point. See
     # `resolve_additional_commands`: argparse lets the last occurrence win, so an unchecked
     # fragment overrides the thread count validated one line above.
-    additional_commands = resolve_additional_commands(settings)
+    additional_commands = resolve_additional_commands(settings, advntr_version=advntr_version)
 
     # Determine the output extension. Shared with pipeline.py, which reconstructs this path.
     output_ext = advntr_output_extension(settings)
@@ -864,10 +697,21 @@ def process_advntr_output(
         with open(output_path) as file:
             content = file.readlines()
 
-        # Replace header to ensure consistency
-        content = [line.replace("#VID", "VID") if line.startswith("#VID") else line for line in content]
+        cleaned = []
+        header_found = False
+        for line in content:
+            stripped = line.strip()
+            if not header_found:
+                if stripped.startswith(("#VID", "VID")):
+                    header_found = True
+                    if stripped.startswith("#VID"):
+                        cleaned.append(line.replace("#VID", "VID", 1))
+                    else:
+                        cleaned.append(line)
+                continue
+            cleaned.append(line)
         with open(output_path, "w") as file:
-            file.writelines(content)
+            file.writelines(cleaned)
     except OSError as e:
         message = f"Error reading adVNTR output: {e}"
         logger.error(message)
@@ -875,7 +719,7 @@ def process_advntr_output(
 
     try:
         logger.info("Loading data into DataFrame...")
-        df = pd.read_csv(output_path, sep="\t", comment="#")
+        df = pd.read_csv(output_path, sep="\t")
         logger.info(f"Data loaded successfully with shape: {df.shape}")
         logger.debug(f"First few rows of the DataFrame:\n{df.head()}")
     except Exception as e:
