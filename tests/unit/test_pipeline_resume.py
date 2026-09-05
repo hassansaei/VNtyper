@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -1339,7 +1340,7 @@ def test_resume_revokes_stale_published_reports_and_exports(tmp_path: Path) -> N
     from vntyper.scripts import pipeline as pipeline_module
 
     with (
-        patch.object(pipeline_module, "protect_pipeline_input_ownership", side_effect=RuntimeError("simulated abort")),
+        patch.object(pipeline_module, "create_output_directories", side_effect=RuntimeError("simulated abort")),
         pytest.raises(AssertionError, match="run_pipeline exited"),
     ):
         run_pipeline_under_harness(
@@ -1860,3 +1861,153 @@ def test_load_prior_summary_rejects_incompatible_donor_and_fresh_run_clears_it(t
         resume=False,
     )
     assert not (output_dir / "pipeline_summary.donor.json").exists()
+
+
+def test_resume_protects_patient_input_directory_before_revoking_published_reports(tmp_path: Path) -> None:
+    """Ownership verification occurs before any file in output_dir is deleted on resume (#20)."""
+    p = tmp_path
+    bam = p / "input" / "sample.bam"
+    bam.parent.mkdir(parents=True)
+    bam.touch()
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        steps=[],
+    )
+    patient_dir = bam.parent
+    (patient_dir / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+    report = patient_dir / "summary_report.html"
+    report.write_text("operator report", encoding="utf-8")
+
+    alias = p / "alias"
+    alias.symlink_to(patient_dir, target_is_directory=True)
+
+    harness = run_pipeline_under_harness(
+        output_dir=alias,
+        bam=str(bam),
+        resume=True,
+        expect_failure=True,
+    )
+    assert harness.error is not None
+    assert report.is_file(), "Published report was deleted before input ownership verification"
+    assert report.read_text(encoding="utf-8") == "operator report"
+
+
+def test_resume_cram_with_reference_fasta_succeeds_and_preserves_persistent_reference(tmp_path: Path) -> None:
+    """CRAM runs record persistent reference paths so resume succeeds after binding cleanup (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    cram = tmp_path / "input" / "sample.cram"
+    cram.parent.mkdir(parents=True)
+    cram.touch()
+    ref = tmp_path / "ref.fa"
+    ref.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+    # First run writes persistent reference path into summary
+    h1 = run_pipeline_under_harness(
+        output_dir=out,
+        cram=str(cram),
+        reference_fasta=str(ref),
+    )
+    assert h1.error is None
+    summary1 = json.loads((out / "pipeline_summary.json").read_text(encoding="utf-8"))
+    assert summary1.get("reference_path") == str(ref.resolve())
+    assert summary1.get("persistent_reference_path") == str(ref.resolve())
+
+    # Resume run validates persistent reference and completes cleanly
+    h2 = run_pipeline_under_harness(
+        output_dir=out,
+        cram=str(cram),
+        reference_fasta=str(ref),
+        resume=True,
+    )
+    assert h2.error is None
+
+
+def test_resume_reruns_kestrel_when_additional_motifs_reference_changes(tmp_path: Path) -> None:
+    """Changing configured additional motifs invalidates Kestrel checkpoint (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    bam = tmp_path / "input" / "sample.bam"
+    bam.parent.mkdir(parents=True)
+    bam.touch()
+
+    k_dir = out / "kestrel"
+    k_dir.mkdir()
+    for name in ["kestrel_result.tsv", "output.vcf", "output_indel.vcf", "output.bam", "kestrel_pre_result.tsv"]:
+        (k_dir / name).write_text("x", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        steps=[
+            {
+                "step": summary_steps.STEP_KESTREL,
+                "result_file": str(k_dir / "kestrel_result.tsv"),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"x").hexdigest(),
+                "parsed_result": {"data": []},
+            }
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    config = copy.deepcopy(MINIMAL_CONFIG)
+    new_motifs = tmp_path / "new_motifs.fa"
+    new_motifs.write_text(">new\nACGT\n", encoding="utf-8")
+    config["reference_data"]["muc1_motifs_rev_com"] = str(new_motifs)
+
+    harness = run_pipeline_under_harness(
+        output_dir=out,
+        bam=str(bam),
+        config=config,
+        resume=True,
+    )
+    assert harness.error is None
+    harness.stages["run_kestrel"].assert_called_once()
+
+
+def test_resume_reruns_advntr_when_code_advntr_rus_reference_changes(tmp_path: Path) -> None:
+    """Changing configured code_adVNTR_RUs reference invalidates adVNTR checkpoint (#20)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    bam = tmp_path / "input" / "sample.bam"
+    bam.parent.mkdir(parents=True)
+    bam.touch()
+
+    adv_dir = out / "advntr"
+    adv_dir.mkdir()
+    adv_tsv = adv_dir / "advntr_genotype.tsv"
+    adv_tsv.write_text("advntr result", encoding="utf-8")
+
+    prior = _make_prior_summary(
+        input_files={"bam": bam.name},
+        canonical_input_files={"bam": str(bam.resolve())},
+        extra_modules=["advntr"],
+        steps=[
+            {
+                "step": summary_steps.STEP_ADVNTR,
+                "result_file": str(adv_tsv),
+                "file_type": "tsv",
+                "md5sum": hashlib.md5(b"advntr result").hexdigest(),
+                "parsed_result": {"data": []},
+            }
+        ],
+    )
+    (out / "pipeline_summary.json").write_text(json.dumps(prior), encoding="utf-8")
+
+    config = copy.deepcopy(MINIMAL_CONFIG)
+    new_rus = tmp_path / "new_rus.fa"
+    new_rus.write_text(">RU1\nACGT\n", encoding="utf-8")
+    config["reference_data"]["code_adVNTR_RUs"] = str(new_rus)
+
+    harness = run_pipeline_under_harness(
+        output_dir=out,
+        bam=str(bam),
+        config=config,
+        extra_modules=["advntr"],
+        resume=True,
+    )
+    assert harness.error is None
+    harness.stages["run_advntr"].assert_called_once()

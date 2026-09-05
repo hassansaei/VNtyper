@@ -76,6 +76,12 @@ def start_summary(
     kestrel_reference_path: str | None = None,
     input_fingerprints: dict[str, str] | None = None,
     kestrel_reference_fingerprint: str | None = None,
+    kestrel_motifs_path: str | None = None,
+    kestrel_motifs_fingerprint: str | None = None,
+    advntr_rus_path: str | None = None,
+    advntr_rus_fingerprint: str | None = None,
+    persistent_reference_path: str | None = None,
+    reference_consumer_path: str | None = None,
 ):
     """
     Initializes a new pipeline summary.
@@ -172,12 +178,18 @@ def start_summary(
         "analysis_settings": analysis_settings,
         "kestrel_reference_path": kestrel_reference_path,
         "kestrel_reference_fingerprint": kestrel_reference_fingerprint,
+        "kestrel_motifs_path": kestrel_motifs_path,
+        "kestrel_motifs_fingerprint": kestrel_motifs_fingerprint,
+        "advntr_rus_path": advntr_rus_path,
+        "advntr_rus_fingerprint": advntr_rus_fingerprint,
         "stage_artifact_md5s": {},
         "sample_name": sample_name,
         "sample_name_is_explicit": bool(sample_name_is_explicit),
         "reference_assembly_requested": reference_assembly_requested,
         "reference_key_used": reference_key_used,
         "reference_path": reference_path,
+        "persistent_reference_path": persistent_reference_path or reference_path,
+        "reference_consumer_path": reference_consumer_path,
         "reference_source_effective": reference_source_effective,
         # The span the coverage stage actually worked over. It is not known yet -
         # `calculate_alignment_coverage` resolves it mid-run - but the key exists

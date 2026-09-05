@@ -148,14 +148,19 @@ def load_prior_summary(path: str | Path) -> dict[str, Any] | None:
                     if not donor_matches:
                         logger.warning("Ignoring incompatible donor checkpoint at %s", donor_path)
                     else:
-                        k_ref_matches = donor_data.get("kestrel_reference_path") == data.get(
-                            "kestrel_reference_path"
-                        ) and donor_data.get("kestrel_reference_fingerprint") == data.get(
-                            "kestrel_reference_fingerprint"
+                        k_ref_matches = (
+                            donor_data.get("kestrel_reference_path") == data.get("kestrel_reference_path")
+                            and donor_data.get("kestrel_reference_fingerprint")
+                            == data.get("kestrel_reference_fingerprint")
+                            and donor_data.get("kestrel_motifs_path") == data.get("kestrel_motifs_path")
+                            and donor_data.get("kestrel_motifs_fingerprint") == data.get("kestrel_motifs_fingerprint")
                         )
-                        adv_model_matches = donor_data.get("advntr_model", {}).get("sha256") == data.get(
-                            "advntr_model", {}
-                        ).get("sha256")
+                        adv_model_matches = (
+                            donor_data.get("advntr_model", {}).get("sha256")
+                            == data.get("advntr_model", {}).get("sha256")
+                            and donor_data.get("advntr_rus_path") == data.get("advntr_rus_path")
+                            and donor_data.get("advntr_rus_fingerprint") == data.get("advntr_rus_fingerprint")
+                        )
                         existing_steps = {s.get("step") for s in data.get("steps", [])}
                         for s in donor_data.get("steps", []):
                             st = s.get("step")
@@ -262,7 +267,7 @@ def resume_refusals(
         refusals.append(f"reference key differs (prior: {prior_ref_key!r}, current: {reference_key_used!r})")
 
     if reference_path is not None:
-        prior_ref_path = prior.get("reference_path")
+        prior_ref_path = prior.get("persistent_reference_path") or prior.get("reference_path")
         if prior_ref_path is not None:
             prior_resolved = str(Path(prior_ref_path).resolve()) if prior_ref_path else None
             curr_resolved = str(Path(reference_path).resolve()) if reference_path else None

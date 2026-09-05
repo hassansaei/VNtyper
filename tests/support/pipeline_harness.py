@@ -243,7 +243,9 @@ def _alignment_plan(*args: Any, **kwargs: Any) -> AlignmentPlan:
         view_path=str(view_path),
         file_format=file_format,
         index_path=f"{view_path}.{index_suffix}",
-        reference_path="/refs/hg19.fa" if file_format == "cram" else None,
+        reference_path=str(Path(kwargs["reference_fasta"]).resolve())
+        if kwargs.get("reference_fasta")
+        else ("/refs/hg19.fa" if file_format == "cram" else None),
         reference_source="harness",
         uncovered_contigs=(),
         unmapped_scan="indexed",

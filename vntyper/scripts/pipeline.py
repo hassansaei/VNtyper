@@ -357,6 +357,20 @@ def run_pipeline(
             else None
         )
 
+        raw_motifs = config.get("reference_data", {}).get("muc1_motifs_rev_com")
+        kestrel_motifs_path = str(Path(os.path.join(project_root, raw_motifs)).resolve()) if raw_motifs else None
+        kestrel_motifs_fingerprint = (
+            fingerprint_file(Path(kestrel_motifs_path))
+            if kestrel_motifs_path and Path(kestrel_motifs_path).is_file()
+            else None
+        )
+
+        raw_advntr_rus = config.get("reference_data", {}).get("code_adVNTR_RUs")
+        advntr_rus_path = str(Path(os.path.join(project_root, raw_advntr_rus)).resolve()) if raw_advntr_rus else None
+        advntr_rus_fingerprint = (
+            fingerprint_file(Path(advntr_rus_path)) if advntr_rus_path and Path(advntr_rus_path).is_file() else None
+        )
+
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         prior_summary = None
         if resume:
@@ -386,19 +400,6 @@ def run_pipeline(
                 raise ValueError(f"Cannot resume pipeline: {'; '.join(refusals)}")
             logger.info("Resuming execution from prior summary (started %s)", prior_summary.get("pipeline_start"))
 
-            # On resume, revoke published reports and export tables from prior run so
-            # an early failure during re-execution does not leave stale public outputs.
-            for stale_name in (
-                "summary_report.html",
-                "pipeline_summary.csv",
-                "pipeline_summary.tsv",
-                "pipeline_summary_rows.csv",
-                "pipeline_summary_rows.tsv",
-            ):
-                stale_path = Path(output_dir) / stale_name
-                if stale_path.is_file():
-                    stale_path.unlink()
-
         protect_pipeline_input_ownership(
             output_dir,
             input_type,
@@ -415,6 +416,21 @@ def run_pipeline(
             archive_format,
             additional_operator_paths,
         )
+
+        if resume:
+            # On resume, revoke published reports and export tables from prior run so
+            # an early failure during re-execution does not leave stale public outputs.
+            # This runs strictly after ownership validation to protect input files.
+            for stale_name in (
+                "summary_report.html",
+                "pipeline_summary.csv",
+                "pipeline_summary.tsv",
+                "pipeline_summary_rows.csv",
+                "pipeline_summary_rows.tsv",
+            ):
+                stale_path = Path(output_dir) / stale_name
+                if stale_path.is_file():
+                    stale_path.unlink()
 
         # Refuse an unknown/incompatible adVNTR before alignment preparation,
         # conversion, coverage, or Kestrel. Keep the classified startup answer in this
@@ -551,15 +567,21 @@ def run_pipeline(
             input_fingerprints=input_fingerprints,
             analysis_settings=analysis_settings,
             kestrel_reference_path=kestrel_reference_path,
+            kestrel_reference_fingerprint=kestrel_reference_fingerprint,
+            kestrel_motifs_path=kestrel_motifs_path,
+            kestrel_motifs_fingerprint=kestrel_motifs_fingerprint,
+            advntr_rus_path=advntr_rus_path,
+            advntr_rus_fingerprint=advntr_rus_fingerprint,
             sample_name=sample_name,
             sample_name_is_explicit=sample_name_is_explicit,
             reference_assembly_requested=reference_assembly,
             reference_key_used=reference_provenance.key_used,
             reference_path=reference_provenance.path,
+            persistent_reference_path=reference_provenance.path,
+            reference_consumer_path=alignment_plan.reference_path if alignment_plan else None,
             reference_source_effective=reference_provenance.source_effective,
             advntr_evidence_digest=advntr_evidence.digest if advntr_evidence is not None else None,
             decision_profile=run_configuration.decision_profile,
-            kestrel_reference_fingerprint=kestrel_reference_fingerprint,
         )
 
         kestrel_ref_matches = True
@@ -577,11 +599,37 @@ def run_pipeline(
             ) and prior_k_fp != kestrel_reference_fingerprint:
                 kestrel_ref_matches = False
 
+            prior_k_motifs = prior_summary.get("kestrel_motifs_path")
+            if (prior_k_motifs is None) != (kestrel_motifs_path is None) or (
+                prior_k_motifs is not None
+                and kestrel_motifs_path is not None
+                and str(Path(prior_k_motifs).resolve()) != str(Path(kestrel_motifs_path).resolve())
+            ):
+                kestrel_ref_matches = False
+            prior_k_motifs_fp = prior_summary.get("kestrel_motifs_fingerprint")
+            if (
+                prior_k_motifs_fp is not None or kestrel_motifs_fingerprint is not None
+            ) and prior_k_motifs_fp != kestrel_motifs_fingerprint:
+                kestrel_ref_matches = False
+
         advntr_model_matches = True
-        if prior_summary and advntr_context:
-            prior_model_sha = prior_summary.get("advntr_model", {}).get("sha256")
-            curr_model_sha = advntr_context.model.get("sha256")
-            if prior_model_sha and curr_model_sha and prior_model_sha != curr_model_sha:
+        if prior_summary:
+            if advntr_context:
+                prior_model_sha = prior_summary.get("advntr_model", {}).get("sha256")
+                curr_model_sha = advntr_context.model.get("sha256")
+                if prior_model_sha and curr_model_sha and prior_model_sha != curr_model_sha:
+                    advntr_model_matches = False
+            prior_rus_path = prior_summary.get("advntr_rus_path")
+            if (prior_rus_path is None) != (advntr_rus_path is None) or (
+                prior_rus_path is not None
+                and advntr_rus_path is not None
+                and str(Path(prior_rus_path).resolve()) != str(Path(advntr_rus_path).resolve())
+            ):
+                advntr_model_matches = False
+            prior_rus_fp = prior_summary.get("advntr_rus_fingerprint")
+            if (
+                prior_rus_fp is not None or advntr_rus_fingerprint is not None
+            ) and prior_rus_fp != advntr_rus_fingerprint:
                 advntr_model_matches = False
 
         if resume and prior_summary:
@@ -1060,9 +1108,12 @@ def run_pipeline(
 
             prior_model_sha = prior_summary.get("advntr_model", {}).get("sha256") if prior_summary else None
             curr_model_sha = advntr_model.get("sha256")
-            model_matches = bool(prior_model_sha and curr_model_sha and prior_model_sha == curr_model_sha)
-
-            if resume and prior_summary and model_matches and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir):
+            if (
+                resume
+                and prior_summary
+                and advntr_model_matches
+                and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir)
+            ):
                 logger.info("Reusing previous %s step results.", STEP_ADVNTR)
                 prior_advntr_step = next(s for s in prior_summary.get("steps", []) if s.get("step") == STEP_ADVNTR)
                 _record_reused_step(
