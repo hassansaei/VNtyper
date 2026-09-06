@@ -19,6 +19,13 @@ API_DESCRIPTION = """Genotyping pipeline for *MUC1* Variable Number Tandem Repea
 | **Cohorts** | Passphrase-protected sample grouping for joint multi-sample genotyping | `POST /create-cohort/` |
 | **Data Retention** | Automatic purging of uploaded files and result archives after 3 days | 3-day retention policy |
 | **Validation** | Genotyping methodology and benchmarking in ADTKD-MUC1 cohorts | [Popp & Saei et al., medRxiv (2026)](https://doi.org/10.64898/2026.05.27.26352937) |
+
+## Analysis Modes
+
+| Mode | Engine | Best For | Typical Processing Time |
+| :--- | :--- | :--- | :--- |
+| **Normal Mode** | Kestrel local haplotype assembly | Rapid screening & routine ADTKD-MUC1 diagnostics | ~30–90 seconds |
+| **adVNTR Mode** | Profile-HMM repeat-unit counting | Deep motif validation & repeat-unit expansion analysis | ~1–3 minutes |
 """
 
 API_TAGS_METADATA: list[dict[str, Any]] = [
@@ -67,7 +74,8 @@ body {
 
 .swagger-ui .wrapper {
   width: 100% !important;
-  max-width: 100% !important;
+  max-width: 1400px !important;
+  margin: 0 auto !important;
   padding: 0 32px 48px !important;
   box-sizing: border-box !important;
 }
@@ -151,7 +159,7 @@ body {
 .swagger-ui .info .description table {
   width: 100% !important;
   border-collapse: collapse !important;
-  margin: 16px 0 !important;
+  margin: 16px 0 24px !important;
   border-radius: 8px !important;
   overflow: hidden !important;
   border: 1px solid #e2e8f0 !important;
@@ -182,22 +190,10 @@ body {
   background: #f8fafc !important;
 }
 
-.swagger-ui .info .description th:first-child,
 .swagger-ui .info .description td:first-child {
   white-space: nowrap !important;
-  width: 130px !important;
   font-weight: 600 !important;
   color: #0f172a !important;
-}
-
-.swagger-ui .info .description th:nth-child(2),
-.swagger-ui .info .description td:nth-child(2) {
-  width: 55% !important;
-}
-
-.swagger-ui .info .description th:nth-child(3),
-.swagger-ui .info .description td:nth-child(3) {
-  width: 35% !important;
 }
 
 .swagger-ui .info .description code {
@@ -224,22 +220,29 @@ body {
 
 /* Scheme / Server Selector Card */
 .swagger-ui .scheme-container {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  padding: 0 32px !important;
+  margin: 0 auto 20px !important;
+  max-width: 1400px !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+}
+
+.swagger-ui .scheme-container .schemes.wrapper {
   background: #ffffff !important;
   border: 1px solid #e2e8f0 !important;
   border-radius: 12px !important;
   padding: 16px 28px !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
-  margin: 0 0 20px !important;
-  box-sizing: border-box !important;
-  width: 100% !important;
-}
-
-.swagger-ui .scheme-container .schemes {
   margin: 0 !important;
-  padding: 0 !important;
+  box-sizing: border-box !important;
   display: flex !important;
   align-items: center !important;
   gap: 12px !important;
+  width: 100% !important;
+  max-width: 100% !important;
 }
 
 .swagger-ui .scheme-container .schemes > label {
@@ -248,21 +251,30 @@ body {
 }
 
 /* Tag Sections & Filter */
-.swagger-ui .filter {
-  margin: 0 0 20px !important;
+.swagger-ui .filter-container {
+  margin: 0 !important;
   padding: 0 !important;
-  width: 100% !important;
+}
+
+.swagger-ui .filter.wrapper {
+  margin: 0 auto 20px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  display: flex !important;
+  align-items: center !important;
 }
 
 .swagger-ui .filter .operation-filter-input {
   width: 100% !important;
-  max-width: 100% !important;
+  max-width: 360px !important;
   border: 1px solid #cbd5e1 !important;
   border-radius: 8px !important;
-  padding: 10px 16px !important;
+  padding: 9px 14px !important;
   font-size: 14px !important;
   box-sizing: border-box !important;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+  background-color: #ffffff !important;
+  color: #0f172a !important;
 }
 
 .swagger-ui .filter .operation-filter-input:focus {
