@@ -460,7 +460,7 @@ def handle_pipeline(
 
     run_pipeline(
         bwa_reference=bwa_reference,
-        output_dir=Path(args.output_dir),
+        output_dir=args.output_dir,
         extra_modules=flattened_modules,
         module_args=module_args_dict,
         config=config,

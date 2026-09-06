@@ -149,7 +149,10 @@ def _clear_preflight_error(output_dir: str | Path) -> None:
     directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     directory_flags |= getattr(os, "O_DIRECTORY", 0)
     try:
-        directory_descriptor = os.open(output_dir, directory_flags)
+        path = str(output_dir)
+        if "/proc/" in path and "/fd/" in path and not path.endswith("/."):
+            path = f"{path}/."
+        directory_descriptor = os.open(path, directory_flags)
     except FileNotFoundError:
         return
     try:
@@ -209,7 +212,10 @@ def write_preflight_error(output_dir: str | Path, payload: dict) -> Path:
         # ``/proc/<pid>/fd/<descriptor>/.``. Converting it to ``Path`` first
         # removes the trailing ``/.`` and turns the final component back into
         # a procfs symlink, which O_NOFOLLOW correctly refuses.
-        directory_descriptor = os.open(output_dir, directory_flags)
+        path = str(output_dir)
+        if "/proc/" in path and "/fd/" in path and not path.endswith("/."):
+            path = f"{path}/."
+        directory_descriptor = os.open(path, directory_flags)
     except OSError as error:
         message = "preflight error output must be an existing real directory"
         logger.error(message)
