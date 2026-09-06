@@ -28,6 +28,7 @@ REDIS_URL = build_redis_url(REDIS_HOST, REDIS_PORT, REDIS_DB, get_redis_password
 
 # Initialize Celery
 celery_app = Celery("worker", broker=REDIS_URL, backend=REDIS_URL)
+celery_app.set_default()
 
 # Autodiscover tasks from the 'app.tasks' module
 celery_app.autodiscover_tasks(["app.tasks"])
