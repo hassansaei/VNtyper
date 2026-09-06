@@ -26,7 +26,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field, ValidationError
 
@@ -210,10 +210,14 @@ app = FastAPI(
 )
 
 
+FAVICON_DIR = Path(__file__).resolve().parent / "static" / "favicon"
+
+
 @app.api_route("/docs", methods=["GET", "HEAD"], include_in_schema=False)
 async def custom_swagger_ui_html(req: Request) -> HTMLResponse:
     root_path = req.scope.get("root_path", "").rstrip("/") or (app.root_path or "").rstrip("/")
     openapi_url = root_path + (app.openapi_url or "/openapi.json")
+    favicon_url = root_path + "/favicon.svg"
     oauth2_redirect_url = app.swagger_ui_oauth2_redirect_url
     if oauth2_redirect_url:
         oauth2_redirect_url = root_path + oauth2_redirect_url
@@ -222,8 +226,25 @@ async def custom_swagger_ui_html(req: Request) -> HTMLResponse:
             openapi_url=openapi_url,
             title=f"{app.title} - Swagger UI",
             oauth2_redirect_url=oauth2_redirect_url,
+            favicon_url=favicon_url,
         )
     )
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico() -> FileResponse:
+    ico_path = FAVICON_DIR / "favicon.ico"
+    if ico_path.is_file():
+        return FileResponse(ico_path, media_type="image/x-icon")
+    raise HTTPException(status_code=404, detail="Favicon not found")
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon_svg() -> FileResponse:
+    svg_path = FAVICON_DIR / "favicon.svg"
+    if svg_path.is_file():
+        return FileResponse(svg_path, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Favicon not found")
 
 
 # Bound the size of every request before it is read, not only the part of it
@@ -237,7 +258,7 @@ app.add_middleware(RequestSizeLimitMiddleware)
 # CORS configuration for development
 # Only allow localhost origins when ENVIRONMENT is 'development' or 'local'
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
-if ENVIRONMENT in ["development", "local"]:
+if ENVIRONMENT in ["development", "local", "dev"]:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[

@@ -6,101 +6,44 @@ styling for Swagger UI adhering to WCAG AA contrast standards.
 
 from typing import Any
 
-API_SUMMARY = "High-speed MUC1 VNTR genotyping and cohort analysis pipeline for ADTKD-MUC1"
+API_SUMMARY = "Genotyping and cohort analysis for MUC1 VNTR in ADTKD-MUC1"
 
-API_DESCRIPTION = """The **VNtyper Online API** provides programmatic access to **VNtyper 2**, an advanced pipeline engineered for high-speed genotyping of *MUC1* Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (**ADTKD-MUC1**) using Short-Read Sequencing (SRS) alignments.
+API_DESCRIPTION = """Genotyping pipeline for *MUC1* Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (**ADTKD-MUC1**) from short-read sequencing data (BAM/CRAM).
 
----
+## Overview
 
-## API Overview
-
-The API supports automated end-to-end processing of genomic alignment files (BAM/BAI and CRAM), rapid variant calling, asynchronous background execution, and passphrase-protected multi-sample cohort management.
-
----
-
-## Key Capabilities
-
-- **High-Speed Variant Calling**: Genotyping via k-mer analysis using Kestrel for rapid local haplotype assembly and frameshift detection.
-- **Repeat-Unit Validation**: Optional code-adVNTR profile-HMM repeat-unit validation for in-depth motif architecture analysis.
-- **Asynchronous Processing**: Scalable Celery task queue architecture with real-time job status polling and automatic artifact retention.
-- **Passphrase-Protected Cohorts**: Group multiple related samples into secure, collaborative cohorts with credential protection, joint multi-sample genotyping, and aggregated call tables.
-- **Runtime Configuration Discovery**: Query server-side defaults and administrator policy enforcement flags via `GET /options-config/`.
-- **Anonymized Research Donations**: Opt-in framework for contributing anonymous run summaries and variant calls to support algorithm benchmarking.
-- **Platform Usage Metrics**: Transparent system throughput tracking including cumulative jobs processed, unique users, and recent 24-hour activity.
-
----
-
-## Analysis Modes
-
-| Mode | Engine | Best For | Typical Processing Time |
-| :--- | :--- | :--- | :--- |
-| **Normal Mode** | Kestrel local haplotype assembly | Rapid screening & routine ADTKD-MUC1 diagnostics | ~1–3 minutes |
-| **adVNTR Mode** | Profile-HMM repeat-unit counting | Deep motif validation & repeat-unit expansion analysis | ~15–45 minutes |
-
-*Tip: Query `GET /options-config/` to inspect whether your server enforces or defaults adVNTR or normal analysis modes.*
-
----
-
-## Workflow Guide
-
-### 1. Single-Sample Genotyping
-
-1. **Submit Alignment**: Upload a BAM file with BAI index to `POST /run-job/`. Specify optional notification email, cohort alias, or analysis mode.
-2. **Poll Status**: Periodically query `GET /job-status/{job_id}/` to monitor job progress and queue position.
-3. **Download Results**: Once the status is `completed`, retrieve the complete results bundle from `GET /download/{job_id}/`.
-
-### 2. Passphrase-Protected Cohort Analysis
-
-1. **Create Cohort**: Register a new cohort via `POST /create-cohort/` with an alias and passphrase.
-2. **Join Samples**: Submit multiple samples referencing the cohort alias and passphrase.
-3. **Trigger Analysis**: Request collective analysis with `POST /cohort-analysis/` passing the cohort authorization header.
-4. **Download Summary**: Retrieve aggregated cohort call summaries via `GET /cohort-download/`.
-
----
-
-## Security & Privacy
-
-- **Cohort Authentication**: All operations modifying or querying cohorts require the cohort passphrase. We recommend using the **`X-Cohort-Passphrase`** HTTP header to protect credentials from appearing in URL logs.
-- **Rate Limiting**: Tiered token-bucket rate limiting applies to all public endpoints. If exceeded, the API returns `429 Too Many Requests`.
-- **Data Retention**: Uploaded alignments and result archives are retained for **3 days** (`MAX_RESULT_AGE_DAYS`) before automatic purging.
-
----
-
-## Citations & Research
-
-If you use VNtyper Online in your research, please cite:
-
-> **Popp B, Saei H, et al.** *VNtyper 2 enables open-access short-read genotyping of MUC1 VNTR variants in ADTKD at high-speed.* **medRxiv** (2026). [doi:10.64898/2026.05.27.26352937](https://doi.org/10.64898/2026.05.27.26352937)
+| Feature | Details | Action / Reference |
+| :--- | :--- | :--- |
+| **Pipeline** | K-mer haplotype assembly via Kestrel and optional profile-HMM repeat counting | [VNtyper 2 Repository](https://github.com/hassansaei/vntyper) |
+| **Workflow** | Submit alignment files, monitor task execution, and retrieve results | `POST /run-job/` → `GET /download/` |
+| **Cohorts** | Passphrase-protected sample grouping for joint multi-sample genotyping | `POST /create-cohort/` |
+| **Data Retention** | Automatic purging of uploaded files and result archives after 3 days | 3-day retention policy |
+| **Validation** | Genotyping methodology and benchmarking in ADTKD-MUC1 cohorts | [Popp & Saei et al., medRxiv (2026)](https://doi.org/10.64898/2026.05.27.26352937) |
 """
 
 API_TAGS_METADATA: list[dict[str, Any]] = [
     {
         "name": "General",
-        "description": "System health checks, service discovery, and API & bioinformatics tool version discovery.",
+        "description": "Health checks and version endpoints.",
     },
     {
         "name": "Job Management",
-        "description": (
-            "Submit genomic alignment files (BAM), configure analysis options, query asynchronous "
-            "job execution status, and download final result packages."
-        ),
+        "description": "Submit alignments (BAM/CRAM), check job status, and download results.",
     },
     {
         "name": "Cohort Management",
-        "description": (
-            "Group multiple related samples into secure, passphrase-protected cohorts for collective genotyping, "
-            "cross-sample allele frequency metrics, and aggregated analysis."
-        ),
+        "description": "Passphrase-protected sample cohorts and joint analysis.",
     },
     {
         "name": "Usage Statistics",
-        "description": "Access anonymized platform usage metrics, including cumulative jobs, unique users, and recent 24-hour activity.",
+        "description": "Platform throughput and run statistics.",
     },
     {
         "name": "Research Data Donations",
-        "description": "Opt-in anonymous research donation endpoints to help benchmark and improve VNTR genotyping accuracy.",
+        "description": "Optional anonymous variant data contributions for benchmark validation.",
     },
 ]
+
 
 SWAGGER_CUSTOM_CSS = """
 /* Custom VNtyper Swagger UI Theme - WCAG AA Compliant & Clean Aesthetic */
@@ -123,22 +66,26 @@ body {
 }
 
 .swagger-ui .wrapper {
-  max-width: 1360px;
-  padding: 0 24px 48px;
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 0 32px 48px !important;
+  box-sizing: border-box !important;
 }
 
 /* Info Header Card */
 .swagger-ui .info {
-  margin: 32px 0 24px;
+  margin: 24px 0 20px !important;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  padding: 32px;
+  padding: 28px 32px !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box !important;
+  width: 100% !important;
 }
 
 .swagger-ui .info .title {
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 800;
   color: #0f172a;
   letter-spacing: -0.025em;
@@ -146,6 +93,7 @@ body {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+  margin-bottom: 8px;
 }
 
 .swagger-ui .info .title small {
@@ -174,105 +122,91 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
   color: #475569;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .swagger-ui .info .description {
   font-size: 15px;
-  line-height: 1.7;
+  line-height: 1.6;
   color: #334155;
-  margin-top: 20px;
+  margin-top: 16px;
+  width: 100%;
 }
 
-.swagger-ui .info .description p,
-.swagger-ui .info .description li,
-.swagger-ui .info .description blockquote,
-.swagger-ui .opblock-tag small,
-.swagger-ui .opblock-tag p,
-.swagger-ui .opblock-tag-section p {
-  max-width: 72ch !important;
-  margin-left: 0 !important;
-  margin-right: auto !important;
+.swagger-ui .info .description p {
+  margin: 10px 0;
+  max-width: 75ch;
+  line-height: 1.6;
 }
 
 .swagger-ui .info .description h2 {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   color: #0f172a;
-  margin: 28px 0 12px;
-  padding-bottom: 8px;
-  border-bottom: 2px solid #e2e8f0;
-}
-
-.swagger-ui .info .description h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1e293b;
-  margin: 20px 0 8px;
-}
-
-.swagger-ui .info .description hr {
-  border: 0;
-  height: 1px;
-  background: #e2e8f0;
-  margin: 24px 0;
+  margin: 24px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e2e8f0;
 }
 
 .swagger-ui .info .description table {
-  width: 100%;
-  max-width: 900px;
-  border-collapse: collapse;
-  margin: 16px 0;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid #cbd5e1;
+  width: 100% !important;
+  border-collapse: collapse !important;
+  margin: 16px 0 !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  border: 1px solid #e2e8f0 !important;
+  box-sizing: border-box !important;
 }
 
 .swagger-ui .info .description th {
-  background: #f1f5f9;
-  color: #0f172a;
-  font-weight: 700;
-  padding: 10px 14px;
-  border: 1px solid #cbd5e1;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  padding: 10px 16px !important;
+  border: 1px solid #e2e8f0 !important;
+  text-align: left !important;
 }
 
 .swagger-ui .info .description td {
-  padding: 10px 14px;
-  border: 1px solid #cbd5e1;
-  color: #334155;
+  padding: 12px 16px !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #334155 !important;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
 }
 
-.swagger-ui .info .description tr:nth-child(even) {
-  background: #f8fafc;
+.swagger-ui .info .description tr:nth-child(even) td {
+  background: #f8fafc !important;
 }
 
-.swagger-ui .info .description pre {
-  background: #0f172a;
-  color: #f8fafc;
-  padding: 14px 18px;
-  border-radius: 8px;
-  overflow-x: auto;
-  font-size: 13px;
-  line-height: 1.5;
-  border: 1px solid #334155;
-  max-width: 900px;
+.swagger-ui .info .description th:first-child,
+.swagger-ui .info .description td:first-child {
+  white-space: nowrap !important;
+  width: 130px !important;
+  font-weight: 600 !important;
+  color: #0f172a !important;
+}
+
+.swagger-ui .info .description th:nth-child(2),
+.swagger-ui .info .description td:nth-child(2) {
+  width: 55% !important;
+}
+
+.swagger-ui .info .description th:nth-child(3),
+.swagger-ui .info .description td:nth-child(3) {
+  width: 35% !important;
 }
 
 .swagger-ui .info .description code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-  background: #f1f5f9;
+  font-size: 12.5px;
+  background: #e2e8f0;
   color: #0f172a;
   padding: 2px 6px;
   border-radius: 4px;
-  border: 1px solid #e2e8f0;
-}
-
-.swagger-ui .info .description pre code {
-  background: transparent;
-  border: none;
-  padding: 0;
-  color: inherit;
 }
 
 .swagger-ui .info .description a,
@@ -288,14 +222,62 @@ body {
   color: #075985;
 }
 
+/* Scheme / Server Selector Card */
+.swagger-ui .scheme-container {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  padding: 16px 28px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+  margin: 0 0 20px !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+}
+
+.swagger-ui .scheme-container .schemes {
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+.swagger-ui .scheme-container .schemes > label {
+  font-weight: 600 !important;
+  color: #0f172a !important;
+}
+
 /* Tag Sections & Filter */
+.swagger-ui .filter {
+  margin: 0 0 20px !important;
+  padding: 0 !important;
+  width: 100% !important;
+}
+
+.swagger-ui .filter .operation-filter-input {
+  width: 100% !important;
+  max-width: 100% !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 8px !important;
+  padding: 10px 16px !important;
+  font-size: 14px !important;
+  box-sizing: border-box !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+}
+
+.swagger-ui .filter .operation-filter-input:focus {
+  border-color: #0369a1 !important;
+  outline: 2px solid rgba(3, 105, 161, 0.25) !important;
+}
+
 .swagger-ui .opblock-tag-section {
-  margin-top: 36px !important;
+  margin-top: 28px !important;
   margin-bottom: 20px !important;
+  width: 100% !important;
 }
 
 .swagger-ui .opblock-tag {
-  font-size: 19px;
+  font-size: 18px;
   font-weight: 700;
   color: #0f172a;
   border-bottom: 2px solid #cbd5e1;
@@ -304,31 +286,16 @@ body {
   margin-bottom: 10px !important;
 }
 
-.swagger-ui .opblock-tag small {
+.swagger-ui .opblock-tag small,
+.swagger-ui .opblock-tag p,
+.swagger-ui .opblock-tag-section .renderedMarkdown p {
   font-size: 14px;
   font-weight: 400;
   color: #475569;
   padding: 6px 12px !important;
   display: inline-block !important;
-}
-
-.swagger-ui .filter {
-  margin-bottom: 24px;
-}
-
-.swagger-ui .filter .operation-filter-input {
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  padding: 10px 16px;
-  font-size: 14px;
-  width: 100%;
-  max-width: 440px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.swagger-ui .filter .operation-filter-input:focus {
-  border-color: #0369a1;
-  outline: 2px solid rgba(3, 105, 161, 0.25);
+  max-width: 75ch !important;
+  margin: 0 !important;
 }
 
 /* Method Badges - WCAG AA Contrast Compliant */
@@ -487,6 +454,7 @@ def render_custom_swagger_ui_html(
     openapi_url: str,
     title: str,
     oauth2_redirect_url: str | None = None,
+    favicon_url: str = "/api/favicon.svg",
 ) -> str:
     """Generate custom Swagger UI HTML embedding accessible CSS and configuration."""
     redirect_script = ""
@@ -500,7 +468,8 @@ def render_custom_swagger_ui_html(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title}</title>
   <link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="{favicon_url}">
+  <link rel="shortcut icon" href="/api/favicon.ico">
   <style>{SWAGGER_CUSTOM_CSS}</style>
 </head>
 <body>
