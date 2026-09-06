@@ -104,6 +104,7 @@ dev = [
     "email_validator==2.3.0",
     "bcrypt==5.0.0",
     "pydantic==2.13.5",
+    "psycopg[binary]>=3.1.0",
     # The deliberate exceptions to the mirror above are test-only, so the image
     # has no reason to carry them and requirements-web.txt does not list them.
     "fakeredis>=2.21",  # pure-Python Redis stand-in, unit-tier only
@@ -127,6 +128,7 @@ web = [
     "email_validator==2.3.0",
     "bcrypt==5.0.0",
     "pydantic==2.13.5",
+    "psycopg[binary]>=3.1.0",
 ]
 docs = [
     "mkdocs>=1.6,<2",

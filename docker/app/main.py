@@ -27,7 +27,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi_limiter.depends import RateLimiter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from . import admission
 from .admission_http import reserve_or_refuse, total_file_bytes_or_refuse
@@ -43,6 +43,16 @@ from .cohorts import (
     resolve_cohort,
 )
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
+from .donations import (
+    CONTROLLED_CONFIRMATIONS,
+    CONTROLLED_KITS,
+    CONTROLLED_PLATFORMS,
+    DonationAggregatesResponse,
+    DonationMetadata,
+    DonationResponse,
+    get_donation_repo,
+    validate_donation_archive,
+)
 from .identifiers import canonical_id
 from .job_failures import stored_preflight_message
 from .job_lookup import stored_task_id
@@ -912,10 +922,18 @@ def get_cohort_status(
     }
 
 
+class CumulativeStatistics(BaseModel):
+    total_jobs: int = Field(0, description="Total jobs submitted since cumulative counting began.")
+    unique_users: int = Field(0, description="Estimated unique users since cumulative counting began.")
+    since: str | None = Field(None, description="ISO timestamp when cumulative counting began.")
+    job_statuses: dict = Field(default_factory=dict, description="Counts of jobs by status cumulatively.")
+
+
 class UsageStatisticsResponse(BaseModel):
     total_jobs: int = Field(..., description="Total number of jobs submitted.")
     unique_users: int = Field(..., description="Number of unique users.")
     job_statuses: dict = Field(..., description="Counts of jobs by status.")
+    cumulative: CumulativeStatistics | None = Field(None, description="Cumulative lifetime usage statistics.")
 
 
 @router.get(
@@ -947,6 +965,7 @@ def get_usage_statistics():
         total_jobs=statistics["total_jobs"],
         unique_users=statistics["unique_users"],
         job_statuses=statistics["job_statuses"],
+        cumulative=statistics.get("cumulative"),
     )
 
 
@@ -1142,6 +1161,134 @@ def run_cohort_analysis(
         "message": "Cohort analysis started",
         "analysis_job_id": analysis_job_id,
     }
+
+
+# ----------------------------------------------------------------------
+# Feature: Data Donation Endpoints (Issue #93)
+# ----------------------------------------------------------------------
+@router.get(
+    "/donations/status/",
+    tags=["Data Donation"],
+    dependencies=[Depends(simple_rate_limiter)],
+    summary="Get Data Donation status and controlled vocabularies",
+)
+def get_donation_status():
+    """Returns the operational status of the data donation endpoint and controlled vocabularies."""
+    return {
+        "enabled": settings.ENABLE_DONATIONS,
+        "controlled_vocabularies": {
+            "kits": CONTROLLED_KITS,
+            "platforms": CONTROLLED_PLATFORMS,
+            "confirmations": CONTROLLED_CONFIRMATIONS,
+        },
+    }
+
+
+@router.post(
+    "/donations/",
+    tags=["Data Donation"],
+    dependencies=[Depends(high_rate_limiter)],
+    summary="Submit anonymous research data donation",
+    response_model=DonationResponse,
+)
+async def submit_donation(
+    archive: UploadFile = File(..., description="Stripped result ZIP archive"),
+    consent: bool = Form(..., description="Explicit GDPR Art. 9 consent"),
+    kit: str = Form(..., description="Target capture kit"),
+    sequencing_platform: str = Form(..., description="Sequencing platform"),
+    positive_call: bool = Form(..., description="Positive finding (True/False)"),
+    phenotype_hpo: str | None = Form(None, description="Comma-separated or JSON list of HPO terms"),
+    confirmation_method: str | None = Form(None, description="Confirmation method if positive"),
+    sex: str | None = Form(None, description="Coarse sex: XX, XY, other, unknown"),
+    collection_month: str | None = Form(None, description="Coarse collection date (YYYY-MM)"),
+    depth_counting_policy: str = Form("vntr_flank_mean_depth", description="Depth counting policy"),
+):
+    """
+    Submits a client-side stripped VNtyper result archive for anonymous research donation.
+    Enforces GDPR Art. 9 explicit consent, cryptographic integrity check via report anchor,
+    and server-side re-validation of raw data stripping.
+    """
+    if not settings.ENABLE_DONATIONS:
+        raise HTTPException(
+            status_code=503,
+            detail="Data donation is currently disabled on this server.",
+        )
+
+    import json
+
+    hpo_list: list[str] = []
+    if phenotype_hpo:
+        phenotype_hpo_str = phenotype_hpo.strip()
+        if phenotype_hpo_str.startswith("["):
+            try:
+                hpo_list = json.loads(phenotype_hpo_str)
+            except (json.JSONDecodeError, TypeError):
+                hpo_list = [t.strip() for t in phenotype_hpo_str.strip("[]").split(",") if t.strip()]
+        else:
+            hpo_list = [t.strip() for t in phenotype_hpo_str.split(",") if t.strip()]
+
+    try:
+        meta = DonationMetadata(
+            consent=consent,
+            kit=kit,
+            sequencing_platform=sequencing_platform,
+            positive_call=positive_call,
+            confirmation_method=confirmation_method,
+            phenotype_hpo=hpo_list,
+            sex=sex or None,
+            collection_month=collection_month or None,
+            depth_counting_policy=depth_counting_policy,
+        )
+    except (ValidationError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    archive_bytes = await archive.read()
+    if not archive_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded archive is empty.")
+
+    try:
+        validated_data = validate_donation_archive(archive_bytes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    record = {
+        **validated_data,
+        "kit": meta.kit,
+        "sequencing_platform": meta.sequencing_platform,
+        "positive_call": meta.positive_call,
+        "confirmation_method": meta.confirmation_method,
+        "phenotype_hpo": meta.phenotype_hpo,
+        "sex": meta.sex,
+        "collection_month": meta.collection_month,
+        "depth_counting_policy": meta.depth_counting_policy,
+    }
+
+    donation_repo = get_donation_repo()
+    donation_id = donation_repo.save_donation(record)
+
+    return DonationResponse(
+        donation_id=donation_id,
+        run_id=validated_data["run_id"],
+        tool_version=validated_data["tool_version"],
+    )
+
+
+@router.get(
+    "/donations/aggregates/",
+    tags=["Data Donation"],
+    dependencies=[Depends(simple_rate_limiter)],
+    summary="Get aggregated donation statistics",
+    response_model=DonationAggregatesResponse,
+)
+def get_donation_aggregates():
+    """Returns aggregated donation metrics with minimum-cell-size suppression (n < 5) and negative arm power verification."""
+    if not settings.ENABLE_DONATIONS:
+        raise HTTPException(
+            status_code=503,
+            detail="Data donation is currently disabled on this server.",
+        )
+    donation_repo = get_donation_repo()
+    return donation_repo.get_aggregates(min_cell_size=5)
 
 
 # Include the router in the FastAPI app

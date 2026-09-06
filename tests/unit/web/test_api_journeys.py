@@ -518,8 +518,11 @@ def test_usage_statistics_aggregate_the_recorded_jobs(client, fake_redis) -> Non
     response = client.get("/usage-statistics/")
 
     assert response.status_code == 200, response.text
-    assert response.json() == {
-        "total_jobs": 3,
-        "unique_users": 2,
-        "job_statuses": {"completed": 2, "failed": 1},
-    }
+    data = response.json()
+    assert data["total_jobs"] == 3
+    assert data["unique_users"] == 2
+    assert data["job_statuses"] == {"completed": 2, "failed": 1}
+    assert "cumulative" in data
+    assert data["cumulative"]["total_jobs"] == 3
+    assert data["cumulative"]["unique_users"] == 2
+    assert data["cumulative"]["job_statuses"] == {"completed": 2, "failed": 1}

@@ -1317,6 +1317,9 @@ def run_pipeline(
         # Mark pipeline end in summary
         end_summary(summary)
 
+        from vntyper.scripts.report_integrity import anchor_pipeline_summary
+        anchor_pipeline_summary(summary, output_dir)
+
         # Write out the complete pipeline summary
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         write_summary(summary, summary_file_path)

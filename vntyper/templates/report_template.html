@@ -894,6 +894,18 @@
                     <dd{% if region_resolved == not_recorded %} class="unrecorded"{% endif %}>
                         {{- region_resolved }}</dd>
                 </div>
+                {% if run_id %}
+                <div>
+                    <dt>Run ID</dt>
+                    <dd>{{ run_id }}</dd>
+                </div>
+                {% endif %}
+                {% if report_integrity_digest %}
+                <div>
+                    <dt>Integrity</dt>
+                    <dd title="{{ report_integrity_digest }}">{{ report_integrity_digest[:8] }}</dd>
+                </div>
+                {% endif %}
             </dl>
 
             {#

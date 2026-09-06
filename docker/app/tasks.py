@@ -27,7 +27,12 @@ from .pipeline_job_workspace import (
     open_pipeline_job_workspace,
     reclaim_unopened_spool_inputs,
 )
-from .usage_records import started_usage_record
+from .usage_records import (
+    record_cumulative_job_completed,
+    record_cumulative_job_failed,
+    record_cumulative_job_started,
+    started_usage_record,
+)
 from .utils import send_email
 
 logger = get_task_logger(__name__)
@@ -312,6 +317,12 @@ def run_vntyper_job(
         usage_data = started_usage_record(job_id, client_ip=client_ip, user_agent=user_agent)
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
+        record_cumulative_job_started(
+            redis_usage_client,
+            job_id,
+            user_hash=usage_data.get("user_hash"),
+            ttl_seconds=settings.USAGE_DATA_RETENTION_SECONDS,
+        )
 
         if archive_results:
             clear_stale_archive(
@@ -381,6 +392,11 @@ def run_vntyper_job(
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
+        record_cumulative_job_completed(
+            redis_usage_client,
+            job_id,
+            ttl_seconds=settings.USAGE_DATA_RETENTION_SECONDS,
+        )
         if not archive_published:
             workspace.require_current_output("completion bookkeeping")
 
@@ -464,6 +480,11 @@ def run_vntyper_job(
                     logger.error(f"Error removing failed job's public archive: {rollback_error}")
         try:
             redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+            record_cumulative_job_failed(
+                redis_usage_client,
+                job_id,
+                ttl_seconds=settings.USAGE_DATA_RETENTION_SECONDS,
+            )
         except Exception as status_error:
             logger.error(f"Error recording failed status for {job_id}: {status_error}")
         raise
@@ -617,6 +638,12 @@ def run_cohort_analysis_job(
         )
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
+        record_cumulative_job_started(
+            redis_usage_client,
+            job_id,
+            user_hash=usage_data.get("user_hash"),
+            ttl_seconds=settings.USAGE_DATA_RETENTION_SECONDS,
+        )
 
         # 1) Exclusively reserve this task's public output name before removing
         # an earlier archive. Every task write then stays in private staging,
@@ -686,6 +713,11 @@ def run_cohort_analysis_job(
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
+        record_cumulative_job_completed(
+            redis_usage_client,
+            job_id,
+            ttl_seconds=settings.USAGE_DATA_RETENTION_SECONDS,
+        )
 
     except Exception as e:
         logger.error(f"Error in joint cohort analysis for {cohort_id}: {e}")
@@ -704,6 +736,11 @@ def run_cohort_analysis_job(
                     logger.error(f"Error removing failed cohort archive: {rollback_error}")
         try:
             redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+            record_cumulative_job_failed(
+                redis_usage_client,
+                job_id,
+                ttl_seconds=settings.USAGE_DATA_RETENTION_SECONDS,
+            )
         except Exception as status_error:
             logger.error(f"Error recording failed status for cohort analysis {job_id}: {status_error}")
         raise

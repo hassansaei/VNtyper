@@ -118,6 +118,10 @@ class Settings:
     USAGE_DATA_RETENTION_DAYS: int = int(os.getenv("USAGE_DATA_RETENTION_DAYS", 30))
     USAGE_DATA_RETENTION_SECONDS: int = USAGE_DATA_RETENTION_DAYS * 86400
 
+    # Data donation configurations
+    ENABLE_DONATIONS: bool = os.getenv("ENABLE_DONATIONS", "false").lower() in ("true", "1", "yes")
+    POSTGRES_URL: str | None = os.getenv("POSTGRES_URL", None)
+
     def cohort_retention_days(self) -> int:
         """
         Cohort lifetime, bounded by the archive window.

@@ -134,11 +134,12 @@ def test_usage_statistics_are_computed_without_calling_keys(client, fake_redis, 
     response = client.get("/usage-statistics/")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "total_jobs": 3,
-        "unique_users": 2,
-        "job_statuses": {"completed": 2, "failed": 1},
-    }
+    data = response.json()
+    assert data["total_jobs"] == 3
+    assert data["unique_users"] == 2
+    assert data["job_statuses"] == {"completed": 2, "failed": 1}
+    assert "cumulative" in data
+    assert data["cumulative"]["total_jobs"] == 3
 
 
 def test_usage_statistics_with_no_recorded_usage_are_all_zeroes(client, fake_redis, monkeypatch) -> None:
@@ -158,7 +159,12 @@ def test_usage_statistics_with_no_recorded_usage_are_all_zeroes(client, fake_red
     response = client.get("/usage-statistics/")
 
     assert response.status_code == 200
-    assert response.json() == {"total_jobs": 0, "unique_users": 0, "job_statuses": {}}
+    data = response.json()
+    assert data["total_jobs"] == 0
+    assert data["unique_users"] == 0
+    assert data["job_statuses"] == {}
+    assert "cumulative" in data
+    assert data["cumulative"]["total_jobs"] == 0
 
 
 def test_usage_statistics_scan_pages_are_deduplicated_and_batch_fetched() -> None:
@@ -167,11 +173,9 @@ def test_usage_statistics_scan_pages_are_deduplicated_and_batch_fetched() -> Non
 
     result = aggregate_usage_statistics(store)
 
-    assert result == {
-        "total_jobs": 3,
-        "unique_users": 2,
-        "job_statuses": {"completed": 1, "failed": 1, "unknown": 1},
-    }
+    assert result["total_jobs"] == 3
+    assert result["unique_users"] == 2
+    assert result["job_statuses"] == {"completed": 1, "failed": 1, "unknown": 1}
     assert store.scan_calls == [0, 5, 7]
     assert store.pipeline_executions == 1
     assert store.pipeline_batch_sizes == [3]
@@ -192,11 +196,9 @@ def test_usage_statistics_preserve_an_empty_status_value() -> None:
     """Only a missing status maps to ``unknown``; an empty value stays empty."""
     result = aggregate_usage_statistics(_StatusEdgeStore())
 
-    assert result == {
-        "total_jobs": 2,
-        "unique_users": 2,
-        "job_statuses": {"unknown": 1, "": 1},
-    }
+    assert result["total_jobs"] == 2
+    assert result["unique_users"] == 2
+    assert result["job_statuses"] == {"unknown": 1, "": 1}
 
 
 def test_usage_statistics_bound_each_pipeline_fetch_batch() -> None:
@@ -205,11 +207,9 @@ def test_usage_statistics_bound_each_pipeline_fetch_batch() -> None:
 
     result = aggregate_usage_statistics(store)
 
-    assert result == {
-        "total_jobs": 205,
-        "unique_users": 205,
-        "job_statuses": {"completed": 205},
-    }
+    assert result["total_jobs"] == 205
+    assert result["unique_users"] == 205
+    assert result["job_statuses"] == {"completed": 205}
     assert sum(store.pipeline_batch_sizes) == 205
     assert len(store.pipeline_batch_sizes) > 1
     assert max(store.pipeline_batch_sizes) <= 100
@@ -223,3 +223,41 @@ def test_usage_statistics_propagate_scan_failures() -> None:
         aggregate_usage_statistics(store)
 
     assert store.pipeline_executions == 0
+
+
+def test_cumulative_usage_recording_and_retry_guards(fake_redis) -> None:
+    """Cumulative counters increment and guard against double-counting on task retries."""
+    from app.usage_records import (
+        record_cumulative_job_started,
+        record_cumulative_job_completed,
+        record_cumulative_job_failed,
+    )
+
+    job_id = "job-retry-test"
+    user_hash = "user-abc"
+
+    # First start
+    record_cumulative_job_started(fake_redis, job_id, user_hash)
+    # Retry start with same job_id should be ignored
+    record_cumulative_job_started(fake_redis, job_id, user_hash)
+
+    assert int(fake_redis.get("usage:cumulative:jobs")) == 1
+    assert fake_redis.pfcount("usage:cumulative:users") == 1
+    assert fake_redis.get("usage:cumulative:since") is not None
+
+    # First completion
+    record_cumulative_job_completed(fake_redis, job_id)
+    # Retry completion
+    record_cumulative_job_completed(fake_redis, job_id)
+    assert int(fake_redis.get("usage:cumulative:completed")) == 1
+
+    # Another job fails
+    job_failed_id = "job-fail-test"
+    record_cumulative_job_started(fake_redis, job_failed_id, "user-xyz")
+    record_cumulative_job_failed(fake_redis, job_failed_id)
+    record_cumulative_job_failed(fake_redis, job_failed_id)
+
+    assert int(fake_redis.get("usage:cumulative:jobs")) == 2
+    assert fake_redis.pfcount("usage:cumulative:users") == 2
+    assert int(fake_redis.get("usage:cumulative:failed")) == 1
+

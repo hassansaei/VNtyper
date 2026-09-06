@@ -1124,6 +1124,8 @@ def generate_summary_report(
         # listed, and they are printed rather than put behind a hover, because this
         # report is read on paper as often as on a screen.
         "nomenclature_legend": nomenclature_legend(kestrel_df_raw, advntr_df),
+        "run_id": pipeline_summary.get("report_integrity", {}).get("run_id"),
+        "report_integrity_digest": pipeline_summary.get("report_integrity", {}).get("report_integrity_digest"),
     }
 
     try:

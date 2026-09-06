@@ -80,3 +80,106 @@ def started_usage_record(
     if cohort_id is not None:
         record["cohort_id"] = cohort_id
     return record
+
+
+def record_cumulative_job_started(
+    store: any,
+    job_id: str,
+    user_hash: str | None,
+    now: datetime | None = None,
+    ttl_seconds: int = 30 * 86400,
+) -> bool:
+    """Record job start in cumulative counters, guarded against task retries.
+
+    Returns True if this was the first start attempt counted, False if already counted.
+    """
+    guard_key = f"usage:counted:started:{job_id}"
+    setter = getattr(store, "set", None)
+    if setter is not None:
+        try:
+            was_set = store.set(guard_key, "1", nx=True, ex=ttl_seconds)
+            if not was_set:
+                return False
+        except TypeError:
+            setnx_fn = getattr(store, "setnx", None)
+            if setnx_fn is not None and not setnx_fn(guard_key, "1"):
+                return False
+            expire_fn = getattr(store, "expire", None)
+            if expire_fn is not None:
+                expire_fn(guard_key, ttl_seconds)
+
+    stamped = now if now is not None else datetime.now(timezone.utc)
+    since_val = stamped.isoformat()
+
+    # SETNX usage:cumulative:since
+    setnx = getattr(store, "setnx", None)
+    if setnx is not None:
+        setnx("usage:cumulative:since", since_val)
+    elif setter is not None:
+        store.set("usage:cumulative:since", since_val, nx=True)
+
+    # INCR usage:cumulative:jobs
+    incr = getattr(store, "incr", None)
+    if incr is not None:
+        incr("usage:cumulative:jobs")
+
+    # PFADD usage:cumulative:users
+    pfadd = getattr(store, "pfadd", None)
+    if pfadd is not None and user_hash:
+        pfadd("usage:cumulative:users", user_hash)
+
+    return True
+
+
+def record_cumulative_job_completed(
+    store: any,
+    job_id: str,
+    ttl_seconds: int = 30 * 86400,
+) -> bool:
+    """Record job completion in cumulative counters, guarded against retries."""
+    guard_key = f"usage:counted:completed:{job_id}"
+    setter = getattr(store, "set", None)
+    if setter is not None:
+        try:
+            was_set = store.set(guard_key, "1", nx=True, ex=ttl_seconds)
+            if not was_set:
+                return False
+        except TypeError:
+            setnx_fn = getattr(store, "setnx", None)
+            if setnx_fn is not None and not setnx_fn(guard_key, "1"):
+                return False
+            expire_fn = getattr(store, "expire", None)
+            if expire_fn is not None:
+                expire_fn(guard_key, ttl_seconds)
+
+    incr = getattr(store, "incr", None)
+    if incr is not None:
+        incr("usage:cumulative:completed")
+    return True
+
+
+def record_cumulative_job_failed(
+    store: any,
+    job_id: str,
+    ttl_seconds: int = 30 * 86400,
+) -> bool:
+    """Record job failure in cumulative counters, guarded against duplicate failure reporting."""
+    guard_key = f"usage:counted:failed:{job_id}"
+    setter = getattr(store, "set", None)
+    if setter is not None:
+        try:
+            was_set = store.set(guard_key, "1", nx=True, ex=ttl_seconds)
+            if not was_set:
+                return False
+        except TypeError:
+            setnx_fn = getattr(store, "setnx", None)
+            if setnx_fn is not None and not setnx_fn(guard_key, "1"):
+                return False
+            expire_fn = getattr(store, "expire", None)
+            if expire_fn is not None:
+                expire_fn(guard_key, ttl_seconds)
+
+    incr = getattr(store, "incr", None)
+    if incr is not None:
+        incr("usage:cumulative:failed")
+    return True
