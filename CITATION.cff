@@ -13,7 +13,7 @@ authors:
 repository-code: "https://github.com/hassansaei/VNtyper"
 url: "https://vntyper.org"
 license: BSD-3-Clause
-version: "2.0.29"
+version: "2.0.30"
 date-released: '2026-09-06'
 doi: "10.5281/zenodo.19744166"
 identifiers:

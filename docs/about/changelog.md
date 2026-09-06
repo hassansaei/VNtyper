@@ -6,6 +6,17 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.30 (2026-09-06)
+
+### Web API v0.19.0, OpenAPI Docs Modernization & FastAPI 0.137+ Support
+
+- **Server-Configurable Analysis Modes**: Added `GET /options-config/` endpoint allowing frontend discovery of server defaults and forced analysis mode policies (`default_advntr_mode`, `default_normal_mode`, `force_advntr_mode`, `force_normal_mode`).
+- **OpenAPI Documentation & Swagger UI Theme Overhaul**: Modernized Swagger UI with a WCAG AA-compliant theme featuring custom method badges, high-contrast parameter typography, and an aligned 1400px container layout.
+- **Accurate adVNTR Runtime Documentation**: Updated documentation with real-data benchmark metrics (~30–90s for normal mode, ~1–3 min for adVNTR mode, with adVNTR genotyping completing in 3–11s on real alignment subsets).
+- **FastAPI 0.137+ Rate Limiter Compatibility**: Patched `fastapi-limiter` for compatibility with `_IncludedRouter` route objects in FastAPI >= 0.137.
+- **Shared Brand Favicons**: Added `/api/favicon.svg` and `/api/favicon.ico` endpoints in the web API matching frontend branding.
+- **Queue State CLS Elimination**: Addressed navbar layout shift on queue updates using tabular numerals.
+
 ## 2.0.29 (2026-09-06)
 
 ### adVNTR v2.2.0 integration and runtime optimizations ([#326](https://github.com/hassansaei/VNtyper/pull/326))
