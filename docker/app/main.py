@@ -740,12 +740,8 @@ def download_result(job_id: str):
 @router.get(
     "/health/",
     tags=["General"],
-    dependencies=[Depends(simple_rate_limiter)],
     summary="Health check endpoint",
-    description=(
-        "Endpoint to check the health status of the API.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_SIMPLE_TIMES} requests per {settings.RATE_LIMIT_SIMPLE_SECONDS} seconds."
-    ),
+    description="Endpoint to check the health status of the API.",
 )
 def health_check():
     """

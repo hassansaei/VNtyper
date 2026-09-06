@@ -32,6 +32,51 @@ class LimiterInitializer(Protocol):
         """Load the limiter script into the supplied Redis client."""
 
 
+def patch_fastapi_limiter() -> None:
+    """Patch fastapi-limiter for compatibility with FastAPI >= 0.137.
+
+    FastAPI 0.137+ wraps included routers into `_IncludedRouter` objects which
+    do not have a `.path` attribute, causing `RateLimiter.__call__` to crash with
+    AttributeError when scanning `request.app.routes`.
+    """
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from fastapi_limiter.depends import RateLimiter
+    import redis.exceptions
+
+    async def _patched_call(self: RateLimiter, request: Request, response: Response):
+        if not FastAPILimiter.redis:
+            raise Exception("You must call FastAPILimiter.init in startup event of fastapi!")
+
+        route = request.scope.get("route")
+        route_index = getattr(route, "path", request.scope.get("path", "0"))
+        dep_index = 0
+        if route and hasattr(route, "dependencies"):
+            for j, dependency in enumerate(route.dependencies):
+                if self is dependency.dependency:
+                    dep_index = j
+                    break
+
+        identifier = self.identifier or FastAPILimiter.identifier
+        callback = self.callback or FastAPILimiter.http_callback
+        rate_key = await identifier(request)
+        key = f"{FastAPILimiter.prefix}:{rate_key}:{route_index}:{dep_index}"
+        try:
+            pexpire = await self._check(key)
+        except redis.exceptions.NoScriptError:
+            FastAPILimiter.lua_sha = await FastAPILimiter.redis.script_load(
+                FastAPILimiter.lua_script
+            )
+            pexpire = await self._check(key)
+        if pexpire != 0:
+            return await callback(request, response, pexpire)
+
+    RateLimiter.__call__ = _patched_call
+
+
+patch_fastapi_limiter()
+
+
 async def initialize_rate_limiter(
     redis_url: str,
     *,
@@ -53,6 +98,7 @@ async def initialize_rate_limiter(
             closing the client. A close failure is logged without replacing the
             initialization failure.
     """
+    patch_fastapi_limiter()
     client = redis_factory(redis_url, encoding="utf8", decode_responses=True)
     try:
         await limiter.init(client)
