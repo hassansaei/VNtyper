@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import tempfile
 import zipfile
 from collections.abc import AsyncIterator
@@ -546,7 +547,12 @@ def run_vntyper(
         # identifier naming a job that was never created and whose directories
         # are about to be reclaimed.
         if cohort_key is not None:
-            redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+            pipeline = redis_cohort_client.pipeline()
+            pipeline.sadd(f"{cohort_key}:jobs", job_id)
+            pipeline.expire(
+                f"{cohort_key}:jobs", settings.cohort_retention_days() * 86400
+            )
+            pipeline.execute()
             logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
 
         # ---------------------------------------------------------------------
@@ -1107,11 +1113,22 @@ def run_cohort_analysis(
     # 2) Build the list of existing .zip result paths for these jobs
     zip_paths: list[str] = []
     for jid in job_ids:
-        candidate_zip = os.path.join(DEFAULT_OUTPUT_DIR, f"{jid}.zip")
+        clean_jid = canonical_id(jid) or (
+            jid
+            if isinstance(jid, str)
+            and re.match(r"^[a-zA-Z0-9_-]{1,64}\Z", jid)
+            and "/" not in jid
+            and ".." not in jid
+            else None
+        )
+        if not clean_jid:
+            logger.warning(f"Invalid job ID '{jid}' in cohort. Skipping.")
+            continue
+        candidate_zip = os.path.join(DEFAULT_OUTPUT_DIR, f"{clean_jid}.zip")
         if os.path.exists(candidate_zip):
             zip_paths.append(candidate_zip)
         else:
-            logger.warning(f"Job {jid} missing .zip file. Skipping from cohort analysis.")
+            logger.warning(f"Job {clean_jid} missing .zip file. Skipping from cohort analysis.")
 
     if not zip_paths:
         raise HTTPException(
