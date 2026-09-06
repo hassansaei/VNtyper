@@ -179,15 +179,15 @@ def aggregate_usage_statistics(store: UsageStore) -> UsageStatistics:
     setter = getattr(store, "set", None)
     if cumulative_jobs == 0 and len(seen_keys) > 0 and setter is not None:
         try:
-            was_unseeded = store.set("usage:cumulative:seeded", "1", nx=True)
+            was_unseeded = setter("usage:cumulative:seeded", "1", nx=True)
             if was_unseeded:
-                store.set("usage:cumulative:jobs", str(len(seen_keys)))
+                setter("usage:cumulative:jobs", str(len(seen_keys)))
                 cumulative_jobs = len(seen_keys)
                 if job_statuses.get("completed"):
-                    store.set("usage:cumulative:completed", str(job_statuses["completed"]))
+                    setter("usage:cumulative:completed", str(job_statuses["completed"]))
                     cumulative_completed = job_statuses["completed"]
                 if job_statuses.get("failed"):
-                    store.set("usage:cumulative:failed", str(job_statuses["failed"]))
+                    setter("usage:cumulative:failed", str(job_statuses["failed"]))
                     cumulative_failed = job_statuses["failed"]
                 pfadd_fn = getattr(store, "pfadd", None)
                 if pfadd_fn is not None:
@@ -206,7 +206,7 @@ def aggregate_usage_statistics(store: UsageStore) -> UsageStatistics:
             if setnx_fn is not None:
                 setnx_fn("usage:cumulative:since", now_iso)
             else:
-                store.set("usage:cumulative:since", now_iso, nx=True)
+                setter("usage:cumulative:since", now_iso, nx=True)
             cumulative_since = now_iso
         except (ValueError, TypeError, AttributeError, RuntimeError, OSError):
             pass

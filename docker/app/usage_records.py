@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from redis.typing import EncodableT, FieldT
 
@@ -83,7 +84,7 @@ def started_usage_record(
 
 
 def record_cumulative_job_started(
-    store: any,
+    store: Any,
     job_id: str,
     user_hash: str | None,
     now: datetime | None = None,
@@ -97,7 +98,7 @@ def record_cumulative_job_started(
     setter = getattr(store, "set", None)
     if setter is not None:
         try:
-            was_set = store.set(guard_key, "1", nx=True, ex=ttl_seconds)
+            was_set = setter(guard_key, "1", nx=True, ex=ttl_seconds)
             if not was_set:
                 return False
         except TypeError:
@@ -116,7 +117,7 @@ def record_cumulative_job_started(
     if setnx is not None:
         setnx("usage:cumulative:since", since_val)
     elif setter is not None:
-        store.set("usage:cumulative:since", since_val, nx=True)
+        setter("usage:cumulative:since", since_val, nx=True)
 
     # INCR usage:cumulative:jobs
     incr = getattr(store, "incr", None)
@@ -132,7 +133,7 @@ def record_cumulative_job_started(
 
 
 def record_cumulative_job_completed(
-    store: any,
+    store: Any,
     job_id: str,
     ttl_seconds: int = 30 * 86400,
 ) -> bool:
@@ -141,7 +142,7 @@ def record_cumulative_job_completed(
     setter = getattr(store, "set", None)
     if setter is not None:
         try:
-            was_set = store.set(guard_key, "1", nx=True, ex=ttl_seconds)
+            was_set = setter(guard_key, "1", nx=True, ex=ttl_seconds)
             if not was_set:
                 return False
         except TypeError:
@@ -159,7 +160,7 @@ def record_cumulative_job_completed(
 
 
 def record_cumulative_job_failed(
-    store: any,
+    store: Any,
     job_id: str,
     ttl_seconds: int = 30 * 86400,
 ) -> bool:
@@ -168,7 +169,7 @@ def record_cumulative_job_failed(
     setter = getattr(store, "set", None)
     if setter is not None:
         try:
-            was_set = store.set(guard_key, "1", nx=True, ex=ttl_seconds)
+            was_set = setter(guard_key, "1", nx=True, ex=ttl_seconds)
             if not was_set:
                 return False
         except TypeError:

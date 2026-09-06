@@ -317,10 +317,11 @@ def run_vntyper_job(
         usage_data = started_usage_record(job_id, client_ip=client_ip, user_agent=user_agent)
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
+        user_hash_val = usage_data.get("user_hash")
         record_cumulative_job_started(
             redis_usage_client,
             job_id,
-            user_hash=usage_data.get("user_hash"),
+            user_hash=str(user_hash_val) if user_hash_val is not None else None,
             ttl_seconds=settings.USAGE_DATA_RETENTION_SECONDS,
         )
 
@@ -638,10 +639,11 @@ def run_cohort_analysis_job(
         )
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
+        user_hash_val = usage_data.get("user_hash")
         record_cumulative_job_started(
             redis_usage_client,
             job_id,
-            user_hash=usage_data.get("user_hash"),
+            user_hash=str(user_hash_val) if user_hash_val is not None else None,
             ttl_seconds=settings.USAGE_DATA_RETENTION_SECONDS,
         )
 

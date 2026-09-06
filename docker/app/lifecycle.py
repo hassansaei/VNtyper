@@ -39,10 +39,10 @@ def patch_fastapi_limiter() -> None:
     do not have a `.path` attribute, causing `RateLimiter.__call__` to crash with
     AttributeError when scanning `request.app.routes`.
     """
+    import redis.exceptions
+    from fastapi_limiter.depends import RateLimiter
     from starlette.requests import Request
     from starlette.responses import Response
-    from fastapi_limiter.depends import RateLimiter
-    import redis.exceptions
 
     async def _patched_call(self: RateLimiter, request: Request, response: Response):
         if not FastAPILimiter.redis:
@@ -64,14 +64,12 @@ def patch_fastapi_limiter() -> None:
         try:
             pexpire = await self._check(key)
         except redis.exceptions.NoScriptError:
-            FastAPILimiter.lua_sha = await FastAPILimiter.redis.script_load(
-                FastAPILimiter.lua_script
-            )
+            FastAPILimiter.lua_sha = await FastAPILimiter.redis.script_load(FastAPILimiter.lua_script)
             pexpire = await self._check(key)
         if pexpire != 0:
             return await callback(request, response, pexpire)
 
-    RateLimiter.__call__ = _patched_call
+    RateLimiter.__call__ = _patched_call  # type: ignore[method-assign]
 
 
 patch_fastapi_limiter()

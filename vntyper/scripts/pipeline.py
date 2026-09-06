@@ -1318,6 +1318,7 @@ def run_pipeline(
         end_summary(summary)
 
         from vntyper.scripts.report_integrity import anchor_pipeline_summary
+
         anchor_pipeline_summary(summary, output_dir)
 
         # Write out the complete pipeline summary

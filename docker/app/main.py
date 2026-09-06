@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from uuid import uuid4
 
 import redis
@@ -1296,7 +1296,7 @@ async def submit_donation(
     positive_call: bool = Form(..., description="Positive finding (True/False)"),
     phenotype_hpo: str | None = Form(None, description="Comma-separated or JSON list of HPO terms"),
     confirmation_method: str | None = Form(None, description="Confirmation method if positive"),
-    sex: str | None = Form(None, description="Coarse sex: XX, XY, other, unknown"),
+    sex: Literal["XX", "XY", "other", "unknown"] | None = Form(None, description="Coarse sex: XX, XY, other, unknown"),
     collection_month: str | None = Form(None, description="Coarse collection date (YYYY-MM)"),
     depth_counting_policy: str = Form("vntr_flank_mean_depth", description="Depth counting policy"),
 ):

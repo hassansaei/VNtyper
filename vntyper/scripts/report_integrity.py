@@ -116,15 +116,15 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
 
             # Compute decision digest
             hasher = hashlib.sha256()
-            base_dir = os.path.dirname(summary_path)
+            zip_dir = os.path.dirname(summary_path)
 
-            kestrel_path = os.path.join(base_dir, "kestrel_result.tsv")
+            kestrel_path = os.path.join(zip_dir, "kestrel_result.tsv")
             if kestrel_path not in zip_ref.namelist():
-                kestrel_path = os.path.join(base_dir, "kestrel/output_indel.vcf.gz")
+                kestrel_path = os.path.join(zip_dir, "kestrel/output_indel.vcf.gz")
 
-            coverage_path = os.path.join(base_dir, "coverage/coverage_summary.tsv")
+            coverage_path = os.path.join(zip_dir, "coverage/coverage_summary.tsv")
             if coverage_path not in zip_ref.namelist():
-                coverage_path = os.path.join(base_dir, "coverage_summary.tsv")
+                coverage_path = os.path.join(zip_dir, "coverage_summary.tsv")
 
             files_to_hash = [("kestrel", kestrel_path), ("coverage", coverage_path)]
 
@@ -139,15 +139,15 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
 
     else:
         # It's a directory
-        base_dir = Path(archive_path_or_dir)
-        summary_path = base_dir / "pipeline_summary.json"
-        if not summary_path.exists():
+        dir_path = Path(archive_path_or_dir)
+        summary_path_obj = dir_path / "pipeline_summary.json"
+        if not summary_path_obj.exists():
             return {"valid": False, "error": "pipeline_summary.json not found", "signed": False}
 
-        with open(summary_path) as f:
+        with open(summary_path_obj) as f:
             summary = json.load(f)
 
-        recomputed_decision_files_digest = compute_decision_digest(base_dir)
+        recomputed_decision_files_digest = compute_decision_digest(dir_path)
 
     integrity = summary.get("report_integrity")
     if not integrity:
@@ -174,11 +174,11 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
         }
 
     payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_files_digest}:{decision_profile_id}:{decision_profile_digest}"
-    key = secret_key or os.environ.get("VNTYPER_INTEGRITY_KEY")
+    integrity_key = secret_key or os.environ.get("VNTYPER_INTEGRITY_KEY")
     signed = False
 
-    if key:
-        mac = hmac.new(key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256)
+    if integrity_key:
+        mac = hmac.new(integrity_key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256)
         expected_digest = mac.hexdigest()
         signed = True
     else:

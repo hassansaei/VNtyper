@@ -1,7 +1,11 @@
 import json
 import zipfile
 
+import pytest
+
 from vntyper.scripts.report_integrity import anchor_pipeline_summary, verify_report_integrity
+
+pytestmark = pytest.mark.unit
 
 
 def test_generate_anchor(tmp_path):

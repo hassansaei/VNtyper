@@ -228,9 +228,9 @@ def test_usage_statistics_propagate_scan_failures() -> None:
 def test_cumulative_usage_recording_and_retry_guards(fake_redis) -> None:
     """Cumulative counters increment and guard against double-counting on task retries."""
     from app.usage_records import (
-        record_cumulative_job_started,
         record_cumulative_job_completed,
         record_cumulative_job_failed,
+        record_cumulative_job_started,
     )
 
     job_id = "job-retry-test"
@@ -260,4 +260,3 @@ def test_cumulative_usage_recording_and_retry_guards(fake_redis) -> None:
     assert int(fake_redis.get("usage:cumulative:jobs")) == 2
     assert fake_redis.pfcount("usage:cumulative:users") == 2
     assert int(fake_redis.get("usage:cumulative:failed")) == 1
-

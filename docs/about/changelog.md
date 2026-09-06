@@ -6,6 +6,16 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.31 (2026-09-06)
+
+### Pipeline procfs descriptors, report integrity, and CI quality fixes ([#328](https://github.com/hassansaei/VNtyper/pull/328))
+
+- **Descriptor-Bound Procfs Output Fix**: Preserved trailing `/.` on procfs descriptor paths in `preflight_error_io.py` and `handle_pipeline`, ensuring safe execution under containerized and restricted procfs mount environments ([#328](https://github.com/hassansaei/VNtyper/pull/328)).
+- **Report Cryptographic Integrity & Tamper Anchors**: Added pipeline summary anchoring and verification module (`vntyper/scripts/report_integrity.py`) computing deterministic decision digests and optional HMAC signatures.
+- **Anonymous Research Data Donations**: Integrated client-stripped result donation endpoint (`POST /donations/`) with GDPR Art. 9 consent validation, integrity verification, and aggregation counters.
+- **Cumulative Usage Tracking**: Added Redis HyperLogLog and cumulative job counting in worker tasks with retry deduplication guards.
+- **CI & Type Quality Enforcement**: Resolved Ruff import sorting issues, Mypy type definitions across Celery tasks and Redis models, test marker hygiene, and integration compatibility observation enrollment.
+
 ## 2.0.30 (2026-09-06)
 
 ### Web API v0.19.0, OpenAPI Docs Modernization & FastAPI 0.137+ Support
