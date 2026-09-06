@@ -26,7 +26,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field, ValidationError
 
@@ -44,6 +44,12 @@ from .cohorts import (
     resolve_cohort,
 )
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
+from .docs_theme import (
+    API_DESCRIPTION,
+    API_SUMMARY,
+    API_TAGS_METADATA,
+    render_custom_swagger_ui_html,
+)
 from .donations import (
     CONTROLLED_CONFIRMATIONS,
     CONTROLLED_KITS,
@@ -182,25 +188,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="VNtyper Online API",
+    summary=API_SUMMARY,
     version=API_VERSION,
-    description=(
-        """
-        VNtyper Online API is an Application Programming Interface designed to facilitate the genotyping of MUC1 Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data.
-
-        This API allows users to submit genomic data for VNTR analysis, check job statuses, download results, and access aggregated usage statistics.
-
-        Features
-
-        - Submit Jobs: Upload BAM files and initiate VNTR analysis.
-        - Job Management: Check the status of submitted jobs and retrieve results.
-        - Cohort Support: Group jobs into cohorts for collective analysis.
-        - Usage Statistics: Access anonymized usage statistics of the API.
-        - In-Browser Processing: Leverages powerful genomic data processing tools.
-        """
-    ),
+    description=API_DESCRIPTION,
+    openapi_tags=API_TAGS_METADATA,
     terms_of_service="https://vntyper.org/terms/",
     contact={
-        "name": "Support Team",
+        "name": "VNtyper Support Team",
         "url": "https://vntyper.org/support/",
         "email": "support@vntyper.org",
     },
@@ -209,11 +203,28 @@ app = FastAPI(
         "url": "https://github.com/hassansaei/vntyper/blob/main/LICENSE",
     },
     root_path="/api",
-    docs_url="/docs",
+    docs_url=None,
     redoc_url="/redoc",
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+
+@app.api_route("/docs", methods=["GET", "HEAD"], include_in_schema=False)
+async def custom_swagger_ui_html(req: Request) -> HTMLResponse:
+    root_path = req.scope.get("root_path", "").rstrip("/") or (app.root_path or "").rstrip("/")
+    openapi_url = root_path + (app.openapi_url or "/openapi.json")
+    oauth2_redirect_url = app.swagger_ui_oauth2_redirect_url
+    if oauth2_redirect_url:
+        oauth2_redirect_url = root_path + oauth2_redirect_url
+    return HTMLResponse(
+        render_custom_swagger_ui_html(
+            openapi_url=openapi_url,
+            title=f"{app.title} - Swagger UI",
+            oauth2_redirect_url=oauth2_redirect_url,
+        )
+    )
+
 
 # Bound the size of every request before it is read, not only the part of it
 # that reaches the job volume. MAX_UPLOAD_BYTES above governs what a submission
@@ -995,7 +1006,7 @@ class UsageStatisticsResponse(BaseModel):
 
 @router.get(
     "/usage-statistics/",
-    tags=["Statistics"],
+    tags=["Usage Statistics"],
     dependencies=[Depends(simple_rate_limiter)],
     summary="Get Usage Statistics",
     description=(
@@ -1233,7 +1244,7 @@ def run_cohort_analysis(
 # ----------------------------------------------------------------------
 @router.get(
     "/donations/status/",
-    tags=["Data Donation"],
+    tags=["Research Data Donations"],
     dependencies=[Depends(simple_rate_limiter)],
     summary="Get Data Donation status and controlled vocabularies",
 )
@@ -1251,7 +1262,7 @@ def get_donation_status():
 
 @router.post(
     "/donations/",
-    tags=["Data Donation"],
+    tags=["Research Data Donations"],
     dependencies=[Depends(high_rate_limiter)],
     summary="Submit anonymous research data donation",
     response_model=DonationResponse,
@@ -1340,7 +1351,7 @@ async def submit_donation(
 
 @router.get(
     "/donations/aggregates/",
-    tags=["Data Donation"],
+    tags=["Research Data Donations"],
     dependencies=[Depends(simple_rate_limiter)],
     summary="Get aggregated donation statistics",
     response_model=DonationAggregatesResponse,
