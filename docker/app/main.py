@@ -308,6 +308,47 @@ def get_versions():
     return {"api_version": API_VERSION, "tool_version": TOOL_VERSION}
 
 
+class JobOptionsConfigResponse(BaseModel):
+    default_advntr_mode: bool = Field(..., description="Default state for adVNTR mode checkbox.")
+    default_normal_mode: bool = Field(..., description="Default state for normal mode checkbox.")
+    force_advntr_mode: bool = Field(..., description="Whether adVNTR mode is enforced by the server.")
+    force_normal_mode: bool = Field(..., description="Whether normal mode is enforced by the server.")
+
+
+@router.get(
+    "/options-config/",
+    tags=["Job Management"],
+    dependencies=[Depends(simple_rate_limiter)],
+    summary="Get configurable job submission options",
+    description=(
+        "Retrieve server-side defaults and enforcement settings for job submission options.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_SIMPLE_TIMES} requests per "
+        f"{settings.RATE_LIMIT_SIMPLE_SECONDS} seconds."
+    ),
+    response_model=JobOptionsConfigResponse,
+)
+def get_options_config():
+    """
+    **Description:**
+
+    Retrieve configuration for optional analysis parameters (such as adVNTR and Normal mode).
+    This allows server administrators to enforce or default these modes.
+
+    **Returns:**
+
+    - **default_advntr_mode**: Default checked state for adVNTR mode.
+    - **default_normal_mode**: Default checked state for normal mode.
+    - **force_advntr_mode**: Whether adVNTR mode is forced on by the server.
+    - **force_normal_mode**: Whether normal mode is forced on by the server.
+    """
+    return {
+        "default_advntr_mode": bool(settings.DEFAULT_ADVNTR_MODE or settings.FORCE_ADVNTR_MODE),
+        "default_normal_mode": bool(settings.DEFAULT_NORMAL_MODE or settings.FORCE_NORMAL_MODE),
+        "force_advntr_mode": bool(settings.FORCE_ADVNTR_MODE),
+        "force_normal_mode": bool(settings.FORCE_NORMAL_MODE),
+    }
+
+
 @router.post(
     "/create-cohort/",
     tags=["Cohort Management"],
@@ -399,9 +440,12 @@ def run_vntyper(
     alias: str | None = Form(None, description="Optional cohort alias"),
     passphrase: str | None = Form(None, description="Passphrase if required by the cohort"),
     # ----------------------------------------------------
-    # ADDED: single option for advntr_mode (default False)
+    # Configurable option for advntr_mode (server configurable)
     # ----------------------------------------------------
-    advntr_mode: bool = Form(False),
+    advntr_mode: bool | None = Form(
+        None,
+        description="Optional flag to enable adVNTR mode. If omitted, defaults to server configuration.",
+    ),
 ):
     """
     **Description:**
@@ -549,17 +593,28 @@ def run_vntyper(
         if cohort_key is not None:
             pipeline = redis_cohort_client.pipeline()
             pipeline.sadd(f"{cohort_key}:jobs", job_id)
-            pipeline.expire(
-                f"{cohort_key}:jobs", settings.cohort_retention_days() * 86400
-            )
+            pipeline.expire(f"{cohort_key}:jobs", settings.cohort_retention_days() * 86400)
             pipeline.execute()
             logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
 
         # ---------------------------------------------------------------------
-        # If advntr_mode is True, use vntyper_long_queue; else the default queue.
+        # Resolve effective advntr_mode considering server-side settings
+        # If FORCE_ADVNTR_MODE is enabled, adVNTR analysis is always executed.
+        # Otherwise, user preference is honored if provided, or DEFAULT_ADVNTR_MODE is used.
+        # ---------------------------------------------------------------------
+        effective_advntr_mode: bool
+        if settings.FORCE_ADVNTR_MODE:
+            effective_advntr_mode = True
+        elif advntr_mode is not None:
+            effective_advntr_mode = advntr_mode
+        else:
+            effective_advntr_mode = settings.DEFAULT_ADVNTR_MODE
+
+        # ---------------------------------------------------------------------
+        # If effective_advntr_mode is True, use vntyper_long_queue; else the default queue.
         # ---------------------------------------------------------------------
         try:
-            if advntr_mode:
+            if effective_advntr_mode:
                 task = run_vntyper_job.apply_async(
                     kwargs={
                         "bam_path": bam_path,
@@ -1111,10 +1166,7 @@ def run_cohort_analysis(
     for jid in job_ids:
         clean_jid = canonical_id(jid) or (
             jid
-            if isinstance(jid, str)
-            and re.match(r"^[a-zA-Z0-9_-]{1,64}\Z", jid)
-            and "/" not in jid
-            and ".." not in jid
+            if isinstance(jid, str) and re.match(r"^[a-zA-Z0-9_-]{1,64}\Z", jid) and "/" not in jid and ".." not in jid
             else None
         )
         if not clean_jid:

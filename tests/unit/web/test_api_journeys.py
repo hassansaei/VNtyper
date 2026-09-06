@@ -526,3 +526,54 @@ def test_usage_statistics_aggregate_the_recorded_jobs(client, fake_redis) -> Non
     assert data["cumulative"]["total_jobs"] == 3
     assert data["cumulative"]["unique_users"] == 2
     assert data["cumulative"]["job_statuses"] == {"completed": 2, "failed": 1}
+
+
+def test_options_config_endpoint_returns_defaults_and_honors_settings(client, monkeypatch) -> None:
+    """The /options-config/ endpoint reports configurable options and reflects server settings."""
+    from app.config import settings
+
+    # Default case
+    response = client.get("/options-config/")
+    assert response.status_code == 200
+    data = response.json()
+    assert "default_advntr_mode" in data
+    assert "default_normal_mode" in data
+    assert "force_advntr_mode" in data
+    assert "force_normal_mode" in data
+
+    # Test overridden settings
+    monkeypatch.setattr(settings, "FORCE_ADVNTR_MODE", True)
+    monkeypatch.setattr(settings, "DEFAULT_NORMAL_MODE", True)
+    response2 = client.get("/options-config/")
+    assert response2.status_code == 200
+    data2 = response2.json()
+    assert data2["force_advntr_mode"] is True
+    assert data2["default_advntr_mode"] is True
+    assert data2["default_normal_mode"] is True
+    assert data2["force_normal_mode"] is False
+
+
+def test_job_submission_honors_force_advntr_mode(client, fake_redis, monkeypatch) -> None:
+    """When FORCE_ADVNTR_MODE is enabled, job submissions execute with advntr_mode True regardless of client input."""
+    import app.main as app_main
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "FORCE_ADVNTR_MODE", True)
+
+    enqueued_kwargs = None
+
+    def fake_apply_async(*args, **kwargs):
+        nonlocal enqueued_kwargs
+        enqueued_kwargs = kwargs.get("kwargs", {})
+        task = SimpleNamespace(id="fake-task-id")
+        return task
+
+    monkeypatch.setattr(app_main.run_vntyper_job, "apply_async", fake_apply_async)
+
+    files = {"bam_file": (BAM_NAME, io.BytesIO(BAM_BYTES), "application/octet-stream")}
+    data = {"advntr_mode": "false"}
+
+    response = client.post("/run-job/", files=files, data=data)
+    assert response.status_code == 200
+    assert enqueued_kwargs is not None
+    assert enqueued_kwargs.get("advntr_mode") is True

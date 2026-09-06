@@ -122,6 +122,12 @@ class Settings:
     ENABLE_DONATIONS: bool = os.getenv("ENABLE_DONATIONS", "false").lower() in ("true", "1", "yes")
     POSTGRES_URL: str | None = os.getenv("POSTGRES_URL", None)
 
+    # Configurable analysis options (defaults and forced overrides)
+    DEFAULT_ADVNTR_MODE: bool = os.getenv("DEFAULT_ADVNTR_MODE", "false").lower() in ("true", "1", "yes")
+    DEFAULT_NORMAL_MODE: bool = os.getenv("DEFAULT_NORMAL_MODE", "false").lower() in ("true", "1", "yes")
+    FORCE_ADVNTR_MODE: bool = os.getenv("FORCE_ADVNTR_MODE", "false").lower() in ("true", "1", "yes")
+    FORCE_NORMAL_MODE: bool = os.getenv("FORCE_NORMAL_MODE", "false").lower() in ("true", "1", "yes")
+
     def cohort_retention_days(self) -> int:
         """
         Cohort lifetime, bounded by the archive window.
