@@ -6,6 +6,15 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.32 (2026-09-08)
+
+### Identity dominance selection, biophysical depth semantics, and junction boundary resolution ([#270](https://github.com/hassansaei/VNtyper/issues/270), [#295](https://github.com/hassansaei/VNtyper/issues/295))
+
+- **Identity Dominance Selection Engine**: Resolved mis-named true positives where the correct candidate was present in pre-results but beaten under legacy coordinate-based sorting ([#270](https://github.com/hassansaei/VNtyper/issues/270)). Groups passing candidate rows by canonical `Molecular_Identity`, ranks groups by an 8-tier lexicographic dominance hierarchy (confidence priority, unflagged status, canonical X-repeat context fidelity, physical peak alternate depth, assembly cardinality, peak depth score, peak haplo count, and min pos), and deterministically selects the optimal representative row with complete tie-breaking.
+- **Biophysical Read Depth Semantics**: Replaced assembly-cardinality depth summation with physical peak alternate depth (`max(Estimated_Depth_AlternateVariant)` across motif assemblies supporting the winning identity), eliminating read double-counting across overlapping motif pairs while respecting Kestrel single-read multi-assembly alignment ([#295](https://github.com/hassansaei/VNtyper/issues/295)).
+- **Junction Boundary Insertion Resolution**: Resolved boundary insertions (such as `dupA` at repeat junction `gap == 60`) by identifying flanking sequence matching repeat unit 1 or 2 with minus-strand orientation priority, unlocking previously uncallable `dupA` frameshift mutations without sacrificing 100% false-positive specificity on normal controls.
+- **Configurable Kestrel Selection Strategy**: Made selection strategy configurable via `KestrelDecisionConfig(strategy=...)` defaulting to `"identity_dominance"`, while retaining `"legacy"` for full backward compatibility and historical reproducibility.
+
 ## 2.0.31 (2026-09-06)
 
 ### Pipeline procfs descriptors, report integrity, and CI quality fixes ([#328](https://github.com/hassansaei/VNtyper/pull/328))
