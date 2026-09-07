@@ -37,6 +37,9 @@ class IdentityCandidateGroup:
     peak_alternate_depth: float
     peak_depth_score: float
     candidates: pd.DataFrame
+    is_unflagged: int = 1
+    peak_haplo_count: int = 0
+    min_pos: int = 999999
 
     def __post_init__(self) -> None:
         """Validate group fields and invariants."""
@@ -46,17 +49,21 @@ class IdentityCandidateGroup:
             raise ValueError("IdentityCandidateGroup requires at least one candidate row")
         if self.context_fidelity not in (0, 1):
             raise ValueError("context_fidelity must be binary (0 or 1)")
+        if self.is_unflagged not in (0, 1):
+            raise ValueError("is_unflagged must be binary (0 or 1)")
 
 
 def group_candidates_by_identity(
     df: pd.DataFrame,
     confidence_priority: Mapping[str, int] | None = None,
+    unflagged_value: str = UNFLAGGED_DEFAULT,
 ) -> list[IdentityCandidateGroup]:
     """Partition passing Kestrel candidate rows into distinct identity groups.
 
     Args:
         df: DataFrame of Kestrel candidate rows that have passed initial quality gates.
         confidence_priority: Mapping from confidence string to integer priority.
+        unflagged_value: Value in Flag column considered unflagged.
 
     Returns:
         List of IdentityCandidateGroup objects with computed group-level metrics.
@@ -92,6 +99,13 @@ def group_candidates_by_identity(
         conf_series = group_df["Confidence"].map(lambda c: priority_map.get(str(c), 0))
         max_priority = int(conf_series.max()) if not conf_series.empty else 0
 
+        # Unflagged fidelity: 1 if at least one candidate in group is unflagged
+        if "Flag" in group_df.columns:
+            unflagged_vals = (group_df["Flag"] == unflagged_value).astype(int)
+        else:
+            unflagged_vals = pd.Series([1] * len(group_df), index=group_df.index)
+        has_unflagged = 1 if any(v == 1 for v in unflagged_vals) else 0
+
         # Context fidelity: 1 if at least one candidate has canonical X context
         if "Molecular_Identity_Context_Diverges" in group_df.columns:
             diverges_vals = group_df["Molecular_Identity_Context_Diverges"]
@@ -113,6 +127,18 @@ def group_candidates_by_identity(
             depth_scores = pd.Series(0.0, index=group_df.index)
         peak_depth_score = float(depth_scores.max()) if not depth_scores.empty else 0.0
 
+        if "haplo_count" in group_df.columns:
+            haplos = pd.to_numeric(group_df["haplo_count"], errors="coerce").fillna(0)
+        else:
+            haplos = pd.Series(0, index=group_df.index)
+        peak_haplo = int(haplos.max()) if not haplos.empty else 0
+
+        if "POS" in group_df.columns:
+            positions = pd.to_numeric(group_df["POS"], errors="coerce").fillna(999999)
+        else:
+            positions = pd.Series(999999, index=group_df.index)
+        min_p = int(positions.min()) if not positions.empty else 999999
+
         groups.append(
             IdentityCandidateGroup(
                 identity_key=key,
@@ -123,6 +149,9 @@ def group_candidates_by_identity(
                 peak_alternate_depth=peak_alt_depth,
                 peak_depth_score=peak_depth_score,
                 candidates=group_df,
+                is_unflagged=has_unflagged,
+                peak_haplo_count=peak_haplo,
+                min_pos=min_p,
             )
         )
 
@@ -134,10 +163,13 @@ def rank_candidate_groups(groups: Sequence[IdentityCandidateGroup]) -> list[Iden
 
     Sort hierarchy:
         1. max_confidence_priority DESC (High_Precision* > High_Precision > Low_Precision)
-        2. context_fidelity DESC (canonical X repeat context preferred over divergent motifs)
-        3. peak_alternate_depth DESC (highest alternate k-mer depth)
-        4. assembly_cardinality DESC (most supporting motif pair assemblies)
-        5. peak_depth_score DESC (highest allele fraction)
+        2. is_unflagged DESC (clean unflagged candidates preferred over flagged artifacts)
+        3. context_fidelity DESC (canonical X repeat context preferred over divergent motifs)
+        4. peak_alternate_depth DESC (highest alternate k-mer depth)
+        5. assembly_cardinality DESC (most supporting motif pair assemblies)
+        6. peak_depth_score DESC (highest allele fraction)
+        7. peak_haplo_count DESC (highest supporting haplotype count)
+        8. min_pos ASC (lower genomic position)
 
     Args:
         groups: Sequence of candidate groups to rank.
@@ -149,10 +181,14 @@ def rank_candidate_groups(groups: Sequence[IdentityCandidateGroup]) -> list[Iden
         groups,
         key=lambda g: (
             g.max_confidence_priority,
+            g.is_unflagged,
             g.context_fidelity,
             g.peak_alternate_depth,
             g.assembly_cardinality,
             g.peak_depth_score,
+            g.peak_haplo_count,
+            -g.min_pos,
+            g.identity_key,
         ),
         reverse=True,
     )
@@ -168,8 +204,8 @@ def select_group_representative_row(
     Tie-breaking hierarchy within the winning identity group:
         1. Confidence DESC
         2. is_unflagged DESC
-        3. haplo_count DESC
-        4. Depth_Score DESC
+        3. Depth_Score DESC
+        4. haplo_count DESC
         5. POS ASC
 
     Args:
@@ -194,27 +230,37 @@ def select_group_representative_row(
     else:
         df["_is_unflagged"] = 1
 
-    if "haplo_count" in df.columns:
-        df["_haplo_count"] = pd.to_numeric(df["haplo_count"], errors="coerce").fillna(0)
-    else:
-        df["_haplo_count"] = 0
-
     if "Depth_Score" in df.columns:
         df["_depth_score"] = pd.to_numeric(df["Depth_Score"], errors="coerce").fillna(0.0)
     else:
         df["_depth_score"] = 0.0
+
+    if "haplo_count" in df.columns:
+        df["_haplo_count"] = pd.to_numeric(df["haplo_count"], errors="coerce").fillna(0)
+    else:
+        df["_haplo_count"] = 0
 
     if "POS" in df.columns:
         df["_pos"] = pd.to_numeric(df["POS"], errors="coerce").fillna(0)
     else:
         df["_pos"] = 0
 
+    if "REF" in df.columns:
+        df["_ref"] = df["REF"].astype(str)
+    else:
+        df["_ref"] = ""
+
+    if "ALT" in df.columns:
+        df["_alt"] = df["ALT"].astype(str)
+    else:
+        df["_alt"] = ""
+
     sorted_df = df.sort_values(
-        by=["_priority", "_is_unflagged", "_haplo_count", "_depth_score", "_pos"],
-        ascending=[False, False, False, False, True],
+        by=["_priority", "_is_unflagged", "_depth_score", "_haplo_count", "_pos", "_ref", "_alt"],
+        ascending=[False, False, False, False, True, False, False],
     )
 
-    added_cols = ["_priority", "_is_unflagged", "_haplo_count", "_depth_score", "_pos"]
+    added_cols = ["_priority", "_is_unflagged", "_depth_score", "_haplo_count", "_pos", "_ref", "_alt"]
     return sorted_df.head(1).drop(columns=added_cols)
 
 
@@ -249,7 +295,11 @@ def select_identity_dominance_variant(
         if isinstance(unflagged_val, str):
             unflagged_value = unflagged_val
 
-    groups = group_candidates_by_identity(df, confidence_priority=confidence_priority)
+    groups = group_candidates_by_identity(
+        df,
+        confidence_priority=confidence_priority,
+        unflagged_value=unflagged_value,
+    )
     if not groups:
         return df.head(1)
 

@@ -41,7 +41,7 @@ def translate_kestrel_representation(
     representation: KestrelRepresentation,
     motif_map: Mapping[str, str],
     *,
-    permit_boundary_insertions: bool = False,
+    permit_boundary_insertions: bool = True,
 ) -> IdentityTranslation:
     """Translate one complete Kestrel motif-pair representation independently.
 
@@ -330,17 +330,17 @@ def _affected_half(
     pair_sequence: str = "",
     inserted: str = "",
     *,
-    permit_boundary_insertions: bool = False,
+    permit_boundary_insertions: bool = True,
 ) -> int | None:
     """Return the affected plus-strand half, closing on the pair junction."""
     if end < start:
         gap = start - 1
         if gap == _UNIT_LENGTH:
             if permit_boundary_insertions and inserted and pair_sequence and len(pair_sequence) >= _PAIR_LENGTH:
-                if pair_sequence[_UNIT_LENGTH:].startswith(inserted):
-                    return 1
                 if pair_sequence[:_UNIT_LENGTH].endswith(inserted):
                     return 0
+                if pair_sequence[_UNIT_LENGTH:].startswith(inserted):
+                    return 1
             return None
         return 0 if gap < _UNIT_LENGTH else 1
     if start <= _UNIT_LENGTH < end:

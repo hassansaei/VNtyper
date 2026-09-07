@@ -378,7 +378,9 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
     assert isinstance(selection, Mapping)
     original_is_candidate = nomenclature_bam_adapter.is_candidate
     original_rescue = BamRescuer.rescue_with_identity_evidence
-    identity_component = translation_component_from_config(run_configuration.nomenclature)
+    identity_component = translation_component_from_config(
+        {**run_configuration.nomenclature, "permit_boundary_insertions": False}
+    )
     sim_root = corpus.sim_root
     advntr_root = corpus.advntr_root
 
@@ -435,7 +437,12 @@ def uut_replay(corpus: GoldenCorpus, tmp_path_factory: pytest.TempPathFactory) -
         evidenced = with_candidate_evidence(candidates, pre_result.to_dict("records"))
         passing_mask = pre_result[list(FILTER_COLUMNS)].all(axis=1)
         passing_ordinals = tuple(int(value) for value in pre_result.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]])
-        selected = filter_final_dataframe(pre_result, str(output_dir), selection=selection)
+        selected = filter_final_dataframe(
+            pre_result,
+            str(output_dir),
+            selection=selection,
+            strategy="legacy",
+        )
 
         if selected.empty:
             shutil.copyfile(source_result, output_dir / "kestrel_result.tsv")

@@ -50,16 +50,23 @@ def _valid_selection_mapping() -> dict[str, Any]:
     }
 
 
-def test_project_kestrel_selection_legacy_default() -> None:
+def test_project_kestrel_selection_default_is_identity_dominance() -> None:
     raw = _valid_selection_mapping()
     projected = project_kestrel_selection(raw)
-    assert projected.strategy == "legacy"
+    assert projected.strategy == "identity_dominance"
     assert projected.modulus == 3
     assert projected.insertion_remainder == 2
     assert projected.deletion_remainder == 1
     assert projected.unflagged_value == "Not flagged"
     assert len(projected.sort_order) == 5
     assert projected.sort_order[0] == KestrelSortField("confidence_priority", False)
+
+
+def test_project_kestrel_selection_explicit_legacy() -> None:
+    raw = _valid_selection_mapping()
+    raw["strategy"] = "legacy"
+    projected = project_kestrel_selection(raw)
+    assert projected.strategy == "legacy"
 
 
 def test_project_kestrel_selection_identity_dominance() -> None:
@@ -146,24 +153,25 @@ def test_select_single_best_variant_dispatches_between_legacy_and_identity_domin
     )
 
     # Legacy strategy selects Row 0 based on raw Depth_Score
-    legacy_sel = project_kestrel_selection(_valid_selection_mapping())
+    raw_legacy = _valid_selection_mapping()
+    raw_legacy["strategy"] = "legacy"
+    legacy_sel = project_kestrel_selection(raw_legacy)
     assert legacy_sel.strategy == "legacy"
     legacy_best = select_single_best_variant(frame, selection=legacy_sel)
     assert legacy_best.iloc[0]["Molecular_Identity"] == "repeat:1:58:ins:G"
     assert legacy_best.iloc[0]["Depth_Score"] == 0.090
 
-    # Identity dominance strategy groups Rows 1 & 2 into repeat:1:53:ins:G (2 assemblies, peak AltDepth 25.0)
+    # Identity dominance strategy (now default) groups Rows 1 & 2 into repeat:1:53:ins:G (2 assemblies, peak AltDepth 25.0)
     # dominating Row 0 (1 assembly, peak AltDepth 5.0)
-    raw_dom = _valid_selection_mapping()
-    raw_dom["strategy"] = "identity_dominance"
-    dom_sel = project_kestrel_selection(raw_dom)
+    dom_sel = project_kestrel_selection(_valid_selection_mapping())
+    assert dom_sel.strategy == "identity_dominance"
     dom_best = select_single_best_variant(frame, selection=dom_sel)
     assert dom_best.iloc[0]["Molecular_Identity"] == "repeat:1:53:ins:G"
     assert dom_best.iloc[0]["Depth_Score"] == 0.040
 
     # Test explicit strategy override parameter
-    override_best = select_single_best_variant(frame, strategy="identity_dominance")
-    assert override_best.iloc[0]["Molecular_Identity"] == "repeat:1:53:ins:G"
+    override_best = select_single_best_variant(frame, strategy="legacy")
+    assert override_best.iloc[0]["Molecular_Identity"] == "repeat:1:58:ins:G"
 
 
 def test_filter_final_dataframe_with_identity_dominance(tmp_path: Any) -> None:

@@ -57,7 +57,7 @@ class IdentityTranslationComponent:
     kestrel_motifs: Mapping[str, str]
     advntr_repeat_unit_motifs: Mapping[str, str]
     advntr_rotation_offset: int
-    permit_boundary_insertions: bool = False
+    permit_boundary_insertions: bool = True
 
     def __post_init__(self) -> None:
         """Copy and validate every injected translation authority."""
@@ -282,7 +282,7 @@ def translation_component_from_config(config: Mapping[str, object]) -> IdentityT
     rotation_offset = advntr["rotation_offset"]
     if not isinstance(repeat_unit_motifs, Mapping):
         raise TypeError("adVNTR repeat-unit mapping must be a mapping")
-    permit_boundary_insertions = bool(config.get("permit_boundary_insertions", False))
+    permit_boundary_insertions = bool(config.get("permit_boundary_insertions", True))
     return IdentityTranslationComponent(
         cast(Mapping[str, str], motifs),
         cast(Mapping[str, str], repeat_unit_motifs),
