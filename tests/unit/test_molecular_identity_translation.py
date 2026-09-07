@@ -131,6 +131,26 @@ def test_dupa_remains_distinct_from_dupc() -> None:
     assert serialize_molecular_identity(result.identity) != CANONICAL_DUPC
 
 
+def test_pos_60_insertion_matching_half_1_flank_assigns_to_half_1_and_yields_dupa() -> None:
+    """A T insertion after position 60 matching Half 1 flank assigns to Half 1 as dupA when permitted."""
+    rep = kestrel_representation(
+        required_pair("X-X"),
+        motifs="X-X",
+        position=60,
+        reference="C",
+        alternate="CT",
+    )
+    legacy_result = translate_kestrel_representation(rep, TEST_MOTIF_MAP, permit_boundary_insertions=False)
+    assert legacy_result.status == "unresolved"
+    assert legacy_result.failure == "pair-boundary-edit"
+
+    optin_result = translate_kestrel_representation(rep, TEST_MOTIF_MAP, permit_boundary_insertions=True)
+    assert optin_result.status == "resolved"
+    assert optin_result.identity is not None
+    assert serialize_molecular_identity(optin_result.identity) == CANONICAL_DUPA
+    assert serialize_molecular_identity(optin_result.identity) != "MUC1-X-60-coding-v1|1|0|-|A"
+
+
 def test_first_pair_half_is_oriented_without_swapping_the_identity() -> None:
     """An edit in the plus pair's first half still becomes coding terminal dupA."""
     result = translate_kestrel_representation(
@@ -619,3 +639,20 @@ def test_bam_binding_does_not_resolve_an_unresolved_kestrel_call() -> None:
     identity = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
 
     assert bind_bam_translation(unresolved, identity) is None
+
+
+def test_boundary_insertion_resolves_when_matching_left_unit_suffix() -> None:
+    from vntyper.scripts.molecular_identity import (
+        CANONICAL_MUC1_X_CODING_UNIT,
+    )
+    from vntyper.scripts.molecular_identity_translation import (
+        _affected_half,
+        _reverse_complement,
+    )
+
+    x_plus = _reverse_complement(CANONICAL_MUC1_X_CODING_UNIT)
+    pair = x_plus + "A" * 60
+    suffix = x_plus[-2:]
+    # start = 61, end = 60 (gap = 60)
+    half = _affected_half(61, 60, pair_sequence=pair, inserted=suffix, permit_boundary_insertions=True)
+    assert half == 0

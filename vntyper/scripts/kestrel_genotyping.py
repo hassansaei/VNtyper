@@ -27,6 +27,7 @@ import logging
 import os
 import shutil
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -60,6 +61,7 @@ from vntyper.scripts.identity_candidates import (
     translation_component_from_config,
     with_candidate_evidence,
 )
+from vntyper.scripts.identity_dominance_selection import select_identity_dominance_variant
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_decision_config import KestrelSelection, project_kestrel_selection
@@ -865,6 +867,7 @@ def process_kmer_results(
     identity_component: IdentityTranslationComponent | None = None,
     custom_context_active: bool = False,
     retain_complete_identity_candidates: bool = False,
+    strategy: str | None = None,
 ):
     """
     Applies the main postprocessing heuristics:
@@ -902,11 +905,16 @@ def process_kmer_results(
             instead of using the packaged compatibility fallback.
         retain_complete_identity_candidates: Persist an authoritative selection
             projection for every passing identity hypothesis before legacy reduction.
+        strategy: Optional selection strategy override ("legacy" or "identity_dominance").
 
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
     """
-    selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active)
+    selection = _resolve_selection(
+        kestrel_config,
+        custom_context_active=custom_context_active,
+        strategy=strategy,
+    )
     if compiled_flag_rules is None:
         compiled_flag_rules = compile_flag_rules(kestrel_config.get("flagging_rules", {}), KESTREL_FLAG_COLUMNS)
     duplicates_config = kestrel_config.get("duplicate_flagging", {})
@@ -1116,9 +1124,12 @@ def _resolve_selection(
     selection: Mapping[str, object] | KestrelSelection | None,
     *,
     custom_context_active: bool = False,
+    strategy: str | None = None,
 ) -> KestrelSelection:
     """Resolve a typed Kestrel selection for production and direct compatibility calls."""
     if isinstance(selection, KestrelSelection):
+        if strategy is not None and selection.strategy != strategy:
+            return replace(selection, strategy=strategy)
         return selection
     if selection is None:
         component = resolve_compatibility_component(
@@ -1130,16 +1141,23 @@ def _resolve_selection(
     if not isinstance(selection, Mapping):
         raise ValueError("Kestrel selection component must be a mapping")
     nested = selection.get("selection")
+    selection_dict: dict[str, object]
     if isinstance(nested, Mapping):
-        selection = nested
+        selection_dict = dict(nested)
     elif "confidence_priority" not in selection:
         if custom_context_active:
             raise ValueError("Kestrel selection component is missing the complete selection mapping")
         component = resolve_compatibility_component("kestrel", None, custom_context_active=False)
-        selection = component["selection"]  # type: ignore[assignment]
-        if not isinstance(selection, Mapping):
+        comp_sel = component["selection"]
+        if not isinstance(comp_sel, Mapping):
             raise ValueError("packaged Kestrel selection component must be a mapping")
-    return project_kestrel_selection(selection)
+        selection_dict = dict(comp_sel)
+        selection_dict.update(dict(selection))
+    else:
+        selection_dict = dict(selection)
+    if strategy is not None:
+        selection_dict["strategy"] = strategy
+    return project_kestrel_selection(selection_dict)
 
 
 def select_single_best_variant(
@@ -1147,6 +1165,7 @@ def select_single_best_variant(
     selection: Mapping[str, object] | KestrelSelection | None = None,
     *,
     custom_context_active: bool = False,
+    strategy: str | None = None,
 ) -> pd.DataFrame:
     """
     Select the single best variant (Hassan's requirement: "one representative variant").
@@ -1166,6 +1185,7 @@ def select_single_best_variant(
             packaged compatibility caller.
         custom_context_active: Whether an incomplete mapping must fail rather than use
             the legacy packaged compatibility fallback.
+        strategy: Optional selection strategy override ("legacy" or "identity_dominance").
 
     Returns:
         DataFrame with exactly 1 row (the best variant), or empty if input empty
@@ -1193,7 +1213,14 @@ def select_single_best_variant(
     if df.empty:
         return df
 
-    resolved_selection = _resolve_selection(selection, custom_context_active=custom_context_active)
+    resolved_selection = _resolve_selection(
+        selection,
+        custom_context_active=custom_context_active,
+        strategy=strategy,
+    )
+
+    if resolved_selection.strategy == "identity_dominance":
+        return select_identity_dominance_variant(df, selection=resolved_selection)
 
     df = df.copy()
     df["_priority"] = df["Confidence"].map(resolved_selection.confidence_priority).fillna(0)
@@ -1245,6 +1272,8 @@ def filter_final_dataframe(
     df: pd.DataFrame,
     output_dir: str,
     selection: Mapping[str, object] | KestrelSelection | None = None,
+    *,
+    strategy: str | None = None,
 ) -> pd.DataFrame:
     """
     Final step: filter the DataFrame based on the boolean columns introduced
@@ -1277,6 +1306,8 @@ def filter_final_dataframe(
         df (pd.DataFrame): The postprocessed DataFrame, with all six
             boolean filter columns.
         output_dir (str): Path to the main output directory.
+        selection: Optional selection mapping, typed KestrelSelection, or None.
+        strategy: Optional selection strategy override ("legacy" or "identity_dominance").
 
     Returns:
         pd.DataFrame: A copy of `df` containing only rows that pass
@@ -1302,7 +1333,7 @@ def filter_final_dataframe(
         logger.info("Empty DataFrame reached the final filter; returning it unchanged.")
         return df
 
-    resolved_selection = _resolve_selection(selection)
+    resolved_selection = _resolve_selection(selection, strategy=strategy)
 
     # Columns every non-empty frame is required to carry
     filter_cols = resolved_selection.final_filter_columns
@@ -1340,10 +1371,10 @@ def filter_final_dataframe(
     filtered_df = df[final_mask].copy()
     logger.info("Final DataFrame has %d rows after all filters.", len(filtered_df))
 
-    # Select single best variant using multi-key priority sorting
+    # Select single best variant using multi-key priority sorting or identity dominance
     if len(filtered_df) > 1:
         filtered_df = select_single_best_variant(filtered_df, selection=resolved_selection)
-        logger.info("Selected 1 best variant from %d candidates using priority sorting.", len(df[final_mask]))
+        logger.info("Selected 1 best variant from %d candidates.", len(df[final_mask]))
     elif len(filtered_df) == 1:
         logger.info("Only 1 variant passed all filters (no selection needed).")
     else:

@@ -40,12 +40,16 @@ class _RawEdit:
 def translate_kestrel_representation(
     representation: KestrelRepresentation,
     motif_map: Mapping[str, str],
+    *,
+    permit_boundary_insertions: bool = True,
 ) -> IdentityTranslation:
     """Translate one complete Kestrel motif-pair representation independently.
 
     Args:
         representation: Raw VCF fields plus the observed 120-base reference pair.
         motif_map: Expected checked-in genomic-plus motif sequences, keyed by motif.
+        permit_boundary_insertions: Whether unit-boundary insertions matching repeat
+            unit flanks are permitted to resolve to the affected half.
 
     Returns:
         A resolved canonical identity or a closed unresolved translation.
@@ -72,7 +76,21 @@ def translate_kestrel_representation(
         representation.reference_allele,
         representation.alternate_allele,
     )
-    affected_half = _affected_half(changed_start, changed_end)
+    inserted = (
+        representation.alternate_allele[
+            changed_start - representation.position : len(representation.alternate_allele)
+            - (representation.position + len(representation.reference_allele) - 1 - changed_end)
+        ]
+        if changed_end < changed_start
+        else ""
+    )
+    affected_half = _affected_half(
+        changed_start,
+        changed_end,
+        pair_sequence=representation.pair_sequence,
+        inserted=inserted,
+        permit_boundary_insertions=permit_boundary_insertions,
+    )
     if affected_half is None:
         return _unresolved("pair-boundary-edit")
 
@@ -306,11 +324,23 @@ def _changed_reference_interval(position: int, reference: str, alternate: str) -
     return start, end
 
 
-def _affected_half(start: int, end: int) -> int | None:
+def _affected_half(
+    start: int,
+    end: int,
+    pair_sequence: str = "",
+    inserted: str = "",
+    *,
+    permit_boundary_insertions: bool = True,
+) -> int | None:
     """Return the affected plus-strand half, closing on the pair junction."""
     if end < start:
         gap = start - 1
         if gap == _UNIT_LENGTH:
+            if permit_boundary_insertions and inserted and pair_sequence and len(pair_sequence) >= _PAIR_LENGTH:
+                if pair_sequence[:_UNIT_LENGTH].endswith(inserted):
+                    return 0
+                if pair_sequence[_UNIT_LENGTH:].startswith(inserted):
+                    return 1
             return None
         return 0 if gap < _UNIT_LENGTH else 1
     if start <= _UNIT_LENGTH < end:

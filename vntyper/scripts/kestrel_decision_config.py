@@ -25,6 +25,7 @@ class KestrelSelection:
     deletion_remainder: int
     sort_order: tuple[KestrelSortField, ...]
     unflagged_value: str
+    strategy: str = "identity_dominance"
 
 
 def project_kestrel_selection(selection: Mapping[str, object]) -> KestrelSelection:
@@ -56,6 +57,10 @@ def project_kestrel_selection(selection: Mapping[str, object]) -> KestrelSelecti
     if not isinstance(unflagged_value, str):
         raise ValueError("Kestrel unflagged_value must be a string")
 
+    strategy = str(selection.get("strategy", "identity_dominance"))
+    if strategy not in {"legacy", "identity_dominance"}:
+        raise ValueError(f"unsupported Kestrel selection strategy: {strategy!r}")
+
     priority = {str(label): int(value) for label, value in priority_raw.items()}
     sort_order: list[KestrelSortField] = []
     for item in sort_raw:
@@ -75,4 +80,5 @@ def project_kestrel_selection(selection: Mapping[str, object]) -> KestrelSelecti
         deletion_remainder=int(frameshift_raw["deletion_remainder"]),
         sort_order=tuple(sort_order),
         unflagged_value=unflagged_value,
+        strategy=strategy,
     )

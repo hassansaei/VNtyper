@@ -57,6 +57,7 @@ class IdentityTranslationComponent:
     kestrel_motifs: Mapping[str, str]
     advntr_repeat_unit_motifs: Mapping[str, str]
     advntr_rotation_offset: int
+    permit_boundary_insertions: bool = True
 
     def __post_init__(self) -> None:
         """Copy and validate every injected translation authority."""
@@ -68,6 +69,8 @@ class IdentityTranslationComponent:
             or not 1 <= self.advntr_rotation_offset <= 60
         ):
             raise ValueError("adVNTR rotation offset must be an integer from 1 through 60")
+        if not isinstance(self.permit_boundary_insertions, bool):
+            raise ValueError("permit_boundary_insertions must be a boolean")
         object.__setattr__(self, "kestrel_motifs", MappingProxyType(motif_map))
         object.__setattr__(self, "advntr_repeat_unit_motifs", MappingProxyType(repeat_unit_map))
 
@@ -80,7 +83,11 @@ class IdentityTranslationComponent:
         Returns:
             Its resolved or closed-unresolved translation.
         """
-        return translate_kestrel_representation(representation, self.kestrel_motifs)
+        return translate_kestrel_representation(
+            representation,
+            self.kestrel_motifs,
+            permit_boundary_insertions=self.permit_boundary_insertions,
+        )
 
     def translate_advntr(self, representation: AdvntrRepresentation) -> IdentityTranslation:
         """Translate with the injected RU mapping and rotation.
@@ -275,10 +282,12 @@ def translation_component_from_config(config: Mapping[str, object]) -> IdentityT
     rotation_offset = advntr["rotation_offset"]
     if not isinstance(repeat_unit_motifs, Mapping):
         raise TypeError("adVNTR repeat-unit mapping must be a mapping")
+    permit_boundary_insertions = bool(config.get("permit_boundary_insertions", True))
     return IdentityTranslationComponent(
         cast(Mapping[str, str], motifs),
         cast(Mapping[str, str], repeat_unit_motifs),
         cast(int, rotation_offset),
+        permit_boundary_insertions=permit_boundary_insertions,
     )
 
 
