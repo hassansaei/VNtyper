@@ -27,6 +27,7 @@ from vntyper.scripts.nomenclature import (
     Nomenclature,
     load_nomenclature_config,
     pair_sequence,
+    render,
 )
 from vntyper.scripts.nomenclature_bam import (
     BamConsensus,
@@ -816,10 +817,12 @@ def test_agreement_leaves_the_call_alone() -> None:
 def test_a_delins_from_haplotype_records_overrides_a_shape_the_vcf_cannot_hold() -> None:
     """Kestrel's VariantType has SNP, INSERTION and DELETION and nothing else, so
     whatever it wrote for a delins locus is the closest representable shape rather
-    than the allele."""
+    than the allele. Per owner decision #313, positional naming is withheld with an
+    explicit representation-limited disposition."""
     vcf = _named("55_56insA", "insertion")
     refined = refine(vcf, _named("55delinsAT", "delins", "kestrel_bam"))
-    assert refined.name == "55delinsAT"
+    assert refined.name is None
+    assert render(refined) == "frameshift +1, representation-limited"
     assert "allele-unrepresentable-in-vcf" in refined.flags
 
 

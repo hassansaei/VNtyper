@@ -329,13 +329,18 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             return call
         # The VCF had no allele to offer; the resolved haplotypes do. This is the
         # whole point of the rescue path -- it is where delins and the insG family
-        # come from.
+        # come from. When the molecular class is a delins, per owner decision #313 the
+        # positional name is withheld and representation-limited disposition emitted.
+        name = None if bam_call.event == "delins" else bam_call.name
+        flags = {*call.flags, *bam_call.flags}
+        if bam_call.event == "delins":
+            flags.add(FLAG_ALLELE_UNREPRESENTABLE)
         return Nomenclature(
-            name=bam_call.name,
+            name=name,
             event=bam_call.event,
             unit=bam_call.unit,
             tier=bam_call.tier,
-            flags=tuple(sorted({*call.flags, *bam_call.flags})),
+            flags=tuple(sorted(flags)),
             ambiguity=bam_call.ambiguity,
             repeat_form=bam_call.repeat_form,
             net_length=bam_call.net_length,
@@ -353,8 +358,11 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         # closest representable shape rather than the allele -- the haplotype
         # records are the better evidence here even though they are the junior
         # source everywhere else.
+        # Per owner decision #313: abstain with an explicit disposition.
+        # When the selected candidate's molecular class is one Kestrel cannot represent,
+        # the positional name is withheld and a representation-limited disposition is emitted.
         return Nomenclature(
-            name=bam_call.name,
+            name=None,
             event=bam_call.event,
             unit=bam_call.unit,
             tier=bam_call.tier,
@@ -457,11 +465,14 @@ def merge_edits(edits: Iterable[Edit]) -> list[Edit]:
             if previous.start + previous.ref_span == edit.start:
                 ref_span = previous.ref_span + edit.ref_span
                 inserted = previous.inserted + edit.inserted
-                kind = "delins" if ref_span and inserted and ref_span != inserted else previous.kind
-                if ref_span and not inserted:
+                if ref_span and inserted:
+                    kind = "substitution" if ref_span == 1 and inserted == 1 else "delins"
+                elif ref_span and not inserted:
                     kind = "deletion"
                 elif inserted and not ref_span:
                     kind = "insertion"
+                else:
+                    kind = previous.kind
                 merged[-1] = Edit(kind, previous.start, ref_span, inserted, previous.bases + edit.bases)
                 continue
         merged.append(edit)

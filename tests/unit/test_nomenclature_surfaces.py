@@ -1457,7 +1457,10 @@ def test_row_verdicts_keep_each_haplotype_call_paired_with_its_vcf_row() -> None
 
     verdicts = nomenclature_annotate._row_verdicts([first_vcf, second_vcf], [None, second_bam])
 
-    assert [call.name if call is not None else None for call in verdicts] == ["59dupC", "55delinsAT"]
+    assert [call.name if call is not None else None for call in verdicts] == ["59dupC", None]
+    assert verdicts[1] is not None
+    assert verdicts[1].event == "delins"
+    assert verdicts[1].source == "kestrel_bam"
 
 
 def test_the_cross_caller_stage_consults_resolved_haplotype_records(tmp_path) -> None:

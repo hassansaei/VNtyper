@@ -68,6 +68,7 @@ class OutcomeObservation:
     applicable: bool
     baseline_applicable: bool
     baseline_tier: str | None
+    representation_limited: bool = False
 
     def __post_init__(self) -> None:
         """Validate the distinct mutated/control and selected/abstained states."""
@@ -82,12 +83,18 @@ class OutcomeObservation:
             (self.abstained, "abstained"),
             (self.applicable, "applicable"),
             (self.baseline_applicable, "baseline applicable"),
+            (self.representation_limited, "representation limited"),
         ):
             if not isinstance(boolean_value, bool):
                 raise ValueError(f"calibration outcome {label} must be Boolean")
         if (self.expected_identity is None) != (self.expected_display_name is None):
             raise ValueError("calibration expected identity and displayed name must be jointly present or absent")
-        if (self.selected_identity is None) != (self.displayed_name is None):
+        if self.representation_limited:
+            if self.selected_identity is None:
+                raise ValueError("representation-limited outcome requires a selected identity")
+            if self.displayed_name is not None:
+                raise ValueError("representation-limited outcome must withhold displayed name")
+        elif (self.selected_identity is None) != (self.displayed_name is None):
             raise ValueError("calibration selected identity and displayed name must be jointly present or absent")
         if self.abstained and self.selected_identity is not None:
             raise ValueError("calibration abstention cannot carry a selected identity")
@@ -149,7 +156,11 @@ def calculate_metrics(
     ) / len(strata)
     detected = sum(row.selected_identity is not None for row in mutated)
     wrong_names = tuple(
-        row for row in mutated if row.displayed_name is not None and row.displayed_name != row.expected_display_name
+        row
+        for row in mutated
+        if not row.representation_limited
+        and row.displayed_name is not None
+        and row.displayed_name != row.expected_display_name
     )
     applicable_denominator = tuple(row for row in observations if row.baseline_applicable)
     abstentions = sum(row.abstained for row in applicable_denominator)

@@ -853,6 +853,8 @@ def confidence_note(
         str: The note, or ``""`` when there is no name to qualify.
     """
     if not call.name:
+        if call.event == "delins" or "representation-limited" in call.flags:
+            return "positional name withheld: allele molecular class cannot be represented in VCF; requires validation"
         return ""
     known_variants = decision_config.known_variants if decision_config is not None else KNOWN_VARIANTS
     citation = known_variants.get(call.name)
@@ -888,6 +890,12 @@ def render(call: Nomenclature) -> str:
     # No name could be computed at all. A net length change of zero is not a
     # frameshift, so saying "frameshift +0" would state something untrue about a
     # locus we know nothing about.
+    if call.event == "delins" or "representation-limited" in call.flags:
+        if call.net_length == 0:
+            return "representation-limited"
+        sign = "+" if call.net_length > 0 else "-"
+        return f"frameshift {sign}{abs(call.net_length)}, representation-limited"
+
     if call.net_length == 0:
         return "allele undetermined"
     sign = "+" if call.net_length > 0 else "-"
