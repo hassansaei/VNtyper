@@ -164,3 +164,78 @@ def test_hmac_verification(tmp_path):
 
     result_wrong_key = verify_report_integrity(tmp_path, secret_key="wrong-key")
     assert result_wrong_key["valid"] is False
+
+
+def test_canonical_hashing_preserves_trailing_tabs(tmp_path):
+    """Trailing tabs in TSV files represent empty fields and must not be stripped."""
+    tsv_with_tabs = b"col1\tcol2\tcol3\nval1\tval2\t\n"
+    tsv_without_tabs = b"col1\tcol2\tcol3\nval1\tval2\n"
+
+    from vntyper.scripts.report_integrity import _hash_file_content
+
+    hash_with_tabs = _hash_file_content(tsv_with_tabs, "test.tsv")
+    hash_without_tabs = _hash_file_content(tsv_without_tabs, "test.tsv")
+    assert hash_with_tabs != hash_without_tabs
+
+
+def test_multistage_decision_files_included(tmp_path):
+    """Optional adVNTR and provenance files are hashed into the decision digest when present."""
+    kestrel_dir = tmp_path / "kestrel"
+    kestrel_dir.mkdir()
+    (kestrel_dir / "kestrel_result.tsv").write_text("kestrel content\n")
+
+    cov_dir = tmp_path / "coverage"
+    cov_dir.mkdir()
+    (cov_dir / "coverage_summary.tsv").write_text("coverage content\n")
+
+    advntr_dir = tmp_path / "advntr"
+    advntr_dir.mkdir()
+    (advntr_dir / "output_adVNTR_result.tsv").write_text("advntr content\n")
+    (advntr_dir / "cross_match_results.tsv").write_text("cross match content\n")
+
+    prov_dir = tmp_path / "provenance"
+    prov_dir.mkdir()
+    (prov_dir / "decision_profile.json").write_text('{"profile": "v1"}\n')
+
+    summary = {
+        "version": "2.0.26",
+        "sample_name": "sample1",
+        "decision_profile_id": "profile1",
+        "decision_profile_sha256": "0" * 64,
+    }
+
+    anchor_pipeline_summary(summary, tmp_path)
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is True
+
+    # Tamper with adVNTR cross_match
+    (advntr_dir / "cross_match_results.tsv").write_text("tampered cross match\n")
+    result_tampered = verify_report_integrity(tmp_path)
+    assert result_tampered["valid"] is False
+    assert result_tampered["error"] == "decision_files_digest mismatch"
+
+
+def test_summary_body_tamper_detected(tmp_path):
+    """Tampering with summary content (e.g. sample_name or steps) is caught by pre_anchor_summary_digest."""
+    kestrel_file = tmp_path / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\n")
+
+    cov_file = tmp_path / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    summary = {
+        "version": "2.0.26",
+        "sample_name": "patient_001",
+        "steps": [{"step": "kestrel", "status": "completed"}],
+    }
+
+    anchor_pipeline_summary(summary, tmp_path)
+    # Modify sample_name in summary
+    summary["sample_name"] = "patient_tampered"
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is False
+    assert "tampered" in str(result["error"])

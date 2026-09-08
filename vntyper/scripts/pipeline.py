@@ -1291,13 +1291,19 @@ def run_pipeline(
         bed_out = os.path.join(dirs["kestrel"], "output.bed")
         fasta_reference = config["reference_data"]["muc1_reference_vntr"]
 
+        # Mark pipeline end in summary
+        end_summary(summary)
+
+        from vntyper.scripts.report_integrity import anchor_pipeline_summary
+
+        anchor_pipeline_summary(summary, output_dir)
+
         # `generate_summary_report` reads `pipeline_summary.json` back **from
-        # disk**, and the final `write_summary` below runs after it. Every
-        # top-level key set since the last `record_step` would therefore be
-        # missing from the report even though the finished file carries it. This
-        # makes the file match the summary in hand at the moment it is read,
-        # rather than relying on a later `record_step` happening to fire (#242).
+        # disk**. Writing the finished summary out here ensures every terminal
+        # key, the pipeline_end timestamp, and the report integrity anchors
+        # are present when the report is rendered (#242, #327).
         write_summary(summary, summary_file_path)
+        logger.info(f"Pipeline summary written to: {summary_file_path}")
 
         generate_summary_report(
             output_dir,
@@ -1313,18 +1319,6 @@ def run_pipeline(
             report_igv=report_igv,
         )
         logger.info(f"Summary report generated: {report_file}")
-
-        # Mark pipeline end in summary
-        end_summary(summary)
-
-        from vntyper.scripts.report_integrity import anchor_pipeline_summary
-
-        anchor_pipeline_summary(summary, output_dir)
-
-        # Write out the complete pipeline summary
-        summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
-        write_summary(summary, summary_file_path)
-        logger.info(f"Pipeline summary written to: {summary_file_path}")
 
         donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"
         if donor_summary_path.is_file():
