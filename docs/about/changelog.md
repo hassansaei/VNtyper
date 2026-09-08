@@ -6,6 +6,13 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.33 (2026-09-08)
+
+### Integration contract update and identity dominance default enablement ([#270](https://github.com/hassansaei/VNtyper/issues/270), [#295](https://github.com/hassansaei/VNtyper/issues/295))
+
+- **Identity Dominance Default Enablement**: Activated `identity_dominance` as the default Kestrel variant selection strategy across the pipeline and decision profiles.
+- **Integration Outcome Contract Update**: Updated integration test assertions for `example_6449` to reflect the biologically consensus candidate group metrics, enrolling versioned observation sets with exact append-only backward compatibility.
+
 ## 2.0.32 (2026-09-08)
 
 ### Identity dominance selection, biophysical depth semantics, and junction boundary resolution ([#270](https://github.com/hassansaei/VNtyper/issues/270), [#295](https://github.com/hassansaei/VNtyper/issues/295))

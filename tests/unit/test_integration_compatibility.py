@@ -971,6 +971,76 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
             "extends": "2.0.31",
             "report_overrides": [],
         },
+        {
+            "version": "2.0.33",
+            "provenance_commit": "07d66ada02dcd80a702a18577bab609e6b8eaaae",
+            "extends": "2.0.32",
+            "report_overrides": [],
+            "kestrel_overrides": [
+                {
+                    "suite": "fastq_tests",
+                    "test_name": "example_6449_hg19_subset_fastq_shark",
+                    "kestrel": {
+                        "Estimated_Depth_AlternateVariant": {
+                            "value": 268,
+                            "tolerance": {
+                                "kind": "percentage",
+                                "value": 0,
+                            },
+                        },
+                        "Estimated_Depth_Variant_ActiveRegion": {
+                            "value": 16583,
+                            "tolerance": {
+                                "kind": "percentage",
+                                "value": 0,
+                            },
+                        },
+                        "Depth_Score": {
+                            "value": 0.016161128866911897,
+                            "tolerance": {
+                                "kind": "percentage",
+                                "value": 0,
+                            },
+                        },
+                        "Confidence": {
+                            "value": "High_Precision*",
+                            "tolerance": None,
+                        },
+                    },
+                },
+                {
+                    "suite": "fastq_tests",
+                    "test_name": "example_6449_hg19_subset_single_fastq",
+                    "kestrel": {
+                        "Estimated_Depth_AlternateVariant": {
+                            "value": 262,
+                            "tolerance": {
+                                "kind": "percentage",
+                                "value": 0,
+                            },
+                        },
+                        "Estimated_Depth_Variant_ActiveRegion": {
+                            "value": 11484,
+                            "tolerance": {
+                                "kind": "percentage",
+                                "value": 0,
+                            },
+                        },
+                        "Depth_Score": {
+                            "value": 0.022814350400557296,
+                            "tolerance": {
+                                "kind": "percentage",
+                                "value": 0,
+                            },
+                        },
+                        "Confidence": {
+                            "value": "High_Precision*",
+                            "tolerance": None,
+                        },
+                    },
+                },
+            ],
+        },
     ]
     assert len(shipped) == 1
     assert len(overrides) == 2
@@ -1083,5 +1153,5 @@ def test_final_manifest_activates_from_absent_base_without_mutating_historical_t
         live,
         live,
         historical_test_config=historical,
-        observation_version="2.0.32",
+        observation_version="2.0.33",
     )

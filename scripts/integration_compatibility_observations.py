@@ -17,8 +17,10 @@ SUPPORTED_SCHEMA_VERSIONS = {LEGACY_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION}
 
 _LEGACY_TOP_KEYS = {"schema_version", "contracts"}
 _OBSERVATION_TOP_KEYS = {"schema_version", "contracts", "observation_sets"}
-_OBSERVATION_SET_KEYS = {"version", "provenance_commit", "extends", "report_overrides"}
+_OBSERVATION_SET_REQUIRED_KEYS = {"version", "provenance_commit", "extends", "report_overrides"}
+_OBSERVATION_SET_ALLOWED_KEYS = _OBSERVATION_SET_REQUIRED_KEYS | {"kestrel_overrides"}
 _REPORT_OVERRIDE_KEYS = {"suite", "test_name", "report"}
+_KESTREL_OVERRIDE_KEYS = {"suite", "test_name", "kestrel"}
 _PLAIN_RELEASE_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 
@@ -91,6 +93,31 @@ def _report(value: object, label: str) -> list[str]:
     return result
 
 
+def _kestrel_assertions(value: object, label: str) -> dict[str, Any]:
+    assertions = _mapping(value, label)
+    if not assertions:
+        raise ValueError(f"{label} must not be empty")
+    for field, raw in assertions.items():
+        _nonempty_string(field, f"{label} field")
+        assertion = _mapping(raw, f"{label}.{field}")
+        _exact_keys(assertion, {"value", "tolerance"}, f"{label}.{field}")
+        expected = assertion["value"]
+        if expected is None or isinstance(expected, (dict, list)):
+            raise ValueError(f"{label}.{field}.value must be a scalar")
+        tolerance_value = assertion["tolerance"]
+        if tolerance_value is not None:
+            tolerance = _mapping(tolerance_value, f"{label}.{field}.tolerance")
+            _exact_keys(tolerance, {"kind", "value"}, f"{label}.{field}.tolerance")
+            if tolerance["kind"] not in {"percentage", "log10"}:
+                raise ValueError(f"{label}.{field}.tolerance kind is unsupported")
+            number = tolerance["value"]
+            if isinstance(number, bool) or not isinstance(number, (int, float)):
+                raise ValueError(f"{label}.{field}.tolerance value must be numeric")
+            if number < 0 or (tolerance["kind"] == "percentage" and number > 100):
+                raise ValueError(f"{label}.{field}.tolerance is unbounded")
+    return assertions
+
+
 def _observation_sets(manifest: Manifest, identities: set[Identity]) -> list[dict[str, Any]]:
     values = manifest["observation_sets"]
     if not isinstance(values, list) or not values:
@@ -101,7 +128,12 @@ def _observation_sets(manifest: Manifest, identities: set[Identity]) -> list[dic
     previous_parsed: tuple[int, int, int] | None = None
     for set_index, raw_set in enumerate(values):
         observation = _mapping(raw_set, f"observation_sets[{set_index}]")
-        _exact_keys(observation, _OBSERVATION_SET_KEYS, f"observation_sets[{set_index}]")
+        missing_keys = sorted(_OBSERVATION_SET_REQUIRED_KEYS - observation.keys())
+        extra_keys = sorted(observation.keys() - _OBSERVATION_SET_ALLOWED_KEYS)
+        if missing_keys:
+            raise ValueError(f"observation_sets[{set_index}] has missing keys: {missing_keys}")
+        if extra_keys:
+            raise ValueError(f"observation_sets[{set_index}] has extra keys: {extra_keys}")
         version = observation["version"]
         parsed = _release_version(version, f"observation_sets[{set_index}].version")
         if version in seen_versions:
@@ -135,6 +167,26 @@ def _observation_sets(manifest: Manifest, identities: set[Identity]) -> list[dic
                 raise ValueError(f"duplicate report override for {identity}")
             _report(override["report"], f"{label}.report")
             seen_overrides.add(identity)
+
+        k_overrides = observation.get("kestrel_overrides", [])
+        if not isinstance(k_overrides, list):
+            raise ValueError(f"observation_sets[{set_index}].kestrel_overrides must be a list")
+        seen_k_overrides: set[Identity] = set()
+        for k_index, raw_k_override in enumerate(k_overrides):
+            k_label = f"observation_sets[{set_index}].kestrel_overrides[{k_index}]"
+            k_override = _mapping(raw_k_override, k_label)
+            _exact_keys(k_override, _KESTREL_OVERRIDE_KEYS, k_label)
+            identity = (
+                _nonempty_string(k_override["suite"], f"{k_label}.suite"),
+                _nonempty_string(k_override["test_name"], f"{k_label}.test_name"),
+            )
+            if identity not in identities:
+                raise ValueError(f"{k_label} refers to unknown contract identity {identity}")
+            if identity in seen_k_overrides:
+                raise ValueError(f"duplicate kestrel override for {identity}")
+            _kestrel_assertions(k_override["kestrel"], f"{k_label}.kestrel")
+            seen_k_overrides.add(identity)
+
         result.append(observation)
         seen_versions.add(version)
         previous_version = version
@@ -188,6 +240,9 @@ def effective_contracts(
         for override in observation["report_overrides"]:
             identity = (override["suite"], override["test_name"])
             effective[identity]["outcomes"]["report"] = copy.deepcopy(override["report"])
+        for k_override in observation.get("kestrel_overrides", []):
+            identity = (k_override["suite"], k_override["test_name"])
+            effective[identity]["outcomes"]["kestrel"] = copy.deepcopy(k_override["kestrel"])
     return effective
 
 

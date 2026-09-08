@@ -345,3 +345,67 @@ def test_only_schema_one_to_two_migration_is_supported(base_schema: int, current
 
     with pytest.raises(ValueError, match="schema transition"):
         module.validate_append_only_history(base, current)
+
+
+def test_effective_contracts_applies_kestrel_overrides() -> None:
+    """kestrel_overrides updates the effective kestrel outcome projection."""
+    module = _module()
+    assert module is not None
+    contract = _contract()
+    original_kestrel = copy.deepcopy(contract["outcomes"]["kestrel"])
+    indexed = {("bam_tests", "case-a"): contract}
+
+    new_kestrel = {
+        "Estimated_Depth_AlternateVariant": {"value": 268, "tolerance": {"kind": "percentage", "value": 0}},
+        "Depth_Score": {"value": 0.016, "tolerance": {"kind": "percentage", "value": 0}},
+        "Confidence": {"value": "High_Precision*", "tolerance": None},
+    }
+    observation_set = {
+        "version": VERSION,
+        "provenance_commit": PROVENANCE,
+        "extends": None,
+        "report_overrides": [],
+        "kestrel_overrides": [
+            {
+                "suite": "bam_tests",
+                "test_name": "case-a",
+                "kestrel": new_kestrel,
+            }
+        ],
+    }
+    manifest = {
+        "schema_version": 2,
+        "contracts": [contract],
+        "observation_sets": [observation_set],
+    }
+
+    effective = module.effective_contracts(manifest, indexed, VERSION)
+    assert contract["outcomes"]["kestrel"] == original_kestrel
+    assert effective[("bam_tests", "case-a")]["outcomes"]["kestrel"] == new_kestrel
+
+
+def test_kestrel_overrides_validations() -> None:
+    """Invalid kestrel_overrides shapes, types, and identities fail closed."""
+    module = _module()
+    assert module is not None
+    contract = _contract()
+
+    # Must be a list
+    manifest = _v2(contract)
+    manifest["observation_sets"][0]["kestrel_overrides"] = "not-a-list"
+    with pytest.raises(ValueError, match="kestrel_overrides must be a list"):
+        module.validate_observation_sets(manifest, {("bam_tests", "case-a")})
+
+    # Unknown contract identity
+    manifest["observation_sets"][0]["kestrel_overrides"] = [
+        {"suite": "unknown", "test_name": "unknown", "kestrel": {"foo": {"value": 1, "tolerance": None}}}
+    ]
+    with pytest.raises(ValueError, match="refers to unknown contract identity"):
+        module.validate_observation_sets(manifest, {("bam_tests", "case-a")})
+
+    # Empty kestrel assertions
+    manifest["observation_sets"][0]["kestrel_overrides"] = [
+        {"suite": "bam_tests", "test_name": "case-a", "kestrel": {}}
+    ]
+    with pytest.raises(ValueError, match="must not be empty"):
+        module.validate_observation_sets(manifest, {("bam_tests", "case-a")})

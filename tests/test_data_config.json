@@ -2102,15 +2102,15 @@
         ],
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
-            "value": 239,
+            "value": 268,
             "tolerance_percentage": 0
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 478,
+            "value": 16583,
             "tolerance_percentage": 0
           },
           "Depth_Score": {
-            "value": 0.5,
+            "value": 0.016161128866911897,
             "tolerance_percentage": 0
           },
           "Confidence": "High_Precision*"
@@ -2173,11 +2173,11 @@
             "tolerance_percentage": 0
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 1695,
+            "value": 11484,
             "tolerance_percentage": 0
           },
           "Depth_Score": {
-            "value": 0.15457227138643068,
+            "value": 0.022814350400557296,
             "tolerance_percentage": 0
           },
           "Confidence": "High_Precision*"

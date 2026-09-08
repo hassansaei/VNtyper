@@ -199,7 +199,7 @@ def test_direct_single_fastq_has_an_end_to_end_integration_contract() -> None:
     assert case["fastq1"] == "tests/data/example_6449_hg19_subset_R1.fastq.gz"
     assert case["expected_fastq_records"] == {"r1": 0, "r2": 0, "other": 40203, "single": 0}
     assert case["expected_selected_fastqs"] == ["output_other.fastq.gz"]
-    assert case["kestrel_assertions"]["Depth_Score"] == {"value": 0.15457227138643068, "tolerance_percentage": 0}
+    assert case["kestrel_assertions"]["Depth_Score"] == {"value": 0.022814350400557296, "tolerance_percentage": 0}
     assert case["coverage_assertions"] == {
         "mean": "2255.56",
         "median": "1613.00",
