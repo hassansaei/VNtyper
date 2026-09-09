@@ -312,8 +312,6 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
     report_integrity_digest = str(integrity.get("report_integrity_digest") or "")
 
     tool_version = str(summary.get("version") or "")
-    sample_name = str(summary.get("sample_name") or "")
-    decision_profile_id = str(summary.get("decision_profile_id") or "")
 
     if recomputed_decision_files_digest != decision_files_digest:
         return {
@@ -326,17 +324,17 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
         }
 
     if version == "1.0":
-        decision_profile_digest = str(summary.get("decision_profile_digest") or "")
-        payload = _build_integrity_payload_v1(
-            run_id,
-            version,
-            tool_version,
-            sample_name,
-            decision_files_digest,
-            decision_profile_id,
-            decision_profile_digest,
+        v1_tool_version = summary.get("version", "")
+        v1_sample_name = summary.get("sample_name", "")
+        v1_decision_profile_id = summary.get("decision_profile_id", "")
+        v1_decision_profile_digest = summary.get("decision_profile_digest", "")
+        payload = (
+            f"{run_id}:{version}:{v1_tool_version}:{v1_sample_name}:"
+            f"{decision_files_digest}:{v1_decision_profile_id}:{v1_decision_profile_digest}"
         )
     else:
+        sample_name = str(summary.get("sample_name") or "")
+        decision_profile_id = str(summary.get("decision_profile_id") or "")
         decision_profile_sha256 = str(
             summary.get("decision_profile_sha256") or summary.get("decision_profile_digest") or ""
         )

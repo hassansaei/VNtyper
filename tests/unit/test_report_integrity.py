@@ -396,3 +396,44 @@ def test_verify_legacy_v1_preserves_empty_profile_digest_when_sha256_populated(t
 
     result = verify_report_integrity(tmp_path)
     assert result["valid"] is True
+
+
+def test_verify_legacy_v1_preserves_null_sample_name(tmp_path):
+    """In base revision v1 anchors, sample_name: null serialized as 'None'.
+
+    Verification must preserve this exact contract rather than normalizing to empty string.
+    """
+    import hashlib
+
+    from vntyper.scripts.report_integrity import _compute_dir_decision_digest_v1
+
+    kestrel_file = tmp_path / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\n")
+    cov_file = tmp_path / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    decision_digest = _compute_dir_decision_digest_v1(tmp_path)
+    run_id = "v1-run-null-sample"
+    version = "1.0"
+    tool_version = "2.0.33"
+    sample_name = None
+    decision_profile_id = "profile1"
+
+    payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_digest}:{decision_profile_id}:"
+    integrity_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    summary = {
+        "version": tool_version,
+        "sample_name": sample_name,
+        "decision_profile_id": decision_profile_id,
+        "report_integrity": {
+            "report_integrity_version": "1.0",
+            "run_id": run_id,
+            "decision_files_digest": decision_digest,
+            "report_integrity_digest": integrity_digest,
+        },
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is True
