@@ -103,10 +103,10 @@ def _projection(rows: list[dict[str, object]], labels_by_key: Mapping[str, Label
         tier = _row_field(row, "tier")
         is_rep_limited = isinstance(name, str) and "representation-limited" in name
         displayed_name = None if is_rep_limited else name
+        if identity is not None and label.truth_status == "control":
+            aggregate["control_findings"] += 1
         if displayed_name is not None:
             aggregate["displayed"] += 1
-            if label.truth_status == "control":
-                aggregate["control_findings"] += 1
             if displayed_name != label.expected_display_name:
                 aggregate["wrong"] += 1
         if identity is not None and identity == label.expected_identity:

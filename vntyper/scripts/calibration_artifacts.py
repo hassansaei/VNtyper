@@ -35,6 +35,7 @@ from vntyper.scripts.calibration_result_artifacts import encode_evaluation, enco
 from vntyper.scripts.calibration_role_inputs import RoleInputs, build_role_inputs
 from vntyper.scripts.calibration_run_commitments import normalize_run_commitments
 from vntyper.scripts.calibration_run_extraction import decode_run_hashes
+from vntyper.scripts.calibration_run_projection import rendered_identity_projection
 from vntyper.scripts.calibration_scalar_replay import replay_scalar_dominance
 from vntyper.scripts.calibration_statistics import PairedObservation, paired_group_bootstrap
 from vntyper.scripts.calibration_study_binding import (
@@ -487,32 +488,7 @@ def _observations(
     return tuple(candidate_rows), tuple(baseline_rows)
 
 
-def _rendered_identity_projection(
-    baseline: Mapping[str, object], selected_identity: str | None
-) -> tuple[str | None, str | None]:
-    """Look up a selected identity in the closed non-feature rendering map."""
-    projection = _mapping(baseline.get("identity_projection"), "baseline identity projection")
-    for identity, raw in projection.items():
-        if not isinstance(identity, str) or not identity:
-            raise ValueError("calibration baseline identity projection keys must be non-empty strings")
-        value = _mapping(raw, "baseline identity rendering")
-        if set(value) != {"name", "tier"}:
-            raise ValueError("calibration baseline identity rendering fields differ")
-        if not isinstance(value["name"], str) or not value["name"]:
-            raise ValueError("calibration baseline identity rendering name must be non-empty")
-        if value["tier"] is not None and (not isinstance(value["tier"], str) or not value["tier"]):
-            raise ValueError("calibration baseline identity rendering tier must be non-empty or null")
-    if selected_identity is None:
-        return None, None
-    selected = projection.get(selected_identity)
-    if selected is None:
-        raise ValueError("calibration selected identity is absent from the closed baseline rendering projection")
-    value = _mapping(selected, "selected baseline identity rendering")
-    name = value["name"]
-    tier = value["tier"]
-    assert isinstance(name, str)
-    assert tier is None or isinstance(tier, str)
-    return name, tier
+_rendered_identity_projection = rendered_identity_projection
 
 
 def _write_locked_declaration(

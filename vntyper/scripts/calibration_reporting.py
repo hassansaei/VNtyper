@@ -10,6 +10,7 @@ from pathlib import Path
 from vntyper.scripts.calibration_artifact_io import write_json
 from vntyper.scripts.calibration_objective import CandidateEvaluation
 from vntyper.scripts.calibration_report import decode_calibration_report, write_calibration_report
+from vntyper.scripts.calibration_run_projection import rendered_identity_projection
 from vntyper.scripts.calibration_scalar_replay import replay_scalar_dominance
 from vntyper.scripts.calibration_statistics import clopper_pearson_interval, deterministic_curves, joint_surface
 from vntyper.scripts.calibration_workflow import ExtractedEvidence
@@ -112,10 +113,13 @@ def _analyse(profile: ResolvedDecisionProfile, evidence: ExtractedEvidence) -> d
             detected += decision.selected_identity is not None
         if decision.abstention_reason is not None:
             reasons[decision.abstention_reason] += 1
-        tier = baseline_row.get("tier")
-        name = baseline_row.get("name")
-        is_rep_limited = isinstance(name, str) and "representation-limited" in name
-        displayed_name = None if is_rep_limited else name
+        displayed, tier = rendered_identity_projection(baseline_row, decision.selected_identity)
+        is_rep_limited = bool(
+            decision.selected_identity is not None
+            and isinstance(displayed, str)
+            and "representation-limited" in displayed
+        )
+        displayed_name = None if is_rep_limited else (displayed if isinstance(displayed, str) else None)
         if decision.selected_identity is not None and isinstance(tier, str) and displayed_name is not None:
             counts = tiers.setdefault(tier, {"tier": tier, "displayed": 0, "exact": 0, "wrong": 0})
             _increment(counts, "displayed")

@@ -70,3 +70,28 @@ def test_projection_reports_a_missing_row_field_as_a_typed_error(missing: str) -
 
     with pytest.raises(ValueError, match=f"lacks required field: {missing}|row keys must be non-empty strings"):
         project_baseline(expected, observed, _labels())
+
+
+def test_projection_counts_control_findings_for_representation_limited_call() -> None:
+    """Control findings are counted whenever a control row has a canonical identity, even if unrepresentable."""
+    row_a = _row("a")
+    row_a["canonical_identity"] = "c.54_56delinsAT"
+    row_a["name"] = "frameshift +1, representation-limited"
+    row_a["tier"] = "A"
+
+    row_b = _row("b")
+    row_b["canonical_identity"] = None
+    row_b["name"] = None
+
+    expected = [row_a, row_b]
+    observed = [dict(row_a), dict(row_b)]
+
+    projected = project_baseline(expected, observed, _labels())
+    expected_data = projected["expected"]
+    assert isinstance(expected_data, dict)
+    aggregate = expected_data["aggregate"]
+    assert isinstance(aggregate, dict)
+
+    assert aggregate["control_findings"] == 1
+    assert aggregate["displayed"] == 0
+    assert aggregate["wrong"] == 0
