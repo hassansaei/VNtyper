@@ -314,9 +314,6 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
     tool_version = str(summary.get("version") or "")
     sample_name = str(summary.get("sample_name") or "")
     decision_profile_id = str(summary.get("decision_profile_id") or "")
-    decision_profile_sha256 = str(
-        summary.get("decision_profile_sha256") or summary.get("decision_profile_digest") or ""
-    )
 
     if recomputed_decision_files_digest != decision_files_digest:
         return {
@@ -329,6 +326,7 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
         }
 
     if version == "1.0":
+        decision_profile_digest = str(summary.get("decision_profile_digest") or "")
         payload = _build_integrity_payload_v1(
             run_id,
             version,
@@ -336,9 +334,12 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
             sample_name,
             decision_files_digest,
             decision_profile_id,
-            decision_profile_sha256,
+            decision_profile_digest,
         )
     else:
+        decision_profile_sha256 = str(
+            summary.get("decision_profile_sha256") or summary.get("decision_profile_digest") or ""
+        )
         recorded_pre_anchor_summary_digest = integrity.get("pre_anchor_summary_digest")
         if not recorded_pre_anchor_summary_digest:
             return {

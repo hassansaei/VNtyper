@@ -351,3 +351,48 @@ def test_verify_unsupported_version(tmp_path):
     result = verify_report_integrity(tmp_path)
     assert result["valid"] is False
     assert "unsupported report integrity version" in result["error"]
+
+
+def test_verify_legacy_v1_preserves_empty_profile_digest_when_sha256_populated(tmp_path):
+    """In base revision v1 anchors, only decision_profile_digest was read.
+
+    When production summaries populated decision_profile_sha256 instead,
+    the v1 anchor payload used the empty string for the 7th field. Verification
+    must preserve this exact contract.
+    """
+    import hashlib
+
+    from vntyper.scripts.report_integrity import _compute_dir_decision_digest_v1
+
+    kestrel_file = tmp_path / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\n")
+    cov_file = tmp_path / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    decision_digest = _compute_dir_decision_digest_v1(tmp_path)
+    run_id = "v1-run-sha256"
+    version = "1.0"
+    tool_version = "2.0.33"
+    sample_name = "sample_sha"
+    decision_profile_id = "profile1"
+
+    # 7th field was empty string because decision_profile_digest was absent
+    payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_digest}:{decision_profile_id}:"
+    integrity_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    summary = {
+        "version": tool_version,
+        "sample_name": sample_name,
+        "decision_profile_id": decision_profile_id,
+        "decision_profile_sha256": "abcdef" * 10,
+        "report_integrity": {
+            "report_integrity_version": "1.0",
+            "run_id": run_id,
+            "decision_files_digest": decision_digest,
+            "report_integrity_digest": integrity_digest,
+        },
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is True

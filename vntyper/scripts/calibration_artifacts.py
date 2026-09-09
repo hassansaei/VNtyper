@@ -431,11 +431,7 @@ def _observations(
         baseline_tier_value = baseline.get("tier")
         baseline_tier = baseline_tier_value if isinstance(baseline_tier_value, str) else None
         candidate_is_rep_limited = bool(
-            selected is not None
-            and (
-                (isinstance(displayed, str) and "representation-limited" in displayed)
-                or label.mutation_class == "delins"
-            )
+            selected is not None and isinstance(displayed, str) and "representation-limited" in displayed
         )
         candidate_displayed = None if candidate_is_rep_limited else (displayed if isinstance(displayed, str) else None)
         candidate_rows.append(
@@ -459,10 +455,8 @@ def _observations(
         baseline_selected = baseline_identity if isinstance(baseline_identity, str) else None
         baseline_is_rep_limited = bool(
             baseline_selected is not None
-            and (
-                (isinstance(baseline_name, str) and "representation-limited" in baseline_name)
-                or label.mutation_class == "delins"
-            )
+            and isinstance(baseline_name, str)
+            and "representation-limited" in baseline_name
         )
         baseline_displayed = (
             None if baseline_is_rep_limited else (baseline_name if isinstance(baseline_name, str) else None)
