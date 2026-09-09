@@ -387,12 +387,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             internal_allele=bam_call.internal_allele or bam_call.name,
         )
 
-    if bam_call.name == call.name:
-        # Corroboration. Recorded as agreement, but tier promotion still belongs to
-        # `reconcile`, which is the only place that sees the support quantity.
-        return call
-
-    if bam_call.event == "delins":
+    if bam_call.event == "delins" or call.event == "delins":
         # The VCF shape cannot hold this. Kestrel's `VariantType` has SNP, INSERTION
         # and DELETION and nothing else, so whatever it wrote for this locus is the
         # closest representable shape rather than the allele -- the haplotype
@@ -405,7 +400,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         flags.discard(FLAG_SEQUENCE_UNDETERMINED)
         return Nomenclature(
             name=None,
-            event=bam_call.event,
+            event=bam_call.event if bam_call.event == "delins" else call.event,
             unit=bam_call.unit,
             tier=bam_call.tier,
             flags=tuple(sorted(flags)),
@@ -413,8 +408,13 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             repeat_form=bam_call.repeat_form,
             net_length=bam_call.net_length,
             source="kestrel_bam",
-            internal_allele=bam_call.internal_allele or bam_call.name,
+            internal_allele=bam_call.internal_allele or bam_call.name or call.internal_allele or call.name,
         )
+
+    if bam_call.name == call.name:
+        # Corroboration. Recorded as agreement, but tier promotion still belongs to
+        # `reconcile`, which is the only place that sees the support quantity.
+        return call
 
     # Disagreement: keep the VCF allele and say so, rather than silently preferring
     # either. The flag is what stops this reaching tier A.

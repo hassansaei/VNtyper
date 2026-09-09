@@ -72,17 +72,22 @@ from vntyper.scripts.fastp_cutoffs import (
 from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMN_HELP, IDENTITY_COLUMNS
 from vntyper.scripts.nomenclature_presentation import (
     COLUMN_HELP,
-    NOMENCLATURE_FLAG_MEANINGS,
     tier_reason,
 )
 from vntyper.scripts.nomenclature_presentation import (
     KESTREL_BAM_SEMANTICS as KESTREL_BAM_SEMANTICS,
 )
 from vntyper.scripts.nomenclature_presentation import (
+    NOMENCLATURE_FLAG_MEANINGS as NOMENCLATURE_FLAG_MEANINGS,
+)
+from vntyper.scripts.nomenclature_presentation import (
     NOMENCLATURE_TIERS as NOMENCLATURE_TIERS,
 )
 from vntyper.scripts.nomenclature_presentation import (
     TIER_A_BLOCKERS as TIER_A_BLOCKERS,
+)
+from vntyper.scripts.nomenclature_presentation import (
+    flag_meaning as flag_meaning,
 )
 from vntyper.scripts.nomenclature_presentation import (
     tier_presentation as tier_presentation,
@@ -1229,9 +1234,7 @@ def variant_identity(*frames: pd.DataFrame) -> dict[str, Any] | None:
     identity["advntr_name"] = single("advntr_name")
     identity["note"] = single("note")
     identity["callers_agree"] = bool(identity["kestrel_name"] and identity["kestrel_name"] == identity["advntr_name"])
-    identity["flags"] = [
-        {"token": token, "meaning": NOMENCLATURE_FLAG_MEANINGS.get(token, "")} for token in split_flags
-    ]
+    identity["flags"] = [{"token": token, "meaning": flag_meaning(token, displayed_name=name)} for token in split_flags]
     return identity
 
 
@@ -1249,6 +1252,8 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
         list[dict[str, str]]: ``term``/``meaning`` pairs, tiers first, then flags in the
         order the rows carry them.
     """
+    from vntyper.scripts import nomenclature
+
     row_details: list[tuple[str, list[str], str]] = []
     all_flags: list[str] = []
     for frame in frames:
@@ -1277,7 +1282,6 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
     for tier in seen_tiers:
         tier_rows = [(f, n) for t, f, n in row_details if t == tier]
         if tier == "B":
-            from vntyper.scripts import nomenclature
 
             def _is_row_withheld(flags: list[str], name: str) -> bool:
                 return bool(
@@ -1304,13 +1308,19 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
             if meaning:
                 entries.append({"term": f"Tier {tier}", "label": label, "meaning": meaning})
 
+    has_any_withheld = any(
+        (nomenclature.FLAG_ALLELE_UNREPRESENTABLE in f or "representation-limited" in f)
+        and nomenclature.FLAG_SEQUENCE_UNDETERMINED not in f
+        and (not n or "representation-limited" in n or "withheld" in n.lower())
+        for _, f, n in row_details
+    )
     for token in _split_flags(all_flags):
         # `""` rather than `None`, so the name is not rebound to a wider type than the
         # tier branch above gives it - and so an unrecognised token is skipped by the
         # same falsy test either way.
-        flag_meaning = NOMENCLATURE_FLAG_MEANINGS.get(token, "")
-        if flag_meaning:
-            entries.append({"term": token, "label": "", "meaning": flag_meaning})
+        token_meaning = flag_meaning(token, displayed_name=None if has_any_withheld else "named")
+        if token_meaning:
+            entries.append({"term": token, "label": "", "meaning": token_meaning})
     return entries
 
 

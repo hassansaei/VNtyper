@@ -113,12 +113,14 @@ def _analyse(profile: ResolvedDecisionProfile, evidence: ExtractedEvidence) -> d
         if decision.abstention_reason is not None:
             reasons[decision.abstention_reason] += 1
         tier = baseline_row.get("tier")
-        if decision.selected_identity is not None and isinstance(tier, str):
+        name = baseline_row.get("name")
+        is_rep_limited = isinstance(name, str) and "representation-limited" in name
+        displayed_name = None if is_rep_limited else name
+        if decision.selected_identity is not None and isinstance(tier, str) and displayed_name is not None:
             counts = tiers.setdefault(tier, {"tier": tier, "displayed": 0, "exact": 0, "wrong": 0})
             _increment(counts, "displayed")
             is_exact = (
-                decision.selected_identity == label.expected_identity
-                and baseline_row.get("name") == label.expected_display_name
+                decision.selected_identity == label.expected_identity and displayed_name == label.expected_display_name
             )
             _increment(counts, "exact" if is_exact else "wrong")
         score_value = feature.features.get("haplotype_record_share", 0)

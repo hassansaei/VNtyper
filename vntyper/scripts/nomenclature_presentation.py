@@ -16,6 +16,7 @@ __all__ = [
     "NOMENCLATURE_FLAG_MEANINGS",
     "NOMENCLATURE_TIERS",
     "TIER_A_BLOCKERS",
+    "flag_meaning",
     "tier_presentation",
     "tier_reason",
 ]
@@ -254,3 +255,29 @@ def tier_presentation(
             "withheld.",
         )
     return NOMENCLATURE_TIERS.get(tier, ("", ""))
+
+
+def flag_meaning(token: str, displayed_name: str | None = None) -> str:
+    """Return the human-readable explanation for a nomenclature flag token.
+
+    Args:
+        token: Nomenclature flag string.
+        displayed_name: Emitted variant name shown in the report, if available.
+
+    Returns:
+        str: Flag explanation, adjusting withheld-name wording for legacy named rows.
+    """
+    if token == nomenclature.FLAG_ALLELE_UNREPRESENTABLE:
+        is_withheld = (
+            displayed_name is None or "representation-limited" in displayed_name or "withheld" in displayed_name.lower()
+        )
+        if is_withheld:
+            return (
+                "The allele cannot be written in Kestrel's VCF shape. The event is resolved from Kestrel's "
+                "haplotype records, while the positional name is withheld."
+            )
+        return (
+            "The allele cannot be written in Kestrel's VCF shape. The event is resolved from Kestrel's "
+            "haplotype records."
+        )
+    return NOMENCLATURE_FLAG_MEANINGS.get(token, "")

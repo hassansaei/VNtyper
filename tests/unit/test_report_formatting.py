@@ -1492,6 +1492,30 @@ def test_legacy_named_delins_retains_qualified_name_presentation() -> None:
     assert len(legend) == 2
     assert legend[0]["term"] == "Tier B"
     assert legend[0]["label"] == "qualified name"
+    assert "positional name is withheld" not in identity["flags"][0]["meaning"]
+    assert "positional name is withheld" not in legend[1]["meaning"]
+
+
+def test_already_selected_delins_withholds_name_before_equality_shortcut() -> None:
+    """When a call already has the delins name, refine still withholds it rather than returning early."""
+    from vntyper.scripts.nomenclature import Nomenclature, reconcile, render
+    from vntyper.scripts.nomenclature_bam import refine
+
+    bam_delins = Nomenclature(
+        name="55delinsAT",
+        event="delins",
+        unit="X",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=1,
+        source="kestrel_bam",
+    )
+    reconciled = reconcile(bam_delins)
+    refined = refine(reconciled, bam_delins)
+    assert refined.name is None
+    assert render(refined) == "frameshift +1, representation-limited"
 
 
 def test_bam_rescued_delins_clears_undetermined_and_labels_representation_limited() -> None:
