@@ -1405,6 +1405,38 @@ def test_nomenclature_legend_is_empty_for_a_run_that_named_nothing() -> None:
     assert rf.nomenclature_legend(pd.DataFrame(), pd.DataFrame()) == []
 
 
+def test_variant_identity_and_legend_explain_withheld_name_disposition() -> None:
+    """Withheld-name results emit disposition-aware tier label, reason, and flag explanations."""
+    row = {
+        "Nomenclature": "frameshift +1, representation-limited",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "allele-unrepresentable-in-vcf",
+        "Ambiguity_Interval": "",
+        "Repeat_Form": "",
+        "Nomenclature_Kestrel": "frameshift +1, representation-limited",
+        "Nomenclature_adVNTR": "",
+        "Nomenclature_Note": "Positional name withheld: allele molecular class cannot be represented in VCF; requires validation",
+    }
+    identity = rf.variant_identity(pd.DataFrame([row]))
+    assert identity is not None
+    assert identity["tier"] == "B"
+    assert identity["tier_label"] == "positional name withheld"
+    assert "positional name is withheld" in identity["tier_meaning"]
+    assert (
+        "Held below the corroborated tier because the allele molecular class cannot be represented in Kestrel's VCF shape"
+        in identity["tier_reason"]
+    )
+    assert identity["flags"][0]["token"] == "allele-unrepresentable-in-vcf"
+    assert "positional name is withheld" in identity["flags"][0]["meaning"]
+
+    legend = rf.nomenclature_legend(pd.DataFrame([row]))
+    assert legend[0]["term"] == "Tier B"
+    assert legend[0]["label"] == "positional name withheld"
+    assert "positional name is withheld" in legend[0]["meaning"]
+    assert legend[1]["term"] == "allele-unrepresentable-in-vcf"
+    assert "positional name is withheld" in legend[1]["meaning"]
+
+
 def test_every_flag_the_caller_can_set_is_explained() -> None:
     """The vocabulary is closed and declared in one place, so the key can be complete.
 

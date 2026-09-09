@@ -295,6 +295,7 @@ def from_bam(
             repeat_form=named.repeat_form,
             net_length=named.net_length,
             source=named.source,
+            internal_allele=named.internal_allele or named.name,
         )
     return named
 
@@ -324,18 +325,36 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             # The allele was already resolved from BAM records, but its positional
             # name was withheld due to representation limits (#313). A subsequent
             # candidate must not overwrite it as if no allele were present.
+            call_allele = call.internal_allele or call.name
+            bam_allele = bam_call.internal_allele or bam_call.name
+            if call_allele and bam_allele:
+                if call_allele == bam_allele:
+                    return call
+                return Nomenclature(
+                    name=call.name,
+                    event=call.event,
+                    unit=call.unit,
+                    tier=call.tier,
+                    flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_CALLER_DISAGREEMENT})),
+                    ambiguity=call.ambiguity,
+                    repeat_form=call.repeat_form,
+                    net_length=call.net_length,
+                    source=call.source,
+                    internal_allele=call.internal_allele,
+                )
             if bam_call.event == call.event and bam_call.net_length == call.net_length:
                 return call
             return Nomenclature(
                 name=call.name,
                 event=call.event,
                 unit=call.unit,
-                tier="C",
+                tier=call.tier,
                 flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_CALLER_DISAGREEMENT})),
                 ambiguity=call.ambiguity,
                 repeat_form=call.repeat_form,
                 net_length=call.net_length,
                 source=call.source,
+                internal_allele=call.internal_allele,
             )
 
         if FLAG_CALLER_DISAGREEMENT in call.flags and FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT in bam_call.flags:
@@ -363,6 +382,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             repeat_form=bam_call.repeat_form,
             net_length=bam_call.net_length,
             source="kestrel_bam",
+            internal_allele=bam_call.internal_allele or bam_call.name,
         )
 
     if bam_call.name == call.name:
@@ -389,6 +409,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             repeat_form=bam_call.repeat_form,
             net_length=bam_call.net_length,
             source="kestrel_bam",
+            internal_allele=bam_call.internal_allele or bam_call.name,
         )
 
     # Disagreement: keep the VCF allele and say so, rather than silently preferring
@@ -403,6 +424,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         repeat_form=call.repeat_form,
         net_length=call.net_length,
         source=call.source,
+        internal_allele=call.internal_allele or call.name,
     )
 
 

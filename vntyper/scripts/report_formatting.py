@@ -73,14 +73,19 @@ from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMN_HELP
 from vntyper.scripts.nomenclature_presentation import (
     COLUMN_HELP,
     NOMENCLATURE_FLAG_MEANINGS,
-    NOMENCLATURE_TIERS,
     tier_reason,
 )
 from vntyper.scripts.nomenclature_presentation import (
     KESTREL_BAM_SEMANTICS as KESTREL_BAM_SEMANTICS,
 )
 from vntyper.scripts.nomenclature_presentation import (
+    NOMENCLATURE_TIERS as NOMENCLATURE_TIERS,
+)
+from vntyper.scripts.nomenclature_presentation import (
     TIER_A_BLOCKERS as TIER_A_BLOCKERS,
+)
+from vntyper.scripts.nomenclature_presentation import (
+    tier_presentation as tier_presentation,
 )
 
 logger = logging.getLogger(__name__)
@@ -1211,11 +1216,12 @@ def variant_identity(*frames: pd.DataFrame) -> dict[str, Any] | None:
         return values[0] if len(values) == 1 else ""
 
     tier = single("tier")
-    label, meaning = NOMENCLATURE_TIERS.get(tier, ("", ""))
+    split_flags = _split_flags(flags)
+    label, meaning = tier_presentation(tier, split_flags)
     identity["tier"] = tier
     identity["tier_label"] = label
     identity["tier_meaning"] = meaning
-    identity["tier_reason"] = tier_reason(tier, _split_flags(flags))
+    identity["tier_reason"] = tier_reason(tier, split_flags)
     identity["ambiguity"] = single("ambiguity")
     identity["repeat_form"] = single("repeat_form")
     identity["kestrel_name"] = single("kestrel_name")
@@ -1223,7 +1229,7 @@ def variant_identity(*frames: pd.DataFrame) -> dict[str, Any] | None:
     identity["note"] = single("note")
     identity["callers_agree"] = bool(identity["kestrel_name"] and identity["kestrel_name"] == identity["advntr_name"])
     identity["flags"] = [
-        {"token": token, "meaning": NOMENCLATURE_FLAG_MEANINGS.get(token, "")} for token in _split_flags(flags)
+        {"token": token, "meaning": NOMENCLATURE_FLAG_MEANINGS.get(token, "")} for token in split_flags
     ]
     return identity
 
@@ -1250,12 +1256,13 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
         tiers.extend(_row_values(frame, _IDENTITY_FIELDS["tier"]))
         flags.extend(_row_values(frame, _FLAG_FIELDS))
 
+    split_flags = _split_flags(flags)
     entries: list[dict[str, str]] = []
     for tier in dict.fromkeys(tiers):
-        label, meaning = NOMENCLATURE_TIERS.get(tier, ("", ""))
+        label, meaning = tier_presentation(tier, split_flags)
         if meaning:
             entries.append({"term": f"Tier {tier}", "label": label, "meaning": meaning})
-    for token in _split_flags(flags):
+    for token in split_flags:
         # `""` rather than `None`, so the name is not rebound to a wider type than the
         # tier branch above gives it - and so an unrecognised token is skipped by the
         # same falsy test either way.

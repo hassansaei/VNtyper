@@ -567,6 +567,9 @@ class Nomenclature:
         repeat_form: ``53C[7]>53C[8]``, or ``None`` outside a detectable tract.
         net_length: Change in length, e.g. ``+1`` for a duplication.
         source: ``kestrel_vcf`` | ``kestrel_bam`` | ``advntr``.
+        internal_allele: Preserved allele identity when positional name is withheld
+            due to representation limits (#313), allowing sequential refinement to
+            detect agreement vs disagreement.
     """
 
     name: str | None
@@ -578,6 +581,7 @@ class Nomenclature:
     repeat_form: str | None
     net_length: int
     source: str
+    internal_allele: str | None = None
 
 
 def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ...]) -> Nomenclature:

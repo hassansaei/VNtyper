@@ -16,6 +16,7 @@ __all__ = [
     "NOMENCLATURE_FLAG_MEANINGS",
     "NOMENCLATURE_TIERS",
     "TIER_A_BLOCKERS",
+    "tier_presentation",
     "tier_reason",
 ]
 
@@ -69,6 +70,9 @@ TIER_A_BLOCKERS: dict[str, str] = {
         "source-specific evidence threshold"
     ),
     nomenclature.FLAG_REPRESENTATION_ONLY: "no MUC1 variant described in the literature matches this name",
+    nomenclature.FLAG_ALLELE_UNREPRESENTABLE: (
+        "the allele molecular class cannot be represented in Kestrel's VCF shape (positional name withheld)"
+    ),
 }
 
 #: Closed nomenclature flag vocabulary in report wording.
@@ -86,8 +90,8 @@ NOMENCLATURE_FLAG_MEANINGS: dict[str, str] = {
         "the coordinate projected onto X is less certain."
     ),
     nomenclature.FLAG_ALLELE_UNREPRESENTABLE: (
-        "The allele cannot be written in Kestrel's VCF shape. The name comes from Kestrel's resolved haplotype "
-        "records, which preserve the full allele shape."
+        "The allele cannot be written in Kestrel's VCF shape. The event is resolved from Kestrel's haplotype "
+        "records, while the positional name is withheld."
     ),
     nomenclature.FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT: (
         "Resolved Kestrel haplotype-record support is below the BAM rescue thinness threshold."
@@ -195,3 +199,31 @@ def tier_reason(tier: str, flags: Sequence[str]) -> str:
     if len(reasons) == 1:
         return f"Held below the corroborated tier because {reasons[0]}."
     return "Held below the corroborated tier because " + "; and ".join(reasons) + "."
+
+
+def tier_presentation(
+    tier: str,
+    flags: Sequence[str] = (),
+) -> tuple[str, str]:
+    """Return the label and meaning for a nomenclature tier, accounting for withheld names.
+
+    When an allele is detected in haplotype records but its molecular class cannot be
+    represented in Kestrel's VCF shape, the positional name is withheld (#313). In this
+    case, Tier B explains the withheld name rather than claiming 'the name is shown so it
+    can be weighed'.
+
+    Args:
+        tier: Emitted tier letter ('A', 'B', 'C').
+        flags: Flags associated with the call.
+
+    Returns:
+        tuple[str, str]: The human-readable tier label and meaning.
+    """
+    if tier == "B" and nomenclature.FLAG_ALLELE_UNREPRESENTABLE in flags:
+        return (
+            "positional name withheld",
+            "An allele was resolved in haplotype records, but its molecular class cannot be represented in "
+            "Kestrel's VCF shape. The event is reported so it can be weighed, while the positional name is "
+            "withheld.",
+        )
+    return NOMENCLATURE_TIERS.get(tier, ("", ""))

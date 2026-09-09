@@ -845,3 +845,34 @@ def test_subsequent_candidate_cannot_overwrite_withheld_delins_allele() -> None:
     assert refined_again.event == "delins"
     assert "caller-disagreement" in refined_again.flags
     assert "allele-unrepresentable-in-vcf" in refined_again.flags
+
+
+def test_sequential_refinement_competing_delins_alleles_records_disagreement() -> None:
+    """Sequential refinement receiving different delins alleles records caller-disagreement."""
+    vcf = _named("55_56insA", "insertion")
+    # First BAM delins allele
+    delins_first = refine(vcf, _named("55delinsAT", "delins", "kestrel_bam"))
+    assert delins_first.name is None
+    assert "caller-disagreement" not in delins_first.flags
+
+    # Competing second delins allele with the same net length
+    delins_competing = _named("58delinsGT", "delins", "kestrel_bam")
+    refined_competing = refine(delins_first, delins_competing)
+    assert refined_competing.name is None
+    assert refined_competing.event == "delins"
+    assert "caller-disagreement" in refined_competing.flags
+    assert "allele-unrepresentable-in-vcf" in refined_competing.flags
+
+
+def test_sequential_refinement_identical_delins_alleles_preserves_agreement() -> None:
+    """Sequential refinement receiving the same delins allele preserves agreement without disagreement flag."""
+    vcf = _named("55_56insA", "insertion")
+    delins_first = refine(vcf, _named("55delinsAT", "delins", "kestrel_bam"))
+    assert delins_first.name is None
+
+    # Corroborating second candidate with identical allele
+    delins_identical = _named("55delinsAT", "delins", "kestrel_bam")
+    refined_same = refine(delins_first, delins_identical)
+    assert refined_same.name is None
+    assert refined_same.event == "delins"
+    assert "caller-disagreement" not in refined_same.flags
