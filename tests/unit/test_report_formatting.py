@@ -1437,6 +1437,42 @@ def test_variant_identity_and_legend_explain_withheld_name_disposition() -> None
     assert "positional name is withheld" in legend[1]["meaning"]
 
 
+def test_nomenclature_legend_explains_both_tier_b_cases_in_mixed_report() -> None:
+    """When a report contains both ordinary and withheld-name Tier B results, legend explains both."""
+    ordinary_row = {
+        "Nomenclature": "59dupC",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "known-variant;position-ambiguous",
+    }
+    withheld_row = {
+        "Nomenclature": "frameshift +1, representation-limited",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "allele-unrepresentable-in-vcf",
+    }
+    legend = rf.nomenclature_legend(pd.DataFrame([ordinary_row, withheld_row]))
+    terms = [entry["term"] for entry in legend]
+    assert "Tier B" in terms
+    assert "Tier B (name withheld)" in terms
+    entry_std = next(e for e in legend if e["term"] == "Tier B")
+    entry_wh = next(e for e in legend if e["term"] == "Tier B (name withheld)")
+    assert entry_std["label"] == "qualified name"
+    assert entry_wh["label"] == "positional name withheld"
+
+
+def test_advntr_undetermined_call_is_not_labeled_representation_limited() -> None:
+    """Undetermined adVNTR calls (e.g. D27_2&I27_2_A_LEN2) remain Tier C allele undetermined."""
+    from vntyper.scripts.nomenclature import confidence_note, from_advntr, render
+
+    calls = from_advntr("D27_2&I27_2_A_LEN2")
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.tier == "C"
+    assert "sequence-undetermined" in call.flags
+    assert "allele-unrepresentable-in-vcf" not in call.flags
+    assert render(call) == "frameshift +1, allele undetermined"
+    assert confidence_note(call) == ""
+
+
 def test_every_flag_the_caller_can_set_is_explained() -> None:
     """The vocabulary is closed and declared in one place, so the key can be complete.
 
