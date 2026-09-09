@@ -26,6 +26,8 @@ def test_is_unrepresentable_molecular_class():
 def test_format_representation_limited_name():
     assert format_representation_limited_name(1) == "frameshift +1, representation-limited"
     assert format_representation_limited_name(-2) == "frameshift -2, representation-limited"
+    assert format_representation_limited_name(3) == "in-frame +3, representation-limited"
+    assert format_representation_limited_name(-6) == "in-frame -6, representation-limited"
     assert format_representation_limited_name(0) == DISPOSITION_REPRESENTATION_LIMITED
 
 
@@ -37,6 +39,14 @@ def test_format_masthead_representation_limited():
     assert (
         format_masthead_representation_limited(-1)
         == "Frameshift detected (-1 bp, positional naming withheld: representation-limited)"
+    )
+    assert (
+        format_masthead_representation_limited(3)
+        == "In-frame variant detected (+3 bp, positional naming withheld: representation-limited)"
+    )
+    assert (
+        format_masthead_representation_limited(-3)
+        == "In-frame variant detected (-3 bp, positional naming withheld: representation-limited)"
     )
     assert (
         format_masthead_representation_limited(0)

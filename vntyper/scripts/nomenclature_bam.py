@@ -372,6 +372,8 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         flags = {*call.flags, *bam_call.flags}
         if bam_call.event == "delins":
             flags.add(FLAG_ALLELE_UNREPRESENTABLE)
+            flags.add("representation-limited")
+            flags.discard(FLAG_SEQUENCE_UNDETERMINED)
         return Nomenclature(
             name=name,
             event=bam_call.event,
@@ -390,7 +392,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         # `reconcile`, which is the only place that sees the support quantity.
         return call
 
-    if bam_call.event == "delins" and call.event != "delins":
+    if bam_call.event == "delins":
         # The VCF shape cannot hold this. Kestrel's `VariantType` has SNP, INSERTION
         # and DELETION and nothing else, so whatever it wrote for this locus is the
         # closest representable shape rather than the allele -- the haplotype
@@ -399,12 +401,14 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         # Per owner decision #313: abstain with an explicit disposition.
         # When the selected candidate's molecular class is one Kestrel cannot represent,
         # the positional name is withheld and a representation-limited disposition is emitted.
+        flags = {*call.flags, *bam_call.flags, FLAG_ALLELE_UNREPRESENTABLE, "representation-limited"}
+        flags.discard(FLAG_SEQUENCE_UNDETERMINED)
         return Nomenclature(
             name=None,
             event=bam_call.event,
             unit=bam_call.unit,
             tier=bam_call.tier,
-            flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_ALLELE_UNREPRESENTABLE})),
+            flags=tuple(sorted(flags)),
             ambiguity=bam_call.ambiguity,
             repeat_form=bam_call.repeat_form,
             net_length=bam_call.net_length,

@@ -58,7 +58,8 @@ def format_representation_limited_name(net_length: int) -> str:
     if net_length == 0:
         return DISPOSITION_REPRESENTATION_LIMITED
     sign = "+" if net_length > 0 else "-"
-    return f"frameshift {sign}{abs(net_length)}, {DISPOSITION_REPRESENTATION_LIMITED}"
+    kind = "in-frame" if net_length % 3 == 0 else "frameshift"
+    return f"{kind} {sign}{abs(net_length)}, {DISPOSITION_REPRESENTATION_LIMITED}"
 
 
 def format_masthead_representation_limited(net_length: int) -> str:
@@ -73,4 +74,5 @@ def format_masthead_representation_limited(net_length: int) -> str:
     if net_length == 0:
         return f"Variant detected (positional naming withheld: {DISPOSITION_REPRESENTATION_LIMITED})"
     sign = "+" if net_length > 0 else "-"
-    return f"Frameshift detected ({sign}{abs(net_length)} bp, positional naming withheld: {DISPOSITION_REPRESENTATION_LIMITED})"
+    kind = "In-frame variant" if net_length % 3 == 0 else "Frameshift"
+    return f"{kind} detected ({sign}{abs(net_length)} bp, positional naming withheld: {DISPOSITION_REPRESENTATION_LIMITED})"

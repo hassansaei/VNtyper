@@ -1216,12 +1216,13 @@ def variant_identity(*frames: pd.DataFrame) -> dict[str, Any] | None:
         return values[0] if len(values) == 1 else ""
 
     tier = single("tier")
+    name = single("name")
     split_flags = _split_flags(flags)
-    label, meaning = tier_presentation(tier, split_flags)
+    label, meaning = tier_presentation(tier, split_flags, displayed_name=name)
     identity["tier"] = tier
     identity["tier_label"] = label
     identity["tier_meaning"] = meaning
-    identity["tier_reason"] = tier_reason(tier, split_flags)
+    identity["tier_reason"] = tier_reason(tier, split_flags, displayed_name=name)
     identity["ambiguity"] = single("ambiguity")
     identity["repeat_form"] = single("repeat_form")
     identity["kestrel_name"] = single("kestrel_name")
@@ -1248,13 +1249,14 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
         list[dict[str, str]]: ``term``/``meaning`` pairs, tiers first, then flags in the
         order the rows carry them.
     """
-    row_tiers_and_flags: list[tuple[str, list[str]]] = []
+    row_details: list[tuple[str, list[str], str]] = []
     all_flags: list[str] = []
     for frame in frames:
         if frame is None or frame.empty:
             continue
         tier_col = next((name for name in _IDENTITY_FIELDS["tier"] if name in frame.columns), None)
         flags_col = next((name for name in _FLAG_FIELDS if name in frame.columns), None)
+        name_col = next((name for name in _IDENTITY_FIELDS["name"] if name in frame.columns), None)
         all_flags.extend(_row_values(frame, _FLAG_FIELDS))
         if tier_col is not None:
             for idx in range(len(frame)):
@@ -1266,24 +1268,26 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
                     continue
                 f_val = frame[flags_col].iloc[idx] if flags_col is not None else ""
                 f_str = "" if f_val is None or (isinstance(f_val, float) and pd.isna(f_val)) else str(f_val).strip()
-                row_tiers_and_flags.append((t_str, _split_flags([f_str])))
+                n_val = frame[name_col].iloc[idx] if name_col is not None else ""
+                n_str = "" if n_val is None or (isinstance(n_val, float) and pd.isna(n_val)) else str(n_val).strip()
+                row_details.append((t_str, _split_flags([f_str]), n_str))
 
     entries: list[dict[str, str]] = []
-    seen_tiers = list(dict.fromkeys(t for t, _ in row_tiers_and_flags))
+    seen_tiers = list(dict.fromkeys(t for t, _, _ in row_details))
     for tier in seen_tiers:
-        tier_flags = [f for t, f in row_tiers_and_flags if t == tier]
+        tier_rows = [(f, n) for t, f, n in row_details if t == tier]
         if tier == "B":
             from vntyper.scripts import nomenclature
 
-            has_withheld = any(
-                (nomenclature.FLAG_ALLELE_UNREPRESENTABLE in flags or "representation-limited" in flags)
-                and nomenclature.FLAG_SEQUENCE_UNDETERMINED not in flags
-                for flags in tier_flags
-            )
-            has_standard = any(
-                nomenclature.FLAG_ALLELE_UNREPRESENTABLE not in flags and "representation-limited" not in flags
-                for flags in tier_flags
-            )
+            def _is_row_withheld(flags: list[str], name: str) -> bool:
+                return bool(
+                    (nomenclature.FLAG_ALLELE_UNREPRESENTABLE in flags or "representation-limited" in flags)
+                    and nomenclature.FLAG_SEQUENCE_UNDETERMINED not in flags
+                    and (not name or "representation-limited" in name or "withheld" in name.lower())
+                )
+
+            has_withheld = any(_is_row_withheld(flags, name) for flags, name in tier_rows)
+            has_standard = any(not _is_row_withheld(flags, name) for flags, name in tier_rows)
             if has_standard and has_withheld:
                 label_std, meaning_std = NOMENCLATURE_TIERS.get("B", ("", ""))
                 label_wh, meaning_wh = tier_presentation("B", [nomenclature.FLAG_ALLELE_UNREPRESENTABLE])

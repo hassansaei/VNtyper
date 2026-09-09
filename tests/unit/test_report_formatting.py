@@ -1473,6 +1473,65 @@ def test_advntr_undetermined_call_is_not_labeled_representation_limited() -> Non
     assert confidence_note(call) == ""
 
 
+def test_legacy_named_delins_retains_qualified_name_presentation() -> None:
+    """Archived runs with explicit positional names (e.g. 55delinsAT) retain qualified name."""
+    legacy_row = {
+        "Nomenclature": "55delinsAT",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "allele-unrepresentable-in-vcf",
+    }
+    df = pd.DataFrame([legacy_row])
+    identity = rf.variant_identity(df)
+    assert identity is not None
+    assert identity["tier_label"] == "qualified name"
+    assert "positional name is withheld" not in identity["tier_meaning"]
+    assert "(positional name withheld)" not in identity["tier_reason"]
+    assert "allele molecular class cannot be represented in Kestrel's VCF shape" in identity["tier_reason"]
+
+    legend = rf.nomenclature_legend(df)
+    assert len(legend) == 2
+    assert legend[0]["term"] == "Tier B"
+    assert legend[0]["label"] == "qualified name"
+
+
+def test_bam_rescued_delins_clears_undetermined_and_labels_representation_limited() -> None:
+    """BAM rescue of delins clears sequence-undetermined flag and correctly formats in-frame alleles."""
+    from vntyper.scripts.nomenclature import Nomenclature, confidence_note, render
+    from vntyper.scripts.nomenclature_bam import refine
+
+    vcf = Nomenclature(
+        name=None,
+        event="delins",
+        unit="X",
+        tier="C",
+        flags=("sequence-undetermined",),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=1,
+        source="kestrel_vcf",
+    )
+    bam = Nomenclature(
+        name="54_55delinsTTTTT",
+        event="delins",
+        unit="X",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=3,
+        source="kestrel_bam",
+    )
+    refined = refine(vcf, bam)
+    assert refined.name is None
+    assert "sequence-undetermined" not in refined.flags
+    assert "allele-unrepresentable-in-vcf" in refined.flags
+    assert "representation-limited" in refined.flags
+    assert refined.tier == "B"
+    assert refined.internal_allele == "54_55delinsTTTTT"
+    assert render(refined) == "in-frame +3, representation-limited"
+    assert "positional name withheld" in confidence_note(refined)
+
+
 def test_every_flag_the_caller_can_set_is_explained() -> None:
     """The vocabulary is closed and declared in one place, so the key can be complete.
 

@@ -860,7 +860,11 @@ def confidence_note(
         if (
             call.tier != "C"
             and (FLAG_ALLELE_UNREPRESENTABLE in call.flags or "representation-limited" in call.flags)
-            and FLAG_SEQUENCE_UNDETERMINED not in call.flags
+            and (
+                FLAG_SEQUENCE_UNDETERMINED not in call.flags
+                or call.internal_allele is not None
+                or call.source == "kestrel_bam"
+            )
         ):
             return "positional name withheld: allele molecular class cannot be represented in VCF; requires validation"
         return ""
@@ -901,17 +905,23 @@ def render(call: Nomenclature) -> str:
     if (
         call.tier != "C"
         and (FLAG_ALLELE_UNREPRESENTABLE in call.flags or "representation-limited" in call.flags)
-        and FLAG_SEQUENCE_UNDETERMINED not in call.flags
+        and (
+            FLAG_SEQUENCE_UNDETERMINED not in call.flags
+            or call.internal_allele is not None
+            or call.source == "kestrel_bam"
+        )
     ):
         if call.net_length == 0:
             return "representation-limited"
         sign = "+" if call.net_length > 0 else "-"
-        return f"frameshift {sign}{abs(call.net_length)}, representation-limited"
+        kind = "in-frame" if call.net_length % 3 == 0 else "frameshift"
+        return f"{kind} {sign}{abs(call.net_length)}, representation-limited"
 
     if call.net_length == 0:
         return "allele undetermined"
     sign = "+" if call.net_length > 0 else "-"
-    return f"frameshift {sign}{abs(call.net_length)}, allele undetermined"
+    kind = "in-frame" if call.net_length % 3 == 0 else "frameshift"
+    return f"{kind} {sign}{abs(call.net_length)}, allele undetermined"
 
 
 _ADVNTR_STATE = re.compile(r"^(?P<kind>[ID])(?P<pos>\d+)_(?P<ru>\d+)(?:_(?P<base>[ACGT])_LEN(?P<length>\d+))?$")
