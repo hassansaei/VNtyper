@@ -387,7 +387,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             internal_allele=bam_call.internal_allele or bam_call.name,
         )
 
-    if bam_call.event == "delins" or call.event == "delins":
+    if bam_call.event == "delins":
         # The VCF shape cannot hold this. Kestrel's `VariantType` has SNP, INSERTION
         # and DELETION and nothing else, so whatever it wrote for this locus is the
         # closest representable shape rather than the allele -- the haplotype
@@ -396,11 +396,28 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         # Per owner decision #313: abstain with an explicit disposition.
         # When the selected candidate's molecular class is one Kestrel cannot represent,
         # the positional name is withheld and a representation-limited disposition is emitted.
+        if call.event == "delins":
+            call_allele = call.internal_allele or call.name
+            bam_allele = bam_call.internal_allele or bam_call.name
+            if call_allele and bam_allele and call_allele != bam_allele:
+                # Two conflicting delins alleles: preserve call and record caller disagreement
+                return Nomenclature(
+                    name=call.name,
+                    event=call.event,
+                    unit=call.unit,
+                    tier=call.tier,
+                    flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_CALLER_DISAGREEMENT})),
+                    ambiguity=call.ambiguity,
+                    repeat_form=call.repeat_form,
+                    net_length=call.net_length,
+                    source=call.source,
+                    internal_allele=call.internal_allele or call.name,
+                )
         flags = {*call.flags, *bam_call.flags, FLAG_ALLELE_UNREPRESENTABLE, "representation-limited"}
         flags.discard(FLAG_SEQUENCE_UNDETERMINED)
         return Nomenclature(
             name=None,
-            event=bam_call.event if bam_call.event == "delins" else call.event,
+            event=bam_call.event,
             unit=bam_call.unit,
             tier=bam_call.tier,
             flags=tuple(sorted(flags)),
@@ -408,7 +425,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             repeat_form=bam_call.repeat_form,
             net_length=bam_call.net_length,
             source="kestrel_bam",
-            internal_allele=bam_call.internal_allele or bam_call.name or call.internal_allele or call.name,
+            internal_allele=bam_call.internal_allele or bam_call.name,
         )
 
     if bam_call.name == call.name:

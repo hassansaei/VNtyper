@@ -876,3 +876,38 @@ def test_sequential_refinement_identical_delins_alleles_preserves_agreement() ->
     assert refined_same.name is None
     assert refined_same.event == "delins"
     assert "caller-disagreement" not in refined_same.flags
+
+
+def test_refine_preserves_selected_delins_when_bam_reports_different_event() -> None:
+    """When the existing call is a delins but BAM reports another event, preserve the delins and flag disagreement."""
+    call = Nomenclature(
+        name="56delinsAT",
+        event="delins",
+        unit="2",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form="canonical",
+        net_length=1,
+        source="kestrel_vcf",
+        internal_allele="56delinsAT",
+    )
+    bam_call = Nomenclature(
+        name="55_56insTTT",
+        event="insertion",
+        unit="2",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form="canonical",
+        net_length=3,
+        source="kestrel_bam",
+        internal_allele="55_56insTTT",
+    )
+    refined = refine(call, bam_call)
+    # Must preserve call's net_length (+1 frameshift), name, and event, and record caller-disagreement
+    assert refined.name == "56delinsAT"
+    assert refined.event == "delins"
+    assert refined.net_length == 1
+    assert "caller-disagreement" in refined.flags
+    assert refined.source == "kestrel_vcf"
