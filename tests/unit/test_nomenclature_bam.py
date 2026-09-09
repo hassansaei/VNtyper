@@ -829,3 +829,19 @@ def test_a_delins_from_haplotype_records_overrides_a_shape_the_vcf_cannot_hold()
 def test_silence_from_haplotype_records_changes_nothing() -> None:
     vcf = _named("59dupC", "duplication")
     assert refine(vcf, None) is vcf
+
+
+def test_subsequent_candidate_cannot_overwrite_withheld_delins_allele() -> None:
+    """A delins with withheld positional name must not be overwritten by later candidates."""
+    vcf = _named("55_56insA", "insertion")
+    delins_refined = refine(vcf, _named("55delinsAT", "delins", "kestrel_bam"))
+    assert delins_refined.name is None
+    assert delins_refined.event == "delins"
+
+    # Subsequent conflicting candidate arrives
+    second_candidate = _named("59dupC", "duplication", "kestrel_bam")
+    refined_again = refine(delins_refined, second_candidate)
+    assert refined_again.name is None
+    assert refined_again.event == "delins"
+    assert "caller-disagreement" in refined_again.flags
+    assert "allele-unrepresentable-in-vcf" in refined_again.flags

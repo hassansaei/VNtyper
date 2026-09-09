@@ -430,6 +430,14 @@ def _observations(
             raise ValueError("calibration feature row requires assay_class")
         baseline_tier_value = baseline.get("tier")
         baseline_tier = baseline_tier_value if isinstance(baseline_tier_value, str) else None
+        candidate_is_rep_limited = bool(
+            selected is not None
+            and (
+                (isinstance(displayed, str) and "representation-limited" in displayed)
+                or label.mutation_class == "delins"
+            )
+        )
+        candidate_displayed = None if candidate_is_rep_limited else (displayed if isinstance(displayed, str) else None)
         candidate_rows.append(
             OutcomeObservation(
                 feature.manifest_key,
@@ -438,16 +446,27 @@ def _observations(
                 label.expected_identity,
                 label.expected_display_name,
                 selected,
-                displayed if isinstance(displayed, str) else None,
+                candidate_displayed,
                 tier if isinstance(tier, str) else None,
                 abstained,
                 applicable,
                 True,
                 baseline_tier,
+                representation_limited=candidate_is_rep_limited,
             )
         )
         baseline_name = baseline.get("name")
         baseline_selected = baseline_identity if isinstance(baseline_identity, str) else None
+        baseline_is_rep_limited = bool(
+            baseline_selected is not None
+            and (
+                (isinstance(baseline_name, str) and "representation-limited" in baseline_name)
+                or label.mutation_class == "delins"
+            )
+        )
+        baseline_displayed = (
+            None if baseline_is_rep_limited else (baseline_name if isinstance(baseline_name, str) else None)
+        )
         baseline_rows.append(
             OutcomeObservation(
                 feature.manifest_key,
@@ -456,12 +475,13 @@ def _observations(
                 label.expected_identity,
                 label.expected_display_name,
                 baseline_selected,
-                baseline_name if isinstance(baseline_name, str) else None,
+                baseline_displayed,
                 baseline_tier,
                 baseline.get("abstention") is not None,
                 True,
                 True,
                 baseline_tier,
+                representation_limited=baseline_is_rep_limited,
             )
         )
         if members[feature.manifest_key].role == "training":

@@ -320,6 +320,24 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         return call
 
     if call.name is None:
+        if call.source == "kestrel_bam" and (call.event == "delins" or FLAG_ALLELE_UNREPRESENTABLE in call.flags):
+            # The allele was already resolved from BAM records, but its positional
+            # name was withheld due to representation limits (#313). A subsequent
+            # candidate must not overwrite it as if no allele were present.
+            if bam_call.event == call.event and bam_call.net_length == call.net_length:
+                return call
+            return Nomenclature(
+                name=call.name,
+                event=call.event,
+                unit=call.unit,
+                tier="C",
+                flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_CALLER_DISAGREEMENT})),
+                ambiguity=call.ambiguity,
+                repeat_form=call.repeat_form,
+                net_length=call.net_length,
+                source=call.source,
+            )
+
         if FLAG_CALLER_DISAGREEMENT in call.flags and FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT in bam_call.flags:
             # There is no name here because two callers described different events,
             # which is a real conflict rather than a gap the BAM may fill. A thin

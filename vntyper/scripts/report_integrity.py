@@ -15,7 +15,7 @@ from vntyper.scripts.canonical_json import canonical_sha256
 
 logger = logging.getLogger(__name__)
 
-REPORT_INTEGRITY_VERSION = "1.0"
+REPORT_INTEGRITY_VERSION = "2.0"
 
 CANDIDATE_DECISION_FILES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("kestrel", ("kestrel/kestrel_result.tsv", "kestrel_result.tsv")),
@@ -38,6 +38,18 @@ def _canonical_file_bytes(content: bytes, filename: str) -> bytes:
 def _hash_file_content(content: bytes, filename: str) -> str:
     canonical = _canonical_file_bytes(content, filename)
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _hash_file_content_v1(content: bytes, filename: str) -> str:
+    """Legacy v1.0 hashing without trailing newline normalization."""
+    hasher = hashlib.sha256()
+    if filename.endswith((".tsv", ".csv", ".json", ".txt")):
+        content = content.replace(b"\r\n", b"\n")
+        lines = content.split(b"\n")
+        lines = [line.rstrip() for line in lines]
+        content = b"\n".join(lines)
+    hasher.update(content)
+    return hasher.hexdigest()
 
 
 def _hash_file(filepath: str | Path) -> str:
@@ -72,7 +84,91 @@ def compute_decision_digest(output_dir_or_files: Path | Mapping[str, Path | str]
     return hasher.hexdigest()
 
 
-def _build_integrity_payload(
+def _compute_dir_decision_digest_v1(
+    output_dir_or_files: Path | Mapping[str, Path | str] | str,
+) -> str:
+    """Computes legacy v1.0 SHA-256 digest over kestrel and coverage files."""
+    hasher = hashlib.sha256()
+    if isinstance(output_dir_or_files, (str, Path)):
+        base_dir = Path(output_dir_or_files)
+        kestrel_file = base_dir / "kestrel_result.tsv"
+        if not kestrel_file.exists():
+            kestrel_file = base_dir / "kestrel" / "output_indel.vcf.gz"
+
+        coverage_file = base_dir / "coverage" / "coverage_summary.tsv"
+        if not coverage_file.exists():
+            coverage_file = base_dir / "coverage_summary.tsv"
+
+        files_to_hash: list[tuple[str, Path]] = [("kestrel", kestrel_file), ("coverage", coverage_file)]
+    else:
+        files_to_hash = []
+        for key in sorted(output_dir_or_files.keys()):
+            files_to_hash.append((key, Path(output_dir_or_files[key])))
+
+    for key, path in files_to_hash:
+        if path.exists():
+            file_hash = _hash_file_content_v1(path.read_bytes(), path.name)
+            hasher.update(f"{key}:{file_hash}\n".encode())
+
+    return hasher.hexdigest()
+
+
+def _compute_zip_decision_digest_v1(zip_ref: zipfile.ZipFile, zip_dir: str) -> str:
+    """Recomputes legacy v1.0 digest from zip archive."""
+    hasher = hashlib.sha256()
+    kestrel_path = os.path.join(zip_dir, "kestrel_result.tsv") if zip_dir else "kestrel_result.tsv"
+    if kestrel_path not in zip_ref.namelist():
+        kestrel_path = (
+            os.path.join(zip_dir, "kestrel/output_indel.vcf.gz") if zip_dir else "kestrel/output_indel.vcf.gz"
+        )
+
+    coverage_path = (
+        os.path.join(zip_dir, "coverage/coverage_summary.tsv") if zip_dir else "coverage/coverage_summary.tsv"
+    )
+    if coverage_path not in zip_ref.namelist():
+        coverage_path = os.path.join(zip_dir, "coverage_summary.tsv") if zip_dir else "coverage_summary.tsv"
+
+    for key, path in [("kestrel", kestrel_path), ("coverage", coverage_path)]:
+        if path in zip_ref.namelist():
+            with zip_ref.open(path) as f:
+                content = f.read()
+            file_hash = _hash_file_content_v1(content, os.path.basename(path))
+            hasher.update(f"{key}:{file_hash}\n".encode())
+
+    return hasher.hexdigest()
+
+
+def _compute_zip_decision_digest_v2(zip_ref: zipfile.ZipFile, zip_dir: str) -> str:
+    """Recomputes canonical v2.0 digest from zip archive."""
+    hasher = hashlib.sha256()
+    for key, relative_paths in CANDIDATE_DECISION_FILES:
+        for rel_path in relative_paths:
+            candidate = os.path.join(zip_dir, rel_path) if zip_dir else rel_path
+            if candidate in zip_ref.namelist():
+                with zip_ref.open(candidate) as f:
+                    content = f.read()
+                file_hash = _hash_file_content(content, os.path.basename(candidate))
+                hasher.update(f"{key}:{file_hash}\n".encode())
+                break
+    return hasher.hexdigest()
+
+
+def _build_integrity_payload_v1(
+    run_id: str,
+    version: str,
+    tool_version: str,
+    sample_name: str,
+    decision_files_digest: str,
+    decision_profile_id: str,
+    decision_profile_digest: str,
+) -> str:
+    return (
+        f"{run_id}:{version}:{tool_version}:{sample_name}:"
+        f"{decision_files_digest}:{decision_profile_id}:{decision_profile_digest}"
+    )
+
+
+def _build_integrity_payload_v2(
     run_id: str,
     version: str,
     tool_version: str,
@@ -87,6 +183,9 @@ def _build_integrity_payload(
         f"{decision_files_digest}:{pre_anchor_summary_digest}:"
         f"{decision_profile_id}:{decision_profile_sha256}"
     )
+
+
+_build_integrity_payload = _build_integrity_payload_v2
 
 
 def anchor_pipeline_summary(
@@ -160,20 +259,26 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
             with zip_ref.open(summary_path) as f:
                 summary = json.load(f)
 
-            hasher = hashlib.sha256()
+            if not summary or not isinstance(summary, dict):
+                return {"valid": False, "error": "invalid summary format", "signed": False}
+
+            integrity = summary.get("report_integrity")
+            if not integrity or not isinstance(integrity, dict):
+                return {"valid": False, "error": "report_integrity missing from summary", "signed": False}
+
+            version = str(integrity.get("report_integrity_version") or "1.0")
             zip_dir = os.path.dirname(summary_path)
 
-            for key, relative_paths in CANDIDATE_DECISION_FILES:
-                for rel_path in relative_paths:
-                    candidate = os.path.join(zip_dir, rel_path) if zip_dir else rel_path
-                    if candidate in zip_ref.namelist():
-                        with zip_ref.open(candidate) as f:
-                            content = f.read()
-                        file_hash = _hash_file_content(content, os.path.basename(candidate))
-                        hasher.update(f"{key}:{file_hash}\n".encode())
-                        break
-
-            recomputed_decision_files_digest = hasher.hexdigest()
+            if version == "1.0":
+                recomputed_decision_files_digest = _compute_zip_decision_digest_v1(zip_ref, zip_dir)
+            elif version == "2.0":
+                recomputed_decision_files_digest = _compute_zip_decision_digest_v2(zip_ref, zip_dir)
+            else:
+                return {
+                    "valid": False,
+                    "error": f"unsupported report integrity version: {version}",
+                    "signed": False,
+                }
     else:
         dir_path = Path(archive_path_or_dir)
         summary_path_obj = dir_path / "pipeline_summary.json"
@@ -183,19 +288,27 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
         with open(summary_path_obj, encoding="utf-8") as f:
             summary = json.load(f)
 
-        recomputed_decision_files_digest = compute_decision_digest(dir_path)
+        if not summary or not isinstance(summary, dict):
+            return {"valid": False, "error": "invalid summary format", "signed": False}
 
-    if not summary or not isinstance(summary, dict):
-        return {"valid": False, "error": "invalid summary format", "signed": False}
+        integrity = summary.get("report_integrity")
+        if not integrity or not isinstance(integrity, dict):
+            return {"valid": False, "error": "report_integrity missing from summary", "signed": False}
 
-    integrity = summary.get("report_integrity")
-    if not integrity or not isinstance(integrity, dict):
-        return {"valid": False, "error": "report_integrity missing from summary", "signed": False}
+        version = str(integrity.get("report_integrity_version") or "1.0")
+        if version == "1.0":
+            recomputed_decision_files_digest = _compute_dir_decision_digest_v1(dir_path)
+        elif version == "2.0":
+            recomputed_decision_files_digest = compute_decision_digest(dir_path)
+        else:
+            return {
+                "valid": False,
+                "error": f"unsupported report integrity version: {version}",
+                "signed": False,
+            }
 
     run_id = str(integrity.get("run_id") or "")
-    version = str(integrity.get("report_integrity_version") or "")
     decision_files_digest = str(integrity.get("decision_files_digest") or "")
-    recorded_pre_anchor_summary_digest = integrity.get("pre_anchor_summary_digest")
     report_integrity_digest = str(integrity.get("report_integrity_digest") or "")
 
     tool_version = str(summary.get("version") or "")
@@ -215,35 +328,51 @@ def verify_report_integrity(archive_path_or_dir: str | Path, secret_key: str | N
             "signed": False,
         }
 
-    clean_summary = {k: v for k, v in summary.items() if k != "report_integrity"}
-    recomputed_pre_anchor_summary_digest = canonical_sha256(clean_summary)
+    if version == "1.0":
+        payload = _build_integrity_payload_v1(
+            run_id,
+            version,
+            tool_version,
+            sample_name,
+            decision_files_digest,
+            decision_profile_id,
+            decision_profile_sha256,
+        )
+    else:
+        recorded_pre_anchor_summary_digest = integrity.get("pre_anchor_summary_digest")
+        if not recorded_pre_anchor_summary_digest:
+            return {
+                "valid": False,
+                "run_id": run_id,
+                "tool_version": tool_version,
+                "decision_files_digest": decision_files_digest,
+                "error": "pre_anchor_summary_digest missing from report_integrity",
+                "signed": False,
+            }
 
-    if (
-        recorded_pre_anchor_summary_digest
-        and recorded_pre_anchor_summary_digest != recomputed_pre_anchor_summary_digest
-    ):
-        return {
-            "valid": False,
-            "run_id": run_id,
-            "tool_version": tool_version,
-            "decision_files_digest": decision_files_digest,
-            "error": "summary content tampered (pre_anchor_summary_digest mismatch)",
-            "signed": False,
-        }
+        clean_summary = {k: v for k, v in summary.items() if k != "report_integrity"}
+        recomputed_pre_anchor_summary_digest = canonical_sha256(clean_summary)
 
-    # Backward compatibility: if pre_anchor_summary_digest was not recorded in older version, use recorded or recomputed
-    payload_summary_digest = str(recorded_pre_anchor_summary_digest or recomputed_pre_anchor_summary_digest)
+        if recorded_pre_anchor_summary_digest != recomputed_pre_anchor_summary_digest:
+            return {
+                "valid": False,
+                "run_id": run_id,
+                "tool_version": tool_version,
+                "decision_files_digest": decision_files_digest,
+                "error": "summary content tampered (pre_anchor_summary_digest mismatch)",
+                "signed": False,
+            }
 
-    payload = _build_integrity_payload(
-        run_id,
-        version,
-        tool_version,
-        sample_name,
-        decision_files_digest,
-        payload_summary_digest,
-        decision_profile_id,
-        decision_profile_sha256,
-    )
+        payload = _build_integrity_payload_v2(
+            run_id,
+            version,
+            tool_version,
+            sample_name,
+            decision_files_digest,
+            str(recorded_pre_anchor_summary_digest),
+            decision_profile_id,
+            decision_profile_sha256,
+        )
 
     integrity_key = secret_key or os.environ.get("VNTYPER_INTEGRITY_KEY")
     signed = False

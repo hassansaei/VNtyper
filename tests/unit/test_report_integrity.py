@@ -239,3 +239,115 @@ def test_summary_body_tamper_detected(tmp_path):
     result = verify_report_integrity(tmp_path)
     assert result["valid"] is False
     assert "tampered" in str(result["error"])
+
+
+def test_verify_legacy_v1_archive_directory(tmp_path):
+    """Legacy v1.0 archives without pre_anchor_summary_digest and with 7-field payload verify successfully."""
+    import hashlib
+
+    from vntyper.scripts.report_integrity import _compute_dir_decision_digest_v1
+
+    kestrel_file = tmp_path / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\r\n")
+    cov_file = tmp_path / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    decision_digest = _compute_dir_decision_digest_v1(tmp_path)
+
+    run_id = "legacy-run-123"
+    version = "1.0"
+    tool_version = "2.0.26"
+    sample_name = "sample_legacy"
+    decision_profile_id = "profile1"
+    decision_profile_digest = "digest1"
+
+    payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_digest}:{decision_profile_id}:{decision_profile_digest}"
+    integrity_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    summary = {
+        "version": tool_version,
+        "sample_name": sample_name,
+        "decision_profile_id": decision_profile_id,
+        "decision_profile_digest": decision_profile_digest,
+        "report_integrity": {
+            "report_integrity_version": "1.0",
+            "run_id": run_id,
+            "decision_files_digest": decision_digest,
+            "report_integrity_digest": integrity_digest,
+        },
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is True
+    assert result["run_id"] == run_id
+    assert result["decision_files_digest"] == decision_digest
+
+    # Tampering with file in v1.0 fails
+    kestrel_file.write_text("tampered")
+    result_tampered = verify_report_integrity(tmp_path)
+    assert result_tampered["valid"] is False
+    assert result_tampered["error"] == "decision_files_digest mismatch"
+
+
+def test_verify_legacy_v1_zip_archive(tmp_path):
+    """Legacy v1.0 zip archives verify correctly."""
+    import hashlib
+
+    from vntyper.scripts.report_integrity import _compute_dir_decision_digest_v1
+
+    base_dir = tmp_path / "run_dir"
+    base_dir.mkdir()
+    kestrel_file = base_dir / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\n")
+    cov_file = base_dir / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    decision_digest = _compute_dir_decision_digest_v1(base_dir)
+
+    run_id = "legacy-zip-run"
+    version = "1.0"
+    tool_version = "2.0.26"
+    sample_name = "sample_legacy_zip"
+    payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_digest}::"
+    integrity_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    summary = {
+        "version": tool_version,
+        "sample_name": sample_name,
+        "report_integrity": {
+            "report_integrity_version": "1.0",
+            "run_id": run_id,
+            "decision_files_digest": decision_digest,
+            "report_integrity_digest": integrity_digest,
+        },
+    }
+    summary_file = base_dir / "pipeline_summary.json"
+    summary_file.write_text(json.dumps(summary))
+
+    zip_path = tmp_path / "legacy.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.write(kestrel_file, "run_dir/kestrel_result.tsv")
+        zf.write(cov_file, "run_dir/coverage_summary.tsv")
+        zf.write(summary_file, "run_dir/pipeline_summary.json")
+
+    result = verify_report_integrity(zip_path)
+    assert result["valid"] is True
+
+
+def test_verify_unsupported_version(tmp_path):
+    """An unknown integrity version returns an informative error."""
+    summary = {
+        "version": "2.0.26",
+        "sample_name": "sample1",
+        "report_integrity": {
+            "report_integrity_version": "99.0",
+            "run_id": "test",
+            "decision_files_digest": "0" * 64,
+            "report_integrity_digest": "0" * 64,
+        },
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is False
+    assert "unsupported report integrity version" in result["error"]
