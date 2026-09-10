@@ -19,7 +19,7 @@ adVNTR targets the MUC1 coding VNTR using **VNTR ID 25561**. Key settings in `ad
 |-----------|---------|-------------|
 | `vid` | 25561 | Database ID for MUC1 VNTR |
 | `threads` | 1 | CPU thread allocation (`null` inherits pipeline `--threads`) |
-| `additional_commands` | `""` | Optional adVNTR flags; pass `-aln` for alignment sidecars or v2.2.0 algorithms |
+| `additional_commands` | `""` | Optional adVNTR flags; pass `-aln` for alignment sidecars or v2.2.0/v2.3.0 algorithms |
 | `output_format` | `vcf` | Format of output files (`tsv` or `vcf`) |
 | `max_frameshift` | 100 | Maximum frameshift multiplier for filtering |
 | `frameshift_multiplier` | 3 | Base multiplier for frame patterns |
@@ -33,16 +33,18 @@ vntyper pipeline --bam sample.bam -o out/ --extra-modules advntr \
 
 ### Requirements
 
-- Dedicated conda environment `envadvntr` with adVNTR installed (pinned to v2.2.0+).
+- Dedicated conda environment `envadvntr` with adVNTR installed (pinned to v2.3.0+).
 - Reference database for the target assembly (hg19 or hg38).
 
-### Opt-In v2.2.0 Algorithms
+### Opt-In v2.2.0 & v2.3.0 Algorithms
 
-adVNTR v2.2.0 introduces targeted algorithms that can be enabled via `additional_commands` or `--advntr-additional-commands`:
+adVNTR v2.2.0 and v2.3.0 introduce targeted algorithms that can be enabled via `additional_commands` or `--advntr-additional-commands`:
 
-- **`--prune-reverse`**: Prunes reverse-strand search states during Viterbi dynamic programming. Yields an additional ~25% wall-clock runtime reduction without impacting caller sensitivity.
-- **`--rare-unit-coverage-guard <fraction>`** (e.g. `0.15`): Imposes a minimum coverage threshold for rare repeat-unit transitions. In empirical benchmark runs on 20 simulation cases, this eliminates false-positive artifact calls (such as spurious `D28_5` calls in normal controls) while preserving 100% sensitivity for true frameshift mutations.
-- **`--exact-frameshift-caller`**: Activates precise repeat-unit boundary frameshift calling (requires `--rare-unit-coverage-guard`).
+- **`--filter-adapter-readthrough`** (v2.3.0+): Filters reads with adapter read-through and short partial matches that cause false-positive indel calls in short insert libraries.
+- **`--min-read-match-ratio <fraction>`** (v2.3.0+, e.g. `0.60`): Minimum fraction of read length required to be genuine match states in Viterbi alignment (default: 0.60 when adapter filter is enabled).
+- **`--prune-reverse`** (v2.1.0+): Prunes reverse-strand search states during Viterbi dynamic programming. Yields an additional ~25% wall-clock runtime reduction without impacting caller sensitivity.
+- **`--rare-unit-coverage-guard <fraction>`** (v2.2.0+, e.g. `0.15`): Imposes a minimum coverage threshold for rare repeat-unit transitions. In empirical benchmark runs on 20 simulation cases, this eliminates false-positive artifact calls (such as spurious `D28_5` calls in normal controls) while preserving 100% sensitivity for true frameshift mutations.
+- **`--exact-frameshift-caller`** (v2.2.0+): Activates precise repeat-unit boundary frameshift calling (requires `--frameshift-background`).
 - **`--viterbi-beam-width <int>`**: Constrains Viterbi search width for high-throughput exploration.
 
 ### Processing

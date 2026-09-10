@@ -71,7 +71,7 @@ Omitting `--decision-profile` applies the verified packaged profile. Runtime pat
 |--------|------|---------|-------------|
 | `--extra-modules` | string | `[]` | Optional modules to execute: `advntr`, `shark`. Repeat the flag or supply comma-separated values (`--extra-modules advntr,shark`) |
 | `--advntr-max-coverage` | int | None | Coverage cap (e.g. 300) for adVNTR quick mode. Only valid when `advntr` is active |
-| `--advntr-additional-commands` | string | None | Additional options passed directly to `advntr genotype` (e.g. `'--prune-reverse --rare-unit-coverage-guard 0.15'`). Requires `advntr >= 2.2.0` |
+| `--advntr-additional-commands` | string | None | Additional options passed directly to `advntr genotype` (e.g. `'--prune-reverse --rare-unit-coverage-guard 0.15 --filter-adapter-readthrough'`). Requires `advntr >= 2.2.0` (or `2.3.0` for adapter filtering) |
 
 The `shark` module requires FASTQ input and is not supported in BAM/CRAM mode.
 

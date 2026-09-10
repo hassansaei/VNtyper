@@ -4,7 +4,11 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### adVNTR v2.3.0 upgrade and adapter read-through filtering
+
+- **adVNTR v2.3.0 upgrade**: Pinned adVNTR to commit `6f9e5745f30ce5ffc3690ec843dc8f773b3d464f` (v2.3.0 release).
+- **Opt-in v2.3.0 algorithms**: Added CLI and configuration support for `--filter-adapter-readthrough` (filters reads with adapter read-through and short partial matches that cause false-positive indel calls) and `--min-read-match-ratio` (minimum fraction of read length required to be genuine match states in Viterbi alignment, default 0.60 when adapter filter is enabled).
+- **Version capability enforcement**: Added version compatibility enforcement in `advntr_options.py` ensuring v2.3.0 options require adVNTR >= 2.3.0, and fail-fast refusal of `-u`/`--update` on adVNTR >= 2.3.0, while maintaining full backward compatibility with older versions.
 
 ## 2.0.34 (2026-09-10)
 
