@@ -84,6 +84,11 @@ def test_the_source_revision_is_pinned_to_a_full_commit_sha():
     assert re.fullmatch(r"[0-9a-f]{40}", commit), f"GIT_COMMIT must be a full 40-character SHA, got {commit!r}"
 
 
+def test_pinned_commit_is_v230_release():
+    """GIT_COMMIT in install_advntr.cfg must match the pinned v2.3.0 release commit."""
+    assert _cfg_value("GIT_COMMIT") == "6f9e5745f30ce5ffc3690ec843dc8f773b3d464f"
+
+
 def test_the_branch_is_the_forks_default():
     """The fork's default branch used to be `master` while VNtyper installed `enhanced_hmm`,
     so the default branch was not the code that runs. `main` now carries that work.

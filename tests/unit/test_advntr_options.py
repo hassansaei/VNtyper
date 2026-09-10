@@ -36,15 +36,28 @@ def test_v22_options_are_part_of_extra_options():
     assert opt.ADVNTR_V22_OPTIONS.issubset(opt.ADVNTR_EXTRA_OPTIONS)
 
 
+def test_v23_options_are_part_of_extra_options():
+    """All v2.3.0 options must be allowlisted in ADVNTR_EXTRA_OPTIONS."""
+    expected = {
+        "--filter-adapter-readthrough",
+        "--min-read-match-ratio",
+    }
+    assert expected == opt.ADVNTR_V23_OPTIONS
+    assert opt.ADVNTR_V23_OPTIONS.issubset(opt.ADVNTR_EXTRA_OPTIONS)
+
+
 @pytest.mark.parametrize(
     "token, expected",
     [
         ("--prune-reverse", "--prune-reverse"),
         ("--rare-unit-coverage-guard=0.15", "--rare-unit-coverage-guard"),
         ("--frameshift-background=/path/to/bg", "--frameshift-background"),
+        ("--filter-adapter-readthrough", "--filter-adapter-readthrough"),
+        ("--min-read-match-ratio=0.60", "--min-read-match-ratio"),
         ("-aln", "-aln"),
         ("-c", "-c"),
         ("0.15", None),
+        ("0.60", None),
         ("/path/to/bg", None),
         ("-1", None),
         ("-1.5", None),
@@ -72,6 +85,21 @@ def test_v22_options_pass_validation(cmd):
     assert result == cmd
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "--filter-adapter-readthrough",
+        "--min-read-match-ratio 0.60",
+        "--min-read-match-ratio=0.60",
+        "--filter-adapter-readthrough --min-read-match-ratio 0.65",
+        "--prune-reverse --filter-adapter-readthrough",
+    ],
+)
+def test_v23_options_pass_validation(cmd):
+    result = opt.resolve_additional_commands({"additional_commands": cmd}, advntr_version=(2, 3, 0))
+    assert result == cmd
+
+
 def test_exact_frameshift_caller_without_background_raises():
     with pytest.raises(ValueError, match="without '--frameshift-background'"):
         opt.resolve_additional_commands({"additional_commands": "--exact-frameshift-caller"})
@@ -83,6 +111,41 @@ def test_v22_option_refused_on_older_advntr():
             {"additional_commands": "--prune-reverse"},
             advntr_version=(2, 0, 4),
         )
+
+
+@pytest.mark.parametrize(
+    "cmd, token",
+    [
+        ("--filter-adapter-readthrough", "--filter-adapter-readthrough"),
+        ("--min-read-match-ratio 0.60", "--min-read-match-ratio"),
+    ],
+)
+def test_v23_option_refused_on_older_advntr(cmd, token):
+    with pytest.raises(ValueError, match=r"requires adVNTR >= 2\.3\.0, but installed adVNTR version is 2\.2\.0"):
+        opt.resolve_additional_commands(
+            {"additional_commands": cmd},
+            advntr_version=(2, 2, 0),
+        )
+
+
+@pytest.mark.parametrize("cmd", ["-u", "--update"])
+def test_v23_update_refused_on_advntr_23(cmd):
+    with pytest.raises(ValueError, match=r"unsupported on adVNTR >= 2\.3\.0"):
+        opt.resolve_additional_commands(
+            {"additional_commands": cmd},
+            advntr_version=(2, 3, 0),
+        )
+
+
+@pytest.mark.parametrize("cmd", ["-u", "--update"])
+def test_update_allowed_on_legacy_advntr(cmd):
+    assert (
+        opt.resolve_additional_commands(
+            {"additional_commands": cmd},
+            advntr_version=(2, 0, 4),
+        )
+        == cmd
+    )
 
 
 def test_legacy_options_pass_on_older_advntr():

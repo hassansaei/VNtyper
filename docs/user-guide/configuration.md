@@ -216,6 +216,6 @@ The optional adVNTR module is configured in `vntyper/modules/advntr/advntr_confi
 ```
 
 - **`threads`**: adVNTR thread count. Setting to `null` instructs adVNTR to inherit the pipeline's `--threads` setting.
-- **`additional_commands`**: Command fragment appended to `advntr genotype`. May include adVNTR v2.2.0 optimization flags such as `--prune-reverse` and `--rare-unit-coverage-guard 0.15`.
+- **`additional_commands`**: Command fragment appended to `advntr genotype`. May include adVNTR v2.2.0/v2.3.0 optimization and filtering flags such as `--prune-reverse`, `--rare-unit-coverage-guard 0.15`, and `--filter-adapter-readthrough`.
 - Per-run command flags can also be provided directly on the command line via `--advntr-additional-commands`.
 

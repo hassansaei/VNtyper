@@ -101,7 +101,7 @@ If you prefer to install adVNTR manually, follow these steps.
 1. **Clone the adVNTR Repository**
 
    ```bash
-   git clone https://github.com/mehrdadbakhtiari/adVNTR.git --branch enhanced_hmm
+   git clone https://github.com/berntpopp/adVNTR.git --branch main
    cd adVNTR
    ```
 

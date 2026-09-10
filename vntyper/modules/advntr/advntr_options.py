@@ -65,6 +65,14 @@ ADVNTR_V22_OPTIONS: frozenset[str] = frozenset(
     }
 )
 
+#: adVNTR options added in v2.3.0 that require an upgraded adVNTR binary.
+ADVNTR_V23_OPTIONS: frozenset[str] = frozenset(
+    {
+        "--filter-adapter-readthrough",
+        "--min-read-match-ratio",
+    }
+)
+
 #: Every other option adVNTR's ``genotype`` subparser declares -- the ones this module does
 #: not set, and which ``additional_commands`` therefore exists to carry.
 #:
@@ -98,6 +106,7 @@ ADVNTR_EXTRA_OPTIONS: frozenset[str] = frozenset(
         "-aln",
         "--aln",
         *ADVNTR_V22_OPTIONS,
+        *ADVNTR_V23_OPTIONS,
     }
 )
 
@@ -182,6 +191,16 @@ def resolve_additional_commands(
             raise ValueError(
                 f"advntr_settings['additional_commands'] contains {token!r}, which requires adVNTR >= 2.2.0, "
                 f"but installed adVNTR version is {advntr_version[0]}.{advntr_version[1]}.{advntr_version[2]}."
+            )
+        if advntr_version is not None and advntr_version < (2, 3, 0) and option in ADVNTR_V23_OPTIONS:
+            raise ValueError(
+                f"advntr_settings['additional_commands'] contains {token!r}, which requires adVNTR >= 2.3.0, "
+                f"but installed adVNTR version is {advntr_version[0]}.{advntr_version[1]}.{advntr_version[2]}."
+            )
+        if advntr_version is not None and advntr_version >= (2, 3, 0) and option in {"-u", "--update"}:
+            raise ValueError(
+                f"advntr_settings['additional_commands'] contains {token!r}, which is unsupported on adVNTR >= 2.3.0: "
+                "model refinement is not supported with the enhanced HMM backend."
             )
 
     if "--exact-frameshift-caller" in seen_options and "--frameshift-background" not in seen_options:
