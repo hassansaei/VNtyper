@@ -6,6 +6,16 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.34 (2026-09-10)
+
+### Representation-limited disposition and report cryptographic integrity anchoring ([#313](https://github.com/hassansaei/VNtyper/issues/313), [#327](https://github.com/hassansaei/VNtyper/issues/327), [#330](https://github.com/hassansaei/VNtyper/pull/330))
+
+- **Representation-Limited Disposition**: Resolved issue [#313](https://github.com/hassansaei/VNtyper/issues/313) where Kestrel's VCF caller cannot represent deletion-insertion (delins) alleles. Emits an explicit `representation-limited` disposition with withheld positional names (e.g. `frameshift +1, representation-limited`), maintaining 100% frameshift carrier detection across all 400 simulated benchmark cases while preventing misleading positional names.
+- **Calibration & Golden Objective Invariants**: Evaluated `representation-limited` outcomes separately from wrong names in calibration and golden evaluation, eliminating unjustified penalties against the calibration objective while preserving independent counting of positive control findings.
+- **BAM Refinement Safeguards**: Safeguarded delins allele refinement in `nomenclature_bam.py` to preserve primary frameshift alleles and net lengths against conflicting BAM candidate events, preventing chimera construction and recording caller disagreement.
+- **Generation-Time Report Cryptographic Integrity**: Resolved issue [#327](https://github.com/hassansaei/VNtyper/issues/327) by introducing multi-stage cryptographic integrity anchors in `report_integrity.py`. Normalizes line endings (`\r\n` and `\r` to `\n`) and intra-line tabs deterministically across platforms, computes SHA-256 digests across all pipeline decision files, and embeds an RFC 8785 canonical JSON hash of the pre-anchor summary to guarantee report authenticity and tamper evidence.
+- **Pipeline Stage Reordering**: Reordered pipeline summary anchoring to precede summary report generation, ensuring `run_id` and verified integrity digests are directly injected into HTML reports and disk summaries.
+
 ## 2.0.33 (2026-09-08)
 
 ### Integration contract update and identity dominance default enablement ([#270](https://github.com/hassansaei/VNtyper/issues/270), [#295](https://github.com/hassansaei/VNtyper/issues/295))
