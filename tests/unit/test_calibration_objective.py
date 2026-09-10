@@ -632,3 +632,71 @@ def test_free_parameter_contract_rejects_each_invalid_leaf() -> None:
     for component in invalid:
         with pytest.raises(ValueError):
             count_free_parameters(component)
+
+
+def test_representation_limited_outcome_validation() -> None:
+    """Validate the representation_limited invariant on OutcomeObservation."""
+    # Valid representation_limited outcome
+    obs = _outcome(selected_identity="identity-delins", displayed_name=None, representation_limited=True)
+    assert obs.representation_limited is True
+    assert obs.selected_identity == "identity-delins"
+    assert obs.displayed_name is None
+
+    # Invalid: non-boolean representation_limited
+    with pytest.raises(ValueError, match="calibration outcome representation limited must be Boolean"):
+        _outcome(representation_limited="true")  # type: ignore[arg-type]
+
+    # Invalid: missing selected_identity
+    with pytest.raises(ValueError, match="representation-limited outcome requires a selected identity"):
+        _outcome(selected_identity=None, displayed_name=None, representation_limited=True)
+
+    # Invalid: displayed_name not withheld
+    with pytest.raises(ValueError, match="representation-limited outcome must withhold displayed name"):
+        _outcome(selected_identity="identity-delins", displayed_name="55delinsAT", representation_limited=True)
+
+
+def test_representation_limited_preserves_detection_and_avoids_wrong_names() -> None:
+    """Representation-limited calls count as detected without being charged as wrong names."""
+    rows = (
+        OutcomeObservation(
+            "delins-carrier",
+            "assay-a",
+            "delins",
+            "expected-delins-id",
+            "54_56delinsAT",
+            "kestrel-delins-id",
+            None,
+            "B",
+            False,
+            True,
+            True,
+            "B",
+            representation_limited=True,
+        ),
+        OutcomeObservation(
+            "control-sample",
+            "assay-a",
+            "control",
+            None,
+            None,
+            None,
+            None,
+            None,
+            False,
+            True,
+            True,
+            None,
+        ),
+    )
+    summary = calculate_metrics(
+        rows,
+        profile_sha256="0" * 64,
+        free_parameter_count=0,
+        required_strata=("assay-a:delins",),
+    )
+    # Binary detection sensitivity is 1 (100% preserved)
+    assert summary.metrics.binary_detection_sensitivity == Fraction(1, 1)
+    # Zero wrong names charged
+    assert summary.metrics.wrong_displayed_names_all_tiers == 0
+    assert summary.metrics.wrong_tier_a_displayed_names == 0
+    assert summary.metrics.control_findings == 0

@@ -868,6 +868,65 @@ def test_candidate_a_to_b_is_counted_as_a_wrong_tier_a_displayed_name(tmp_path: 
     assert summary.metrics.wrong_tier_a_displayed_names == 3
 
 
+def test_observations_delins_with_wrong_positional_name_is_not_masked_as_representation_limited(
+    tmp_path: Path,
+) -> None:
+    """When a delins truth sample receives an incorrect positional call (e.g. 59dupC),
+    calibration must NOT conceal the wrong name by deriving representation-limited from truth.
+    """
+    truth, partitions, runs_path = _inputs(tmp_path)
+    runs_document = load_strict_json_object(runs_path.read_bytes())
+    run_values = runs_document["runs"]
+    assert isinstance(run_values, dict)
+    for key in tuple(run_values):
+        run_values[key] = write_schema_three_run(
+            tmp_path / "wrong-delins-runs" / key,
+            key,
+            identity=IDENTITY,
+            name="59dupC",
+            with_advntr=False,
+            selected_name="59dupC",
+            reconciled_identity=IDENTITY,
+        )
+    study = decode_study_declaration(load_strict_json_object(partitions.read_bytes()))
+    labels_document = load_strict_json_object(truth.read_bytes())["labels"]
+    assert isinstance(labels_document, dict) and isinstance(labels_document["rows"], list)
+    labels_document["rows"].insert(0, _label_row("held"))
+    delins_rows = [
+        {**row, "mutation_class": "delins", "expected_display_name": "54_56delinsAT"} for row in labels_document["rows"]
+    ]
+    labels = decode_label_artifact({"schema_version": "calibration-labels-v1", "rows": delins_rows})
+    evidence = extract_evidence(study, labels, run_values)
+
+    profile = build_generated_profile(
+        {
+            "enabled": True,
+            "minimum_record_count_margin": 1,
+            "minimum_record_share": 0.5,
+            "minimum_record_share_margin": 0.0,
+            "xd_veto": "disabled",
+            "abstain_on_inadmissible_advntr": False,
+        },
+        dataset_manifest_hash="b" * 64,
+        partition_manifest_hash="c" * 64,
+        seed=295,
+        objective="lexicographic-safety-v1",
+        generator_version="test",
+    )
+    observations, _ = _observations(profile, evidence)
+
+    # Because emitted name was '59dupC' (not representation-limited), it must NOT be marked representation_limited
+    assert all(not row.representation_limited for row in observations)
+    assert {row.displayed_name for row in observations} == {"59dupC"}
+    summary = calculate_metrics(
+        observations,
+        profile_sha256="a" * 64,
+        free_parameter_count=0,
+        required_strata=("capture-short-read:delins",),
+    )
+    assert summary.metrics.wrong_displayed_names_all_tiers > 0
+
+
 @pytest.mark.parametrize("forbidden", ["features", "baseline"])
 def test_extract_truth_is_strictly_labels_only(tmp_path: Path, forbidden: str) -> None:
     truth, partitions, runs = _inputs(tmp_path)

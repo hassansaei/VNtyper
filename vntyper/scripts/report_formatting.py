@@ -72,15 +72,25 @@ from vntyper.scripts.fastp_cutoffs import (
 from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMN_HELP, IDENTITY_COLUMNS
 from vntyper.scripts.nomenclature_presentation import (
     COLUMN_HELP,
-    NOMENCLATURE_FLAG_MEANINGS,
-    NOMENCLATURE_TIERS,
     tier_reason,
 )
 from vntyper.scripts.nomenclature_presentation import (
     KESTREL_BAM_SEMANTICS as KESTREL_BAM_SEMANTICS,
 )
 from vntyper.scripts.nomenclature_presentation import (
+    NOMENCLATURE_FLAG_MEANINGS as NOMENCLATURE_FLAG_MEANINGS,
+)
+from vntyper.scripts.nomenclature_presentation import (
+    NOMENCLATURE_TIERS as NOMENCLATURE_TIERS,
+)
+from vntyper.scripts.nomenclature_presentation import (
     TIER_A_BLOCKERS as TIER_A_BLOCKERS,
+)
+from vntyper.scripts.nomenclature_presentation import (
+    flag_meaning as flag_meaning,
+)
+from vntyper.scripts.nomenclature_presentation import (
+    tier_presentation as tier_presentation,
 )
 
 logger = logging.getLogger(__name__)
@@ -1211,20 +1221,20 @@ def variant_identity(*frames: pd.DataFrame) -> dict[str, Any] | None:
         return values[0] if len(values) == 1 else ""
 
     tier = single("tier")
-    label, meaning = NOMENCLATURE_TIERS.get(tier, ("", ""))
+    name = single("name")
+    split_flags = _split_flags(flags)
+    label, meaning = tier_presentation(tier, split_flags, displayed_name=name)
     identity["tier"] = tier
     identity["tier_label"] = label
     identity["tier_meaning"] = meaning
-    identity["tier_reason"] = tier_reason(tier, _split_flags(flags))
+    identity["tier_reason"] = tier_reason(tier, split_flags, displayed_name=name)
     identity["ambiguity"] = single("ambiguity")
     identity["repeat_form"] = single("repeat_form")
     identity["kestrel_name"] = single("kestrel_name")
     identity["advntr_name"] = single("advntr_name")
     identity["note"] = single("note")
     identity["callers_agree"] = bool(identity["kestrel_name"] and identity["kestrel_name"] == identity["advntr_name"])
-    identity["flags"] = [
-        {"token": token, "meaning": NOMENCLATURE_FLAG_MEANINGS.get(token, "")} for token in _split_flags(flags)
-    ]
+    identity["flags"] = [{"token": token, "meaning": flag_meaning(token, displayed_name=name)} for token in split_flags]
     return identity
 
 
@@ -1242,26 +1252,75 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
         list[dict[str, str]]: ``term``/``meaning`` pairs, tiers first, then flags in the
         order the rows carry them.
     """
-    tiers: list[str] = []
-    flags: list[str] = []
+    from vntyper.scripts import nomenclature
+
+    row_details: list[tuple[str, list[str], str]] = []
+    all_flags: list[str] = []
     for frame in frames:
         if frame is None or frame.empty:
             continue
-        tiers.extend(_row_values(frame, _IDENTITY_FIELDS["tier"]))
-        flags.extend(_row_values(frame, _FLAG_FIELDS))
+        tier_col = next((name for name in _IDENTITY_FIELDS["tier"] if name in frame.columns), None)
+        flags_col = next((name for name in _FLAG_FIELDS if name in frame.columns), None)
+        name_col = next((name for name in _IDENTITY_FIELDS["name"] if name in frame.columns), None)
+        all_flags.extend(_row_values(frame, _FLAG_FIELDS))
+        if tier_col is not None:
+            for idx in range(len(frame)):
+                t_val = frame[tier_col].iloc[idx]
+                if t_val is None or (isinstance(t_val, float) and pd.isna(t_val)):
+                    continue
+                t_str = str(t_val).strip()
+                if not t_str or t_str.lower() == "nan":
+                    continue
+                f_val = frame[flags_col].iloc[idx] if flags_col is not None else ""
+                f_str = "" if f_val is None or (isinstance(f_val, float) and pd.isna(f_val)) else str(f_val).strip()
+                n_val = frame[name_col].iloc[idx] if name_col is not None else ""
+                n_str = "" if n_val is None or (isinstance(n_val, float) and pd.isna(n_val)) else str(n_val).strip()
+                row_details.append((t_str, _split_flags([f_str]), n_str))
 
     entries: list[dict[str, str]] = []
-    for tier in dict.fromkeys(tiers):
-        label, meaning = NOMENCLATURE_TIERS.get(tier, ("", ""))
-        if meaning:
-            entries.append({"term": f"Tier {tier}", "label": label, "meaning": meaning})
-    for token in _split_flags(flags):
+    seen_tiers = list(dict.fromkeys(t for t, _, _ in row_details))
+    for tier in seen_tiers:
+        tier_rows = [(f, n) for t, f, n in row_details if t == tier]
+        if tier == "B":
+
+            def _is_row_withheld(flags: list[str], name: str) -> bool:
+                return bool(
+                    (nomenclature.FLAG_ALLELE_UNREPRESENTABLE in flags or "representation-limited" in flags)
+                    and nomenclature.FLAG_SEQUENCE_UNDETERMINED not in flags
+                    and (not name or "representation-limited" in name or "withheld" in name.lower())
+                )
+
+            has_withheld = any(_is_row_withheld(flags, name) for flags, name in tier_rows)
+            has_standard = any(not _is_row_withheld(flags, name) for flags, name in tier_rows)
+            if has_standard and has_withheld:
+                label_std, meaning_std = NOMENCLATURE_TIERS.get("B", ("", ""))
+                label_wh, meaning_wh = tier_presentation("B", [nomenclature.FLAG_ALLELE_UNREPRESENTABLE])
+                entries.append({"term": "Tier B", "label": label_std, "meaning": meaning_std})
+                entries.append({"term": "Tier B (name withheld)", "label": label_wh, "meaning": meaning_wh})
+            elif has_withheld:
+                label, meaning = tier_presentation("B", [nomenclature.FLAG_ALLELE_UNREPRESENTABLE])
+                entries.append({"term": "Tier B", "label": label, "meaning": meaning})
+            else:
+                label, meaning = NOMENCLATURE_TIERS.get("B", ("", ""))
+                entries.append({"term": "Tier B", "label": label, "meaning": meaning})
+        else:
+            label, meaning = NOMENCLATURE_TIERS.get(tier, ("", ""))
+            if meaning:
+                entries.append({"term": f"Tier {tier}", "label": label, "meaning": meaning})
+
+    has_any_withheld = any(
+        (nomenclature.FLAG_ALLELE_UNREPRESENTABLE in f or "representation-limited" in f)
+        and nomenclature.FLAG_SEQUENCE_UNDETERMINED not in f
+        and (not n or "representation-limited" in n or "withheld" in n.lower())
+        for _, f, n in row_details
+    )
+    for token in _split_flags(all_flags):
         # `""` rather than `None`, so the name is not rebound to a wider type than the
         # tier branch above gives it - and so an unrecognised token is skipped by the
         # same falsy test either way.
-        flag_meaning = NOMENCLATURE_FLAG_MEANINGS.get(token, "")
-        if flag_meaning:
-            entries.append({"term": token, "label": "", "meaning": flag_meaning})
+        token_meaning = flag_meaning(token, displayed_name=None if has_any_withheld else "named")
+        if token_meaning:
+            entries.append({"term": token, "label": "", "meaning": token_meaning})
     return entries
 
 

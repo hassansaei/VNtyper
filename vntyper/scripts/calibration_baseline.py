@@ -101,19 +101,21 @@ def _projection(rows: list[dict[str, object]], labels_by_key: Mapping[str, Label
         name = _row_field(row, "name")
         identity = _row_field(row, "canonical_identity")
         tier = _row_field(row, "tier")
-        if name is not None:
+        is_rep_limited = isinstance(name, str) and "representation-limited" in name
+        displayed_name = None if is_rep_limited else name
+        if identity is not None and label.truth_status == "control":
+            aggregate["control_findings"] += 1
+        if displayed_name is not None:
             aggregate["displayed"] += 1
-            if label.truth_status == "control":
-                aggregate["control_findings"] += 1
-            if name != label.expected_display_name:
+            if displayed_name != label.expected_display_name:
                 aggregate["wrong"] += 1
         if identity is not None and identity == label.expected_identity:
             aggregate["exact"] += 1
         if isinstance(tier, str):
             counts = per_tier.setdefault(tier, {"displayed": 0, "exact": 0, "wrong": 0})
-            if name is not None:
+            if displayed_name is not None:
                 counts["displayed"] += 1
-                if name != label.expected_display_name:
+                if displayed_name != label.expected_display_name:
                     counts["wrong"] += 1
             if identity is not None and identity == label.expected_identity:
                 counts["exact"] += 1

@@ -1405,6 +1405,157 @@ def test_nomenclature_legend_is_empty_for_a_run_that_named_nothing() -> None:
     assert rf.nomenclature_legend(pd.DataFrame(), pd.DataFrame()) == []
 
 
+def test_variant_identity_and_legend_explain_withheld_name_disposition() -> None:
+    """Withheld-name results emit disposition-aware tier label, reason, and flag explanations."""
+    row = {
+        "Nomenclature": "frameshift +1, representation-limited",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "allele-unrepresentable-in-vcf",
+        "Ambiguity_Interval": "",
+        "Repeat_Form": "",
+        "Nomenclature_Kestrel": "frameshift +1, representation-limited",
+        "Nomenclature_adVNTR": "",
+        "Nomenclature_Note": "Positional name withheld: allele molecular class cannot be represented in VCF; requires validation",
+    }
+    identity = rf.variant_identity(pd.DataFrame([row]))
+    assert identity is not None
+    assert identity["tier"] == "B"
+    assert identity["tier_label"] == "positional name withheld"
+    assert "positional name is withheld" in identity["tier_meaning"]
+    assert (
+        "Held below the corroborated tier because the allele molecular class cannot be represented in Kestrel's VCF shape"
+        in identity["tier_reason"]
+    )
+    assert identity["flags"][0]["token"] == "allele-unrepresentable-in-vcf"
+    assert "positional name is withheld" in identity["flags"][0]["meaning"]
+
+    legend = rf.nomenclature_legend(pd.DataFrame([row]))
+    assert legend[0]["term"] == "Tier B"
+    assert legend[0]["label"] == "positional name withheld"
+    assert "positional name is withheld" in legend[0]["meaning"]
+    assert legend[1]["term"] == "allele-unrepresentable-in-vcf"
+    assert "positional name is withheld" in legend[1]["meaning"]
+
+
+def test_nomenclature_legend_explains_both_tier_b_cases_in_mixed_report() -> None:
+    """When a report contains both ordinary and withheld-name Tier B results, legend explains both."""
+    ordinary_row = {
+        "Nomenclature": "59dupC",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "known-variant;position-ambiguous",
+    }
+    withheld_row = {
+        "Nomenclature": "frameshift +1, representation-limited",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "allele-unrepresentable-in-vcf",
+    }
+    legend = rf.nomenclature_legend(pd.DataFrame([ordinary_row, withheld_row]))
+    terms = [entry["term"] for entry in legend]
+    assert "Tier B" in terms
+    assert "Tier B (name withheld)" in terms
+    entry_std = next(e for e in legend if e["term"] == "Tier B")
+    entry_wh = next(e for e in legend if e["term"] == "Tier B (name withheld)")
+    assert entry_std["label"] == "qualified name"
+    assert entry_wh["label"] == "positional name withheld"
+
+
+def test_advntr_undetermined_call_is_not_labeled_representation_limited() -> None:
+    """Undetermined adVNTR calls (e.g. D27_2&I27_2_A_LEN2) remain Tier C allele undetermined."""
+    from vntyper.scripts.nomenclature import confidence_note, from_advntr, render
+
+    calls = from_advntr("D27_2&I27_2_A_LEN2")
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.tier == "C"
+    assert "sequence-undetermined" in call.flags
+    assert "allele-unrepresentable-in-vcf" not in call.flags
+    assert render(call) == "frameshift +1, allele undetermined"
+    assert confidence_note(call) == ""
+
+
+def test_legacy_named_delins_retains_qualified_name_presentation() -> None:
+    """Archived runs with explicit positional names (e.g. 55delinsAT) retain qualified name."""
+    legacy_row = {
+        "Nomenclature": "55delinsAT",
+        "Nomenclature_Tier": "B",
+        "Nomenclature_Flags": "allele-unrepresentable-in-vcf",
+    }
+    df = pd.DataFrame([legacy_row])
+    identity = rf.variant_identity(df)
+    assert identity is not None
+    assert identity["tier_label"] == "qualified name"
+    assert "positional name is withheld" not in identity["tier_meaning"]
+    assert "(positional name withheld)" not in identity["tier_reason"]
+    assert "allele molecular class cannot be represented in Kestrel's VCF shape" in identity["tier_reason"]
+
+    legend = rf.nomenclature_legend(df)
+    assert len(legend) == 2
+    assert legend[0]["term"] == "Tier B"
+    assert legend[0]["label"] == "qualified name"
+    assert "positional name is withheld" not in identity["flags"][0]["meaning"]
+    assert "positional name is withheld" not in legend[1]["meaning"]
+
+
+def test_already_selected_delins_withholds_name_before_equality_shortcut() -> None:
+    """When a call already has the delins name, refine still withholds it rather than returning early."""
+    from vntyper.scripts.nomenclature import Nomenclature, reconcile, render
+    from vntyper.scripts.nomenclature_bam import refine
+
+    bam_delins = Nomenclature(
+        name="55delinsAT",
+        event="delins",
+        unit="X",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=1,
+        source="kestrel_bam",
+    )
+    reconciled = reconcile(bam_delins)
+    refined = refine(reconciled, bam_delins)
+    assert refined.name is None
+    assert render(refined) == "frameshift +1, representation-limited"
+
+
+def test_bam_rescued_delins_clears_undetermined_and_labels_representation_limited() -> None:
+    """BAM rescue of delins clears sequence-undetermined flag and correctly formats in-frame alleles."""
+    from vntyper.scripts.nomenclature import Nomenclature, confidence_note, render
+    from vntyper.scripts.nomenclature_bam import refine
+
+    vcf = Nomenclature(
+        name=None,
+        event="delins",
+        unit="X",
+        tier="C",
+        flags=("sequence-undetermined",),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=1,
+        source="kestrel_vcf",
+    )
+    bam = Nomenclature(
+        name="54_55delinsTTTTT",
+        event="delins",
+        unit="X",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form=None,
+        net_length=3,
+        source="kestrel_bam",
+    )
+    refined = refine(vcf, bam)
+    assert refined.name is None
+    assert "sequence-undetermined" not in refined.flags
+    assert "allele-unrepresentable-in-vcf" in refined.flags
+    assert "representation-limited" in refined.flags
+    assert refined.tier == "B"
+    assert refined.internal_allele == "54_55delinsTTTTT"
+    assert render(refined) == "in-frame +3, representation-limited"
+    assert "positional name withheld" in confidence_note(refined)
+
+
 def test_every_flag_the_caller_can_set_is_explained() -> None:
     """The vocabulary is closed and declared in one place, so the key can be complete.
 

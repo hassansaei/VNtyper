@@ -295,6 +295,7 @@ def from_bam(
             repeat_form=named.repeat_form,
             net_length=named.net_length,
             source=named.source,
+            internal_allele=named.internal_allele or named.name,
         )
     return named
 
@@ -320,6 +321,42 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         return call
 
     if call.name is None:
+        if call.source == "kestrel_bam" and (call.event == "delins" or FLAG_ALLELE_UNREPRESENTABLE in call.flags):
+            # The allele was already resolved from BAM records, but its positional
+            # name was withheld due to representation limits (#313). A subsequent
+            # candidate must not overwrite it as if no allele were present.
+            call_allele = call.internal_allele or call.name
+            bam_allele = bam_call.internal_allele or bam_call.name
+            if call_allele and bam_allele:
+                if call_allele == bam_allele:
+                    return call
+                return Nomenclature(
+                    name=call.name,
+                    event=call.event,
+                    unit=call.unit,
+                    tier=call.tier,
+                    flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_CALLER_DISAGREEMENT})),
+                    ambiguity=call.ambiguity,
+                    repeat_form=call.repeat_form,
+                    net_length=call.net_length,
+                    source=call.source,
+                    internal_allele=call.internal_allele,
+                )
+            if bam_call.event == call.event and bam_call.net_length == call.net_length:
+                return call
+            return Nomenclature(
+                name=call.name,
+                event=call.event,
+                unit=call.unit,
+                tier=call.tier,
+                flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_CALLER_DISAGREEMENT})),
+                ambiguity=call.ambiguity,
+                repeat_form=call.repeat_form,
+                net_length=call.net_length,
+                source=call.source,
+                internal_allele=call.internal_allele,
+            )
+
         if FLAG_CALLER_DISAGREEMENT in call.flags and FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT in bam_call.flags:
             # There is no name here because two callers described different events,
             # which is a real conflict rather than a gap the BAM may fill. A thin
@@ -329,41 +366,72 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
             return call
         # The VCF had no allele to offer; the resolved haplotypes do. This is the
         # whole point of the rescue path -- it is where delins and the insG family
-        # come from.
+        # come from. When the molecular class is a delins, per owner decision #313 the
+        # positional name is withheld and representation-limited disposition emitted.
+        name = None if bam_call.event == "delins" else bam_call.name
+        flags = {*call.flags, *bam_call.flags}
+        if bam_call.event == "delins":
+            flags.add(FLAG_ALLELE_UNREPRESENTABLE)
+            flags.add("representation-limited")
+            flags.discard(FLAG_SEQUENCE_UNDETERMINED)
         return Nomenclature(
-            name=bam_call.name,
+            name=name,
             event=bam_call.event,
             unit=bam_call.unit,
             tier=bam_call.tier,
-            flags=tuple(sorted({*call.flags, *bam_call.flags})),
+            flags=tuple(sorted(flags)),
             ambiguity=bam_call.ambiguity,
             repeat_form=bam_call.repeat_form,
             net_length=bam_call.net_length,
             source="kestrel_bam",
+            internal_allele=bam_call.internal_allele or bam_call.name,
+        )
+
+    if bam_call.event == "delins":
+        # The VCF shape cannot hold this. Kestrel's `VariantType` has SNP, INSERTION
+        # and DELETION and nothing else, so whatever it wrote for this locus is the
+        # closest representable shape rather than the allele -- the haplotype
+        # records are the better evidence here even though they are the junior
+        # source everywhere else.
+        # Per owner decision #313: abstain with an explicit disposition.
+        # When the selected candidate's molecular class is one Kestrel cannot represent,
+        # the positional name is withheld and a representation-limited disposition is emitted.
+        if call.event == "delins":
+            call_allele = call.internal_allele or call.name
+            bam_allele = bam_call.internal_allele or bam_call.name
+            if call_allele and bam_allele and call_allele != bam_allele:
+                # Two conflicting delins alleles: preserve call and record caller disagreement
+                return Nomenclature(
+                    name=call.name,
+                    event=call.event,
+                    unit=call.unit,
+                    tier=call.tier,
+                    flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_CALLER_DISAGREEMENT})),
+                    ambiguity=call.ambiguity,
+                    repeat_form=call.repeat_form,
+                    net_length=call.net_length,
+                    source=call.source,
+                    internal_allele=call.internal_allele or call.name,
+                )
+        flags = {*call.flags, *bam_call.flags, FLAG_ALLELE_UNREPRESENTABLE, "representation-limited"}
+        flags.discard(FLAG_SEQUENCE_UNDETERMINED)
+        return Nomenclature(
+            name=None,
+            event=bam_call.event,
+            unit=bam_call.unit,
+            tier=bam_call.tier,
+            flags=tuple(sorted(flags)),
+            ambiguity=bam_call.ambiguity,
+            repeat_form=bam_call.repeat_form,
+            net_length=bam_call.net_length,
+            source="kestrel_bam",
+            internal_allele=bam_call.internal_allele or bam_call.name,
         )
 
     if bam_call.name == call.name:
         # Corroboration. Recorded as agreement, but tier promotion still belongs to
         # `reconcile`, which is the only place that sees the support quantity.
         return call
-
-    if bam_call.event == "delins" and call.event != "delins":
-        # The VCF shape cannot hold this. Kestrel's `VariantType` has SNP, INSERTION
-        # and DELETION and nothing else, so whatever it wrote for this locus is the
-        # closest representable shape rather than the allele -- the haplotype
-        # records are the better evidence here even though they are the junior
-        # source everywhere else.
-        return Nomenclature(
-            name=bam_call.name,
-            event=bam_call.event,
-            unit=bam_call.unit,
-            tier=bam_call.tier,
-            flags=tuple(sorted({*call.flags, *bam_call.flags, FLAG_ALLELE_UNREPRESENTABLE})),
-            ambiguity=bam_call.ambiguity,
-            repeat_form=bam_call.repeat_form,
-            net_length=bam_call.net_length,
-            source="kestrel_bam",
-        )
 
     # Disagreement: keep the VCF allele and say so, rather than silently preferring
     # either. The flag is what stops this reaching tier A.
@@ -377,6 +445,7 @@ def refine(call: Nomenclature, bam_call: Nomenclature | None) -> Nomenclature:
         repeat_form=call.repeat_form,
         net_length=call.net_length,
         source=call.source,
+        internal_allele=call.internal_allele or call.name,
     )
 
 
@@ -457,11 +526,14 @@ def merge_edits(edits: Iterable[Edit]) -> list[Edit]:
             if previous.start + previous.ref_span == edit.start:
                 ref_span = previous.ref_span + edit.ref_span
                 inserted = previous.inserted + edit.inserted
-                kind = "delins" if ref_span and inserted and ref_span != inserted else previous.kind
-                if ref_span and not inserted:
+                if ref_span and inserted:
+                    kind = "substitution" if ref_span == 1 and inserted == 1 else "delins"
+                elif ref_span and not inserted:
                     kind = "deletion"
                 elif inserted and not ref_span:
                     kind = "insertion"
+                else:
+                    kind = previous.kind
                 merged[-1] = Edit(kind, previous.start, ref_span, inserted, previous.bases + edit.bases)
                 continue
         merged.append(edit)

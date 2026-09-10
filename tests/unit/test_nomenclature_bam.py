@@ -27,6 +27,7 @@ from vntyper.scripts.nomenclature import (
     Nomenclature,
     load_nomenclature_config,
     pair_sequence,
+    render,
 )
 from vntyper.scripts.nomenclature_bam import (
     BamConsensus,
@@ -816,13 +817,97 @@ def test_agreement_leaves_the_call_alone() -> None:
 def test_a_delins_from_haplotype_records_overrides_a_shape_the_vcf_cannot_hold() -> None:
     """Kestrel's VariantType has SNP, INSERTION and DELETION and nothing else, so
     whatever it wrote for a delins locus is the closest representable shape rather
-    than the allele."""
+    than the allele. Per owner decision #313, positional naming is withheld with an
+    explicit representation-limited disposition."""
     vcf = _named("55_56insA", "insertion")
     refined = refine(vcf, _named("55delinsAT", "delins", "kestrel_bam"))
-    assert refined.name == "55delinsAT"
+    assert refined.name is None
+    assert render(refined) == "frameshift +1, representation-limited"
     assert "allele-unrepresentable-in-vcf" in refined.flags
 
 
 def test_silence_from_haplotype_records_changes_nothing() -> None:
     vcf = _named("59dupC", "duplication")
     assert refine(vcf, None) is vcf
+
+
+def test_subsequent_candidate_cannot_overwrite_withheld_delins_allele() -> None:
+    """A delins with withheld positional name must not be overwritten by later candidates."""
+    vcf = _named("55_56insA", "insertion")
+    delins_refined = refine(vcf, _named("55delinsAT", "delins", "kestrel_bam"))
+    assert delins_refined.name is None
+    assert delins_refined.event == "delins"
+
+    # Subsequent conflicting candidate arrives
+    second_candidate = _named("59dupC", "duplication", "kestrel_bam")
+    refined_again = refine(delins_refined, second_candidate)
+    assert refined_again.name is None
+    assert refined_again.event == "delins"
+    assert "caller-disagreement" in refined_again.flags
+    assert "allele-unrepresentable-in-vcf" in refined_again.flags
+
+
+def test_sequential_refinement_competing_delins_alleles_records_disagreement() -> None:
+    """Sequential refinement receiving different delins alleles records caller-disagreement."""
+    vcf = _named("55_56insA", "insertion")
+    # First BAM delins allele
+    delins_first = refine(vcf, _named("55delinsAT", "delins", "kestrel_bam"))
+    assert delins_first.name is None
+    assert "caller-disagreement" not in delins_first.flags
+
+    # Competing second delins allele with the same net length
+    delins_competing = _named("58delinsGT", "delins", "kestrel_bam")
+    refined_competing = refine(delins_first, delins_competing)
+    assert refined_competing.name is None
+    assert refined_competing.event == "delins"
+    assert "caller-disagreement" in refined_competing.flags
+    assert "allele-unrepresentable-in-vcf" in refined_competing.flags
+
+
+def test_sequential_refinement_identical_delins_alleles_preserves_agreement() -> None:
+    """Sequential refinement receiving the same delins allele preserves agreement without disagreement flag."""
+    vcf = _named("55_56insA", "insertion")
+    delins_first = refine(vcf, _named("55delinsAT", "delins", "kestrel_bam"))
+    assert delins_first.name is None
+
+    # Corroborating second candidate with identical allele
+    delins_identical = _named("55delinsAT", "delins", "kestrel_bam")
+    refined_same = refine(delins_first, delins_identical)
+    assert refined_same.name is None
+    assert refined_same.event == "delins"
+    assert "caller-disagreement" not in refined_same.flags
+
+
+def test_refine_preserves_selected_delins_when_bam_reports_different_event() -> None:
+    """When the existing call is a delins but BAM reports another event, preserve the delins and flag disagreement."""
+    call = Nomenclature(
+        name="56delinsAT",
+        event="delins",
+        unit="2",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form="canonical",
+        net_length=1,
+        source="kestrel_vcf",
+        internal_allele="56delinsAT",
+    )
+    bam_call = Nomenclature(
+        name="55_56insTTT",
+        event="insertion",
+        unit="2",
+        tier="B",
+        flags=(),
+        ambiguity=None,
+        repeat_form="canonical",
+        net_length=3,
+        source="kestrel_bam",
+        internal_allele="55_56insTTT",
+    )
+    refined = refine(call, bam_call)
+    # Must preserve call's net_length (+1 frameshift), name, and event, and record caller-disagreement
+    assert refined.name == "56delinsAT"
+    assert refined.event == "delins"
+    assert refined.net_length == 1
+    assert "caller-disagreement" in refined.flags
+    assert refined.source == "kestrel_vcf"

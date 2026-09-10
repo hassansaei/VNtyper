@@ -164,3 +164,276 @@ def test_hmac_verification(tmp_path):
 
     result_wrong_key = verify_report_integrity(tmp_path, secret_key="wrong-key")
     assert result_wrong_key["valid"] is False
+
+
+def test_canonical_hashing_preserves_trailing_tabs(tmp_path):
+    """Trailing tabs in TSV files represent empty fields and must not be stripped."""
+    tsv_with_tabs = b"col1\tcol2\tcol3\nval1\tval2\t\n"
+    tsv_without_tabs = b"col1\tcol2\tcol3\nval1\tval2\n"
+
+    from vntyper.scripts.report_integrity import _hash_file_content
+
+    hash_with_tabs = _hash_file_content(tsv_with_tabs, "test.tsv")
+    hash_without_tabs = _hash_file_content(tsv_without_tabs, "test.tsv")
+    assert hash_with_tabs != hash_without_tabs
+
+
+def test_multistage_decision_files_included(tmp_path):
+    """Optional adVNTR and provenance files are hashed into the decision digest when present."""
+    kestrel_dir = tmp_path / "kestrel"
+    kestrel_dir.mkdir()
+    (kestrel_dir / "kestrel_result.tsv").write_text("kestrel content\n")
+
+    cov_dir = tmp_path / "coverage"
+    cov_dir.mkdir()
+    (cov_dir / "coverage_summary.tsv").write_text("coverage content\n")
+
+    advntr_dir = tmp_path / "advntr"
+    advntr_dir.mkdir()
+    (advntr_dir / "output_adVNTR_result.tsv").write_text("advntr content\n")
+    (advntr_dir / "cross_match_results.tsv").write_text("cross match content\n")
+
+    prov_dir = tmp_path / "provenance"
+    prov_dir.mkdir()
+    (prov_dir / "decision_profile.json").write_text('{"profile": "v1"}\n')
+
+    summary = {
+        "version": "2.0.26",
+        "sample_name": "sample1",
+        "decision_profile_id": "profile1",
+        "decision_profile_sha256": "0" * 64,
+    }
+
+    anchor_pipeline_summary(summary, tmp_path)
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is True
+
+    # Tamper with adVNTR cross_match
+    (advntr_dir / "cross_match_results.tsv").write_text("tampered cross match\n")
+    result_tampered = verify_report_integrity(tmp_path)
+    assert result_tampered["valid"] is False
+    assert result_tampered["error"] == "decision_files_digest mismatch"
+
+
+def test_summary_body_tamper_detected(tmp_path):
+    """Tampering with summary content (e.g. sample_name or steps) is caught by pre_anchor_summary_digest."""
+    kestrel_file = tmp_path / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\n")
+
+    cov_file = tmp_path / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    summary = {
+        "version": "2.0.26",
+        "sample_name": "patient_001",
+        "steps": [{"step": "kestrel", "status": "completed"}],
+    }
+
+    anchor_pipeline_summary(summary, tmp_path)
+    # Modify sample_name in summary
+    summary["sample_name"] = "patient_tampered"
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is False
+    assert "tampered" in str(result["error"])
+
+
+def test_verify_legacy_v1_archive_directory(tmp_path):
+    """Legacy v1.0 archives without pre_anchor_summary_digest and with 7-field payload verify successfully."""
+    import hashlib
+
+    from vntyper.scripts.report_integrity import _compute_dir_decision_digest_v1
+
+    kestrel_file = tmp_path / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\r\n")
+    cov_file = tmp_path / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    decision_digest = _compute_dir_decision_digest_v1(tmp_path)
+
+    run_id = "legacy-run-123"
+    version = "1.0"
+    tool_version = "2.0.26"
+    sample_name = "sample_legacy"
+    decision_profile_id = "profile1"
+    decision_profile_digest = "digest1"
+
+    payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_digest}:{decision_profile_id}:{decision_profile_digest}"
+    integrity_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    summary = {
+        "version": tool_version,
+        "sample_name": sample_name,
+        "decision_profile_id": decision_profile_id,
+        "decision_profile_digest": decision_profile_digest,
+        "report_integrity": {
+            "report_integrity_version": "1.0",
+            "run_id": run_id,
+            "decision_files_digest": decision_digest,
+            "report_integrity_digest": integrity_digest,
+        },
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is True
+    assert result["run_id"] == run_id
+    assert result["decision_files_digest"] == decision_digest
+
+    # Tampering with file in v1.0 fails
+    kestrel_file.write_text("tampered")
+    result_tampered = verify_report_integrity(tmp_path)
+    assert result_tampered["valid"] is False
+    assert result_tampered["error"] == "decision_files_digest mismatch"
+
+
+def test_verify_legacy_v1_zip_archive(tmp_path):
+    """Legacy v1.0 zip archives verify correctly."""
+    import hashlib
+
+    from vntyper.scripts.report_integrity import _compute_dir_decision_digest_v1
+
+    base_dir = tmp_path / "run_dir"
+    base_dir.mkdir()
+    kestrel_file = base_dir / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\n")
+    cov_file = base_dir / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    decision_digest = _compute_dir_decision_digest_v1(base_dir)
+
+    run_id = "legacy-zip-run"
+    version = "1.0"
+    tool_version = "2.0.26"
+    sample_name = "sample_legacy_zip"
+    payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_digest}::"
+    integrity_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    summary = {
+        "version": tool_version,
+        "sample_name": sample_name,
+        "report_integrity": {
+            "report_integrity_version": "1.0",
+            "run_id": run_id,
+            "decision_files_digest": decision_digest,
+            "report_integrity_digest": integrity_digest,
+        },
+    }
+    summary_file = base_dir / "pipeline_summary.json"
+    summary_file.write_text(json.dumps(summary))
+
+    zip_path = tmp_path / "legacy.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.write(kestrel_file, "run_dir/kestrel_result.tsv")
+        zf.write(cov_file, "run_dir/coverage_summary.tsv")
+        zf.write(summary_file, "run_dir/pipeline_summary.json")
+
+    result = verify_report_integrity(zip_path)
+    assert result["valid"] is True
+
+
+def test_verify_unsupported_version(tmp_path):
+    """An unknown integrity version returns an informative error."""
+    summary = {
+        "version": "2.0.26",
+        "sample_name": "sample1",
+        "report_integrity": {
+            "report_integrity_version": "99.0",
+            "run_id": "test",
+            "decision_files_digest": "0" * 64,
+            "report_integrity_digest": "0" * 64,
+        },
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is False
+    assert "unsupported report integrity version" in result["error"]
+
+
+def test_verify_legacy_v1_preserves_empty_profile_digest_when_sha256_populated(tmp_path):
+    """In base revision v1 anchors, only decision_profile_digest was read.
+
+    When production summaries populated decision_profile_sha256 instead,
+    the v1 anchor payload used the empty string for the 7th field. Verification
+    must preserve this exact contract.
+    """
+    import hashlib
+
+    from vntyper.scripts.report_integrity import _compute_dir_decision_digest_v1
+
+    kestrel_file = tmp_path / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\n")
+    cov_file = tmp_path / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    decision_digest = _compute_dir_decision_digest_v1(tmp_path)
+    run_id = "v1-run-sha256"
+    version = "1.0"
+    tool_version = "2.0.33"
+    sample_name = "sample_sha"
+    decision_profile_id = "profile1"
+
+    # 7th field was empty string because decision_profile_digest was absent
+    payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_digest}:{decision_profile_id}:"
+    integrity_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    summary = {
+        "version": tool_version,
+        "sample_name": sample_name,
+        "decision_profile_id": decision_profile_id,
+        "decision_profile_sha256": "abcdef" * 10,
+        "report_integrity": {
+            "report_integrity_version": "1.0",
+            "run_id": run_id,
+            "decision_files_digest": decision_digest,
+            "report_integrity_digest": integrity_digest,
+        },
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is True
+
+
+def test_verify_legacy_v1_preserves_null_sample_name(tmp_path):
+    """In base revision v1 anchors, sample_name: null serialized as 'None'.
+
+    Verification must preserve this exact contract rather than normalizing to empty string.
+    """
+    import hashlib
+
+    from vntyper.scripts.report_integrity import _compute_dir_decision_digest_v1
+
+    kestrel_file = tmp_path / "kestrel_result.tsv"
+    kestrel_file.write_text("kestrel content\n")
+    cov_file = tmp_path / "coverage_summary.tsv"
+    cov_file.write_text("coverage content\n")
+
+    decision_digest = _compute_dir_decision_digest_v1(tmp_path)
+    run_id = "v1-run-null-sample"
+    version = "1.0"
+    tool_version = "2.0.33"
+    sample_name = None
+    decision_profile_id = "profile1"
+
+    payload = f"{run_id}:{version}:{tool_version}:{sample_name}:{decision_digest}:{decision_profile_id}:"
+    integrity_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    summary = {
+        "version": tool_version,
+        "sample_name": sample_name,
+        "decision_profile_id": decision_profile_id,
+        "report_integrity": {
+            "report_integrity_version": "1.0",
+            "run_id": run_id,
+            "decision_files_digest": decision_digest,
+            "report_integrity_digest": integrity_digest,
+        },
+    }
+    (tmp_path / "pipeline_summary.json").write_text(json.dumps(summary))
+
+    result = verify_report_integrity(tmp_path)
+    assert result["valid"] is True

@@ -567,6 +567,9 @@ class Nomenclature:
         repeat_form: ``53C[7]>53C[8]``, or ``None`` outside a detectable tract.
         net_length: Change in length, e.g. ``+1`` for a duplication.
         source: ``kestrel_vcf`` | ``kestrel_bam`` | ``advntr``.
+        internal_allele: Preserved allele identity when positional name is withheld
+            due to representation limits (#313), allowing sequential refinement to
+            detect agreement vs disagreement.
     """
 
     name: str | None
@@ -578,6 +581,7 @@ class Nomenclature:
     repeat_form: str | None
     net_length: int
     source: str
+    internal_allele: str | None = None
 
 
 def _undetermined(event: str, net_length: int, source: str, flags: tuple[str, ...]) -> Nomenclature:
@@ -853,6 +857,16 @@ def confidence_note(
         str: The note, or ``""`` when there is no name to qualify.
     """
     if not call.name:
+        if (
+            call.tier != "C"
+            and (FLAG_ALLELE_UNREPRESENTABLE in call.flags or "representation-limited" in call.flags)
+            and (
+                FLAG_SEQUENCE_UNDETERMINED not in call.flags
+                or call.internal_allele is not None
+                or call.source == "kestrel_bam"
+            )
+        ):
+            return "positional name withheld: allele molecular class cannot be represented in VCF; requires validation"
         return ""
     known_variants = decision_config.known_variants if decision_config is not None else KNOWN_VARIANTS
     citation = known_variants.get(call.name)
@@ -888,10 +902,26 @@ def render(call: Nomenclature) -> str:
     # No name could be computed at all. A net length change of zero is not a
     # frameshift, so saying "frameshift +0" would state something untrue about a
     # locus we know nothing about.
+    if (
+        call.tier != "C"
+        and (FLAG_ALLELE_UNREPRESENTABLE in call.flags or "representation-limited" in call.flags)
+        and (
+            FLAG_SEQUENCE_UNDETERMINED not in call.flags
+            or call.internal_allele is not None
+            or call.source == "kestrel_bam"
+        )
+    ):
+        if call.net_length == 0:
+            return "representation-limited"
+        sign = "+" if call.net_length > 0 else "-"
+        kind = "in-frame" if call.net_length % 3 == 0 else "frameshift"
+        return f"{kind} {sign}{abs(call.net_length)}, representation-limited"
+
     if call.net_length == 0:
         return "allele undetermined"
     sign = "+" if call.net_length > 0 else "-"
-    return f"frameshift {sign}{abs(call.net_length)}, allele undetermined"
+    kind = "in-frame" if call.net_length % 3 == 0 else "frameshift"
+    return f"{kind} {sign}{abs(call.net_length)}, allele undetermined"
 
 
 _ADVNTR_STATE = re.compile(r"^(?P<kind>[ID])(?P<pos>\d+)_(?P<ru>\d+)(?:_(?P<base>[ACGT])_LEN(?P<length>\d+))?$")

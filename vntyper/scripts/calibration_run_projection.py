@@ -272,3 +272,46 @@ def _support(value: object, source: str) -> int | float:
     if number < 0:
         raise ValueError(f"calibration {source} baseline support must be non-negative")
     return number
+
+
+def rendered_identity_projection(
+    baseline: Mapping[str, object], selected_identity: str | None
+) -> tuple[str | None, str | None]:
+    """Look up a selected identity in the closed non-feature rendering map.
+
+    Args:
+        baseline: Baseline row dictionary containing 'identity_projection'.
+        selected_identity: Selected canonical identity string, or None.
+
+    Returns:
+        Tuple of (displayed_name, tier).
+
+    Raises:
+        ValueError: If baseline identity projection is malformed or selected identity is missing.
+    """
+    raw_projection = baseline.get("identity_projection")
+    if not isinstance(raw_projection, Mapping):
+        raise ValueError("baseline identity projection must be an object")
+    for identity, raw in raw_projection.items():
+        if not isinstance(identity, str) or not identity:
+            raise ValueError("calibration baseline identity projection keys must be non-empty strings")
+        if not isinstance(raw, Mapping):
+            raise ValueError("baseline identity rendering must be an object")
+        if set(raw) != {"name", "tier"}:
+            raise ValueError("calibration baseline identity rendering fields differ")
+        if not isinstance(raw["name"], str) or not raw["name"]:
+            raise ValueError("calibration baseline identity rendering name must be non-empty")
+        if raw["tier"] is not None and (not isinstance(raw["tier"], str) or not raw["tier"]):
+            raise ValueError("calibration baseline identity rendering tier must be non-empty or null")
+    if selected_identity is None:
+        return None, None
+    selected = raw_projection.get(selected_identity)
+    if selected is None:
+        raise ValueError("calibration selected identity is absent from the closed baseline rendering projection")
+    if not isinstance(selected, Mapping):
+        raise ValueError("selected baseline identity rendering must be an object")
+    name = selected["name"]
+    tier = selected["tier"]
+    assert isinstance(name, str)
+    assert tier is None or isinstance(tier, str)
+    return name, tier
