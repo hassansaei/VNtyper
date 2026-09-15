@@ -214,12 +214,12 @@ def _decode_capture(path: Path, key: str) -> KestrelCapture:
     """Decode one complete capture, naming the sample whose evidence is unusable."""
     try:
         raw = read_regular_path(path)
-    except (OSError, ValueError) as error:
-        raise ValueError(f"cutoff optimize capture for {key} is missing, unsafe, or unreadable") from error
+    except (OSError, ValueError):
+        _fail(f"cutoff optimize capture for {key} is missing, unsafe, or unreadable")
     try:
         return decode_kestrel_capture(load_strict_json_object(raw))
-    except ValueError as error:
-        raise ValueError(f"cutoff optimize capture for {key} is not strict JSON or not a complete capture") from error
+    except ValueError:
+        _fail(f"cutoff optimize capture for {key} is not strict JSON or not a complete capture")
 
 
 def _capture_baseline(captures: Mapping[str, KestrelCapture]) -> CallerPolicyValues:

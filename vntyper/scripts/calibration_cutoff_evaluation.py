@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NoReturn
 
 from vntyper.scripts.calibration_caller_metrics import (
     CallerObservation,
@@ -22,6 +23,13 @@ from vntyper.scripts.calibration_cutoff_selection import (
     cutoff_counts_document,
     select_cutoff_policy,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _fail(message: str) -> NoReturn:
+    logger.error(message)
+    raise ValueError(message)
 
 
 def _selection_document(selection: CutoffSelection) -> dict[str, Any]:
@@ -48,14 +56,14 @@ def _bound_arms(
     arms: Mapping[str, Sequence[CallerObservation]], baseline_id: str
 ) -> dict[str, tuple[CallerObservation, ...]]:
     if not isinstance(arms, Mapping) or baseline_id not in arms:
-        raise ValueError("cutoff evaluation requires an explicit baseline arm")
+        _fail("cutoff evaluation requires an explicit baseline arm")
     if any(not isinstance(name, str) or not name or name.strip() != name for name in arms):
-        raise ValueError("cutoff evaluation policy IDs must be nonempty trimmed strings")
+        _fail("cutoff evaluation policy IDs must be nonempty trimmed strings")
     validated = {name: validate_caller_observations(tuple(rows)) for name, rows in arms.items()}
     reference = tuple((r.key, r.group_key, r.truth_positive, r.truth_variants) for r in validated[baseline_id])
     for rows in validated.values():
         if tuple((r.key, r.group_key, r.truth_positive, r.truth_variants) for r in rows) != reference:
-            raise ValueError("cutoff evaluation requires complete identical specimen, group and truth rosters")
+            _fail("cutoff evaluation requires complete identical specimen, group and truth rosters")
     return validated
 
 

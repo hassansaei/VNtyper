@@ -127,7 +127,7 @@ def _index(axis: AxisBreakpoints, candidate: object) -> int:
     if not isinstance(candidate, CutoffCandidate):
         _fail("cutoff axis curves require CutoffCandidate values")
     suffix = candidate.candidate_id.removeprefix(f"{axis.axis}-")
-    if suffix == candidate.candidate_id or len(suffix) != _ID_DIGITS or not suffix.isdigit():
+    if suffix == candidate.candidate_id or len(suffix) < _ID_DIGITS or not suffix.isdigit():
         _fail(f"cutoff candidate {candidate.candidate_id} is not a breakpoint of axis {axis.axis}")
     position = int(suffix)
     if position >= len(axis.values):

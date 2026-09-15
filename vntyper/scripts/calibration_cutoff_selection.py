@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from fractions import Fraction
+from typing import NoReturn
 
 from vntyper.scripts.calibration_caller_metrics import CallerObservation, validate_caller_observations
+
+logger = logging.getLogger(__name__)
+
+
+def _fail(message: str) -> NoReturn:
+    logger.error(message)
+    raise ValueError(message)
+
 
 # Each objective names the exact rate it maximizes; every rate is an exact Fraction.
 _OBJECTIVE_RATES: dict[str, str] = {
@@ -59,14 +69,14 @@ class SearchSpec:
 
     def __post_init__(self) -> None:
         if not isinstance(self.objective, str) or self.objective not in _OBJECTIVE_RATES:
-            raise ValueError("unsupported cutoff search objective")
+            _fail("unsupported cutoff search objective")
         for value in (self.min_sensitivity, self.min_specificity):
             if value is not None and (
                 type(value) not in {int, float} or not 0 <= value <= 1 or not math.isfinite(value)
             ):
-                raise ValueError("cutoff search minimum rates must be finite fractions in [0,1]")
+                _fail("cutoff search minimum rates must be finite fractions in [0,1]")
         if self.objective == "max-sensitivity-at-specificity" and self.min_specificity is None:
-            raise ValueError("cutoff search objective max-sensitivity-at-specificity requires min_specificity")
+            _fail("cutoff search objective max-sensitivity-at-specificity requires min_specificity")
 
 
 @dataclass(frozen=True)
@@ -173,7 +183,7 @@ def cutoff_counts_document(counts: CutoffCounts) -> dict[str, int | float | None
 def _training_rows(rows: Sequence[CallerObservation], keys: set[str]) -> tuple[CallerObservation, ...]:
     selected = tuple(row for row in rows if row.key in keys)
     if len(selected) != len(keys) or {row.key for row in selected} != keys:
-        raise ValueError("cutoff training roster is missing or duplicated in an arm")
+        _fail("cutoff training roster is missing or duplicated in an arm")
     return validate_caller_observations(selected) if selected else ()
 
 
@@ -204,18 +214,18 @@ def select_cutoff_policy(
             bindings, absent baseline or invalid constraints.
     """
     if not isinstance(spec, SearchSpec):
-        raise ValueError("cutoff selection requires a typed SearchSpec")
+        _fail("cutoff selection requires a typed SearchSpec")
     spec.__post_init__()
     if (
         not isinstance(arms, Mapping)
         or baseline_id not in arms
         or any(not isinstance(name, str) or not name for name in arms)
     ):
-        raise ValueError("cutoff selection requires named candidates and an explicit baseline")
+        _fail("cutoff selection requires named candidates and an explicit baseline")
     if any(not isinstance(key, str) or not key for key in training_keys) or len(set(training_keys)) != len(
         training_keys
     ):
-        raise ValueError("cutoff training keys must be unique nonempty strings")
+        _fail("cutoff training keys must be unique nonempty strings")
     keys = set(training_keys)
     baseline_rows = _training_rows(arms[baseline_id], keys)
     baseline = cutoff_counts(baseline_rows)
@@ -226,7 +236,7 @@ def select_cutoff_policy(
     for name, observations in arms.items():
         rows = _training_rows(observations, keys)
         if tuple((r.key, r.group_key, r.truth_positive, r.truth_variants) for r in rows) != identity:
-            raise ValueError("cutoff training truth and group identities differ across arms")
+            _fail("cutoff training truth and group identities differ across arms")
         counts = cutoff_counts(rows)
         rates = _rates(counts)
         sensitivity, specificity = rates["sensitivity"], rates["specificity"]

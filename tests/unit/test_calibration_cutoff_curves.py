@@ -446,3 +446,21 @@ def test_joint_operating_point_is_frozen() -> None:
     assert isinstance(point, JointOperatingPoint)
     with pytest.raises(AttributeError):
         point.label = "other"  # type: ignore[misc]
+
+
+def test_candidate_with_five_digit_index_is_accepted_by_curve() -> None:
+    many_values = tuple(sorted([0.001 + i * 1e-6 for i in range(10000)] + [BASELINE_GG]))
+    base_idx = many_values.index(BASELINE_GG)
+    breakpoints = axis(many_values)
+    c_base = CutoffCandidate(f"{GG_GATE_INDEPENDENT}-{base_idx:04d}", policy(), MappingProxyType({}))
+    c_10000 = CutoffCandidate(
+        f"{GG_GATE_INDEPENDENT}-10000",
+        policy({GG: many_values[10000]}),
+        MappingProxyType({GG: many_values[10000]}),
+    )
+    arms = {
+        c_base.candidate_id: observations({"p1": True, "p2": True, "n1": False, "n2": False}),
+        c_10000.candidate_id: observations({"p1": True, "p2": True, "n1": False, "n2": False}),
+    }
+    result = build_axis_curve(breakpoints, (c_base, c_10000), arms, comparison=">=", phase="policy-selection")
+    assert len(result.curves.points) == 2
