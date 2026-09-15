@@ -215,3 +215,25 @@ def test_unrepresentable_integer_input_has_the_same_validation_error_as_infinity
     rows = (m.LengthObservation("sample-1", "group-1", "nominal", 10**1000, 100, 100),)
     with pytest.raises(ValueError, match="truth"):
         m.calculate_length_metrics(rows)
+
+
+def test_twenty_percent_improvement_is_not_rounded_below_its_gate():
+    m = import_module("vntyper.scripts.calibration_length_metrics")
+    rows = (m.LengthObservation("sample-1", "group-1", "nominal", 100, 110, 112.5),)
+    assert m.calculate_length_metrics(rows).relative_mae_improvement == 0.2
+
+
+def test_tolerance_can_follow_a_separately_frozen_study_contract():
+    m = import_module("vntyper.scripts.calibration_length_metrics")
+    rows = (m.LengthObservation("sample-1", "group-1", "nominal", 100, 108, 112),)
+    result = m.calculate_length_metrics(rows, tolerance_absolute=5, tolerance_relative=0.05)
+    assert result.within_tolerance == 0
+    assert result.availability == 1
+
+
+@pytest.mark.parametrize("absolute,relative", [(True, 0.1), (0, 0.1), (10, float("nan")), (10, 2)])
+def test_invalid_tolerance_limits_are_rejected(absolute, relative):
+    m = import_module("vntyper.scripts.calibration_length_metrics")
+    rows = (m.LengthObservation("sample-1", "group-1", "nominal", 100, 108, 112),)
+    with pytest.raises(ValueError, match="tolerance"):
+        m.calculate_length_metrics(rows, tolerance_absolute=absolute, tolerance_relative=relative)

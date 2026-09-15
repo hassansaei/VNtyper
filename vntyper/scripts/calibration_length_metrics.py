@@ -104,11 +104,15 @@ def one_sided_binomial_lower(successes: int, total: int, *, confidence: Fraction
     return clopper_pearson_interval(successes, total, confidence=2 * confidence - 1).lower
 
 
-def calculate_length_metrics(rows: Sequence[LengthObservation]) -> LengthMetrics:
+def calculate_length_metrics(
+    rows: Sequence[LengthObservation], *, tolerance_absolute: float = 10.0, tolerance_relative: float = 0.1
+) -> LengthMetrics:
     """Measure fixed predictions without fitting or dropping unavailable cases.
 
     Args:
         rows: Predeclared independent primary observations with exact total truth.
+        tolerance_absolute: Frozen positive absolute error tolerance in repeat units.
+        tolerance_relative: Frozen positive relative tolerance, at most one.
 
     Returns:
         Paired error metrics and eligible-population proportion bounds. Undefined
@@ -117,13 +121,20 @@ def calculate_length_metrics(rows: Sequence[LengthObservation]) -> LengthMetrics
     Raises:
         ValueError: If observations are empty, duplicated or numerically invalid.
     """
+    _positive(tolerance_absolute, "tolerance_absolute")
+    _positive(tolerance_relative, "tolerance_relative")
+    if tolerance_relative > 1:
+        _fail("length tolerance_relative must not exceed one")
     observations = _observations(rows)
     count = len(observations)
     paired = tuple(row for row in observations if row.prediction is not None)
     available = len(paired)
     errors = [row.prediction - row.truth for row in paired if row.prediction is not None]
     absolute = [abs(error) for error in errors]
-    within = sum(abs(error) <= max(10.0, 0.1 * row.truth) for row, error in zip(paired, errors, strict=True))
+    within = sum(
+        abs(error) <= max(tolerance_absolute, tolerance_relative * row.truth)
+        for row, error in zip(paired, errors, strict=True)
+    )
     mae = bias = baseline_mae = relative = rmse = med = r_squared = None
     if available:
         mae = math.fsum(error / available for error in absolute)
@@ -132,7 +143,7 @@ def calculate_length_metrics(rows: Sequence[LengthObservation]) -> LengthMetrics
         rmse = math.hypot(*(error / math.sqrt(available) for error in errors))
         baseline_mae = math.fsum(abs(row.baseline_prediction - row.truth) / available for row in paired)
         if baseline_mae > 0:
-            relative = 1 - mae / baseline_mae
+            relative = (baseline_mae - mae) / baseline_mae
             if not math.isfinite(relative):
                 relative = None
         mean_truth = math.fsum(row.truth / available for row in paired)
