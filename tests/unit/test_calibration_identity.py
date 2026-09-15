@@ -10,6 +10,7 @@ import pytest
 from tests.unit.test_calibration_intake_contract import synthetic_intake
 from vntyper.scripts.calibration_intake_contract import decode_intake
 from vntyper.scripts.calibration_read_fingerprints import LogicalReadFingerprint
+from vntyper.scripts.canonical_json import canonical_sha256
 
 pytestmark = pytest.mark.unit
 
@@ -71,6 +72,37 @@ def audit(raw, fingerprints=None, priority=("synthetic-preprocessing-v1",)):
         fingerprints_for(raw) if fingerprints is None else fingerprints,
         preprocessing_priority=priority,
     )
+
+
+def test_public_audit_document_binds_intake_and_returns_independent_json_content():
+    m = import_module("vntyper.scripts.calibration_identity")
+    raw = intake_for()
+    result = audit(raw)
+    document = m.identity_audit_document(decode_intake(raw), result)
+    assert canonical_sha256(document) == result.sha256
+    assert document["schema_version"] == "calibration-identity-audit-v1"
+    assert document["intake_sha256"] == decode_intake(raw).sha256
+    assert document["primary_artifact_by_specimen"] == {"sample-0": "artifact-0", "sample-1": "artifact-1"}
+    document["fingerprints"]["artifact-0"]["reasons"].append("tampered")
+    assert result.fingerprints["artifact-0"].logical.reasons == ()
+    assert m.identity_audit_document(decode_intake(raw), result)["fingerprints"]["artifact-0"]["reasons"] == []
+
+
+@pytest.mark.parametrize("change", ["digest", "representative", "intake", "type"])
+def test_public_audit_document_rejects_forged_or_stale_decisions(change):
+    m = import_module("vntyper.scripts.calibration_identity")
+    raw = intake_for()
+    result = audit(raw)
+    if change == "digest":
+        result = replace(result, sha256="0" * 64)
+    elif change == "representative":
+        result = replace(result, primary_artifact_by_specimen={"sample-0": "artifact-1"})
+    elif change == "intake":
+        raw["artifacts"][0]["path"] = "/synthetic/changed.bam"
+    else:
+        result = None
+    with pytest.raises(ValueError, match="identity audit"):
+        m.identity_audit_document(decode_intake(raw), result)
 
 
 def test_distinct_read_sets_do_not_override_explicit_biological_linkage():

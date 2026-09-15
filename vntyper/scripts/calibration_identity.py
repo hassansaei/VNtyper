@@ -362,6 +362,35 @@ def resolve_identities(
     return replace(audit, sha256=canonical_sha256(_audit_document(audit)))
 
 
+def _validated_audit(declaration: IntakeDeclaration, audit: IdentityAudit) -> tuple[IntakeDeclaration, IdentityAudit]:
+    if not isinstance(audit, IdentityAudit):
+        _fail("identity audit must be an IdentityAudit")
+    declaration = _validated_intake(declaration)
+    expected = resolve_identities(declaration, audit.fingerprints, preprocessing_priority=audit.preprocessing_priority)
+    if expected != audit:
+        _fail("identity audit differs from its canonical content or intake")
+    return declaration, expected
+
+
+def identity_audit_document(declaration: IntakeDeclaration, audit: IdentityAudit) -> dict[str, object]:
+    """Project a recomputed identity audit to canonicalizable local artifact content.
+
+    Args:
+        declaration: Exact normalized intake bound by the audit.
+        audit: Complete audit with frozen fingerprints and representative priority.
+
+    Returns:
+        Independent JSON-compatible content whose canonical digest equals the
+        audit digest. This contains local specimen keys and is not a portable
+        model export.
+
+    Raises:
+        ValueError: If the audit is forged, stale, or inconsistent with the intake.
+    """
+    _, expected = _validated_audit(declaration, audit)
+    return _audit_document(expected)
+
+
 def build_partition_members(declaration: IntakeDeclaration, audit: IdentityAudit) -> tuple[PartitionMember, ...]:
     """Project audited input artifacts to role members while keeping artifact keys.
 
@@ -378,12 +407,7 @@ def build_partition_members(declaration: IntakeDeclaration, audit: IdentityAudit
     Raises:
         ValueError: If the audit is forged, stale, or inconsistent with the intake.
     """
-    if not isinstance(audit, IdentityAudit):
-        _fail("identity audit must be an IdentityAudit")
-    declaration = _validated_intake(declaration)
-    expected = resolve_identities(declaration, audit.fingerprints, preprocessing_priority=audit.preprocessing_priority)
-    if expected != audit:
-        _fail("identity audit differs from its canonical content or intake")
+    declaration, expected = _validated_audit(declaration, audit)
     assignments = {row.specimen_key: row for row in declaration.assignments}
     return tuple(
         PartitionMember(
