@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import builtins
+
 import pytest
 
 from vntyper.scripts.calibration_standard_length import (
@@ -69,6 +71,23 @@ def test_fit_standard_model_uses_training_only_bayesian_result(monkeypatch) -> N
     assert model.intercept == 10
     assert model.coefficients[0] == 50
     assert model.count_convention == "source-reported"
+
+
+def test_fit_reports_missing_optional_sklearn_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_import = builtins.__import__
+
+    def reject_sklearn(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.startswith("sklearn"):
+            raise ImportError("synthetic missing training dependency")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", reject_sklearn)
+    with pytest.raises(RuntimeError, match="optional scikit-learn training dependency"):
+        fit_standard_length_model(
+            (_measurement(10), _measurement(20)),
+            (60, 110),
+            count_convention="source-reported",
+        )
 
 
 def test_fit_allows_identical_vectors_but_rejects_nonintegral_truth(monkeypatch) -> None:
