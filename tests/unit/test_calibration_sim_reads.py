@@ -1,16 +1,12 @@
 """Known-origin paired reads generated independently of production alignment."""
 
 import random
-import sys
 from importlib import import_module
-from pathlib import Path
 
 import pytest
+from calibration_sim.haplotypes import build_haplotype
 
 pytestmark = pytest.mark.unit
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-
-from calibration_sim.haplotypes import build_haplotype  # noqa: E402
 
 
 def _haplotypes():

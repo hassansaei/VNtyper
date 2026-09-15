@@ -1,14 +1,11 @@
 """Independent sequence construction for known-truth calibration simulations."""
 
-import sys
 from dataclasses import replace
 from importlib import import_module
-from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.unit
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 
 def _module():

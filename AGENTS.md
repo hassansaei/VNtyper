@@ -710,7 +710,9 @@ summary | release-summary | none | always records success, failure, skipped jobs
     passing unit tests. Adding `scripts/integration_compatibility_observations.py`
     (#293, the version-selected append-only report-observation policy) took it to all
     43 Python files and `make test-scripts-cov` to 94.00% over 8,138 collected unit
-    tests. **A new file under `scripts/` must update this sentence** -
+    tests. Adding `scripts/calibration_sim/` (the package initializer and independent
+    haplotype/read generators) took the directory to all 46 Python files.
+    **A new file under `scripts/` must update this sentence** -
     `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
     counts root `scripts/**/*.py` and fails until it does, which is the tripwire working,
     not a flaky test. Package modules under `vntyper/scripts/` do not change that root-only
