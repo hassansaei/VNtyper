@@ -157,6 +157,70 @@ def test_a_missing_pipeline_summary_still_renders(tmp_path) -> None:
     assert "Not calculated" in html
 
 
+def test_length_estimate_and_features_render_without_member_identity(tmp_path: Path) -> None:
+    from tests.unit.test_length_presentation import _summary
+
+    write_summary(tmp_path, **_summary("estimated", 110.25))
+    html = render(tmp_path)
+
+    assert "Approximate total diploid VNTR repeat count" in html
+    assert "110.25 repeat units" in html
+    assert "Core/invariant depth ratio (A)" in html
+    assert "Array/flank depth ratio (F)" in html
+    assert "affine-a" in html
+    assert "d" * 64 in html
+    assert 'class="mono length-model-digest"' in html
+    assert ".length-model-digest" in html and "overflow-wrap: anywhere" in html
+    assert "private-member-must-not-render" not in html
+
+
+@pytest.mark.parametrize(
+    ("summary_fields", "expected"),
+    [
+        ({}, "Not recorded by this run"),
+        (
+            {
+                "length_estimation_status": "disabled",
+                "estimated_total_repeat_count": None,
+                "length_calibration_id": None,
+                "length_estimation_reasons": [],
+                "length_features": None,
+                "length_features_sha256": None,
+                "length_model_sha256": None,
+            },
+            "Not requested",
+        ),
+    ],
+)
+def test_length_section_distinguishes_legacy_not_recorded_from_disabled(
+    tmp_path: Path,
+    summary_fields: dict[str, object],
+    expected: str,
+) -> None:
+    write_summary(tmp_path, **summary_fields)
+
+    assert expected in render(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("measured-only", "Features measured; no model applied"),
+        ("unavailable", "low_denominator_depth"),
+    ],
+)
+def test_length_section_renders_measurement_only_and_unavailable_states(
+    tmp_path: Path,
+    status: str,
+    expected: str,
+) -> None:
+    from tests.unit.test_length_presentation import _summary
+
+    write_summary(tmp_path, **_summary(status, None))
+
+    assert expected in render(tmp_path)
+
+
 def test_a_report_without_a_bam_still_explains_kestrel_bam_evidence(tmp_path) -> None:
     """The artifact contract is report help, not a claim that this run retained a BAM."""
     html = render(tmp_path, report_igv=report_assets.REPORT_IGV_OFF)
@@ -3813,7 +3877,7 @@ def test_the_summary_schema_version_is_shown(tmp_path) -> None:
     assert _labeled_value(render(tmp_path), "Summary schema version") == "1"
 
 
-def test_current_summary_provenance_uses_schema_three_and_records_the_default_profile(tmp_path) -> None:
+def test_current_summary_provenance_uses_schema_four_and_records_the_default_profile(tmp_path) -> None:
     """Catch an omitted profile identity or substitution of the packaged policy literal."""
     from vntyper.scripts.decision_profile import load_packaged_decision_profile
     from vntyper.scripts.profile_provenance import snapshot_decision_profile
@@ -3826,15 +3890,15 @@ def test_current_summary_provenance_uses_schema_three_and_records_the_default_pr
     on_disk = json.loads((tmp_path / "pipeline_summary.json").read_text(encoding="utf-8"))
     block = _provenance_block(render(tmp_path))
 
-    assert summary.SUMMARY_SCHEMA_VERSION == 3
-    assert on_disk["schema_version"] == 3
+    assert summary.SUMMARY_SCHEMA_VERSION == 4
+    assert on_disk["schema_version"] == 4
     assert on_disk["decision_policy"] == "legacy-selection-v1"
     assert on_disk["advntr_evidence_digest"] is None
     assert on_disk["decision_profile_sha256"] == profile.digest
     assert on_disk["decision_profile_source"] == "package"
     assert on_disk["decision_profile_snapshot"] == "provenance/decision_profile.json"
     assert _labeled_value(block, "Decision policy") == "legacy-selection-v1"
-    assert _labeled_value(block, "Summary schema version") == "3"
+    assert _labeled_value(block, "Summary schema version") == "4"
     assert _labeled_value(block, "Decision profile ID") == profile.profile_id
     assert _labeled_value(block, "Decision profile revision") == profile.profile_revision
     assert _labeled_value(block, "Decision profile kind") == "packaged"

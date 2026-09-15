@@ -367,10 +367,10 @@ def resolve_summary_profile(
         run_root: Directory containing the summary and its provenance directory.
 
     Returns:
-        Verified schema-3 provenance, or explicit legacy provenance for schema 1/2.
+        Verified schema-3/4 provenance, or explicit legacy provenance for schema 1/2.
 
     Raises:
-        OSError: If a schema-3 snapshot cannot be read.
+        OSError: If a current-schema snapshot cannot be read.
         ValueError: If the summary or snapshot violates the closed contract.
     """
     if not isinstance(summary, Mapping):
@@ -383,7 +383,9 @@ def resolve_summary_profile(
         if forbidden:
             raise ValueError(f"legacy summary cannot contain schema 3 decision profile fields: {forbidden}")
         return DecisionProfileProvenance(None, None, None, None, None, None)
-    if not isinstance(schema_version, int) or schema_version != 3:
+    # Schema 4 adds optional length fields while preserving the complete schema-3
+    # decision-profile and caller-row contract unchanged.
+    if not isinstance(schema_version, int) or schema_version not in {3, 4}:
         raise ValueError(f"unsupported pipeline summary schema version: {schema_version}")
     if "advntr_evidence_digest" not in summary:
         raise ValueError("summary schema 3 requires advntr_evidence_digest")

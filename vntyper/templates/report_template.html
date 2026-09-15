@@ -703,6 +703,10 @@
             font-family: var(--font-mono);
             font-size: 0.95em;
         }
+        .length-model-digest {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
 
         /* The alignment panel's own frame. It has a minimum height because the state
            inside it changes after load - the embedded library is expanded
@@ -1418,6 +1422,43 @@
                 </tbody>
             </table>
         </div>
+
+        {% if length_presentation %}
+            <h2>VNTR Length Research Result</h2>
+            <div class="metrics" data-length-status="{{ length_presentation.status }}">
+                <p class="metric">
+                    <strong>{{ length_presentation.label }}:</strong>
+                    {{ length_presentation.value }}
+                    {%- if length_presentation.status == "estimated" %} {{ length_presentation.unit }}{% endif %}
+                    <br><small>{{ length_presentation.help }}</small>
+                </p>
+                <p class="metric"><strong>Status:</strong> {{ length_presentation.status_text }}</p>
+            </div>
+            {% if length_presentation.feature_values %}
+                <dl class="allele-facts">
+                    {% for feature_label, feature_value in length_presentation.feature_values %}
+                        <div>
+                            <dt>{{ feature_label }}</dt>
+                            <dd>{{ feature_value }}</dd>
+                        </div>
+                    {% endfor %}
+                </dl>
+            {% endif %}
+            {% if length_presentation.calibration_id %}
+                <p><strong>Calibration ID:</strong> {{ length_presentation.calibration_id }}</p>
+            {% endif %}
+            {% if length_presentation.model_sha256 %}
+                <p><strong>Model SHA-256:</strong>
+                    <span class="mono length-model-digest">{{ length_presentation.model_sha256 }}</span></p>
+            {% endif %}
+            {% if length_presentation.reasons %}
+                <p><strong>Availability reasons:</strong>
+                    {% for reason in length_presentation.reasons %}
+                        <code>{{ reason }}</code>{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                </p>
+            {% endif %}
+        {% endif %}
 
         <!-- Conditionally show fastp metrics if available -->
         {% if fastp_available %}

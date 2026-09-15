@@ -813,5 +813,21 @@
       "grade": "finding"
     }
   ],
-  "confidence_grade_default": "not-established"
+  "confidence_grade_default": "not-established",
+  "length_estimation": {
+    "label": "Approximate total diploid VNTR repeat count",
+    "unit": "repeat units",
+    "help": "Research-only estimate of the total repeat count across both alleles. It does not affect variant calls or screening conclusions.",
+    "status_labels": {
+      "not-recorded": "Not recorded by this run",
+      "disabled": "Not requested",
+      "measured-only": "Features measured; no model applied",
+      "estimated": "Estimated",
+      "unavailable": "Unavailable"
+    },
+    "feature_labels": {
+      "A": "Core/invariant depth ratio (A)",
+      "F": "Array/flank depth ratio (F)"
+    }
+  }
 }

@@ -95,12 +95,12 @@ def test_profile_projection_and_snapshot_reject_unresolved_objects(tmp_path: Pat
         snapshot_decision_profile(object(), tmp_path / "profile.json")  # type: ignore[arg-type]
 
 
-def test_current_summary_is_schema_three_and_records_the_resolved_profile() -> None:
+def test_current_summary_is_schema_four_and_records_the_resolved_profile() -> None:
     profile = load_packaged_decision_profile()
 
     current = start_summary(decision_profile=profile)
 
-    assert current["schema_version"] == 3
+    assert current["schema_version"] == 4
     assert current["decision_policy"] == "legacy-selection-v1"
     assert current["advntr_evidence_digest"] is None
     assert {key: current[key] for key in PROFILE_FIELDS} == profile_summary_fields(profile)
@@ -118,6 +118,14 @@ def test_schema_three_snapshot_verifies_to_the_recorded_profile(tmp_path: Path) 
     assert recorded.sha256 == profile.digest
     assert recorded.snapshot_path == "provenance/decision_profile.json"
     assert recorded.revision == profile.profile_revision
+
+
+def test_schema_four_preserves_schema_three_profile_verification(tmp_path: Path) -> None:
+    profile, _snapshot = _snapshot_packaged(tmp_path)
+    current = _schema_three_summary(profile, rows=[GOOD_IDENTITY_ROW])
+    current["schema_version"] = 4
+
+    assert resolve_summary_profile(current, tmp_path).sha256 == profile.digest
 
 
 @pytest.mark.parametrize("schema_version", [None, 1, 2])
