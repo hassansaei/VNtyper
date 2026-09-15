@@ -26,7 +26,8 @@ from Saei et al., iScience 26, 107171 (2023).
 import logging
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,6 +81,10 @@ from vntyper.scripts.variant_parsing import read_vcf_without_comments
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
+
+KestrelRawCaptureObserver = Callable[
+    [pd.DataFrame, pd.DataFrame, dict[str, object], KestrelSelection, IdentityTranslationComponent], None
+]
 
 
 def load_kestrel_config(config_path=None):
@@ -832,6 +837,7 @@ def process_kmer_results(
     custom_context_active: bool = False,
     retain_complete_identity_candidates: bool = False,
     strategy: str | None = None,
+    raw_capture_observer: KestrelRawCaptureObserver | None = None,
 ):
     """
     Applies the main postprocessing heuristics:
@@ -870,11 +876,24 @@ def process_kmer_results(
         retain_complete_identity_candidates: Persist an authoritative selection
             projection for every passing identity hypothesis before legacy reduction.
         strategy: Optional selection strategy override ("legacy" or "identity_dominance").
+        raw_capture_observer: Optional calibration boundary invoked synchronously with
+            defensive copies of the complete raw frame, parsed motif table and config,
+            plus frozen selection and identity decisions, before any scoring or gate.
 
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
     """
     selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active, strategy=strategy)
+    if raw_capture_observer is not None:
+        if identity_component is None:
+            raise ValueError("Kestrel raw capture requires an explicit frozen identity component")
+        raw_capture_observer(
+            combined_df.copy(deep=True),
+            merged_motifs.copy(deep=True),
+            deepcopy(kestrel_config),
+            selection,
+            identity_component,
+        )
 
     def write_prefilter(frame: pd.DataFrame) -> None:
         pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")

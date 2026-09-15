@@ -4,12 +4,19 @@ import pandas as pd
 import pytest
 
 from tests.builders import kestrel_config, kestrel_stage_frame
+from vntyper.scripts.identity_candidates import translation_component_from_config
 from vntyper.scripts.kestrel_decision_config import KestrelSelection
-from vntyper.scripts.kestrel_genotyping import _resolve_selection, add_haplo_count, select_single_best_variant
+from vntyper.scripts.kestrel_genotyping import (
+    _resolve_selection,
+    add_haplo_count,
+    process_kmer_results,
+    select_single_best_variant,
+)
 from vntyper.scripts.kestrel_postprocessing import (
     evaluate_kestrel_candidates,
     filter_and_select_kestrel_candidates,
 )
+from vntyper.scripts.nomenclature import nomenclature_config
 
 pytestmark = pytest.mark.unit
 
@@ -90,3 +97,59 @@ def test_empty_evaluator_never_claims_to_have_reached_the_final_gate() -> None:
     assert result.reached_final_filter is False
     assert result.prefilter.empty
     assert result.selected.empty
+
+
+def test_live_postprocessing_observer_receives_complete_defensive_raw_inputs_before_decisions(tmp_path) -> None:
+    first = kestrel_stage_frame("raw")
+    suppressed = kestrel_stage_frame("raw", ref="C", alt="CGGCA")
+    suppressed.loc[0, "POS"] = 68
+    raw = pd.concat([first, suppressed], ignore_index=True)
+    identity_motifs = nomenclature_config["motifs"]
+    assert isinstance(identity_motifs, dict)
+    raw["Motifs"] = "S-C"
+    raw["Motif_sequence"] = identity_motifs["C"] + identity_motifs["S"]
+    motifs = pd.DataFrame({"Motif": ["S"], "Motif_sequence": [identity_motifs["S"]]})
+    config = kestrel_config()
+    identity = translation_component_from_config(nomenclature_config)
+    observed: dict[str, object] = {}
+
+    def observe(raw_frame, motif_frame, frozen_config, selection, identity_component) -> None:
+        observed["raw"] = raw_frame.copy(deep=True)
+        observed["motifs"] = motif_frame.copy(deep=True)
+        observed["selection"] = selection
+        observed["identity"] = identity_component
+        raw_frame.loc[0, "ALT"] = "MUTATED"
+        motif_frame.loc[0, "Motif"] = "MUTATED"
+        frozen_config["artifact_flags"] = []
+
+    result = process_kmer_results(
+        raw,
+        motifs,
+        str(tmp_path),
+        config,
+        identity_component=identity,
+        raw_capture_observer=observe,
+    )
+
+    observed_raw = observed["raw"]
+    observed_motifs = observed["motifs"]
+    assert isinstance(observed_raw, pd.DataFrame) and isinstance(observed_motifs, pd.DataFrame)
+    pd.testing.assert_frame_equal(observed_raw, raw)
+    pd.testing.assert_frame_equal(observed_motifs, motifs)
+    assert observed["identity"] is identity
+    assert observed["selection"] == _resolve_selection(config)
+    assert result.iloc[0]["ALT"] != "MUTATED"
+    prefilter = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t")
+    assert len(prefilter) == 2
+    assert bool(prefilter.iloc[1]["flag_filter_pass"]) is False
+
+
+def test_live_raw_capture_observer_requires_explicit_frozen_identity(tmp_path) -> None:
+    with pytest.raises(ValueError, match="identity"):
+        process_kmer_results(
+            kestrel_stage_frame("raw"),
+            _motifs(),
+            str(tmp_path),
+            kestrel_config(),
+            raw_capture_observer=lambda *_args: None,
+        )
