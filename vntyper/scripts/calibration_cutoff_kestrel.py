@@ -12,7 +12,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, NoReturn
+from typing import Literal, NoReturn, cast
 
 from vntyper.scripts.calibration_caller_policy import (
     KESTREL_CALLER_POLICY_POINTERS,
@@ -192,10 +192,45 @@ def _effective_policy(baseline: CallerPolicyValues, candidate: CallerPolicyValue
     )
 
 
+def _selected_fields(result: KestrelReplayResult) -> dict[str, object] | None:
+    """Reduce one replay to the selected row's decision-bearing fields.
+
+    Only these fields reach the parent. The prefilter population stays inside the
+    worker, because carrying it back would make peak memory scale with samples times
+    policies times candidate rows.
+
+    Args:
+        result: One complete replay of one capture under one policy.
+
+    Returns:
+        The selected row's fields, or None when the policy selected nothing.
+
+    Raises:
+        ValueError: If a selected row carries empty confidence or flag text.
+    """
+    selected = kestrel_replay_selected_frame(result)
+    if selected.empty:
+        return None
+    row = selected.iloc[0].to_dict()
+    persisted = parse_selected_candidate_cells(row)
+    identity = persisted.translation.identity
+    confidence, flag = row.get("Confidence"), row.get("Flag")
+    if not isinstance(confidence, str) or not confidence or not isinstance(flag, str) or not flag:
+        _fail("Kestrel cutoff selected confidence and Flag must be nonempty text")
+    return {
+        "confidence": confidence,
+        "flag": flag,
+        "canonical_identity": None if identity is None else serialize_molecular_identity(identity),
+        "translation_status": persisted.translation.status,
+        "translation_failure": persisted.translation.failure,
+        "context_diverges": persisted.translation.context_diverges,
+    }
+
+
 def _replay_case(
-    item: tuple[str, object, Mapping[str, dict[str, object]]],
-) -> tuple[str, str, str, dict[str, str], dict[str, dict[str, object]]]:
-    key, capture_document, candidate_documents = item
+    item: tuple[str, object, Mapping[str, dict[str, object]], bool],
+) -> tuple[str, str, str, dict[str, str], dict[str, dict[str, object]], dict[str, object] | None]:
+    key, capture_document, candidate_documents, needs_native_baseline = item
     capture = decode_kestrel_capture(capture_document)
     candidates = {name: decode_caller_policy_values(value) for name, value in candidate_documents.items()}
     effective: dict[str, CallerPolicyValues] = {"baseline": capture.baseline_policy}
@@ -204,17 +239,32 @@ def _replay_case(
     unique: dict[str, CallerPolicyValues] = {}
     for name in ("baseline", *tuple(sorted(candidates))):
         unique.setdefault(parameter_by_policy[name], effective[name])
-    replayed = {
-        parameter_sha: kestrel_replay_document(
-            replay_kestrel_capture(
-                capture,
-                policy,
-                capture_policy_sha256=capture.provenance.capture_policy_sha256,
-            )
+    baseline_parameter = parameter_by_policy["baseline"]
+    replayed: dict[str, dict[str, object]] = {}
+    baseline_document: dict[str, object] | None = None
+    for parameter_sha, policy in unique.items():
+        result = replay_kestrel_capture(
+            capture,
+            policy,
+            capture_policy_sha256=capture.provenance.capture_policy_sha256,
         )
-        for parameter_sha, policy in unique.items()
-    }
-    return key, capture.sha256, capture.baseline_policy.sha256, parameter_by_policy, replayed
+        replayed[parameter_sha] = {
+            "policy_sha256": result.policy_sha256,
+            "capture_sha256": result.capture_sha256,
+            "replay_sha256": result.sha256,
+            "disposition": result.disposition,
+            "selected": _selected_fields(result),
+        }
+        if needs_native_baseline and parameter_sha == baseline_parameter:
+            baseline_document = kestrel_replay_document(result)
+    return (
+        key,
+        capture.sha256,
+        capture.baseline_policy.sha256,
+        parameter_by_policy,
+        replayed,
+        baseline_document,
+    )
 
 
 def _native_inputs(
@@ -291,22 +341,43 @@ def _observation(
     key: str,
     policy_id: str,
     policy_sha256: str,
-    replay_policy_sha256: str,
-    result: KestrelReplayResult,
+    record: Mapping[str, object],
     *,
     empty_native_negative: bool,
 ) -> KestrelGridObservation:
-    selected = kestrel_replay_selected_frame(result)
-    if selected.empty:
-        called = False if result.disposition == "no-call" or empty_native_negative else None
+    """Compose one endpoint from a worker's reduced replay record.
+
+    Args:
+        key: Sample key the capture was associated with.
+        policy_id: Requested policy identifier.
+        policy_sha256: Digest of the requested complete policy.
+        record: Reduced replay fields returned by :func:`_replay_case`.
+        empty_native_negative: Whether an exact native Negative placeholder proved the
+            run completed and found nothing.
+
+    Returns:
+        The immutable per-sample, per-policy observation.
+
+    Raises:
+        ValueError: If the reduced record is malformed.
+    """
+    if set(record) != {"policy_sha256", "capture_sha256", "replay_sha256", "disposition", "selected"}:
+        _fail("Kestrel cutoff replay record fields differ from the reduced contract")
+    disposition = cast(GridDisposition, record["disposition"])
+    replay_policy_sha256 = cast(str, record["policy_sha256"])
+    capture_sha256 = cast(str, record["capture_sha256"])
+    replay_sha256 = cast(str, record["replay_sha256"])
+    selected = record["selected"]
+    if selected is None:
+        called = False if disposition == "no-call" or empty_native_negative else None
         return KestrelGridObservation(
             key,
             policy_id,
             policy_sha256,
             replay_policy_sha256,
-            result.capture_sha256,
-            result.sha256,
-            result.disposition,
+            capture_sha256,
+            replay_sha256,
+            disposition,
             called,
             None,
             None,
@@ -315,27 +386,22 @@ def _observation(
             None,
             None,
         )
-    row = selected.iloc[0].to_dict()
-    persisted = parse_selected_candidate_cells(row)
-    identity = persisted.translation.identity
-    confidence, flag = row.get("Confidence"), row.get("Flag")
-    if not isinstance(confidence, str) or not confidence or not isinstance(flag, str) or not flag:
-        _fail("Kestrel cutoff selected confidence and Flag must be nonempty text")
+    fields = cast(Mapping[str, object], selected)
     return KestrelGridObservation(
         key,
         policy_id,
         policy_sha256,
         replay_policy_sha256,
-        result.capture_sha256,
-        result.sha256,
-        result.disposition,
+        capture_sha256,
+        replay_sha256,
+        disposition,
         True,
-        confidence,
-        flag,
-        None if identity is None else serialize_molecular_identity(identity),
-        persisted.translation.status,
-        persisted.translation.failure,
-        persisted.translation.context_diverges,
+        cast(str, fields["confidence"]),
+        cast(str, fields["flag"]),
+        cast("str | None", fields["canonical_identity"]),
+        cast("str | None", fields["translation_status"]),
+        cast("str | None", fields["translation_failure"]),
+        cast("bool | None", fields["context_diverges"]),
     )
 
 
@@ -539,7 +605,7 @@ def replay_kestrel_grid(
     keys, capture_documents, capture_hashes = _capture_documents(capture_paths)
     policy_ids, candidate_documents, candidate_hashes = _candidate_documents(policies)
     native_raw, native_hashes = _native_inputs(keys, native_paths)
-    tasks = [(key, capture_documents[key], candidate_documents) for key in keys]
+    tasks = [(key, capture_documents[key], candidate_documents, native_raw[key] is not None) for key in keys]
     if workers == 1:
         case_rows = [_replay_case(task) for task in tasks]
     else:
@@ -552,24 +618,27 @@ def replay_kestrel_grid(
         _fail("Kestrel cutoff capture baseline policies differ")
     baseline_sha = next(iter(baselines))
     policy_hashes = {"baseline": baseline_sha, **candidate_hashes}
-    parameter_by_case = {key: values for key, _capture, _baseline, values, _replays in case_rows}
+    parameter_by_case = {key: values for key, _capture, _baseline, values, _replays, _document in case_rows}
     first_parameters = parameter_by_case[keys[0]]
     if any(values != first_parameters for values in parameter_by_case.values()):
         _fail("Kestrel cutoff effective policy projections differ across captures")
-    result_by_case: dict[str, dict[str, KestrelReplayResult]] = {}
+    result_by_case: dict[str, dict[str, dict[str, object]]] = {}
     capture_semantic: dict[str, str] = {}
     parity: dict[str, BaselineParity] = {}
     empty_native_negative: dict[str, bool] = {}
-    for key, capture_sha, _baseline, parameter_map, replay_documents in case_rows:
+    for key, capture_sha, _baseline, parameter_map, replay_records, baseline_document in case_rows:
         capture_semantic[key] = capture_sha
-        decoded = {digest: decode_kestrel_replay_result(value) for digest, value in replay_documents.items()}
-        result_by_case[key] = decoded
-        baseline = decoded[parameter_map["baseline"]]
+        result_by_case[key] = replay_records
         native = native_raw[key]
         if native is None:
             parity[key] = "capture-replay-authoritative"
             empty_native_negative[key] = False
         else:
+            if baseline_document is None:
+                _fail(f"Kestrel cutoff baseline replay is missing for native parity on {key}")
+            baseline = decode_kestrel_replay_result(baseline_document)
+            if baseline.policy_sha256 != replay_records[parameter_map["baseline"]]["policy_sha256"]:
+                _fail(f"Kestrel cutoff baseline replay identity differs from its reduced record on {key}")
             empty_native_negative[key] = validate_native_kestrel_baseline_parity(native, baseline) == "negative"
             parity[key] = "native-exact"
     observations = {
@@ -579,7 +648,6 @@ def replay_kestrel_grid(
                     key,
                     policy_id,
                     policy_hashes[policy_id],
-                    result_by_case[key][parameter_by_case[key][policy_id]].policy_sha256,
                     result_by_case[key][parameter_by_case[key][policy_id]],
                     empty_native_negative=empty_native_negative[key],
                 )
@@ -594,7 +662,10 @@ def replay_kestrel_grid(
         MappingProxyType(observations),
         MappingProxyType(policy_hashes),
         MappingProxyType(
-            {policy_id: result_by_case[keys[0]][first_parameters[policy_id]].policy_sha256 for policy_id in policy_ids}
+            {
+                policy_id: cast(str, result_by_case[keys[0]][first_parameters[policy_id]]["policy_sha256"])
+                for policy_id in policy_ids
+            }
         ),
         MappingProxyType(capture_hashes),
         MappingProxyType(native_hashes),

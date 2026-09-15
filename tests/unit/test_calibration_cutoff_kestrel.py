@@ -12,7 +12,11 @@ import pytest
 from tests.builders import kestrel_config
 from tests.unit.test_calibration_caller_policy import policy_document, policy_values
 from tests.unit.test_calibration_kestrel_replay import _GG, _candidate, _capture, _raw
-from vntyper.scripts.calibration_caller_policy import CallerPolicyValues, decode_caller_policy_values
+from vntyper.scripts.calibration_caller_policy import (
+    CallerPolicyValues,
+    caller_policy_values_document,
+    decode_caller_policy_values,
+)
 from vntyper.scripts.calibration_cutoff_kestrel import (
     kestrel_grid_replay_document,
     replay_kestrel_grid,
@@ -330,3 +334,54 @@ def test_grid_rejects_different_capture_baselines(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="baseline policies differ"):
         replay_kestrel_grid({"a": first, "b": second}, {})
+
+
+def test_the_candidate_population_never_crosses_the_worker_boundary(tmp_path: Path) -> None:
+    """Replaying a grid must not carry every candidate table back to the parent.
+
+    The parent needs a verdict per (sample, policy), not the population that produced
+    it. Returning whole prefilter tables makes peak memory scale with samples times
+    policies times candidate rows, which on a real cohort reaches tens of gigabytes
+    and turns the breakpoint cap into a memory workaround rather than the resolution
+    control it is meant to be.
+    """
+    import json
+
+    from vntyper.scripts.calibration_cutoff_kestrel import _replay_case
+
+    config = kestrel_config()
+    capture = _capture(_raw(), config)
+    document = kestrel_capture_document(capture)
+    lowered = _candidate(capture.baseline_policy, **{_GG: 0.001})
+    candidates = {"low": caller_policy_values_document(lowered)}
+
+    key, capture_sha, baseline_sha, parameter_map, replayed, baseline_document = _replay_case(
+        ("s", document, candidates, False)
+    )
+
+    assert key == "s"
+    assert capture_sha == capture.sha256
+    assert baseline_sha == capture.baseline_policy.sha256
+    assert set(parameter_map) == {"baseline", "low"}
+    assert baseline_document is None
+    for record in replayed.values():
+        assert set(record) == {"policy_sha256", "capture_sha256", "replay_sha256", "disposition", "selected"}
+        serialized = json.dumps(record)
+        assert "prefilter" not in serialized
+        assert "__Calibration_Source_Row_Ordinal" not in serialized
+
+
+def test_the_baseline_population_returns_only_when_native_parity_is_checked() -> None:
+    """The one place a whole replay is still needed is the native parity comparison."""
+    import json
+
+    from vntyper.scripts.calibration_cutoff_kestrel import _replay_case
+
+    document = kestrel_capture_document(_capture(_raw(), kestrel_config()))
+
+    without = _replay_case(("s", document, {}, False))
+    with_native = _replay_case(("s", document, {}, True))
+
+    assert without[5] is None
+    assert with_native[5] is not None
+    assert "prefilter" in json.dumps(with_native[5])
