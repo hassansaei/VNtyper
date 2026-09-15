@@ -20,6 +20,7 @@ paths are *reachable* from a test.
 
 import argparse
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -100,6 +101,26 @@ def test_the_pipeline_subcommand_parses_advntr_additional_commands():
         ["pipeline", "--advntr-additional-commands", "--prune-reverse --rare-unit-coverage-guard 0.15"]
     )
     assert args.advntr_additional_commands == "--prune-reverse --rare-unit-coverage-guard 0.15"
+
+
+def test_pipeline_parses_explicit_length_measurement_inputs() -> None:
+    args = build_parser().parse_args(
+        [
+            "pipeline",
+            "--measure-vntr-length-features",
+            "--length-model",
+            "approved-model",
+            "--length-annotation",
+            "annotation.json",
+            "--length-context",
+            "context.json",
+        ]
+    )
+
+    assert args.measure_vntr_length_features is True
+    assert args.length_model == Path("approved-model")
+    assert args.length_annotation == Path("annotation.json")
+    assert args.length_context == Path("context.json")
 
 
 def test_the_report_subcommand_parses_an_output_directory():

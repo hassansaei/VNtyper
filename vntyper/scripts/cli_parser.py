@@ -209,6 +209,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser_pipeline.add_argument("--cram", type=str, help="Path to the CRAM file.")
     parser_pipeline.add_argument("--reference-fasta", type=Path, help="Path to the reference FASTA for CRAM decoding.")
     parser_pipeline.add_argument(
+        "--measure-vntr-length-features",
+        action="store_true",
+        help="Measure research VNTR length features using an explicit annotation and provenance context.",
+    )
+    parser_pipeline.add_argument(
+        "--length-model",
+        type=Path,
+        default=None,
+        help="Approved portable length model bundle directory; implies feature measurement.",
+    )
+    parser_pipeline.add_argument(
+        "--length-annotation",
+        type=Path,
+        default=None,
+        help="Explicit length annotation JSON for measurement-only mode.",
+    )
+    parser_pipeline.add_argument(
+        "--length-context",
+        type=Path,
+        default=None,
+        help="Explicit length measurement provenance context JSON.",
+    )
+    parser_pipeline.add_argument(
         "--threads",
         type=positive_int,
         default=None,

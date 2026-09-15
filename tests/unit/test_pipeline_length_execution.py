@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
+from tests.support.pipeline_harness import run_pipeline_under_harness
 from tests.unit.test_length_estimation import features as _features
 from tests.unit.test_length_features import _annotation, _context
 from tests.unit.test_pipeline_length import _write_applicable_bundle
@@ -268,3 +271,47 @@ def test_reference_selection_rejects_missing_bwa_and_relative_project_root() -> 
         length_reference_path(_plan(), None, "/project")
     with pytest.raises(ValueError, match="project root"):
         length_reference_path(_plan(), "/reference.fa", "relative")
+
+
+def test_pipeline_runs_measurement_with_retained_plan_and_records_bound_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vntyper.scripts import pipeline
+
+    configuration = _measurement_only_configuration()
+    measurement = object()
+    observed: dict[str, object] = {}
+
+    class RecordingRunner:
+        def __init__(self, **kwargs: object) -> None:
+            observed["runner_kwargs"] = kwargs
+            self.result: object | None = None
+
+        def __call__(self, plan: AlignmentPlan) -> None:
+            observed["plan"] = plan
+            self.result = measurement
+
+    monkeypatch.setattr(pipeline, "LengthMeasurementRunner", RecordingRunner)
+    with mock.patch.object(
+        pipeline,
+        "length_summary_fields",
+        return_value={"length_estimation_status": "measured-only"},
+    ) as summary_fields:
+        harness = run_pipeline_under_harness(
+            tmp_path / "out",
+            length_configuration=configuration,
+            length_operator_paths=(tmp_path / "annotation.json", tmp_path / "context.json"),
+        )
+
+    assert observed["runner_kwargs"] == {
+        "configuration": configuration,
+        "bwa_reference": "/refs/hg19.fa",
+        "project_root": str(Path.cwd()),
+        "samtools_path": "samtools",
+    }
+    assert isinstance(observed["plan"], AlignmentPlan)
+    summary_fields.assert_called_once_with(configuration, measurement)
+    recorded = json.loads((harness.output_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
+    assert recorded["length_estimation_status"] == "measured-only"
+    assert recorded["analysis_settings"]["length_configuration_sha256"] == configuration.sha256

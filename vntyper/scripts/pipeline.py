@@ -55,6 +55,12 @@ from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
+from vntyper.scripts.pipeline_length import (
+    LengthPipelineConfiguration,
+    encode_length_pipeline_configuration,
+    resolve_length_pipeline_configuration,
+)
+from vntyper.scripts.pipeline_length_execution import LengthMeasurementRunner, length_summary_fields
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.pipeline_resume_planning import (
     build_analysis_settings,
@@ -207,6 +213,8 @@ def run_pipeline(
     summary_formats=None,  # New parameter: list of additional summary output formats (e.g., ['csv', 'tsv'])
     report_igv=DEFAULT_REPORT_IGV,
     run_configuration=None,
+    length_configuration=None,
+    length_operator_paths=(),
     resume=False,
 ):
     """
@@ -257,6 +265,8 @@ def run_pipeline(
             `vntyper report` (#242).
         run_configuration: Immutable decision profile and stage components resolved
             before the run. Direct compatibility callers load the packaged profile.
+        length_configuration: Immutable optional length measurement/model preflight.
+        length_operator_paths: Exact operator-owned model, annotation, and context paths.
 
     Raises:
         ValueError: Various input validation errors.
@@ -267,6 +277,20 @@ def run_pipeline(
         run_configuration = resolve_run_configuration()
     elif not isinstance(run_configuration, RunConfiguration):
         raise ValueError("pipeline run_configuration must be a resolved RunConfiguration")
+    if length_configuration is None:
+        length_configuration = resolve_length_pipeline_configuration(
+            measurement_enabled=False,
+            model_path=None,
+            annotation_path=None,
+            context_path=None,
+        )
+    elif not isinstance(length_configuration, LengthPipelineConfiguration):
+        raise ValueError("pipeline length_configuration must be resolved")
+    encode_length_pipeline_configuration(length_configuration)
+    if not isinstance(length_operator_paths, tuple) or any(
+        not isinstance(path, (str, Path)) for path in length_operator_paths
+    ):
+        raise ValueError("pipeline length_operator_paths must be a tuple of paths")
 
     if log_file is not None:
         early_advntr_preflight = plan_valid_advntr_preflight(
@@ -296,7 +320,9 @@ def run_pipeline(
 
     input_type, input_files = resolve_pipeline_input(fastq1, fastq2, bam, cram, bwa_reference, extra_modules)
     archive_protected_paths = tuple(
-        path for path in (bam, cram, fastq1, fastq2, reference_fasta, bed_file, bwa_reference) if path
+        path
+        for path in (bam, cram, fastq1, fastq2, reference_fasta, bed_file, bwa_reference, *length_operator_paths)
+        if path
     )
     previous_ref_path = None
     reference_resolution_pinned = False
@@ -306,7 +332,10 @@ def run_pipeline(
         advntr_preflight = plan_advntr_preflight(config, extra_modules, module_args, reference_assembly)
         needs_advntr = advntr_preflight.enabled
         advntr_reference = advntr_preflight.reference
-        additional_operator_paths = (advntr_reference,) if advntr_reference is not None else ()
+        additional_operator_paths = (
+            *((advntr_reference,) if advntr_reference is not None else ()),
+            *length_operator_paths,
+        )
         canonical_input_files, input_fingerprints = build_canonical_inputs_and_fingerprints(
             input_type, fastq1, fastq2, bam, cram, bed_file
         )
@@ -322,6 +351,11 @@ def run_pipeline(
             extra_modules=extra_modules,
             input_type=input_type,
         )
+        # Old summaries predate optional length measurement. Keep their absent key
+        # equivalent to today's disabled mode, while an enabled configuration becomes
+        # an exact resume input and therefore invalidates incompatible prior work.
+        if length_configuration.measurement_enabled:
+            analysis_settings["length_configuration_sha256"] = length_configuration.sha256
 
         effective_reference_path = None
         if input_type == "FASTQ" and bwa_reference:
@@ -640,6 +674,8 @@ def run_pipeline(
             advntr_evidence_digest=advntr_evidence.digest if advntr_evidence is not None else None,
             decision_profile=run_configuration.decision_profile,
         )
+        if not length_configuration.measurement_enabled:
+            summary.update(length_summary_fields(length_configuration, None))
 
         compatibility = evaluate_resume_compatibility(
             prior_summary,
@@ -999,6 +1035,16 @@ def run_pipeline(
         if alignment_plan is None:
             raise RuntimeError("Alignment preflight did not produce a plan for coverage.")
         cov_start = datetime.now(timezone.utc).replace(tzinfo=None)
+        length_runner = (
+            LengthMeasurementRunner(
+                configuration=length_configuration,
+                bwa_reference=bwa_reference,
+                project_root=project_root,
+                samtools_path=config.get("tools", {}).get("samtools", "samtools"),
+            )
+            if length_configuration.measurement_enabled
+            else None
+        )
         vntr_region = calculate_alignment_coverage(
             plan=alignment_plan,
             region=vntr_region,
@@ -1008,7 +1054,10 @@ def run_pipeline(
             output_dir=dirs["coverage"],
             coverage_calculator=calculate_vntr_coverage,
             region_resolver=get_region_string_with_fallback,
+            length_consumer=length_runner,
         )
+        if length_runner is not None:
+            summary.update(length_summary_fields(length_configuration, length_runner.result))
         # The exact span the coverage stage consumed - resolved here and, until
         # #242, thrown away. The report could not otherwise state it: reading
         # `config["default_values"]["reference_assembly"]` back would mislabel any

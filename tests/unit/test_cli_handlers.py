@@ -120,6 +120,43 @@ def test_reference_fasta_is_forwarded_to_the_pipeline(tmp_path: Path) -> None:
     assert stub.call_args.kwargs["reference_fasta"] == reference
 
 
+def test_length_inputs_are_resolved_before_pipeline_and_forwarded_with_protected_paths(tmp_path: Path) -> None:
+    parser = build_parser()
+    model = tmp_path / "model"
+    context = tmp_path / "context.json"
+    output = tmp_path / "out"
+    args = parser.parse_args(
+        [
+            "pipeline",
+            "-o",
+            str(output),
+            "--bam",
+            "in.bam",
+            "--length-model",
+            str(model),
+            "--length-context",
+            str(context),
+        ]
+    )
+    sentinel = mock.Mock(measurement_enabled=True)
+
+    with (
+        mock.patch.object(cli_handlers, "resolve_length_pipeline_configuration", return_value=sentinel) as resolver,
+        mock.patch.object(cli_handlers, "run_pipeline", autospec=True) as runner,
+    ):
+        cli_handlers.handle_pipeline(args, MINIMAL_CONFIG, parser, logging.INFO, None)
+
+    resolver.assert_called_once_with(
+        measurement_enabled=False,
+        model_path=model,
+        annotation_path=None,
+        context_path=context,
+    )
+    assert runner.call_args.kwargs["length_configuration"] is sentinel
+    assert runner.call_args.kwargs["length_operator_paths"] == (model, context)
+    assert not output.exists()
+
+
 def test_the_pipeline_basename_is_accepted_explicitly(tmp_path: Path) -> None:
     """Asking for the basename the pipeline already uses is a no-op, not an error.
 
