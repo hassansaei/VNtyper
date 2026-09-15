@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import cast
 
 from vntyper.scripts.artifact_names import DECISION_PROFILE_SNAPSHOT_RELATIVE
+from vntyper.scripts.caller_profile_provenance import resolve_recorded_explicit_profile
 from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
 from vntyper.scripts.decision_profile import (
     ProfileKind,
     ProfileSource,
     ResolvedDecisionProfile,
     load_packaged_decision_profile,
-    parse_decision_profile,
 )
 from vntyper.scripts.decision_profile_schema import component_projection, validate_complete_inventory
 from vntyper.scripts.molecular_identity import parse_molecular_identity, serialize_molecular_identity
@@ -331,8 +331,7 @@ def verify_profile_snapshot(
         revision = document["profile_revision"]
         kind = document["profile_kind"]
     else:
-        packaged = load_packaged_decision_profile()
-        resolved = parse_decision_profile(raw, packaged_document=packaged.document)
+        resolved = resolve_recorded_explicit_profile(raw, Path(snapshot_path), schema_three_summary)
         advntr_component = resolved.components["advntr"]
         profile_id = resolved.profile_id
         revision = resolved.profile_revision
