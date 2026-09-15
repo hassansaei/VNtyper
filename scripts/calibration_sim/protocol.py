@@ -237,11 +237,10 @@ def _families(cases: tuple[SimulationCase, ...]) -> int:
         groups.add(case.group_key)
         primaries[case.group_key] += int(case.primary)
         # Explicit genealogies remain required. These extra mechanical collisions
-        # prevent a seed or exact paired backbone being renamed into independence.
-        backbone = tuple(
-            sorted(
-                (item.repeat_unit_bp, item.repeat_units, item.left_flank, item.right_flank) for item in case.haplotypes
-            )
+        # prevent a seed, ancestral haplotype, or paired backbone being renamed
+        # into independence.
+        haplotype_backbones = tuple(
+            (item.repeat_unit_bp, item.repeat_units, item.left_flank, item.right_flank) for item in case.haplotypes
         )
         for key in (
             ("group", case.group_key),
@@ -249,7 +248,8 @@ def _families(cases: tuple[SimulationCase, ...]) -> int:
             ("pair", case.pair_family),
             ("seed-family", case.seed_family),
             ("seed-value", case.reads.seed),
-            ("backbone-bases", backbone),
+            ("backbone-bases", tuple(sorted(haplotype_backbones))),
+            *(("haplotype-backbone", backbone) for backbone in haplotype_backbones),
         ):
             previous = families.setdefault(key, group)
             if previous != group:

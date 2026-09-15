@@ -142,6 +142,7 @@ def test_shared_families_cannot_cross_roles_or_count_as_independent_groups(famil
     )
     second["reads"]["seed"] = 99
     second["haplotypes"][0]["repeat_units"] = ["AAAA", "CCCC"]
+    second["haplotypes"][1]["repeat_units"] = ["CCCC", "AAAA"]
     second[family] = first[family]
     with pytest.raises(ValueError, match="famil|group|role"):
         decode(simulation_protocol(first, second))
@@ -203,6 +204,7 @@ def test_study_design_declares_disjoint_roles_without_attesting_to_power_or_vali
     )
     second["reads"]["seed"] = 99
     second["haplotypes"][0]["repeat_units"] = ["AAAA", "CCCC"]
+    second["haplotypes"][1]["repeat_units"] = ["CCCC", "AAAA"]
     raw = simulation_protocol(first, second)
     raw["purpose"] = "study-design"
     result = decode(raw)
@@ -218,6 +220,7 @@ def test_relabelled_identical_seed_or_unedited_backbone_does_not_create_independ
     )
     if collision == "seed":
         second["haplotypes"][0]["repeat_units"] = ["AAAA", "CCCC"]
+        second["haplotypes"][1]["repeat_units"] = ["CCCC", "AAAA"]
     else:
         second["reads"]["seed"] = 99
         second["haplotypes"][0]["edits"] = [
@@ -225,6 +228,20 @@ def test_relabelled_identical_seed_or_unedited_backbone_does_not_create_independ
         ]
     with pytest.raises(ValueError, match="families"):
         decode(simulation_protocol(first, second))
+
+
+def test_one_shared_ancestral_haplotype_cannot_be_relabelled_as_independent():
+    first = simulation_case()
+    second = simulation_case(
+        "case-b", group_key="group-b", backbone_family="backbone-b", seed_family="seed-b", pair_family="pair-b"
+    )
+    second["reads"]["seed"] = 99
+    second["haplotypes"][1]["repeat_units"] = ["AAAA", "CCCC"]
+    raw = simulation_protocol(first, second)
+    raw["purpose"] = "study-design"
+
+    with pytest.raises(ValueError, match="families"):
+        decode(raw)
 
 
 def test_aggregate_generation_budget_counts_all_technical_arms():
