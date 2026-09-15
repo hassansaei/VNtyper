@@ -2,20 +2,128 @@
 
 from dataclasses import replace
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from tests.unit.test_calibration_caller_controller import _caller_study
+from tests.unit.test_calibration_caller_protocol import changed_policy, protocol_document
 from tests.unit.test_calibration_portable_background import background
 from vntyper.modules.advntr.advntr_background import BackgroundFitResult
 from vntyper.modules.advntr.advntr_calibration_policy import AdvntrCapabilities, AdvntrToolPin
 from vntyper.scripts.calibration_caller_observations import CallerTruth, CallerTruthRow
+from vntyper.scripts.calibration_caller_protocol import decode_caller_protocol
 from vntyper.scripts.calibration_caller_roster import EligibleCallerMember
-from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
+from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
 
 pytestmark = pytest.mark.unit
+
+
+def _context(protocol=None):
+    study = _caller_study()
+    study = SimpleNamespace(
+        target=study.target,
+        baseline=study.baseline,
+        protocol=study.protocol if protocol is None else protocol,
+        sha256=study.sha256,
+        partitions=study.partitions,
+        exposure_ledger_id=study.exposure_ledger_id,
+    )
+    runs = SimpleNamespace(sha256="6" * 64)
+    identities = (("physical-readset", "1" * 64), ("specimen", "2" * 64))
+    source = SimpleNamespace(
+        role="training",
+        study_sha256=study.sha256,
+        run_manifest_sha256=runs.sha256,
+        identities=identities,
+    )
+    receipt = SimpleNamespace(
+        target="callers",
+        role="training",
+        study_sha256=study.sha256,
+        partition_sha256=study.partitions.sha256,
+        evidence_sha256=source.sha256 if hasattr(source, "sha256") else "7" * 64,
+        membership_sha256=canonical_sha256([{"namespace": name, "sha256": digest} for name, digest in identities]),
+        exposure_ledger_id=study.exposure_ledger_id,
+    )
+    source.sha256 = receipt.evidence_sha256
+    return study, runs, source, receipt
+
+
+def _receipt(module):
+    portable = canonical_json_bytes(background())
+    native = BackgroundFitResult(
+        AdvntrCapabilities("2.4.1", "b" * 64, "a" * 40, (), (), (), (), "c" * 64),
+        "9" * 64,
+        "a" * 64,
+        MappingProxyType({"native.json": "b" * 64}),
+    )
+    result = module._result(
+        SimpleNamespace(sha256="1" * 64),
+        SimpleNamespace(sha256="2" * 64),
+        SimpleNamespace(sha256="3" * 64),
+        SimpleNamespace(sha256="4" * 64),
+        portable,
+        native,
+        ("negative",),
+        ("positive",),
+        ("unknown",),
+    )
+    return portable, result, module.training_background_document(result)
+
+
+@pytest.mark.parametrize("change", ["source", "receipt", "membership"])
+def test_context_refuses_forged_training_source_and_exposure_bindings(change: str) -> None:
+    module = __import__("vntyper.scripts.calibration_caller_background_training", fromlist=["x"])
+    study, runs, source, receipt = _context()
+    if change == "source":
+        source.role = "policy-selection"
+    elif change == "receipt":
+        receipt.evidence_sha256 = "8" * 64
+    else:
+        receipt.membership_sha256 = "8" * 64
+    with (
+        patch.object(module, "target_study_document"),
+        patch.object(module, "target_runs_document"),
+        patch.object(module, "role_source_document"),
+        patch.object(module, "exposure_receipt_document"),
+        pytest.raises(ValueError, match="training source|receipt membership"),
+    ):
+        module._require_context(study, runs, source, receipt)
+
+
+def test_context_accepts_exact_baseline_when_all_candidates_are_legacy() -> None:
+    module = __import__("vntyper.scripts.calibration_caller_background_training", fromlist=["x"])
+    baseline = _caller_study().protocol.baseline_policy
+    legacy = changed_policy(**{"/components/advntr/calibrated_calling/mode": "legacy"})
+    protocol = decode_caller_protocol(protocol_document(baseline, [(legacy, 1)]), baseline_policy=baseline)
+    study, runs, source, receipt = _context(protocol)
+    with (
+        patch.object(module, "target_study_document"),
+        patch.object(module, "target_runs_document"),
+        patch.object(module, "role_source_document"),
+        patch.object(module, "exposure_receipt_document"),
+    ):
+        assert module._require_context(study, runs, source, receipt) == protocol
+
+
+@pytest.mark.parametrize("change", ["overlap", "empty-artifacts", "artifact-hash", "training-hash", "receipt-hash"])
+def test_training_background_decoder_refuses_forged_membership_and_hashes(change: str) -> None:
+    module = __import__("vntyper.scripts.calibration_caller_background_training", fromlist=["x"])
+    portable, _result, document = _receipt(module)
+    if change == "overlap":
+        document["diagnostic_positive_keys"] = ["negative"]
+    elif change == "empty-artifacts":
+        document["fitter_artifact_sha256"] = {}
+    elif change == "artifact-hash":
+        document["fitter_artifact_sha256"] = {"native.json": "invalid"}
+    elif change == "training-hash":
+        document["training_evidence_sha256"] = "0" * 64
+    else:
+        document["sha256"] = "0" * 64
+    with pytest.raises(ValueError):
+        module.decode_training_background_document(document, portable)
 
 
 def test_staging_includes_known_controls_and_cases_but_explicitly_excludes_unknown(tmp_path: Path) -> None:
