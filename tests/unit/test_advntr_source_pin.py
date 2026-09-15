@@ -84,9 +84,9 @@ def test_the_source_revision_is_pinned_to_a_full_commit_sha():
     assert re.fullmatch(r"[0-9a-f]{40}", commit), f"GIT_COMMIT must be a full 40-character SHA, got {commit!r}"
 
 
-def test_pinned_commit_is_v230_release():
-    """GIT_COMMIT must match the released v2.4.0 calibration implementation."""
-    assert _cfg_value("GIT_COMMIT") == "98ca8827def04be7eb209f7f954832d40356123c"
+def test_pinned_commit_is_v241_release():
+    """GIT_COMMIT must match the released v2.4.1 calibration implementation."""
+    assert _cfg_value("GIT_COMMIT") == "6e854d8eea077580cb9913c54442f2f804acf5dd"
 
 
 def test_the_branch_is_the_forks_default():

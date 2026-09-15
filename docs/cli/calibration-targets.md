@@ -15,9 +15,9 @@ activation requires a separately approved portable bundle.
 
 Length estimation does not resolve two allele lengths, assign a mutation to an allele,
 or alter the genotype. Its fitted family is affine regression on either ratio, with
-an intercept and a training-only mean baseline. Physical hypotheses require an
-annotation that explicitly supports their geometry. No fitted coefficients ship as
-a default model.
+an intercept and a training-only mean baseline. Physical A/F hypotheses are reserved
+in the protocol but currently remain fit-ineligible and cannot be loaded as runtime
+models. No fitted coefficients ship as a default model.
 
 Metadata describes applicability and supports separate confounding checks. Assay,
 processing labels, specimen identifiers, and source labels are not predictive features.
@@ -122,6 +122,12 @@ vntyper calibrate fit --target length --objective length-total-v1 \
 For callers, use `--target callers`, omit `--length-annotation`, and fit with
 `--objective caller-safety-v1`. The source directory contains
 `roles/<role>/source.json` for all four declared roles. Truth assets remain separate.
+When the protocol includes an exact adVNTR policy, fitting also requires
+`--advntr-executable /path/to/advntr`. Its installed version and build must match the
+frozen capture producer. The controller fits the background from authorized training
+captures and negative truth only; known positive training observations contribute
+diagnostics. Unknown VNTR lengths remain null diagnostic metadata. Every exact
+selection run must use the resulting portable background bytes.
 
 Fitting records exposure before opening training or selection outcomes. Length fitting
 uses only training truth to estimate coefficients and the baseline. Selection compares
@@ -227,11 +233,12 @@ accuracy on external samples.
 vntyper pipeline --bam reads.bam -o results/ \
   --length-model approved-length/ --length-context length-context.json
 
-vntyper pipeline --bam reads.bam -o results/ \
+vntyper pipeline --bam reads.bam -o results/ --extra-modules advntr \
   --calibration-bundle approved-callers/ --calibration-context caller-context.json
 ```
 
 Caller context must match the bundle's frozen applicability and native capture policy.
+Enable the adVNTR extra module explicitly when the approved caller bundle includes it.
 Native model bytes and installed adVNTR capabilities are checked independently.
 Caller-v2 profiles cannot bypass bundle approval through `--decision-profile`. Run-local
 snapshots preserve the verified portable bundle; reports check the recorded bundle
