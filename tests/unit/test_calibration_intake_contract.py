@@ -283,6 +283,7 @@ def test_locked_membership_only_rows_are_allowed_without_artifact_or_truth() -> 
     raw = synthetic_intake()
     raw["artifacts"] = []
     raw["truth"] = []
+    raw["aliases"] = []
     raw["assignments"][0].update(role="locked-heldout", provenance="external-custodian")
 
     declaration = decode_intake(raw)
@@ -290,6 +291,45 @@ def test_locked_membership_only_rows_are_allowed_without_artifact_or_truth() -> 
     assert declaration.artifacts == ()
     assert declaration.truth == ()
     assert declaration.assignments[0].role == "locked-heldout"
+
+
+def test_locked_membership_rejects_source_aliases_even_without_artifacts_or_truth() -> None:
+    raw = synthetic_intake()
+    raw["artifacts"] = []
+    raw["truth"] = []
+    raw["assignments"][0].update(role="locked-heldout", provenance="external-custodian")
+    with pytest.raises(ValueError, match="locked.*alias"):
+        decode_intake(raw)
+
+
+@pytest.mark.parametrize("genotype,variants", [("positive", []), ("negative", []), ("unknown", ["synthetic-variant"])])
+def test_missing_truth_cannot_carry_a_genotype_or_variant_label(genotype: str, variants: list[str]) -> None:
+    raw = synthetic_intake()
+    raw["truth"][0].update(status="missing", genotype=genotype, variants=variants, length=None)
+    with pytest.raises(ValueError, match="missing.*truth"):
+        decode_intake(raw)
+
+
+@pytest.mark.parametrize(
+    "measurement,lower,upper", [("interval", 100, None), ("interval", None, 200), ("censored", 100, 200)]
+)
+def test_length_bound_cardinality_matches_measurement_kind(
+    measurement: str, lower: int | None, upper: int | None
+) -> None:
+    raw = synthetic_intake()
+    raw["truth"][0]["length"] = {
+        "allele_1": None,
+        "allele_2": None,
+        "unit": "repeat-count",
+        "repeat_unit_bp": 60,
+        "boundary_definition": "target-v1",
+        "measurement": measurement,
+        "lower_bound": lower,
+        "upper_bound": upper,
+        "conversion_id": None,
+    }
+    with pytest.raises(ValueError, match="bound"):
+        decode_intake(raw)
 
 
 def test_locked_membership_requires_external_custodian_provenance() -> None:

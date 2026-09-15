@@ -220,7 +220,7 @@ def decode_intake(value: object) -> IntakeDeclaration:
     alias_values = {row.alias for row in aliases}
     if alias_values & specimen_keys:
         raise ValueError("calibration alias cannot shadow a specimen key")
-    _validate_role_boundaries(specimens, artifacts, truth, assignments)
+    _validate_role_boundaries(specimens, artifacts, truth, assignments, aliases)
     declaration = IntakeDeclaration(specimens, artifacts, aliases, truth, assignments, "")
     return IntakeDeclaration(
         specimens, artifacts, aliases, truth, assignments, canonical_sha256(encode_intake(declaration))
@@ -335,12 +335,15 @@ def _decode_truth(value: object) -> TruthRecord:
     if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
         raise ValueError("calibration truth source digest must be a lowercase SHA-256")
     length = None if raw["length"] is None else _decode_length(raw["length"])
+    variants = _string_list(raw["variants"], "calibration truth variants", allow_empty=True)
     if status == "missing" and length is not None:
         raise ValueError("missing calibration truth requires null length")
+    if status == "missing" and (genotype != "unknown" or variants):
+        raise ValueError("missing calibration truth requires unknown genotype and no variants")
     return TruthRecord(
         _nonempty_string(raw["specimen_key"], "calibration truth specimen key"),
         cast(Genotype, genotype),
-        _string_list(raw["variants"], "calibration truth variants", allow_empty=True),
+        variants,
         length,
         _nonempty_string(raw["method"], "calibration truth method"),
         digest,
@@ -369,6 +372,10 @@ def _decode_length(value: object) -> LengthTruth:
         raise ValueError("interval or censored calibration length truth forbids exact allele values")
     if measurement != "exact" and lower is None and upper is None:
         raise ValueError("interval or censored calibration length truth requires a directional bound")
+    if measurement == "interval" and (lower is None or upper is None):
+        raise ValueError("interval calibration length truth requires both bounds")
+    if measurement == "censored" and lower is not None and upper is not None:
+        raise ValueError("censored calibration length truth requires exactly one directional bound")
     if unit == "repeat-count":
         for allele in (allele_1, allele_2):
             if allele is not None and allele.denominator != 1:
@@ -417,10 +424,12 @@ def _validate_role_boundaries(
     artifacts: tuple[InputArtifact, ...],
     truth: tuple[TruthRecord, ...],
     assignments: tuple[Assignment, ...],
+    aliases: tuple[SpecimenAlias, ...],
 ) -> None:
     specimens_by_key = {row.key: row for row in specimens}
     artifacts_by_specimen = {row.specimen_key for row in artifacts}
     truth_by_specimen = {row.specimen_key for row in truth}
+    aliases_by_specimen = {row.specimen_key for row in aliases}
     for assignment in assignments:
         specimen = specimens_by_key[assignment.specimen_key]
         if assignment.role in _CONFIRMATORY_ROLES and specimen.identity_status == "unresolved":
@@ -432,6 +441,8 @@ def _validate_role_boundaries(
                 raise ValueError("locked held-out membership forbids artifact paths")
             if assignment.specimen_key in truth_by_specimen:
                 raise ValueError("locked held-out membership forbids truth")
+            if assignment.specimen_key in aliases_by_specimen:
+                raise ValueError("locked held-out membership forbids source aliases")
         elif assignment.specimen_key not in artifacts_by_specimen:
             raise ValueError("non-locked calibration specimen requires an input artifact")
 
