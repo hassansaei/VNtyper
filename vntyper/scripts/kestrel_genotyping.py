@@ -27,14 +27,15 @@ import logging
 import os
 import shutil
 from collections.abc import Callable, Mapping
-from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
 from vntyper.scripts.artifact_publish import discard_partial, partial_path, publish_partial
+from vntyper.scripts.calibration_artifact_io import thaw_json
 from vntyper.scripts.command_builders import build_sam_to_bam_command, build_samtools_index_command, quote_path
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.flagging import (
@@ -887,10 +888,11 @@ def process_kmer_results(
     if raw_capture_observer is not None:
         if identity_component is None:
             raise ValueError("Kestrel raw capture requires an explicit frozen identity component")
+        capture_config = cast(dict[str, object], thaw_json(kestrel_config))
         raw_capture_observer(
             combined_df.copy(deep=True),
             merged_motifs.copy(deep=True),
-            deepcopy(kestrel_config),
+            capture_config,
             selection,
             identity_component,
         )

@@ -165,6 +165,41 @@ def test_live_postprocessing_observer_receives_complete_defensive_raw_inputs_bef
     assert bool(prefilter.iloc[1]["flag_filter_pass"]) is False
 
 
+def test_live_postprocessing_observer_materializes_recursively_frozen_config(tmp_path) -> None:
+    run_configuration = resolve_run_configuration()
+    frozen = run_configuration.kestrel
+    identity = translation_component_from_config(run_configuration.nomenclature)
+    identity_motifs = nomenclature_config["motifs"]
+    assert isinstance(identity_motifs, dict)
+    raw = kestrel_stage_frame("raw")
+    raw["Motifs"] = "S-C"
+    raw["Motif_sequence"] = identity_motifs["C"] + identity_motifs["S"]
+    motifs = pd.DataFrame({"Motif": ["S"], "Motif_sequence": [identity_motifs["S"]]})
+    observed: dict[str, object] = {}
+
+    def observe(_raw, _motifs, frozen_config, _selection, _identity) -> None:
+        observed["config"] = frozen_config
+        frozen_config["confidence_assignment"]["reporting_floor"] = 0.0
+
+    result = process_kmer_results(
+        raw,
+        motifs,
+        str(tmp_path),
+        frozen,
+        identity_component=identity,
+        raw_capture_observer=observe,
+    )
+
+    captured = observed["config"]
+    assert isinstance(captured, dict)
+    captured_confidence = captured["confidence_assignment"]
+    assert isinstance(captured_confidence, dict)
+    frozen_confidence = frozen["confidence_assignment"]
+    assert isinstance(frozen_confidence, MappingProxyType)
+    assert frozen_confidence["reporting_floor"] == 0.00469
+    assert len(result) == 1
+
+
 def test_live_raw_capture_observer_requires_explicit_frozen_identity(tmp_path) -> None:
     with pytest.raises(ValueError, match="identity"):
         process_kmer_results(
