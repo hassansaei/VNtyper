@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pysam
 import pytest
+from pysam.version import __htslib_version__
 
 from vntyper.scripts.length_annotation import LengthAnnotation, decode_length_annotation
 from vntyper.scripts.length_depth_io import read_length_depth
@@ -95,7 +96,7 @@ def _context(
             "fragment_reader": {
                 "name": "pysam",
                 "version": pysam.__version__,
-                "htslib_version": pysam.version.__htslib_version__,
+                "htslib_version": __htslib_version__,
                 "alignment_semantics": "explicit-filtered-aligned-pairs-v1",
             },
             "preprocessing_id": "generated-synthetic-v1",

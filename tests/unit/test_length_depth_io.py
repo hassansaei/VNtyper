@@ -11,6 +11,7 @@ from unittest import mock
 
 import pysam
 import pytest
+from pysam.version import __htslib_version__
 
 from vntyper.scripts import length_depth_io
 from vntyper.scripts.length_annotation import LengthAnnotation, decode_length_annotation
@@ -81,7 +82,7 @@ def _context(input_sha256: str, annotation: LengthAnnotation, **changes: object)
         "fragment_reader": {
             "name": "pysam",
             "version": pysam.__version__,
-            "htslib_version": pysam.version.__htslib_version__,
+            "htslib_version": __htslib_version__,
             "alignment_semantics": "explicit-filtered-aligned-pairs-v1",
         },
         "preprocessing_id": "synthetic-preprocessing-v1",
@@ -524,7 +525,7 @@ def test_cram_uses_reference_environment_seam_and_restores_on_depth_failure(
             {
                 "name": "pysam",
                 "version": "999.0",
-                "htslib_version": pysam.version.__htslib_version__,
+                "htslib_version": __htslib_version__,
                 "alignment_semantics": "explicit-filtered-aligned-pairs-v1",
             },
             "pysam version",
