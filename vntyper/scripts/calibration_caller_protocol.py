@@ -134,8 +134,15 @@ def _rate(
     maximum: float,
     positive: bool = False,
 ) -> Fraction:
-    if not isinstance(value, float) or not math.isfinite(value) or not minimum <= value <= maximum:
-        _fail(f"caller protocol acceptance {field} must be a finite float in [{minimum}, {maximum}]")
+    # Canonical JSON writes integral rates such as 1.0 as 1; both numeric forms
+    # must decode identically while booleans remain invalid protocol values.
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not minimum <= value <= maximum
+        or not math.isfinite(value)
+    ):
+        _fail(f"caller protocol acceptance {field} must be a finite number in [{minimum}, {maximum}]")
     if positive and value == 0:
         _fail(f"caller protocol acceptance {field} must be positive")
     return Fraction(str(value))

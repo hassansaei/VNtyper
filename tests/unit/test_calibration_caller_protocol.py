@@ -318,7 +318,9 @@ def test_uncertainty_and_multiplicity_rules_are_frozen(section: str, field: str,
         ("minimum_positive_groups", True),
         ("minimum_negative_groups", 0),
         ("maximum_fpr_upper", float("nan")),
-        ("maximum_fpr_upper", 1),
+        ("maximum_fpr_upper", True),
+        ("maximum_fpr_upper", "1"),
+        ("maximum_fpr_upper", 10**500),
         ("minimum_sensitivity_delta_lower", -1.01),
         ("maximum_no_call_increase", 1.01),
         ("minimum_exact_benefit", 0.0),
@@ -335,6 +337,24 @@ def test_acceptance_limits_have_strict_types_and_domains(field: str, value: obje
 
     with pytest.raises(ValueError, match=field):
         protocols.decode_caller_protocol(raw, baseline_policy=baseline)
+
+
+def test_integral_rate_boundaries_survive_canonical_json_roundtrip() -> None:
+    from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
+
+    protocols = import_module("vntyper.scripts.calibration_caller_protocol")
+    baseline = decode_caller_policy_values(policy_document())
+    raw = protocol_document(baseline)
+    acceptance = raw["acceptance"]
+    assert isinstance(acceptance, dict)
+    acceptance.update(maximum_fpr_upper=1.0, minimum_sensitivity_delta_lower=-1.0)
+    expected = protocols.decode_caller_protocol(raw, baseline_policy=baseline)
+    canonical = load_strict_json_object(canonical_json_bytes(raw))
+    assert canonical["acceptance"]["maximum_fpr_upper"] == 1
+    observed = protocols.decode_caller_protocol(canonical, baseline_policy=baseline)
+    assert observed == expected
+    assert observed.gate_rules.maximum_fpr_upper == Fraction(1)
+    assert observed.gate_rules.minimum_sensitivity_delta_lower == Fraction(-1)
 
 
 @pytest.mark.parametrize(
