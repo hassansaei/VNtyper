@@ -233,11 +233,50 @@ def test_no_beneficial_candidate_is_a_completed_failed_selection() -> None:
     assert result.selection.selected_candidate_id is None
 
 
-def test_advntr_policy_change_is_recapture_and_needs_no_scalar_attestation() -> None:
+@pytest.mark.parametrize(
+    "pointer,value",
+    [
+        ("/components/advntr/calibrated_calling/mode", "legacy"),
+        ("/components/advntr/calibrated_calling/cutoff", 0.025),
+        ("/components/advntr/calibrated_calling/minimum_read_support", 5),
+    ],
+)
+def test_advntr_native_decision_policy_changes_use_verified_scalar_replay(pointer: str, value: object) -> None:
+    callers = import_module("vntyper.scripts.calibration_callers")
+    baseline = decode_caller_policy_values(policy_document())
+    candidate = changed_policy(**{pointer: value})
+    raw_protocol = protocol_document(baseline, [(candidate, 1)])
+    acceptance = raw_protocol["acceptance"]
+    assert isinstance(acceptance, dict)
+    acceptance.update(
+        minimum_positive_groups=1,
+        minimum_negative_groups=1,
+        maximum_fpr_upper=1.0,
+        minimum_sensitivity_delta_lower=-1.0,
+    )
+    protocol = decode_caller_protocol(raw_protocol, baseline_policy=baseline)
+
+    result = callers.evaluate_caller_grid(protocol, _roster(), _evidence(protocol))
+
+    assert result.candidates[0].execution_kind == "scalar-replay"
+
+
+@pytest.mark.parametrize(
+    "pointer,value",
+    [
+        ("/components/advntr/calibrated_calling/rare_unit_fraction", 0.2),
+        ("/components/advntr/calibrated_calling/adapter_filter", True),
+        ("/components/advntr/calibrated_calling/minimum_read_match_ratio", 0.8),
+        ("/components/advntr/calibrated_calling/prune_reverse", True),
+    ],
+)
+def test_advntr_capture_policy_change_is_recapture_and_needs_no_scalar_attestation(
+    pointer: str, value: object
+) -> None:
     callers = import_module("vntyper.scripts.calibration_callers")
     artifacts = import_module("vntyper.scripts.calibration_caller_artifacts")
     baseline = decode_caller_policy_values(policy_document())
-    candidate = changed_policy(**{"/components/advntr/calibrated_calling/cutoff": 0.025})
+    candidate = changed_policy(**{pointer: value})
     raw_protocol = protocol_document(baseline, [(candidate, 1)])
     acceptance = raw_protocol["acceptance"]
     assert isinstance(acceptance, dict)

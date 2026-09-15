@@ -26,6 +26,13 @@ EvidenceDisposition = Literal["called", "negative", "no-call", "zero-candidate",
 SelectionStatus = Literal["selected", "no-feasible-candidate", "not-applicable"]
 _NON_SELECTION_PHASES = {"validation", "locked-heldout", "development-assessment"}
 _ADVNTR_PREFIX = "/components/advntr/calibrated_calling/"
+_ADVNTR_REPLAY_POINTERS = frozenset(
+    {
+        f"{_ADVNTR_PREFIX}mode",
+        f"{_ADVNTR_PREFIX}cutoff",
+        f"{_ADVNTR_PREFIX}minimum_read_support",
+    }
+)
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -120,7 +127,10 @@ def _expected_execution(protocol: CallerProtocol, candidate_id: str) -> Executio
         for pointer, value in candidate.policy.values.items()
         if value != protocol.baseline_policy.values[pointer]
     }
-    return "recapture" if any(pointer.startswith(_ADVNTR_PREFIX) for pointer in changed) else "scalar-replay"
+    requires_recapture = any(
+        pointer.startswith(_ADVNTR_PREFIX) and pointer not in _ADVNTR_REPLAY_POINTERS for pointer in changed
+    )
+    return "recapture" if requires_recapture else "scalar-replay"
 
 
 def _observations(policy: CallerPolicyEvidence) -> tuple[CallerObservation, ...]:
