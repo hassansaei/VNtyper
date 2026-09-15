@@ -49,6 +49,39 @@ def test_invalid_or_duplicate_truth_is_refused(tmp_path, rows):
         read_cohort_manifest(manifest(tmp_path, rows))
 
 
+def test_absent_truth_variant_column_leaves_every_identity_unavailable(tmp_path):
+    from vntyper.scripts.calibration_cohort_manifest import read_cohort_manifest
+
+    rows = read_cohort_manifest(manifest(tmp_path, ["a\ta.bam\tGRCh38\tpositive\t\t\t"]))
+    assert rows[0].truth_variant is None
+
+
+def test_declared_truth_variant_is_preserved_and_an_empty_cell_stays_unavailable(tmp_path):
+    from vntyper.scripts.calibration_cohort_manifest import read_cohort_manifest
+
+    header = "sample_id\tbam\tassembly\tgenotype\ttruth_variant"
+    rows = read_cohort_manifest(
+        manifest(
+            tmp_path,
+            ["a\ta.bam\tGRCh38\tpositive\tMUC1-X-60-coding-v1|60|59|-|C", "b\tb.bam\tGRCh38\tpositive\t"],
+            header,
+        )
+    )
+    assert rows[0].truth_variant == "MUC1-X-60-coding-v1|60|59|-|C"
+    assert rows[1].truth_variant is None
+
+
+@pytest.mark.parametrize("genotype", ["negative", "unknown", ""])
+def test_a_confirmed_variant_without_a_positive_genotype_is_refused(tmp_path, genotype):
+    from vntyper.scripts.calibration_cohort_manifest import read_cohort_manifest
+
+    header = "sample_id\tbam\tassembly\tgenotype\ttruth_variant"
+    with pytest.raises(ValueError, match="truth_variant"):
+        read_cohort_manifest(
+            manifest(tmp_path, [f"a\ta.bam\tGRCh38\t{genotype}\tMUC1-X-60-coding-v1|60|59|-|C"], header)
+        )
+
+
 def test_minimal_manifest_and_unknown_column_refusal(tmp_path):
     from vntyper.scripts.calibration_cohort_manifest import read_cohort_manifest
 

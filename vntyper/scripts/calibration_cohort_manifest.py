@@ -12,7 +12,15 @@ from pathlib import Path
 from vntyper.scripts.calibration_secure_io import read_regular_path
 
 _REQUIRED = {"sample_id", "bam", "assembly"}
-_OPTIONAL = {"genotype", "allele_1", "allele_2", "group_id", "kestrel_result", "advntr_result"}
+_OPTIONAL = {
+    "genotype",
+    "allele_1",
+    "allele_2",
+    "group_id",
+    "kestrel_result",
+    "advntr_result",
+    "truth_variant",
+}
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class CohortSample:
     kestrel_result: Path | None = None
     advntr_result: Path | None = None
     length_reason: str | None = None
+    truth_variant: str | None = None
 
 
 def _path(raw: str, parent: Path) -> Path | None:
@@ -51,6 +60,11 @@ def _length(first: str, second: str) -> float | None:
 def read_cohort_manifest(path: Path) -> tuple[CohortSample, ...]:
     """Read strict TSV rows without opening alignment or caller outcomes.
 
+    The optional ``truth_variant`` column states the independently confirmed variant
+    identity of a positive sample, so exact-identity correctness can be scored instead
+    of detection alone. An empty cell leaves that identity unavailable, which is not the
+    same claim as an absent variant: only a ``negative`` genotype asserts that.
+
     Args:
         path: Local TSV with required sample_id, bam and assembly columns.
 
@@ -58,7 +72,8 @@ def read_cohort_manifest(path: Path) -> tuple[CohortSample, ...]:
         Sample-sorted immutable rows, preserving missing targets independently.
 
     Raises:
-        ValueError: If columns, truth, identities, paths or row geometry differ.
+        ValueError: If columns, truth, identities, paths or row geometry differ, or if a
+            ``truth_variant`` is declared for a sample whose genotype is not positive.
     """
     parent = path.resolve().parent
     reader = csv.DictReader(io.StringIO(read_regular_path(path).decode("utf-8-sig")), delimiter="\t")
@@ -93,6 +108,12 @@ def read_cohort_manifest(path: Path) -> tuple[CohortSample, ...]:
         genotype = raw.get("genotype", "")
         if genotype not in {"", "unknown", "positive", "negative"}:
             raise ValueError("cohort genotype must be positive, negative, unknown, or empty")
+        truth_variant = raw.get("truth_variant", "") or None
+        if truth_variant is not None and genotype != "positive":
+            raise ValueError(
+                "cohort truth_variant requires genotype positive; "
+                f"sample {identity} declares genotype {genotype or 'unknown'!r}"
+            )
         identities.add(identity)
         paths.add(bam)
         group = "declared:" + raw["group_id"] if raw.get("group_id") else "sample:" + identity
@@ -107,6 +128,7 @@ def read_cohort_manifest(path: Path) -> tuple[CohortSample, ...]:
                 _path(raw.get("kestrel_result", ""), parent),
                 _path(raw.get("advntr_result", ""), parent),
                 "incomplete_allele_pair" if bool(raw.get("allele_1")) != bool(raw.get("allele_2")) else None,
+                truth_variant,
             )
         )
     if not rows:
