@@ -160,6 +160,80 @@ def test_coverage_failure_is_not_replaced_by_cleanup_failure(tmp_path: Path) -> 
         )
 
 
+def test_optional_length_consumer_runs_after_coverage_before_plan_close() -> None:
+    """Length extraction must retain the same proven alignment descriptor lifetime."""
+    events: list[str] = []
+
+    class RecordingPlan(AlignmentPlan):
+        def close(self) -> None:
+            events.append("close")
+
+    plan = RecordingPlan(
+        input_path="/input/patient.bam",
+        view_path="/run/input.bam",
+        file_format="bam",
+        index_path="/run/input.bam.bai",
+        reference_path=None,
+        reference_source="not-required",
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+    )
+
+    calculate_alignment_coverage(
+        plan=plan,
+        region="chr1:10-20",
+        reference_assembly="hg19",
+        threads=2,
+        config={},
+        output_dir="/coverage",
+        coverage_calculator=lambda **kwargs: events.append("coverage"),
+        region_resolver=lambda **kwargs: "unused",
+        length_consumer=lambda received: events.append("length" if received is plan else "wrong-plan"),
+    )
+
+    assert events == ["coverage", "length", "close"]
+
+
+def test_length_consumer_failure_releases_plan_and_remains_primary() -> None:
+    """A measurement failure must close the plan without being hidden by cleanup."""
+    events: list[str] = []
+
+    class CleanupFailingPlan(AlignmentPlan):
+        def close(self) -> None:
+            events.append("close")
+            raise RuntimeError("cleanup failure")
+
+    plan = CleanupFailingPlan(
+        input_path="/input/patient.bam",
+        view_path="/run/input.bam",
+        file_format="bam",
+        index_path="/run/input.bam.bai",
+        reference_path=None,
+        reference_source="not-required",
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+    )
+
+    def fail_length(_plan: AlignmentPlan) -> None:
+        events.append("length")
+        raise ValueError("length measurement failed")
+
+    with pytest.raises(ValueError, match="length measurement failed"):
+        calculate_alignment_coverage(
+            plan=plan,
+            region="chr1:10-20",
+            reference_assembly="hg19",
+            threads=2,
+            config={},
+            output_dir="/coverage",
+            coverage_calculator=lambda **kwargs: events.append("coverage"),
+            region_resolver=lambda **kwargs: "unused",
+            length_consumer=fail_length,
+        )
+
+    assert events == ["coverage", "length", "close"]
+
+
 def test_the_assembly_alias_is_resolved_before_the_geometry_is_looked_up():
     """`hg19` is the default, and the geometry is keyed `GRCh37` (#222).
 
