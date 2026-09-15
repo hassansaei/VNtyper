@@ -126,3 +126,22 @@ def test_closed_checksum_schema(tmp_path, change):
     path.write_bytes(canonical_json_bytes(checksums))
     with pytest.raises(ValueError, match="checksum"):
         loader().load_caller_model_bundle(root)
+
+
+@pytest.mark.parametrize("mode", ["kestrel", "legacy", "exact"])
+def test_bundle_can_snapshot_exact_frozen_bytes_without_reopening_source(tmp_path, mode):
+    root = bundle(tmp_path, mode)
+    decoded = loader().load_caller_model_bundle(root)
+    expected = {path.name: path.read_bytes() for path in root.iterdir()}
+    for path in root.iterdir():
+        path.unlink()
+    assert loader().caller_model_bundle_files(decoded) == expected
+
+
+def test_bundle_snapshot_rejects_replaced_digest_or_background(tmp_path):
+    from dataclasses import replace
+
+    decoded = loader().load_caller_model_bundle(bundle(tmp_path, "exact"))
+    for changed in (replace(decoded, sha256="0" * 64), replace(decoded, background_bytes=b"changed")):
+        with pytest.raises(ValueError):
+            loader().caller_model_bundle_files(changed)

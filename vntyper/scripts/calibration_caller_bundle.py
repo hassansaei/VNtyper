@@ -13,22 +13,30 @@ from typing import NoReturn, cast
 
 from vntyper.scripts.calibration_advntr_runtime_policy import (
     AdvntrRuntimePolicy,
+    advntr_runtime_policy_document,
     decode_advntr_runtime_policy,
     validate_advntr_runtime_policy,
 )
 from vntyper.scripts.calibration_caller_policy import CallerPolicyValues, decode_caller_policy_values
-from vntyper.scripts.calibration_candidate import CandidateEnvelope, decode_candidate, validate_candidate_payload
+from vntyper.scripts.calibration_candidate import (
+    CandidateEnvelope,
+    candidate_document,
+    decode_candidate,
+    validate_candidate_payload,
+)
 from vntyper.scripts.calibration_payload import (
     CallerBundleDescriptor,
     PayloadManifest,
     decode_caller_bundle_descriptor,
     decode_payload_manifest,
+    payload_manifest_document,
     validate_payload_observations,
 )
 from vntyper.scripts.calibration_portable_background import validate_portable_background
 from vntyper.scripts.calibration_portable_projection import (
     PortableApproval,
     decode_portable_approval,
+    portable_approval_document,
     validate_portable_approval_candidate,
 )
 from vntyper.scripts.calibration_secure_io import SecureDirectoryReader
@@ -183,3 +191,46 @@ def load_caller_model_bundle(path: Path) -> CallerModelBundle:
     return CallerModelBundle(
         candidate, manifest, approval, profile, policy, native, payload.get("background.json"), digest
     )
+
+
+def caller_model_bundle_files(bundle: CallerModelBundle) -> dict[str, bytes]:
+    """Reconstruct and verify the exact opened portable bytes for a run snapshot.
+
+    Args:
+        bundle: Bundle loaded from a verified closed portable directory.
+
+    Returns:
+        Fresh exact file bytes, independent of later changes to the source directory.
+
+    Raises:
+        ValueError: If typed content or its transitive checksum commitment changed.
+    """
+    files = {
+        "candidate.json": canonical_json_bytes(candidate_document(bundle.candidate)),
+        "payload-manifest.json": canonical_json_bytes(payload_manifest_document(bundle.payload)),
+        "portable-approval.json": canonical_json_bytes(portable_approval_document(bundle.approval)),
+        "decision-profile.json": bundle.profile.canonical_bytes,
+    }
+    if bundle.advntr_policy is not None:
+        files["advntr-policy.json"] = canonical_json_bytes(advntr_runtime_policy_document(bundle.advntr_policy))
+    if bundle.background_bytes is not None:
+        files["background.json"] = bundle.background_bytes
+    files["caller-bundle.json"] = canonical_json_bytes(
+        {
+            "schema_version": "caller-bundle-v2",
+            "required_callers": list(bundle.caller_policy.required_callers),
+            "components": {
+                name: hashlib.sha256(files[name]).hexdigest() if name in files else None
+                for name in ("decision-profile.json", "advntr-policy.json", "background.json")
+            },
+        }
+    )
+    files["checksums.json"] = canonical_json_bytes(
+        {
+            "schema_version": "calibration-checksums-v1",
+            "files": {name: hashlib.sha256(raw).hexdigest() for name, raw in files.items()},
+        }
+    )
+    if _checksums(files) != bundle.sha256:
+        _fail("runtime caller bundle snapshot differs from its opened checksum commitment")
+    return files
