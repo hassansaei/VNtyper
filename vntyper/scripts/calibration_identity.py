@@ -20,7 +20,7 @@ from vntyper.scripts.calibration_intake_contract import (
 )
 from vntyper.scripts.calibration_manifest import PartitionMember, connected_leakage_groups, decode_partition_manifest
 from vntyper.scripts.calibration_read_fingerprints import LogicalReadFingerprint
-from vntyper.scripts.canonical_json import canonical_sha256
+from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256
 
 logger = logging.getLogger(__name__)
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -389,6 +389,96 @@ def identity_audit_document(declaration: IntakeDeclaration, audit: IdentityAudit
     """
     _, expected = _validated_audit(declaration, audit)
     return _audit_document(expected)
+
+
+def decode_identity_audit(value: object, declaration: IntakeDeclaration) -> IdentityAudit:
+    """Decode an identity audit by recomputing every stored decision.
+
+    Args:
+        value: Strict JSON-compatible identity audit document.
+        declaration: Exact normalized intake whose artifacts were audited.
+
+    Returns:
+        Immutable audit recomputed from the stored fingerprints and priority.
+
+    Raises:
+        ValueError: If the document is malformed, bound to another intake, or
+            contains any decision that differs from deterministic recomputation.
+    """
+    declaration = _validated_intake(declaration)
+    fields = {
+        "schema_version",
+        "intake_sha256",
+        "preprocessing_priority",
+        "fingerprints",
+        "specimen_groups",
+        "specimen_linkage",
+        "execution_representatives",
+        "primary_artifact_by_specimen",
+        "primary_artifact_by_group",
+        "quarantined_specimens",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        _fail("identity audit document fields differ from the closed schema")
+    if value["schema_version"] != "calibration-identity-audit-v1":
+        _fail("identity audit schema version is unsupported")
+    if value["intake_sha256"] != declaration.sha256:
+        _fail("identity audit intake digest differs from the supplied declaration")
+    raw_priority = value["preprocessing_priority"]
+    if not isinstance(raw_priority, list) or any(not isinstance(item, str) for item in raw_priority):
+        _fail("identity audit preprocessing priority must be a JSON string array")
+    raw_fingerprints = value["fingerprints"]
+    if not isinstance(raw_fingerprints, Mapping):
+        _fail("identity audit fingerprints must be an object")
+    fingerprint_fields = {
+        "byte_sha256",
+        "mate_byte_sha256",
+        "alignment_sha256",
+        "named_sequence_sha256",
+        "unnamed_sequence_sha256",
+        "primary_record_count",
+        "sequence_identity_reliable",
+        "reasons",
+    }
+    fingerprints: dict[str, ArtifactFingerprint] = {}
+    for key, raw in raw_fingerprints.items():
+        if not isinstance(key, str) or not isinstance(raw, Mapping) or set(raw) != fingerprint_fields:
+            _fail("identity audit fingerprint fields differ from the closed schema")
+        mate = raw["mate_byte_sha256"]
+        reasons = raw["reasons"]
+        count = raw["primary_record_count"]
+        reliable = raw["sequence_identity_reliable"]
+        digests = (
+            raw["byte_sha256"],
+            raw["alignment_sha256"],
+            raw["named_sequence_sha256"],
+            raw["unnamed_sequence_sha256"],
+        )
+        if (
+            any(not isinstance(item, str) for item in digests)
+            or (mate is not None and not isinstance(mate, str))
+            or not isinstance(reasons, list)
+            or any(not isinstance(item, str) for item in reasons)
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or not isinstance(reliable, bool)
+        ):
+            _fail("identity audit fingerprint values have invalid types")
+        fingerprints[key] = ArtifactFingerprint(
+            key,
+            digests[0],
+            mate,
+            LogicalReadFingerprint(digests[1], digests[2], digests[3], count, reliable, tuple(reasons)),
+        )
+    expected = resolve_identities(declaration, fingerprints, preprocessing_priority=tuple(raw_priority))
+    expected_document = _audit_document(expected)
+    try:
+        matches = canonical_json_bytes(value) == canonical_json_bytes(expected_document)
+    except (TypeError, ValueError) as error:
+        raise ValueError("identity audit document is not canonicalizable JSON") from error
+    if not matches:
+        _fail("identity audit decisions differ from recomputed identity evidence")
+    return expected
 
 
 def build_partition_members(declaration: IntakeDeclaration, audit: IdentityAudit) -> tuple[PartitionMember, ...]:

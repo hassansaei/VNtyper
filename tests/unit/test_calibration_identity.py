@@ -88,6 +88,36 @@ def test_public_audit_document_binds_intake_and_returns_independent_json_content
     assert m.identity_audit_document(decode_intake(raw), result)["fingerprints"]["artifact-0"]["reasons"] == []
 
 
+def test_identity_audit_decoder_recomputes_every_decision_from_fingerprints():
+    m = import_module("vntyper.scripts.calibration_identity")
+    declaration = decode_intake(intake_for())
+    expected = audit(intake_for())
+    document = m.identity_audit_document(declaration, expected)
+    assert m.decode_identity_audit(document, declaration) == expected
+
+    changed = deepcopy(document)
+    changed["primary_artifact_by_group"] = {"forged": "artifact-0"}
+    with pytest.raises(ValueError, match="recomputed"):
+        m.decode_identity_audit(changed, declaration)
+
+
+@pytest.mark.parametrize("mode", ["root-field", "fingerprint-field", "intake"])
+def test_identity_audit_decoder_rejects_malformed_or_differently_bound_documents(mode):
+    m = import_module("vntyper.scripts.calibration_identity")
+    raw = intake_for()
+    declaration = decode_intake(raw)
+    document = m.identity_audit_document(declaration, audit(raw))
+    if mode == "root-field":
+        document["unknown"] = True
+    elif mode == "fingerprint-field":
+        del document["fingerprints"]["artifact-0"]["named_sequence_sha256"]
+    else:
+        raw["artifacts"][0]["path"] = "/synthetic/changed.bam"
+        declaration = decode_intake(raw)
+    with pytest.raises(ValueError, match="identity audit"):
+        m.decode_identity_audit(document, declaration)
+
+
 @pytest.mark.parametrize("change", ["digest", "representative", "intake", "type"])
 def test_public_audit_document_rejects_forged_or_stale_decisions(change):
     m = import_module("vntyper.scripts.calibration_identity")
