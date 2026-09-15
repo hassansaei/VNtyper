@@ -135,7 +135,20 @@ def _number(value: int | float) -> str:
     return str(value)
 
 
-def _policy_argv(policy: CapturePolicy, caller: CallerPolicyValues, background: Path | None) -> list[str]:
+def calibrated_policy_argv(policy: CapturePolicy, caller: CallerPolicyValues, background: Path | None) -> list[str]:
+    """Render the exact representable native policy for capture or runtime calls.
+
+    Args:
+        policy: Full resolved native capture policy.
+        caller: Complete selected caller values.
+        background: Exact-mode background path, otherwise None.
+
+    Returns:
+        Explicit genotype policy arguments including the thread count.
+
+    Raises:
+        ValueError: If policy values conflict or cannot be represented by the CLI.
+    """
     expected = capture_policy_for_caller(policy, caller)
     if expected != policy:
         _fail("adVNTR capture policy differs from the full calibrated caller values")
@@ -238,7 +251,7 @@ def build_capture_plan(
         _fail("adVNTR background path and SHA256 must be present together")
     if background_sha256 is not None:
         _digest(background_sha256, "adVNTR background")
-    policy_args = _policy_argv(capture_policy, caller_policy, background_path)
+    policy_args = calibrated_policy_argv(capture_policy, caller_policy, background_path)
     argv = [
         *argv_prefix,
         "genotype",
