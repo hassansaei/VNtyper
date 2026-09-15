@@ -713,7 +713,7 @@ summary | release-summary | none | always records success, failure, skipped jobs
     tests. Adding `scripts/calibration_sim/` (the package initializer and independent
     haplotype/read generators) took the directory to 46 Python files. Adding its
     finite simulation protocol brought coverage scope to 47 Python files; the atomic
-    simulation generation/inventory helper brings it to all 48 Python files.
+    simulation generation/inventory helper and CLI bring it to all 49 Python files.
     **A new file under `scripts/` must update this sentence** -
     `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
     counts root `scripts/**/*.py` and fails until it does, which is the tripwire working,
