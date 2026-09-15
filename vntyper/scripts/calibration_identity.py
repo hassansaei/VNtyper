@@ -6,12 +6,14 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from types import MappingProxyType
 from typing import NoReturn
 
 from vntyper.scripts.calibration_intake_contract import (
     InputArtifact,
     IntakeDeclaration,
+    LengthTruth,
     TruthRecord,
     decode_intake,
     encode_intake,
@@ -121,23 +123,42 @@ def _truth_conflicts(rows: Sequence[TruthRecord]) -> set[str]:
         reasons.add("genotype_truth_conflict")
     if len({row.variants for row in confirmed if row.variants}) > 1:
         reasons.add("variant_truth_conflict")
-    lengths = {
-        (
-            length.unit,
-            length.repeat_unit_bp,
-            length.boundary_definition,
-            length.conversion_id,
-            tuple(sorted((length.allele_1, length.allele_2))),
-        )
-        for row in confirmed
-        if (length := row.length) is not None
-        and length.measurement == "exact"
-        and length.allele_1 is not None
-        and length.allele_2 is not None
+    lengths = [row.length for row in confirmed if row.length is not None]
+    geometries = {
+        (length.unit, length.repeat_unit_bp, length.boundary_definition, length.conversion_id) for length in lengths
     }
-    if len(lengths) > 1:
+    exact_pairs = {
+        tuple(sorted((length.allele_1, length.allele_2)))
+        for length in lengths
+        if length.measurement == "exact" and length.allele_1 is not None and length.allele_2 is not None
+    }
+    constraints = [_total_length_constraint(length) for length in lengths]
+    if (
+        len(geometries) > 1
+        or len(exact_pairs) > 1
+        or (len(lengths) > 1 and any(constraint is None for constraint in constraints))
+    ):
         reasons.add("length_truth_conflict")
+    elif constraints:
+        lower_bounds = [
+            lower for constraint in constraints if constraint is not None if (lower := constraint[0]) is not None
+        ]
+        upper_bounds = [
+            upper for constraint in constraints if constraint is not None if (upper := constraint[1]) is not None
+        ]
+        if lower_bounds and upper_bounds and max(lower_bounds) > min(upper_bounds):
+            reasons.add("length_truth_conflict")
     return reasons
+
+
+def _total_length_constraint(length: LengthTruth) -> tuple[Fraction | None, Fraction | None] | None:
+    """Project normalized total-diploid truth to its closed feasible interval."""
+    if length.measurement == "exact":
+        if length.allele_1 is None or length.allele_2 is None:
+            return None
+        total = length.allele_1 + length.allele_2
+        return total, total
+    return length.lower_bound, length.upper_bound
 
 
 def _policy_key(artifact: InputArtifact) -> tuple[str, ...]:

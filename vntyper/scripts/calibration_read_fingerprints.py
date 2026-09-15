@@ -66,6 +66,23 @@ def _reduce_chunks(paths: list[Path], directory: Path, fan_in: int) -> Path:
     return paths[0]
 
 
+def _add_sorted_run(levels: list[list[Path]], path: Path, directory: Path, fan_in: int) -> None:
+    level = 0
+    while True:
+        if level == len(levels):
+            levels.append([])
+        levels[level].append(path)
+        if len(levels[level]) < fan_in:
+            return
+        path = _merge_chunks(levels[level], directory)
+        levels[level] = []
+        level += 1
+
+
+def _finish_sorted_runs(levels: list[list[Path]], directory: Path, fan_in: int) -> Path:
+    return _reduce_chunks([path for level in levels for path in level], directory, fan_in)
+
+
 def fingerprint_read_records(
     records: Iterable[PrimaryReadRecord],
     *,
@@ -96,9 +113,9 @@ def fingerprint_read_records(
     count = 0
     reasons: set[str] = set()
     buffers: list[list[str]] = [[], [], []]
-    chunks: list[list[Path]] = [[], [], []]
     with tempfile.TemporaryDirectory(prefix="vntyper-read-audit-", dir=temporary_parent) as temporary:
         directory = Path(temporary)
+        runs: list[list[list[Path]]] = [[], [], []]
         for record in records:
             tokens = read_identity_tokens(record)
             if tokens is None:
@@ -110,20 +127,20 @@ def fingerprint_read_records(
             ):
                 buffer.append(token)
             if len(buffers[0]) == chunk_records:
-                for buffer, stream_chunks in zip(buffers, chunks, strict=True):
-                    stream_chunks.append(_write_chunk(buffer, directory))
+                for buffer, stream_runs in zip(buffers, runs, strict=True):
+                    _add_sorted_run(stream_runs, _write_chunk(buffer, directory), directory, merge_fan_in)
                     buffer.clear()
         if count == 0:
             message = "read fingerprint requires at least one primary record"
             logger.error(message)
             raise ValueError(message)
-        for buffer, stream_chunks in zip(buffers, chunks, strict=True):
+        for buffer, stream_runs in zip(buffers, runs, strict=True):
             if buffer:
-                stream_chunks.append(_write_chunk(buffer, directory))
+                _add_sorted_run(stream_runs, _write_chunk(buffer, directory), directory, merge_fan_in)
                 buffer.clear()
         digests: list[str] = []
-        for stream_chunks in chunks:
-            merged = _reduce_chunks(stream_chunks, directory, merge_fan_in)
+        for stream_runs in runs:
+            merged = _finish_sorted_runs(stream_runs, directory, merge_fan_in)
             with merged.open(encoding="ascii") as handle:
                 fingerprint = digest_sorted_tokens(line.removesuffix("\n") for line in handle)
             if fingerprint.record_count != count:

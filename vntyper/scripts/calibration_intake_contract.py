@@ -121,7 +121,12 @@ class SpecimenAlias:
 
 @dataclass(frozen=True)
 class LengthTruth:
-    """One preserved paired length observation and its measurement semantics."""
+    """One preserved length observation and its measurement semantics.
+
+    Lower and upper bounds are normalized bounds on total diploid length in
+    the declared unit and boundary definition. Raw per-allele bounds require
+    explicit source-adapter conversion before they can populate these fields.
+    """
 
     allele_1: Fraction | None
     allele_2: Fraction | None

@@ -334,6 +334,103 @@ def test_all_independent_truth_conflicts_require_adjudication(kind, reason):
     assert reason in audit(raw).quarantined_specimens["sample-0"]
 
 
+def _partial_length(measurement, lower, upper, *, boundary="target-v1"):
+    return {
+        "allele_1": None,
+        "allele_2": None,
+        "unit": "repeat-count",
+        "repeat_unit_bp": 60,
+        "boundary_definition": boundary,
+        "measurement": measurement,
+        "lower_bound": lower,
+        "upper_bound": upper,
+        "conversion_id": None,
+    }
+
+
+def _truth_rows_with_lengths(*lengths):
+    rows = []
+    for source_row, length in enumerate(lengths, start=1):
+        truth = deepcopy(synthetic_intake()["truth"][0])
+        truth.update(specimen_key="sample-0", source_row=source_row, length=length)
+        rows.append(truth)
+    return rows
+
+
+@pytest.mark.parametrize(
+    "lengths",
+    [
+        (_partial_length("interval", 10, 20), _partial_length("interval", 30, 40)),
+        (_partial_length("censored", 100, None), _partial_length("censored", None, 90)),
+        (
+            {
+                "allele_1": 40,
+                "allele_2": 90,
+                "unit": "repeat-count",
+                "repeat_unit_bp": 60,
+                "boundary_definition": "target-v1",
+                "measurement": "exact",
+                "lower_bound": None,
+                "upper_bound": None,
+                "conversion_id": None,
+            },
+            _partial_length("interval", 140, 150),
+        ),
+        (_partial_length("interval", 10, 20), _partial_length("interval", 10, 20, boundary="other-target")),
+    ],
+)
+def test_disjoint_or_incompatible_partial_length_truth_is_quarantined(lengths):
+    raw = intake_for(1)
+    raw["truth"] = _truth_rows_with_lengths(*lengths)
+    assert "length_truth_conflict" in audit(raw).quarantined_specimens["sample-0"]
+
+    raw["assignments"][0]["role"] = "validation"
+    with pytest.raises(ValueError, match="confirmatory"):
+        audit(raw)
+
+
+def test_overlapping_interval_censor_and_exact_truth_remain_compatible():
+    exact = {
+        "allele_1": 40,
+        "allele_2": 90,
+        "unit": "repeat-count",
+        "repeat_unit_bp": 60,
+        "boundary_definition": "target-v1",
+        "measurement": "exact",
+        "lower_bound": None,
+        "upper_bound": None,
+        "conversion_id": None,
+    }
+    raw = intake_for(1)
+    raw["truth"] = _truth_rows_with_lengths(
+        exact,
+        {**exact, "allele_1": 90, "allele_2": 40},
+        _partial_length("interval", 120, 140),
+        _partial_length("censored", 100, None),
+        _partial_length("censored", None, 150),
+    )
+
+    assert audit(raw).quarantined_specimens == {}
+
+
+def test_different_exact_allele_pairs_conflict_even_when_total_target_matches():
+    first = {
+        "allele_1": 10,
+        "allele_2": 30,
+        "unit": "repeat-count",
+        "repeat_unit_bp": 60,
+        "boundary_definition": "target-v1",
+        "measurement": "exact",
+        "lower_bound": None,
+        "upper_bound": None,
+        "conversion_id": None,
+    }
+    raw = intake_for(1)
+    raw["truth"] = _truth_rows_with_lengths(first, {**first, "allele_1": 20, "allele_2": 20})
+
+    assert "length_truth_conflict" in audit(raw).quarantined_specimens["sample-0"]
+
+
 def test_unresolved_development_identity_is_visible_and_does_not_become_confirmed():
     raw = intake_for(1)
     raw["specimens"][0].update(individual_key=None, identity_status="unresolved")

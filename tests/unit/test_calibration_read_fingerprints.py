@@ -111,10 +111,34 @@ def test_truncated_sort_chunk_is_detected_before_any_fingerprint_is_returned(tmp
 
     def truncate_chunk(values, directory):
         path = original(values, directory)
-        path.write_text(sorted(values)[0] + "\n", encoding="ascii")
+        path.write_text(min(values) + "\n", encoding="ascii")
         return path
 
     monkeypatch.setattr(m, "_write_chunk", truncate_chunk)
     with pytest.raises(ValueError, match="record count"):
         m.fingerprint_read_records([record(), record(name="second")], temporary_parent=tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_many_tiny_chunks_compact_runs_online_with_logarithmic_retained_metadata(tmp_path):
+    m = import_module("vntyper.scripts.calibration_read_fingerprints")
+    records = [record(name=f"synthetic-{index % 17}") for index in range(128)]
+    peak_retained_run_files = 0
+
+    def observed_records():
+        nonlocal peak_retained_run_files
+        for item in records:
+            directories = list(tmp_path.iterdir())
+            if directories:
+                peak_retained_run_files = max(peak_retained_run_files, len(list(directories[0].iterdir())))
+            yield item
+
+    compacted = m.fingerprint_read_records(
+        observed_records(), temporary_parent=tmp_path, chunk_records=1, merge_fan_in=2
+    )
+    baseline = m.fingerprint_read_records(records, temporary_parent=tmp_path, chunk_records=128, merge_fan_in=2)
+
+    assert compacted == baseline
+    assert compacted.primary_record_count == 128
+    assert peak_retained_run_files <= 24
     assert list(tmp_path.iterdir()) == []
