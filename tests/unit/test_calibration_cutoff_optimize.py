@@ -335,7 +335,7 @@ def test_an_infeasible_objective_still_writes_the_report_and_names_the_constrain
 
 def test_constraints_that_are_reachable_apart_but_not_together_are_named_as_such(tmp_path: Path) -> None:
     """ "Neither floor is too high, but no one cutoff meets both" is its own finding."""
-    cohort = {
+    cohort: dict[str, tuple[str, tuple[str, ...], str | None]] = {
         # Both samples carry the identical Depth_Score, so no threshold separates them.
         "specimen-alpha": ("positive", ("0.004",), None),
         "specimen-charlie": ("negative", ("0.004",), None),
