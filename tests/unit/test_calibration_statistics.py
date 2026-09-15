@@ -298,6 +298,54 @@ def test_clopper_pearson_pins_non_boundary_estimate_and_interval() -> None:
     assert one_event.upper == Fraction(336279543117, 755656998139)
 
 
+@pytest.mark.parametrize(
+    ("events", "total", "expected_lower", "expected_upper"),
+    [
+        (600, 1_200, 0.4713232091171471, 0.5286767908828529),
+        (1, 10_000, 0.0000025317775934746866, 0.0005570369979470473),
+        (5_000, 10_000, 0.4901513805899805, 0.5098486194100196),
+        (9_999, 10_000, 0.9994429630020529, 0.9999974682224065),
+    ],
+)
+def test_clopper_pearson_matches_stored_scipy_beta_quantiles_at_cohort_scale(
+    events: int,
+    total: int,
+    expected_lower: float,
+    expected_upper: float,
+) -> None:
+    interval = clopper_pearson_interval(events, total)
+
+    assert float(interval.lower) == pytest.approx(expected_lower, abs=2e-12)
+    assert float(interval.upper) == pytest.approx(expected_upper, abs=2e-12)
+
+
+def test_clopper_pearson_large_sample_bounds_and_monotonicity() -> None:
+    zero = clopper_pearson_interval(0, 10_000)
+    one = clopper_pearson_interval(1, 10_000)
+    almost_all = clopper_pearson_interval(9_999, 10_000)
+    all_events = clopper_pearson_interval(10_000, 10_000)
+
+    assert zero.lower == Fraction(0)
+    assert all_events.upper == Fraction(1)
+    assert zero.lower <= one.lower < almost_all.lower <= all_events.lower
+    assert zero.upper <= one.upper < almost_all.upper <= all_events.upper
+
+
+def test_clopper_pearson_large_sample_respects_exact_custom_confidence() -> None:
+    interval = clopper_pearson_interval(600, 1_200, confidence=Fraction(9, 10))
+
+    assert float(interval.lower) == pytest.approx(0.47586097957789397, abs=2e-12)
+    assert float(interval.upper) == pytest.approx(0.5241390204221059, abs=2e-12)
+
+
+def test_large_binomial_tail_probabilities_preserve_degenerate_boundaries() -> None:
+    assert calibration_statistics._binomial_probability_at_most(0, 1_001, 0.0) == 1.0
+    assert calibration_statistics._binomial_probability_at_most(1_000, 1_001, 1.0) == 0.0
+    assert calibration_statistics._binomial_probability_at_most(1_001, 1_001, 1.0) == 1.0
+    assert calibration_statistics._binomial_probability_at_least(1, 1_001, 0.0) == 0.0
+    assert calibration_statistics._binomial_probability_at_least(1_001, 1_001, 1.0) == 1.0
+
+
 def test_clopper_pearson_confidence_is_keyword_only() -> None:
     with pytest.raises(TypeError):
         clopper_pearson_interval(1, 2, Fraction(9, 10))  # type: ignore[misc]

@@ -10,6 +10,9 @@ from fractions import Fraction
 from itertools import product
 from types import MappingProxyType
 
+# Preserve established small-sample Fraction outputs while every coefficient remains representable as a float.
+_DIRECT_BINOMIAL_MAX_TOTAL = 1_000
+
 
 @dataclass(frozen=True)
 class PairedObservation:
@@ -254,6 +257,8 @@ def _bisect_probability(events: int, total: int, tail: float, *, upper_tail: boo
 
 
 def _binomial_probability_at_least(events: int, total: int, probability: float) -> float:
+    if total > _DIRECT_BINOMIAL_MAX_TOTAL:
+        return _binomial_probability_at_most(total - events, total, 1 - probability)
     return sum(
         math.comb(total, count) * probability**count * (1 - probability) ** (total - count)
         for count in range(events, total + 1)
@@ -261,6 +266,32 @@ def _binomial_probability_at_least(events: int, total: int, probability: float) 
 
 
 def _binomial_probability_at_most(events: int, total: int, probability: float) -> float:
+    if total > _DIRECT_BINOMIAL_MAX_TOTAL:
+        if probability == 0:
+            return 1.0
+        if probability == 1:
+            return float(events == total)
+
+        log_probability = math.log(probability)
+        log_complement = math.log1p(-probability)
+        log_term = (
+            math.lgamma(total + 1)
+            - math.lgamma(events + 1)
+            - math.lgamma(total - events + 1)
+            + events * log_probability
+            + (total - events) * log_complement
+        )
+        maximum_log_term = log_term
+        scaled_sum = 1.0
+        for count in range(events, 0, -1):
+            log_term += math.log(count) - math.log(total - count + 1) + log_complement - log_probability
+            if log_term <= maximum_log_term:
+                scaled_sum += math.exp(log_term - maximum_log_term)
+            else:
+                scaled_sum = scaled_sum * math.exp(maximum_log_term - log_term) + 1
+                maximum_log_term = log_term
+        return min(1.0, math.exp(maximum_log_term + math.log(scaled_sum)))
+
     return sum(
         math.comb(total, count) * probability**count * (1 - probability) ** (total - count)
         for count in range(events + 1)
