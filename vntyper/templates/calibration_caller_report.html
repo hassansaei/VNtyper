@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VNtyper caller calibration — {{ phase }}</title>
+  <style>
+    body { max-width: 1100px; margin: auto; padding: 2rem; font: 16px/1.5 system-ui, sans-serif; color: #17202a; }
+    h1, h2 { color: #17365d; } code { overflow-wrap: anywhere; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
+    th, td { border: 1px solid #aeb6bf; padding: .4rem .6rem; text-align: left; }
+    th { background: #eaf2f8; } .plots { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+    figure { flex: 1 1 380px; margin: 0; } svg { width: 100%; max-width: 420px; }
+  </style>
+</head>
+<body><main>
+  <h1>Caller calibration: {{ phase }}</h1>
+  <p>Objective: <code>lexicographic-safety-v1</code>. Reject safety failures; minimize false calls and wrong tier-A identities;
+    maximize exact recovery, then sensitivity; prefer fewer free parameters, then stable candidate identity.</p>
+  <p>Protocol: <code>{{ protocol }}</code><br>Evidence: <code>{{ evidence }}</code><br>Eligible roster: <code>{{ roster }}</code></p>
+  {% if selected_id %}<p>Selected/frozen candidate: <code>{{ selected_id }}</code></p>{% else %}<p>No candidate selected.</p>{% endif %}
+  <p>No-calls remain in sensitivity and specificity denominators and are listed separately from negative calls.
+    Consequently specificity plus FPR can be less than one. Precision depends on the study prevalence.
+    Exact recovery requires a known complete variant identity set. Counts use one frozen representative per independent group.</p>
+  <p>These are descriptive research results. Rendering a report does not authorize model promotion.
+    Mandatory strata may overlap; their group counts are not added to the pooled count.</p>
+  {% for entry in entries %}
+  <section><h2>{{ entry.label }}: <code>{{ entry.id }}</code></h2>
+    {% if entry.reasons %}<h3>Gate reasons</h3><ul>{% for reason in entry.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
+    {% for population in entry.populations %}<h3>{{ population.name }}</h3>
+      {% if population.rows %}<table><thead><tr><th>Metric</th><th>Observed value and uncertainty</th></tr></thead><tbody>
+        {% for label, value in population.rows %}<tr><th scope="row">{{ label }}</th><td>{{ value }}</td></tr>{% endfor %}
+      </tbody></table>{% else %}<p>insufficient-evidence: no eligible groups in this mandatory stratum.</p>{% endif %}
+    {% endfor %}
+  </section>{% endfor %}
+  <h2>Cutoff operating points</h2>
+  {% if plots %}<p>Only measured scalar cutoffs are connected. No extrapolated endpoints or AUC are inferred.
+    No-calls use the same eligible denominator at every cutoff.</p><div class="plots">
+    {% for plot in plots %}<figure><h3>{{ plot.kind }}</h3>
+      <svg viewBox="0 0 420 400" role="img" aria-label="{{ plot.kind }} operating curve">
+        <path d="M40 20 V340 H360" stroke="#485460" fill="none"/>
+        <polyline points="{{ plot.line }}" stroke="#176b87" stroke-width="2" fill="none"/>
+        {% for point in plot.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="4" fill="#176b87"><title>{{ point.label }}</title></circle>{% endfor %}
+        <text x="36" y="357">0</text><text x="356" y="357">1</text><text x="22" y="25">1</text>
+        <text x="200" y="383" text-anchor="middle">{{ plot.x_label }}</text>
+        <text transform="translate(14,180) rotate(-90)" text-anchor="middle">{{ plot.y_label }}</text>
+      </svg><figcaption>Fixed policy <code>{{ plot.policy }}</code>; no-calls {{ plot.no_calls }}/{{ plot.eligible }}.</figcaption>
+    </figure>{% endfor %}</div>
+  {% else %}<p>No cutoff-search curve in this report. Fixed or multidimensional policies are compared in the tables above.</p>{% endif %}
+</main></body></html>
