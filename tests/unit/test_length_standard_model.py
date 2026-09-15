@@ -121,6 +121,7 @@ def test_standard_model_is_closed_and_rejects_nonfinite_or_wrong_order() -> None
         lambda row: row.update(intercept=10**400),
         lambda row: row.update(feature_order=list(reversed(STANDARD_FEATURE_ORDER))),
         lambda row: row["target"].update(count_convention="unconfirmed"),  # type: ignore[union-attr]
+        lambda row: row.update(model_source=[]),
     ):
         document = _model_document()
         mutate(document)

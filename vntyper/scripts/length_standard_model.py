@@ -209,7 +209,7 @@ def decode_standard_length_model(value: object) -> StandardLengthModel:
         if value[field] != expected:
             raise ValueError(f"standard length model {field} differs")
     source = value["model_source"]
-    if source not in {"packaged-research", "local-research"}:
+    if not isinstance(source, str) or source not in {"packaged-research", "local-research"}:
         raise ValueError("standard length model source is unsupported")
     model = StandardLengthModel(
         cast(str, version),
