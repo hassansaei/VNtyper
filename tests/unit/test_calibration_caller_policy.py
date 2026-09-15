@@ -128,6 +128,7 @@ def test_advntr_pointers_are_present_exactly_when_advntr_is_required() -> None:
         ("/components/kestrel/confidence_assignment/depth_score_thresholds/low", float("nan")),
         ("/components/kestrel/confidence_assignment/depth_score_thresholds/high", float("inf")),
         ("/components/kestrel/confidence_assignment/depth_score_thresholds/high", True),
+        ("/components/kestrel/confidence_assignment/depth_score_thresholds/high", 10**1_000),
     ],
 )
 def test_kestrel_fractional_thresholds_are_finite_unit_numbers(pointer: str, value: object) -> None:
@@ -185,6 +186,7 @@ def test_alternate_depths_preserve_the_v1_partition(low: int, mid_low: int, mid_
     "pointer,value",
     [
         ("/components/advntr/calibrated_calling/mode", "future"),
+        ("/components/advntr/calibrated_calling/mode", []),
         ("/components/advntr/calibrated_calling/cutoff", 0.0),
         ("/components/advntr/calibrated_calling/cutoff", 1.0),
         ("/components/advntr/calibrated_calling/cutoff", True),

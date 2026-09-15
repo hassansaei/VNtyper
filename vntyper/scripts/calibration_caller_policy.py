@@ -94,7 +94,11 @@ def _callers(value: object) -> tuple[CallerName, ...]:
 
 
 def _unit_number(value: object, pointer: str) -> int | float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or (isinstance(value, float) and not math.isfinite(value))
+    ):
         _fail(f"{pointer} must be a finite number between zero and one")
     if not 0 <= value <= 1:
         _fail(f"{pointer} must be between zero and one")
@@ -149,7 +153,7 @@ def _decode_values(value: object, callers: tuple[CallerName, ...]) -> Mapping[st
         _fail("Kestrel alternate-depth partition must satisfy mid_low=low+1 and mid_high>=mid_low+1")
     if "advntr" in callers:
         mode = raw[_ADVNTR_MODE]
-        if mode not in {"legacy", "exact"} or not isinstance(mode, str):
+        if not isinstance(mode, str) or mode not in {"legacy", "exact"}:
             _fail(f"{_ADVNTR_MODE} must be mode legacy or exact")
         rare = raw[_ADVNTR_RARE]
         parsed.update(
