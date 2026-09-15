@@ -158,6 +158,7 @@ def build_length_presentation(
     if configured is None:
         return None
     label, unit, help_text, status_labels, feature_labels = configured
+    raw_status: object
     if "length_estimation_status" not in summary:
         partial = sorted((_SUMMARY_FIELDS - {"length_estimation_status"}) & set(summary))
         if partial:
