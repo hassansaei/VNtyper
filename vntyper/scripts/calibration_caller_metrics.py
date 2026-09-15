@@ -86,7 +86,19 @@ def _variants(values: object) -> None:
         _fail("caller variant identities must be sorted unique non-empty strings in a tuple")
 
 
-def _observations(rows: Sequence[CallerObservation]) -> tuple[CallerObservation, ...]:
+def validate_caller_observations(rows: Sequence[CallerObservation]) -> tuple[CallerObservation, ...]:
+    """Validate fixed calls without calculating rates or requiring a truth label.
+
+    Args:
+        rows: Independent primary observations, including unknowns and no-calls.
+
+    Returns:
+        Immutable observations sorted by group. Population completeness requires
+        the separate frozen-roster binding at the workflow boundary.
+
+    Raises:
+        ValueError: If rows are empty, duplicated, malformed or inconsistent.
+    """
     if not isinstance(rows, (tuple, list)) or not rows:
         _fail("caller metrics require non-empty typed observations")
     keys: set[str] = set()
@@ -165,7 +177,7 @@ def calculate_caller_metrics(rows: Sequence[CallerObservation]) -> CallerMetrics
     Raises:
         ValueError: If observations are empty, inconsistent or duplicated.
     """
-    observations = _observations(rows)
+    observations = validate_caller_observations(rows)
     positives = tuple(row for row in observations if row.truth_positive is True)
     negatives = tuple(row for row in observations if row.truth_positive is False)
     known = len(positives) + len(negatives)
