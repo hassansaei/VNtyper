@@ -85,6 +85,15 @@ def _scale(value: float, lower: float, upper: float, start: float, end: float) -
     return start + (value - lower) * (end - start) / (upper - lower)
 
 
+def _axis_ticks(lower: float, upper: float, start: int, end: int) -> list[dict[str, object]]:
+    if lower == upper:
+        return [{"position": (start + end) / 2, "label": _number(lower)}]
+    return [
+        {"position": start, "label": _number(lower)},
+        {"position": end, "label": _number(upper)},
+    ]
+
+
 def _plots(predictions: tuple[LengthPredictionEvidence, ...]) -> list[dict[str, object]]:
     assessable = tuple(item for item in predictions if item.prediction is not None)
     if not assessable:
@@ -118,6 +127,8 @@ def _plots(predictions: tuple[LengthPredictionEvidence, ...]) -> list[dict[str, 
             "title": "Predicted versus truth",
             "x_label": "Truth (repeat units)",
             "y_label": "Predicted (repeat units)",
+            "x_ticks": _axis_ticks(value_min, value_max, 45, 365),
+            "y_ticks": _axis_ticks(value_min, value_max, 345, 25),
             "points": scatter_points,
             "reference": {"x1": 45, "y1": 345, "x2": 365, "y2": 25},
         },
@@ -125,6 +136,8 @@ def _plots(predictions: tuple[LengthPredictionEvidence, ...]) -> list[dict[str, 
             "title": "Residuals",
             "x_label": "Truth (repeat units)",
             "y_label": "Prediction − truth",
+            "x_ticks": _axis_ticks(truth_min, truth_max, 45, 365),
+            "y_ticks": _axis_ticks(residual_min, residual_max, 345, 25),
             "points": residual_points,
             "reference": {"x1": 45, "y1": zero_y, "x2": 365, "y2": zero_y},
         },
@@ -209,6 +222,7 @@ def _candidate_entry(candidate: LengthCandidateEvaluation, protocol: LengthProto
         "kind": candidate.model_kind,
         "status": candidate.status,
         "reasons": candidate.reasons,
+        "availability_assessed": candidate.status == "evaluated",
         "unavailable": sorted(unavailable.items()),
         "populations": (
             []

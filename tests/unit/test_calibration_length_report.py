@@ -83,12 +83,30 @@ def test_residual_plot_keeps_the_zero_reference_when_all_errors_have_one_sign():
     assert html.count("<line ") == 2  # Scatter identity and residual zero references.
 
 
+def test_plots_show_numeric_minimum_and_maximum_axis_ticks():
+    html = _render(values=(1, 3), truths=(60, 160))
+    compact = " ".join(html.split())
+
+    assert '<text class="x-tick" x="45" y="360" text-anchor="middle">60</text>' in compact
+    assert '<text class="x-tick" x="365" y="360" text-anchor="middle">160</text>' in compact
+    assert '<text class="y-tick" x="40" y="349" text-anchor="end">60</text>' in compact
+    assert '<text class="y-tick" x="40" y="29" text-anchor="end">160</text>' in compact
+
+
+def test_degenerate_plot_range_has_one_centered_numeric_tick_per_axis():
+    report = import_module("vntyper.scripts.calibration_length_report")
+
+    assert report._axis_ticks(60.0, 60.0, 45, 365) == [{"position": 205.0, "label": "60"}]
+    assert report._axis_ticks(0.0, 0.0, 345, 25) == [{"position": 185.0, "label": "0"}]
+
+
 @pytest.mark.parametrize("phase", ["validation", "locked-heldout", "development-assessment"])
 def test_nonselection_report_has_one_fixed_evaluated_candidate_and_no_selection_claim(phase):
     html = _render(phase=phase)
 
     assert phase in html
-    assert "Fixed evaluated candidate" in html
+    assert "fixed evaluated candidate" in html
+    assert "Fixed evaluated candidate" not in html
     assert "Selection is not applicable in this phase" in html
     assert html.count("<svg ") == 2
 
@@ -100,6 +118,8 @@ def test_nonselection_report_keeps_unselected_siblings_visible_without_plotting_
     )
     assert "not-evaluated" in html
     assert "not_fixed_candidate" in html
+    assert "Prediction availability" in html
+    assert "<p>not evaluated.</p>" in html
     assert html.count("<svg ") == 2
 
 
@@ -115,6 +135,7 @@ def test_fit_ineligible_and_unavailable_predictions_remain_visible_without_ident
     assert "fit-ineligible" in html
     assert "physical_model_geometry_evidence_unsupported" in html
     assert "Unavailable predictions" in html
+    assert "<p>not evaluated.</p>" in html
     assert "feature_A_out_of_bounds" in html
     assert "evaluation-" not in html
 

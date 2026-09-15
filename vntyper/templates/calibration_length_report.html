@@ -20,7 +20,7 @@
   {% if selection.status == "selected" %}<p>Selected candidate: <code>{{ selection.selected_candidate_id }}</code>.</p>
   {% elif selection.status == "no-feasible-candidate" %}<p>No feasible candidate was selected.</p>
   {% else %}<p>Selection is not applicable in this phase.
-    The report describes the Fixed evaluated candidate.</p>{% endif %}
+    The report describes the fixed evaluated candidate.</p>{% endif %}
   <p>Counts use one frozen representative per independent group. Mandatory strata can overlap and are evaluated
     separately. Unavailable predictions remain in availability denominators and are never converted into estimates.</p>
   <p>These are descriptive research results. Rendering does not authorize model promotion or evidence exposure.
@@ -30,11 +30,12 @@
     {% if entry.reasons %}<h3>Status reasons</h3><ul>
       {% for reason in entry.reasons %}<li>{{ reason }}</li>{% endfor %}
     </ul>{% endif %}
-    <h3>Unavailable predictions</h3>
-    {% if entry.unavailable %}<ul>
-      {% for reason, count in entry.unavailable %}<li>{{ reason }}: {{ count }}</li>{% endfor %}
-    </ul>
-    {% else %}<p>None.</p>{% endif %}
+    {% if entry.availability_assessed %}<h3>Unavailable predictions</h3>
+      {% if entry.unavailable %}<ul>
+        {% for reason, count in entry.unavailable %}<li>{{ reason }}: {{ count }}</li>{% endfor %}
+      </ul>
+      {% else %}<p>None.</p>{% endif %}
+    {% else %}<h3>Prediction availability</h3><p>not evaluated.</p>{% endif %}
     {% for population in entry.populations %}<h3>{{ population.name }}</h3>
       <p>Gate status: {{ population.status }}{% if population.reasons %}; reasons:
         {{ population.reasons | join(", ") }}{% endif %}.</p>
@@ -50,6 +51,10 @@
           x2="{{ plot.reference.x2 }}" y2="{{ plot.reference.y2 }}" stroke="#8c7b75" stroke-dasharray="5 4"/>{% endif %}
         {% for point in plot.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="4" fill="#176b87">
           <title>{{ point.label }}</title></circle>{% endfor %}
+        {% for tick in plot.x_ticks %}<text class="x-tick" x="{{ tick.position }}" y="360"
+          text-anchor="middle">{{ tick.label }}</text>{% endfor %}
+        {% for tick in plot.y_ticks %}<text class="y-tick" x="40" y="{{ tick.position + 4 }}"
+          text-anchor="end">{{ tick.label }}</text>{% endfor %}
         <text x="205" y="375" text-anchor="middle">{{ plot.x_label }}</text>
         <text transform="translate(15,185) rotate(-90)" text-anchor="middle">{{ plot.y_label }}</text>
       </svg><figcaption>Anonymous eligible observations with available model predictions.</figcaption>
