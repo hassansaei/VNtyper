@@ -22,6 +22,7 @@ import logging
 import math
 from pathlib import Path
 
+from vntyper.scripts.cli_calibration_parser import add_calibrate_subparser, add_pipeline_calibration_arguments
 from vntyper.scripts.reference_registry import list_assemblies
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV, REPORT_IGV_MODES
 from vntyper.version import __version__ as VERSION
@@ -89,47 +90,6 @@ REPORT_IGV_HELP = (
     "'sidecar' leaves it out and points the reader at the self-contained "
     "igv_report.html written beside it. 'off' produces no alignment browser at all."
 )
-
-
-def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
-    """Register the closed calibration command tree.
-
-    Args:
-        subparsers: Top-level VNtyper subparser collection.
-    """
-    calibrate = subparsers.add_parser(
-        "calibrate",
-        help="Extract, fit, validate, or evaluate an opt-in calibration profile.",
-        conflict_handler="resolve",
-    )
-    operations = calibrate.add_subparsers(dest="calibration_operation", required=True)
-
-    intake = operations.add_parser("intake", help="Audit and normalize declared local calibration inputs.")
-    intake.add_argument("--manifest", type=Path, required=True)
-    intake.add_argument("--output", type=Path, required=True)
-    intake.add_argument("--preprocessing-priority", nargs="+", required=True, metavar="ID")
-    intake.add_argument("--cram-references", type=Path, default=None)
-    intake.add_argument("--temporary-directory", type=Path, default=None)
-
-    extract = operations.add_parser("extract", help="Extract immutable replay evidence.")
-    extract.add_argument("--truth", type=Path, required=True)
-    extract.add_argument("--partitions", type=Path, required=True)
-    extract.add_argument("--runs", type=Path, required=True)
-    extract.add_argument("--output", type=Path, required=True)
-
-    fit = operations.add_parser("fit", help="Fit the frozen safety-first candidate family.")
-    fit.add_argument("--evidence", type=Path, required=True)
-    fit.add_argument("--objective", required=True, choices=["lexicographic-safety-v1"])
-    fit.add_argument("--output", type=Path, required=True)
-
-    for name, help_text in (
-        ("validate", "Validate one fixed profile on validation evidence."),
-        ("evaluate", "Evaluate one fixed profile on locked held-out evidence."),
-    ):
-        operation = operations.add_parser(name, help=help_text)
-        operation.add_argument("--profile", type=Path, required=True)
-        operation.add_argument("--evidence", type=Path, required=True)
-        operation.add_argument("--output", type=Path, required=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -208,29 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_pipeline.add_argument("--bam", type=str, help="Path to the BAM file.")
     parser_pipeline.add_argument("--cram", type=str, help="Path to the CRAM file.")
     parser_pipeline.add_argument("--reference-fasta", type=Path, help="Path to the reference FASTA for CRAM decoding.")
-    parser_pipeline.add_argument(
-        "--measure-vntr-length-features",
-        action="store_true",
-        help="Measure research VNTR length features using an explicit annotation and provenance context.",
-    )
-    parser_pipeline.add_argument(
-        "--length-model",
-        type=Path,
-        default=None,
-        help="Approved portable length model bundle directory; implies feature measurement.",
-    )
-    parser_pipeline.add_argument(
-        "--length-annotation",
-        type=Path,
-        default=None,
-        help="Explicit length annotation JSON for measurement-only mode.",
-    )
-    parser_pipeline.add_argument(
-        "--length-context",
-        type=Path,
-        default=None,
-        help="Explicit length measurement provenance context JSON.",
-    )
+    add_pipeline_calibration_arguments(parser_pipeline)
     parser_pipeline.add_argument(
         "--threads",
         type=positive_int,
