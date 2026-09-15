@@ -109,4 +109,8 @@ def build_caller_generated_profile(
             },
         }
     )
-    return parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+    return parse_decision_profile(
+        canonical_json_bytes(document),
+        packaged_document=packaged.document,
+        allow_caller_generated=True,
+    )

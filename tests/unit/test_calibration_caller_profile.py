@@ -14,8 +14,9 @@ from vntyper.scripts.calibration_caller_policy import (
     decode_caller_policy_values,
 )
 from vntyper.scripts.calibration_profiles import build_generated_profile
-from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
+from vntyper.scripts.canonical_json import load_strict_json_object
 from vntyper.scripts.decision_profile import load_packaged_decision_profile, parse_decision_profile
+from vntyper.scripts.decision_profile_schema import validate_complete_inventory
 
 pytestmark = pytest.mark.unit
 
@@ -41,6 +42,11 @@ def _build(*, advntr: bool = False):
         seed=295,
         generator_version="unit-test",
     )
+
+
+def _validate_document(document: dict[str, object]) -> None:
+    packaged = load_packaged_decision_profile()
+    validate_complete_inventory(document, packaged_profile=load_strict_json_object(packaged.canonical_bytes))
 
 
 def test_caller_profile_v2_enumerates_exact_kestrel_capability_and_preserves_v1() -> None:
@@ -96,7 +102,6 @@ def test_advntr_profile_adds_only_the_closed_conditional_subtree_with_nullable_n
 
 
 def test_caller_profile_parser_rejects_unlisted_changes_and_tampered_policy_binding() -> None:
-    packaged = load_packaged_decision_profile()
     generated = _build(advntr=True)
     document = load_strict_json_object(generated.canonical_bytes)
     inventory = document["inventory"]
@@ -106,18 +111,17 @@ def test_caller_profile_parser_rejects_unlisted_changes_and_tampered_policy_bind
     fixed = "/components/nomenclature/thresholds/bam_flank"
     inventory[fixed]["value"] = 9
     with pytest.raises(ValueError, match="fixed-safety|non-caller"):
-        parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+        _validate_document(document)
 
     document = load_strict_json_object(generated.canonical_bytes)
     metadata = document["generated_metadata"]
     assert isinstance(metadata, dict)
     metadata["caller_policy_sha256"] = "f" * 64
     with pytest.raises(ValueError, match="caller policy"):
-        parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+        _validate_document(document)
 
 
 def test_caller_profile_public_validation_rejects_omitted_capability_pointer() -> None:
-    packaged = load_packaged_decision_profile()
     generated = _build()
     document = load_strict_json_object(generated.canonical_bytes)
     metadata = document["generated_metadata"]
@@ -125,7 +129,7 @@ def test_caller_profile_public_validation_rejects_omitted_capability_pointer() -
     metadata["generated_pointers"] = list(KESTREL_CALLER_POLICY_POINTERS[:-1])
 
     with pytest.raises(ValueError, match="generated_pointers"):
-        parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+        _validate_document(document)
 
 
 def test_caller_profile_builder_revalidates_directly_forged_typed_policy() -> None:
@@ -153,22 +157,26 @@ def test_caller_profile_builder_revalidates_directly_forged_typed_policy() -> No
 def test_caller_profile_parser_rejects_noncanonical_generation_metadata(
     field: str, value: object, message: str
 ) -> None:
-    packaged = load_packaged_decision_profile()
     document = load_strict_json_object(_build(advntr=True).canonical_bytes)
     metadata = document["generated_metadata"]
     assert isinstance(metadata, dict)
     metadata[field] = value
 
     with pytest.raises(ValueError, match=message):
-        parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+        _validate_document(document)
 
 
 def test_caller_profile_parser_rejects_changed_caller_field_semantics() -> None:
-    packaged = load_packaged_decision_profile()
     document = load_strict_json_object(_build().canonical_bytes)
     inventory = document["inventory"]
     assert isinstance(inventory, dict)
     inventory[KESTREL_CALLER_POLICY_POINTERS[0]]["unit"] = "other"
 
     with pytest.raises(ValueError, match="semantics"):
-        parse_decision_profile(canonical_json_bytes(document), packaged_document=packaged.document)
+        _validate_document(document)
+
+
+def test_caller_profile_v2_cannot_bypass_bundle_validation_as_a_standalone_profile() -> None:
+    packaged = load_packaged_decision_profile()
+    with pytest.raises(ValueError, match="caller.*bundle"):
+        parse_decision_profile(_build().canonical_bytes, packaged_document=packaged.document)

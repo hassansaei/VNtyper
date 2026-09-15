@@ -96,6 +96,7 @@ def parse_decision_profile(
     raw: bytes | str,
     *,
     packaged_document: Mapping[str, object],
+    allow_caller_generated: bool = False,
 ) -> ResolvedDecisionProfile:
     """Parse and validate one complete explicitly selected decision profile.
 
@@ -103,6 +104,7 @@ def parse_decision_profile(
         raw: UTF-8 JSON bytes or text from the explicit path.
         packaged_document: Verified packaged baseline used for completeness and
             immutable-field checks.
+        allow_caller_generated: Internal bundle-validation admission for schema v2.
 
     Returns:
         Canonical resolved explicit profile.
@@ -111,6 +113,8 @@ def parse_decision_profile(
         ValueError: If JSON decoding or any closed-schema rule fails.
     """
     document = load_strict_json_object(raw)
+    if document.get("schema_version") == 2 and not allow_caller_generated:
+        raise ValueError("caller-generated decision profiles require a complete calibration bundle")
     return _resolved(document, source="explicit-cli", packaged_document=packaged_document)
 
 
