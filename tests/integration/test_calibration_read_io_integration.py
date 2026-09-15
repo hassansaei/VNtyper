@@ -51,7 +51,7 @@ def segment(header: pysam.AlignmentHeader, *, mate: int, flags: int | None = Non
     record.reference_id = 0
     record.reference_start = 10 if mate == 1 else 30
     record.mapping_quality = 37 if mate == 1 else 29
-    record.cigar = ((0, 4),)
+    record.cigartuples = [(0, 4)]
     record.next_reference_id = 0
     record.next_reference_start = 30 if mate == 1 else 10
     record.template_length = 24 if mate == 1 else -24
@@ -61,7 +61,7 @@ def segment(header: pysam.AlignmentHeader, *, mate: int, flags: int | None = Non
 def generated_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     reference = tmp_path / "reference with spaces.fa"
     reference.write_text(">synthetic-contig\n" + "ACGT" * 100 + "\n", encoding="ascii")
-    pysam.faidx(str(reference))
+    pysam.faidx(str(reference))  # type: ignore[attr-defined]
     header = pysam.AlignmentHeader.from_dict(
         {"HD": {"VN": "1.6", "SO": "unsorted"}, "SQ": [{"SN": "synthetic-contig", "LN": 400}]}
     )

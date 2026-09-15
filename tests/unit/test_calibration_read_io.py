@@ -334,7 +334,9 @@ def test_alignment_iteration_failure_closes_handle_and_hides_input_name(tmp_path
     def failing_fetch(**kwargs: object):
         alignment.fetch_calls.append(kwargs)
         yield alignment.records[0]
-        raise alignment.records[1]
+        error = alignment.records[1]
+        assert isinstance(error, OSError)
+        raise error
 
     alignment.fetch = failing_fetch  # type: ignore[method-assign]
     with (
@@ -421,7 +423,7 @@ def test_reference_contract_fails_before_alignment_open(tmp_path: Path, changes:
     reference = tmp_path / "reference"
     path.write_bytes(b"input")
     reference.write_bytes(b"reference")
-    kwargs = {"reference_path": reference, "reference_sha256": None}
+    kwargs: dict[str, object] = {"reference_path": reference, "reference_sha256": None}
     kwargs.update({key: value for key, value in changes.items() if key != "artifact_format"})
 
     with (
