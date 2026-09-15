@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import logging
 import math
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from vntyper.scripts.calibration_candidate import CandidateApplicability, candidate_applicability_document
 from vntyper.scripts.length_features import LengthFeatures, RegionFeatures, encode_length_features
-from vntyper.scripts.length_model import LengthModel, encode_length_model
+from vntyper.scripts.length_model import LengthModel, encode_length_model, length_model_qc_document
 
 logger = logging.getLogger(__name__)
 
 EvidenceDomain = Literal["synthetic", "external"]
 LengthEstimationStatus = Literal["disabled", "measured-only", "estimated", "unavailable"]
+LengthFeatureName = Literal["A", "F"]
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 @dataclass(frozen=True)
@@ -25,6 +30,14 @@ class LengthEstimate:
     reasons: tuple[str, ...]
     model_sha256: str | None
     features_sha256: str | None
+
+
+@dataclass(frozen=True)
+class LengthFeatureAssessment:
+    """Required feature value or stable pre-fit applicability/QC reasons."""
+
+    feature_value: float | None
+    reasons: tuple[str, ...]
 
 
 def _evidence_domain(value: object) -> EvidenceDomain | None:
@@ -67,25 +80,31 @@ def _validated_model(value: object) -> LengthModel:
 
 
 def _applicability_reason(
-    features: LengthFeatures, model: LengthModel, evidence_domain: EvidenceDomain | None
+    features: LengthFeatures,
+    annotation_sha256: str,
+    counting_policy_sha256: str,
+    applicability: CandidateApplicability,
+    evidence_domain: EvidenceDomain | None,
 ) -> str | None:
     if evidence_domain is None:
         return "evidence_domain_missing"
-    applicable = model.applicability
     context = features.provenance.measurement_context
     comparisons = (
-        (evidence_domain == applicable.domain, "unsupported_evidence_domain"),
-        (features.annotation_sha256 == model.annotation_sha256, "unsupported_annotation"),
-        (features.counting_policy_sha256 == model.counting_policy_sha256, "unsupported_counting_policy"),
-        (features.assembly in applicable.assemblies, "unsupported_assembly"),
-        (features.assay_class in applicable.assay_classes, "unsupported_assay_class"),
-        (features.input_scope in applicable.input_scopes, "unsupported_input_scope"),
-        (context.preprocessing_id in applicable.preprocessing_ids, "unsupported_preprocessing"),
-        (context.aligner.name == applicable.aligner_name, "unsupported_aligner_name"),
-        (context.aligner.version == applicable.aligner_version, "unsupported_aligner_version"),
-        (context.aligner.arguments_sha256 == applicable.aligner_arguments_sha256, "unsupported_aligner_arguments"),
+        (evidence_domain == applicability.domain, "unsupported_evidence_domain"),
+        (features.annotation_sha256 == annotation_sha256, "unsupported_annotation"),
+        (features.counting_policy_sha256 == counting_policy_sha256, "unsupported_counting_policy"),
+        (features.assembly in applicability.assemblies, "unsupported_assembly"),
+        (features.assay_class in applicability.assay_classes, "unsupported_assay_class"),
+        (features.input_scope in applicability.input_scopes, "unsupported_input_scope"),
+        (context.preprocessing_id in applicability.preprocessing_ids, "unsupported_preprocessing"),
+        (context.aligner.name == applicability.aligner_name, "unsupported_aligner_name"),
+        (context.aligner.version == applicability.aligner_version, "unsupported_aligner_version"),
         (
-            context.aligner.primary_secondary_marking == applicable.primary_secondary_marking,
+            context.aligner.arguments_sha256 == applicability.aligner_arguments_sha256,
+            "unsupported_aligner_arguments",
+        ),
+        (
+            context.aligner.primary_secondary_marking == applicability.primary_secondary_marking,
             "unsupported_primary_secondary_marking",
         ),
     )
@@ -115,15 +134,15 @@ def _required_denominators(features: LengthFeatures, feature: str) -> tuple[tupl
     return (("combined_flanks", _combined_flanks(features)),)
 
 
-def _qc_reasons(features: LengthFeatures, model: LengthModel, feature: str) -> tuple[str, ...]:
+def _qc_reasons(features: LengthFeatures, qc: Mapping[str, int | float | str], feature: str) -> tuple[str, ...]:
     evidence = features.provenance.denominator_qc
     if evidence.evidence_kind == "unavailable":
         return ("fragment_evidence_unavailable",)
-    if evidence.evidence_kind != model.qc["fragment_evidence_kind"]:
+    if evidence.evidence_kind != qc["fragment_evidence_kind"]:
         return ("unsupported_fragment_evidence_kind",)
-    minimum_mean = cast(float, model.qc["minimum_denominator_mean_depth"])
-    minimum_covered = cast(float, model.qc["minimum_denominator_covered_fraction"])
-    minimum_support = cast(int, model.qc["minimum_denominator_supporting_fragments"])
+    minimum_mean = cast(float, qc["minimum_denominator_mean_depth"])
+    minimum_covered = cast(float, qc["minimum_denominator_covered_fraction"])
+    minimum_support = cast(int, qc["minimum_denominator_supporting_fragments"])
     reasons: list[str] = []
     for name, region in _required_denominators(features, feature):
         if region is None:
@@ -137,6 +156,53 @@ def _qc_reasons(features: LengthFeatures, model: LengthModel, feature: str) -> t
         elif region.supporting_fragment_count < minimum_support:
             reasons.append(f"low_{name}_support")
     return tuple(reasons)
+
+
+def assess_length_feature(
+    features: LengthFeatures,
+    *,
+    feature_name: LengthFeatureName,
+    annotation_sha256: str,
+    counting_policy_sha256: str,
+    applicability: CandidateApplicability,
+    qc: Mapping[str, int | float | str],
+    evidence_domain: EvidenceDomain | None,
+) -> LengthFeatureAssessment:
+    """Apply the shared pre-fit applicability and denominator-QC policy.
+
+    Args:
+        features: Immutable measured A/F feature artifact.
+        feature_name: Exact feature required by the candidate.
+        annotation_sha256: Frozen annotation identity.
+        counting_policy_sha256: Frozen counting-policy identity.
+        applicability: Frozen observable measurement applicability.
+        qc: Immutable model denominator-QC contract.
+        evidence_domain: Explicit domain supplied by bound evidence provenance.
+
+    Returns:
+        The usable feature value, or stable reasons without dropping the row.
+
+    Raises:
+        ValueError: If a typed artifact, binding, feature name, or domain is invalid.
+    """
+    checked_features = _validated_features(features)
+    if not isinstance(feature_name, str) or feature_name not in {"A", "F"}:
+        raise ValueError("length feature_name must be A or F")
+    if not isinstance(annotation_sha256, str) or _SHA256.fullmatch(annotation_sha256) is None:
+        raise ValueError("length annotation_sha256 must be a lowercase SHA256 digest")
+    if not isinstance(counting_policy_sha256, str) or _SHA256.fullmatch(counting_policy_sha256) is None:
+        raise ValueError("length counting_policy_sha256 must be a lowercase SHA256 digest")
+    candidate_applicability_document(applicability, target="length")
+    length_model_qc_document(qc)
+    domain = _evidence_domain(evidence_domain)
+    reason = _applicability_reason(checked_features, annotation_sha256, counting_policy_sha256, applicability, domain)
+    if reason is not None:
+        return LengthFeatureAssessment(None, (reason,))
+    feature_value = checked_features.a if feature_name == "A" else checked_features.f
+    if feature_value is None:
+        return LengthFeatureAssessment(None, (f"missing_{feature_name}",))
+    reasons = _qc_reasons(checked_features, qc, feature_name)
+    return LengthFeatureAssessment(None if reasons else feature_value, reasons)
 
 
 def estimate_total_repeats(
@@ -160,18 +226,19 @@ def estimate_total_repeats(
     """
     checked_model = _validated_model(model)
     checked_features = _validated_features(features)
-    domain = _evidence_domain(evidence_domain)
-    applicability_reason = _applicability_reason(checked_features, checked_model, domain)
-    if applicability_reason is not None:
-        return _result("unavailable", checked_features, checked_model, reasons=(applicability_reason,))
-
-    feature_name = checked_model.feature_order[0]
-    feature_value = checked_features.a if feature_name == "A" else checked_features.f
-    if feature_value is None:
-        return _result("unavailable", checked_features, checked_model, reasons=(f"missing_{feature_name}",))
-    qc_reasons = _qc_reasons(checked_features, checked_model, feature_name)
-    if qc_reasons:
-        return _result("unavailable", checked_features, checked_model, reasons=qc_reasons)
+    feature_name = cast(LengthFeatureName, checked_model.feature_order[0])
+    assessment = assess_length_feature(
+        checked_features,
+        feature_name=feature_name,
+        annotation_sha256=checked_model.annotation_sha256,
+        counting_policy_sha256=checked_model.counting_policy_sha256,
+        applicability=checked_model.applicability,
+        qc=checked_model.qc,
+        evidence_domain=evidence_domain,
+    )
+    if assessment.reasons:
+        return _result("unavailable", checked_features, checked_model, reasons=assessment.reasons)
+    feature_value = cast(float, assessment.feature_value)
     bounds = checked_model.feature_bounds[feature_name]
     if feature_value < bounds.minimum or feature_value > bounds.maximum:
         return _result(

@@ -14,7 +14,13 @@ from vntyper.scripts.length_features import DepthPosition, extract_length_featur
 pytestmark = pytest.mark.unit
 
 
-def features(*, missing_region=None, depths=(100, 200, 200, 100, 100, 100), fragment_evidence=True):
+def features(
+    *,
+    missing_region=None,
+    depths=(100, 200, 200, 100, 100, 100),
+    fragment_evidence=True,
+    manifest_key="synthetic-member-1",
+):
     annotation_raw = _annotation_raw()
     if missing_region is None:
         annotation = _annotation()
@@ -32,7 +38,7 @@ def features(*, missing_region=None, depths=(100, 200, 200, 100, 100, 100), frag
         )
         for position, depth in enumerate(depths)
     )
-    return extract_length_features(positions, annotation, _context(annotation))
+    return extract_length_features(positions, annotation, _context(annotation, manifest_key=manifest_key))
 
 
 def model_for(measured, feature="A", **changes):
@@ -283,3 +289,30 @@ def test_explicit_invalid_model_or_features_are_errors():
     model_raw["coefficients"] = ["__import__('os')"]
     with pytest.raises(ValueError):
         import_module("vntyper.scripts.length_model").decode_length_model(model_raw)
+
+
+def test_public_feature_assessment_is_the_shared_prefit_policy_boundary():
+    m = import_module("vntyper.scripts.length_estimation")
+    measured = features()
+    model = model_for(measured)
+    assessment = m.assess_length_feature(
+        measured,
+        feature_name="A",
+        annotation_sha256=model.annotation_sha256,
+        counting_policy_sha256=model.counting_policy_sha256,
+        applicability=model.applicability,
+        qc=model.qc,
+        evidence_domain="synthetic",
+    )
+    assert assessment.feature_value == 2
+    assert assessment.reasons == ()
+    with pytest.raises(ValueError, match="feature_name"):
+        m.assess_length_feature(
+            measured,
+            feature_name=[],
+            annotation_sha256=model.annotation_sha256,
+            counting_policy_sha256=model.counting_policy_sha256,
+            applicability=model.applicability,
+            qc=model.qc,
+            evidence_domain="synthetic",
+        )

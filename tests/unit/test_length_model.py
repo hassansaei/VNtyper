@@ -184,3 +184,12 @@ def test_model_encoder_rejects_forged_or_mutable_typed_values():
         m.encode_length_model(replace(model, sha256="0" * 64))
     with pytest.raises(ValueError, match="immutable"):
         m.encode_length_model(replace(model, feature_bounds=dict(model.feature_bounds)))
+
+
+def test_public_model_qc_helpers_require_the_closed_immutable_contract():
+    m = import_module("vntyper.scripts.length_model")
+    raw = model_document()["qc"]
+    qc = m.decode_length_model_qc(raw)
+    assert m.length_model_qc_document(qc) == raw
+    with pytest.raises(ValueError, match="immutable"):
+        m.length_model_qc_document(dict(qc))

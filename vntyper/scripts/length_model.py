@@ -138,6 +138,41 @@ def _qc(value: object) -> Mapping[str, int | float | str]:
     )
 
 
+def decode_length_model_qc(value: object) -> Mapping[str, int | float | str]:
+    """Decode the shared closed denominator-QC contract.
+
+    Args:
+        value: Parsed JSON-compatible QC object.
+
+    Returns:
+        Immutable validated model QC.
+
+    Raises:
+        ValueError: If fields, thresholds, or evidence identity are invalid.
+    """
+    return _qc(value)
+
+
+def length_model_qc_document(qc: Mapping[str, int | float | str]) -> dict[str, object]:
+    """Project immutable denominator QC after canonical revalidation.
+
+    Args:
+        qc: QC returned by :func:`decode_length_model_qc`.
+
+    Returns:
+        Fresh closed JSON-compatible QC object.
+
+    Raises:
+        ValueError: If the mapping is mutable or its content is invalid.
+    """
+    if not isinstance(qc, _MAPPING_PROXY_TYPE):
+        _fail("length model QC must use a decoded immutable mapping")
+    raw: dict[str, object] = dict(qc)
+    if decode_length_model_qc(raw) != qc:
+        _fail("length model QC differs from its decoded contract")
+    return raw
+
+
 def _feature_bounds(value: object, feature_order: tuple[str, ...]) -> Mapping[str, FeatureBounds]:
     if not isinstance(value, Mapping) or set(value) != set(feature_order):
         _fail("length model feature_bounds fields must match feature_order exactly")
