@@ -95,3 +95,34 @@ def test_read_regular_path_refuses_to_degrade_without_no_follow_support(tmp_path
         read_regular_path(payload)
 
     assert read_regular_path(payload) == b"{}\n"
+
+
+def test_regular_path_and_pinned_child_request_nonblocking_admission(tmp_path: Path) -> None:
+    payload = tmp_path / "payload.json"
+    payload.write_bytes(b"{}\n")
+    path_descriptor = os.open(payload, os.O_RDONLY)
+
+    with patch.object(calibration_secure_io.os, "open", return_value=path_descriptor) as path_open:
+        assert read_regular_path(payload) == b"{}\n"
+    assert path_open.call_args.args[1] & os.O_NONBLOCK
+
+    with SecureDirectoryReader.open(tmp_path, {"payload.json"}) as reader:
+        real_open = os.open
+        observed_flags = 0
+
+        def record_open(path, flags, *args, **kwargs):
+            nonlocal observed_flags
+            observed_flags = flags
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(calibration_secure_io.os, "open", side_effect=record_open):
+            assert reader.read_file("payload.json") == b"{}\n"
+    assert observed_flags & os.O_NONBLOCK
+
+
+def test_read_regular_path_rejects_a_fifo_without_a_writer(tmp_path: Path) -> None:
+    fifo = tmp_path / "payload.fifo"
+    os.mkfifo(fifo)
+
+    with pytest.raises(ValueError, match="regular"):
+        read_regular_path(fifo)

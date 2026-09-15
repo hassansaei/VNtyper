@@ -1,6 +1,7 @@
 """CLI adapter for strict local calibration intake bundles."""
 
 import json
+import os
 import stat
 from copy import deepcopy
 from importlib import import_module
@@ -101,9 +102,10 @@ def test_cram_reference_document_rejects_ambiguous_or_open_content_before_produc
 ) -> None:
     module = import_module("vntyper.scripts.cli_calibration_intake")
     document = tmp_path / "references.json"
-    raw = {
+    reference: dict[str, object] = {"path": "/synthetic/reference.fa", "sha256": "a" * 64}
+    raw: dict[str, object] = {
         "schema_version": "calibration-cram-references-v1",
-        "references": {"assembly-a": {"path": "/synthetic/reference.fa", "sha256": "a" * 64}},
+        "references": {"assembly-a": reference},
     }
     if invalid == "duplicate":
         document.write_text('{"schema_version":"x","schema_version":"y","references":{}}', encoding="utf-8")
@@ -116,17 +118,17 @@ def test_cram_reference_document_rejects_ambiguous_or_open_content_before_produc
         if invalid == "root_field":
             raw["extra"] = True
         elif invalid == "row_field":
-            raw["references"]["assembly-a"]["extra"] = True
+            reference["extra"] = True
         elif invalid == "version":
             raw["schema_version"] = "calibration-cram-references-v2"
         elif invalid == "references_type":
             raw["references"] = []
         elif invalid == "assembly":
-            raw["references"] = {" ": raw["references"]["assembly-a"]}
+            raw["references"] = {" ": reference}
         elif invalid == "path":
-            raw["references"]["assembly-a"]["path"] = "relative.fa"
+            reference["path"] = "relative.fa"
         else:
-            raw["references"]["assembly-a"]["sha256"] = "A" * 64
+            reference["sha256"] = "A" * 64
         document.write_text(json.dumps(raw), encoding="utf-8")
 
     with patch.object(module, "prepare_intake_bundle") as producer, pytest.raises(ValueError):
@@ -203,6 +205,16 @@ def test_cli_malformed_intake_content_exits_one_without_output(tmp_path: Path, m
 
     assert failure.value.code == 1
     assert not output.exists()
+
+
+def test_cram_reference_fifo_fails_before_intake_artifact_reads(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.cli_calibration_intake")
+    references = tmp_path / "references.fifo"
+    os.mkfifo(references)
+
+    with patch.object(module, "prepare_intake_bundle") as producer, pytest.raises(ValueError, match="regular"):
+        module.run_calibration_intake(_arguments(tmp_path, cram_references=references))
+    producer.assert_not_called()
 
 
 def test_cli_builds_real_synthetic_fastq_bundle_without_reading_locked_membership(

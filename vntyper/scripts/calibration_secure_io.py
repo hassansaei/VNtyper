@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 @dataclass
@@ -26,8 +27,8 @@ class SecureDirectoryReader:
     @classmethod
     def open(cls, path: Path, expected_names: set[str]) -> SecureDirectoryReader:
         """Open and pin a nonsymlink directory with an exact regular-file inventory."""
-        if not isinstance(path, Path) or not _NOFOLLOW:
-            raise ValueError("secure calibration directory reads require Path and O_NOFOLLOW support")
+        if not isinstance(path, Path) or not _NOFOLLOW or not _NONBLOCK:
+            raise ValueError("secure calibration directory reads require Path, O_NOFOLLOW, and O_NONBLOCK support")
         try:
             descriptor = os.open(path, os.O_RDONLY | _DIRECTORY | _CLOEXEC | _NOFOLLOW)
         except OSError as error:
@@ -56,7 +57,11 @@ class SecureDirectoryReader:
             for name in names:
                 if name not in self.names:
                     raise ValueError(f"secure calibration import file is undeclared: {name}")
-                descriptor = os.open(name, os.O_RDONLY | _CLOEXEC | _NOFOLLOW, dir_fd=self.descriptor)
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY | _NONBLOCK | _CLOEXEC | _NOFOLLOW,
+                    dir_fd=self.descriptor,
+                )
                 descriptors[name] = descriptor
                 if not stat.S_ISREG(os.fstat(descriptor).st_mode):
                     raise ValueError("secure calibration import entry changed from a regular file")
@@ -97,10 +102,10 @@ def read_regular_path(path: Path) -> bytes:
         ValueError: If no-follow opens are unsupported, or the path is unreadable,
             a symlink, or not a regular file.
     """
-    if not isinstance(path, Path) or not _NOFOLLOW:
-        raise ValueError("secure calibration payload reads require Path and O_NOFOLLOW support")
+    if not isinstance(path, Path) or not _NOFOLLOW or not _NONBLOCK:
+        raise ValueError("secure calibration payload reads require Path, O_NOFOLLOW, and O_NONBLOCK support")
     try:
-        descriptor = os.open(path, os.O_RDONLY | _CLOEXEC | _NOFOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | _NONBLOCK | _CLOEXEC | _NOFOLLOW)
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError("secure calibration payload must be a regular file")
         return _read_descriptor(descriptor)
