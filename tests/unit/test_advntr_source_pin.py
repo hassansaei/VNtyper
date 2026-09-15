@@ -85,8 +85,8 @@ def test_the_source_revision_is_pinned_to_a_full_commit_sha():
 
 
 def test_pinned_commit_is_v230_release():
-    """GIT_COMMIT in install_advntr.cfg must match the pinned v2.3.0 release commit."""
-    assert _cfg_value("GIT_COMMIT") == "6f9e5745f30ce5ffc3690ec843dc8f773b3d464f"
+    """GIT_COMMIT must match the released v2.4.0 calibration implementation."""
+    assert _cfg_value("GIT_COMMIT") == "98ca8827def04be7eb209f7f954832d40356123c"
 
 
 def test_the_branch_is_the_forks_default():
