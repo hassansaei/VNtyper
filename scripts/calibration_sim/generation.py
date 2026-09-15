@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import BinaryIO, NoReturn
 
 from vntyper.scripts.calibration_atomic_io import atomic_output
+from vntyper.scripts.calibration_payload import decode_payload_manifest
 from vntyper.scripts.calibration_secure_io import read_regular_path
 from vntyper.scripts.canonical_json import load_strict_json_object
 
@@ -282,6 +283,14 @@ def verify_generated_bundle(root: Path, *, expected_manifest_sha256: str) -> Sim
         or manifest["independent_group_count"] != protocol.independent_group_count
     ):
         _fail("simulation manifest differs from its declared protocol")
+    files = manifest["files"]
+    if not isinstance(files, list) or any(
+        not isinstance(row, dict) or set(row) != {"path", "size", "sha256"} for row in files
+    ):
+        _fail("simulation file manifest must contain exact path, size, and sha256 rows")
+    decode_payload_manifest(
+        [{"path": row["path"], "size_bytes": row["size"], "sha256": row["sha256"]} for row in files]
+    )
     rows = _inventory(root, {case.case_id for case in protocol.cases})
     expected_names = {"protocol.json"} | {f"{case.case_id}/{name}" for case in protocol.cases for name in _CASE_FILES}
     payload = [row for row in rows if row["path"] != "manifest.json"]

@@ -239,3 +239,20 @@ def test_linked_root_is_rejected_before_opening_manifest(tmp_path: Path):
     with patch.object(_module(), "read_regular_path") as reader, pytest.raises(ValueError, match="root"):
         _module().verify_generated_bundle(linked, expected_manifest_sha256=result.manifest_sha256)
     reader.assert_not_called()
+
+
+@pytest.mark.parametrize("size", [True, 1.0])
+def test_manifest_file_sizes_cannot_use_bool_or_float_as_integer(tmp_path: Path, size):
+    result = _module().generate_simulation_bundle(decode(simulation_protocol()), tmp_path / "bundle")
+    target = result.output / "case-a/reads_R1.fastq"
+    target.write_bytes(b"x")
+    manifest_path = result.output / "manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    for row in manifest["files"]:
+        if row["path"] == "case-a/reads_R1.fastq":
+            row["size"] = size
+            row["sha256"] = hashlib.sha256(b"x").hexdigest()
+    data = json.dumps(manifest).encode()
+    manifest_path.write_bytes(data)
+    with pytest.raises(ValueError, match="size"):
+        _module().verify_generated_bundle(result.output, expected_manifest_sha256=hashlib.sha256(data).hexdigest())
