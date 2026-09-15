@@ -42,6 +42,7 @@ from vntyper.scripts.pipeline_advntr_cleanup import (
     validate_pipeline_log_outside_advntr_preflight,
     validate_pipeline_log_outside_selected_advntr_model,
 )
+from vntyper.scripts.pipeline_advntr_execution import execute_advntr_genotype
 from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight, plan_valid_advntr_preflight
 from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
 from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext, prepare_advntr_run_context
@@ -51,6 +52,13 @@ from vntyper.scripts.pipeline_alignment import (
     prepare_input_alignment_preflight,
     resolve_summary_reference_provenance,
 )
+from vntyper.scripts.pipeline_caller_activation import (
+    caller_calibration_identities,
+    snapshot_caller_calibration,
+    validate_caller_output_destination,
+    validate_caller_pipeline_request,
+)
+from vntyper.scripts.pipeline_caller_native import prepare_caller_native_execution
 from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
@@ -318,10 +326,32 @@ def run_pipeline(
     overall_start = timeit.default_timer()
     logger.info("Pipeline execution started.")
 
+    caller_operator_paths = validate_caller_pipeline_request(
+        run_configuration,
+        assembly=reference_assembly,
+        extra_modules=extra_modules or (),
+        threads=threads,
+        additional_commands=(module_args or {}).get("advntr", {}).get("additional_commands"),
+        output=Path(output_dir),
+    )
+    if run_configuration.caller_calibration is not None and log_file is not None:
+        validate_caller_output_destination(run_configuration.caller_calibration, Path(log_file))
+    calibration_background = None
+
     input_type, input_files = resolve_pipeline_input(fastq1, fastq2, bam, cram, bwa_reference, extra_modules)
     archive_protected_paths = tuple(
         path
-        for path in (bam, cram, fastq1, fastq2, reference_fasta, bed_file, bwa_reference, *length_operator_paths)
+        for path in (
+            bam,
+            cram,
+            fastq1,
+            fastq2,
+            reference_fasta,
+            bed_file,
+            bwa_reference,
+            *length_operator_paths,
+            *caller_operator_paths,
+        )
         if path
     )
     previous_ref_path = None
@@ -335,6 +365,7 @@ def run_pipeline(
         additional_operator_paths = (
             *((advntr_reference,) if advntr_reference is not None else ()),
             *length_operator_paths,
+            *caller_operator_paths,
         )
         canonical_input_files, input_fingerprints = build_canonical_inputs_and_fingerprints(
             input_type, fastq1, fastq2, bam, cram, bed_file
@@ -356,6 +387,8 @@ def run_pipeline(
         # an exact resume input and therefore invalidates incompatible prior work.
         if length_configuration.measurement_enabled:
             analysis_settings["length_configuration_sha256"] = length_configuration.sha256
+        if run_configuration.caller_calibration is not None:
+            analysis_settings.update(caller_calibration_identities(run_configuration.caller_calibration))
 
         effective_reference_path = None
         if input_type == "FASTQ" and bwa_reference:
@@ -526,6 +559,11 @@ def run_pipeline(
                 revoke_outputs=not resume,
                 revoke_published=resume,
             )
+            if (
+                run_configuration.caller_calibration is not None
+                and run_configuration.caller_calibration.bundle.advntr_policy is not None
+            ):
+                prepare_caller_native_execution(run_configuration.caller_calibration, advntr_context)
             advntr_version_overrides["advntr"] = ".".join(str(part) for part in advntr_context.version)
             (
                 effective_advntr_runtime,
@@ -588,6 +626,8 @@ def run_pipeline(
         dirs = create_output_directories(output_dir)
         logger.info(f"Created output directories in: {output_dir}")
 
+        if run_configuration.caller_calibration is not None:
+            calibration_background = snapshot_caller_calibration(run_configuration.caller_calibration, Path(output_dir))
         snapshot_decision_profile(
             run_configuration.decision_profile,
             Path(output_dir) / DECISION_PROFILE_SNAPSHOT_RELATIVE,
@@ -1206,28 +1246,17 @@ def run_pipeline(
                             coverage_prefix="advntr_precheck",
                         )
                     advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                    advntr_execution_config = {**config, "tools": dict(advntr_context.tools)}
-                    advntr_runtime_component = run_configuration.advntr_runtime
-                    if advntr_additional_commands is not None:
-                        advntr_runtime_component = {
-                            **run_configuration.advntr_runtime,
-                            "settings": {
-                                **run_configuration.advntr_runtime.get("settings", {}),
-                                "additional_commands": advntr_additional_commands,
-                            },
-                        }
-                    advntr_status = run_advntr(
-                        advntr_context.model_snapshot,
-                        sorted_bam,
-                        dirs["advntr"],
-                        "output",
-                        config=advntr_execution_config,
+                    advntr_status = execute_advntr_genotype(
+                        configuration=run_configuration,
+                        native_context=advntr_context,
+                        config=config,
+                        alignment=sorted_bam,
+                        output=dirs["advntr"],
                         cwd=project_root,
-                        pipeline_threads=threads,
-                        resolved_component=run_configuration.advntr,
-                        runtime_component=advntr_runtime_component,
-                        custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
-                        advntr_version=advntr_context.version,
+                        threads=threads,
+                        additional_commands=advntr_additional_commands,
+                        background=calibration_background,
+                        invoke=run_advntr,
                     )
                     if advntr_status != 0:
                         msg = f"adVNTR genotyping returned non-zero status {advntr_status}; result parsing was not attempted."

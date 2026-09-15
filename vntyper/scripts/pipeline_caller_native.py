@@ -83,6 +83,8 @@ def prepare_caller_native_execution(
         raise ValueError("calibrated native execution requires an explicit executable prefix")
     prefix = tuple(shlex.split(command))
     capabilities = probe_advntr_capabilities(prefix, pin, runner=runner)
+    if capabilities.package_version != ".".join(str(part) for part in native_context.version):
+        raise ValueError("calibrated native version and capability observations disagree")
     # Reject unsupported CLI construction during preflight, before any read work.
     policy = configuration.context.advntr_capture_policy
     if policy is None:

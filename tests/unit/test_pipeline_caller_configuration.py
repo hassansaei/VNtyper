@@ -114,7 +114,9 @@ def test_preflight_requires_actual_assembly_and_explicit_advintr_for_dual(tmp_pa
         )
 
 
-def dual_configuration(root, mode="exact", producer=True):
+def dual_configuration(
+    root, mode="exact", producer=True, assembly=None, selected=None, model_bytes=b"invented model bytes"
+):
     import hashlib
 
     from tests.unit.test_advntr_calibration_policy import capture_policy
@@ -127,7 +129,13 @@ def dual_configuration(root, mode="exact", producer=True):
     from vntyper.scripts.calibration_export import export_calibration_bundle
     from vntyper.scripts.canonical_json import load_strict_json_object
 
-    args = _dual_setup(root, mode)
+    if selected is None:
+        args = _dual_setup(root, mode)
+    else:
+        from unittest.mock import patch
+
+        with patch("tests.unit.test_calibration_advntr_runtime_policy._caller", return_value=selected):
+            args = _dual_setup(root, mode)
     payload = args.profile / "payload"
     # Decode the same selected values through the exporter before rebinding this
     # entirely invented fixture's native asset commitments.
@@ -138,17 +146,20 @@ def dual_configuration(root, mode="exact", producer=True):
     capture = capture_policy_for_caller(decode_capture_policy(capture_policy()), approved.caller_policy)
     sidecar = load_strict_json_object((payload / "advntr-policy.json").read_bytes())
     sidecar["capture_policy_sha256"] = capture.sha256
-    sidecar["model_sha256"] = hashlib.sha256(b"invented model bytes").hexdigest()
+    sidecar["model_sha256"] = hashlib.sha256(model_bytes).hexdigest()
     (payload / "advntr-policy.json").write_bytes(canonical_json_bytes(sidecar))
     descriptor = load_strict_json_object((payload / "caller-bundle.json").read_bytes())
     descriptor["components"]["advntr-policy.json"] = hashlib.sha256(
         (payload / "advntr-policy.json").read_bytes()
     ).hexdigest()
     (payload / "caller-bundle.json").write_bytes(canonical_json_bytes(descriptor))
-    if producer:
+    if producer or assembly is not None:
         candidate_path = args.profile / "candidate.json"
         candidate = load_strict_json_object(candidate_path.read_bytes())
-        candidate["producer"]["tool_versions"].update(advntr="2.4.0", advntr_build_id="a" * 64)
+        if producer:
+            candidate["producer"]["tool_versions"].update(advntr="2.4.0", advntr_build_id="a" * 64)
+        if assembly is not None:
+            candidate["applicability"]["assemblies"] = [assembly]
         candidate_path.write_bytes(canonical_json_bytes(candidate))
     _rebind_payload(args)
     export_calibration_bundle(args, args.output)

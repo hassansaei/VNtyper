@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from vntyper.modules.advntr.advntr_command_builder import build_advntr_command
 from vntyper.modules.advntr.advntr_decision_config import project_advntr_settings
 from vntyper.modules.advntr.advntr_options import (
     ADVNTR_EXTRA_OPTIONS as ADVNTR_EXTRA_OPTIONS,
@@ -35,7 +36,6 @@ from vntyper.modules.advntr.advntr_variant_annotations import (
     derive_ru_and_pos,
 )
 from vntyper.modules.advntr.artifact_evidence import EVIDENCE_DISPOSITION_COLUMN, ArtifactEvidence
-from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.flagging import ADVNTR_FLAG_COLUMNS, compile_flag_rules
 from vntyper.scripts.nomenclature_annotate import NOMENCLATURE_COLUMNS, annotate_advntr_frame
 from vntyper.scripts.run_configuration import (
@@ -181,6 +181,7 @@ def run_advntr(
     runtime_component: Mapping[str, object] | None = None,
     custom_context_active: bool = False,
     advntr_version: tuple[int, int, int] | None = None,
+    calibrated_policy_arguments: tuple[str, ...] | None = None,
 ):
     """
     Run adVNTR genotyping using explicit resolved decision and runtime settings.
@@ -197,6 +198,7 @@ def run_advntr(
         runtime_component: Immutable excluded adVNTR runtime component.
         custom_context_active: Whether an explicit custom profile owns this run.
         advntr_version: Optional detected adVNTR version tuple for option capability check.
+        calibrated_policy_arguments: Full explicit policy from approved native preflight.
 
     Returns:
         int: 0 on success, or 1 for the pre-command input-validation failures.
@@ -286,20 +288,17 @@ def run_advntr(
             logger.critical(f"Could not create output directory {output}: {e}")
             return 1
 
-    # `run_command` runs this as one string under bash (trap 9), so quoting can only
-    # happen here. Paths, the sample-derived output name and the thread count are
-    # quoted; `advntr_path` and non-empty `additional_commands` are not, because both hold
-    # *command fragments* from config.json - `advntr` is "mamba run -n envadvntr advntr"
-    # (trap 6) and `additional_commands` can be an explicit flag list such as "-aln".
-    # Quoting either would collapse it into a single token bash then looks for as one
-    # binary or one argument. They are operator-controlled configuration, not user input.
-    additional_fragment = f" {additional_commands}" if additional_commands else ""
-    advntr_command = (
-        f"{advntr_path} genotype -fs -vid {quote_path(vid)} "
-        f"--alignment_file {quote_path(sorted_bam)} "
-        f"-o {quote_path(f'{output}/{output_name}_adVNTR{output_ext}')} "
-        f"-m {quote_path(db_file)} --working_directory {quote_path(output)} "
-        f"-t {quote_path(threads)}{additional_fragment}"
+    advntr_command = build_advntr_command(
+        advntr_path,
+        vid=vid,
+        alignment=sorted_bam,
+        result=f"{output}/{output_name}_adVNTR{output_ext}",
+        model=db_file,
+        working_directory=output,
+        threads=threads,
+        additional_commands=additional_commands,
+        calibrated="calibrated_calling" in decision,
+        calibrated_policy_arguments=calibrated_policy_arguments,
     )
 
     # Define log file for adVNTR output

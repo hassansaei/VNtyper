@@ -20,8 +20,8 @@ def module():
     return import_module("vntyper.scripts.pipeline_caller_native")
 
 
-def native_case(root, mode="exact"):
-    path, context_path = dual_configuration(root, mode)
+def native_case(root, mode="exact", selected=None):
+    path, context_path = dual_configuration(root, mode, selected=selected)
     config = resolve_run_configuration(calibration_bundle=path, calibration_context=context_path)
     model = root / "model.db"
     model.write_bytes(b"invented model bytes")
@@ -144,3 +144,34 @@ def test_changed_background_snapshot_cannot_drive_native_call(tmp_path):
     path.write_bytes(b"changed")
     with pytest.raises(ValueError, match="background"):
         module().caller_native_policy_argv(configuration, execution, path)
+
+
+def test_changed_replay_safe_scalar_values_and_mode_activate_selected_projection(tmp_path):
+    from tests.unit.test_advntr_calibration_policy import capture_policy
+    from tests.unit.test_calibration_advntr_runtime_policy import _caller
+    from vntyper.modules.advntr.advntr_calibration_policy import decode_capture_policy
+    from vntyper.scripts.calibration_caller_policy import caller_policy_values_document, decode_caller_policy_values
+
+    baseline = _caller(mode="legacy")
+    selected_document = caller_policy_values_document(baseline)
+    prefix = "/components/advntr/calibrated_calling/"
+    selected_document["values"].update(
+        {prefix + "cutoff": 0.004, prefix + "minimum_read_support": 7, prefix + "mode": "exact"}
+    )
+    selected = decode_caller_policy_values(selected_document)
+    configuration, native = native_case(tmp_path, "exact", selected=selected)
+    assert configuration.bundle.caller_policy != baseline
+    assert configuration.context.advntr_capture_policy.sha256 != decode_capture_policy(capture_policy()).sha256
+    execution = module().prepare_caller_native_execution(configuration, native, runner=runner)
+    background = tmp_path / "background.json"
+    background.write_bytes(execution.background_bytes)
+    argv = module().caller_native_policy_argv(configuration, execution, background)
+    assert argv[argv.index("--frameshift-pvalue-cutoff") + 1] == "0.004"
+    assert argv[argv.index("--min-frameshift-read-support") + 1] == "7"
+    assert "--exact-frameshift-caller" in argv
+
+
+def test_disagreeing_native_version_probe_is_refused(tmp_path):
+    configuration, native = native_case(tmp_path)
+    with pytest.raises(ValueError, match="version"):
+        module().prepare_caller_native_execution(configuration, replace(native, version=(2, 4, 1)), runner=runner)
