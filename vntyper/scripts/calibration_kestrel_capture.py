@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import NoReturn, cast
 
 import pandas as pd
+from Bio.Seq import Seq
 
 from vntyper.scripts.calibration_caller_policy import (
     KESTREL_CALLER_POLICY_POINTERS,
@@ -530,6 +531,8 @@ def build_kestrel_capture(
     for ordinal, record in enumerate(raw_frame[list(KESTREL_RAW_COLUMNS)].to_dict("records")):
         record["source_row_ordinal"] = ordinal
         record["POS"] = _builder_position(record["POS"])
+        if isinstance(record["Motif_sequence"], Seq):
+            record["Motif_sequence"] = str(record["Motif_sequence"])
         _raw_row(record, ordinal)
         rows.append(record)
     motifs = motif_frame.to_dict("records")

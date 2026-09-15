@@ -5,6 +5,7 @@ from dataclasses import FrozenInstanceError, replace
 
 import pandas as pd
 import pytest
+from Bio.Seq import Seq
 
 from tests.builders import kestrel_config, kestrel_stage_frame
 from tests.unit.test_calibration_caller_policy import policy_document
@@ -81,6 +82,16 @@ def test_capture_builder_normalizes_canonical_vcf_position_text() -> None:
 
     assert type(capture.rows[0].position) is int
     assert capture.rows[0].position == 67
+
+
+def test_capture_builder_normalizes_production_biopython_motif_sequence() -> None:
+    frame = kestrel_stage_frame("raw")
+    frame["Motif_sequence"] = frame["Motif_sequence"].map(Seq)
+
+    capture = _capture(frame)
+
+    assert type(capture.rows[0].motif_sequence) is str
+    assert capture.rows[0].motif_sequence == "SEQ1"
 
 
 @pytest.mark.parametrize("stage", ["scored", "confidence", "flagged", "final", "named"])
