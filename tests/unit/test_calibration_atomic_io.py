@@ -57,13 +57,13 @@ def test_atomic_output_refuses_a_racing_empty_directory_without_deleting_it(tmp_
     def race(staging: Path) -> bool:
         (staging / "complete.json").write_bytes(b"{}\n")
         output.mkdir()
-        (output / "owner").write_text("other process", encoding="utf-8")
         return True
 
     with pytest.raises(ValueError, match="already exists"):
         atomic_output(output, race)
 
-    assert (output / "owner").read_text(encoding="utf-8") == "other process"
+    assert output.is_dir()
+    assert not tuple(output.iterdir())
     assert not tuple(tmp_path.glob(".result.*"))
 
 

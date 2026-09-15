@@ -108,7 +108,6 @@ def test_atomic_output_seam_refuses_a_destination_created_during_production(
     def race(_args, staging: Path) -> bool:
         (staging / "complete.json").write_text("{}\n", encoding="utf-8")
         output.mkdir()
-        (output / "owner").write_text("other process", encoding="utf-8")
         return True
 
     monkeypatch.setitem(cli_calibrate.OPERATIONS, "fit", race)
@@ -116,7 +115,8 @@ def test_atomic_output_seam_refuses_a_destination_created_during_production(
 
     with pytest.raises(ValueError, match="already exists"):
         cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
-    assert (output / "owner").read_text(encoding="utf-8") == "other process"
+    assert output.is_dir()
+    assert not tuple(output.iterdir())
 
 
 def test_completed_failed_operation_is_installed_before_cli_exit_one(
