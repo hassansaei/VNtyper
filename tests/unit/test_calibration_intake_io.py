@@ -319,6 +319,33 @@ def test_declaration_symlink_is_rejected_without_artifact_reads(tmp_path: Path) 
     reader.assert_not_called()
 
 
+def test_declaration_open_requests_nonblocking_file_type_admission(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.calibration_intake_io")
+    declaration_path, _ = _write_declaration(tmp_path)
+    descriptor = module.os.open(declaration_path, module.os.O_RDONLY)
+
+    with patch.object(module.os, "open", return_value=descriptor) as opener:
+        snapshot = module._open_source(declaration_path)
+    module.os.close(snapshot.descriptor)
+
+    assert opener.call_args.args[1] & module.os.O_NONBLOCK
+
+
+def test_fifo_declaration_without_a_writer_is_rejected_without_hanging_or_artifact_reads(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.calibration_intake_io")
+    declaration_path = tmp_path / "intake.fifo"
+    module.os.mkfifo(declaration_path)
+
+    with patch.object(module, "fingerprint_input_artifact") as reader, pytest.raises(ValueError, match="regular"):
+        module.prepare_intake_bundle(
+            declaration_path,
+            tmp_path / "bundle",
+            preprocessing_priority=("synthetic-preprocessing-v1",),
+            cram_references={},
+        )
+    reader.assert_not_called()
+
+
 def test_unexpected_staging_file_fails_exact_manifest_and_is_cleaned(tmp_path: Path) -> None:
     module = import_module("vntyper.scripts.calibration_intake_io")
     declaration_path, _ = _write_declaration(tmp_path)

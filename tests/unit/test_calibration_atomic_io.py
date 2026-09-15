@@ -73,7 +73,9 @@ def test_atomic_output_cleans_its_staging_tree_after_base_exception(tmp_path: Pa
     output = tmp_path / "result"
 
     def interrupt(staging: Path) -> bool:
-        (staging / "partial.json").write_text("partial", encoding="utf-8")
+        nested = staging / "nested"
+        nested.mkdir()
+        (nested / "partial.json").write_text("partial", encoding="utf-8")
         raise failure
 
     with pytest.raises(type(failure)):
@@ -101,12 +103,36 @@ def test_atomic_output_rejects_incomplete_producer_contract(tmp_path: Path, mode
 def test_atomic_output_fails_closed_when_renameat2_is_unavailable(tmp_path: Path) -> None:
     module = import_module("vntyper.scripts.calibration_atomic_io")
     output = tmp_path / "result"
+    called = False
 
     def produce(staging: Path) -> bool:
+        nonlocal called
+        called = True
         (staging / "result.json").write_bytes(b"{}\n")
         return True
 
     with patch.object(module, "_renameat2", None), pytest.raises(RuntimeError, match="renameat2"):
         module.atomic_output(output, produce)
+    assert called is False
     assert not output.exists()
     assert not tuple(tmp_path.glob(".result.*"))
+
+
+def test_atomic_output_rejects_parent_path_replacement_and_cleans_pinned_staging(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.calibration_atomic_io")
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    moved = tmp_path / "moved"
+    output = parent / "result"
+
+    def move_parent(staging: Path) -> bool:
+        (staging / "result.json").write_bytes(b"{}\n")
+        parent.rename(moved)
+        parent.mkdir()
+        return True
+
+    with pytest.raises(RuntimeError, match="parent.*changed"):
+        module.atomic_output(output, move_parent)
+    assert not output.exists()
+    assert not tuple(parent.iterdir())
+    assert not tuple(moved.glob(".result.*"))

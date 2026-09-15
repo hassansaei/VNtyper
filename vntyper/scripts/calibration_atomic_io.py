@@ -7,7 +7,6 @@ import errno
 import logging
 import os
 import secrets
-import shutil
 import stat
 import sys
 from collections.abc import Callable
@@ -70,17 +69,54 @@ def _make_staging(output: Path, parent_descriptor: int) -> tuple[Path, tuple[int
     raise RuntimeError("calibration output could not allocate a unique staging directory")
 
 
-def _is_owned_directory(path: Path, identity: tuple[int, int]) -> bool:
+def _is_owned_directory(parent_descriptor: int, name: str, identity: tuple[int, int]) -> bool:
     try:
-        metadata = path.lstat()
+        metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
     except FileNotFoundError:
         return False
     return stat.S_ISDIR(metadata.st_mode) and (metadata.st_dev, metadata.st_ino) == identity
 
 
-def _remove_owned_staging(path: Path, identity: tuple[int, int]) -> None:
-    if _is_owned_directory(path, identity):
-        shutil.rmtree(path, ignore_errors=True)
+def _remove_owned_staging(parent_descriptor: int, name: str, identity: tuple[int, int]) -> None:
+    if not _is_owned_directory(parent_descriptor, name, identity):
+        return
+    staging_descriptor: int | None = None
+    try:
+        staging_descriptor = os.open(name, os.O_RDONLY | _DIRECTORY | _CLOEXEC | _NOFOLLOW, dir_fd=parent_descriptor)
+        metadata = os.fstat(staging_descriptor)
+        if (metadata.st_dev, metadata.st_ino) != identity:
+            return
+        _clear_directory(staging_descriptor)
+        if _is_owned_directory(parent_descriptor, name, identity):
+            os.rmdir(name, dir_fd=parent_descriptor)
+    except OSError:
+        return
+    finally:
+        if staging_descriptor is not None:
+            os.close(staging_descriptor)
+
+
+def _clear_directory(descriptor: int) -> None:
+    for entry in os.scandir(descriptor):
+        metadata = os.stat(entry.name, dir_fd=descriptor, follow_symlinks=False)
+        if stat.S_ISDIR(metadata.st_mode):
+            child = os.open(entry.name, os.O_RDONLY | _DIRECTORY | _CLOEXEC | _NOFOLLOW, dir_fd=descriptor)
+            try:
+                _clear_directory(child)
+            finally:
+                os.close(child)
+            os.rmdir(entry.name, dir_fd=descriptor)
+        else:
+            os.unlink(entry.name, dir_fd=descriptor)
+
+
+def _assert_parent_unchanged(path: Path, identity: tuple[int, int]) -> None:
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError:
+        raise RuntimeError("calibration output parent path changed during production") from None
+    if not stat.S_ISDIR(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != identity:
+        raise RuntimeError("calibration output parent path changed during production")
 
 
 def _activate(parent_descriptor: int, staging_name: str, output_name: str) -> None:
@@ -127,6 +163,8 @@ def atomic_output(output: Path, producer: Callable[[Path], bool]) -> bool:
         _fail("calibration output must be a non-root Path")
     if not callable(producer):
         _fail("calibration output producer must be callable")
+    if _renameat2 is None:
+        raise RuntimeError("calibration atomic output requires Linux libc renameat2 with RENAME_NOREPLACE")
     if not _NOFOLLOW:
         raise RuntimeError("calibration atomic output requires O_NOFOLLOW support")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -138,15 +176,19 @@ def atomic_output(output: Path, producer: Callable[[Path], bool]) -> bool:
     staging_identity: tuple[int, int] | None = None
     activated = False
     try:
-        if not stat.S_ISDIR(os.fstat(parent_descriptor).st_mode):
+        parent_metadata = os.fstat(parent_descriptor)
+        if not stat.S_ISDIR(parent_metadata.st_mode):
             _fail("calibration output parent must be a directory")
+        parent_identity = (parent_metadata.st_dev, parent_metadata.st_ino)
+        _assert_parent_unchanged(output.parent, parent_identity)
         if _entry_exists(parent_descriptor, output.name):
             _fail("calibration output already exists")
         staging, staging_identity = _make_staging(output, parent_descriptor)
         successful = producer(staging)
         if not isinstance(successful, bool):
             _fail("calibration operation must return a completed-operation success value")
-        if not _is_owned_directory(staging, staging_identity):
+        _assert_parent_unchanged(output.parent, parent_identity)
+        if not _is_owned_directory(parent_descriptor, staging.name, staging_identity):
             raise RuntimeError("calibration staging directory changed during production")
         if not any(staging.iterdir()):
             _fail("calibration operation produced no artifacts")
@@ -154,6 +196,6 @@ def atomic_output(output: Path, producer: Callable[[Path], bool]) -> bool:
         activated = True
         return successful
     finally:
-        os.close(parent_descriptor)
         if not activated and staging is not None and staging_identity is not None:
-            _remove_owned_staging(staging, staging_identity)
+            _remove_owned_staging(parent_descriptor, staging.name, staging_identity)
+        os.close(parent_descriptor)

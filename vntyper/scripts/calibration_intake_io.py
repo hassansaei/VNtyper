@@ -84,7 +84,7 @@ def _open_source(path: Path) -> _SourceSnapshot:
         _fail("calibration intake declaration requires a Path and O_NOFOLLOW support")
     local_path = path if path.is_absolute() else Path.cwd() / path
     try:
-        descriptor = os.open(local_path, os.O_RDONLY | _CLOEXEC | _NOFOLLOW)
+        descriptor = os.open(local_path, os.O_RDONLY | os.O_NONBLOCK | _CLOEXEC | _NOFOLLOW)
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             _fail("calibration intake declaration must be a regular non-symlink file")
