@@ -113,6 +113,7 @@ def _write_manifests(
     Returns:
         The cohort manifest path and the capture association manifest path.
     """
+    tmp_path.mkdir(mode=0o700, parents=True, exist_ok=True)
     cohort_path = tmp_path / "cohort.tsv"
     captures_path = tmp_path / "captures.tsv"
     cohort_lines = ["sample_id\tbam\tassembly\tgenotype\tgroup_id"]
@@ -332,6 +333,22 @@ def test_an_infeasible_objective_still_writes_the_report_and_names_the_constrain
     assert document["profile"]["status"] == "unavailable"
 
 
+def test_constraints_that_are_reachable_apart_but_not_together_are_named_as_such(tmp_path: Path) -> None:
+    """ "Neither floor is too high, but no one cutoff meets both" is its own finding."""
+    cohort = {
+        # Both samples carry the identical Depth_Score, so no threshold separates them.
+        "specimen-alpha": ("positive", ("0.004",), None),
+        "specimen-charlie": ("negative", ("0.004",), None),
+    }
+    successful, document, _ = _run(tmp_path, cohort, objective="youden-j", min_sensitivity=0.5, min_specificity=0.5)
+    infeasible = document["selection"]["infeasible"]
+
+    assert successful is False
+    assert infeasible["unsatisfiable_constraints"] == []
+    assert infeasible["best_achievable"] == {"min_sensitivity": 1.0, "min_specificity": 1.0}
+    assert "no single tested cutoff satisfies them all" in infeasible["note"]
+
+
 def test_unknown_truth_and_no_calls_keep_fixed_denominators_at_every_cutoff(tmp_path: Path) -> None:
     """A no-call stays inside its truth class and unknown truth keeps its own count."""
     _, document, _ = _run(tmp_path)
@@ -520,12 +537,17 @@ def test_broken_capture_evidence_fails_with_a_clear_message(tmp_path: Path, dama
     ("overrides", "message"),
     [
         ({"objective": "not-an-objective"}, "unsupported cutoff search objective"),
+        ({"objective": None}, "unsupported cutoff search objective"),
         ({"axes": []}, "at least one axis"),
         ({"axes": ["not-an-axis"]}, "cutoff axis name must be"),
+        ({"axes": [DEPTH_FLOOR_LINKED, DEPTH_FLOOR_LINKED]}, "at most once"),
         ({"caller": "sideways"}, "caller must be kestrel, advntr, or both"),
         ({"caller": "both", "advntr_executable": None}, "requires --advntr-executable"),
         ({"manifest": "cohort.tsv"}, "must be Paths"),
+        ({"advntr_executable": "advntr"}, "must be Paths"),
         ({"workers": 0}, "workers must be a positive integer"),
+        ({"max_breakpoints": 2}, "max_breakpoints must be an integer of at least 3"),
+        ({"folds": 1}, "folds must be an integer"),
     ],
 )
 def test_invalid_arguments_are_refused_before_any_evidence_is_read(
@@ -541,6 +563,43 @@ def test_invalid_arguments_are_refused_before_any_evidence_is_read(
 
     with pytest.raises(ValueError, match=message):
         run_cutoff_optimization(args, staging)
+
+
+def test_a_staging_directory_that_already_holds_artifacts_is_refused(tmp_path: Path) -> None:
+    """The entry point owns an empty private directory, never one with prior content."""
+    from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
+
+    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT)
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    (staging / "stale.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="empty staged directory"):
+        run_cutoff_optimization(_namespace(cohort_path, captures_path), staging)
+
+
+def test_an_unset_axis_option_derives_the_linked_depth_axis(tmp_path: Path) -> None:
+    """``--axis`` is repeatable, so argparse leaves it None and the run owns the default."""
+    _, document, _ = _run(tmp_path, axes=None)
+
+    assert [entry["axis"] for entry in document["axes"]] == [DEPTH_FLOOR_LINKED]
+    assert document["selection"]["axis"] == DEPTH_FLOOR_LINKED
+
+
+def test_the_breakpoint_cap_subsamples_the_axis_and_says_so(tmp_path: Path) -> None:
+    """A capped axis keeps its ends and its baseline, and the report records the cap."""
+    _, uncapped, _ = _run(tmp_path / "all", axes=[DEPTH_FLOOR_LINKED])
+    _, capped, _ = _run(tmp_path / "few", axes=[DEPTH_FLOOR_LINKED], max_breakpoints=3)
+
+    assert uncapped["axes"][0]["capped"] is False
+    assert uncapped["axes"][0]["values"] == [0.0004, 0.001, 0.004, 0.00469, 0.014]
+    assert capped["max_breakpoints"] == 3
+    assert capped["axes"][0]["capped"] is True
+    values = capped["axes"][0]["values"]
+    assert len(values) == 3
+    assert values[0] == 0.0004
+    assert values[-1] == 0.014
+    assert 0.00469 in values  # the shipped operating point is never subsampled away
 
 
 def test_a_capture_manifest_that_omits_a_primary_sample_is_refused(tmp_path: Path) -> None:
