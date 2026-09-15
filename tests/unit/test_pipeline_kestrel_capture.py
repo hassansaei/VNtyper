@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -197,4 +198,4 @@ def test_a_non_writable_destination_is_reported_and_leaves_nothing(tmp_path: Pat
 
 def test_the_writer_factory_refuses_unvalidated_assets(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="CaptureAssets"):
-        kestrel_capture_writer(tmp_path / "capture.json", assets={"reference_file": "x"})
+        kestrel_capture_writer(tmp_path / "capture.json", assets=cast(CaptureAssets, {"reference_file": "x"}))

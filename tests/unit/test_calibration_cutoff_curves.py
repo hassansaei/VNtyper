@@ -1,15 +1,21 @@
 """A curve needs one moving axis; anything else is a labelled table, not a ROC curve."""
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from fractions import Fraction
 from types import MappingProxyType
+from typing import Any, cast
 
 import pytest
 
 from tests.unit.test_calibration_caller_policy import policy_document, policy_values
 from vntyper.scripts.calibration_caller_metrics import CallerObservation
-from vntyper.scripts.calibration_caller_policy import CallerPolicyValues, decode_caller_policy_values
+from vntyper.scripts.calibration_caller_policy import (
+    CallerPolicyScalar,
+    CallerPolicyValues,
+    decode_caller_policy_values,
+)
 from vntyper.scripts.calibration_cutoff_axes import GG_GATE_INDEPENDENT, AxisBreakpoints
 from vntyper.scripts.calibration_cutoff_curves import (
     AxisCurve,
@@ -31,7 +37,7 @@ PAIR = (0.002, BASELINE_GG)
 TRUTH: dict[str, bool | None] = {"p1": True, "p2": True, "n1": False, "n2": False}
 
 
-def policy(overrides: dict[str, object] | None = None) -> CallerPolicyValues:
+def policy(overrides: Mapping[str, object] | None = None) -> CallerPolicyValues:
     """A decoded Kestrel-only policy with the shipped values unless overridden."""
     raw = policy_document(include_advntr=False)
     policy_values(raw).update(overrides or {})
@@ -124,8 +130,10 @@ def test_clean_separable_cohort_is_perfect_at_the_shipped_threshold() -> None:
         (Fraction(1), Fraction(1, 2)),
     ]
     shipped = result.interval_by_threshold[repr(BASELINE_GG)]
-    assert shipped["sensitivity"]["estimate"] == Fraction(1)
-    assert shipped["specificity"]["estimate"] == Fraction(1)
+    sensitivity = cast(Mapping[str, Any], shipped["sensitivity"])
+    specificity = cast(Mapping[str, Any], shipped["specificity"])
+    assert sensitivity["estimate"] == Fraction(1)
+    assert specificity["estimate"] == Fraction(1)
     assert result.boundary_support == {
         "positives_within_band": 1,
         "negatives_within_band": 1,
@@ -197,9 +205,11 @@ def test_unknown_truth_keeps_its_own_denominator_and_stays_out_of_sensitivity() 
     assert result.curves.eligible_count == 5
     assert result.curves.unknown_truth_count == 1
     loose = result.interval_by_threshold[repr(0.002)]
-    assert loose["sensitivity"]["events"] == 2
-    assert loose["sensitivity"]["total"] == 2
-    assert loose["precision"]["total"] == 2
+    sensitivity = cast(Mapping[str, Any], loose["sensitivity"])
+    precision = cast(Mapping[str, Any], loose["precision"])
+    assert sensitivity["events"] == 2
+    assert sensitivity["total"] == 2
+    assert precision["total"] == 2
     assert result.boundary_support["positives_within_band"] == 0
     assert result.boundary_support["negatives_within_band"] == 0
 
@@ -217,8 +227,9 @@ def test_no_calls_stay_inside_their_truth_class_denominator() -> None:
     assert result.curves.positive_no_calls == 1
     assert result.curves.negative_no_calls == 0
     shipped = result.interval_by_threshold[repr(BASELINE_GG)]
-    assert (shipped["sensitivity"]["events"], shipped["sensitivity"]["total"]) == (1, 2)
-    assert shipped["sensitivity"]["estimate"] == Fraction(1, 2)
+    sensitivity = cast(Mapping[str, Any], shipped["sensitivity"])
+    assert (sensitivity["events"], sensitivity["total"]) == (1, 2)
+    assert sensitivity["estimate"] == Fraction(1, 2)
 
 
 def test_tiny_denominators_widen_the_exact_clopper_pearson_bounds() -> None:
@@ -233,19 +244,23 @@ def test_tiny_denominators_widen_the_exact_clopper_pearson_bounds() -> None:
     )
 
     one = tiny.interval_by_threshold[repr(BASELINE_GG)]
-    assert one["sensitivity"]["lower"] == Fraction(1, 40)
-    assert one["sensitivity"]["upper"] == Fraction(1)
-    assert one["specificity"]["lower"] == Fraction(1, 40)
+    one_sensitivity = cast(Mapping[str, Any], one["sensitivity"])
+    one_specificity = cast(Mapping[str, Any], one["specificity"])
+    assert one_sensitivity["lower"] == Fraction(1, 40)
+    assert one_sensitivity["upper"] == Fraction(1)
+    assert one_specificity["lower"] == Fraction(1, 40)
     two = curve(SEPARABLE).interval_by_threshold[repr(BASELINE_GG)]
-    assert two["sensitivity"]["lower"] > one["sensitivity"]["lower"]
+    two_sensitivity = cast(Mapping[str, Any], two["sensitivity"])
+    assert two_sensitivity["lower"] > one_sensitivity["lower"]
 
 
 def test_zero_observed_false_positives_still_admit_a_material_rate() -> None:
     result = curve(SEPARABLE)
 
     shipped = result.interval_by_threshold[repr(BASELINE_GG)]
-    assert shipped["false_positive_rate_one_sided_upper"] == Fraction(684455749451, 881583902934)
-    assert shipped["false_positive_rate_one_sided_upper"] > 0
+    upper = cast(Fraction, shipped["false_positive_rate_one_sided_upper"])
+    assert upper == Fraction(684455749451, 881583902934)
+    assert upper > 0
 
 
 def test_boundary_support_is_zero_when_no_sample_lies_in_the_band() -> None:
@@ -322,7 +337,7 @@ def test_axis_curve_document_round_trips_with_counts_and_rejected_breakpoints() 
     assert document["thresholds"] == [0.01, BASELINE_GG, 0.002]
     assert document["baseline_threshold"] == BASELINE_GG
     assert document["rejected"] == [{"value": 0.9, "reason": "gg_depth_score_threshold must be between zero and one"}]
-    rows = document["points"]
+    rows = cast(Sequence[Mapping[str, Any]], document["points"])
     assert [row["threshold"] for row in rows] == [0.01, BASELINE_GG, 0.002]
     assert [
         (row["true_positives"], row["false_positives"], row["true_negatives"], row["false_negatives"]) for row in rows
@@ -330,7 +345,8 @@ def test_axis_curve_document_round_trips_with_counts_and_rejected_breakpoints() 
     assert all(row["positive_no_calls"] == row["negative_no_calls"] == row["unknown_truth_count"] == 0 for row in rows)
     assert rows[1]["intervals"]["sensitivity"]["estimate"] == 1.0
     assert rows[0]["precision"] == 1.0
-    assert document["boundary_support"]["band_high"] == 0.01
+    boundary_support = cast(Mapping[str, Any], document["boundary_support"])
+    assert boundary_support["band_high"] == 0.01
 
 
 def test_axis_curve_document_refuses_a_foreign_object() -> None:
@@ -339,7 +355,7 @@ def test_axis_curve_document_refuses_a_foreign_object() -> None:
 
 
 def joint(
-    label_values: dict[str, dict[str, object]],
+    label_values: dict[str, dict[str, CallerPolicyScalar]],
 ) -> dict[str, tuple[CutoffCandidate, tuple[CallerObservation, ...]]]:
     """Labelled multi-parameter operating points over the same replayed cohort."""
     calls: dict[str, bool | None] = {"p1": True, "p2": True, "n1": True, "n2": False}
@@ -375,7 +391,7 @@ def test_joint_points_document_round_trips() -> None:
     assert json.loads(json.dumps(document)) == document
     assert document["schema_version"] == "calibration-cutoff-joint-v1"
     assert document["point_count"] == 2
-    rows = document["points"]
+    rows = cast(Sequence[Mapping[str, Any]], document["points"])
     assert [row["label"] for row in rows] == ["alpha", "zebra"]
     assert rows[1]["values"] == {FLOOR: 0.001, GG: 0.002}
     assert rows[0]["metrics"]["true_positives"] == 2

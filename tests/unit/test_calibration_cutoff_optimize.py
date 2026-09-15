@@ -22,11 +22,11 @@ from __future__ import annotations
 import argparse
 import json
 import stat
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import pandas as pd
@@ -283,7 +283,7 @@ def test_a_corrupted_native_baseline_aborts_the_run(tmp_path: Path) -> None:
     """A curve on evidence that cannot reproduce the shipped result is worthless."""
     from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
 
-    cohort = {
+    cohort: dict[str, tuple[str, tuple[str, ...], str | None]] = {
         "specimen-alpha": ("positive", ("0.014",), None),
         "specimen-charlie": ("negative", ("0.0004",), None),
     }
@@ -391,7 +391,7 @@ def test_the_exported_profile_round_trips_and_equals_the_selected_policy(tmp_pat
     assert document["profile"]["sha256"] == document["profile"]["round_trip_sha256"]
     assert document["usage_hint"].startswith("vntyper pipeline --research-decision-profile")
     resolved = resolve_research_decision_profile(profile_path)
-    kestrel = resolved.components["kestrel"]
+    kestrel = cast(Mapping[str, Any], resolved.components["kestrel"])
     assert kestrel["confidence_assignment"]["reporting_floor"] == 0.004
     assert kestrel["confidence_assignment"]["depth_score_thresholds"]["low"] == 0.004
     assert kestrel["alt_filtering"]["gg_depth_score_threshold"] == 0.004
@@ -400,7 +400,7 @@ def test_the_exported_profile_round_trips_and_equals_the_selected_policy(tmp_pat
 
 def test_the_plateau_interval_is_wider_than_the_single_selected_value(tmp_path: Path) -> None:
     """Quoting one value from inside a step-function plateau is false precision."""
-    cohort = {
+    cohort: dict[str, tuple[str, tuple[str, ...], str | None]] = {
         "specimen-alpha": ("positive", ("0.014",), None),
         "specimen-golf": ("positive", ("0.008",), None),
         "specimen-charlie": ("negative", ("0.0004",), None),

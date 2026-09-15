@@ -9,7 +9,9 @@ gates that already exist.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -63,14 +65,16 @@ def test_research_profile_threads_every_linked_cutoff_into_the_kestrel_component
     path.write_bytes(_research_profile_bytes(0.002))
 
     resolved = resolve_research_decision_profile(path)
-    kestrel = resolved.components["kestrel"]
+    kestrel = cast(Mapping[str, Any], resolved.components["kestrel"])
+    confidence = cast(Mapping[str, Any], kestrel["confidence_assignment"])
+    depth_scores = cast(Mapping[str, Any], confidence["depth_score_thresholds"])
 
     assert resolved.profile_kind == "generated"
-    assert kestrel["confidence_assignment"]["reporting_floor"] == 0.002
-    assert kestrel["confidence_assignment"]["depth_score_thresholds"]["low"] == 0.002
-    assert kestrel["alt_filtering"]["gg_depth_score_threshold"] == 0.002
+    assert confidence["reporting_floor"] == 0.002
+    assert depth_scores["low"] == 0.002
+    assert cast(Mapping[str, Any], kestrel["alt_filtering"])["gg_depth_score_threshold"] == 0.002
     # The band edge is a separate axis and must not move as a side effect.
-    assert kestrel["confidence_assignment"]["depth_score_thresholds"]["high"] == 0.00515
+    assert depth_scores["high"] == 0.00515
 
 
 def test_the_ordinary_decision_profile_flag_still_refuses_a_caller_generated_profile(tmp_path: Path) -> None:
@@ -105,8 +109,10 @@ def test_run_configuration_accepts_the_research_profile_and_records_its_identity
 
     configuration = resolve_run_configuration(research_profile=path)
 
+    confidence = cast(Mapping[str, Any], configuration.kestrel["confidence_assignment"])
+
     assert configuration.decision_profile.profile_kind == "generated"
-    assert configuration.kestrel["confidence_assignment"]["reporting_floor"] == 0.0031
+    assert confidence["reporting_floor"] == 0.0031
     assert configuration.caller_calibration is None
 
 
