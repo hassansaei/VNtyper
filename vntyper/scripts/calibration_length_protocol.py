@@ -34,6 +34,7 @@ _FIELDS = {
     "qc",
     "feature_bounds_rule",
     "truth_distribution_sha256",
+    "eligible_roster_sha256",
 }
 _ACCEPTANCE = {
     "minimum_independent_count",
@@ -58,6 +59,7 @@ _UNCERTAINTY = {
 }
 _MULTIPLICITY = {"mandatory": "intersection-union", "exploratory": "holm"}
 _KINDS = {"affine-A": 2, "affine-F": 2, "physical-A": 0, "physical-F": 0}
+_MAPPING_PROXY_TYPE: type[object] = type(MappingProxyType({}))
 
 
 @dataclass(frozen=True)
@@ -83,7 +85,9 @@ class LengthProtocol:
     declared_exclusions: tuple[str, ...]
     acceptance: Mapping[str, int | float]
     qc: Mapping[str, int | float]
+    qc_sha256: str
     truth_distribution_sha256: str
+    eligible_roster_sha256: str
     sha256: str
 
 
@@ -109,6 +113,12 @@ def _number(value: object, name: str, *, positive: bool = False, maximum: float 
         _fail(f"length protocol {name} must be finite, nonnegative and within its allowed range")
     if positive and value == 0:
         _fail(f"length protocol {name} must be positive")
+    return value
+
+
+def _nonpositive_number(value: object, name: str) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not -sys.float_info.max <= value <= 0:
+        _fail(f"length protocol {name} must be finite and nonpositive")
     return value
 
 
@@ -155,7 +165,7 @@ def _acceptance(value: object) -> Mapping[str, int | float]:
         if key == "minimum_independent_count":
             result[key] = _integer(raw[key], key, minimum=1)
         elif key == "paired_error_difference_upper_limit":
-            result[key] = _number(raw[key], key, maximum=0)
+            result[key] = _nonpositive_number(raw[key], key)
         elif key in {"maximum_mae", "tolerance_absolute"}:
             result[key] = _number(raw[key], key, positive=True)
         else:
@@ -221,9 +231,13 @@ def decode_length_protocol(value: object) -> LengthProtocol:
     priority = _strings(raw["representative_preprocessing_priority"], "preprocessing priority", ordered=False)
     strata = _strings(raw["required_strata"], "required strata")
     exclusions = _strings(raw["declared_exclusions"], "declared exclusions", allow_empty=True)
-    distribution_digest = raw["truth_distribution_sha256"]
-    if not isinstance(distribution_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", distribution_digest):
-        _fail("length protocol truth distribution digest must be lowercase SHA256")
+    digests = {}
+    for field in ("truth_distribution_sha256", "eligible_roster_sha256"):
+        value_digest = raw[field]
+        if not isinstance(value_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", value_digest):
+            _fail(f"length protocol {field} must be lowercase SHA256")
+        digests[field] = value_digest
+    qc = _qc(raw["qc"])
     return LengthProtocol(
         seed,
         folds,
@@ -234,8 +248,10 @@ def decode_length_protocol(value: object) -> LengthProtocol:
         strata,
         exclusions,
         _acceptance(raw["acceptance"]),
-        _qc(raw["qc"]),
-        distribution_digest,
+        qc,
+        canonical_sha256(dict(qc)),
+        digests["truth_distribution_sha256"],
+        digests["eligible_roster_sha256"],
         canonical_sha256(raw),
     )
 
@@ -254,6 +270,16 @@ def length_protocol_document(protocol: LengthProtocol) -> dict[str, object]:
     """
     if not isinstance(protocol, LengthProtocol):
         _fail("length protocol must be a LengthProtocol")
+    if (
+        not isinstance(protocol.representative_preprocessing_priority, tuple)
+        or not isinstance(protocol.candidates, tuple)
+        or any(not isinstance(item, LengthHypothesis) for item in protocol.candidates)
+        or not isinstance(protocol.required_strata, tuple)
+        or not isinstance(protocol.declared_exclusions, tuple)
+        or not isinstance(protocol.acceptance, _MAPPING_PROXY_TYPE)
+        or not isinstance(protocol.qc, _MAPPING_PROXY_TYPE)
+    ):
+        _fail("length protocol must use decoded immutable collections")
     raw: dict[str, object] = {
         "schema_version": "length-protocol-v1",
         "objective": "length-total-v1",
@@ -276,6 +302,7 @@ def length_protocol_document(protocol: LengthProtocol) -> dict[str, object]:
         "qc": dict(protocol.qc),
         "feature_bounds_rule": "training-min-max-expand-10-percent-v1",
         "truth_distribution_sha256": protocol.truth_distribution_sha256,
+        "eligible_roster_sha256": protocol.eligible_roster_sha256,
     }
     if decode_length_protocol(raw) != protocol:
         _fail("length protocol content or digest does not match its decoded contract")

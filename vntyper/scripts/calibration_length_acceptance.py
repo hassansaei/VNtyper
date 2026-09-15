@@ -3,23 +3,39 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from types import MappingProxyType
-from typing import Literal
+from typing import Literal, NoReturn
 
 from vntyper.scripts.calibration_length_metrics import (
+    LengthEligibleRoster,
     LengthMetrics,
     LengthObservation,
+    bind_length_observations,
     calculate_length_metrics,
+    length_eligible_roster_document,
     paired_length_error_interval,
 )
 from vntyper.scripts.calibration_length_protocol import LengthProtocol, length_protocol_document
+from vntyper.scripts.canonical_json import canonical_sha256
 
 logger = logging.getLogger(__name__)
 
 GateStatus = Literal["passed", "failed", "insufficient-evidence"]
+_CONTEXT_FIELDS = {"schema_version", "protocol_sha256", "qc_sha256"}
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+@dataclass(frozen=True)
+class LengthPredictionContext:
+    """Protocol/QC identity binding; it does not attest that pending QC was applied."""
+
+    protocol_sha256: str
+    qc_sha256: str
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -38,8 +54,75 @@ class LengthAcceptance:
 
     status: GateStatus
     protocol_sha256: str
+    eligible_roster_sha256: str
+    prediction_context_sha256: str
     pooled: LengthGateResult
     strata: Mapping[str, LengthGateResult]
+
+
+def _fail(message: str) -> NoReturn:
+    logger.error(message)
+    raise ValueError(message)
+
+
+def _digest(value: object, field: str) -> str:
+    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+        _fail(f"length prediction context {field} must be a lowercase SHA256 digest")
+    return value
+
+
+def decode_length_prediction_context(value: object) -> LengthPredictionContext:
+    """Decode the protocol and declared-QC identity attached to predictions.
+
+    This is an integrity binding only. Model integration must later prove that
+    the declared QC was actually applied before scientific completion is claimed.
+
+    Args:
+        value: Closed JSON prediction-context object.
+
+    Returns:
+        Immutable context and canonical content digest.
+
+    Raises:
+        ValueError: If fields, schema or digests are invalid.
+    """
+    if not isinstance(value, Mapping) or set(value) != _CONTEXT_FIELDS:
+        _fail("length prediction context fields differ from the closed contract")
+    if value["schema_version"] != "length-prediction-context-v1":
+        _fail("length prediction context schema_version must be length-prediction-context-v1")
+    return LengthPredictionContext(
+        _digest(value["protocol_sha256"], "protocol_sha256"),
+        _digest(value["qc_sha256"], "qc_sha256"),
+        canonical_sha256(value),
+    )
+
+
+def _prediction_context_document(context: LengthPredictionContext) -> dict[str, object]:
+    return {
+        "schema_version": "length-prediction-context-v1",
+        "protocol_sha256": context.protocol_sha256,
+        "qc_sha256": context.qc_sha256,
+    }
+
+
+def length_prediction_context_document(context: LengthPredictionContext) -> dict[str, object]:
+    """Project a prediction context after canonical integrity validation.
+
+    Args:
+        context: Decoded immutable prediction context.
+
+    Returns:
+        Fresh JSON-compatible context object.
+
+    Raises:
+        ValueError: If typed context content or its digest was forged.
+    """
+    if not isinstance(context, LengthPredictionContext):
+        _fail("length prediction context must be a LengthPredictionContext")
+    raw = _prediction_context_document(context)
+    if decode_length_prediction_context(raw) != context:
+        _fail("length prediction context differs from its canonical content or digest")
+    return raw
 
 
 def _population_gate(
@@ -76,36 +159,52 @@ def _population_gate(
     return LengthGateResult(status, tuple(reasons), metrics, interval)
 
 
-def evaluate_length_acceptance(rows: Sequence[LengthObservation], protocol: LengthProtocol) -> LengthAcceptance:
+def evaluate_length_acceptance(
+    rows: Sequence[LengthObservation],
+    roster: LengthEligibleRoster,
+    prediction_context: LengthPredictionContext,
+    protocol: LengthProtocol,
+) -> LengthAcceptance:
     """Evaluate frozen predictions without fitting, selection, or promotion writes.
 
     Args:
         rows: One primary observation per predeclared independent group. Its
-            stratum is assigned before observing prediction availability/errors.
+            stratum memberships are frozen separately in the roster.
+        roster: Exact pre-outcome eligible members and stratum memberships.
+        prediction_context: Integrity binding to protocol and declared QC policy.
         protocol: Validated study rules containing every mandatory stratum.
 
     Returns:
         All pooled and stratum verdicts. Absolute-error and proportion gates
         apply to every stratum; paired improvement applies to the pooled fixed
         baseline comparison. Sparse metadata populations stay distinct from
-        model-induced unavailability. This verdict alone is not an attestation
-        of evidence custody, candidate identity, or external applicability.
+        model-induced unavailability. This verdict and prediction-context
+        binding do not prove that pending model-stage QC was applied and are not
+        an attestation of evidence custody, candidate identity, or applicability.
 
     Raises:
         ValueError: If observations, stratum labels, or protocol integrity fail.
     """
     length_protocol_document(protocol)
-    pooled = _population_gate(rows, protocol, require_improvement=True)
-    grouped: dict[str, list[LengthObservation]] = {}
-    for row in rows:
-        if row.stratum not in protocol.required_strata:
-            message = "length acceptance observations contain an undeclared stratum"
-            logger.error(message)
-            raise ValueError(message)
-        grouped.setdefault(row.stratum, []).append(row)
+    length_eligible_roster_document(roster)
+    length_prediction_context_document(prediction_context)
+    if roster.sha256 != protocol.eligible_roster_sha256:
+        _fail("length eligible roster digest differs from the frozen protocol")
+    if prediction_context.protocol_sha256 != protocol.sha256 or prediction_context.qc_sha256 != protocol.qc_sha256:
+        _fail("length prediction context differs from the protocol or QC binding")
+    observations = bind_length_observations(rows, roster)
+    allowed = set(protocol.required_strata)
+    if any(not set(member.strata) <= allowed for member in roster.members):
+        _fail("length eligible roster contains an undeclared stratum")
+    pooled = _population_gate(observations, protocol, require_improvement=True)
+    by_group = {row.group_key: row for row in observations}
+    grouped = {
+        name: [by_group[member.group_key] for member in roster.members if name in member.strata]
+        for name in protocol.required_strata
+    }
     strata = {
         name: _population_gate(grouped[name], protocol, require_improvement=False)
-        if name in grouped
+        if grouped[name]
         else LengthGateResult("insufficient-evidence", ("missing_required_stratum",), None, None)
         for name in protocol.required_strata
     }
@@ -117,4 +216,11 @@ def evaluate_length_acceptance(rows: Sequence[LengthObservation], protocol: Leng
         if "failed" in statuses
         else "passed"
     )
-    return LengthAcceptance(status, protocol.sha256, pooled, MappingProxyType(strata))
+    return LengthAcceptance(
+        status,
+        protocol.sha256,
+        roster.sha256,
+        prediction_context.sha256,
+        pooled,
+        MappingProxyType(strata),
+    )

@@ -13,17 +13,34 @@ from types import MappingProxyType
 from typing import NoReturn
 
 from vntyper.scripts.calibration_statistics import clopper_pearson_interval
+from vntyper.scripts.canonical_json import canonical_sha256
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class LengthObservation:
-    """One predeclared primary observation per specimen and independent group."""
+class EligibleLengthMember:
+    """One outcome-independent primary representative and its stratum memberships."""
 
     key: str
     group_key: str
-    stratum: str
+    strata: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LengthEligibleRoster:
+    """Canonical roster frozen before predictions or outcomes are inspected."""
+
+    members: tuple[EligibleLengthMember, ...]
+    sha256: str
+
+
+@dataclass(frozen=True)
+class LengthObservation:
+    """One prediction outcome per predeclared specimen and independent group."""
+
+    key: str
+    group_key: str
     truth: float
     prediction: float | None
     baseline_prediction: float
@@ -58,6 +75,87 @@ def _positive(value: object, field: str) -> None:
         _fail(f"length observation {field} must be finite and positive")
 
 
+def _text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        _fail(f"length roster {field} must be non-empty text")
+    return value
+
+
+def _strata(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        _fail("length roster strata must be a non-empty sorted unique list")
+    result = tuple(_text(item, "strata") for item in value)
+    if result != tuple(sorted(set(result))):
+        _fail("length roster strata must be a non-empty sorted unique list")
+    return result
+
+
+def decode_length_eligible_roster(value: object) -> LengthEligibleRoster:
+    """Decode an exact eligible roster frozen before outcomes are available.
+
+    Args:
+        value: Sorted JSON list of key, group_key and multiple stratum memberships.
+
+    Returns:
+        Immutable roster with its canonical digest.
+
+    Raises:
+        ValueError: If rows, identities, ordering or memberships are invalid.
+    """
+    if not isinstance(value, list) or not value:
+        _fail("length eligible roster must be a non-empty list")
+    members = []
+    for row in value:
+        if not isinstance(row, Mapping) or set(row) != {"key", "group_key", "strata"}:
+            _fail("length eligible roster row fields differ from the closed contract")
+        members.append(
+            EligibleLengthMember(_text(row["key"], "key"), _text(row["group_key"], "group_key"), _strata(row["strata"]))
+        )
+    identities = [(member.group_key, member.key) for member in members]
+    if (
+        identities != sorted(identities)
+        or len({member.key for member in members}) != len(members)
+        or len({member.group_key for member in members}) != len(members)
+    ):
+        _fail("length eligible roster must have unique keys and groups in increasing group order")
+    return LengthEligibleRoster(tuple(members), canonical_sha256(value))
+
+
+def _roster_document(roster: LengthEligibleRoster) -> list[dict[str, object]]:
+    return [
+        {"key": member.key, "group_key": member.group_key, "strata": list(member.strata)} for member in roster.members
+    ]
+
+
+def _require_roster(roster: object) -> LengthEligibleRoster:
+    if not isinstance(roster, LengthEligibleRoster):
+        _fail("length eligible roster must be a LengthEligibleRoster")
+    if not isinstance(roster.members, tuple) or any(
+        not isinstance(item, EligibleLengthMember) for item in roster.members
+    ):
+        _fail("length eligible roster must use decoded immutable content")
+    if any(not isinstance(item.strata, tuple) for item in roster.members):
+        _fail("length eligible roster must use decoded immutable content")
+    if decode_length_eligible_roster(_roster_document(roster)) != roster:
+        _fail("length eligible roster differs from its canonical content or digest")
+    return roster
+
+
+def length_eligible_roster_document(roster: LengthEligibleRoster) -> list[dict[str, object]]:
+    """Project a validated eligible roster into independent JSON rows.
+
+    Args:
+        roster: Decoded immutable eligible roster.
+
+    Returns:
+        Fresh canonicalizable roster rows.
+
+    Raises:
+        ValueError: If typed content or its digest was forged.
+    """
+    return _roster_document(_require_roster(roster))
+
+
 def _observations(rows: Sequence[LengthObservation]) -> tuple[LengthObservation, ...]:
     if not isinstance(rows, (tuple, list)) or not rows:
         _fail("length metrics require non-empty typed observations")
@@ -66,7 +164,7 @@ def _observations(rows: Sequence[LengthObservation]) -> tuple[LengthObservation,
     for row in rows:
         if not isinstance(row, LengthObservation):
             _fail("length metrics require LengthObservation values")
-        for field in ("key", "group_key", "stratum"):
+        for field in ("key", "group_key"):
             value = getattr(row, field)
             if not isinstance(value, str) or not value or value != value.strip():
                 _fail(f"length observation {field} must be non-empty text")
@@ -79,6 +177,29 @@ def _observations(rows: Sequence[LengthObservation]) -> tuple[LengthObservation,
         keys.add(row.key)
         groups.add(row.group_key)
     return tuple(sorted(rows, key=lambda row: row.group_key))
+
+
+def bind_length_observations(
+    rows: Sequence[LengthObservation], roster: LengthEligibleRoster
+) -> tuple[LengthObservation, ...]:
+    """Require one exact outcome row for every independently frozen roster member.
+
+    Args:
+        rows: Candidate and baseline outcomes, including unavailable predictions.
+        roster: Pre-outcome eligible population binding.
+
+    Returns:
+        Validated observations in increasing group order.
+
+    Raises:
+        ValueError: If an outcome is missing, extra, duplicated or identity-swapped.
+    """
+    observations = _observations(rows)
+    expected = {(member.key, member.group_key) for member in _require_roster(roster).members}
+    observed = {(row.key, row.group_key) for row in observations}
+    if observed != expected:
+        _fail("length outcome set must match the frozen eligible roster exactly")
+    return observations
 
 
 def one_sided_binomial_lower(successes: int, total: int, *, confidence: Fraction = Fraction(95, 100)) -> Fraction:
@@ -170,11 +291,20 @@ def calculate_length_metrics(
     )
 
 
-def stratified_length_metrics(rows: Sequence[LengthObservation]) -> Mapping[str, LengthMetrics]:
+def stratified_length_metrics(
+    rows: Sequence[LengthObservation],
+    roster: LengthEligibleRoster,
+    *,
+    tolerance_absolute: float,
+    tolerance_relative: float,
+) -> Mapping[str, LengthMetrics]:
     """Apply the same denominator contract independently to each observed stratum.
 
     Args:
         rows: Unique primary observations, including unavailable predictions.
+        roster: Exact predeclared membership of every observation.
+        tolerance_absolute: Frozen absolute tolerance in repeat units.
+        tolerance_relative: Frozen relative tolerance.
 
     Returns:
         Immutable metrics keyed in increasing stratum order. Missing mandatory
@@ -183,10 +313,20 @@ def stratified_length_metrics(rows: Sequence[LengthObservation]) -> Mapping[str,
     Raises:
         ValueError: If any observation or representative is invalid.
     """
+    observations = bind_length_observations(rows, roster)
+    by_group = {row.group_key: row for row in observations}
     grouped: dict[str, list[LengthObservation]] = {}
-    for row in _observations(rows):
-        grouped.setdefault(row.stratum, []).append(row)
-    return MappingProxyType({name: calculate_length_metrics(grouped[name]) for name in sorted(grouped)})
+    for member in roster.members:
+        for stratum in member.strata:
+            grouped.setdefault(stratum, []).append(by_group[member.group_key])
+    return MappingProxyType(
+        {
+            name: calculate_length_metrics(
+                grouped[name], tolerance_absolute=tolerance_absolute, tolerance_relative=tolerance_relative
+            )
+            for name in sorted(grouped)
+        }
+    )
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -225,4 +365,5 @@ def paired_length_error_interval(rows: Sequence[LengthObservation], *, seed: int
         return None
     generator = random.Random(seed)
     means = sorted(math.fsum(value / count for value in generator.choices(differences, k=count)) for _ in range(10_000))
+    # R6 freezes a central 95% percentile interval; its upper endpoint is q.975.
     return _percentile(means, 0.025), _percentile(means, 0.975)

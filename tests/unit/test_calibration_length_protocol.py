@@ -5,6 +5,8 @@ from importlib import import_module
 
 import pytest
 
+from vntyper.scripts.canonical_json import canonical_sha256
+
 pytestmark = pytest.mark.unit
 
 
@@ -50,6 +52,7 @@ def protocol_document():
         },
         "feature_bounds_rule": "training-min-max-expand-10-percent-v1",
         "truth_distribution_sha256": "a" * 64,
+        "eligible_roster_sha256": "b" * 64,
     }
 
 
@@ -61,6 +64,7 @@ def test_protocol_is_hash_bound_and_preserves_priority_order():
     assert result.candidates[0].free_parameters == 2
     assert result.candidates[1].free_parameters == 0
     assert result.representative_preprocessing_priority == ("primary", "secondary")
+    assert result.qc_sha256 == canonical_sha256(raw["qc"])
     assert m.length_protocol_document(result) == raw
     raw["candidate_grid"][0]["model_kind"] = "physical-A"
     assert result.candidates[0].model_kind == "affine-F"
@@ -93,6 +97,7 @@ def test_protocol_is_hash_bound_and_preserves_priority_order():
         ("declared_exclusions", [" "]),
         ("feature_bounds_rule", "validation-min-max"),
         ("truth_distribution_sha256", "A" * 64),
+        ("eligible_roster_sha256", "B" * 64),
     ],
 )
 def test_protocol_rejects_invalid_or_unplanned_rules(field, value):
@@ -136,6 +141,8 @@ def test_candidate_search_is_explicit_unique_finite_and_cannot_promote_baseline_
         ("acceptance", "maximum_mae", float("nan")),
         ("acceptance", "minimum_relative_mae_improvement", -0.1),
         ("acceptance", "paired_error_difference_upper_limit", 0.1),
+        ("acceptance", "paired_error_difference_upper_limit", True),
+        ("acceptance", "paired_error_difference_upper_limit", float("-inf")),
         ("acceptance", "tolerance_absolute", 0),
         ("acceptance", "tolerance_relative", 1.1),
         ("acceptance", "minimum_tolerance_lower_bound", True),
@@ -171,6 +178,15 @@ def test_predeclared_external_limits_are_hash_bound_without_becoming_reference_s
     assert m.decode_length_protocol(changed).sha256 != m.decode_length_protocol(raw).sha256
 
 
+def test_stricter_signed_paired_error_limit_is_valid_and_hash_bound():
+    m = import_module("vntyper.scripts.calibration_length_protocol")
+    raw = protocol_document()
+    raw["acceptance"]["paired_error_difference_upper_limit"] = -0.5
+    result = m.decode_length_protocol(raw)
+    assert result.acceptance["paired_error_difference_upper_limit"] == -0.5
+    assert m.length_protocol_document(result) == raw
+
+
 def test_protocol_document_refuses_forged_typed_digest():
     from dataclasses import replace
 
@@ -178,3 +194,14 @@ def test_protocol_document_refuses_forged_typed_digest():
     result = m.decode_length_protocol(protocol_document())
     with pytest.raises(ValueError, match="digest"):
         m.length_protocol_document(replace(result, sha256="0" * 64))
+
+
+def test_protocol_document_refuses_mutable_typed_collections():
+    from dataclasses import replace
+
+    m = import_module("vntyper.scripts.calibration_length_protocol")
+    result = m.decode_length_protocol(protocol_document())
+    with pytest.raises(ValueError, match="immutable"):
+        m.length_protocol_document(replace(result, acceptance=dict(result.acceptance)))
+    with pytest.raises(ValueError, match="immutable"):
+        m.length_protocol_document(replace(result, qc=dict(result.qc)))
