@@ -102,6 +102,18 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "fastq1": (("--fastq1",), "_StoreAction", "str", None, False, None, None),
         "fastq2": (("--fastq2",), "_StoreAction", "str", None, False, None, None),
         "keep_intermediates": (("--keep-intermediates",), "_StoreTrueAction", None, False, False, None, 0),
+        "length_annotation": (("--length-annotation",), "_StoreAction", "Path", None, False, None, None),
+        "length_context": (("--length-context",), "_StoreAction", "Path", None, False, None, None),
+        "length_model": (("--length-model",), "_StoreAction", "Path", None, False, None, None),
+        "measure_vntr_length_features": (
+            ("--measure-vntr-length-features",),
+            "_StoreTrueAction",
+            None,
+            False,
+            False,
+            None,
+            0,
+        ),
         "output_dir": (("-o", "--output-dir"), "_StoreAction", "str", None, False, None, None),
         "output_name": (("-n", "--output-name"), "_StoreAction", "str", None, False, None, None),
         "reference_assembly": (
