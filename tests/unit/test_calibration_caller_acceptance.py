@@ -77,6 +77,102 @@ def test_wrong_tier_a_identity_is_a_hard_failure_even_if_binary_detection_is_cor
     assert result.status == "failed"
 
 
+@pytest.mark.parametrize("truth_positive,index", [(True, 0), (None, 62)])
+def test_candidate_tier_a_call_without_assessable_identity_is_insufficient_in_every_population(truth_positive, index):
+    candidate, baseline, roster = _population()
+    missing_truth = replace(
+        candidate[index],
+        truth_positive=truth_positive,
+        truth_variants=None,
+        called_positive=True,
+        called_variants=("v",),
+        tier_a_variants=("v",),
+    )
+    candidate = (*candidate[:index], missing_truth, *candidate[index + 1 :])
+    baseline = (
+        *baseline[:index],
+        replace(
+            baseline[index],
+            truth_positive=truth_positive,
+            truth_variants=None,
+            called_positive=truth_positive is True,
+            called_variants=("v",) if truth_positive is True else (),
+            tier_a_variants=(),
+        ),
+        *baseline[index + 1 :],
+    )
+
+    result = _evaluate(candidate, baseline, roster, _rules())
+
+    assert result.status == "insufficient-evidence"
+    assert result.pooled.reasons == ("unassessable_tier_a_identity",)
+    assert result.strata["nominal"].status == "insufficient-evidence"
+    assert result.strata["nominal"].reasons == ("unassessable_tier_a_identity",)
+    assert result.pooled.candidate.sensitivity.events == 60
+    assert result.pooled.candidate.sensitivity.total == 60
+    assert result.pooled.candidate.wrong_tier_a_identity_groups == 0
+
+
+@pytest.mark.parametrize("truth_positive,index", [(True, 0), (None, 62)])
+def test_missing_truth_identity_without_candidate_tier_a_call_remains_permitted(truth_positive, index):
+    candidate, baseline, roster = _population()
+    candidate = (
+        *candidate[:index],
+        replace(
+            candidate[index],
+            truth_positive=truth_positive,
+            truth_variants=None,
+            called_positive=True,
+            called_variants=("v",),
+        ),
+        *candidate[index + 1 :],
+    )
+    baseline = (
+        *baseline[:index],
+        replace(
+            baseline[index],
+            truth_positive=truth_positive,
+            truth_variants=None,
+            called_positive=truth_positive is True,
+            called_variants=("v",) if truth_positive is True else (),
+        ),
+        *baseline[index + 1 :],
+    )
+
+    result = _evaluate(candidate, baseline, roster, _rules())
+
+    assert result.status == "passed"
+    assert "unassessable_tier_a_identity" not in result.pooled.reasons
+
+
+def test_baseline_only_unassessable_tier_a_call_does_not_penalize_candidate():
+    candidate, baseline, roster = _population()
+    candidate = (replace(candidate[0], truth_variants=None), *candidate[1:])
+    baseline = (
+        replace(baseline[0], truth_variants=None, tier_a_variants=("v",)),
+        *baseline[1:],
+    )
+
+    result = _evaluate(candidate, baseline, roster, _rules())
+
+    assert result.status == "passed"
+    assert "unassessable_tier_a_identity" not in result.pooled.reasons
+
+
+def test_unassessable_candidate_tier_a_identity_cannot_enter_selection():
+    candidate, baseline, roster = _population()
+    candidate = (
+        replace(candidate[0], truth_variants=None, tier_a_variants=("v",)),
+        *candidate[1:],
+    )
+    baseline = (replace(baseline[0], truth_variants=None), *baseline[1:])
+    result = _evaluate(candidate, baseline, roster, _rules())
+
+    assert result.selection_benefit is True
+    assert result.status == "insufficient-evidence"
+    assert select_caller_candidate((CallerSelectionEntry("a" * 64, 1, result),)) is None
+
+
 def test_missing_or_sparse_strata_cannot_be_hidden_by_pooled_success():
     candidate, baseline, roster = _population()
     result = _evaluate(candidate, baseline, roster, _rules(required_strata=("absent", "nominal")))

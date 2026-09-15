@@ -163,6 +163,9 @@ def _population(
         if count < minimum:
             sparse = True
             reasons.append(reason)
+    if any(row.tier_a_variants and row.truth_variants is None for row in candidate):
+        sparse = True
+        reasons.append("unassessable_tier_a_identity")
     if current.wrong_tier_a_identity_groups:
         reasons.append("wrong_tier_a_identity")
     if current.fpr_one_sided_upper is None or current.fpr_one_sided_upper > rules.maximum_fpr_upper:
