@@ -47,6 +47,47 @@ def test_read_renaming_only_changes_named_identity_and_alignment_identity():
     assert first.unnamed_sequence == second.unnamed_sequence
 
 
+def test_agreed_terminal_mate_suffix_only_normalizes_named_sequence_identity():
+    m = import_module("vntyper.scripts.calibration_read_identity")
+    suffixed = m.read_identity_tokens(record(name="synthetic-read/1"))
+    bare = m.read_identity_tokens(record(name="synthetic-read"))
+
+    assert suffixed.named_sequence == bare.named_sequence
+    assert suffixed.unnamed_sequence == bare.unnamed_sequence
+    assert suffixed.alignment != bare.alignment
+    assert m.canonical_sequence_name("synthetic-read/2", 2) == "synthetic-read"
+    assert m.canonical_sequence_name("synthetic-read/3", 2) == "synthetic-read/3"
+    assert m.canonical_sequence_name("synthetic-read/1", 0) == "synthetic-read/1"
+
+
+@pytest.mark.parametrize(
+    ("name", "mate"),
+    [("synthetic-read/2", 1), ("synthetic-read/1", 2), ("/1", 1), ("/2", 2)],
+)
+def test_sequence_name_normalization_rejects_conflicting_or_empty_terminal_suffix(name, mate):
+    m = import_module("vntyper.scripts.calibration_read_identity")
+
+    with pytest.raises(ValueError, match="mate suffix"):
+        m.canonical_sequence_name(name, mate)
+
+
+@pytest.mark.parametrize(
+    ("name", "mate"), [("", 1), ("synthetic read", 1), ("synthetic-read", True), ("synthetic-read", 3)]
+)
+def test_sequence_name_normalization_revalidates_name_and_mate(name, mate):
+    m = import_module("vntyper.scripts.calibration_read_identity")
+
+    with pytest.raises(ValueError):
+        m.canonical_sequence_name(name, mate)
+
+
+def test_read_identity_rejects_a_qname_suffix_that_conflicts_with_mate_flags():
+    m = import_module("vntyper.scripts.calibration_read_identity")
+
+    with pytest.raises(ValueError, match="mate suffix"):
+        m.read_identity_tokens(record(name="synthetic-read/2"))
+
+
 @pytest.mark.parametrize(
     "changes",
     [

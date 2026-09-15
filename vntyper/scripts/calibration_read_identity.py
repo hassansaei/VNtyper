@@ -125,6 +125,40 @@ def _validate_record(record: PrimaryReadRecord) -> None:
         _fail("read identity mapped record requires CIGAR and coordinates")
 
 
+def canonical_sequence_name(name: str, mate: int) -> str:
+    """Normalize only an explicit terminal mate suffix for sequence identity v1.
+
+    The raw name remains part of alignment identity. A terminal ``/1`` or
+    ``/2`` is removed only when it agrees with the explicit mate ordinal. No
+    other prefix, suffix, or description transformation is permitted.
+
+    Args:
+        name: Original FASTQ header name or BAM/CRAM QNAME.
+        mate: Explicit mate ordinal: zero for unpaired, one or two for paired.
+
+    Returns:
+        The name used by named sequence identity.
+
+    Raises:
+        ValueError: If the name, mate, or terminal mate suffix is invalid.
+    """
+    if not isinstance(name, str) or not name or any(char.isspace() for char in name):
+        _fail("read identity name must be non-empty and contain no whitespace")
+    _integer(mate, "mate", minimum=0, maximum=2)
+    if mate == 0:
+        return name
+    matching_suffix = f"/{mate}"
+    conflicting_suffix = "/2" if mate == 1 else "/1"
+    if name.endswith(conflicting_suffix):
+        _fail("read identity terminal mate suffix conflicts with the explicit mate ordinal")
+    if name.endswith(matching_suffix):
+        normalized = name[: -len(matching_suffix)]
+        if not normalized:
+            _fail("read identity terminal mate suffix requires a non-empty base name")
+        return normalized
+    return name
+
+
 def read_identity_tokens(record: PrimaryReadRecord) -> ReadIdentityTokens | None:
     """Produce canonical record tokens for an external-sort duplicate audit.
 
@@ -159,9 +193,10 @@ def read_identity_tokens(record: PrimaryReadRecord) -> ReadIdentityTokens | None
         "qualities": list(qualities) if qualities is not None else None,
         "mate": record.mate,
     }
-    named_content = {**content, "name": record.name}
+    named_content = {**content, "name": canonical_sequence_name(record.name, record.mate)}
     alignment = {
-        **named_content,
+        **content,
+        "name": record.name,
         "flags": record.flags,
         "mapping_quality": record.mapping_quality,
         "contig": record.contig,
