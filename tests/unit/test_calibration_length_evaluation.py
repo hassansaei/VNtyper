@@ -137,10 +137,11 @@ def test_inclusive_one_repeat_tie_uses_stable_candidate_id_for_equal_complexity(
     assert result.selection.selected_candidate_id == "a-affine-f"
 
 
-def test_nonselection_phases_require_and_evaluate_only_the_fixed_candidate(monkeypatch):
+@pytest.mark.parametrize("phase", ["validation", "locked-heldout", "development-assessment"])
+def test_nonselection_phases_require_and_evaluate_only_the_fixed_candidate(monkeypatch, phase):
     evaluation = import_module("vntyper.scripts.calibration_length_evaluation")
     estimation = import_module("vntyper.scripts.length_estimation")
-    rows = evaluation_rows(phase="validation")
+    rows = evaluation_rows(phase=phase)
     protocol, roster = evaluation_protocol(rows, ("a-affine-f", "affine-F"), ("z-affine-a", "affine-A"))
     fitted = fitted_training(evaluation_protocol(rows, ("z-affine-a", "affine-A"))[0])
     measured = rows[0].features
@@ -181,6 +182,22 @@ def test_nonselection_phases_require_and_evaluate_only_the_fixed_candidate(monke
     assert result.selection.selected_candidate_id is None
 
 
+def test_old_development_phase_name_is_rejected():
+    evaluation = import_module("vntyper.scripts.calibration_length_evaluation")
+    rows = evaluation_rows(phase="development")
+    protocol, roster = evaluation_protocol(rows, ("affine-a", "affine-A"))
+    fitted = fitted_training(protocol)
+    with pytest.raises(ValueError, match="phase"):
+        evaluation.evaluate_length_hypotheses(
+            fitted.outcomes,
+            fitted.baseline,
+            roster,
+            protocol,
+            rows,
+            fixed_candidate_id="affine-a",
+        )
+
+
 def test_full_protocol_fit_outcome_roster_and_fit_state_are_strict():
     evaluation = import_module("vntyper.scripts.calibration_length_evaluation")
     training = import_module("vntyper.scripts.calibration_length")
@@ -213,7 +230,7 @@ def test_rows_require_exact_roster_feature_identity_integral_truth_and_one_allow
     fractional = (replace(rows[0], total_truth_repeat_count=60.5), rows[1])
     with pytest.raises(ValueError, match="integral exact repeat count"):
         evaluation.evaluate_length_hypotheses(fitted.outcomes, fitted.baseline, roster, protocol, fractional)
-    mixed = (rows[0], replace(rows[1], phase="development"))
+    mixed = (rows[0], replace(rows[1], phase="development-assessment"))
     with pytest.raises(ValueError, match="one common phase"):
         evaluation.evaluate_length_hypotheses(fitted.outcomes, fitted.baseline, roster, protocol, mixed)
     invalid = (replace(rows[0], phase="training"), replace(rows[1], phase="training"))

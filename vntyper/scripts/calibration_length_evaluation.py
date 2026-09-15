@@ -37,10 +37,10 @@ from vntyper.scripts.length_model import TARGET_BOUNDARY_DEFINITION, LengthModel
 
 logger = logging.getLogger(__name__)
 
-EvaluationPhase = Literal["policy-selection", "validation", "locked-heldout", "development"]
+EvaluationPhase = Literal["policy-selection", "validation", "locked-heldout", "development-assessment"]
 CandidateEvaluationStatus = Literal["evaluated", "fit-ineligible", "not-evaluated"]
 SelectionStatus = Literal["selected", "no-feasible-candidate", "not-applicable"]
-_PHASES = {"policy-selection", "validation", "locked-heldout", "development"}
+_PHASES = {"policy-selection", "validation", "locked-heldout", "development-assessment"}
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _QC_FIELDS = (
     "minimum_denominator_mean_depth",
