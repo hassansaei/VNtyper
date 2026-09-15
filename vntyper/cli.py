@@ -113,6 +113,11 @@ def main(argv: list[str] | None = None) -> None:
                     calibration_bundle=args.calibration_bundle,
                     calibration_context=args.calibration_context,
                 )
+            elif args.research_decision_profile is not None:
+                args.run_configuration = resolve_run_configuration(
+                    args.decision_profile,
+                    research_profile=args.research_decision_profile,
+                )
             else:
                 args.run_configuration = resolve_run_configuration(args.decision_profile)
         except ValueError as exc:

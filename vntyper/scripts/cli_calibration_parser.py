@@ -110,6 +110,15 @@ def add_pipeline_calibration_arguments(parser: argparse.ArgumentParser) -> None:
         help="Locally fitted research length model JSON in place of the packaged standard model.",
     )
     parser.add_argument(
+        "--research-decision-profile",
+        type=Path,
+        default=None,
+        help=(
+            "Derived caller research profile from 'vntyper calibrate optimize'. Applies locally derived "
+            "cutoffs without approval; research use only, and exclusive with --decision-profile."
+        ),
+    )
+    parser.add_argument(
         "--calibration-bundle",
         type=Path,
         default=None,
