@@ -315,8 +315,8 @@ def test_clopper_pearson_matches_stored_scipy_beta_quantiles_at_cohort_scale(
 ) -> None:
     interval = clopper_pearson_interval(events, total)
 
-    assert float(interval.lower) == pytest.approx(expected_lower, abs=2e-12)
-    assert float(interval.upper) == pytest.approx(expected_upper, abs=2e-12)
+    assert float(interval.lower) == pytest.approx(expected_lower, abs=2e-12, rel=0)
+    assert float(interval.upper) == pytest.approx(expected_upper, abs=2e-12, rel=0)
 
 
 def test_clopper_pearson_large_sample_bounds_and_monotonicity() -> None:
@@ -334,8 +334,8 @@ def test_clopper_pearson_large_sample_bounds_and_monotonicity() -> None:
 def test_clopper_pearson_large_sample_respects_exact_custom_confidence() -> None:
     interval = clopper_pearson_interval(600, 1_200, confidence=Fraction(9, 10))
 
-    assert float(interval.lower) == pytest.approx(0.47586097957789397, abs=2e-12)
-    assert float(interval.upper) == pytest.approx(0.5241390204221059, abs=2e-12)
+    assert float(interval.lower) == pytest.approx(0.47586097957789397, abs=2e-12, rel=0)
+    assert float(interval.upper) == pytest.approx(0.5241390204221059, abs=2e-12, rel=0)
 
 
 def test_large_binomial_tail_probabilities_preserve_degenerate_boundaries() -> None:
