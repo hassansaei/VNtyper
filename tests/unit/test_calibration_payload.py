@@ -1,7 +1,7 @@
 """A payload digest binds every file and a unique, safe layout."""
 
 from copy import deepcopy
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from importlib import import_module
 
 import pytest
@@ -149,3 +149,110 @@ def test_public_projection_and_validation_refuse_undecoded_manifest():
         payload.payload_manifest_document(manifest_rows())
     with pytest.raises(ValueError, match="PayloadManifest"):
         payload.validate_payload_observations(manifest_rows(), {})
+
+
+def test_manifest_public_boundaries_recompute_the_canonical_digest():
+    payload = import_module("vntyper.scripts.calibration_payload")
+    manifest = payload.decode_payload_manifest(manifest_rows())
+    forged = replace(manifest, sha256="f" * 64)
+
+    with pytest.raises(ValueError, match="canonical"):
+        payload.payload_manifest_document(forged)
+    with pytest.raises(ValueError, match="canonical"):
+        payload.validate_payload_observations(forged, {})
+
+
+def caller_bundle_document(callers=None, *, advntr_digest="b" * 64, background_digest=None):
+    if callers is None:
+        callers = ["advntr", "kestrel"]
+    return {
+        "schema_version": "caller-bundle-v2",
+        "required_callers": callers,
+        "components": {
+            "decision-profile.json": "a" * 64,
+            "advntr-policy.json": advntr_digest,
+            "background.json": background_digest,
+        },
+    }
+
+
+def test_caller_bundle_descriptor_is_closed_hash_bound_and_immutable():
+    payload = import_module("vntyper.scripts.calibration_payload")
+    raw = caller_bundle_document(background_digest="c" * 64)
+    expected = deepcopy(raw)
+    descriptor = payload.decode_caller_bundle_descriptor(raw)
+
+    assert descriptor.sha256 == canonical_sha256(expected)
+    assert descriptor.required_callers == ("advntr", "kestrel")
+    raw["components"]["decision-profile.json"] = "d" * 64
+    assert payload.caller_bundle_descriptor_document(descriptor) == expected
+    with pytest.raises(FrozenInstanceError):
+        descriptor.background_sha256 = None
+
+
+def test_caller_descriptor_entry_does_not_change_the_r4_manifest_list_hash():
+    payload = import_module("vntyper.scripts.calibration_payload")
+    descriptor = payload.decode_caller_bundle_descriptor(caller_bundle_document())
+    rows = [
+        {"path": "caller-bundle.json", "size_bytes": 301, "sha256": descriptor.sha256},
+        {"path": "decision-profile.json", "size_bytes": 23, "sha256": "a" * 64},
+    ]
+
+    assert payload.decode_payload_manifest(rows).sha256 == canonical_sha256(rows)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "root-extra",
+        "root-missing",
+        "component-extra",
+        "component-missing",
+        "schema",
+        "unsorted-callers",
+        "missing-kestrel",
+        "unknown-caller",
+        "missing-advntr-policy",
+        "unexpected-advntr-policy",
+        "bad-component-digest",
+    ],
+)
+def test_caller_bundle_descriptor_rejects_open_or_inconsistent_content(change):
+    payload = import_module("vntyper.scripts.calibration_payload")
+    raw = caller_bundle_document()
+    if change == "root-extra":
+        raw["extra"] = True
+    elif change == "root-missing":
+        del raw["components"]
+    elif change == "component-extra":
+        raw["components"]["extra.json"] = None
+    elif change == "component-missing":
+        del raw["components"]["background.json"]
+    elif change == "schema":
+        raw["schema_version"] = "caller-bundle-v1"
+    elif change == "unsorted-callers":
+        raw["required_callers"] = ["kestrel", "advntr"]
+    elif change == "missing-kestrel":
+        raw["required_callers"] = ["advntr"]
+    elif change == "unknown-caller":
+        raw["required_callers"] = ["kestrel", "other"]
+    elif change == "missing-advntr-policy":
+        raw["components"]["advntr-policy.json"] = None
+    elif change == "unexpected-advntr-policy":
+        raw = caller_bundle_document(["kestrel"], advntr_digest="b" * 64)
+    else:
+        raw["components"]["decision-profile.json"] = "bad"
+
+    with pytest.raises(ValueError):
+        payload.decode_caller_bundle_descriptor(raw)
+
+
+def test_kestrel_only_bundle_omits_advntr_policy_and_descriptor_boundary_revalidates():
+    payload = import_module("vntyper.scripts.calibration_payload")
+    raw = caller_bundle_document(["kestrel"], advntr_digest=None)
+    descriptor = payload.decode_caller_bundle_descriptor(raw)
+    assert payload.caller_bundle_descriptor_document(descriptor) == raw
+
+    forged = replace(descriptor, sha256="f" * 64)
+    with pytest.raises(ValueError, match="canonical"):
+        payload.caller_bundle_descriptor_document(forged)

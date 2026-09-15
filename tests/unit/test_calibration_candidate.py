@@ -1,12 +1,18 @@
 """Research candidates bind their target, provenance and complete payload."""
 
 from copy import deepcopy
+from dataclasses import replace
 from importlib import import_module
 
 import pytest
 
-from vntyper.scripts.calibration_payload import decode_payload_manifest
-from vntyper.scripts.canonical_json import canonical_sha256
+from vntyper.scripts.calibration_payload import (
+    CALLER_BUNDLE_DESCRIPTOR_PATH,
+    decode_caller_bundle_descriptor,
+    decode_payload_manifest,
+    payload_manifest_document,
+)
+from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256
 
 pytestmark = pytest.mark.unit
 
@@ -21,6 +27,16 @@ def candidate_document(target="length"):
     }
     if target == "callers":
         applicability["required_callers"] = ["advntr", "kestrel"]
+    else:
+        applicability.update(
+            {
+                "aligner_name": "synthetic-aligner",
+                "aligner_version": "1.0",
+                "aligner_arguments_sha256": "1" * 64,
+                "primary_secondary_marking": "primary-only",
+                "counting_policy_sha256": "2" * 64,
+            }
+        )
     raw = {
         "schema_version": "calibration-candidate-v2",
         "target": target,
@@ -145,6 +161,50 @@ def test_length_candidate_cannot_claim_caller_composition():
         candidates.decode_candidate(raw)
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("aligner_name", ""),
+        ("aligner_version", None),
+        ("aligner_arguments_sha256", "bad"),
+        ("primary_secondary_marking", True),
+        ("counting_policy_sha256", "F" * 64),
+    ],
+)
+def test_length_applicability_requires_explicit_aligner_and_counting_identity(field, value):
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    raw = candidate_document()
+    raw["applicability"][field] = value
+    with pytest.raises(ValueError, match=field):
+        candidates.decode_candidate(raw)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "aligner_name",
+        "aligner_version",
+        "aligner_arguments_sha256",
+        "primary_secondary_marking",
+        "counting_policy_sha256",
+    ],
+)
+def test_length_applicability_requires_every_measurement_identity_field(field):
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    raw = candidate_document()
+    del raw["applicability"][field]
+    with pytest.raises(ValueError, match="fields"):
+        candidates.decode_candidate(raw)
+
+
+def test_caller_candidate_cannot_claim_length_measurement_identity():
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    raw = candidate_document("callers")
+    raw["applicability"]["aligner_name"] = "synthetic-aligner"
+    with pytest.raises(ValueError, match="fields"):
+        candidates.decode_candidate(raw)
+
+
 @pytest.mark.parametrize("callers", [[], ["advntr"], ["unknown"], ["kestrel", "advntr"], ["kestrel", "kestrel"]])
 def test_caller_set_is_sorted_and_includes_pipeline_kestrel(callers):
     candidates = import_module("vntyper.scripts.calibration_candidate")
@@ -199,6 +259,167 @@ def test_payload_binding_checks_target_and_entire_manifest():
         candidates.validate_candidate_payload(
             candidates.decode_candidate(candidate_document()), manifest, expected_target="length"
         )
+
+
+def caller_bundle_payload(callers=("advntr", "kestrel"), *, include_background=False):
+    descriptor_raw = {
+        "schema_version": "caller-bundle-v2",
+        "required_callers": list(callers),
+        "components": {
+            "decision-profile.json": "a" * 64,
+            "advntr-policy.json": "b" * 64 if "advntr" in callers else None,
+            "background.json": "c" * 64 if include_background else None,
+        },
+    }
+    descriptor = decode_caller_bundle_descriptor(descriptor_raw)
+    rows = [
+        {
+            "path": CALLER_BUNDLE_DESCRIPTOR_PATH,
+            "size_bytes": len(canonical_json_bytes(descriptor_raw)),
+            "sha256": descriptor.sha256,
+        },
+        {"path": "decision-profile.json", "size_bytes": 102, "sha256": "a" * 64},
+    ]
+    if "advntr" in callers:
+        rows.append({"path": "advntr-policy.json", "size_bytes": 103, "sha256": "b" * 64})
+    if include_background:
+        rows.append({"path": "background.json", "size_bytes": 104, "sha256": "c" * 64})
+    return descriptor, decode_payload_manifest(sorted(rows, key=lambda row: row["path"]))
+
+
+def bound_candidate(target, manifest, *, callers=("advntr", "kestrel")):
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    raw = candidate_document(target)
+    raw["payload_sha256"] = manifest.sha256
+    if target == "callers":
+        raw["applicability"]["required_callers"] = list(callers)
+    return candidates.decode_candidate(resign(raw))
+
+
+@pytest.mark.parametrize("callers", [("kestrel",), ("advntr", "kestrel")])
+@pytest.mark.parametrize("include_background", [False, True])
+def test_caller_payload_requires_matching_closed_descriptor_and_conditional_files(callers, include_background):
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    descriptor, manifest = caller_bundle_payload(callers, include_background=include_background)
+    candidate = bound_candidate("callers", manifest, callers=callers)
+
+    assert (
+        candidates.validate_candidate_payload(
+            candidate, manifest, expected_target="callers", caller_descriptor=descriptor
+        )
+        is None
+    )
+
+
+def test_caller_payload_rejects_missing_or_mismatched_descriptor():
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    descriptor, manifest = caller_bundle_payload()
+    candidate = bound_candidate("callers", manifest)
+    with pytest.raises(ValueError, match="descriptor"):
+        candidates.validate_candidate_payload(candidate, manifest, expected_target="callers")
+
+    kestrel_descriptor, _ = caller_bundle_payload(("kestrel",))
+    with pytest.raises(ValueError, match="required_callers"):
+        candidates.validate_candidate_payload(
+            candidate, manifest, expected_target="callers", caller_descriptor=kestrel_descriptor
+        )
+
+    forged = replace(descriptor, decision_profile_sha256="d" * 64)
+    with pytest.raises(ValueError, match="canonical"):
+        candidates.validate_candidate_payload(candidate, manifest, expected_target="callers", caller_descriptor=forged)
+
+
+@pytest.mark.parametrize("path", ["extra.json", "advntr-policy.json"])
+def test_caller_payload_rejects_files_outside_descriptor_layout(path):
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    descriptor, manifest = caller_bundle_payload(("kestrel",))
+    rows = payload_manifest_document(manifest)
+    rows.append({"path": path, "size_bytes": 1, "sha256": "d" * 64})
+    changed = decode_payload_manifest(sorted(rows, key=lambda row: row["path"]))
+    candidate = bound_candidate("callers", changed, callers=("kestrel",))
+    with pytest.raises(ValueError, match="file set"):
+        candidates.validate_candidate_payload(
+            candidate, changed, expected_target="callers", caller_descriptor=descriptor
+        )
+
+
+@pytest.mark.parametrize("path", [CALLER_BUNDLE_DESCRIPTOR_PATH, "advntr-policy.json"])
+def test_caller_payload_rejects_a_missing_required_file(path):
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    descriptor, manifest = caller_bundle_payload()
+    rows = [row for row in payload_manifest_document(manifest) if row["path"] != path]
+    changed = decode_payload_manifest(rows)
+    candidate = bound_candidate("callers", changed)
+    with pytest.raises(ValueError, match="file set"):
+        candidates.validate_candidate_payload(
+            candidate, changed, expected_target="callers", caller_descriptor=descriptor
+        )
+
+
+def test_caller_payload_rejects_component_or_descriptor_digest_mismatch():
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    descriptor, manifest = caller_bundle_payload()
+    for path in ("decision-profile.json", CALLER_BUNDLE_DESCRIPTOR_PATH):
+        rows = payload_manifest_document(manifest)
+        for row in rows:
+            if row["path"] == path:
+                row["sha256"] = "d" * 64
+        changed = decode_payload_manifest(rows)
+        candidate = bound_candidate("callers", changed)
+        with pytest.raises(ValueError, match="digest"):
+            candidates.validate_candidate_payload(
+                candidate, changed, expected_target="callers", caller_descriptor=descriptor
+            )
+
+    rows = payload_manifest_document(manifest)
+    next(row for row in rows if row["path"] == CALLER_BUNDLE_DESCRIPTOR_PATH)["size_bytes"] += 1
+    changed = decode_payload_manifest(rows)
+    candidate = bound_candidate("callers", changed)
+    with pytest.raises(ValueError, match="size"):
+        candidates.validate_candidate_payload(
+            candidate, changed, expected_target="callers", caller_descriptor=descriptor
+        )
+
+
+def test_length_payload_rejects_caller_descriptor():
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    descriptor = decode_caller_bundle_descriptor(
+        {
+            "schema_version": "caller-bundle-v2",
+            "required_callers": ["kestrel"],
+            "components": {
+                "decision-profile.json": "a" * 64,
+                "advntr-policy.json": None,
+                "background.json": None,
+            },
+        }
+    )
+    manifest = decode_payload_manifest([{"path": "length-model.json", "size_bytes": 5, "sha256": "a" * 64}])
+    candidate = bound_candidate("length", manifest)
+    with pytest.raises(ValueError, match="length.*descriptor"):
+        candidates.validate_candidate_payload(
+            candidate, manifest, expected_target="length", caller_descriptor=descriptor
+        )
+
+
+def test_public_boundaries_revalidate_candidate_and_payload_content():
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    manifest = decode_payload_manifest([{"path": "length-model.json", "size_bytes": 5, "sha256": "a" * 64}])
+    candidate = bound_candidate("length", manifest)
+
+    forged_candidate = replace(candidate, candidate_id="0" * 64, sha256="0" * 64)
+    with pytest.raises(ValueError, match="candidate_id"):
+        candidates.candidate_document(forged_candidate)
+    with pytest.raises(ValueError, match="candidate_id"):
+        candidates.validate_candidate_payload(forged_candidate, manifest, expected_target="length")
+
+    forged_manifest = replace(manifest, sha256="f" * 64)
+    with pytest.raises(ValueError, match="canonical"):
+        candidates.validate_candidate_payload(candidate, forged_manifest, expected_target="length")
+
+    mutable_producer = replace(candidate.producer, tool_versions={"depth-tool": "1.0"})
+    with pytest.raises(ValueError, match="decoded immutable"):
+        candidates.candidate_document(replace(candidate, producer=mutable_producer))
 
 
 @pytest.mark.parametrize("raw", [None, [], "candidate"])

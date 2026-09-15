@@ -14,6 +14,9 @@ from vntyper.scripts.canonical_json import canonical_sha256
 logger = logging.getLogger(__name__)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+CALLER_BUNDLE_DESCRIPTOR_PATH = "caller-bundle.json"
+_CALLER_BUNDLE_FIELDS = {"schema_version", "required_callers", "components"}
+_CALLER_COMPONENT_FIELDS = {"decision-profile.json", "advntr-policy.json", "background.json"}
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,17 @@ class PayloadManifest:
     """Complete file set and the canonical digest binding all its members."""
 
     files: tuple[PayloadFile, ...]
+    sha256: str
+
+
+@dataclass(frozen=True)
+class CallerBundleDescriptor:
+    """Closed caller payload composition and the digests of its component files."""
+
+    required_callers: tuple[str, ...]
+    decision_profile_sha256: str
+    advntr_policy_sha256: str | None
+    background_sha256: str | None
     sha256: str
 
 
@@ -65,6 +79,21 @@ def _digest(value: object) -> str:
     return value
 
 
+def _optional_digest(value: object) -> str | None:
+    if value is None:
+        return None
+    return _digest(value)
+
+
+def _caller_set(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+        _fail("required_callers must be a non-empty sorted unique list")
+    callers = tuple(value)
+    if callers != tuple(sorted(set(callers))) or "kestrel" not in callers or not set(callers) <= {"kestrel", "advntr"}:
+        _fail("required_callers must include kestrel and optionally advntr")
+    return callers
+
+
 def decode_payload_manifest(value: object) -> PayloadManifest:
     """Decode a closed, sorted manifest without reading its files.
 
@@ -94,6 +123,72 @@ def decode_payload_manifest(value: object) -> PayloadManifest:
     return PayloadManifest(tuple(files), canonical_sha256(value))
 
 
+def decode_caller_bundle_descriptor(value: object) -> CallerBundleDescriptor:
+    """Decode the closed composition descriptor for a caller calibration payload.
+
+    Args:
+        value: Decoded JSON descriptor object.
+
+    Returns:
+        Immutable caller set, component digests and descriptor digest.
+
+    Raises:
+        ValueError: If the schema, caller set or conditional component hashes are invalid.
+    """
+    if not isinstance(value, Mapping) or set(value) != _CALLER_BUNDLE_FIELDS:
+        _fail("caller bundle descriptor fields differ from the closed contract")
+    if value["schema_version"] != "caller-bundle-v2":
+        _fail("caller bundle schema_version must be caller-bundle-v2")
+    callers = _caller_set(value["required_callers"])
+    components = value["components"]
+    if not isinstance(components, Mapping) or set(components) != _CALLER_COMPONENT_FIELDS:
+        _fail("caller bundle component fields differ from the closed contract")
+    decision_profile = _digest(components["decision-profile.json"])
+    advntr_policy = _optional_digest(components["advntr-policy.json"])
+    background = _optional_digest(components["background.json"])
+    if ("advntr" in callers) != (advntr_policy is not None):
+        _fail("advntr-policy.json digest must be present exactly when advntr is required")
+    return CallerBundleDescriptor(callers, decision_profile, advntr_policy, background, canonical_sha256(value))
+
+
+def _manifest_rows(manifest: PayloadManifest) -> list[dict[str, object]]:
+    return [{"path": item.path, "size_bytes": item.size_bytes, "sha256": item.sha256} for item in manifest.files]
+
+
+def _require_payload_manifest(manifest: object) -> PayloadManifest:
+    if not isinstance(manifest, PayloadManifest):
+        _fail("payload manifest must be a PayloadManifest")
+    if not isinstance(manifest.files, tuple) or any(not isinstance(item, PayloadFile) for item in manifest.files):
+        _fail("payload manifest must use decoded immutable content")
+    decoded = decode_payload_manifest(_manifest_rows(manifest))
+    if decoded != manifest:
+        _fail("payload manifest differs from its canonical content or digest")
+    return manifest
+
+
+def _caller_bundle_document(descriptor: CallerBundleDescriptor) -> dict[str, object]:
+    return {
+        "schema_version": "caller-bundle-v2",
+        "required_callers": list(descriptor.required_callers),
+        "components": {
+            "decision-profile.json": descriptor.decision_profile_sha256,
+            "advntr-policy.json": descriptor.advntr_policy_sha256,
+            "background.json": descriptor.background_sha256,
+        },
+    }
+
+
+def _require_caller_bundle_descriptor(descriptor: object) -> CallerBundleDescriptor:
+    if not isinstance(descriptor, CallerBundleDescriptor):
+        _fail("caller descriptor must be a CallerBundleDescriptor")
+    if not isinstance(descriptor.required_callers, tuple):
+        _fail("caller descriptor must use decoded immutable content")
+    decoded = decode_caller_bundle_descriptor(_caller_bundle_document(descriptor))
+    if decoded != descriptor:
+        _fail("caller descriptor differs from its canonical content or digest")
+    return descriptor
+
+
 def payload_manifest_document(manifest: PayloadManifest) -> list[dict[str, object]]:
     """Project an immutable manifest into independent canonicalizable rows.
 
@@ -106,9 +201,22 @@ def payload_manifest_document(manifest: PayloadManifest) -> list[dict[str, objec
     Raises:
         ValueError: If manifest is not a PayloadManifest.
     """
-    if not isinstance(manifest, PayloadManifest):
-        _fail("payload manifest must be a PayloadManifest")
-    return [{"path": item.path, "size_bytes": item.size_bytes, "sha256": item.sha256} for item in manifest.files]
+    return _manifest_rows(_require_payload_manifest(manifest))
+
+
+def caller_bundle_descriptor_document(descriptor: CallerBundleDescriptor) -> dict[str, object]:
+    """Project a validated caller bundle descriptor into an independent document.
+
+    Args:
+        descriptor: Decoded caller bundle descriptor.
+
+    Returns:
+        Fresh JSON-compatible descriptor content.
+
+    Raises:
+        ValueError: If the typed value is not its canonical decoded content.
+    """
+    return _caller_bundle_document(_require_caller_bundle_descriptor(descriptor))
 
 
 def validate_payload_observations(manifest: PayloadManifest, observed: Mapping[str, tuple[int, str]]) -> None:
@@ -124,8 +232,7 @@ def validate_payload_observations(manifest: PayloadManifest, observed: Mapping[s
     Raises:
         ValueError: If a file is missing, extra, malformed or changed.
     """
-    if not isinstance(manifest, PayloadManifest):
-        _fail("payload manifest must be a PayloadManifest")
+    manifest = _require_payload_manifest(manifest)
     if not isinstance(observed, Mapping) or set(observed) != {item.path for item in manifest.files}:
         _fail("observed payload files must match the manifest exactly")
     for item in manifest.files:

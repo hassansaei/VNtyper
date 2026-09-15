@@ -9,14 +9,21 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, NoReturn, cast
 
-from vntyper.scripts.calibration_payload import PayloadManifest
-from vntyper.scripts.canonical_json import canonical_sha256
+from vntyper.scripts.calibration_payload import (
+    CALLER_BUNDLE_DESCRIPTOR_PATH,
+    CallerBundleDescriptor,
+    PayloadManifest,
+    caller_bundle_descriptor_document,
+    payload_manifest_document,
+)
+from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256
 
 logger = logging.getLogger(__name__)
 
 CalibrationTarget = Literal["callers", "length"]
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_MAPPING_PROXY_TYPE: type[object] = type(MappingProxyType({}))
 _DIGEST_FIELDS = (
     "study_sha256",
     "baseline_sha256",
@@ -46,6 +53,11 @@ class CandidateApplicability:
     input_scopes: tuple[str, ...]
     preprocessing_ids: tuple[str, ...]
     required_callers: tuple[str, ...]
+    aligner_name: str | None
+    aligner_version: str | None
+    aligner_arguments_sha256: str | None
+    primary_secondary_marking: str | None
+    counting_policy_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -113,6 +125,16 @@ def _applicability(value: object, target: CalibrationTarget) -> CandidateApplica
     fields = {"domain", "assemblies", "assay_classes", "input_scopes", "preprocessing_ids"}
     if target == "callers":
         fields.add("required_callers")
+    else:
+        fields.update(
+            {
+                "aligner_name",
+                "aligner_version",
+                "aligner_arguments_sha256",
+                "primary_secondary_marking",
+                "counting_policy_sha256",
+            }
+        )
     raw = _object(value, fields, "candidate applicability")
     domain = _text(raw["domain"], "domain")
     if domain not in {"synthetic", "external"}:
@@ -123,6 +145,15 @@ def _applicability(value: object, target: CalibrationTarget) -> CandidateApplica
     callers = _strings(raw["required_callers"], "required_callers") if target == "callers" else ()
     if target == "callers" and ("kestrel" not in callers or not set(callers) <= {"kestrel", "advntr"}):
         _fail("required_callers must include kestrel and optionally advntr")
+    aligner_name = _text(raw["aligner_name"], "aligner_name") if target == "length" else None
+    aligner_version = _text(raw["aligner_version"], "aligner_version") if target == "length" else None
+    aligner_arguments_sha256 = (
+        _digest(raw["aligner_arguments_sha256"], "aligner_arguments_sha256") if target == "length" else None
+    )
+    marking = _text(raw["primary_secondary_marking"], "primary_secondary_marking") if target == "length" else None
+    counting_policy_sha256 = (
+        _digest(raw["counting_policy_sha256"], "counting_policy_sha256") if target == "length" else None
+    )
     return CandidateApplicability(
         domain,
         _strings(raw["assemblies"], "assemblies"),
@@ -130,6 +161,11 @@ def _applicability(value: object, target: CalibrationTarget) -> CandidateApplica
         scopes,
         _strings(raw["preprocessing_ids"], "preprocessing_ids"),
         callers,
+        aligner_name,
+        aligner_version,
+        aligner_arguments_sha256,
+        marking,
+        counting_policy_sha256,
     )
 
 
@@ -197,20 +233,7 @@ def decode_candidate(value: object) -> CandidateEnvelope:
     )
 
 
-def candidate_document(candidate: CandidateEnvelope) -> dict[str, object]:
-    """Return a fresh canonicalizable document for a decoded candidate.
-
-    Args:
-        candidate: Immutable candidate binding.
-
-    Returns:
-        Independent JSON-compatible object with the original content identity.
-
-    Raises:
-        ValueError: If candidate is not a CandidateEnvelope.
-    """
-    if not isinstance(candidate, CandidateEnvelope):
-        _fail("candidate must be a CandidateEnvelope")
+def _candidate_document(candidate: CandidateEnvelope) -> dict[str, object]:
     applicable = candidate.applicability
     applicability: dict[str, object] = {
         "domain": applicable.domain,
@@ -221,6 +244,16 @@ def candidate_document(candidate: CandidateEnvelope) -> dict[str, object]:
     }
     if candidate.target == "callers":
         applicability["required_callers"] = list(applicable.required_callers)
+    else:
+        applicability.update(
+            {
+                "aligner_name": applicable.aligner_name,
+                "aligner_version": applicable.aligner_version,
+                "aligner_arguments_sha256": applicable.aligner_arguments_sha256,
+                "primary_secondary_marking": applicable.primary_secondary_marking,
+                "counting_policy_sha256": applicable.counting_policy_sha256,
+            }
+        )
     return {
         "schema_version": "calibration-candidate-v2",
         "target": candidate.target,
@@ -238,8 +271,53 @@ def candidate_document(candidate: CandidateEnvelope) -> dict[str, object]:
     }
 
 
+def _require_candidate(candidate: object) -> CandidateEnvelope:
+    if not isinstance(candidate, CandidateEnvelope):
+        _fail("candidate must be a CandidateEnvelope")
+    applicable = candidate.applicability
+    if (
+        not isinstance(applicable, CandidateApplicability)
+        or not all(
+            isinstance(items, tuple)
+            for items in (
+                applicable.assemblies,
+                applicable.assay_classes,
+                applicable.input_scopes,
+                applicable.preprocessing_ids,
+                applicable.required_callers,
+            )
+        )
+        or not isinstance(candidate.producer, CandidateProducer)
+        or not isinstance(candidate.producer.tool_versions, _MAPPING_PROXY_TYPE)
+    ):
+        _fail("candidate must use decoded immutable content")
+    decoded = decode_candidate(_candidate_document(candidate))
+    if decoded != candidate:
+        _fail("candidate differs from its canonical content or digest")
+    return candidate
+
+
+def candidate_document(candidate: CandidateEnvelope) -> dict[str, object]:
+    """Return a fresh canonicalizable document for a decoded candidate.
+
+    Args:
+        candidate: Immutable candidate binding.
+
+    Returns:
+        Independent JSON-compatible object with the original content identity.
+
+    Raises:
+        ValueError: If candidate is not a CandidateEnvelope.
+    """
+    return _candidate_document(_require_candidate(candidate))
+
+
 def validate_candidate_payload(
-    candidate: CandidateEnvelope, payload: PayloadManifest, *, expected_target: CalibrationTarget
+    candidate: CandidateEnvelope,
+    payload: PayloadManifest,
+    *,
+    expected_target: CalibrationTarget,
+    caller_descriptor: CallerBundleDescriptor | None = None,
 ) -> None:
     """Check target and complete payload identity before reading model semantics.
 
@@ -247,15 +325,39 @@ def validate_candidate_payload(
         candidate: Decoded immutable candidate.
         payload: Decoded full payload manifest.
         expected_target: Target selected by the consuming operation.
+        caller_descriptor: Required closed composition descriptor for caller payloads.
 
     Raises:
         ValueError: If types, target or payload binding differ.
     """
-    if not isinstance(candidate, CandidateEnvelope):
-        _fail("candidate must be a CandidateEnvelope")
-    if not isinstance(payload, PayloadManifest):
-        _fail("payload must be a PayloadManifest")
+    candidate = _require_candidate(candidate)
+    payload_manifest_document(payload)
     if candidate.target != expected_target:
         _fail("candidate target differs from the consuming operation")
     if candidate.payload_sha256 != payload.sha256:
         _fail("candidate payload digest differs from the opened manifest")
+    if candidate.target == "length":
+        if caller_descriptor is not None:
+            _fail("length candidate cannot accept a caller descriptor")
+        return
+    if caller_descriptor is None:
+        _fail("caller candidate requires its caller descriptor")
+    descriptor_document = caller_bundle_descriptor_document(caller_descriptor)
+    if caller_descriptor.required_callers != candidate.applicability.required_callers:
+        _fail("caller descriptor required_callers differ from candidate applicability")
+    expected_hashes = {
+        CALLER_BUNDLE_DESCRIPTOR_PATH: caller_descriptor.sha256,
+        "decision-profile.json": caller_descriptor.decision_profile_sha256,
+    }
+    if caller_descriptor.advntr_policy_sha256 is not None:
+        expected_hashes["advntr-policy.json"] = caller_descriptor.advntr_policy_sha256
+    if caller_descriptor.background_sha256 is not None:
+        expected_hashes["background.json"] = caller_descriptor.background_sha256
+    observed_hashes = {item.path: item.sha256 for item in payload.files}
+    if set(observed_hashes) != set(expected_hashes):
+        _fail("caller payload file set differs from its descriptor")
+    if observed_hashes != expected_hashes:
+        _fail("caller payload component digest differs from its descriptor")
+    descriptor_file = next(item for item in payload.files if item.path == CALLER_BUNDLE_DESCRIPTOR_PATH)
+    if descriptor_file.size_bytes != len(canonical_json_bytes(descriptor_document)):
+        _fail("caller descriptor size differs from its canonical bytes")
