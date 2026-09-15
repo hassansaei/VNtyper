@@ -17,6 +17,8 @@ LOW = "/components/kestrel/confidence_assignment/depth_score_thresholds/low"
 HIGH = "/components/kestrel/confidence_assignment/depth_score_thresholds/high"
 GG = "/components/kestrel/alt_filtering/gg_depth_score_threshold"
 MODE = "/components/advntr/calibrated_calling/mode"
+CUTOFF = "/components/advntr/calibrated_calling/cutoff"
+SUPPORT = "/components/advntr/calibrated_calling/minimum_read_support"
 
 
 def custom(*, dual=True):
@@ -82,18 +84,31 @@ def test_stricter_candidate_removes_weaker_finding_while_retaining_stronger_find
         assert replay_kestrel_capture(capture, tight, capture_policy_sha256=commitment).disposition == expected
 
 
-def test_custom_exact_baseline_is_retained_and_ad_alternatives_are_legacy():
+def test_advntr_candidates_inherit_the_baseline_mode_and_a_skipped_arm_states_why():
     from vntyper.scripts.calibration_cutoff_grid import build_cutoff_grid
 
+    # The adVNTR replay refuses any candidate whose mode differs from the captured
+    # baseline, so an exact baseline must yield an empty, explicitly explained arm.
     base = decode_caller_policy_values(policy_document())
+    assert base.values[MODE] == "exact"
     grid = build_cutoff_grid(base, custom())
-    assert len(grid.kestrel) == 3 and len(grid.advntr) == 5
-    assert grid.advntr[0].policy.values[MODE] == "exact"
-    assert all(c.policy.values[MODE] == "legacy" for c in grid.advntr[1:])
-    assert (
-        build_cutoff_grid(decode_caller_policy_values(policy_document(include_advntr=False)), custom(dual=False)).advntr
-        == ()
+    assert len(grid.kestrel) == 3 and grid.advntr == ()
+    assert grid.advntr_skipped_reason is not None
+    assert "exact" in grid.advntr_skipped_reason and "legacy" in grid.advntr_skipped_reason
+
+    raw = policy_document()
+    policy_values(raw)[MODE] = "legacy"
+    legacy_base = decode_caller_policy_values(raw)
+    legacy = build_cutoff_grid(legacy_base, custom())
+    assert len(legacy.advntr) == 5 and legacy.advntr_skipped_reason is None
+    assert legacy.advntr[0].candidate_id == "baseline" and legacy.advntr[0].policy is legacy_base
+    assert all(c.policy.values[MODE] == legacy_base.values[MODE] for c in legacy.advntr)
+    assert all(set(c.parameters) <= {CUTOFF, SUPPORT} for c in legacy.advntr)
+
+    kestrel_only = build_cutoff_grid(
+        decode_caller_policy_values(policy_document(include_advntr=False)), custom(dual=False)
     )
+    assert kestrel_only.advntr == () and kestrel_only.advntr_skipped_reason is None
 
 
 @pytest.mark.parametrize(

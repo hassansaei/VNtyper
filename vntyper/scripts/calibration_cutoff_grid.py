@@ -39,10 +39,20 @@ class CutoffCandidate:
 
 @dataclass(frozen=True)
 class CutoffGrid:
-    """Independent component inventories; their Cartesian product needs no new replay."""
+    """Independent component inventories; their Cartesian product needs no new replay.
+
+    Attributes:
+        kestrel: Kestrel candidates, baseline first.
+        advntr: adVNTR candidates, baseline first, empty when the arm is skipped or
+            the baseline does not require adVNTR.
+        advntr_skipped_reason: Why a required adVNTR arm is empty, or ``None`` when
+            nothing was skipped. An empty arm with no reason means the baseline
+            simply does not require adVNTR.
+    """
 
     kestrel: tuple[CutoffCandidate, ...]
     advntr: tuple[CutoffCandidate, ...]
+    advntr_skipped_reason: str | None
 
 
 def _values(value: object, *, integer: bool, strict: bool, cap: int) -> tuple[int | float, ...]:
@@ -95,7 +105,7 @@ def build_cutoff_grid(
     *,
     max_candidates: int = 4096,
 ) -> CutoffGrid:
-    """Build separately replayable Kestrel and legacy-adVNTR cutoff candidates.
+    """Build separately replayable Kestrel and adVNTR cutoff candidates.
 
     Args:
         baseline: Complete typed policy from the actual capture; always retained.
@@ -106,6 +116,10 @@ def build_cutoff_grid(
         Component policies with stable IDs and immutable changed-value metadata.
         Kestrel low confidence boundary moves down with a lower reporting floor;
         the high boundary and other confidence partitions remain at baseline.
+        adVNTR candidates keep the baseline calibrated-calling mode. Only a legacy
+        baseline is replayable, so a non-legacy baseline yields an empty adVNTR arm
+        and a stated ``advntr_skipped_reason`` instead of unusable candidates. The
+        requested adVNTR values are still validated and counted against the cap.
 
     Raises:
         ValueError: For invalid policies, grid values/schema or an excessive product.
@@ -143,15 +157,30 @@ def build_cutoff_grid(
         [{_FLOOR: floor, _LOW: min(baseline_low, floor), _GG: gg} for floor, gg in product(floors, gg_values)],
         "kestrel",
     )
-    advntr = (
+    # The adVNTR replay refuses any candidate whose mode differs from the captured
+    # baseline, so candidates inherit the baseline mode rather than forcing legacy.
+    baseline_mode = baseline.values[_MODE] if has_advntr else None
+    requested = (
         _candidates(
             baseline,
-            [{_MODE: "legacy", _CUTOFF: float(cutoff), _SUPPORT: support} for cutoff, support in product(*ad_values)],
+            [
+                {_MODE: baseline_mode, _CUTOFF: float(cutoff), _SUPPORT: support}
+                for cutoff, support in product(*ad_values)
+            ],
             "advntr",
         )
         if has_advntr
         else ()
     )
-    if len(kestrel) * max(1, len(advntr)) > max_candidates:
+    # The cap bounds the requested product, whether or not the adVNTR arm is replayable.
+    if len(kestrel) * max(1, len(requested)) > max_candidates:
         raise ValueError("combined cutoff candidate product including baseline exceeds the configured cap")
-    return CutoffGrid(kestrel, advntr)
+    skipped = (
+        None
+        if not has_advntr or baseline_mode == "legacy"
+        else (
+            f"adVNTR baseline calibrated_calling mode is {baseline_mode!r}, not 'legacy'; the adVNTR replay refuses "
+            "candidates whose mode differs from the captured baseline, so no adVNTR candidate was emitted"
+        )
+    )
+    return CutoffGrid(kestrel, () if skipped is not None else requested, skipped)
