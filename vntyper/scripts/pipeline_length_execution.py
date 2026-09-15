@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,58 @@ class LengthPipelineMeasurement:
     features: LengthFeatures
     estimate: LengthEstimate
     configuration_sha256: str
+
+
+@dataclass
+class LengthMeasurementRunner:
+    """Single-use callback retaining the result of an in-lifetime measurement."""
+
+    configuration: LengthPipelineConfiguration
+    bwa_reference: str | Path | None
+    project_root: str | Path
+    samtools_path: str | Path
+    result: LengthPipelineMeasurement | None = None
+
+    def __call__(self, plan: AlignmentPlan) -> None:
+        """Measure once using the reference actually selected for this plan."""
+        if self.result is not None:
+            raise ValueError("length measurement callback must run exactly once")
+        reference_path = length_reference_path(plan, self.bwa_reference, self.project_root)
+        self.result = measure_pipeline_length(
+            plan=plan,
+            reference_path=reference_path,
+            samtools_path=Path(self.samtools_path).resolve(),
+            configuration=self.configuration,
+        )
+
+
+def length_reference_path(
+    plan: AlignmentPlan,
+    bwa_reference: str | Path | None,
+    project_root: str | Path,
+) -> Path:
+    """Select the local FASTA that the length readers will actually consume.
+
+    Args:
+        plan: Proven alignment plan, including its CRAM reference when applicable.
+        bwa_reference: Resolved assembly FASTA used for BAM/FASTQ length measurement.
+        project_root: Pipeline startup directory used to resolve relative references.
+
+    Returns:
+        Absolute reference path for the depth adapter.
+
+    Raises:
+        ValueError: If the plan is invalid or no explicit local reference is available.
+    """
+    if not isinstance(plan, AlignmentPlan):
+        raise ValueError("length reference selection requires an AlignmentPlan")
+    selected = plan.reference_path if plan.file_format == "cram" else bwa_reference
+    if selected is None:
+        raise ValueError("length measurement requires an explicit local reference FASTA")
+    root = Path(project_root)
+    if not root.is_absolute():
+        raise ValueError("length measurement project root must be absolute")
+    return Path(os.path.join(root, selected)).resolve()
 
 
 def measure_pipeline_length(

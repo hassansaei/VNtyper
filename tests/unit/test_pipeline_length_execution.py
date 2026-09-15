@@ -223,3 +223,48 @@ def test_summary_rejects_missing_or_cross_configuration_measurement() -> None:
             configuration,
             LengthPipelineMeasurement(other_features, other_estimate, configuration.sha256),
         )
+
+
+def test_single_use_runner_selects_cram_or_bwa_reference_and_retains_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vntyper.scripts import pipeline_length_execution
+
+    configuration = _measurement_only_configuration()
+    sentinel = object()
+    observed: list[tuple[Path | None, Path]] = []
+
+    def fake_measure(**kwargs: object) -> object:
+        observed.append((kwargs["reference_path"], kwargs["samtools_path"]))  # type: ignore[arg-type]
+        return sentinel
+
+    monkeypatch.setattr(pipeline_length_execution, "measure_pipeline_length", fake_measure)
+    runner = pipeline_length_execution.LengthMeasurementRunner(
+        configuration=configuration,
+        bwa_reference="relative/reference.fa",
+        project_root="/project",
+        samtools_path="/tools/samtools",
+    )
+    runner(_plan())
+    assert runner.result is sentinel
+    assert observed == [(Path("/project/relative/reference.fa"), Path("/tools/samtools"))]
+    with pytest.raises(ValueError, match="exactly once"):
+        runner(_plan())
+
+    cram_runner = pipeline_length_execution.LengthMeasurementRunner(
+        configuration=configuration,
+        bwa_reference="ignored.fa",
+        project_root="/project",
+        samtools_path="/tools/samtools",
+    )
+    cram_runner(_plan(file_format="cram", reference_path="/bound/reference.fa"))
+    assert observed[-1][0] == Path("/bound/reference.fa")
+
+
+def test_reference_selection_rejects_missing_bwa_and_relative_project_root() -> None:
+    from vntyper.scripts.pipeline_length_execution import length_reference_path
+
+    with pytest.raises(ValueError, match="reference FASTA"):
+        length_reference_path(_plan(), None, "/project")
+    with pytest.raises(ValueError, match="project root"):
+        length_reference_path(_plan(), "/reference.fa", "relative")
