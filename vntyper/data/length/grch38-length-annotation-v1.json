@@ -1,0 +1,53 @@
+{
+  "accepted_contig_aliases": [
+    "1"
+  ],
+  "annotation_provenance": "PMCID:PMC12458345;public-repeat-repository:pristanna/muc1repeats@74a8bab867ef984798991dcd9c848faef4371cc9;VNtyper-array-derivation:b476789a",
+  "annotation_version": "grch38-public-reference-terminal-witness-v1",
+  "array_boundary_geometry": {
+    "array_only_bp": 0,
+    "target_only_bp": 272
+  },
+  "assembly": "GRCh38",
+  "boundary_definition": "complete-core-plus-invariant-units-v1",
+  "contig": "chr1",
+  "coordinate_system": "zero-based-half-open",
+  "physical_hypothesis_compatibility": {
+    "physical_A": false,
+    "physical_F": false
+  },
+  "reference_fasta_sha256": "04ee6db2e94ccc4daddc168453189d8c17a01454ba67ac0443a73a0401408ee0",
+  "regions": {
+    "ARRAY": {
+      "end": 155192010,
+      "start": 155188529
+    },
+    "CORE": [
+      {
+        "end": 155191939,
+        "start": 155188726
+      }
+    ],
+    "INVARIANT": [
+      {
+        "end": 155188726,
+        "start": 155188486
+      },
+      {
+        "end": 155192239,
+        "start": 155191939
+      }
+    ],
+    "LEFT_FLANK": {
+      "end": 155188486,
+      "start": 155188296
+    },
+    "RIGHT_FLANK": {
+      "end": 155192429,
+      "start": 155192239
+    }
+  },
+  "repeat_unit_bp": 60,
+  "schema_version": "length-annotation-v1",
+  "target_boundary_conversion_sha256": null
+}

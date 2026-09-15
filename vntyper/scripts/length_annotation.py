@@ -66,7 +66,10 @@ class LengthAnnotation:
         """Return the verified complete CORE unit count when annotated."""
         if self.core is None:
             return None
-        return sum(interval.length_bp for interval in self.core) // self.repeat_unit_bp
+        length_bp = sum(interval.length_bp for interval in self.core)
+        if length_bp % self.repeat_unit_bp:
+            return None
+        return length_bp // self.repeat_unit_bp
 
     @property
     def reference_invariant_repeat_count(self) -> int | None:
@@ -145,7 +148,9 @@ def decode_length_annotation(value: object) -> LengthAnnotation:
     array = _optional_interval(regions["ARRAY"], "ARRAY")
     left_flank = _optional_interval(regions["LEFT_FLANK"], "LEFT_FLANK")
     right_flank = _optional_interval(regions["RIGHT_FLANK"], "RIGHT_FLANK")
-    _validate_repeat_geometry(core, repeat_unit_bp, "CORE")
+    # A complete biological repeat can contain a sequence insertion or deletion.
+    # Such a CORE remains measurable, but its bp span cannot establish a physical
+    # reference repeat count by integer division.
     _validate_repeat_geometry(invariant, repeat_unit_bp, "INVARIANT")
     if core is not None and invariant is not None and _overlap_length(core, invariant):
         raise ValueError("length annotation CORE and INVARIANT intervals must be disjoint")
@@ -170,6 +175,8 @@ def decode_length_annotation(value: object) -> LengthAnnotation:
         raise ValueError("physical length hypotheses require a target boundary conversion digest")
     if physical_a and (core is None or invariant is None):
         raise ValueError("physical A compatibility requires CORE and INVARIANT annotation")
+    if physical_a and sum(interval.length_bp for interval in core or ()) % repeat_unit_bp:
+        raise ValueError("physical A compatibility requires a fixed-width CORE reference count")
     if physical_f and (array is None or left_flank is None or right_flank is None):
         raise ValueError("physical F compatibility requires ARRAY and both flank annotations")
 

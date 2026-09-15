@@ -24,6 +24,7 @@ _COMMON_FIELDS = {
 }
 _BP_FIELDS = _COMMON_FIELDS | {"allele_1_nonrepeat_bp", "allele_2_nonrepeat_bp"}
 _COUNT_FIELDS = _COMMON_FIELDS | {"allele_1_offset", "allele_2_offset"}
+_ADDITIVE_COUNT_FIELDS = _COMMON_FIELDS | {"allele_1_adjustment", "allele_2_adjustment"}
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class LengthConversion:
 class ConversionRegistry:
     """Immutable explicit conversion registry and its canonical digest."""
 
+    schema_version: str
     conversions: Mapping[str, LengthConversion]
     sha256: str
 
@@ -60,12 +62,16 @@ def decode_conversion_registry(value: object) -> ConversionRegistry:
         ValueError: If fields, values, or conversion IDs are invalid.
     """
     root = _exact_object(value, _ROOT_FIELDS, "calibration conversion registry")
-    if root["schema_version"] != "calibration-length-conversions-v1":
-        raise ValueError("calibration conversion registry schema version must be calibration-length-conversions-v1")
+    schema_version = root["schema_version"]
+    if not isinstance(schema_version, str) or schema_version not in {
+        "calibration-length-conversions-v1",
+        "calibration-length-conversions-v2",
+    }:
+        raise ValueError("calibration conversion registry schema version is unsupported")
     raw_conversions = root["conversions"]
     if not isinstance(raw_conversions, list) or not raw_conversions:
         raise ValueError("calibration conversion registry conversions must be a non-empty list")
-    decoded = tuple(_decode_conversion(row) for row in raw_conversions)
+    decoded = tuple(_decode_conversion(row, cast(str, schema_version)) for row in raw_conversions)
     ids = tuple(row.conversion_id for row in decoded)
     if len(ids) != len(set(ids)):
         raise ValueError("calibration conversion ids must be unique")
@@ -73,10 +79,10 @@ def decode_conversion_registry(value: object) -> ConversionRegistry:
         {row.conversion_id: row for row in sorted(decoded, key=lambda row: row.conversion_id)}
     )
     normalized = {
-        "schema_version": "calibration-length-conversions-v1",
-        "conversions": [_encode_conversion(row) for row in conversions.values()],
+        "schema_version": schema_version,
+        "conversions": [_encode_conversion(row, cast(str, schema_version)) for row in conversions.values()],
     }
-    return ConversionRegistry(conversions, canonical_sha256(normalized))
+    return ConversionRegistry(cast(str, schema_version), conversions, canonical_sha256(normalized))
 
 
 def length_target(truth: TruthRecord) -> float | None:
@@ -171,7 +177,7 @@ def _required_pair(length: LengthTruth) -> tuple[Fraction, Fraction]:
     return length.allele_1, length.allele_2
 
 
-def _decode_conversion(value: object) -> LengthConversion:
+def _decode_conversion(value: object, schema_version: str) -> LengthConversion:
     if not isinstance(value, Mapping):
         raise ValueError("calibration length conversion must be an object")
     source_unit = value.get("source_unit")
@@ -180,13 +186,20 @@ def _decode_conversion(value: object) -> LengthConversion:
         repeat_unit_bp = _positive_integer(raw["repeat_unit_bp"], "calibration conversion repeat unit bp")
         subtract_1 = _nonnegative_number(raw["allele_1_nonrepeat_bp"], "calibration allele 1 nonrepeat bp")
         subtract_2 = _nonnegative_number(raw["allele_2_nonrepeat_bp"], "calibration allele 2 nonrepeat bp")
-    elif source_unit == "repeat-count":
+    elif source_unit == "repeat-count" and schema_version == "calibration-length-conversions-v1":
         raw = _exact_object(value, _COUNT_FIELDS, "calibration repeat-count conversion")
         repeat_unit_bp = _positive_integer(raw["repeat_unit_bp"], "calibration conversion repeat unit bp")
         subtract_1 = _nonnegative_number(raw["allele_1_offset"], "calibration allele 1 offset")
         subtract_2 = _nonnegative_number(raw["allele_2_offset"], "calibration allele 2 offset")
         if subtract_1.denominator != 1 or subtract_2.denominator != 1:
             raise ValueError("calibration repeat-count conversion offsets must be integral")
+    elif source_unit == "repeat-count":
+        raw = _exact_object(value, _ADDITIVE_COUNT_FIELDS, "calibration additive repeat-count conversion")
+        repeat_unit_bp = _positive_integer(raw["repeat_unit_bp"], "calibration conversion repeat unit bp")
+        adjustment_1 = _integral_number(raw["allele_1_adjustment"], "calibration allele 1 adjustment")
+        adjustment_2 = _integral_number(raw["allele_2_adjustment"], "calibration allele 2 adjustment")
+        subtract_1 = -adjustment_1
+        subtract_2 = -adjustment_2
     else:
         raise ValueError(f"unsupported calibration conversion source unit: {source_unit!r}")
     return LengthConversion(
@@ -200,7 +213,7 @@ def _decode_conversion(value: object) -> LengthConversion:
     )
 
 
-def _encode_conversion(conversion: LengthConversion) -> dict[str, object]:
+def _encode_conversion(conversion: LengthConversion, schema_version: str) -> dict[str, object]:
     common: dict[str, object] = {
         "conversion_id": conversion.conversion_id,
         "source_unit": conversion.source_unit,
@@ -214,11 +227,18 @@ def _encode_conversion(conversion: LengthConversion) -> dict[str, object]:
             "allele_1_nonrepeat_bp": _json_number(conversion.allele_1_subtract),
             "allele_2_nonrepeat_bp": _json_number(conversion.allele_2_subtract),
         }
+    if schema_version == "calibration-length-conversions-v1":
+        return {
+            **common,
+            "repeat_unit_bp": conversion.repeat_unit_bp,
+            "allele_1_offset": _json_number(conversion.allele_1_subtract),
+            "allele_2_offset": _json_number(conversion.allele_2_subtract),
+        }
     return {
         **common,
         "repeat_unit_bp": conversion.repeat_unit_bp,
-        "allele_1_offset": _json_number(conversion.allele_1_subtract),
-        "allele_2_offset": _json_number(conversion.allele_2_subtract),
+        "allele_1_adjustment": _json_number(-conversion.allele_1_subtract),
+        "allele_2_adjustment": _json_number(-conversion.allele_2_subtract),
     }
 
 
@@ -245,6 +265,15 @@ def _nonnegative_number(value: object, label: str) -> Fraction:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise ValueError(f"{label} must be a finite nonnegative number")
     return Fraction(str(value))
+
+
+def _integral_number(value: object, label: str) -> Fraction:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{label} must be a finite integral number")
+    result = Fraction(str(value))
+    if result.denominator != 1:
+        raise ValueError(f"{label} must be a finite integral number")
+    return result
 
 
 def _json_number(value: Fraction) -> int | float:

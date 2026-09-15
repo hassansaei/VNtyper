@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
+from importlib.resources import files
 from typing import Any
 
 import pytest
@@ -70,6 +72,23 @@ def _registry() -> dict[str, Any]:
                 "allele_1_offset": 1,
                 "allele_2_offset": 2,
             },
+        ],
+    }
+
+
+def _additive_registry() -> dict[str, Any]:
+    return {
+        "schema_version": "calibration-length-conversions-v2",
+        "conversions": [
+            {
+                "conversion_id": "canonical-only-plus-nine-terminals-v1",
+                "source_unit": "repeat-count",
+                "source_boundary_definition": "canonical-variable-only-units-v1",
+                "target_boundary_definition": "complete-core-plus-invariant-units-v1",
+                "repeat_unit_bp": 60,
+                "allele_1_adjustment": 9,
+                "allele_2_adjustment": 9,
+            }
         ],
     }
 
@@ -155,6 +174,43 @@ def test_repeat_count_boundary_conversion_applies_exact_paired_offsets() -> None
     assert converted_length_target(truth, registry, target_boundary_definition="target-boundary-v1") == 130.0
 
 
+def test_additive_repeat_count_conversion_can_include_nine_terminal_units_per_allele() -> None:
+    registry = decode_conversion_registry(_additive_registry())
+    truth = _truth(
+        40,
+        90,
+        boundary_definition="canonical-variable-only-units-v1",
+        conversion_id="canonical-only-plus-nine-terminals-v1",
+    )
+
+    assert registry.schema_version == "calibration-length-conversions-v2"
+    assert (
+        converted_length_target(
+            truth,
+            registry,
+            target_boundary_definition="complete-core-plus-invariant-units-v1",
+        )
+        == 148.0
+    )
+
+
+def test_packaged_terminal_count_conversion_is_the_reviewed_additive_contract() -> None:
+    path = files("vntyper").joinpath("data/length/grch38-count-conversions-v2.json")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+
+    assert raw == _additive_registry()
+    assert decode_conversion_registry(raw).schema_version == "calibration-length-conversions-v2"
+
+
+@pytest.mark.parametrize("adjustment", [True, 0.5, float("inf")])
+def test_additive_repeat_count_conversion_requires_finite_integral_adjustments(adjustment: object) -> None:
+    raw = _additive_registry()
+    raw["conversions"][0]["allele_1_adjustment"] = adjustment
+
+    with pytest.raises(ValueError, match="adjustment"):
+        decode_conversion_registry(raw)
+
+
 def test_repeat_count_boundary_conversion_binds_the_repeat_unit() -> None:
     registry = decode_conversion_registry(_registry())
     truth = _truth(
@@ -204,7 +260,8 @@ def test_conversion_registry_rejects_duplicate_ids_and_unknown_aliases() -> None
 @pytest.mark.parametrize(
     ("value", "message"),
     [
-        ({"schema_version": "calibration-length-conversions-v2", "conversions": []}, "schema version"),
+        ({"schema_version": "calibration-length-conversions-v3", "conversions": []}, "schema version"),
+        ({"schema_version": [], "conversions": []}, "schema version"),
         ({"schema_version": "calibration-length-conversions-v1", "conversions": []}, "non-empty list"),
         ({"schema_version": "calibration-length-conversions-v1", "conversions": [42]}, "must be an object"),
     ],

@@ -166,6 +166,8 @@ version = {attr = "vntyper.version.__version__"}
 ]
 "vntyper" = [
     "config.json",
+    "data/length/grch38-count-conversions-v2.json",
+    "data/length/grch38-length-annotation-v1.json",
     # Every file under vntyper/templates/ is named here, not matched by a glob, so
     # adding one is a deliberate packaging decision rather than an accident of the
     # pattern. `_report_base.html` was missing until #242: a wheel built without it

@@ -72,9 +72,9 @@ def test_decode_preserves_independent_array_geometry_and_has_a_deterministic_dig
     assert annotation.sha256 == canonical_sha256(raw)
 
 
-def test_core_and_invariant_repeat_units_must_be_disjoint_and_complete() -> None:
+def test_core_and_invariant_repeat_units_must_be_disjoint_and_invariant_fixed_width() -> None:
     for core, invariant, message in (
-        ([{"start": 10, "end": 15}], [{"start": 16, "end": 18}], "complete repeat units"),
+        ([{"start": 10, "end": 14}], [{"start": 16, "end": 19}], "complete repeat units"),
         ([{"start": 10, "end": 14}], [{"start": 13, "end": 17}], "disjoint"),
         (
             [{"start": 10, "end": 14}, {"start": 13, "end": 15}],
@@ -90,6 +90,40 @@ def test_core_and_invariant_repeat_units_must_be_disjoint_and_complete() -> None
         raw["regions"] = regions
         with pytest.raises(ValueError, match=message):
             decode_length_annotation(raw)
+
+
+def test_complete_core_region_with_indel_bases_does_not_invent_an_integral_reference_count() -> None:
+    raw = _annotation()
+    assert isinstance(raw["regions"], dict)
+    raw["regions"] = {
+        **raw["regions"],
+        "CORE": [{"start": 10, "end": 15}],
+        "ARRAY": {"start": 10, "end": 20},
+        "RIGHT_FLANK": {"start": 20, "end": 23},
+    }
+    raw["array_boundary_geometry"] = {"array_only_bp": 3, "target_only_bp": 0}
+
+    annotation = decode_length_annotation(raw)
+
+    assert annotation.core == (Interval(10, 15),)
+    assert annotation.reference_core_repeat_count is None
+
+
+def test_physical_a_rejects_a_core_without_fixed_width_reference_count() -> None:
+    raw = _annotation()
+    assert isinstance(raw["regions"], dict)
+    raw["regions"] = {
+        **raw["regions"],
+        "CORE": [{"start": 10, "end": 15}],
+        "ARRAY": {"start": 10, "end": 20},
+        "RIGHT_FLANK": {"start": 20, "end": 23},
+    }
+    raw["array_boundary_geometry"] = {"array_only_bp": 3, "target_only_bp": 0}
+    raw["target_boundary_conversion_sha256"] = "b" * 64
+    raw["physical_hypothesis_compatibility"] = {"physical_A": True, "physical_F": False}
+
+    with pytest.raises(ValueError, match="fixed-width CORE reference count"):
+        decode_length_annotation(raw)
 
 
 @pytest.mark.parametrize(
