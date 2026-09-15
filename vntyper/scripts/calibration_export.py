@@ -6,16 +6,11 @@ import hashlib
 import logging
 import os
 from argparse import Namespace
-from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn, cast
 
-from vntyper.scripts.calibration_advntr_runtime_policy import (
-    decode_advntr_runtime_policy,
-    validate_advntr_runtime_policy,
-)
 from vntyper.scripts.calibration_artifact_io import write_checksums, write_json
-from vntyper.scripts.calibration_caller_policy import decode_caller_policy_values
+from vntyper.scripts.calibration_caller_bundle import load_caller_model_bundle, validate_caller_payload
 from vntyper.scripts.calibration_candidate import (
     CalibrationTarget,
     CandidateEnvelope,
@@ -29,7 +24,6 @@ from vntyper.scripts.calibration_payload import (
     decode_payload_manifest,
     validate_payload_observations,
 )
-from vntyper.scripts.calibration_portable_background import validate_portable_background
 from vntyper.scripts.calibration_portable_projection import build_portable_approval, portable_approval_document
 from vntyper.scripts.calibration_secure_io import SecureDirectoryReader, read_regular_path
 from vntyper.scripts.calibration_target_attestation import (
@@ -39,7 +33,6 @@ from vntyper.scripts.calibration_target_attestation import (
 from vntyper.scripts.calibration_target_authority import decode_target_custodian_authority
 from vntyper.scripts.calibration_target_completion import decode_target_completion
 from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
-from vntyper.scripts.decision_profile import load_packaged_decision_profile, parse_decision_profile
 from vntyper.scripts.length_model_bundle import load_length_model_bundle
 
 logger = logging.getLogger(__name__)
@@ -123,43 +116,6 @@ def _profile(
     return candidate, manifest, headers, files, descriptor
 
 
-def _validate_caller(
-    files: Mapping[str, bytes], candidate: CandidateEnvelope, descriptor: CallerBundleDescriptor
-) -> None:
-    _object(files["decision-profile.json"])
-    profile = parse_decision_profile(
-        files["decision-profile.json"],
-        packaged_document=load_packaged_decision_profile().document,
-        allow_caller_generated=True,
-    )
-    document = _object(profile.canonical_bytes)
-    metadata = document.get("generated_metadata")
-    if document["schema_version"] != 2 or profile.profile_kind != "generated" or not isinstance(metadata, Mapping):
-        _fail("calibration export caller payload requires a caller-generated schema-v2 decision profile")
-    if (
-        metadata["generation_target"] != "callers"
-        or tuple(metadata["required_callers"]) != descriptor.required_callers
-        or metadata["partition_manifest_hash"] != candidate.partition_sha256
-    ):
-        _fail("calibration export caller profile target, composition, or partition differs")
-    if "advntr" in descriptor.required_callers:
-        inventory = cast(Mapping[str, Mapping[str, object]], document["inventory"])
-        pointers = cast(list[str], metadata["generated_pointers"])
-        policy = decode_caller_policy_values(
-            {
-                "schema_version": "calibration-caller-policy-values-v1",
-                "required_callers": list(descriptor.required_callers),
-                "values": {pointer: inventory[pointer]["value"] for pointer in pointers},
-            }
-        )
-        runtime = decode_advntr_runtime_policy(_object(files["advntr-policy.json"]))
-        background_sha256 = None
-        if "background.json" in files:
-            validate_portable_background(load_strict_json_object(files["background.json"]))
-            background_sha256 = hashlib.sha256(files["background.json"]).hexdigest()
-        validate_advntr_runtime_policy(runtime, policy, background_raw_sha256=background_sha256)
-
-
 def export_calibration_bundle(args: Namespace, output: Path) -> bool:
     """Export only the verified payload and aggregate-free portable approval.
 
@@ -197,11 +153,13 @@ def export_calibration_bundle(args: Namespace, output: Path) -> bool:
         decode_target_completion(documents["completion"]),
     )
     if target == "callers":
-        _validate_caller(files, candidate, cast(CallerBundleDescriptor, descriptor))
+        validate_caller_payload(files, candidate, cast(CallerBundleDescriptor, descriptor))
     for name, raw in {**headers, **files}.items():
         (output / name).write_bytes(raw)
     write_json(output / "portable-approval.json", portable_approval_document(approval))
     write_checksums(output)
     if target == "length":
         load_length_model_bundle(output)
+    else:
+        load_caller_model_bundle(output)
     return True
