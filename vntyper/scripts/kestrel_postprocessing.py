@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import pandas as pd
@@ -51,7 +51,7 @@ FILTER_COLUMNS: tuple[str, ...] = (
 
 AddHaplotypeCount = Callable[[pd.DataFrame], pd.DataFrame]
 SelectSingleVariant = Callable[[pd.DataFrame, KestrelSelection], pd.DataFrame]
-AnnotateMotifs = Callable[[pd.DataFrame, pd.DataFrame, dict[str, object]], pd.DataFrame]
+AnnotateMotifs = Callable[[pd.DataFrame, pd.DataFrame, Mapping[str, object]], pd.DataFrame]
 PrefilterObserver = Callable[[pd.DataFrame], None]
 
 
@@ -109,7 +109,7 @@ def filter_and_select_kestrel_candidates(
 def evaluate_kestrel_candidates(
     combined_df: pd.DataFrame,
     merged_motifs: pd.DataFrame,
-    kestrel_config: dict[str, object],
+    kestrel_config: Mapping[str, object],
     *,
     selection: KestrelSelection,
     add_haplo_count_fn: AddHaplotypeCount,
@@ -140,13 +140,14 @@ def evaluate_kestrel_candidates(
     """
     if compiled_flag_rules is None:
         flagging = kestrel_config.get("flagging_rules", {})
-        if not isinstance(flagging, dict):
+        if not isinstance(flagging, Mapping):
             raise ValueError("Kestrel flagging_rules must be a mapping")
         compiled_flag_rules = compile_flag_rules(flagging, KESTREL_FLAG_COLUMNS)
     duplicates_config = kestrel_config.get("duplicate_flagging", {})
-    if not isinstance(duplicates_config, dict):
+    if not isinstance(duplicates_config, Mapping):
         raise ValueError("Kestrel duplicate_flagging must be a mapping")
     validate_duplicate_flagging_config(duplicates_config, compiled_flag_rules)
+    mutable_config = dict(kestrel_config)
 
     if combined_df.empty:
         return _early(combined_df)
@@ -168,7 +169,7 @@ def evaluate_kestrel_candidates(
 
     from vntyper.scripts.confidence_assignment import calculate_depth_score_and_assign_confidence
 
-    frame = calculate_depth_score_and_assign_confidence(frame, kestrel_config)
+    frame = calculate_depth_score_and_assign_confidence(frame, mutable_config)
     if frame.empty:
         return _early(frame)
 
@@ -190,17 +191,17 @@ def evaluate_kestrel_candidates(
             frame[column] = [cells[column] for cells in diagnostics]
 
     frame = add_haplo_count_fn(frame)
-    frame = filter_by_alt_values_and_finalize(frame, kestrel_config)
+    frame = filter_by_alt_values_and_finalize(frame, mutable_config)
     if frame.empty:
         return _early(frame)
-    frame = motif_annotation_fn(frame, merged_motifs, kestrel_config)
+    frame = motif_annotation_fn(frame, merged_motifs, mutable_config)
     if frame.empty:
         return _early(frame)
     if compiled_flag_rules.rules or duplicates_config.get("enabled", False):
-        frame = add_flags(frame, compiled_flag_rules, duplicates_config=duplicates_config)
+        frame = add_flags(frame, compiled_flag_rules, duplicates_config=dict(duplicates_config))
     artifacts = kestrel_config.get("artifact_flags", [])
-    if not isinstance(artifacts, list):
-        raise ValueError("Kestrel artifact_flags must be a list")
+    if not isinstance(artifacts, Sequence) or isinstance(artifacts, (str, bytes)):
+        raise ValueError("Kestrel artifact_flags must be a sequence of flag names")
     frame = add_artifact_gate(frame, artifacts)
 
     evidenced_candidates = None

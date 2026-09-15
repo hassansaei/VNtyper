@@ -1,5 +1,7 @@
 """The extracted Kestrel evaluator preserves complete decision evidence."""
 
+from types import MappingProxyType
+
 import pandas as pd
 import pytest
 
@@ -17,6 +19,7 @@ from vntyper.scripts.kestrel_postprocessing import (
     filter_and_select_kestrel_candidates,
 )
 from vntyper.scripts.nomenclature import nomenclature_config
+from vntyper.scripts.run_configuration import resolve_run_configuration
 
 pytestmark = pytest.mark.unit
 
@@ -47,6 +50,24 @@ def test_evaluator_retains_an_artifact_row_that_the_final_result_suppresses() ->
     assert bool(result.prefilter.iloc[0]["flag_filter_pass"]) is False
     assert result.prefilter.iloc[0]["Flag"] == "False_Positive_4bp_Insertion"
     assert result.selected.empty
+
+
+def test_evaluator_accepts_the_recursively_frozen_production_configuration() -> None:
+    frozen = resolve_run_configuration().kestrel
+    assert isinstance(frozen["flagging_rules"], MappingProxyType)
+    assert isinstance(frozen["duplicate_flagging"], MappingProxyType)
+
+    result = evaluate_kestrel_candidates(
+        kestrel_stage_frame("raw"),
+        _motifs(),
+        frozen,
+        selection=_resolve_selection(frozen),
+        add_haplo_count_fn=add_haplo_count,
+        select_single_best_variant_fn=_select,
+    )
+
+    assert result.reached_final_filter is True
+    assert len(result.prefilter) == 1
 
 
 def test_evaluator_preserves_ordered_duplicate_source_ordinals() -> None:
