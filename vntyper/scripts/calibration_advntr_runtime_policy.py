@@ -65,9 +65,15 @@ def _digest(value: object, label: str, *, nullable: bool = False) -> str | None:
 
 
 def _fraction(value: object, label: str, *, positive: bool) -> float:
-    if not isinstance(value, float) or not math.isfinite(value) or not 0 <= value <= 1 or (positive and value == 0):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 <= value <= 1
+        or (positive and value == 0)
+    ):
         _fail(f"adVNTR runtime {label} must be a finite float in its declared domain")
-    return value
+    return float(value)
 
 
 def decode_advntr_runtime_policy(value: object) -> AdvntrRuntimePolicy:

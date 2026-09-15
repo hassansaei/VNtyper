@@ -11,6 +11,7 @@ from vntyper.scripts.calibration_advntr_runtime_policy import (
     validate_advntr_runtime_policy,
 )
 from vntyper.scripts.calibration_caller_policy import decode_caller_policy_values
+from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
 
 pytestmark = pytest.mark.unit
 
@@ -133,3 +134,24 @@ def test_runtime_policy_validation_rejects_forged_typed_content_and_raw_backgrou
         validate_advntr_runtime_policy(runtime, caller, background_raw_sha256="e" * 64)
     with pytest.raises(ValueError, match="canonical content"):
         advntr_runtime_policy_document(replace(runtime, model_sha256="f" * 64))
+
+
+def test_integral_float_boundaries_survive_rfc8785_json_roundtrip() -> None:
+    raw = advntr_runtime_policy_document(
+        build_advntr_runtime_policy(
+            _caller(),
+            model_sha256="a" * 64,
+            background_sha256="b" * 64,
+            capture_policy_sha256="c" * 64,
+            advntr_revision="d" * 40,
+        )
+    )
+    raw["cutoff"] = 1.0
+    raw["minimum_read_match_ratio"] = 1.0
+    raw["rare_unit_fraction"] = 1.0
+
+    decoded = decode_advntr_runtime_policy(load_strict_json_object(canonical_json_bytes(raw)))
+
+    assert decoded.cutoff == 1.0
+    assert decoded.minimum_read_match_ratio == 1.0
+    assert decoded.rare_unit_fraction == 1.0
