@@ -1,8 +1,9 @@
-"""Generated-BAM parity tests for the strict length depth adapter."""
+"""Generated-alignment parity tests for the strict length depth adapter."""
 
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -202,3 +203,28 @@ def test_samtools_a_missing_unused_contig_positions_fails_instead_of_inventing_z
 
     with pytest.raises(ValueError, match="missing an expected position"):
         read_length_depth(bam, reference, annotation, context, samtools)
+
+
+def test_generated_cram_preserves_bam_depth_and_fragment_identity_with_pinned_reference(
+    generated_alignment: tuple[Path, Path, Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bam, reference, samtools, revision = generated_alignment
+    cram = bam.with_suffix(".cram")
+    with (
+        pysam.AlignmentFile(str(bam), "rb") as source,
+        pysam.AlignmentFile(str(cram), "wc", header=source.header, reference_filename=str(reference)) as output,
+    ):
+        for record in source.fetch(until_eof=True):
+            output.write(record)
+    pysam.index(str(cram))  # type: ignore[attr-defined]
+    annotation = _annotation("synthetic-contig", 20, _sha256(reference))
+    bam_depths = read_length_depth(bam, reference, annotation, _context(bam, annotation, revision, 20), samtools)
+    # A hostile ambient resolver must not affect either decoding engine.
+    monkeypatch.setenv("REF_PATH", "https://synthetic.invalid/reference/%s")
+    cram_depths = read_length_depth(cram, reference, annotation, _context(cram, annotation, revision, 20), samtools)
+
+    assert cram_depths == bam_depths
+    assert [item.depth for item in cram_depths] == [2, 2, 2, 2, 2, 2, 0, 0, 2, 2, 1, 1, 2, 2, 2, 2, 2, 0, 0, 0]
+    assert len(cram_depths[12].supporting_fragment_ids or ()) == 1
+    assert len(cram_depths[15].supporting_fragment_ids or ()) == 2
+    assert os.environ["REF_PATH"] == "https://synthetic.invalid/reference/%s"
