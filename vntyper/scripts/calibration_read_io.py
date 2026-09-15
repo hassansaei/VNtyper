@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import gzip
-import hashlib
 import logging
 import os
 import re
 import stat
-from collections.abc import Generator
-from contextlib import ExitStack, closing
+from collections.abc import Generator, Iterator
+from contextlib import ExitStack, closing, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, NoReturn, cast
+from tempfile import TemporaryDirectory
+from typing import IO, BinaryIO, NoReturn, cast
 
 import pysam
 
@@ -20,26 +20,24 @@ from vntyper.scripts.calibration_identity import ArtifactFingerprint
 from vntyper.scripts.calibration_intake_contract import InputArtifact
 from vntyper.scripts.calibration_read_fingerprints import LogicalReadFingerprint, fingerprint_read_records
 from vntyper.scripts.calibration_read_identity import PrimaryReadRecord, canonical_sequence_name
+from vntyper.scripts.calibration_read_sources import PinnedReadSource
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution, restore_reference_resolution
 
 logger = logging.getLogger(__name__)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _GZIP_MAGIC = b"\x1f\x8b"
-_BUFFER_SIZE = 1024 * 1024
 _FORMATS = frozenset({"BAM", "CRAM", "FASTQ_PAIR"})
 _SCOPES = frozenset({"full", "regional"})
 _CASAVA_COMMENT = re.compile(r"(?P<mate>[12]):[YN]:[0-9]+:[!-~]+\Z")
 
 
 @dataclass(frozen=True)
-class _FileEvidence:
-    device: int
-    inode: int
-    size: int
-    modified_ns: int
-    changed_ns: int
-    sha256: str
+class ArtifactReadEvidence:
+    """A read fingerprint plus the verified CRAM reference digest, when used."""
+
+    fingerprint: ArtifactFingerprint
+    verified_reference_sha256: str | None
 
 
 def _fail(message: str) -> NoReturn:
@@ -74,45 +72,88 @@ def fingerprint_input_artifact(
         ValueError: If declarations, formats, FASTQ structure, or hashes conflict.
         RuntimeError: If files change or an input cannot be read completely.
     """
+    return fingerprint_input_artifact_evidence(
+        artifact,
+        reference_path=reference_path,
+        reference_sha256=reference_sha256,
+        temporary_parent=temporary_parent,
+    ).fingerprint
+
+
+def fingerprint_input_artifact_evidence(
+    artifact: InputArtifact,
+    *,
+    reference_path: Path | None = None,
+    reference_sha256: str | None = None,
+    temporary_parent: Path | None = None,
+) -> ArtifactReadEvidence:
+    """Fingerprint one artifact and return its verified reference evidence.
+
+    Args:
+        artifact: Strict typed intake artifact declaration.
+        reference_path: Pinned local FASTA required only for CRAM.
+        reference_sha256: Expected lowercase SHA256 of the CRAM reference.
+        temporary_parent: Optional parent for private reference and sort files.
+
+    Returns:
+        The artifact fingerprint and the observed CRAM reference digest.
+
+    Raises:
+        ValueError: If declarations, formats, FASTQ structure, or hashes conflict.
+        RuntimeError: If files change or an input cannot be read completely.
+    """
     _validate_artifact(artifact)
     _validate_temporary_parent(temporary_parent)
     input_path = Path(artifact.path)
     mate_path = Path(artifact.mate_path) if artifact.mate_path is not None else None
     reference = _validate_reference_contract(artifact.format, reference_path, reference_sha256)
 
-    input_evidence = _stable_file_evidence(input_path, "calibration input file")
-    if artifact.expected_sha256 is not None and input_evidence.sha256 != artifact.expected_sha256:
-        _fail("calibration input file differs from its expected SHA256")
-    mate_evidence = _stable_file_evidence(mate_path, "calibration mate file") if mate_path is not None else None
-    reference_evidence = (
-        _stable_file_evidence(reference, "calibration CRAM reference") if reference is not None else None
-    )
-    if reference_evidence is not None and reference_evidence.sha256 != reference_sha256:
-        _fail("calibration CRAM reference differs from its expected SHA256")
-
-    if artifact.format == "FASTQ_PAIR":
-        records = _iter_fastq_pair(input_path, cast(Path, mate_path))
-        with closing(records):
-            logical = fingerprint_read_records(records, temporary_parent=temporary_parent)
-    else:
-        logical = _fingerprint_alignment(
-            input_path,
-            artifact.format,
-            reference,
-            temporary_parent=temporary_parent,
+    with ExitStack() as stack:
+        input_source = stack.enter_context(PinnedReadSource.open(input_path, "calibration input file"))
+        mate_source = (
+            stack.enter_context(PinnedReadSource.open(mate_path, "calibration mate file"))
+            if mate_path is not None
+            else None
         )
-
-    _assert_unchanged(input_path, input_evidence, "calibration input file")
-    if mate_path is not None and mate_evidence is not None:
-        _assert_unchanged(mate_path, mate_evidence, "calibration mate file")
-    if reference is not None and reference_evidence is not None:
-        _assert_unchanged(reference, reference_evidence, "calibration CRAM reference")
-    return ArtifactFingerprint(
-        artifact.key,
-        input_evidence.sha256,
-        mate_evidence.sha256 if mate_evidence is not None else None,
-        logical,
-    )
+        reference_source = (
+            stack.enter_context(PinnedReadSource.open(reference, "calibration CRAM reference"))
+            if reference is not None
+            else None
+        )
+        input_sha256 = input_source.digest()
+        if artifact.expected_sha256 is not None and input_sha256 != artifact.expected_sha256:
+            _fail("calibration input file differs from its expected SHA256")
+        mate_sha256 = mate_source.digest() if mate_source is not None else None
+        observed_reference_sha256: str | None = None
+        if reference_source is None:
+            logical = _fingerprint_source(
+                artifact.format,
+                input_source,
+                mate_source,
+                None,
+                temporary_parent=temporary_parent,
+            )
+        else:
+            with _private_reference_snapshot(
+                reference_source,
+                cast(str, reference_sha256),
+                temporary_parent=temporary_parent,
+            ) as snapshot:
+                reference_snapshot, observed_reference_sha256 = snapshot
+                logical = _fingerprint_source(
+                    artifact.format,
+                    input_source,
+                    mate_source,
+                    reference_snapshot,
+                    temporary_parent=temporary_parent,
+                )
+        input_source.verify()
+        if mate_source is not None:
+            mate_source.verify()
+        if reference_source is not None:
+            reference_source.verify()
+        fingerprint = ArtifactFingerprint(artifact.key, input_sha256, mate_sha256, logical)
+        return ArtifactReadEvidence(fingerprint, observed_reference_sha256)
 
 
 def _validate_artifact(artifact: InputArtifact) -> None:
@@ -168,46 +209,8 @@ def _validate_reference_contract(
     return reference_path
 
 
-def _stable_file_evidence(path: Path, label: str) -> _FileEvidence:
-    try:
-        path_before = path.stat()
-    except OSError:
-        raise RuntimeError(f"{label} could not be read") from None
-    if not stat.S_ISREG(path_before.st_mode):
-        _fail(f"{label} must be a regular file")
-    try:
-        with path.open("rb") as handle:
-            before = os.fstat(handle.fileno())
-            if not stat.S_ISREG(before.st_mode):
-                _fail(f"{label} must be a regular file")
-            digest = hashlib.sha256()
-            for chunk in iter(lambda: handle.read(_BUFFER_SIZE), b""):
-                digest.update(chunk)
-            after = os.fstat(handle.fileno())
-        path_after = path.stat()
-    except OSError:
-        raise RuntimeError(f"{label} could not be read") from None
-    before_identity = _stat_identity(before)
-    if (
-        before_identity != _stat_identity(path_before)
-        or before_identity != _stat_identity(after)
-        or before_identity != _stat_identity(path_after)
-    ):
-        raise RuntimeError(f"{label} changed while its digest was computed")
-    return _FileEvidence(*before_identity, digest.hexdigest())
-
-
-def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
-    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
-
-
-def _assert_unchanged(path: Path, expected: _FileEvidence, label: str) -> None:
-    if _stable_file_evidence(path, label) != expected:
-        raise RuntimeError(f"{label} changed during read fingerprinting")
-
-
-def _open_fastq(stack: ExitStack, path: Path) -> IO[bytes]:
-    raw = stack.enter_context(path.open("rb"))
+def _open_fastq(stack: ExitStack, source: PinnedReadSource) -> IO[bytes]:
+    raw = stack.enter_context(os.fdopen(source.duplicate_descriptor(), "rb"))
     magic = raw.read(2)
     raw.seek(0)
     if magic == _GZIP_MAGIC:
@@ -302,11 +305,13 @@ def _fastq_record(name: str, sequence: str, qualities: tuple[int, ...], mate: in
     )
 
 
-def _iter_fastq_pair(first_path: Path, second_path: Path) -> Generator[PrimaryReadRecord, None, None]:
+def _iter_fastq_pair(
+    first_source: PinnedReadSource, second_source: PinnedReadSource
+) -> Generator[PrimaryReadRecord, None, None]:
     try:
         with ExitStack() as stack:
-            first_handle = _open_fastq(stack, first_path)
-            second_handle = _open_fastq(stack, second_path)
+            first_handle = _open_fastq(stack, first_source)
+            second_handle = _open_fastq(stack, second_source)
             while True:
                 first = _read_fastq_record(first_handle, 1)
                 second = _read_fastq_record(second_handle, 2)
@@ -352,8 +357,79 @@ def _primary_record(record: pysam.AlignedSegment) -> PrimaryReadRecord:
     )
 
 
+def _write_private_reference(source: PinnedReadSource, target: Path) -> str:
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            return source.copy_and_digest(cast(BinaryIO, handle))
+    finally:
+        os.close(descriptor)
+
+
+def _make_private_fasta_index(reference_path: Path) -> None:
+    try:
+        pysam.faidx(str(reference_path))  # type: ignore[attr-defined]
+    except (OSError, ValueError):
+        raise RuntimeError("failed to index the verified calibration CRAM reference snapshot") from None
+    for child in reference_path.parent.iterdir():
+        metadata = child.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError("verified calibration CRAM reference indexing produced an invalid artifact")
+        child.chmod(0o600)
+
+
+@contextmanager
+def _private_reference_snapshot(
+    source: PinnedReadSource,
+    expected_sha256: str,
+    *,
+    temporary_parent: Path | None,
+) -> Iterator[tuple[Path, str]]:
+    try:
+        with TemporaryDirectory(prefix=".vntyper-cram-reference-", dir=temporary_parent) as raw_directory:
+            directory = Path(raw_directory)
+            directory.chmod(0o700)
+            reference_path = directory / "reference.fa"
+            observed_sha256 = _write_private_reference(source, reference_path)
+            if observed_sha256 != expected_sha256:
+                _fail("calibration CRAM reference differs from its expected SHA256")
+            _make_private_fasta_index(reference_path)
+            yield reference_path, observed_sha256
+    except OSError:
+        raise RuntimeError("failed to create a private calibration CRAM reference snapshot") from None
+
+
+def _fingerprint_source(
+    artifact_format: str,
+    input_source: PinnedReadSource,
+    mate_source: PinnedReadSource | None,
+    reference_snapshot: Path | None,
+    *,
+    temporary_parent: Path | None,
+) -> LogicalReadFingerprint:
+    if artifact_format == "FASTQ_PAIR":
+        if mate_source is None:
+            _fail("calibration FASTQ pair requires a mate file")
+        records = _iter_fastq_pair(input_source, mate_source)
+        with closing(records):
+            return fingerprint_read_records(records, temporary_parent=temporary_parent)
+    return _fingerprint_alignment(
+        input_source,
+        artifact_format,
+        reference_snapshot,
+        temporary_parent=temporary_parent,
+    )
+
+
+def _close_descriptor_if_open(descriptor: int) -> None:
+    with suppress(OSError):
+        os.fstat(descriptor)
+        os.close(descriptor)
+
+
 def _fingerprint_alignment(
-    path: Path,
+    source: PinnedReadSource,
     artifact_format: str,
     reference_path: Path | None,
     *,
@@ -367,23 +443,33 @@ def _fingerprint_alignment(
             {"cram": {"allow_ambient_reference_resolution": False, "local_ref_path": str(reference_path)}}
         )
     try:
+        descriptor = source.duplicate_descriptor()
         try:
             if artifact_format == "CRAM":
-                alignment = pysam.AlignmentFile(str(path), "rc", reference_filename=str(reference_path))
+                alignment = pysam.AlignmentFile(
+                    descriptor,
+                    "rc",
+                    reference_filename=str(reference_path),
+                    duplicate_filehandle=False,
+                )
             else:
-                alignment = pysam.AlignmentFile(str(path), "rb")
+                alignment = pysam.AlignmentFile(descriptor, "rb", duplicate_filehandle=False)
         except (OSError, ValueError):
+            _close_descriptor_if_open(descriptor)
             raise RuntimeError("failed to open alignment input") from None
-        with alignment:
-            if (artifact_format == "BAM" and not alignment.is_bam) or (
-                artifact_format == "CRAM" and not alignment.is_cram
-            ):
-                _fail("calibration alignment content differs from its declared format")
-            try:
-                records = (_primary_record(record) for record in alignment.fetch(until_eof=True))
-                return fingerprint_read_records(records, temporary_parent=temporary_parent)
-            except OSError:
-                raise RuntimeError("failed to read alignment input completely") from None
+        try:
+            with alignment:
+                if (artifact_format == "BAM" and not alignment.is_bam) or (
+                    artifact_format == "CRAM" and not alignment.is_cram
+                ):
+                    _fail("calibration alignment content differs from its declared format")
+                try:
+                    records = (_primary_record(record) for record in alignment.fetch(until_eof=True))
+                    return fingerprint_read_records(records, temporary_parent=temporary_parent)
+                except OSError:
+                    raise RuntimeError("failed to read alignment input completely") from None
+        finally:
+            _close_descriptor_if_open(descriptor)
     finally:
         if artifact_format == "CRAM":
             restore_reference_resolution(previous_reference_path)

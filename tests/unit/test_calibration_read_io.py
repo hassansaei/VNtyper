@@ -76,6 +76,43 @@ def test_plain_fastq_pair_hashes_exact_bytes_and_preserves_both_mates(tmp_path: 
     assert sorted(path.name for path in tmp_path.iterdir()) == ["paths with spaces"]
 
 
+def test_typed_read_evidence_preserves_the_public_fingerprint_contract(tmp_path: Path) -> None:
+    from vntyper.scripts.calibration_read_io import (
+        ArtifactReadEvidence,
+        fingerprint_input_artifact,
+        fingerprint_input_artifact_evidence,
+    )
+
+    first = tmp_path / "first.fastq"
+    second = tmp_path / "second.fastq"
+    write_pair(first, second)
+    declared = artifact(first, mate_path=second)
+
+    evidence = fingerprint_input_artifact_evidence(declared, temporary_parent=tmp_path)
+
+    assert isinstance(evidence, ArtifactReadEvidence)
+    assert evidence.verified_reference_sha256 is None
+    assert evidence.fingerprint == fingerprint_input_artifact(declared, temporary_parent=tmp_path)
+
+
+def test_symlink_aba_inputs_cannot_mix_original_hashes_with_alternate_logical_reads(tmp_path: Path) -> None:
+    from vntyper.scripts.calibration_read_io import fingerprint_input_artifact
+
+    original_first = tmp_path / "original-first.fastq"
+    original_second = tmp_path / "original-second.fastq"
+    alternate_first = tmp_path / "alternate-first.fastq"
+    alternate_second = tmp_path / "alternate-second.fastq"
+    write_pair(original_first, original_second, sequence_1="AAAA", sequence_2="TTTT")
+    write_pair(alternate_first, alternate_second, sequence_1="CCCC", sequence_2="GGGG")
+    first = tmp_path / "first.fastq"
+    second = tmp_path / "second.fastq"
+    first.symlink_to(original_first)
+    second.symlink_to(original_second)
+
+    with pytest.raises(ValueError, match="symlink"):
+        fingerprint_input_artifact(artifact(first, mate_path=second), temporary_parent=tmp_path)
+
+
 def test_gzip_fastq_is_detected_from_bytes_without_filename_guessing(tmp_path: Path) -> None:
     from vntyper.scripts.calibration_read_io import fingerprint_input_artifact
 
@@ -287,7 +324,10 @@ def test_bam_uses_whole_file_iteration_and_maps_all_identity_fields(tmp_path: Pa
             artifact(path, artifact_format="BAM"), temporary_parent=tmp_path
         )
 
-    opener.assert_called_once_with(str(path), "rb")
+    opened_descriptor, mode = opener.call_args.args
+    assert isinstance(opened_descriptor, int)
+    assert mode == "rb"
+    assert opener.call_args.kwargs == {"duplicate_filehandle": False}
     assert alignment.fetch_calls == [{"until_eof": True}]
     assert alignment.closed
     assert result.logical.primary_record_count == 3
@@ -359,24 +399,40 @@ def test_cram_requires_verified_reference_and_restores_resolution_environment(tm
     reference_sha256 = hashlib.sha256(reference.read_bytes()).hexdigest()
     alignment = FakeAlignment([alignment_record()], is_bam=False, is_cram=True)
 
+    snapshot: Path | None = None
+
+    def open_snapshot(descriptor, mode, **kwargs):
+        nonlocal snapshot
+        assert isinstance(descriptor, int)
+        assert mode == "rc"
+        assert kwargs["duplicate_filehandle"] is False
+        snapshot = Path(kwargs["reference_filename"])
+        assert snapshot != reference
+        assert snapshot.read_bytes() == reference.read_bytes()
+        assert snapshot.stat().st_mode & 0o777 == 0o600
+        assert snapshot.parent.stat().st_mode & 0o777 == 0o700
+        return alignment
+
     with (
-        mock.patch.object(calibration_read_io.pysam, "AlignmentFile", return_value=alignment) as opener,
+        mock.patch.object(calibration_read_io.pysam, "AlignmentFile", side_effect=open_snapshot) as opener,
         mock.patch.object(calibration_read_io, "pin_reference_resolution", return_value="previous") as pin,
         mock.patch.object(calibration_read_io, "restore_reference_resolution") as restore,
     ):
-        result = calibration_read_io.fingerprint_input_artifact(
+        evidence = calibration_read_io.fingerprint_input_artifact_evidence(
             artifact(path, artifact_format="CRAM"),
             reference_path=reference,
             reference_sha256=reference_sha256,
             temporary_parent=tmp_path,
         )
-
+    assert opener.call_count == 1
+    assert snapshot is not None
     pin.assert_called_once_with(
-        {"cram": {"allow_ambient_reference_resolution": False, "local_ref_path": str(reference)}}
+        {"cram": {"allow_ambient_reference_resolution": False, "local_ref_path": str(snapshot)}}
     )
-    opener.assert_called_once_with(str(path), "rc", reference_filename=str(reference))
     restore.assert_called_once_with("previous")
-    assert result.logical.primary_record_count == 1
+    assert evidence.fingerprint.logical.primary_record_count == 1
+    assert evidence.verified_reference_sha256 == reference_sha256
+    assert not snapshot.parent.exists()
 
 
 def test_cram_restores_resolution_environment_when_content_is_not_cram(tmp_path: Path) -> None:

@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -23,7 +23,7 @@ from vntyper.scripts.calibration_identity import (
 )
 from vntyper.scripts.calibration_intake_contract import IntakeDeclaration, decode_intake, encode_intake
 from vntyper.scripts.calibration_manifest import GROUP_NAMESPACES, PartitionMember, decode_partition_manifest
-from vntyper.scripts.calibration_read_io import fingerprint_input_artifact
+from vntyper.scripts.calibration_read_io import fingerprint_input_artifact, fingerprint_input_artifact_evidence
 from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
 
 logger = logging.getLogger(__name__)
@@ -201,6 +201,7 @@ def _write_bundle(
     declaration: IntakeDeclaration,
     audit: IdentityAudit,
     partition_document: dict[str, object],
+    references: Mapping[str, PinnedCramReference],
 ) -> str:
     payloads = {
         "normalized.json": canonical_json_bytes(encode_intake(declaration)),
@@ -210,10 +211,14 @@ def _write_bundle(
     for name in _PAYLOAD_NAMES:
         _write_private_json(staging / name, load_strict_json_object(payloads[name]))
     provenance: dict[str, object] = {
-        "schema_version": "calibration-intake-provenance-v1",
+        "schema_version": "calibration-intake-provenance-v2",
         "intake_sha256": declaration.sha256,
         "identity_audit_sha256": audit.sha256,
         "partition_sha256": canonical_sha256(partition_document),
+        "cram_references": [
+            {"assembly": assembly, "path": str(references[assembly].path), "sha256": references[assembly].sha256}
+            for assembly in sorted(references)
+        ],
         "files": [_file_row(name, payloads[name]) for name in _PAYLOAD_NAMES],
     }
     provenance_raw = _write_private_json(staging / "provenance.json", provenance)
@@ -249,7 +254,8 @@ def prepare_intake_bundle(
     output: Path,
     *,
     preprocessing_priority: tuple[str, ...],
-    cram_references: Mapping[str, PinnedCramReference],
+    cram_references: Mapping[str, PinnedCramReference] | None = None,
+    cram_reference_loader: Callable[[], Mapping[str, PinnedCramReference]] | None = None,
     temporary_parent: Path | None = None,
 ) -> PreparedIntakeBundle:
     """Validate local intake, audit input identities, and atomically install its bundle.
@@ -263,6 +269,7 @@ def prepare_intake_bundle(
         output: New local bundle directory.
         preprocessing_priority: Frozen unique preprocessing preference order.
         cram_references: Exact CRAM assembly-to-local-reference bindings.
+        cram_reference_loader: Lazy alternative loaded after output preflight.
         temporary_parent: Optional existing directory for fingerprint sort files.
 
     Returns:
@@ -274,6 +281,10 @@ def prepare_intake_bundle(
     """
     if not isinstance(output, Path):
         _fail("calibration intake output must be a Path")
+    if (cram_references is None) == (cram_reference_loader is None):
+        _fail("calibration intake requires exactly one CRAM reference source")
+    if cram_reference_loader is not None and not callable(cram_reference_loader):
+        _fail("calibration intake CRAM reference loader must be callable")
     priority = _validate_priority(preprocessing_priority)
     if temporary_parent is not None and (
         not isinstance(temporary_parent, Path) or not temporary_parent.is_dir() or temporary_parent.is_symlink()
@@ -282,25 +293,39 @@ def prepare_intake_bundle(
     prepared: list[PreparedIntakeBundle] = []
 
     def produce(staging: Path) -> bool:
+        reference_values = cram_reference_loader() if cram_reference_loader is not None else cram_references
+        if not isinstance(reference_values, Mapping):
+            _fail("calibration intake CRAM reference loader must return a mapping")
         snapshot = _open_source(declaration_path)
         try:
             declaration = decode_intake(load_strict_json_object(snapshot.raw))
             _validate_local_paths(declaration)
-            references = _validate_references(declaration, cram_references)
+            references = _validate_references(declaration, reference_values)
             fingerprints: dict[str, ArtifactFingerprint] = {}
             for artifact in declaration.artifacts:
                 reference = references.get(artifact.assembly) if artifact.format == "CRAM" else None
-                fingerprints[artifact.key] = fingerprint_input_artifact(
-                    artifact,
-                    reference_path=None if reference is None else reference.path,
-                    reference_sha256=None if reference is None else reference.sha256,
-                    temporary_parent=temporary_parent,
-                )
+                if reference is None:
+                    fingerprints[artifact.key] = fingerprint_input_artifact(
+                        artifact,
+                        reference_path=None,
+                        reference_sha256=None,
+                        temporary_parent=temporary_parent,
+                    )
+                else:
+                    evidence = fingerprint_input_artifact_evidence(
+                        artifact,
+                        reference_path=reference.path,
+                        reference_sha256=reference.sha256,
+                        temporary_parent=temporary_parent,
+                    )
+                    if evidence.verified_reference_sha256 != reference.sha256:
+                        _fail("calibration read adapter observed CRAM reference differs from its declared binding")
+                    fingerprints[artifact.key] = evidence.fingerprint
             audit = resolve_identities(declaration, fingerprints, preprocessing_priority=priority)
             members = build_partition_members(declaration, audit)
             partition_document = _partition_document(members)
             partition = decode_partition_manifest(partition_document)
-            provenance_sha256 = _write_bundle(staging, declaration, audit, partition_document)
+            provenance_sha256 = _write_bundle(staging, declaration, audit, partition_document, references)
             _assert_source_unchanged(declaration_path, snapshot)
             prepared.append(PreparedIntakeBundle(declaration, audit, partition.members, output, provenance_sha256))
         finally:

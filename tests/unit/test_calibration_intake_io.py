@@ -87,7 +87,8 @@ def test_prepare_intake_bundle_writes_exact_private_canonical_artifacts(tmp_path
         result.declaration.sha256
     )
     provenance = load_strict_json_object((output / "provenance.json").read_bytes())
-    assert provenance["schema_version"] == "calibration-intake-provenance-v1"
+    assert provenance["schema_version"] == "calibration-intake-provenance-v2"
+    assert provenance["cram_references"] == []
     assert provenance["intake_sha256"] == result.declaration.sha256
     assert provenance["identity_audit_sha256"] == result.audit.sha256
     assert provenance["partition_sha256"] == canonical_sha256(
@@ -115,10 +116,21 @@ def test_cram_references_are_exactly_assembly_bound_and_artifacts_are_read_once_
     reference.write_text(">synthetic\nACGT\n", encoding="utf-8")
     reference_sha256 = hashlib.sha256(reference.read_bytes()).hexdigest()
     fingerprints = {key: _fingerprint(key) for key in ("artifact-000", "artifact-001")}
+    observed_keys: list[str] = []
 
-    with patch.object(
-        module, "fingerprint_input_artifact", side_effect=lambda artifact, **_kwargs: fingerprints[artifact.key]
-    ) as reader:
+    def read_cram(artifact, **_kwargs):
+        observed_keys.append(artifact.key)
+        return read_module.ArtifactReadEvidence(fingerprints[artifact.key], reference_sha256)
+
+    def read_other(artifact, **_kwargs):
+        observed_keys.append(artifact.key)
+        return fingerprints[artifact.key]
+
+    read_module = import_module("vntyper.scripts.calibration_read_io")
+    with (
+        patch.object(module, "fingerprint_input_artifact_evidence", side_effect=read_cram) as cram_reader,
+        patch.object(module, "fingerprint_input_artifact", side_effect=read_other) as reader,
+    ):
         result = module.prepare_intake_bundle(
             declaration_path,
             tmp_path / "bundle",
@@ -126,18 +138,121 @@ def test_cram_references_are_exactly_assembly_bound_and_artifacts_are_read_once_
             cram_references={"assembly-b": module.PinnedCramReference(reference.resolve(), reference_sha256)},
         )
 
-    assert [item.args[0].key for item in reader.call_args_list] == ["artifact-000", "artifact-001"]
-    assert reader.call_args_list[0].kwargs == {
+    assert cram_reader.call_args_list[0].args[0].key == "artifact-000"
+    assert cram_reader.call_args_list[0].kwargs == {
         "reference_path": reference.resolve(),
         "reference_sha256": reference_sha256,
         "temporary_parent": None,
     }
-    assert reader.call_args_list[1].kwargs == {
+    assert reader.call_args_list[0].args[0].key == "artifact-001"
+    assert reader.call_args_list[0].kwargs == {
         "reference_path": None,
         "reference_sha256": None,
         "temporary_parent": None,
     }
+    assert observed_keys == ["artifact-000", "artifact-001"]
     assert set(result.audit.fingerprints) == {"artifact-000", "artifact-001"}
+
+
+def test_verified_cram_reference_path_and_digest_are_bound_into_provenance(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.calibration_intake_io")
+    read_module = import_module("vntyper.scripts.calibration_read_io")
+    raw = synthetic_intake()
+    raw["artifacts"][0].update(format="CRAM", assembly="assembly-a")
+    declaration_path, _ = _write_declaration(tmp_path, raw)
+    reference_a = module.PinnedCramReference((tmp_path / "reference-a.fa").resolve(), "a" * 64)
+    reference_b = module.PinnedCramReference((tmp_path / "reference-b.fa").resolve(), "b" * 64)
+
+    def build(output: Path, reference):
+        evidence = read_module.ArtifactReadEvidence(_fingerprint("artifact-001"), reference.sha256)
+        with patch.object(module, "fingerprint_input_artifact_evidence", return_value=evidence):
+            result = module.prepare_intake_bundle(
+                declaration_path,
+                output,
+                preprocessing_priority=("synthetic-preprocessing-v1",),
+                cram_references={"assembly-a": reference},
+            )
+        return result, load_strict_json_object((output / "provenance.json").read_bytes())
+
+    first, first_document = build(tmp_path / "first", reference_a)
+    second, second_document = build(tmp_path / "second", reference_b)
+
+    assert first_document["schema_version"] == "calibration-intake-provenance-v2"
+    assert first_document["cram_references"] == [
+        {"assembly": "assembly-a", "path": str(reference_a.path), "sha256": reference_a.sha256}
+    ]
+    assert second_document["cram_references"] == [
+        {"assembly": "assembly-a", "path": str(reference_b.path), "sha256": reference_b.sha256}
+    ]
+    assert first.provenance_sha256 != second.provenance_sha256
+
+
+def test_cram_reference_observed_digest_must_match_the_declared_binding(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.calibration_intake_io")
+    read_module = import_module("vntyper.scripts.calibration_read_io")
+    raw = synthetic_intake()
+    raw["artifacts"][0].update(format="CRAM", assembly="assembly-a")
+    declaration_path, _ = _write_declaration(tmp_path, raw)
+    reference = module.PinnedCramReference((tmp_path / "reference.fa").resolve(), "a" * 64)
+    evidence = read_module.ArtifactReadEvidence(_fingerprint("artifact-001"), "b" * 64)
+
+    with (
+        patch.object(module, "fingerprint_input_artifact_evidence", return_value=evidence),
+        pytest.raises(ValueError, match="observed CRAM reference"),
+    ):
+        module.prepare_intake_bundle(
+            declaration_path,
+            tmp_path / "bundle",
+            preprocessing_priority=("synthetic-preprocessing-v1",),
+            cram_references={"assembly-a": reference},
+        )
+    assert not (tmp_path / "bundle").exists()
+
+
+def test_lazy_cram_reference_loader_runs_only_after_atomic_output_preflight(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.calibration_intake_io")
+    output = tmp_path / "bundle"
+    output.mkdir()
+    called = False
+
+    def load_references():
+        nonlocal called
+        called = True
+        return {}
+
+    with pytest.raises(ValueError, match="already exists"):
+        module.prepare_intake_bundle(
+            tmp_path / "missing.json",
+            output,
+            preprocessing_priority=("synthetic-preprocessing-v1",),
+            cram_reference_loader=load_references,
+        )
+    assert called is False
+
+
+@pytest.mark.parametrize("sources", ["neither", "both", "invalid-loader", "invalid-result"])
+def test_cram_reference_source_boundary_is_closed(sources: str, tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.calibration_intake_io")
+    declaration_path, _ = _write_declaration(tmp_path)
+    kwargs: dict[str, object] = {}
+    message = "exactly one"
+    if sources == "both":
+        kwargs = {"cram_references": {}, "cram_reference_loader": dict}
+    elif sources == "invalid-loader":
+        kwargs = {"cram_reference_loader": []}
+        message = "callable"
+    elif sources == "invalid-result":
+        kwargs = {"cram_reference_loader": list}
+        message = "return a mapping"
+
+    with pytest.raises(ValueError, match=message):
+        module.prepare_intake_bundle(
+            declaration_path,
+            tmp_path / "bundle",
+            preprocessing_priority=("synthetic-preprocessing-v1",),
+            **kwargs,  # type: ignore[arg-type]
+        )
+    assert not (tmp_path / "bundle").exists()
 
 
 def test_locked_membership_only_is_retained_without_an_artifact_read(tmp_path: Path) -> None:
