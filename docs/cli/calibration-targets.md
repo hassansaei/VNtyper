@@ -119,6 +119,97 @@ and the strict caller workflow below to produce replayable evidence. A backgroun
 trained on this cohort cannot be labelled `fixed-before-cohort`; fit it inside each
 training fold or evaluate a model fixed on separate data.
 
+## Deriving cutoffs from labelled data
+
+The original study selected the depth-score detection threshold `0.00469` by comparing
+sensitivity and specificity across cutoffs (Figure 5C). Its separate high-confidence
+definition required a depth score above `0.00515` **and** an alternate depth above `20`
+(Figure 5B), and that band was chosen as a cautious label rather than swept. The paper
+also limits its detection-threshold rationale to dupC. VNtyper's general reporting floor
+and its `ALT=GG` gate are distinct decisions, so the workflow below replays the current
+production rules instead of reconstructing the historical implementation. See
+[Saei et al., iScience 26, 107171 (2023)](https://pmc.ncbi.nlm.nih.gov/articles/PMC10338300/).
+
+### Candidate cutoffs come from the data
+
+A threshold compared with `>=` only changes a decision at a value the data actually take,
+so enumerating the observed values yields the complete set of distinct outcomes with no
+resolution argument to defend. `calibration_cutoff_axes.derive_axis` collects the measured
+statistic from every candidate row that passes all four structural gates
+(`is_frameshift`, `is_valid_frameshift`, `motif_filter_pass`, `flag_filter_pass`) and
+returns those values as the axis breakpoints, always including the baseline value so the
+shipped operating point appears on every curve. Breakpoints the policy decoder refuses are
+recorded with the decoder's own message rather than dropped.
+
+`calibration_cutoff_grid.build_cutoff_grid` remains available for an explicitly declared
+grid. Declared values are a supplement to the derived breakpoints, not a replacement.
+
+### The depth gates move together
+
+| Axis | Pointers moved | Endpoint it changes |
+| --- | --- | --- |
+| `depth_floor_linked` | reporting floor, depth-score low, GG depth-score gate | detection |
+| `gg_gate_independent` | GG depth-score gate only | detection, link broken on purpose |
+| `depth_score_high` | depth-score high | confidence labelling |
+| `alt_depth_band` | alternate-depth low and mid-low | confidence labelling |
+| `var_active_region` | active-region threshold | confidence labelling |
+
+Lowering the reporting floor on its own changes nothing. The ordered confidence table
+sends a score below the floor to `Negative`, labels a score inside the closed mid-band
+interval `Low_Precision`, and requires a score at or above the high boundary for every
+remaining rule, so a score between a lowered floor and an unchanged mid-band edge matches
+no rule and reaches the `Negative` fallback. The MUC1 dupC candidate is an `ALT=GG` row,
+so it is held by the GG gate as well. The linked axis therefore sets the floor and the GG
+gate to the breakpoint and the mid-band edge to the smaller of that breakpoint and the
+high boundary, which keeps every admitted score inside a labelled band and keeps the
+tightening arm of the curve reachable above the high boundary.
+
+Reference, recruitment, frameshift, motif and artifact rules stay fixed. Complete captures
+are replayed through every production gate and through selection; a final result TSV
+cannot substitute for replay, because it no longer contains the candidates that were
+filtered out.
+
+### Choosing an operating point
+
+`calibration_cutoff_selection.SearchSpec` requires an objective. There is no default.
+
+| Objective | Maximises | Notes |
+| --- | --- | --- |
+| `max-sensitivity-at-specificity` | sensitivity | requires `min_specificity`; refuses construction without it |
+| `youden-j` | sensitivity + specificity - 1 | rank-equivalent to balanced accuracy |
+| `max-f1` | F1 | |
+| `balanced-accuracy`, `sensitivity`, `specificity` | the named rate | retained for compatibility |
+
+For this application the useful objective is usually maximum sensitivity subject to a
+specificity constraint, so a balanced score chosen by default would trade sensitivity away
+silently. `select_cutoff_policy` reads training observations only. Ties prefer fewer false
+positives, then more true positives, then fewer no-calls, then the baseline, then a stable
+policy identifier. A missing truth class prevents selection, and unsatisfiable constraints
+return an explicit no-selection result rather than a nearest match.
+
+Sensitivity and specificity keep no-calls inside their truth-class denominators, and
+samples of unknown truth stay visible in their own denominator. Full-data operating points
+describe the searched cohort; pooled held-out predictions assess fold-selected policies
+separately. Neither is independent validation once the data or the search design has been
+examined.
+
+### Endpoints are reported separately
+
+A binary detection change, a confidence relabelling, an artifact flag and an exact-variant
+identity are different outcomes, and a threshold can move one without moving another.
+Because confidence participates in candidate ranking, a confidence threshold can change
+which variant is selected. The nomenclature tier is assigned downstream of the capture
+boundary and is therefore not available to this replay.
+
+### Applying a derived profile
+
+`vntyper pipeline --research-decision-profile PROFILE` runs the pipeline with cutoffs
+derived locally. The profile is a complete caller-generated decision profile; no approval
+artefact is involved, and the run logs that the values carry no deployment approval. The
+flag is exclusive with `--decision-profile` and with `--calibration-bundle`, and neither of
+those contracts changes: an explicit profile still may not alter a fixed-safety field, and
+an approved portable bundle is still the only approved path.
+
 ## What each target estimates
 
 | Target | Inputs to the scientific model | Output |
