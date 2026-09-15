@@ -94,7 +94,18 @@ def _integer(value: object, maximum: int, label: str) -> int:
     return value
 
 
-def _asset(value: object) -> TargetRunAsset:
+def decode_target_asset(value: object) -> TargetRunAsset:
+    """Decode a local file commitment without opening its path.
+
+    Args:
+        value: Exact path, SHA256 and byte-size fields.
+
+    Returns:
+        Immutable normalized absolute file commitment.
+
+    Raises:
+        ValueError: If fields, path, digest or size are invalid.
+    """
     raw = _object(value, _ASSET_FIELDS, "asset")
     text = _text(raw["path"], "asset path")
     path = Path(text)
@@ -120,7 +131,7 @@ def _run(value: object, target: str) -> TargetRun:
     for name, asset in assets.items():
         if not isinstance(name, str):
             _fail("target runs asset role must be text")
-        decoded[name] = _asset(asset)
+        decoded[name] = decode_target_asset(asset)
     ids = raw.get("vntr_ids", [])
     if not isinstance(ids, list) or any(type(value) is not int or not 1 <= value <= 2**53 - 1 for value in ids):
         _fail("target runs VNTR roster must contain positive integer identifiers")
