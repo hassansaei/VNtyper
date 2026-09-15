@@ -16,6 +16,7 @@ def record(**changes):
         "qualities": (10, 20, 30, 40),
         "mate": 1,
         "flags": 65,
+        "mapping_quality": 60,
         "contig": "synthetic-contig",
         "position_zero_based": 10,
         "cigar": ((0, 4),),
@@ -194,3 +195,18 @@ def test_nonstreams_and_deduplicating_containers_cannot_claim_multiset_identity(
     m = import_module("vntyper.scripts.calibration_read_identity")
     with pytest.raises(ValueError):
         m.digest_sorted_tokens(tokens)
+
+
+def test_mapping_quality_is_alignment_evidence_but_not_source_read_content():
+    m = import_module("vntyper.scripts.calibration_read_identity")
+    high = m.read_identity_tokens(record(mapping_quality=60))
+    low = m.read_identity_tokens(record(mapping_quality=0))
+    assert high.alignment != low.alignment
+    assert high.named_sequence == low.named_sequence
+
+
+@pytest.mark.parametrize("mapq", [True, -1, 256, 1.5])
+def test_invalid_mapping_quality_is_rejected(mapq):
+    m = import_module("vntyper.scripts.calibration_read_identity")
+    with pytest.raises(ValueError, match="mapping quality"):
+        m.read_identity_tokens(record(mapping_quality=mapq))

@@ -34,6 +34,7 @@ class PrimaryReadRecord:
     qualities: tuple[int, ...] | None
     mate: int
     flags: int
+    mapping_quality: int
     contig: str | None
     position_zero_based: int
     cigar: tuple[tuple[int, int], ...]
@@ -77,6 +78,7 @@ def _validate_record(record: PrimaryReadRecord) -> None:
     if not isinstance(record.name, str) or not record.name or any(char.isspace() for char in record.name):
         _fail("read identity name must be non-empty and contain no whitespace")
     _integer(record.flags, "flags", minimum=0, maximum=0xFFFF)
+    _integer(record.mapping_quality, "mapping quality", minimum=0, maximum=255)
     _integer(record.mate, "mate", minimum=0, maximum=2)
     mate_flags = record.flags & (0x40 | 0x80)
     expected_mate_flags = {0: 0, 1: 0x40, 2: 0x80}[record.mate]
@@ -161,6 +163,7 @@ def read_identity_tokens(record: PrimaryReadRecord) -> ReadIdentityTokens | None
     alignment = {
         **named_content,
         "flags": record.flags,
+        "mapping_quality": record.mapping_quality,
         "contig": record.contig,
         "position_zero_based": record.position_zero_based,
         "cigar": [list(item) for item in record.cigar],
