@@ -3,6 +3,21 @@
 import argparse
 from pathlib import Path
 
+from vntyper.scripts.calibration_cutoff_selection import OBJECTIVES
+
+#: The cutoff axes ``optimize`` can sweep. These are spelled out rather than imported
+#: from ``calibration_cutoff_axes`` because that module imports pandas, and the argument
+#: parser is built on every invocation of every subcommand. ``tests/unit/
+#: test_cli_parser_contract.py`` pins this tuple against the axis constants, so a new
+#: axis that the CLI cannot name fails there instead of becoming silently unreachable.
+CUTOFF_AXIS_CHOICES = (
+    "depth_floor_linked",
+    "gg_gate_independent",
+    "depth_score_high",
+    "alt_depth_band",
+    "var_active_region",
+)
+
 
 def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
     """Register the closed calibration command tree.
@@ -34,6 +49,53 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--caller-policies", type=Path, default=None, help="Declared native caller policy outputs JSON."
     )
     cohort.add_argument("--output", type=Path, required=True)
+
+    optimize = operations.add_parser(
+        "optimize", help="Derive caller cutoffs from labelled cohort evidence and export a research profile."
+    )
+    optimize.add_argument("--manifest", type=Path, required=True, help="Cohort TSV carrying the declared truth.")
+    optimize.add_argument(
+        "--captures", type=Path, required=True, help="Sample-to-capture association TSV for the requested callers."
+    )
+    optimize.add_argument("--output", type=Path, required=True)
+    optimize.add_argument(
+        "--objective",
+        required=True,
+        choices=list(OBJECTIVES),
+        help="Quantity the search maximizes; there is no default, because the objectives disagree.",
+    )
+    optimize.add_argument("--min-sensitivity", type=float, default=None)
+    optimize.add_argument(
+        "--min-specificity",
+        type=float,
+        default=None,
+        help="Required by --objective max-sensitivity-at-specificity.",
+    )
+    optimize.add_argument("--caller", choices=["kestrel", "advntr", "both"], default="kestrel")
+    optimize.add_argument(
+        "--axis",
+        dest="axes",
+        action="append",
+        choices=list(CUTOFF_AXIS_CHOICES),
+        default=None,
+        metavar="NAME",
+        help=f"Repeatable cutoff axis; defaults to {CUTOFF_AXIS_CHOICES[0]}.",
+    )
+    optimize.add_argument(
+        "--max-breakpoints",
+        type=int,
+        default=None,
+        help="Optional cap on tested breakpoints per axis, subsampled in rank space.",
+    )
+    optimize.add_argument("--folds", type=int, default=5)
+    optimize.add_argument("--seed", type=int, default=20260915)
+    optimize.add_argument("--workers", type=int, default=1)
+    optimize.add_argument(
+        "--advntr-executable",
+        type=Path,
+        default=None,
+        help="Pinned installed adVNTR executable; required when --caller includes advntr.",
+    )
 
     intake = operations.add_parser("intake", help="Audit and normalize declared local calibration inputs.")
     intake.add_argument("--manifest", type=Path, required=True)

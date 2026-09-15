@@ -52,6 +52,11 @@ def handle_calibrate(
         from vntyper.scripts.calibration_cohort import run_cohort_calibration
 
         producer = run_cohort_calibration
+    elif operation == "optimize":
+        from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
+
+        _optimize_arguments(args, parser)
+        producer = run_cutoff_optimization
     else:
         target = getattr(args, "target", "dominance")
         _target_arguments(args, parser, target, operation)
@@ -67,6 +72,19 @@ def handle_calibrate(
             f"its complete failed output is installed at {args.output}"
         )
         raise SystemExit(1)
+
+
+def _optimize_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Reject the two cross-argument combinations argparse alone cannot express.
+
+    Args:
+        args: Parsed ``calibrate optimize`` arguments.
+        parser: Top-level parser, which owns the exit code for a usage error.
+    """
+    if getattr(args, "objective", None) == "max-sensitivity-at-specificity" and args.min_specificity is None:
+        parser.error("--objective max-sensitivity-at-specificity requires --min-specificity")
+    if getattr(args, "caller", "kestrel") in {"advntr", "both"} and getattr(args, "advntr_executable", None) is None:
+        parser.error("--caller advntr and --caller both require --advntr-executable")
 
 
 def _target_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser, target: str, operation: str) -> None:

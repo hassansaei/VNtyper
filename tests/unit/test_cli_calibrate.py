@@ -67,6 +67,70 @@ def test_fit_objective_is_mandatory_and_closed() -> None:
     assert unknown.value.code == 2
 
 
+def test_optimize_dispatches_through_the_shared_atomic_adapter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "derived"
+    args = build_parser().parse_args(
+        [
+            "calibrate",
+            "optimize",
+            "--manifest",
+            str(tmp_path / "cohort.tsv"),
+            "--captures",
+            str(tmp_path / "captures.tsv"),
+            "--objective",
+            "youden-j",
+            "--output",
+            str(output),
+        ]
+    )
+    seen: list[Path] = []
+
+    def produce(observed, staging: Path) -> bool:
+        assert observed is args
+        assert observed.axes is None  # the entry point owns the repeatable option's default
+        seen.append(staging)
+        (staging / "report.json").write_text("{}\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr("vntyper.scripts.calibration_cutoff_optimize.run_cutoff_optimization", produce)
+    cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+
+    assert len(seen) == 1
+    assert tuple(path.name for path in output.iterdir()) == ("report.json",)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--objective", "max-sensitivity-at-specificity"],
+        ["--objective", "youden-j", "--caller", "both"],
+        ["--objective", "youden-j", "--caller", "advntr"],
+    ],
+)
+def test_optimize_cross_argument_requirements_are_usage_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], extra: list[str]
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "calibrate",
+            "optimize",
+            "--manifest",
+            str(tmp_path / "cohort.tsv"),
+            "--captures",
+            str(tmp_path / "captures.tsv"),
+            "--output",
+            str(tmp_path / "derived"),
+            *extra,
+        ]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+
+    assert excinfo.value.code == 2
+    assert "require" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("operation", sorted(_COMMANDS))
 def test_every_operation_atomically_installs_only_complete_output(
     operation: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
