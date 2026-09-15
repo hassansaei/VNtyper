@@ -169,6 +169,81 @@ def _applicability(value: object, target: CalibrationTarget) -> CandidateApplica
     )
 
 
+def decode_candidate_applicability(value: object, *, target: CalibrationTarget) -> CandidateApplicability:
+    """Decode the shared closed applicability contract for one calibration target.
+
+    Args:
+        value: Parsed JSON applicability object.
+        target: Caller or length target selecting its exact fields.
+
+    Returns:
+        Immutable validated applicability.
+
+    Raises:
+        ValueError: If the target or applicability content is invalid.
+    """
+    if target not in ("callers", "length"):
+        _fail("candidate applicability target must be callers or length")
+    return _applicability(value, target)
+
+
+def _applicability_document(applicable: CandidateApplicability, target: CalibrationTarget) -> dict[str, object]:
+    raw: dict[str, object] = {
+        "domain": applicable.domain,
+        "assemblies": list(applicable.assemblies),
+        "assay_classes": list(applicable.assay_classes),
+        "input_scopes": list(applicable.input_scopes),
+        "preprocessing_ids": list(applicable.preprocessing_ids),
+    }
+    if target == "callers":
+        raw["required_callers"] = list(applicable.required_callers)
+    else:
+        raw.update(
+            {
+                "aligner_name": applicable.aligner_name,
+                "aligner_version": applicable.aligner_version,
+                "aligner_arguments_sha256": applicable.aligner_arguments_sha256,
+                "primary_secondary_marking": applicable.primary_secondary_marking,
+                "counting_policy_sha256": applicable.counting_policy_sha256,
+            }
+        )
+    return raw
+
+
+def candidate_applicability_document(
+    applicable: CandidateApplicability, *, target: CalibrationTarget
+) -> dict[str, object]:
+    """Project and revalidate shared immutable applicability.
+
+    Args:
+        applicable: Typed applicability returned by its decoder.
+        target: Caller or length target selecting its exact fields.
+
+    Returns:
+        Fresh JSON-compatible applicability object.
+
+    Raises:
+        ValueError: If typed content, target, or immutable collections are invalid.
+    """
+    if not isinstance(applicable, CandidateApplicability):
+        _fail("candidate applicability must be a CandidateApplicability")
+    if not all(
+        isinstance(items, tuple)
+        for items in (
+            applicable.assemblies,
+            applicable.assay_classes,
+            applicable.input_scopes,
+            applicable.preprocessing_ids,
+            applicable.required_callers,
+        )
+    ):
+        _fail("candidate applicability must use decoded immutable collections")
+    raw = _applicability_document(applicable, target)
+    if decode_candidate_applicability(raw, target=target) != applicable:
+        _fail("candidate applicability differs from its decoded contract")
+    return raw
+
+
 def _producer(value: object) -> CandidateProducer:
     raw = _object(
         value,
@@ -189,6 +264,53 @@ def _producer(value: object) -> CandidateProducer:
         MappingProxyType(versions),
         _digest(raw["feature_schema_sha256"], "feature_schema_sha256"),
     )
+
+
+def decode_candidate_producer(value: object) -> CandidateProducer:
+    """Decode the shared closed producer provenance contract.
+
+    Args:
+        value: Parsed JSON producer object.
+
+    Returns:
+        Immutable validated producer provenance.
+
+    Raises:
+        ValueError: If producer fields or values are invalid.
+    """
+    return _producer(value)
+
+
+def _producer_document(producer: CandidateProducer) -> dict[str, object]:
+    return {
+        "name": producer.name,
+        "version": producer.version,
+        "source_revision": producer.source_revision,
+        "tool_versions": dict(producer.tool_versions),
+        "feature_schema_sha256": producer.feature_schema_sha256,
+    }
+
+
+def candidate_producer_document(producer: CandidateProducer) -> dict[str, object]:
+    """Project and revalidate shared immutable producer provenance.
+
+    Args:
+        producer: Typed producer returned by its decoder.
+
+    Returns:
+        Fresh JSON-compatible producer object.
+
+    Raises:
+        ValueError: If typed content or immutable mappings are invalid.
+    """
+    if not isinstance(producer, CandidateProducer):
+        _fail("candidate producer must be a CandidateProducer")
+    if not isinstance(producer.tool_versions, _MAPPING_PROXY_TYPE):
+        _fail("candidate producer must use a decoded immutable tool_versions mapping")
+    raw = _producer_document(producer)
+    if decode_candidate_producer(raw) != producer:
+        _fail("candidate producer differs from its decoded contract")
+    return raw
 
 
 def decode_candidate(value: object) -> CandidateEnvelope:
@@ -234,39 +356,14 @@ def decode_candidate(value: object) -> CandidateEnvelope:
 
 
 def _candidate_document(candidate: CandidateEnvelope) -> dict[str, object]:
-    applicable = candidate.applicability
-    applicability: dict[str, object] = {
-        "domain": applicable.domain,
-        "assemblies": list(applicable.assemblies),
-        "assay_classes": list(applicable.assay_classes),
-        "input_scopes": list(applicable.input_scopes),
-        "preprocessing_ids": list(applicable.preprocessing_ids),
-    }
-    if candidate.target == "callers":
-        applicability["required_callers"] = list(applicable.required_callers)
-    else:
-        applicability.update(
-            {
-                "aligner_name": applicable.aligner_name,
-                "aligner_version": applicable.aligner_version,
-                "aligner_arguments_sha256": applicable.aligner_arguments_sha256,
-                "primary_secondary_marking": applicable.primary_secondary_marking,
-                "counting_policy_sha256": applicable.counting_policy_sha256,
-            }
-        )
+    applicability = _applicability_document(candidate.applicability, candidate.target)
     return {
         "schema_version": "calibration-candidate-v2",
         "target": candidate.target,
         "candidate_id": candidate.candidate_id,
         **{field: getattr(candidate, field) for field in _DIGEST_FIELDS},
         "applicability": applicability,
-        "producer": {
-            "name": candidate.producer.name,
-            "version": candidate.producer.version,
-            "source_revision": candidate.producer.source_revision,
-            "tool_versions": dict(candidate.producer.tool_versions),
-            "feature_schema_sha256": candidate.producer.feature_schema_sha256,
-        },
+        "producer": _producer_document(candidate.producer),
         "status": candidate.status,
     }
 

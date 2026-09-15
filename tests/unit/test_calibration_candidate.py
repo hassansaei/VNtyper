@@ -82,6 +82,23 @@ def test_candidate_roundtrip_and_nested_immutability(target):
         decoded.producer.tool_versions["depth-tool"] = "2.0"
 
 
+def test_public_applicability_and_producer_helpers_preserve_candidate_contracts():
+    candidates = import_module("vntyper.scripts.calibration_candidate")
+    raw = candidate_document("length")
+    applicability = candidates.decode_candidate_applicability(raw["applicability"], target="length")
+    producer = candidates.decode_candidate_producer(raw["producer"])
+    assert candidates.candidate_applicability_document(applicability, target="length") == raw["applicability"]
+    assert candidates.candidate_producer_document(producer) == raw["producer"]
+
+    mutable = replace(producer, tool_versions=dict(producer.tool_versions))
+    with pytest.raises(ValueError, match="immutable"):
+        candidates.candidate_producer_document(mutable)
+    with pytest.raises(ValueError, match="applicability"):
+        candidates.candidate_applicability_document({}, target="length")
+    with pytest.raises(ValueError, match="target"):
+        candidates.decode_candidate_applicability(raw["applicability"], target=[])  # type: ignore[arg-type]
+
+
 def test_candidate_identity_changes_with_every_bound_input():
     candidates = import_module("vntyper.scripts.calibration_candidate")
     baseline = candidates.decode_candidate(candidate_document())
