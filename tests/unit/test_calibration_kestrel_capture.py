@@ -73,6 +73,16 @@ def test_capture_roundtrip_preserves_ordered_duplicate_raw_rows_and_distinct_com
         capture.sha256 = "2" * 64
 
 
+def test_capture_builder_normalizes_canonical_vcf_position_text() -> None:
+    frame = kestrel_stage_frame("raw")
+    frame["POS"] = frame["POS"].astype(str)
+
+    capture = _capture(frame)
+
+    assert type(capture.rows[0].position) is int
+    assert capture.rows[0].position == 67
+
+
 @pytest.mark.parametrize("stage", ["scored", "confidence", "flagged", "final", "named"])
 def test_final_or_derived_rows_refuse_capture(stage: str) -> None:
     with pytest.raises(ValueError, match="raw columns"):

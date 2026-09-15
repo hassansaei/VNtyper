@@ -187,6 +187,14 @@ def _position(value: object) -> int:
     return int(value)
 
 
+def _builder_position(value: object) -> int:
+    if isinstance(value, str):
+        if not value.isascii() or not value.isdecimal() or (len(value) > 1 and value.startswith("0")):
+            _fail("Kestrel capture POS must be a canonical positive integer")
+        value = int(value)
+    return _position(value)
+
+
 def _sample(value: object) -> str:
     sample = _text(value, "Sample")
     pieces = sample.split(":")
@@ -521,6 +529,7 @@ def build_kestrel_capture(
     rows = []
     for ordinal, record in enumerate(raw_frame[list(KESTREL_RAW_COLUMNS)].to_dict("records")):
         record["source_row_ordinal"] = ordinal
+        record["POS"] = _builder_position(record["POS"])
         _raw_row(record, ordinal)
         rows.append(record)
     motifs = motif_frame.to_dict("records")
