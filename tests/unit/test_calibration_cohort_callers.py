@@ -13,6 +13,26 @@ def sample(tmp_path, key="a", truth=True):
     return CohortSample(key, tmp_path / (key + ".bam"), "GRCh38", truth, None, "sample:" + key)
 
 
+@pytest.mark.parametrize("advntr_samples", [(), ("a",), ("a", "b")])
+def test_run_root_discovers_advntr_and_keeps_partial_roster_unavailable(tmp_path, advntr_samples):
+    from vntyper.scripts.calibration_cohort_callers import read_policy_arms
+
+    samples = (sample(tmp_path, "a"), sample(tmp_path, "b"))
+    for row in samples:
+        root = tmp_path / "runs" / row.sample_id
+        (root / "kestrel").mkdir(parents=True)
+        (root / "kestrel/kestrel_result.tsv").write_text("Confidence\nHigh_Precision\n")
+        if row.sample_id in advntr_samples:
+            (root / "advntr").mkdir()
+            (root / "advntr/output_adVNTR_result.tsv").write_text("VID\tState\n25561\tI1_2_C\n")
+    _baseline, arms, metadata = read_policy_arms(samples, None, tmp_path / "runs")
+    expected = ["kestrel", "advntr"] if advntr_samples else ["kestrel"]
+    assert metadata["baseline"]["required_callers"] == expected
+    assert [row.called_positive for row in arms["baseline"]] == [
+        True if not advntr_samples or row.sample_id in advntr_samples else None for row in samples
+    ]
+
+
 def test_native_final_positive_negative_and_missing_are_distinct(tmp_path):
     from vntyper.scripts.calibration_cohort_callers import read_native_observation
 

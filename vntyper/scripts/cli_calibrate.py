@@ -47,9 +47,15 @@ def handle_calibrate(
             logger.error(message)
             raise ValueError(message) from error
         return
-    target = getattr(args, "target", "dominance")
-    _target_arguments(args, parser, target, operation)
-    producer = OPERATIONS.get(operation) if target == "dominance" else TARGET_OPERATIONS.get((target, operation))
+    producer: Callable[[argparse.Namespace, Path], bool] | None
+    if operation == "cohort":
+        from vntyper.scripts.calibration_cohort import run_cohort_calibration
+
+        producer = run_cohort_calibration
+    else:
+        target = getattr(args, "target", "dominance")
+        _target_arguments(args, parser, target, operation)
+        producer = OPERATIONS.get(operation) if target == "dominance" else TARGET_OPERATIONS.get((target, operation))
     if producer is None:
         message = f"unsupported calibration operation: {operation!r}"
         logger.error(message)

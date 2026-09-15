@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ def _length_comparison(
     assignments = group_folds({sample.sample_id: sample.group_id for sample in eligible}, folds=folds, seed=seed)
     measured: dict[str, Any] = {}
     reasons: dict[str, list[str]] = {}
+    warnings: dict[str, list[str]] = {}
     for sample in eligible:
         try:
             measurement = read(sample.bam, reference, assembly=sample.assembly)
@@ -89,6 +91,7 @@ def _length_comparison(
                 if sample.sample_id in measured:
                     result = predict(measured[sample.sample_id], model)
                     predictions[sample.sample_id] = result.estimated_repeat_count
+                    warnings[sample.sample_id] = list(getattr(result, "warnings", ()))
                     if result.reasons:
                         reasons[sample.sample_id] = list(result.reasons)
         fold_records.append(record)
@@ -118,12 +121,15 @@ def _length_comparison(
         "metrics": metric,
         "folds": fold_records,
         "measurement_reasons": reasons,
+        "prediction_warning_counts": dict(Counter(code for codes in warnings.values() for code in codes)),
+        "predictions_with_warnings": sum(bool(codes) for codes in warnings.values()),
         "rows": [
             {
                 "sample_id": sample.sample_id,
                 "group_id": sample.group_id,
                 "truth": sample.length_total,
                 "prediction": predictions[sample.sample_id],
+                "prediction_warnings": warnings.get(sample.sample_id, []),
                 "training_mean_baseline": baseline[sample.sample_id],
                 "fold": assignments.get(sample.sample_id),
             }

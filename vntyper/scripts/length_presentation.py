@@ -154,6 +154,10 @@ def build_length_presentation(
     """
     if not isinstance(summary, Mapping) or not isinstance(report_config, Mapping):
         raise ValueError("length presentation inputs must be mappings")
+    if "length_model_source" in summary:
+        from vntyper.scripts.length_standard_presentation import build_standard_length_presentation
+
+        return build_standard_length_presentation(summary, report_config)
     configured = _configuration(report_config)
     if configured is None:
         return None

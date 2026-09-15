@@ -17,6 +17,24 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
     operations = calibrate.add_subparsers(dest="calibration_operation", required=True)
 
+    cohort = operations.add_parser("cohort", help="Compare and fit research models using optional cohort truth.")
+    cohort.add_argument("--manifest", type=Path, required=True, help="Local TSV with reads and optional truth labels.")
+    cohort.add_argument("--reference", type=Path, default=None, help="Indexed reference FASTA for length extraction.")
+    cohort.add_argument("--target", choices=["auto", "length", "callers", "both"], default="auto")
+    cohort.add_argument("--folds", type=int, default=5)
+    cohort.add_argument("--seed", type=int, default=20260915)
+    cohort.add_argument(
+        "--count-convention",
+        choices=["source-reported", "complete", "canonical-only"],
+        default="source-reported",
+        help="Convention of supplied allele counts; no implicit count conversion is applied.",
+    )
+    cohort.add_argument("--caller-runs", type=Path, default=None)
+    cohort.add_argument(
+        "--caller-policies", type=Path, default=None, help="Declared native caller policy outputs JSON."
+    )
+    cohort.add_argument("--output", type=Path, required=True)
+
     intake = operations.add_parser("intake", help="Audit and normalize declared local calibration inputs.")
     intake.add_argument("--manifest", type=Path, required=True)
     intake.add_argument("--output", type=Path, required=True)
@@ -79,6 +97,18 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
 
 def add_pipeline_calibration_arguments(parser: argparse.ArgumentParser) -> None:
     """Register explicit research measurement and approved runtime bundle inputs."""
+    parser.add_argument(
+        "--estimate-vntr-length",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Estimate diploid VNTR length with the packaged research model (configuration default).",
+    )
+    parser.add_argument(
+        "--standard-length-model",
+        type=Path,
+        default=None,
+        help="Locally fitted research length model JSON in place of the packaged standard model.",
+    )
     parser.add_argument(
         "--calibration-bundle",
         type=Path,

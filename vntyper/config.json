@@ -9,6 +9,9 @@
     "summary_file": "cohort_summary.html",
     "reference_assembly": "hg19"
   },
+  "length_estimation": {
+    "enabled": true
+  },
   "cli_defaults": {
     "log_level": "INFO",
     "log_file": "pipeline.log"

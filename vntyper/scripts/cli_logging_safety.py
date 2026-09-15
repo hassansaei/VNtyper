@@ -82,7 +82,7 @@ def _selected_bwa_reference(args: argparse.Namespace, config: dict[str, Any]) ->
 
 def _pipeline_operator_paths(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Path, ...]:
     paths: list[Path] = []
-    for attribute in ("fastq1", "fastq2", "bed_file"):
+    for attribute in ("fastq1", "fastq2", "bed_file", "standard_length_model"):
         value = getattr(args, attribute, None)
         if value is not None:
             paths.append(Path(value))

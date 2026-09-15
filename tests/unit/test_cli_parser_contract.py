@@ -107,6 +107,16 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "length_annotation": (("--length-annotation",), "_StoreAction", "Path", None, False, None, None),
         "length_context": (("--length-context",), "_StoreAction", "Path", None, False, None, None),
         "length_model": (("--length-model",), "_StoreAction", "Path", None, False, None, None),
+        "standard_length_model": (("--standard-length-model",), "_StoreAction", "Path", None, False, None, None),
+        "estimate_vntr_length": (
+            ("--estimate-vntr-length", "--no-estimate-vntr-length"),
+            "BooleanOptionalAction",
+            None,
+            None,
+            False,
+            None,
+            0,
+        ),
         "measure_vntr_length_features": (
             ("--measure-vntr-length-features",),
             "_StoreTrueAction",

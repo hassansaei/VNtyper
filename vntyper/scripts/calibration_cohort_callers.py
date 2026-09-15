@@ -145,9 +145,12 @@ def read_policy_arms(
         ValueError: For incomplete/duplicate inventories, invalid cutoffs or training claims.
     """
     if policies_path is None:
-        composition: tuple[str, ...] = (
-            ("kestrel", "advntr") if any(row.advntr_result for row in samples) else ("kestrel",)
+        has_advntr = any(
+            row.advntr_result is not None
+            or (caller_runs is not None and (caller_runs / row.sample_id / "advntr/output_adVNTR_result.tsv").is_file())
+            for row in samples
         )
+        composition: tuple[str, ...] = ("kestrel", "advntr") if has_advntr else ("kestrel",)
         composition = required_override or composition
         rows = []
         for sample in samples:

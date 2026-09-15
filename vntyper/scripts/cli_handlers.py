@@ -38,6 +38,7 @@ from vntyper.scripts.cli_lazy_imports import (
 from vntyper.scripts.cohort_pseudonyms import _mapping_at
 from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.pipeline_length import resolve_length_pipeline_configuration
+from vntyper.scripts.pipeline_standard_length import resolve_standard_length_configuration
 from vntyper.scripts.reference_registry import get_reference_source, physical_reference_id, reference_keys
 from vntyper.scripts.reference_resolution import ResolvedReference, resolve_from_mapping
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
@@ -331,8 +332,17 @@ def handle_pipeline(
         annotation_path=length_annotation_path,
         context_path=length_context_path,
     )
+    standard_model_path = getattr(args, "standard_length_model", None)
+    standard_configuration = resolve_standard_length_configuration(
+        config,
+        enabled=getattr(args, "estimate_vntr_length", None),
+        model_path=standard_model_path,
+        approved_enabled=length_configuration.measurement_enabled,
+    )
     length_operator_paths = tuple(
-        path for path in (length_model_path, length_annotation_path, length_context_path) if path is not None
+        path
+        for path in (length_model_path, length_annotation_path, length_context_path, standard_model_path)
+        if path is not None
     )
 
     if args.output_dir is None:
@@ -504,6 +514,7 @@ def handle_pipeline(
         run_configuration=getattr(args, "run_configuration", None),
         length_configuration=length_configuration,
         length_operator_paths=length_operator_paths,
+        standard_length_configuration=standard_configuration,
         resume=getattr(args, "resume", False),
     )
 

@@ -63,12 +63,12 @@ from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
-from vntyper.scripts.pipeline_length import (
-    LengthPipelineConfiguration,
-    encode_length_pipeline_configuration,
-    resolve_length_pipeline_configuration,
-)
 from vntyper.scripts.pipeline_length_execution import LengthMeasurementRunner, length_summary_fields
+from vntyper.scripts.pipeline_length_routing import (
+    build_length_consumer,
+    completed_length_summary,
+    validate_pipeline_length,
+)
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.pipeline_resume_planning import (
     build_analysis_settings,
@@ -79,6 +79,11 @@ from vntyper.scripts.pipeline_resume_planning import (
     resolve_effective_advntr_runtime,
     resolve_effective_kestrel_runtime,
     resolve_effective_shark_runtime,
+)
+from vntyper.scripts.pipeline_standard_length import (
+    StandardLengthConfiguration,
+    encode_standard_length_configuration,
+    resolve_standard_length_configuration,
 )
 from vntyper.scripts.profile_provenance import snapshot_decision_profile
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
@@ -223,6 +228,7 @@ def run_pipeline(
     run_configuration=None,
     length_configuration=None,
     length_operator_paths=(),
+    standard_length_configuration=None,
     resume=False,
 ):
     """
@@ -238,7 +244,7 @@ def run_pipeline(
         fastq2 (str, optional): Path to the second FASTQ file.
         bam (str, optional): Path to the BAM file.
         cram (str, optional): Path to the CRAM file.
-        reference_fasta (Path, optional): Explicit reference FASTA for CRAM decoding.
+        reference_fasta (Path, optional): Explicit FASTA for CRAM decoding or standard BAM length estimation.
         threads (int, optional): Number of threads to use. Default is 4.
         reference_assembly (str, optional): Reference assembly ("hg19" or "hg38").
         reference_key_used (str, optional): The `reference_data` config key that
@@ -275,6 +281,7 @@ def run_pipeline(
             before the run. Direct compatibility callers load the packaged profile.
         length_configuration: Immutable optional length measurement/model preflight.
         length_operator_paths: Exact operator-owned model, annotation, and context paths.
+        standard_length_configuration: Resolved packaged or locally fitted research model selection.
 
     Raises:
         ValueError: Various input validation errors.
@@ -285,20 +292,14 @@ def run_pipeline(
         run_configuration = resolve_run_configuration()
     elif not isinstance(run_configuration, RunConfiguration):
         raise ValueError("pipeline run_configuration must be a resolved RunConfiguration")
-    if length_configuration is None:
-        length_configuration = resolve_length_pipeline_configuration(
-            measurement_enabled=False,
-            model_path=None,
-            annotation_path=None,
-            context_path=None,
+    length_configuration = validate_pipeline_length(length_configuration, length_operator_paths)
+    if standard_length_configuration is None:
+        standard_length_configuration = resolve_standard_length_configuration(
+            config, enabled=None, model_path=None, approved_enabled=length_configuration.measurement_enabled
         )
-    elif not isinstance(length_configuration, LengthPipelineConfiguration):
-        raise ValueError("pipeline length_configuration must be resolved")
-    encode_length_pipeline_configuration(length_configuration)
-    if not isinstance(length_operator_paths, tuple) or any(
-        not isinstance(path, (str, Path)) for path in length_operator_paths
-    ):
-        raise ValueError("pipeline length_operator_paths must be a tuple of paths")
+    elif not isinstance(standard_length_configuration, StandardLengthConfiguration):
+        raise ValueError("pipeline standard_length_configuration must be resolved")
+    encode_standard_length_configuration(standard_length_configuration)
 
     if log_file is not None:
         early_advntr_preflight = plan_valid_advntr_preflight(
@@ -387,6 +388,8 @@ def run_pipeline(
         # an exact resume input and therefore invalidates incompatible prior work.
         if length_configuration.measurement_enabled:
             analysis_settings["length_configuration_sha256"] = length_configuration.sha256
+        elif standard_length_configuration.enabled:
+            analysis_settings["length_configuration_sha256"] = standard_length_configuration.sha256
         if run_configuration.caller_calibration is not None:
             analysis_settings.update(caller_calibration_identities(run_configuration.caller_calibration))
 
@@ -667,11 +670,10 @@ def run_pipeline(
         )
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
-        # What the run actually used, not what BWA was configured with (MAJOR 5,
-        # milestone-5 PR-2 review): a BAM run never reads a reference, and a CRAM run
-        # decodes against whatever `alignment_plan` resolved above, which can differ
-        # entirely from the configured BWA path. Only FASTQ's own BWA resolution is
-        # correct as recorded, so it passes through unchanged.
+        # Record alignment/decoding provenance. BAM decoding needs no reference;
+        # optional standard length measurement records its own locus digest below.
+        # CRAM uses the reference proved by the plan, which can differ from BWA's
+        # configured path. FASTQ retains the BWA reference used for alignment.
         reference_provenance = resolve_summary_reference_provenance(
             input_type=input_type,
             bwa_reference_key=reference_key_used,
@@ -1075,15 +1077,15 @@ def run_pipeline(
         if alignment_plan is None:
             raise RuntimeError("Alignment preflight did not produce a plan for coverage.")
         cov_start = datetime.now(timezone.utc).replace(tzinfo=None)
-        length_runner = (
-            LengthMeasurementRunner(
-                configuration=length_configuration,
-                bwa_reference=bwa_reference,
-                project_root=project_root,
-                samtools_path=config.get("tools", {}).get("samtools", "samtools"),
-            )
-            if length_configuration.measurement_enabled
-            else None
+        length_runner = build_length_consumer(
+            length_configuration,
+            standard_length_configuration,
+            assembly=reference_assembly,
+            reference=bwa_reference,
+            project_root=project_root,
+            samtools=config.get("tools", {}).get("samtools", "samtools"),
+            explicit_bam_reference=reference_fasta if input_type == "BAM" else None,
+            approved_factory=LengthMeasurementRunner,
         )
         vntr_region = calculate_alignment_coverage(
             plan=alignment_plan,
@@ -1097,7 +1099,9 @@ def run_pipeline(
             length_consumer=length_runner,
         )
         if length_runner is not None:
-            summary.update(length_summary_fields(length_configuration, length_runner.result))
+            summary.update(
+                completed_length_summary(length_configuration, length_runner, approved_projector=length_summary_fields)
+            )
         # The exact span the coverage stage consumed - resolved here and, until
         # #242, thrown away. The report could not otherwise state it: reading
         # `config["default_values"]["reference_assembly"]` back would mislabel any

@@ -6,6 +6,8 @@ include LICENSE
 include vntyper/config.json
 include vntyper/data/length/grch38-count-conversions-v2.json
 include vntyper/data/length/grch38-length-annotation-v1.json
+include vntyper/data/length/grch38-standard-length-model-v1.json
+include vntyper/data/length/grch38-standard-length-model-v1.json.sha256
 include vntyper/profiles/decision_profile.json
 include vntyper/profiles/decision_profile.sha256
 include vntyper/profiles/decision_projection.json
@@ -23,6 +25,7 @@ include vntyper/templates/igv_report_template.html
 include vntyper/templates/calibration_report.html
 include vntyper/templates/calibration_caller_report.html
 include vntyper/templates/calibration_length_report.html
+include vntyper/templates/calibration_cohort_report.html
 
 # Include the vendored igv.js and its provenance/licence notice. The report embeds
 # the gzip and prints its SHA-256; a distribution without it cannot render an

@@ -87,6 +87,35 @@ def test_mutation_only_needs_no_reference_and_never_opens_length_reads(tmp_path)
     assert not (output / "length-model.json").exists()
 
 
+def test_held_out_prediction_warnings_are_reported_without_excluding_predictions(tmp_path):
+    from vntyper.scripts import calibration_cohort as module
+
+    args, output = inputs(tmp_path, target="length")
+    warnings = ("feature_A_outside_training_range", "synthetic_<range>")
+    with patch.object(
+        module,
+        "_length_services",
+        return_value=(
+            lambda *args, **kwargs: SimpleNamespace(reasons=()),
+            lambda *args, **kwargs: {},
+            lambda *args, **kwargs: SimpleNamespace(estimated_repeat_count=40.0, reasons=(), warnings=warnings),
+            lambda model: model,
+            lambda measurement: (),
+        ),
+    ):
+        assert module.run_cohort_calibration(args, output)
+    result = json.loads((output / "metrics.json").read_text())["length"]
+    assert result["metrics"]["predicted"] == 8
+    assert result["measurement_reasons"] == {}
+    assert result["prediction_warning_counts"] == dict.fromkeys(warnings, 8)
+    assert all(row["prediction_warnings"] == list(warnings) and row["prediction"] == 40 for row in result["rows"])
+    report = (output / "report.html").read_text()
+    assert "feature_A_outside_training_range" in report
+    assert "synthetic_&lt;range&gt;" in report
+    assert "synthetic_<range>" not in report
+    assert "Predictions with warnings: 8" in report
+
+
 def test_length_target_requires_reference_before_feature_io(tmp_path):
     from vntyper.scripts import calibration_cohort as module
 

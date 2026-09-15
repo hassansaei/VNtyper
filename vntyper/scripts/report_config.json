@@ -829,5 +829,18 @@
       "A": "Core/invariant depth ratio (A)",
       "F": "Array/flank depth ratio (F)"
     }
+  },
+  "standard_length_estimation": {
+    "help": "Research-only estimate across both alleles; variant calls and screening conclusions are unchanged.",
+    "sources": {
+      "packaged-research": "Uses the packaged development model.",
+      "local-research": "Uses a locally fitted development model."
+    },
+    "count_conventions": {
+      "source-reported": "Predicts assay-reported repeat counts; inclusion of terminal invariant units is unspecified.",
+      "complete": "Predicts complete repeat counts including invariant units.",
+      "canonical-only": "Predicts canonical repeat counts excluding invariant units."
+    },
+    "extrapolation_help": "Some measurements are outside the model training range; the estimate involves extrapolation."
   }
 }

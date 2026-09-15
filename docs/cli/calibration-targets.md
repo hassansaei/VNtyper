@@ -3,8 +3,121 @@
 The explicit `callers` and `length` targets extend `vntyper calibrate` for issues
 [#269](https://github.com/hassansaei/VNtyper/issues/269) and
 [#332](https://github.com/hassansaei/VNtyper/issues/332). Omitting `--target` retains
-[dominance calibration](calibrate.md). A fit produces a research candidate. Runtime
-activation requires a separately approved portable bundle.
+[dominance calibration](calibrate.md) for the existing extract/fit/validate/evaluate
+operations. Strict caller-policy activation requires a separately approved portable
+bundle. Standard length estimation and development cohort comparisons are described below.
+
+## Standard pipeline length estimate
+
+The installed configuration enables a packaged research length model on compatible
+GRCh38 alignments. It measures the MUC1 locus during the pipeline's existing alignment
+lifetime, verifies the reference sequence, and records the estimate in the JSON and
+HTML report. It performs one indexed locus traversal; inference requires no additional
+variant caller or machine-learning runtime. For BAM input, `--reference-fasta` selects
+the measurement FASTA explicitly; otherwise the configured assembly reference is used.
+The FASTA must already have its `.fai` index; measurement never creates it implicitly.
+CRAM uses the reference proven for decoding. Unsupported assemblies, unavailable reference
+sequence, or insufficient denominator evidence produce an unavailable estimate with reasons.
+
+```bash
+vntyper pipeline --bam sample.bam --reference-assembly hg38 --output-dir result/
+vntyper pipeline --bam sample.bam --no-estimate-vntr-length --output-dir result/
+vntyper pipeline --bam sample.bam --reference-assembly hg38 \
+  --standard-length-model fitted/length-model.json --output-dir result/
+```
+
+`length_estimation.enabled` controls the configuration default. The explicit
+`--estimate-vntr-length` and `--no-estimate-vntr-length` options override it.
+An explicit approved `--length-model` or measurement-only request selects the strict
+path described later; conflicting explicit requests are rejected.
+
+The standard model uses Bayesian ridge regression fitted on 13 depth/read features:
+A, F, core zero-depth fraction, core depth variation, variation among eight core bins,
+core-half depth balance, invariant-end balance, flank-end balance, invariant depth,
+MAPQ-zero fraction, mean MAPQ, soft-clipped-read fraction, and whole-query GC fraction.
+Its scaler and regression are collapsed into an intercept and 13 coefficients stored
+in closed, checksummed JSON. Extrapolation is flagged; estimates are not clipped to a
+training maximum.
+
+The packaged model predicts **assay-reported total diploid repeat counts**. Its
+`source-reported` count convention does not assert whether the assay includes invariant
+terminal units. The report states that convention explicitly. Reference measurement
+geometry includes invariant units, which is distinct from the truth assay's counting
+convention. Standard length estimates remain research outputs and do not alter mutation
+calls, confidence assignments, or screening conclusions.
+
+## Development calibration with optional truth
+
+Install the training extra when fitting length models:
+
+```bash
+pip install 'vntyper[calibration]'
+vntyper calibrate cohort --manifest samples.tsv --reference reference.fa \
+  --target both --folds 5 --output comparison/
+vntyper calibrate cohort --manifest mutation-only.tsv --target callers \
+  --caller-runs pipeline-results/ --output mutation-comparison/
+```
+
+The local TSV requires `sample_id`, `bam`, and `assembly`. Optional columns are
+`genotype` (`positive`, `negative`, `unknown`, or empty), `allele_1`, `allele_2`,
+`group_id`, `kestrel_result`, and `advntr_result`. Paths are relative to the TSV.
+For example, one exact paired length and one mutation-only observation can coexist:
+
+```text
+sample_id	bam	assembly	allele_1	allele_2	genotype
+example-a	reads/a.bam	hg38	40	65	positive
+example-b	reads/b.bam	hg38			negative
+```
+
+Missing length truth leaves mutation eligibility intact. An incomplete allele pair is
+audited and excluded from diploid fitting. Missing mutation truth stays unknown.
+Duplicate alignment contributions are rejected. `group_id`, when supplied, describes
+biological relationships for leakage control; it is not a processing label or predictor.
+The default `--target auto` selects targets with available truth. A reference is needed
+only for length extraction. `--count-convention source-reported|complete|canonical-only`
+labels the supplied counts; this command performs no implicit terminal-unit conversion.
+
+Length output includes held-out MAE, RMSE, R², bias, availability, comparison against
+training-fold mean predictions, and a locally fitted research `length-model.json`.
+Fitting and scaling use only the training fold. `--folds` controls the number of folds;
+the default is five. Per-row extrapolation warnings remain visible without clipping or
+excluding estimates. Previously examined data remain exploratory regardless of fold count.
+
+Caller output reports unchanged native baseline calls and, when supplied through
+`--caller-policies`, a finite inventory of actual native outputs under alternative
+policies. Selection uses training groups only. Reports include held-out confusion counts,
+sensitivity, specificity, false positives, no-calls, per-caller results, paired differences,
+uncertainty, and descriptive cutoff/ROC operating points. Missing files are no-calls;
+absent truth classes have undefined rates. Baseline-only results cannot demonstrate a
+benefit from calibration. Native-positive union results are explicitly identified and
+are separate from screening conclusions.
+
+This command creates an offline `report.html`, `metrics.json`, checksums, and an optional
+research length model. It does not create validation authority or approve a caller bundle.
+
+### Supplying caller policy comparisons
+
+`--caller-runs` reads `<root>/<sample_id>/kestrel/kestrel_result.tsv` for the baseline.
+Explicit `kestrel_result` and `advntr_result` manifest columns take precedence. Declaring
+adVNTR results or finding a conventional `advntr/output_adVNTR_result.tsv` under any
+declared sample includes adVNTR in the required composition for the entire roster.
+A missing required caller remains a no-call even when the other caller is positive.
+
+For cutoff comparisons, pass `--caller-policies policies.json`. The closed JSON inventory
+contains `schema_version: "cohort-caller-policies-v1"`, a `baseline` policy ID,
+`required_callers` (`["kestrel"]` or `["kestrel", "advntr"]`),
+`training_scope: "fixed-before-cohort"`, and a nonempty `policies` list. Each policy has:
+
+- `policy_id`: a unique name;
+- `cutoff` and `comparison`: a finite cutoff and `<`, `<=`, `>`, or `>=`, or both `null`;
+- `samples`: the exact manifest sample roster, each mapped to `kestrel_result` and
+  `advntr_result` paths relative to the JSON file, with unavailable paths represented by `null`.
+
+These must be actual native outputs from policies fixed before this comparison. The
+command does not reconstruct excluded variants from final TSVs. Use complete captures
+and the strict caller workflow below to produce replayable evidence. A background model
+trained on this cohort cannot be labelled `fixed-before-cohort`; fit it inside each
+training fold or evaluate a model fixed on separate data.
 
 ## What each target estimates
 
@@ -17,7 +130,7 @@ Length estimation does not resolve two allele lengths, assign a mutation to an a
 or alter the genotype. Its fitted family is affine regression on either ratio, with
 an intercept and a training-only mean baseline. Physical A/F hypotheses are reserved
 in the protocol but currently remain fit-ineligible and cannot be loaded as runtime
-models. No fitted coefficients ship as a default model.
+models. This strict affine family is separate from the packaged 13-feature research model.
 
 Metadata describes applicability and supports separate confounding checks. Assay,
 processing labels, specimen identifiers, and source labels are not predictive features.

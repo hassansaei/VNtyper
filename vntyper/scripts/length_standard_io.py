@@ -51,14 +51,28 @@ def _contig(alignment: pysam.AlignmentFile) -> str:
     if len(sq) != 1:
         raise ValueError("standard length alignment sequence header differs")
     assembly = sq[0].get("AS")
-    if assembly is not None and assembly != STANDARD_ASSEMBLY:
+    if assembly is not None and (
+        not isinstance(assembly, str) or resolve_assembly_alias(assembly) != STANDARD_ASSEMBLY
+    ):
         raise ValueError("standard length alignment header assembly differs")
     return matches[0]
 
 
-def _reference_locus(reference_path: Path, contig: str) -> str:
+def _reference_indexes(reference_path: Path) -> tuple[Path, Path | None]:
+    fasta_index = _path(Path(f"{reference_path}.fai"), "reference index")
+    with reference_path.open("rb") as handle:
+        compressed = handle.read(2) == b"\x1f\x8b"
+    compressed_index = _path(Path(f"{reference_path}.gzi"), "compressed reference index") if compressed else None
+    return fasta_index, compressed_index
+
+
+def _reference_locus(reference_path: Path, contig: str, fasta_index: Path, compressed_index: Path | None) -> str:
     try:
-        with pysam.FastaFile(str(reference_path)) as reference:
+        with pysam.FastaFile(
+            str(reference_path),
+            filepath_index=str(fasta_index),
+            filepath_index_compressed=None if compressed_index is None else str(compressed_index),
+        ) as reference:
             candidates = tuple(name for name in STANDARD_ACCEPTED_CONTIGS if name in reference.references)
             reference_contig = contig if contig in candidates else candidates[0] if len(candidates) == 1 else None
             if reference_contig is None:
@@ -162,6 +176,7 @@ def read_standard_length_features(
         raise ValueError("standard length reader supports GRCh38 only")
     if index_path is not None:
         index_path = _path(index_path, "index")
+    fasta_index, compressed_index = _reference_indexes(reference_path)
     before = os.stat(input_path)
     reference_before = os.stat(reference_path)
     is_cram = _cram(input_path)
@@ -172,7 +187,12 @@ def read_standard_length_features(
         )
     try:
         # Validate the exact public reference sequence before opening alignment records.
-        reference_locus_sha256 = _reference_locus(reference_path, STANDARD_ACCEPTED_CONTIGS[0])
+        reference_locus_sha256 = _reference_locus(
+            reference_path,
+            STANDARD_ACCEPTED_CONTIGS[0],
+            fasta_index,
+            compressed_index,
+        )
         contig, depths, read_summary = _read(
             input_path,
             reference_path,
