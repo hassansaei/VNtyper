@@ -9,27 +9,64 @@ from fractions import Fraction
 
 from vntyper.scripts.calibration_caller_metrics import CallerObservation, validate_caller_observations
 
+# Each objective names the exact rate it maximizes; every rate is an exact Fraction.
+_OBJECTIVE_RATES: dict[str, str] = {
+    "max-sensitivity-at-specificity": "sensitivity",
+    "youden-j": "youden_j",
+    "max-f1": "f1",
+    "balanced-accuracy": "balanced_accuracy",
+    "sensitivity": "sensitivity",
+    "specificity": "specificity",
+}
+OBJECTIVES: tuple[str, ...] = tuple(_OBJECTIVE_RATES)
+
 
 @dataclass(frozen=True)
 class SearchSpec:
-    """An explicitly chosen development objective and optional rate constraints."""
+    """An explicitly chosen development objective and optional rate constraints.
 
-    objective: str = "balanced-accuracy"
+    The objective has no default: a calibration run must state which quantity it
+    optimizes, because the accepted objectives disagree about which candidate wins
+    and a silent default would hide that choice from the published decision.
+
+    F1 is deliberately not the default. For MUC1-VNTR calling the useful objective
+    is normally the maximum sensitivity that still holds specificity at a declared
+    floor (``max-sensitivity-at-specificity``), because a missed pathogenic variant
+    and a false positive are not interchangeable here. F1 and balanced accuracy are
+    single balanced scores: they silently trade sensitivity away for precision or
+    specificity at whatever exchange rate the counts happen to imply, so the run
+    never states how much sensitivity it gave up. They remain selectable for
+    comparison, but they must be asked for by name.
+
+    ``youden-j`` maximizes ``sensitivity + specificity - 1``. It ranks candidates
+    identically to ``balanced-accuracy`` (J = 2 * balanced accuracy - 1) and exists
+    because it is the conventional name for that operating-point choice.
+
+    Attributes:
+        objective: Required member of :data:`OBJECTIVES`.
+        min_sensitivity: Optional inclusive sensitivity floor in [0,1].
+        min_specificity: Optional inclusive specificity floor in [0,1]; required
+            when the objective is ``max-sensitivity-at-specificity``.
+
+    Raises:
+        ValueError: For an unsupported objective, malformed rate constraints, or a
+            ``max-sensitivity-at-specificity`` objective without ``min_specificity``.
+    """
+
+    objective: str
     min_sensitivity: float | None = None
     min_specificity: float | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.objective, str) or self.objective not in {
-            "balanced-accuracy",
-            "sensitivity",
-            "specificity",
-        }:
+        if not isinstance(self.objective, str) or self.objective not in _OBJECTIVE_RATES:
             raise ValueError("unsupported cutoff search objective")
         for value in (self.min_sensitivity, self.min_specificity):
             if value is not None and (
                 type(value) not in {int, float} or not 0 <= value <= 1 or not math.isfinite(value)
             ):
                 raise ValueError("cutoff search minimum rates must be finite fractions in [0,1]")
+        if self.objective == "max-sensitivity-at-specificity" and self.min_specificity is None:
+            raise ValueError("cutoff search objective max-sensitivity-at-specificity requires min_specificity")
 
 
 @dataclass(frozen=True)
@@ -109,6 +146,9 @@ def _rates(counts: CutoffCounts) -> dict[str, Fraction | None]:
         "balanced_accuracy": (sensitivity + specificity) / 2
         if sensitivity is not None and specificity is not None
         else None,
+        # Youden's J stays an exact Fraction: the float sum of two thirds minus one
+        # is not the float nearest to -1/3, which would reorder near-tied candidates.
+        "youden_j": sensitivity + specificity - 1 if sensitivity is not None and specificity is not None else None,
         "no_call_rate": _fraction(counts.no_calls, counts.eligible_count),
     }
 
@@ -120,8 +160,9 @@ def cutoff_counts_document(counts: CutoffCounts) -> dict[str, int | float | None
         counts: Counts computed from the supplied observation roster.
 
     Returns:
-        Counts plus sensitivity, specificity, FPR, precision, F1, balanced accuracy
-        and no-call rate. This fast representation contains no confidence bounds.
+        Counts plus sensitivity, specificity, FPR, precision, F1, balanced accuracy,
+        Youden's J and no-call rate. Youden's J is null when either component is
+        undefined. This fast representation contains no confidence bounds.
     """
     return {
         **asdict(counts),
@@ -148,10 +189,14 @@ def select_cutoff_policy(
         arms: Actual replay/native observation inventories keyed by candidate ID.
         training_keys: Unique keys allowed to contribute labels or calls to selection.
         baseline_id: Explicit unchanged policy inventory member.
-        spec: Objective and optional minimum sensitivity/specificity constraints.
+        spec: Explicit objective and optional minimum sensitivity/specificity
+            constraints. ``max-sensitivity-at-specificity`` maximizes sensitivity
+            among the candidates that satisfy its required ``min_specificity``
+            floor; candidates below the floor are dropped before ranking.
 
     Returns:
         Selection with exact training counts. Both known truth classes are required.
+        Every objective is compared as an exact Fraction over integer counts.
         Ties prefer fewer FP, more TP, fewer no-calls, baseline, then stable ID.
 
     Raises:
@@ -190,7 +235,7 @@ def select_cutoff_policy(
             spec.min_specificity is not None and specificity < Fraction(str(spec.min_specificity))
         ):
             continue
-        objective = rates[spec.objective.replace("-", "_")]
+        objective = rates[_OBJECTIVE_RATES[spec.objective]]
         assert objective is not None
         eligible.append(
             (

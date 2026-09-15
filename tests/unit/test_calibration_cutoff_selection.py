@@ -55,9 +55,17 @@ def test_constraints_exclude_ineligible_candidates_and_report_impossibility():
 
     arms = {"baseline": rows((True, False, False, False)), "sensitive": rows((True, True, True, False))}
     keys = ["0", "1", "2", "3"]
-    assert select_cutoff_policy(arms, keys, "baseline", SearchSpec(min_specificity=1)).policy_id == "baseline"
-    assert select_cutoff_policy(arms, keys, "baseline", SearchSpec(min_sensitivity=1)).policy_id == "sensitive"
-    result = select_cutoff_policy(arms, keys, "baseline", SearchSpec(min_sensitivity=1, min_specificity=1))
+    assert (
+        select_cutoff_policy(arms, keys, "baseline", SearchSpec("balanced-accuracy", min_specificity=1)).policy_id
+        == "baseline"
+    )
+    assert (
+        select_cutoff_policy(arms, keys, "baseline", SearchSpec("balanced-accuracy", min_sensitivity=1)).policy_id
+        == "sensitive"
+    )
+    result = select_cutoff_policy(
+        arms, keys, "baseline", SearchSpec("balanced-accuracy", min_sensitivity=1, min_specificity=1)
+    )
     assert result.policy_id is None and result.reason == "no-candidate-satisfies-constraints"
 
 
@@ -66,13 +74,26 @@ def test_ties_use_counts_then_baseline_then_stable_id():
 
     keys = ["0", "1", "2", "3"]
     a = rows((True, False, False, False))
-    assert select_cutoff_policy({"z": a, "baseline": a, "a": a}, keys, "baseline", SearchSpec()).policy_id == "baseline"
+    assert (
+        select_cutoff_policy(
+            {"z": a, "baseline": a, "a": a}, keys, "baseline", SearchSpec("balanced-accuracy")
+        ).policy_id
+        == "baseline"
+    )
     worse = rows((False, False, True, True))
-    assert select_cutoff_policy({"z": a, "baseline": worse, "a": a}, keys, "baseline", SearchSpec()).policy_id == "a"
+    assert (
+        select_cutoff_policy(
+            {"z": a, "baseline": worse, "a": a}, keys, "baseline", SearchSpec("balanced-accuracy")
+        ).policy_id
+        == "a"
+    )
     # Equal balanced accuracy, but fewer false positives precede more true positives.
     assert (
         select_cutoff_policy(
-            {"baseline": rows((True, True, True, False)), "specific": a}, keys, "baseline", SearchSpec()
+            {"baseline": rows((True, True, True, False)), "specific": a},
+            keys,
+            "baseline",
+            SearchSpec("balanced-accuracy"),
         ).policy_id
         == "specific"
     )
@@ -82,7 +103,7 @@ def test_selection_cannot_see_held_out_truth_or_calls():
     from vntyper.scripts.calibration_cutoff_selection import SearchSpec, select_cutoff_policy
 
     arms = {"baseline": rows((True, False, False, True)), "candidate": rows((True, True, False, False))}
-    first = select_cutoff_policy(arms, ["0", "2"], "baseline", SearchSpec())
+    first = select_cutoff_policy(arms, ["0", "2"], "baseline", SearchSpec("balanced-accuracy"))
     changed = {
         name: tuple(
             replace(r, truth_positive=None, truth_variants=None, called_positive=None) if r.key in {"1", "3"} else r
@@ -90,7 +111,7 @@ def test_selection_cannot_see_held_out_truth_or_calls():
         )
         for name, rr in arms.items()
     }
-    assert select_cutoff_policy(changed, ["0", "2"], "baseline", SearchSpec()) == first
+    assert select_cutoff_policy(changed, ["0", "2"], "baseline", SearchSpec("balanced-accuracy")) == first
     assert first.training_count == 2 and first.policy_id == "baseline"
 
 
@@ -98,7 +119,9 @@ def test_selection_cannot_see_held_out_truth_or_calls():
 def test_missing_training_truth_class_returns_no_selection(keys):
     from vntyper.scripts.calibration_cutoff_selection import SearchSpec, select_cutoff_policy
 
-    result = select_cutoff_policy({"baseline": rows((True, True, False, False))}, keys, "baseline", SearchSpec())
+    result = select_cutoff_policy(
+        {"baseline": rows((True, True, False, False))}, keys, "baseline", SearchSpec("balanced-accuracy")
+    )
     assert result.policy_id is None and result.reason == "training-truth-class-missing"
 
 
@@ -106,11 +129,12 @@ def test_missing_training_truth_class_returns_no_selection(keys):
     "kwargs",
     [
         {"objective": "auc"},
-        {"min_sensitivity": True},
-        {"min_sensitivity": -0.1},
-        {"min_specificity": 1.1},
-        {"min_specificity": float("nan")},
-        {"min_specificity": "0.5"},
+        {"objective": "f1"},
+        {"objective": "balanced-accuracy", "min_sensitivity": True},
+        {"objective": "balanced-accuracy", "min_sensitivity": -0.1},
+        {"objective": "balanced-accuracy", "min_specificity": 1.1},
+        {"objective": "balanced-accuracy", "min_specificity": float("nan")},
+        {"objective": "balanced-accuracy", "min_specificity": "0.5"},
     ],
 )
 def test_invalid_search_spec_is_refused(kwargs):
@@ -137,7 +161,7 @@ def test_training_roster_truth_and_baseline_must_bind():
     ]
     for arms, training in invalid:
         with pytest.raises(ValueError):
-            select_cutoff_policy(arms, training, "baseline", SearchSpec())
+            select_cutoff_policy(arms, training, "baseline", SearchSpec("balanced-accuracy"))
 
 
 def test_malformed_spec_types_and_huge_fraction_are_value_errors():
@@ -147,7 +171,7 @@ def test_malformed_spec_types_and_huge_fraction_are_value_errors():
         with pytest.raises(ValueError):
             SearchSpec(objective=objective)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
-        SearchSpec(min_sensitivity=10**400)
+        SearchSpec("balanced-accuracy", min_sensitivity=10**400)
     with pytest.raises(ValueError, match="typed"):
         select_cutoff_policy({"baseline": rows((True, True, False, False))}, ["0", "2"], "baseline", None)  # type: ignore[arg-type]
 
@@ -171,3 +195,85 @@ def test_unknown_truth_contributes_availability_but_not_class_rates():
     assert metrics["unknown_truth_count"] == 1 and metrics["eligible_count"] == 5
     assert metrics["sensitivity"] == metrics["specificity"] == 1
     assert metrics["no_call_rate"] == 0.2
+
+
+def test_objective_has_no_default_and_must_be_declared_explicitly():
+    from vntyper.scripts.calibration_cutoff_selection import OBJECTIVES, SearchSpec
+
+    with pytest.raises(TypeError):
+        SearchSpec()  # type: ignore[call-arg]
+    assert OBJECTIVES == (
+        "max-sensitivity-at-specificity",
+        "youden-j",
+        "max-f1",
+        "balanced-accuracy",
+        "sensitivity",
+        "specificity",
+    )
+    for objective in OBJECTIVES:
+        spec = SearchSpec(objective, min_specificity=0.5)
+        assert spec.objective == objective
+
+
+def test_max_sensitivity_at_specificity_requires_an_explicit_specificity_floor():
+    from vntyper.scripts.calibration_cutoff_selection import SearchSpec
+
+    with pytest.raises(ValueError, match="max-sensitivity-at-specificity.*min_specificity"):
+        SearchSpec("max-sensitivity-at-specificity")
+    with pytest.raises(ValueError, match="min_specificity"):
+        SearchSpec("max-sensitivity-at-specificity", min_sensitivity=0.9)
+    assert SearchSpec("max-sensitivity-at-specificity", min_specificity=0).min_specificity == 0
+
+
+def test_max_sensitivity_at_specificity_maximizes_sensitivity_within_the_constraint():
+    from vntyper.scripts.calibration_cutoff_selection import SearchSpec, select_cutoff_policy
+
+    keys = ["0", "1", "2", "3"]
+    arms = {
+        "baseline": rows((False, False, False, False)),
+        "greedy": rows((True, True, True, True)),
+        "best": rows((True, True, True, False)),
+        "mid": rows((True, False, False, False)),
+    }
+    spec = SearchSpec("max-sensitivity-at-specificity", min_specificity=0.5)
+    assert select_cutoff_policy(arms, keys, "baseline", spec).policy_id == "best"
+    strict = SearchSpec("max-sensitivity-at-specificity", min_specificity=1)
+    assert select_cutoff_policy(arms, keys, "baseline", strict).policy_id == "mid"
+
+
+def test_max_f1_and_balanced_accuracy_disagree_on_the_same_candidates():
+    from vntyper.scripts.calibration_cutoff_selection import SearchSpec, select_cutoff_policy
+
+    keys = ["0", "1", "2", "3"]
+    arms = {"baseline": rows((True, True, True, False)), "conservative": rows((True, False, False, False))}
+    # Both arms score balanced accuracy 3/4, so the tie-break takes the fewer false positives.
+    assert select_cutoff_policy(arms, keys, "baseline", SearchSpec("balanced-accuracy")).policy_id == "conservative"
+    assert select_cutoff_policy(arms, keys, "baseline", SearchSpec("max-f1")).policy_id == "baseline"
+
+
+def test_youden_j_is_reported_exactly_and_ranks_like_balanced_accuracy():
+    from vntyper.scripts.calibration_cutoff_selection import (
+        SearchSpec,
+        cutoff_counts,
+        cutoff_counts_document,
+        select_cutoff_policy,
+    )
+
+    thirds = rows((True, False, None, True, True, False), truth=(True, True, True, False, False, False))
+    document = cutoff_counts_document(cutoff_counts(thirds))
+    # Fraction(1, 3) + Fraction(1, 3) - 1 is exactly -1/3; the float sum is -0.33333333333333337.
+    assert document["sensitivity"] == document["specificity"] == 1 / 3
+    assert document["youden_j"] == -1 / 3
+    assert cutoff_counts_document(cutoff_counts(()))["youden_j"] is None
+
+    keys = ["0", "1", "2", "3"]
+    arms = {
+        "baseline": rows((False, False, False, False)),
+        "wide": rows((True, True, True, False)),
+        "narrow": rows((True, False, False, False)),
+    }
+    for objective in ("youden-j", "balanced-accuracy"):
+        assert select_cutoff_policy(arms, keys, "baseline", SearchSpec(objective)).policy_id == "narrow"
+    arms["wide"] = rows((True, True, False, False))
+    for objective in ("youden-j", "balanced-accuracy"):
+        assert select_cutoff_policy(arms, keys, "baseline", SearchSpec(objective)).policy_id == "wide"

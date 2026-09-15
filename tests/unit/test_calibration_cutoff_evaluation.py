@@ -22,7 +22,7 @@ def arms():
 def test_complete_evaluation_retains_actual_training_and_held_out_predictions():
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
-    result = evaluate_cutoff_arms(arms(), spec=SearchSpec(), folds=2, seed=7)
+    result = evaluate_cutoff_arms(arms(), spec=SearchSpec("balanced-accuracy"), folds=2, seed=7)
     assert result["status"] == "available" and result["cross_validation_available"]
     assert result["final_selection"]["policy_id"] == "candidate"
     assert result["baseline"]["counts"]["balanced_accuracy"] == 0.5
@@ -43,7 +43,7 @@ def test_mutating_held_out_truth_cannot_change_its_fold_selection():
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
     original = arms()
-    first = evaluate_cutoff_arms(original, spec=SearchSpec(), folds=2, seed=7)
+    first = evaluate_cutoff_arms(original, spec=SearchSpec("balanced-accuracy"), folds=2, seed=7)
     fold = first["folds"][0]
     held = set(fold["held_out_keys"])
     changed = {
@@ -52,7 +52,7 @@ def test_mutating_held_out_truth_cannot_change_its_fold_selection():
         )
         for name, values in original.items()
     }
-    second = evaluate_cutoff_arms(changed, spec=SearchSpec(), folds=2, seed=7)
+    second = evaluate_cutoff_arms(changed, spec=SearchSpec("balanced-accuracy"), folds=2, seed=7)
     assert second["folds"][0] == fold
     assert second["baseline"]["counts"]["unknown_truth_count"] == len(held)
 
@@ -61,7 +61,7 @@ def test_unknown_truth_and_no_calls_remain_in_roster_and_denominators():
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
     records = rows((True, None, False, None)) + (CallerObservation("x", "x", None, None, None, (), ()),)
-    result = evaluate_cutoff_arms({"baseline": records}, spec=SearchSpec(), folds=2, seed=7)
+    result = evaluate_cutoff_arms({"baseline": records}, spec=SearchSpec("balanced-accuracy"), folds=2, seed=7)
     assert len(result["rows"]) == 5
     counts = result["held_out"]["counts"]
     assert counts["eligible_count"] == 5 and counts["unknown_truth_count"] == 1
@@ -73,7 +73,7 @@ def test_unknown_truth_and_no_calls_remain_in_roster_and_denominators():
 def test_singleton_has_no_cv_and_no_exportable_selection():
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
-    result = evaluate_cutoff_arms({"baseline": rows((True,), (True,))}, spec=SearchSpec())
+    result = evaluate_cutoff_arms({"baseline": rows((True,), (True,))}, spec=SearchSpec("balanced-accuracy"))
     assert result["status"] == "unavailable"
     assert not result["cross_validation_available"]
     assert result["final_selection"]["policy_id"] is None
@@ -84,7 +84,9 @@ def test_singleton_has_no_cv_and_no_exportable_selection():
 def test_training_class_absence_explicitly_falls_back_to_baseline():
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
-    result = evaluate_cutoff_arms({"baseline": rows((True, False), (True, False))}, spec=SearchSpec(), folds=2)
+    result = evaluate_cutoff_arms(
+        {"baseline": rows((True, False), (True, False))}, spec=SearchSpec("balanced-accuracy"), folds=2
+    )
     assert result["final_selection"]["policy_id"] == "baseline"
     assert all(fold["fallback_reason"] == "training-truth-class-missing" for fold in result["folds"])
     assert all(row["selected_policy"] == "baseline" for row in result["rows"])
@@ -94,7 +96,7 @@ def test_unsatisfied_full_data_constraints_do_not_yield_a_selected_export():
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
     result = evaluate_cutoff_arms(
-        {"baseline": rows((True, False, True, False))}, spec=SearchSpec(min_specificity=1), folds=2
+        {"baseline": rows((True, False, True, False))}, spec=SearchSpec("balanced-accuracy", min_specificity=1), folds=2
     )
     assert result["status"] == "unavailable"
     assert result["final_selection"]["policy_id"] is None
@@ -125,7 +127,7 @@ def test_full_roster_and_truth_binding_precede_any_fold_selection(monkeypatch, m
 
     monkeypatch.setattr(module, "select_cutoff_policy", forbidden)
     with pytest.raises(ValueError):
-        module.evaluate_cutoff_arms(values, spec=SearchSpec())
+        module.evaluate_cutoff_arms(values, spec=SearchSpec("balanced-accuracy"))
 
 
 @pytest.mark.parametrize("values", [{}, {"other": rows((True, False), (True, False))}, {"baseline": ()}])
@@ -133,4 +135,4 @@ def test_missing_baseline_or_empty_population_is_refused(values):
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
     with pytest.raises(ValueError):
-        evaluate_cutoff_arms(values, spec=SearchSpec())
+        evaluate_cutoff_arms(values, spec=SearchSpec("balanced-accuracy"))
