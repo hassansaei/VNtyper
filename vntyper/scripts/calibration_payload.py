@@ -148,6 +148,8 @@ def decode_caller_bundle_descriptor(value: object) -> CallerBundleDescriptor:
     background = _optional_digest(components["background.json"])
     if ("advntr" in callers) != (advntr_policy is not None):
         _fail("advntr-policy.json digest must be present exactly when advntr is required")
+    if "advntr" not in callers and background is not None:
+        _fail("background.json requires an advntr caller policy")
     return CallerBundleDescriptor(callers, decision_profile, advntr_policy, background, canonical_sha256(value))
 
 

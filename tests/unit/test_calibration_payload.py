@@ -256,3 +256,10 @@ def test_kestrel_only_bundle_omits_advntr_policy_and_descriptor_boundary_revalid
     forged = replace(descriptor, sha256="f" * 64)
     with pytest.raises(ValueError, match="canonical"):
         payload.caller_bundle_descriptor_document(forged)
+
+
+def test_kestrel_only_bundle_cannot_carry_an_unused_background_model():
+    payload = import_module("vntyper.scripts.calibration_payload")
+    raw = caller_bundle_document(["kestrel"], advntr_digest=None, background_digest="c" * 64)
+    with pytest.raises(ValueError, match="background"):
+        payload.decode_caller_bundle_descriptor(raw)

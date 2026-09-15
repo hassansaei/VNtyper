@@ -296,8 +296,10 @@ def bound_candidate(target, manifest, *, callers=("advntr", "kestrel")):
     return candidates.decode_candidate(resign(raw))
 
 
-@pytest.mark.parametrize("callers", [("kestrel",), ("advntr", "kestrel")])
-@pytest.mark.parametrize("include_background", [False, True])
+@pytest.mark.parametrize(
+    "callers,include_background",
+    [(("kestrel",), False), (("advntr", "kestrel"), False), (("advntr", "kestrel"), True)],
+)
 def test_caller_payload_requires_matching_closed_descriptor_and_conditional_files(callers, include_background):
     candidates = import_module("vntyper.scripts.calibration_candidate")
     descriptor, manifest = caller_bundle_payload(callers, include_background=include_background)
