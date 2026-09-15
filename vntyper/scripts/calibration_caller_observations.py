@@ -231,7 +231,9 @@ def _flag_set(value: object) -> frozenset[str]:
     return frozenset(part.strip() for part in value.split(",") if part.strip())
 
 
-def _kestrel_reconciliation(capture: KestrelCapture, selected: Mapping[str, object]) -> IdentityReconciliationObservation:
+def _kestrel_reconciliation(
+    capture: KestrelCapture, selected: Mapping[str, object]
+) -> IdentityReconciliationObservation:
     persisted = parse_selected_candidate_cells(selected)
     motifs, position, reference, alternate = (
         selected.get("Motifs"),
@@ -327,7 +329,11 @@ def decode_advntr_baseline_calls(
             statistic, plan = visit.get("statistic"), visit.get("plan")
             if statistic is None:
                 continue
-            if not isinstance(statistic, Mapping) or not isinstance(plan, Mapping) or type(statistic.get("called")) is not bool:
+            if (
+                not isinstance(statistic, Mapping)
+                or not isinstance(plan, Mapping)
+                or type(statistic.get("called")) is not bool
+            ):
                 _fail("caller adVNTR capture decision receipt is invalid")
             if statistic["called"]:
                 calls.append(
@@ -359,8 +365,14 @@ def decode_advntr_replay_calls(
     policy = load_strict_json_object(policy_raw)
     output = load_strict_json_object(raw)
     output_fields = {
-        "schema_version", "manifest_file_sha256", "manifest_sha256", "policy_file_sha256", "policy_sha256",
-        "background_file_sha256", "replay_producer", "results",
+        "schema_version",
+        "manifest_file_sha256",
+        "manifest_sha256",
+        "policy_file_sha256",
+        "policy_sha256",
+        "background_file_sha256",
+        "replay_producer",
+        "results",
     }
     if set(output) != output_fields or output.get("schema_version") != "advntr-frameshift-replay-output-v1":
         _fail("caller adVNTR replay output fields differ")
@@ -378,13 +390,21 @@ def decode_advntr_replay_calls(
         _fail("caller adVNTR replay manifest must contain one exact member")
     capture = captures[0]
     capture_sha = hashlib.sha256(capture_raw).hexdigest()
-    if capture.get("key") != expected_key or capture.get("sha256") != capture_sha or capture.get("vntr_ids") != list(expected_vntr_ids):
+    if (
+        capture.get("key") != expected_key
+        or capture.get("sha256") != capture_sha
+        or capture.get("vntr_ids") != list(expected_vntr_ids)
+    ):
         _fail("caller adVNTR replay manifest differs from the member capture")
     results = output.get("results")
     if not isinstance(results, list) or len(results) != 1 or not isinstance(results[0], Mapping):
         _fail("caller adVNTR replay must contain one exact member result")
     result = results[0]
-    if set(result) != {"key", "capture_sha256", "vntrs"} or result.get("key") != expected_key or result.get("capture_sha256") != capture_sha:
+    if (
+        set(result) != {"key", "capture_sha256", "vntrs"}
+        or result.get("key") != expected_key
+        or result.get("capture_sha256") != capture_sha
+    ):
         _fail("caller adVNTR replay result capture binding differs")
     vntrs = result.get("vntrs")
     if not isinstance(vntrs, list):
@@ -393,8 +413,17 @@ def decode_advntr_replay_calls(
     assessable = True
     seen: list[int] = []
     locus_fields = {
-        "schema_version", "vntr_id", "capture_record_sha256", "policy_sha256", "capture_producer",
-        "capture_assets", "loaded_background_sha256", "baseline_parity", "decision_visits", "calls", "warnings",
+        "schema_version",
+        "vntr_id",
+        "capture_record_sha256",
+        "policy_sha256",
+        "capture_producer",
+        "capture_assets",
+        "loaded_background_sha256",
+        "baseline_parity",
+        "decision_visits",
+        "calls",
+        "warnings",
         "capture_audit",
     }
     for index, row in enumerate(vntrs):
@@ -414,7 +443,10 @@ def decode_advntr_replay_calls(
         ):
             _fail("caller adVNTR replay locus identity or baseline binding differs")
         audit = locus.get("capture_audit")
-        if not isinstance(audit, Mapping) or set(audit) != {"attribution_outside_trials", "calibrated_policy_domain_errors"}:
+        if not isinstance(audit, Mapping) or set(audit) != {
+            "attribution_outside_trials",
+            "calibrated_policy_domain_errors",
+        }:
             _fail("caller adVNTR replay audit fields differ")
         for entries in audit.values():
             if not isinstance(entries, list) or any(not isinstance(item, str) for item in entries):

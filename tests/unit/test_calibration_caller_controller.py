@@ -39,8 +39,13 @@ def test_role_evidence_binding_recomputes_digest_for_actual_assets() -> None:
     source = _evidence()
 
     bound = module.bind_caller_role_evidence(
-        "validation", "1" * 64, source.eligible_roster_sha256, "2" * 64,
-        "3" * 64, source.policies, source.replay_equivalence,
+        "validation",
+        "1" * 64,
+        source.eligible_roster_sha256,
+        "2" * 64,
+        "3" * 64,
+        source.policies,
+        source.replay_equivalence,
     )
 
     assert bound.phase == "validation"
@@ -118,9 +123,7 @@ def test_payload_freezes_selected_profile_runtime_policy_and_portable_background
             {
                 "advntr_model": TargetRunAsset(tmp_path / "model", "4" * 64, 1),
                 "advntr_background": TargetRunAsset(path, hashlib.sha256(raw).hexdigest(), len(raw)),
-                "advntr_capture": TargetRunAsset(
-                    capture_path, hashlib.sha256(b"capture").hexdigest(), len(b"capture")
-                ),
+                "advntr_capture": TargetRunAsset(capture_path, hashlib.sha256(b"capture").hexdigest(), len(b"capture")),
             }
         ),
         (17,),
@@ -128,7 +131,16 @@ def test_payload_freezes_selected_profile_runtime_policy_and_portable_background
     source = type("Source", (), {"sha256": "5" * 64})()
     fitted = type("Background", (), {"background_bytes": raw, "background_sha256": hashlib.sha256(raw).hexdigest()})()
 
-    with patch("vntyper.scripts.calibration_caller_profile_io._capture_records", return_value=({"capture_policy": capture_policy(), "producer": {"package_version": "2.4.1", "build_id": "b" * 64, "source_revision": "c" * 40}, "assets": {"model_sha256": "4" * 64}},)):
+    with patch(
+        "vntyper.scripts.calibration_caller_profile_io._capture_records",
+        return_value=(
+            {
+                "capture_policy": capture_policy(),
+                "producer": {"package_version": "2.4.1", "build_id": "b" * 64, "source_revision": "c" * 40},
+                "assets": {"model_sha256": "4" * 64},
+            },
+        ),
+    ):
         manifest, descriptor, files, profile = module._payload(study, policy, source, (run,), fitted)
 
     assert descriptor.required_callers == ("advntr", "kestrel")
@@ -154,23 +166,41 @@ def test_payload_rejects_unprojected_background_before_candidate_freeze(tmp_path
     capture_path = tmp_path / "capture.jsonl"
     capture_path.write_bytes(b"capture")
     run = TargetRun(
-        "artifact-1", policy.sha256, "1" * 64, "2" * 64, study.baseline.assets_sha256, "3" * 64,
-        "scalar-replay", 0,
-        MappingProxyType({
-            "advntr_model": TargetRunAsset(tmp_path / "model", "4" * 64, 1),
-            "advntr_background": TargetRunAsset(path, hashlib.sha256(raw).hexdigest(), len(raw)),
-            "advntr_capture": TargetRunAsset(
-                capture_path, hashlib.sha256(b"capture").hexdigest(), len(b"capture")
-            ),
-        }),
+        "artifact-1",
+        policy.sha256,
+        "1" * 64,
+        "2" * 64,
+        study.baseline.assets_sha256,
+        "3" * 64,
+        "scalar-replay",
+        0,
+        MappingProxyType(
+            {
+                "advntr_model": TargetRunAsset(tmp_path / "model", "4" * 64, 1),
+                "advntr_background": TargetRunAsset(path, hashlib.sha256(raw).hexdigest(), len(raw)),
+                "advntr_capture": TargetRunAsset(capture_path, hashlib.sha256(b"capture").hexdigest(), len(b"capture")),
+            }
+        ),
         (17,),
     )
     with (
-        patch("vntyper.scripts.calibration_caller_profile_io._capture_records", return_value=({"capture_policy": capture_policy(), "producer": {"package_version": "2.4.1", "build_id": "b" * 64, "source_revision": "c" * 40}, "assets": {"model_sha256": "4" * 64}},)),
+        patch(
+            "vntyper.scripts.calibration_caller_profile_io._capture_records",
+            return_value=(
+                {
+                    "capture_policy": capture_policy(),
+                    "producer": {"package_version": "2.4.1", "build_id": "b" * 64, "source_revision": "c" * 40},
+                    "assets": {"model_sha256": "4" * 64},
+                },
+            ),
+        ),
         pytest.raises(ValueError, match="portable"),
     ):
         module._payload(
-            study, policy, type("Source", (), {"sha256": "5" * 64})(), (run,),
+            study,
+            policy,
+            type("Source", (), {"sha256": "5" * 64})(),
+            (run,),
             type("Background", (), {"background_bytes": raw, "background_sha256": hashlib.sha256(raw).hexdigest()})(),
         )
 
@@ -209,7 +239,9 @@ def test_failed_selection_is_a_complete_reported_outcome(tmp_path: Path) -> None
     output = tmp_path / "output"
     output.mkdir()
     args = Namespace(
-        evidence=tmp_path / "evidence", exposure_ledger=tmp_path / "ledger", objective="caller-safety-v1",
+        evidence=tmp_path / "evidence",
+        exposure_ledger=tmp_path / "ledger",
+        objective="caller-safety-v1",
         advntr_executable=tmp_path / "advntr",
     )
     with (
@@ -220,7 +252,8 @@ def test_failed_selection_is_a_complete_reported_outcome(tmp_path: Path) -> None
         patch.object(module, "_expose", return_value=object()),
         patch.object(module, "load_caller_source_evidence", return_value=object()),
         patch.object(
-            module, "fit_caller_training_background",
+            module,
+            "fit_caller_training_background",
             return_value=type("Background", (), {"training_evidence_sha256": "a" * 64})(),
         ),
         patch.object(module, "_require_training_background_arms"),
@@ -244,9 +277,13 @@ def test_failed_selection_is_a_complete_reported_outcome(tmp_path: Path) -> None
 def test_public_commands_require_path_arguments(tmp_path: Path) -> None:
     module = import_module("vntyper.scripts.calibration_caller_controller")
     with pytest.raises(ValueError, match="Path evidence"):
-        module.fit_caller_bundle(Namespace(evidence="bad", exposure_ledger=tmp_path, objective="caller-safety-v1"), tmp_path)
+        module.fit_caller_bundle(
+            Namespace(evidence="bad", exposure_ledger=tmp_path, objective="caller-safety-v1"), tmp_path
+        )
     with pytest.raises(ValueError, match="Path profile"):
-        module.assess_caller_bundle(Namespace(profile="bad", intake=tmp_path, runs=tmp_path, exposure_ledger=tmp_path), tmp_path)
+        module.assess_caller_bundle(
+            Namespace(profile="bad", intake=tmp_path, runs=tmp_path, exposure_ledger=tmp_path), tmp_path
+        )
 
 
 def test_profile_loader_rejects_incomplete_and_symlink_directories(tmp_path: Path) -> None:
@@ -295,34 +332,52 @@ def test_fixed_evaluation_rejects_native_assets_outside_selected_bundle(tmp_path
     capture_path = tmp_path / "capture.jsonl"
     capture_path.write_bytes(b"capture")
     run = TargetRun(
-        "artifact-1", policy.sha256, "1" * 64, "2" * 64, study.baseline.assets_sha256, "3" * 64,
-        "scalar-replay", 0,
-        MappingProxyType({
-            "advntr_model": TargetRunAsset(tmp_path / "model", "4" * 64, 1),
-            "advntr_background": TargetRunAsset(
-                background_path, hashlib.sha256(background_raw).hexdigest(), len(background_raw)
-            ),
-            "advntr_capture": TargetRunAsset(
-                capture_path, hashlib.sha256(b"capture").hexdigest(), len(b"capture")
-            ),
-        }),
+        "artifact-1",
+        policy.sha256,
+        "1" * 64,
+        "2" * 64,
+        study.baseline.assets_sha256,
+        "3" * 64,
+        "scalar-replay",
+        0,
+        MappingProxyType(
+            {
+                "advntr_model": TargetRunAsset(tmp_path / "model", "4" * 64, 1),
+                "advntr_background": TargetRunAsset(
+                    background_path, hashlib.sha256(background_raw).hexdigest(), len(background_raw)
+                ),
+                "advntr_capture": TargetRunAsset(capture_path, hashlib.sha256(b"capture").hexdigest(), len(b"capture")),
+            }
+        ),
         (17,),
     )
-    with patch("vntyper.scripts.calibration_caller_profile_io._capture_records", return_value=({"capture_policy": capture_policy(), "producer": {"package_version": "2.4.1", "build_id": "b" * 64, "source_revision": "c" * 40}, "assets": {"model_sha256": "4" * 64}},)):
+    with patch(
+        "vntyper.scripts.calibration_caller_profile_io._capture_records",
+        return_value=(
+            {
+                "capture_policy": capture_policy(),
+                "producer": {"package_version": "2.4.1", "build_id": "b" * 64, "source_revision": "c" * 40},
+                "assets": {"model_sha256": "4" * 64},
+            },
+        ),
+    ):
         fitted = type(
-            "Background", (),
+            "Background",
+            (),
             {"background_bytes": background_raw, "background_sha256": hashlib.sha256(background_raw).hexdigest()},
         )()
-        _, _, files, _ = module._payload(
-            study, policy, type("Source", (), {"sha256": "5" * 64})(), (run,), fitted
-        )
+        _, _, files, _ = module._payload(study, policy, type("Source", (), {"sha256": "5" * 64})(), (run,), fitted)
     profile = type(
-        "Profile", (),
+        "Profile",
+        (),
         {"study": study, "selected_protocol_candidate_id": policy.sha256, "payload_files": files},
     )()
-    changed = replace(run, assets=MappingProxyType({**run.assets, "advntr_model": replace(run.assets["advntr_model"], sha256="f" * 64)}))
+    changed = replace(
+        run,
+        assets=MappingProxyType({**run.assets, "advntr_model": replace(run.assets["advntr_model"], sha256="f" * 64)}),
+    )
     with (
-        patch.object(module, "select_target_runs", return_value=(changed,)),
+        patch("vntyper.scripts.calibration_caller_profile_io.select_target_runs", return_value=(changed,)),
         pytest.raises(ValueError, match="run assets"),
     ):
         module._require_profile_run_bindings(profile, object(), ("artifact-1",))

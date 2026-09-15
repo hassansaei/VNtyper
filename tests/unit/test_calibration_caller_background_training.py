@@ -27,8 +27,11 @@ def test_staging_includes_known_controls_and_cases_but_explicitly_excludes_unkno
     source = type(
         "Source",
         (),
-        {"keys": tuple(member.key for member in members), "roster": type("R", (), {"members": members})(),
-         "truth_asset": object()},
+        {
+            "keys": tuple(member.key for member in members),
+            "roster": type("R", (), {"members": members})(),
+            "truth_asset": object(),
+        },
     )()
     rows = (
         CallerTruthRow("negative-key", "negative", ()),
@@ -38,15 +41,21 @@ def test_staging_includes_known_controls_and_cases_but_explicitly_excludes_unkno
     truth = CallerTruth(rows, MappingProxyType({row.key: row for row in rows}), "1" * 64)
     runs = tuple(
         type(
-            "Run", (),
-            {"manifest_key": member.key, "vntr_ids": (17,), "capture_policy_sha256": "c" * 64,
-             "assets": {"advntr_capture": object(), "advntr_model": type("A", (), {"sha256": "d" * 64})()}},
+            "Run",
+            (),
+            {
+                "manifest_key": member.key,
+                "vntr_ids": (17,),
+                "capture_policy_sha256": "c" * 64,
+                "assets": {"advntr_capture": object(), "advntr_model": type("A", (), {"sha256": "d" * 64})()},
+            },
         )()
         for member in members
     )
     record = {
         "producer": {"package_version": "2.4.1", "build_id": "b" * 64, "source_revision": "a" * 40},
-        "assets": {"model_sha256": "d" * 64}, "capture_policy": {},
+        "assets": {"model_sha256": "d" * 64},
+        "capture_policy": {},
     }
     with (
         patch.object(module, "decode_caller_truth", return_value=truth),
@@ -94,8 +103,12 @@ def test_native_fit_is_portable_projected_and_bound_to_training_receipt(tmp_path
             module,
             "_stage_training",
             return_value=(
-                output / "capture/labels.json", output / "capture/policy.json",
-                ("negative",), ("positive",), ("unknown",), AdvntrToolPin("2.4.1", "b" * 64, "a" * 40),
+                output / "capture/labels.json",
+                output / "capture/policy.json",
+                ("negative",),
+                ("positive",),
+                ("unknown",),
+                AdvntrToolPin("2.4.1", "b" * 64, "a" * 40),
             ),
         ),
         patch.object(module, "fit_background", side_effect=native_fit),
@@ -124,7 +137,11 @@ def test_failed_native_fit_cleans_private_staging(tmp_path: Path) -> None:
         pytest.raises(RuntimeError, match="failed fit"),
     ):
         module.fit_caller_training_background(
-            study, type("Runs", (), {})(), type("Source", (), {})(), type("Receipt", (), {})(),
-            argv_prefix=("advntr",), output=output,
+            study,
+            type("Runs", (), {})(),
+            type("Source", (), {})(),
+            type("Receipt", (), {})(),
+            argv_prefix=("advntr",),
+            output=output,
         )
     assert not output.exists()

@@ -45,7 +45,7 @@ from vntyper.scripts.calibration_role_source import RoleSource, decode_role_sour
 from vntyper.scripts.calibration_secure_io import read_regular_path
 from vntyper.scripts.calibration_target_asset_io import read_target_asset, read_target_json
 from vntyper.scripts.calibration_target_contract import CallerBaselinePlan, TargetStudy, decode_target_study
-from vntyper.scripts.calibration_target_runs import TargetRun, decode_target_runs, select_target_runs
+from vntyper.scripts.calibration_target_runs import TargetRun, TargetRuns, decode_target_runs, select_target_runs
 from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256, load_strict_json_object
 from vntyper.scripts.decision_profile import (
     ResolvedDecisionProfile,
@@ -71,8 +71,17 @@ class CallerResearchProfile:
 
 
 _RESEARCH_FILES = {
-    "candidate.json", "checksums.json", "evaluation.json", "payload", "payload-manifest.json", "report.html",
-    "runs.json", "selection-evidence.json", "selection-roster.json", "selection-source.json", "study.json",
+    "candidate.json",
+    "checksums.json",
+    "evaluation.json",
+    "payload",
+    "payload-manifest.json",
+    "report.html",
+    "runs.json",
+    "selection-evidence.json",
+    "selection-roster.json",
+    "selection-source.json",
+    "study.json",
     "training-source.json",
 }
 
@@ -177,7 +186,9 @@ def build_caller_payload(
             "required_callers": list(selected_policy.required_callers),
             "components": {
                 "decision-profile.json": hashlib.sha256(files["decision-profile.json"]).hexdigest(),
-                "advntr-policy.json": None if "advntr-policy.json" not in files else hashlib.sha256(files["advntr-policy.json"]).hexdigest(),
+                "advntr-policy.json": None
+                if "advntr-policy.json" not in files
+                else hashlib.sha256(files["advntr-policy.json"]).hexdigest(),
                 "background.json": background_sha,
             },
         }
@@ -185,10 +196,36 @@ def build_caller_payload(
     files["caller-bundle.json"] = canonical_json_bytes(caller_bundle_descriptor_document(descriptor))
     ordered = MappingProxyType({name: files[name] for name in sorted(files)})
     manifest = decode_payload_manifest(
-        [{"path": name, "size_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()} for name, raw in ordered.items()]
+        [
+            {"path": name, "size_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+            for name, raw in ordered.items()
+        ]
     )
     return manifest, descriptor, ordered, profile
 
+
+def _require_profile_run_bindings(
+    profile: CallerResearchProfile,
+    runs: TargetRuns,
+    keys: tuple[str, ...],
+) -> None:
+    """Require fixed-role native assets to equal the selected payload commitments."""
+    policy = next(
+        item.policy
+        for item in cast(CallerProtocol, profile.study.protocol).candidates
+        if item.candidate_id == profile.selected_protocol_candidate_id
+    )
+    if "advntr" not in policy.required_callers:
+        return
+    runtime = decode_advntr_runtime_policy(load_strict_json_object(profile.payload_files["advntr-policy.json"]))
+    for run in select_target_runs(runs, keys, (policy.sha256,)):
+        background = run.assets.get("advntr_background")
+        if (
+            run.assets["advntr_model"].sha256 != runtime.model_sha256
+            or run.capture_policy_sha256 != runtime.capture_policy_sha256
+            or (None if background is None else background.sha256) != runtime.background_sha256
+        ):
+            _fail("fixed caller run assets differ from the selected runtime bundle")
 
 
 def load_caller_research_profile(profile_dir: Path) -> CallerResearchProfile:
@@ -205,30 +242,37 @@ def load_caller_research_profile(profile_dir: Path) -> CallerResearchProfile:
         _fail("caller research profile requires a caller study")
     protocol = cast(CallerProtocol, study.protocol)
     needs_background = any(
-        "advntr" in policy.required_callers
-        and policy.values["/components/advntr/calibrated_calling/mode"] == "exact"
+        "advntr" in policy.required_callers and policy.values["/components/advntr/calibrated_calling/mode"] == "exact"
         for policy in (protocol.baseline_policy, *(item.policy for item in protocol.candidates))
     )
     if needs_background != ("training-background" in inventory):
         _fail("caller research profile training-background inventory differs from its protocol")
     selection_source = decode_role_source(
         load_object(profile_dir / "selection-source.json", "caller selection source"),
-        study=study, runs=runs, expected_role="policy-selection",
+        study=study,
+        runs=runs,
+        expected_role="policy-selection",
     )
     training_source = decode_role_source(
         load_object(profile_dir / "training-source.json", "caller training source"),
-        study=study, runs=runs, expected_role="training",
+        study=study,
+        runs=runs,
+        expected_role="training",
     )
     roster = cast(CallerEligibleRoster, selection_source.roster)
     stored_roster = decode_caller_eligible_roster(
         _checked_local_json(profile_dir / "selection-roster.json", "caller selection roster")
     )
-    if stored_roster != roster or caller_eligible_roster_document(stored_roster) != caller_eligible_roster_document(roster):
+    if stored_roster != roster or caller_eligible_roster_document(stored_roster) != caller_eligible_roster_document(
+        roster
+    ):
         _fail("caller selection roster differs from its role source")
     evidence = decode_caller_role_evidence(load_object(profile_dir / "selection-evidence.json", "caller evidence"))
     evaluation = decode_caller_evaluation(
         load_object(profile_dir / "evaluation.json", "caller evaluation"),
-        protocol=protocol, roster=roster, evidence=evidence,
+        protocol=protocol,
+        roster=roster,
+        evidence=evidence,
     )
     selected = evaluation.selection.selected_candidate_id
     if evaluation.selection.status != "selected" or selected is None:
@@ -313,8 +357,10 @@ def load_caller_research_profile(profile_dir: Path) -> CallerResearchProfile:
     ):
         _fail("caller payload differs from its selected native run evidence")
     expected_profile = build_caller_generated_profile(
-        policy, dataset_manifest_hash=selection_source.sha256,
-        partition_manifest_hash=study.partitions.sha256, seed=protocol.seed,
+        policy,
+        dataset_manifest_hash=selection_source.sha256,
+        partition_manifest_hash=study.partitions.sha256,
+        seed=protocol.seed,
         generator_version=study.baseline.producer.version,
     )
     if payload_files["decision-profile.json"] != expected_profile.canonical_bytes:
@@ -327,7 +373,8 @@ def load_caller_research_profile(profile_dir: Path) -> CallerResearchProfile:
     if "advntr" in policy.required_callers:
         runtime = decode_advntr_runtime_policy(load_strict_json_object(payload_files["advntr-policy.json"]))
         validate_advntr_runtime_policy(
-            runtime, policy,
+            runtime,
+            policy,
             background_raw_sha256=None if background_raw is None else hashlib.sha256(background_raw).hexdigest(),
         )
     if (
@@ -341,8 +388,13 @@ def load_caller_research_profile(profile_dir: Path) -> CallerResearchProfile:
     ):
         _fail("caller research candidate, policy, profile, or study bindings differ")
     projection = canonical_sha256(
-        {"schema_version": "caller-research-profile-projection-v1", "candidate_sha256": candidate.sha256,
-         "study_sha256": study.sha256, "selected_protocol_candidate_id": selected,
-         "payload_sha256": manifest.sha256, "selection_evidence_sha256": evaluation.sha256}
+        {
+            "schema_version": "caller-research-profile-projection-v1",
+            "candidate_sha256": candidate.sha256,
+            "study_sha256": study.sha256,
+            "selected_protocol_candidate_id": selected,
+            "payload_sha256": manifest.sha256,
+            "selection_evidence_sha256": evaluation.sha256,
+        }
     )
     return CallerResearchProfile(candidate, study, selected, manifest, payload_files, decision, descriptor, projection)

@@ -75,7 +75,9 @@ def training_background_document(result: TrainingBackground) -> dict[str, object
     """Project a training-background receipt after revalidating bytes and digests."""
     if not isinstance(result, TrainingBackground):
         _fail("caller training background projection requires TrainingBackground")
-    decoded = decode_training_background_document({**_payload(result), "sha256": result.sha256}, result.background_bytes)
+    decoded = decode_training_background_document(
+        {**_payload(result), "sha256": result.sha256}, result.background_bytes
+    )
     if decoded != result:
         _fail("caller training background receipt differs from its canonical content")
     return {**_payload(result), "sha256": result.sha256}
@@ -84,13 +86,30 @@ def training_background_document(result: TrainingBackground) -> dict[str, object
 def decode_training_background_document(value: object, background_bytes: bytes) -> TrainingBackground:
     """Decode a training receipt against the exact portable background bytes."""
     fields = {
-        "schema_version", "study_sha256", "run_manifest_sha256", "source_sha256", "exposure_receipt_sha256",
-        "negative_keys", "diagnostic_positive_keys", "excluded_unknown_keys", "background_sha256",
-        "diagnostic_policy_sha256", "fitter_artifact_sha256", "training_evidence_sha256", "sha256",
+        "schema_version",
+        "study_sha256",
+        "run_manifest_sha256",
+        "source_sha256",
+        "exposure_receipt_sha256",
+        "negative_keys",
+        "diagnostic_positive_keys",
+        "excluded_unknown_keys",
+        "background_sha256",
+        "diagnostic_policy_sha256",
+        "fitter_artifact_sha256",
+        "training_evidence_sha256",
+        "sha256",
     }
-    if not isinstance(value, Mapping) or set(value) != fields or value["schema_version"] != "calibration-caller-training-background-v1":
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != fields
+        or value["schema_version"] != "calibration-caller-training-background-v1"
+    ):
         _fail("caller training background fields or schema differ")
-    if not isinstance(background_bytes, bytes) or hashlib.sha256(background_bytes).hexdigest() != value["background_sha256"]:
+    if (
+        not isinstance(background_bytes, bytes)
+        or hashlib.sha256(background_bytes).hexdigest() != value["background_sha256"]
+    ):
         _fail("caller training background bytes differ from their digest")
     key_fields = ("negative_keys", "diagnostic_positive_keys", "excluded_unknown_keys")
     keys: dict[str, tuple[str, ...]] = {}
@@ -109,28 +128,37 @@ def decode_training_background_document(value: object, background_bytes: bytes) 
         _fail("caller training background fitter artifacts must be a nonempty object")
     if any(not isinstance(name, str) or not name for name in artifacts):
         _fail("caller training background fitter artifact names are invalid")
-    checked_artifacts = MappingProxyType({
-        name: require_digest(artifacts[name], "fitter artifact") for name in sorted(artifacts)
-    })
+    checked_artifacts = MappingProxyType(
+        {name: require_digest(artifacts[name], "fitter artifact") for name in sorted(artifacts)}
+    )
     result = TrainingBackground(
-        background_bytes, require_digest(value["background_sha256"], "background"),
+        background_bytes,
+        require_digest(value["background_sha256"], "background"),
         require_digest(value["training_evidence_sha256"], "training evidence"),
-        require_digest(value["study_sha256"], "study"), require_digest(value["run_manifest_sha256"], "runs"),
+        require_digest(value["study_sha256"], "study"),
+        require_digest(value["run_manifest_sha256"], "runs"),
         require_digest(value["source_sha256"], "source"),
-        require_digest(value["exposure_receipt_sha256"], "receipt"), keys["negative_keys"],
-        keys["diagnostic_positive_keys"], keys["excluded_unknown_keys"],
-        require_digest(value["diagnostic_policy_sha256"], "diagnostic policy"), checked_artifacts,
+        require_digest(value["exposure_receipt_sha256"], "receipt"),
+        keys["negative_keys"],
+        keys["diagnostic_positive_keys"],
+        keys["excluded_unknown_keys"],
+        require_digest(value["diagnostic_policy_sha256"], "diagnostic policy"),
+        checked_artifacts,
         require_digest(value["sha256"], "training background receipt"),
     )
     payload = _payload(result)
-    expected_training = canonical_sha256({key: value for key, value in payload.items() if key != "training_evidence_sha256"})
+    expected_training = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "training_evidence_sha256"}
+    )
     expected_sha = canonical_sha256(payload)
     if result.training_evidence_sha256 != expected_training or result.sha256 != expected_sha:
         _fail("caller training background receipt differs from its canonical content")
     return result
 
 
-def _require_context(study: TargetStudy, runs: TargetRuns, source: RoleSource, receipt: ExposureReceipt) -> CallerProtocol:
+def _require_context(
+    study: TargetStudy, runs: TargetRuns, source: RoleSource, receipt: ExposureReceipt
+) -> CallerProtocol:
     target_study_document(study)
     target_runs_document(runs)
     role_source_document(source, study=study, runs=runs)
@@ -140,20 +168,23 @@ def _require_context(study: TargetStudy, runs: TargetRuns, source: RoleSource, r
     if source.role != "training" or source.study_sha256 != study.sha256 or source.run_manifest_sha256 != runs.sha256:
         _fail("caller background fitting requires the exact training source")
     expected = ("callers", "training", study.sha256, study.partitions.sha256, source.sha256, study.exposure_ledger_id)
-    observed = (receipt.target, receipt.role, receipt.study_sha256, receipt.partition_sha256,
-                receipt.evidence_sha256, receipt.exposure_ledger_id)
+    observed = (
+        receipt.target,
+        receipt.role,
+        receipt.study_sha256,
+        receipt.partition_sha256,
+        receipt.evidence_sha256,
+        receipt.exposure_ledger_id,
+    )
     if observed != expected:
         _fail("caller background fitting exposure receipt differs from the training source")
-    membership = canonical_sha256(
-        [{"namespace": name, "sha256": digest} for name, digest in source.identities]
-    )
+    membership = canonical_sha256([{"namespace": name, "sha256": digest} for name, digest in source.identities])
     if receipt.membership_sha256 != membership:
         _fail("caller background fitting receipt membership differs from the training source")
     protocol = cast(CallerProtocol, study.protocol)
     policies = (protocol.baseline_policy, *(item.policy for item in protocol.candidates))
     if not any(
-        "advntr" in policy.required_callers
-        and policy.values["/components/advntr/calibrated_calling/mode"] == "exact"
+        "advntr" in policy.required_callers and policy.values["/components/advntr/calibrated_calling/mode"] == "exact"
         for policy in policies
     ):
         _fail("caller background fitting requires a predeclared exact adVNTR candidate")
@@ -192,14 +223,18 @@ def _stage_training(
         raw_policy = first["capture_policy"]
         if not isinstance(raw_producer, Mapping) or not isinstance(raw_assets, Mapping):
             _fail("caller training capture provenance fields differ")
-        current = (str(raw_producer.get("package_version")), str(raw_producer.get("build_id")),
-                   str(raw_producer.get("source_revision")))
+        current = (
+            str(raw_producer.get("package_version")),
+            str(raw_producer.get("build_id")),
+            str(raw_producer.get("source_revision")),
+        )
         if producer is None:
             producer = current
         if producer != current or any(record.get("producer") != raw_producer for record in records):
             _fail("caller training captures do not share one native producer")
         if (
-            current[:2] != (
+            current[:2]
+            != (
                 study.baseline.producer.tool_versions.get("advntr"),
                 study.baseline.producer.tool_versions.get("advntr_build_id"),
             )
@@ -215,8 +250,14 @@ def _stage_training(
         sink = root / "runs" / sample_id / "output" / "calibration.jsonl"
         _private_write(sink, capture_raw)
         labels.append(
-            {"sample_id": sample_id, "truth": row.genotype == "positive", "partition": "training",
-             "pair_id": member.group_key, "variant_class": row.genotype, "array_length": None}
+            {
+                "sample_id": sample_id,
+                "truth": row.genotype == "positive",
+                "partition": "training",
+                "pair_id": member.group_key,
+                "variant_class": row.genotype,
+                "array_length": None,
+            }
         )
         (positive if row.genotype == "positive" else negative).append(member.key)
     if not negative:
@@ -224,28 +265,52 @@ def _stage_training(
     labels_path = root / "labels.json"
     _private_write(labels_path, canonical_json_bytes({"samples": labels}))
     diagnostic = {
-        "schema_version": "advntr-frameshift-policy-v1", "mode": "exact",
-        "cutoff": 0.001, "minimum_read_support": 3,
+        "schema_version": "advntr-frameshift-policy-v1",
+        "mode": "exact",
+        "cutoff": 0.001,
+        "minimum_read_support": 3,
     }
     diagnostic_path = root / "diagnostic-policy.json"
     _private_write(diagnostic_path, canonical_json_bytes(diagnostic))
     if producer is None:
         _fail("caller background fitting has no assessable training captures")
     return (
-        labels_path, diagnostic_path, tuple(negative), tuple(positive), tuple(unknown),
+        labels_path,
+        diagnostic_path,
+        tuple(negative),
+        tuple(positive),
+        tuple(unknown),
         AdvntrToolPin(*producer),
     )
 
 
 def _result(
-    study: TargetStudy, runs: TargetRuns, source: RoleSource, receipt: ExposureReceipt,
-    raw: bytes, native: BackgroundFitResult, negative: tuple[str, ...], positive: tuple[str, ...], unknown: tuple[str, ...],
+    study: TargetStudy,
+    runs: TargetRuns,
+    source: RoleSource,
+    receipt: ExposureReceipt,
+    raw: bytes,
+    native: BackgroundFitResult,
+    negative: tuple[str, ...],
+    positive: tuple[str, ...],
+    unknown: tuple[str, ...],
 ) -> TrainingBackground:
     portable = raw
     background_sha = hashlib.sha256(portable).hexdigest()
     seed = TrainingBackground(
-        portable, background_sha, "", study.sha256, runs.sha256, source.sha256, receipt.sha256,
-        negative, positive, unknown, native.diagnostic_policy_sha256, native.artifact_sha256, "",
+        portable,
+        background_sha,
+        "",
+        study.sha256,
+        runs.sha256,
+        source.sha256,
+        receipt.sha256,
+        negative,
+        positive,
+        unknown,
+        native.diagnostic_policy_sha256,
+        native.artifact_sha256,
+        "",
     )
     payload = _payload(seed)
     training_sha = canonical_sha256({key: value for key, value in payload.items() if key != "training_evidence_sha256"})
@@ -274,9 +339,16 @@ def fit_caller_training_background(
             capture_root, study, source, runs, protocol
         )
         plan = build_background_fit_plan(
-            argv_prefix, capture_root=capture_root, labels_path=labels, diagnostic_policy_path=diagnostic,
-            output_directory=output / "native", partition="training", profile="caller-training",
-            folds=protocol.fold_count, insert_lengths=8, source_cohort=source.sha256,
+            argv_prefix,
+            capture_root=capture_root,
+            labels_path=labels,
+            diagnostic_policy_path=diagnostic,
+            output_directory=output / "native",
+            partition="training",
+            profile="caller-training",
+            folds=protocol.fold_count,
+            insert_lengths=8,
+            source_cohort=source.sha256,
             design="vntyper-caller-training-v1",
         )
         native = fit_background(plan, pin)

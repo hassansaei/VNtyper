@@ -226,7 +226,12 @@ def test_advntr_baseline_calls_preserve_native_decision_receipts_and_audit() -> 
     assert assessable is True
 
     record["warnings"] = [
-        {"origin": "calibration-audit", "ordinal": None, "state": "invented", "disposition": "attribution-outside-trials"}
+        {
+            "origin": "calibration-audit",
+            "ordinal": None,
+            "state": "invented",
+            "disposition": "attribution-outside-trials",
+        }
     ]
     assert decode_advntr_baseline_calls(_json(record), (17,))[1] is False
 
@@ -237,7 +242,14 @@ def test_advntr_replay_output_binds_manifest_policy_capture_and_complete_roster(
     record_sha = hashlib.sha256(record_line).hexdigest()
     manifest = {
         "schema_version": "advntr-frameshift-replay-manifest-v1",
-        "captures": [{"key": "case-known", "filename": "capture.jsonl", "sha256": hashlib.sha256(record_raw).hexdigest(), "vntr_ids": [17]}],
+        "captures": [
+            {
+                "key": "case-known",
+                "filename": "capture.jsonl",
+                "sha256": hashlib.sha256(record_raw).hexdigest(),
+                "vntr_ids": [17],
+            }
+        ],
     }
     policy = {"schema_version": "advntr-frameshift-replay-policy-v1", "capture_policy": {}, "caller_policy": {}}
     locus = {
@@ -263,12 +275,23 @@ def test_advntr_replay_output_binds_manifest_policy_capture_and_complete_roster(
         "policy_sha256": hashlib.sha256(policy_raw.rstrip(b"\n")).hexdigest(),
         "background_file_sha256": None,
         "replay_producer": _advntr_record()["producer"],
-        "results": [{"key": "case-known", "capture_sha256": hashlib.sha256(record_raw).hexdigest(), "vntrs": [{"vntr_id": 17, "result": locus}]}],
+        "results": [
+            {
+                "key": "case-known",
+                "capture_sha256": hashlib.sha256(record_raw).hexdigest(),
+                "vntrs": [{"vntr_id": 17, "result": locus}],
+            }
+        ],
     }
 
     calls, assessable = decode_advntr_replay_calls(
-        _json(output), manifest_raw=manifest_raw, policy_raw=policy_raw, capture_raw=record_raw,
-        expected_key="case-known", expected_vntr_ids=(17,), expected_background_sha256=None,
+        _json(output),
+        manifest_raw=manifest_raw,
+        policy_raw=policy_raw,
+        capture_raw=record_raw,
+        expected_key="case-known",
+        expected_vntr_ids=(17,),
+        expected_background_sha256=None,
     )
     assert calls[0]["read_support"] == 9
     assert assessable is True
@@ -276,6 +299,11 @@ def test_advntr_replay_output_binds_manifest_policy_capture_and_complete_roster(
     output["manifest_file_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="binding"):
         decode_advntr_replay_calls(
-            _json(output), manifest_raw=manifest_raw, policy_raw=policy_raw, capture_raw=record_raw,
-            expected_key="case-known", expected_vntr_ids=(17,), expected_background_sha256=None,
+            _json(output),
+            manifest_raw=manifest_raw,
+            policy_raw=policy_raw,
+            capture_raw=record_raw,
+            expected_key="case-known",
+            expected_vntr_ids=(17,),
+            expected_background_sha256=None,
         )
