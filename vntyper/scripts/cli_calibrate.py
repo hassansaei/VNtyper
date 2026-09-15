@@ -1,4 +1,4 @@
-"""Four-command calibration CLI with atomic directory installation."""
+"""Calibration CLI dispatch with atomic directory installation."""
 
 from __future__ import annotations
 
@@ -37,6 +37,11 @@ def handle_calibrate(
     operation = getattr(args, "calibration_operation", None)
     if not isinstance(operation, str):
         raise ValueError("calibration operation must be a string")
+    if operation == "intake":
+        from vntyper.scripts.cli_calibration_intake import run_calibration_intake
+
+        run_calibration_intake(args)
+        return
     producer = OPERATIONS.get(operation)
     if producer is None:
         message = f"unsupported calibration operation: {operation!r}"

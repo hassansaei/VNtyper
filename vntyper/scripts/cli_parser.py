@@ -92,7 +92,7 @@ REPORT_IGV_HELP = (
 
 
 def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
-    """Register the closed four-operation calibration command tree.
+    """Register the closed calibration command tree.
 
     Args:
         subparsers: Top-level VNtyper subparser collection.
@@ -103,6 +103,13 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
         conflict_handler="resolve",
     )
     operations = calibrate.add_subparsers(dest="calibration_operation", required=True)
+
+    intake = operations.add_parser("intake", help="Audit and normalize declared local calibration inputs.")
+    intake.add_argument("--manifest", type=Path, required=True)
+    intake.add_argument("--output", type=Path, required=True)
+    intake.add_argument("--preprocessing-priority", nargs="+", required=True, metavar="ID")
+    intake.add_argument("--cram-references", type=Path, default=None)
+    intake.add_argument("--temporary-directory", type=Path, default=None)
 
     extract = operations.add_parser("extract", help="Extract immutable replay evidence.")
     extract.add_argument("--truth", type=Path, required=True)

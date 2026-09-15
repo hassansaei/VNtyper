@@ -21,12 +21,39 @@ _COMMANDS = {
 
 
 @pytest.mark.parametrize(("operation", "options"), sorted(_COMMANDS.items()))
-def test_exact_four_calibration_operations_parse(operation: str, options: list[str]) -> None:
+def test_existing_four_calibration_operations_keep_their_parser_contract(operation: str, options: list[str]) -> None:
     args = build_parser().parse_args(["calibrate", operation, *options, "--output", "out"])
 
     assert args.command == "calibrate"
     assert args.calibration_operation == operation
     assert args.output == Path("out")
+
+
+def test_intake_dispatch_does_not_wrap_its_atomic_producer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = build_parser().parse_args(
+        [
+            "calibrate",
+            "intake",
+            "--manifest",
+            str(tmp_path / "intake.json"),
+            "--output",
+            str(tmp_path / "bundle"),
+            "--preprocessing-priority",
+            "raw-v1",
+        ]
+    )
+    called = False
+
+    def run_intake(observed) -> None:
+        nonlocal called
+        called = True
+        assert observed is args
+
+    monkeypatch.setattr("vntyper.scripts.cli_calibration_intake.run_calibration_intake", run_intake)
+    monkeypatch.setattr(cli_calibrate, "_atomic_output", lambda *_args, **_kwargs: pytest.fail("nested atomic output"))
+
+    cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+    assert called is True
 
 
 def test_fit_objective_is_mandatory_and_closed() -> None:
