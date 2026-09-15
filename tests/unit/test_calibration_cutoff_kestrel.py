@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from tests.builders import kestrel_config
@@ -45,7 +47,67 @@ def _native_negative(path: Path) -> None:
     )
 
 
-def _native_positive(path: Path, capture_path: Path) -> None:
+# The published production column set, taken from the header a real 2.0.35 run wrote to
+# kestrel/kestrel_result.tsv. It carries every __Identity_* column but no __Calibration_*
+# column, and it adds nomenclature and resolved-identity columns the replay never emits.
+PRODUCTION_KESTREL_COLUMNS: tuple[str, ...] = (
+    "Motifs",
+    "POS",
+    "REF",
+    "ALT",
+    "Sample",
+    "Motif_sequence",
+    "Variant",
+    "Del",
+    "Estimated_Depth_AlternateVariant",
+    "Estimated_Depth_Variant_ActiveRegion",
+    "ref_len",
+    "alt_len",
+    "Frame_Score",
+    "is_frameshift",
+    "direction",
+    "frameshift_amount",
+    "is_valid_frameshift",
+    "Depth_Score",
+    "Confidence",
+    "depth_confidence_pass",
+    "__Identity_Raw_Representation_Key",
+    "__Identity_Molecular_Identity",
+    "__Identity_Translation_Status",
+    "__Identity_Translation_Failure",
+    "__Identity_Context_Diverges",
+    "__Identity_Observation_Ordinal",
+    "haplo_count",
+    "alt_filter_pass",
+    "motif_filter_pass",
+    "Motif_fasta",
+    "POS_fasta",
+    "Motif",
+    "Flag",
+    "flag_filter_pass",
+    "__Identity_Selected_Raw_Representation_Key",
+    "__Identity_Equivalent_Representation_Count",
+    "__Identity_Hypothesis_Count",
+    "__Identity_Group_Blocking_Gates",
+    "__Identity_Group_Flags",
+    "__Identity_Selected_Observation_Ordinal",
+    "__Identity_Group_Context_Diverges",
+    "Nomenclature",
+    "Nomenclature_Tier",
+    "Nomenclature_Flags",
+    "Ambiguity_Interval",
+    "Repeat_Form",
+    "Nomenclature_Note",
+    "Nomenclature_Kestrel",
+    "Nomenclature_adVNTR",
+    "Molecular_Identity",
+    "Molecular_Identity_Status",
+    "Equivalent_Representation_Count",
+    "Identity_Hypothesis_Count",
+)
+
+
+def _baseline_frame(capture_path: Path) -> pd.DataFrame:
     from vntyper.scripts.calibration_kestrel_capture import decode_kestrel_capture
     from vntyper.scripts.canonical_json import load_strict_json_object
 
@@ -55,7 +117,28 @@ def _native_positive(path: Path, capture_path: Path) -> None:
         capture.baseline_policy,
         capture_policy_sha256=capture.provenance.capture_policy_sha256,
     )
-    kestrel_replay_selected_frame(replay).to_csv(path, sep="\t", index=False)
+    return kestrel_replay_selected_frame(replay)
+
+
+def _native_production(
+    path: Path,
+    capture_path: Path,
+    *,
+    changes: Mapping[str, str] | None = None,
+    drop: Sequence[str] = (),
+) -> None:
+    """Write a native TSV that has the production shape, not the replay frame shape."""
+    columns = [name for name in PRODUCTION_KESTREL_COLUMNS if name not in set(drop)]
+    frame = _baseline_frame(capture_path)
+    native = frame.drop(columns=[name for name in frame.columns if name not in set(columns)])
+    for name in columns:
+        if name not in native.columns:
+            # Production-only annotation columns carry synthetic, never private, values.
+            native[name] = f"synthetic-{name}"
+    for name, value in (changes or {}).items():
+        native[name] = value
+    body = native[columns].to_csv(sep="\t", index=False)
+    path.write_text(f"## VNtyper Kestrel result\n## VNtyper Version: 0.0.0-test\n{body}", encoding="utf-8")
 
 
 def test_grid_replays_baseline_first_and_deduplicates_identical_kestrel_parameters(tmp_path: Path) -> None:
@@ -126,16 +209,62 @@ def test_exact_native_negative_proves_empty_capture_negative_for_every_policy(tm
     assert all(result.observations[policy]["case"].called_positive is False for policy in result.policy_ids)
 
 
-def test_native_positive_requires_exact_baseline_selected_fields(tmp_path: Path) -> None:
+def test_native_production_column_set_is_accepted_and_private_columns_are_excluded(tmp_path: Path) -> None:
     capture_path = tmp_path / "capture.json"
     _write_capture(capture_path)
     native = tmp_path / "native.tsv"
-    _native_positive(native, capture_path)
+    _native_production(native, capture_path)
+
+    header = native.read_text(encoding="utf-8").splitlines()[2].split("\t")
+    assert header == list(PRODUCTION_KESTREL_COLUMNS)
+    # The replay frame carries a calibration-private column production never publishes.
+    assert "__Calibration_Source_Row_Ordinal" in _baseline_frame(capture_path).columns
+    assert "__Calibration_Source_Row_Ordinal" not in header
+
     result = replay_kestrel_grid({"case": capture_path}, {}, native_paths={"case": native})
     assert result.baseline_parity["case"] == "native-exact"
+    assert result.observations["baseline"]["case"].called_positive is True
 
-    raw = native.read_text(encoding="utf-8").replace("Low_Precision", "High_Precision")
-    native.write_text(raw, encoding="utf-8")
+
+@pytest.mark.parametrize(
+    "column,value", [("Depth_Score", "0.9999"), ("Confidence", "High_Precision"), ("POS", "424242")]
+)
+def test_native_row_disagreeing_on_a_decision_column_is_rejected(tmp_path: Path, column: str, value: str) -> None:
+    capture_path = tmp_path / "capture.json"
+    _write_capture(capture_path)
+    native = tmp_path / "native.tsv"
+    _native_production(native, capture_path)
+    assert replay_kestrel_grid({"case": capture_path}, {}, native_paths={"case": native}).baseline_parity == {
+        "case": "native-exact"
+    }
+
+    _native_production(native, capture_path, changes={column: value})
+    with pytest.raises(ValueError, match="native Kestrel baseline differs"):
+        replay_kestrel_grid({"case": capture_path}, {}, native_paths={"case": native})
+
+
+@pytest.mark.parametrize("column", ["POS", "REF", "ALT", "Depth_Score", "Confidence"])
+def test_native_without_the_required_decision_columns_is_rejected(tmp_path: Path, column: str) -> None:
+    capture_path = tmp_path / "capture.json"
+    _write_capture(capture_path)
+    native = tmp_path / "native.tsv"
+    _native_production(native, capture_path, drop=(column,))
+
+    with pytest.raises(ValueError, match="missing required comparable columns"):
+        replay_kestrel_grid({"case": capture_path}, {}, native_paths={"case": native})
+
+
+@pytest.mark.parametrize("column", ["Motifs", "Estimated_Depth_AlternateVariant"])
+def test_native_lacking_an_optional_shared_column_is_still_compared(tmp_path: Path, column: str) -> None:
+    capture_path = tmp_path / "capture.json"
+    _write_capture(capture_path)
+    native = tmp_path / "native.tsv"
+    _native_production(native, capture_path, drop=(column,))
+    assert replay_kestrel_grid({"case": capture_path}, {}, native_paths={"case": native}).baseline_parity == {
+        "case": "native-exact"
+    }
+
+    _native_production(native, capture_path, drop=(column,), changes={"Depth_Score": "0.9999"})
     with pytest.raises(ValueError, match="native Kestrel baseline differs"):
         replay_kestrel_grid({"case": capture_path}, {}, native_paths={"case": native})
 

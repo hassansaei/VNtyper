@@ -42,6 +42,11 @@ BaselineParity = Literal["native-exact", "capture-replay-authoritative"]
 
 _MAPPING_PROXY_TYPE: type[object] = type(MappingProxyType({}))
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+# Replay-only bookkeeping: the capture row ordinal exists solely inside calibration.
+_PRIVATE_COLUMN_PREFIX = "__Calibration_"
+# The native comparison is worthless unless it covers the actual selection decision:
+# the variant coordinates, the score the floor is applied to and the assigned band.
+_NATIVE_PARITY_REQUIRED = ("POS", "REF", "ALT", "Depth_Score", "Confidence")
 _OBSERVATION_FIELDS = {
     "key",
     "policy_id",
@@ -240,6 +245,12 @@ def _cell_text(value: object) -> str:
 def validate_native_kestrel_baseline_parity(raw: bytes, baseline: KestrelReplayResult) -> Literal["called", "negative"]:
     """Require a native final Kestrel TSV to equal its baseline capture replay.
 
+    The replay's selected frame is compared over the columns it shares with the
+    native header, excluding calibration-private ``__Calibration_*`` columns that
+    only the replay defines and production never publishes. The shared set must
+    still contain every decision-bearing column, so the comparison can never
+    degrade into agreeing about nothing.
+
     Args:
         raw: Exact independently retained native result bytes.
         baseline: Baseline replay from the same complete capture.
@@ -248,7 +259,8 @@ def validate_native_kestrel_baseline_parity(raw: bytes, baseline: KestrelReplayR
         Whether the exact native endpoint is called or negative.
 
     Raises:
-        ValueError: If bytes are malformed or native selected fields differ.
+        ValueError: If bytes are malformed, the shared columns omit a required
+            decision column, or a shared native field differs from the replay.
     """
     if not isinstance(raw, bytes):
         _fail("Kestrel cutoff native baseline must be exact bytes")
@@ -261,9 +273,16 @@ def validate_native_kestrel_baseline_parity(raw: bytes, baseline: KestrelReplayR
         return "negative"
     if len(native_rows) != 1 or is_kestrel_negative_placeholder(native_rows[0]):
         _fail("Kestrel cutoff native Kestrel baseline differs from capture replay")
-    expected = selected.iloc[0].to_dict()
     observed = native_rows[0]
-    if any(column not in observed or observed[column] != _cell_text(value) for column, value in expected.items()):
+    comparable = {
+        column: value
+        for column, value in selected.iloc[0].to_dict().items()
+        if not column.startswith(_PRIVATE_COLUMN_PREFIX) and column in observed
+    }
+    missing = tuple(column for column in _NATIVE_PARITY_REQUIRED if column not in comparable)
+    if missing:
+        _fail(f"Kestrel cutoff native Kestrel baseline is missing required comparable columns: {', '.join(missing)}")
+    if any(observed[column] != _cell_text(value) for column, value in comparable.items()):
         _fail("Kestrel cutoff native Kestrel baseline differs from capture replay selected fields")
     return "called"
 
