@@ -40,7 +40,12 @@ def handle_calibrate(
     if operation == "intake":
         from vntyper.scripts.cli_calibration_intake import run_calibration_intake
 
-        run_calibration_intake(args)
+        try:
+            run_calibration_intake(args)
+        except RuntimeError as error:
+            message = str(error)
+            logger.error(message)
+            raise ValueError(message) from error
         return
     producer = OPERATIONS.get(operation)
     if producer is None:

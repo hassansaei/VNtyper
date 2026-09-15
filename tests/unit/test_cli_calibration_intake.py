@@ -1,6 +1,7 @@
 """CLI adapter for strict local calibration intake bundles."""
 
 import json
+import logging
 import os
 import stat
 from copy import deepcopy
@@ -97,7 +98,7 @@ def test_cram_reference_document_is_closed_strict_and_immutable(tmp_path: Path) 
         "digest",
     ],
 )
-def test_cram_reference_document_rejects_ambiguous_or_open_content_before_producer(
+def test_cram_reference_document_rejects_ambiguous_or_open_content_inside_producer(
     tmp_path: Path, invalid: str
 ) -> None:
     module = import_module("vntyper.scripts.cli_calibration_intake")
@@ -131,11 +132,17 @@ def test_cram_reference_document_rejects_ambiguous_or_open_content_before_produc
             reference["sha256"] = "A" * 64
         document.write_text(json.dumps(raw), encoding="utf-8")
 
-    with patch.object(module, "prepare_intake_bundle") as producer, pytest.raises(ValueError):
+    def invoke_loader(*_args, **kwargs) -> None:
+        kwargs["cram_reference_loader"]()
+
+    with (
+        patch.object(module, "prepare_intake_bundle", side_effect=invoke_loader) as producer,
+        pytest.raises(ValueError),
+    ):
         module.run_calibration_intake(
             _arguments(tmp_path, cram_references=document),
         )
-    producer.assert_not_called()
+    producer.assert_called_once()
 
 
 def test_intake_adapter_passes_explicit_arguments_to_the_single_atomic_producer(tmp_path: Path) -> None:
@@ -154,13 +161,16 @@ def test_intake_adapter_passes_explicit_arguments_to_the_single_atomic_producer(
     with patch.object(module, "prepare_intake_bundle") as producer:
         module.run_calibration_intake(args)
 
-    producer.assert_called_once_with(
-        args.manifest,
-        args.output,
-        preprocessing_priority=("raw-v1", "processed-v2"),
-        cram_references={"assembly-a": module.PinnedCramReference(Path("/synthetic/reference.fa"), "a" * 64)},
-        temporary_parent=args.temporary_directory,
-    )
+    producer.assert_called_once()
+    positional = producer.call_args.args
+    keywords = producer.call_args.kwargs
+    assert positional == (args.manifest, args.output)
+    assert set(keywords) == {"preprocessing_priority", "cram_reference_loader", "temporary_parent"}
+    assert keywords["preprocessing_priority"] == ("raw-v1", "processed-v2")
+    assert keywords["temporary_parent"] == args.temporary_directory
+    assert keywords["cram_reference_loader"]() == {
+        "assembly-a": module.PinnedCramReference(Path("/synthetic/reference.fa"), "a" * 64)
+    }
 
 
 @pytest.mark.parametrize("invalid", ["namespace", "manifest", "priority", "references", "temporary"])
@@ -212,9 +222,77 @@ def test_cram_reference_fifo_fails_before_intake_artifact_reads(tmp_path: Path) 
     references = tmp_path / "references.fifo"
     os.mkfifo(references)
 
-    with patch.object(module, "prepare_intake_bundle") as producer, pytest.raises(ValueError, match="regular"):
+    def invoke_loader(*_args, **kwargs) -> None:
+        kwargs["cram_reference_loader"]()
+
+    with (
+        patch.object(module, "prepare_intake_bundle", side_effect=invoke_loader) as producer,
+        pytest.raises(ValueError, match="regular"),
+    ):
         module.run_calibration_intake(_arguments(tmp_path, cram_references=references))
-    producer.assert_not_called()
+    producer.assert_called_once()
+
+
+def test_unavailable_atomic_activation_fails_before_cram_reference_read(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.cli_calibration_intake")
+    atomic = import_module("vntyper.scripts.calibration_atomic_io")
+    args = _arguments(tmp_path, cram_references=tmp_path / "references.json")
+
+    with (
+        patch.object(module, "load_cram_references") as reader,
+        patch.object(atomic, "_renameat2", None),
+        pytest.raises(RuntimeError, match="renameat2"),
+    ):
+        module.run_calibration_intake(args)
+
+    reader.assert_not_called()
+    assert not args.output.exists()
+
+
+def test_existing_output_fails_before_cram_reference_read(tmp_path: Path) -> None:
+    module = import_module("vntyper.scripts.cli_calibration_intake")
+    args = _arguments(tmp_path, cram_references=tmp_path / "references.json")
+    args.output.mkdir()
+
+    with patch.object(module, "load_cram_references") as reader, pytest.raises(ValueError, match="already exists"):
+        module.run_calibration_intake(args)
+
+    reader.assert_not_called()
+    assert args.output.is_dir()
+    assert not tuple(args.output.iterdir())
+
+
+def test_cli_maps_supported_intake_runtime_failure_to_exit_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    module = import_module("vntyper.scripts.cli_calibration_intake")
+    output = tmp_path / "bundle"
+    monkeypatch.setattr(cli, "setup_logging", lambda log_level, log_file: None)
+    monkeypatch.setattr(
+        module,
+        "prepare_intake_bundle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("synthetic intake source changed")),
+    )
+
+    with pytest.raises(SystemExit) as failure, caplog.at_level(logging.CRITICAL, logger="vntyper.cli"):
+        cli.main(
+            [
+                "calibrate",
+                "intake",
+                "--manifest",
+                str(tmp_path / "intake.json"),
+                "--output",
+                str(output),
+                "--preprocessing-priority",
+                "raw-v1",
+            ]
+        )
+
+    assert failure.value.code == 1
+    assert not output.exists()
+    assert [record.getMessage() for record in caplog.records if record.name == "vntyper.cli"] == [
+        "synthetic intake source changed"
+    ]
 
 
 def test_cli_builds_real_synthetic_fastq_bundle_without_reading_locked_membership(

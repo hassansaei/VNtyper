@@ -97,11 +97,10 @@ def run_calibration_intake(args: argparse.Namespace) -> None:
         _fail("calibration CRAM references must be supplied as a Path")
     if temporary is not None and not isinstance(temporary, Path):
         _fail("calibration intake temporary directory must be a Path")
-    references = load_cram_references(cram_reference_path)
     prepare_intake_bundle(
         manifest,
         output,
         preprocessing_priority=tuple(priority),
-        cram_references=references,
+        cram_reference_loader=lambda: load_cram_references(cram_reference_path),
         temporary_parent=temporary,
     )
