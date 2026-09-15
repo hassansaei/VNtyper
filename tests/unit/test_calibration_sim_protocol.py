@@ -94,6 +94,8 @@ def test_invalid_protocol_limits_and_unknown_fields_are_rejected(field, value):
     "changes",
     [
         {"case_id": "../escape"},
+        {"case_id": "manifest.json"},
+        {"case_id": "protocol.json"},
         {"role": "heldout"},
         {"primary": 1},
         {"strata": ["z", "a"]},

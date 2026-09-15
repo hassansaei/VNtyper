@@ -202,6 +202,8 @@ def _case(value: object, unit_bp: int, maximum_bp: int, budget: int) -> Simulati
             "scenario",
         )
     }
+    if tokens["case_id"] in {"manifest.json", "protocol.json"}:
+        _fail("simulation case ID conflicts with a reserved root artifact name")
     if tokens["role"] not in _ROLES or tokens["scenario"] not in {"nominal", "stress"}:
         _fail("simulation role or scenario is not declared")
     if type(raw["primary"]) is not bool or type(raw["caller_positive"]) is not bool:
