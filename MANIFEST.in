@@ -9,7 +9,7 @@ include vntyper/profiles/decision_profile.sha256
 include vntyper/profiles/decision_projection.json
 
 # Include the templates. `_report_base.html` is the shared token layer both of the
-# other two `{% include %}`, so a distribution without it renders neither report:
+# reports using `{% include %}`, so a distribution without it cannot render them:
 # Jinja2 raises TemplateNotFound at render time, not at import, so nothing that only
 # imports the package notices. Every file under vntyper/templates/ has to be named
 # here and in pyproject's package-data; tests/unit/test_packaging_consistency.py
@@ -20,6 +20,7 @@ include vntyper/templates/cohort_summary_template.html
 include vntyper/templates/igv_report_template.html
 include vntyper/templates/calibration_report.html
 include vntyper/templates/calibration_caller_report.html
+include vntyper/templates/calibration_length_report.html
 
 # Include the vendored igv.js and its provenance/licence notice. The report embeds
 # the gzip and prints its SHA-256; a distribution without it cannot render an

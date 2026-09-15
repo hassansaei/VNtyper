@@ -321,7 +321,38 @@ def _unevaluated(outcome: LengthFitOutcome, hypothesis: LengthHypothesis) -> Len
     )
 
 
-def _selection(candidates: tuple[LengthCandidateEvaluation, ...], phase: EvaluationPhase) -> LengthSelection:
+def select_length_candidates(
+    candidates: tuple[LengthCandidateEvaluation, ...], phase: EvaluationPhase
+) -> LengthSelection:
+    """Apply the frozen length-model tie rule to evaluated acceptance evidence.
+
+    Args:
+        candidates: Immutable candidate evaluations in protocol order.
+        phase: Evaluation role; selection is possible only during policy selection.
+
+    Returns:
+        The deterministic selection decision. This is research evidence and does
+        not authorize model promotion.
+
+    Raises:
+        ValueError: If the collection or phase is outside the typed contract.
+    """
+    if not isinstance(phase, str) or phase not in _PHASES:
+        _fail("length selection phase is not allowed")
+    if not isinstance(candidates, tuple):
+        _fail("length selection candidates must be an immutable tuple")
+    if any(
+        not isinstance(candidate, LengthCandidateEvaluation)
+        or not isinstance(candidate.candidate_id, str)
+        or not candidate.candidate_id
+        or isinstance(candidate.free_parameters, bool)
+        or not isinstance(candidate.free_parameters, int)
+        or candidate.free_parameters < 0
+        or not isinstance(candidate.reasons, tuple)
+        or (candidate.acceptance is not None and not isinstance(candidate.acceptance, LengthAcceptance))
+        for candidate in candidates
+    ):
+        _fail("length selection candidates must contain typed evaluations")
     if phase != "policy-selection":
         return LengthSelection("not-applicable", None, None, ("selection_not_allowed_for_phase",))
     scored: list[tuple[LengthCandidateEvaluation, float]] = []
@@ -553,7 +584,7 @@ def evaluate_length_hypotheses(
         context.sha256,
         rows_sha256,
         candidates,
-        _selection(candidates, phase),
+        select_length_candidates(candidates, phase),
         "",
     )
     return replace(result, sha256=canonical_sha256(_result_payload(result)))

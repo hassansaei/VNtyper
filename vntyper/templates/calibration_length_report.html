@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VNtyper length calibration — {{ phase }}</title>
+  <style>
+    body { max-width: 1100px; margin: auto; padding: 2rem; font: 16px/1.5 system-ui, sans-serif; color: #17202a; }
+    h1, h2 { color: #17365d; } code { overflow-wrap: anywhere; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
+    th, td { border: 1px solid #aeb6bf; padding: .4rem .6rem; text-align: left; }
+    th { background: #eaf2f8; } .plots { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+    figure { flex: 1 1 380px; margin: 0; } svg { width: 100%; max-width: 420px; }
+  </style>
+</head>
+<body><main>
+  <h1>Total diploid repeat-count calibration: {{ phase }}</h1>
+  <p>Protocol: <code>{{ protocol }}</code><br>Evaluation evidence: <code>{{ evidence }}</code><br>
+    Eligible roster: <code>{{ roster }}</code><br>Frozen training-mean baseline: <code>{{ baseline }}</code></p>
+  {% if selection.status == "selected" %}<p>Selected candidate: <code>{{ selection.selected_candidate_id }}</code>.</p>
+  {% elif selection.status == "no-feasible-candidate" %}<p>No feasible candidate was selected.</p>
+  {% else %}<p>Selection is not applicable in this phase.
+    The report describes the Fixed evaluated candidate.</p>{% endif %}
+  <p>Counts use one frozen representative per independent group. Mandatory strata can overlap and are evaluated
+    separately. Unavailable predictions remain in availability denominators and are never converted into estimates.</p>
+  <p>These are descriptive research results. Rendering does not authorize model promotion or evidence exposure.
+    Feature and model provenance were validated by the preceding evaluation stage.</p>
+  {% for entry in entries %}
+  <section><h2>{{ entry.status }}: <code>{{ entry.id }}</code> ({{ entry.kind }})</h2>
+    {% if entry.reasons %}<h3>Status reasons</h3><ul>
+      {% for reason in entry.reasons %}<li>{{ reason }}</li>{% endfor %}
+    </ul>{% endif %}
+    <h3>Unavailable predictions</h3>
+    {% if entry.unavailable %}<ul>
+      {% for reason, count in entry.unavailable %}<li>{{ reason }}: {{ count }}</li>{% endfor %}
+    </ul>
+    {% else %}<p>None.</p>{% endif %}
+    {% for population in entry.populations %}<h3>{{ population.name }}</h3>
+      <p>Gate status: {{ population.status }}{% if population.reasons %}; reasons:
+        {{ population.reasons | join(", ") }}{% endif %}.</p>
+      {% if population.rows %}<table><thead><tr><th>Metric</th><th>Observed value</th></tr></thead><tbody>
+        {% for label, value in population.rows %}<tr><th scope="row">{{ label }}</th>
+          <td>{{ value }}</td></tr>{% endfor %}
+      </tbody></table>{% else %}<p>undefined: no metrics for this frozen population.</p>{% endif %}
+    {% endfor %}
+    {% if entry.plots %}<div class="plots">{% for plot in entry.plots %}<figure><h3>{{ plot.title }}</h3>
+      <svg viewBox="0 0 420 390" role="img" aria-label="{{ plot.title }} plot">
+        <path d="M45 25 V345 H365" stroke="#485460" fill="none"/>
+        {% if plot.reference %}<line x1="{{ plot.reference.x1 }}" y1="{{ plot.reference.y1 }}"
+          x2="{{ plot.reference.x2 }}" y2="{{ plot.reference.y2 }}" stroke="#8c7b75" stroke-dasharray="5 4"/>{% endif %}
+        {% for point in plot.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="4" fill="#176b87">
+          <title>{{ point.label }}</title></circle>{% endfor %}
+        <text x="205" y="375" text-anchor="middle">{{ plot.x_label }}</text>
+        <text transform="translate(15,185) rotate(-90)" text-anchor="middle">{{ plot.y_label }}</text>
+      </svg><figcaption>Anonymous eligible observations with available model predictions.</figcaption>
+    </figure>{% endfor %}</div>{% endif %}
+  </section>{% endfor %}
+</main></body></html>

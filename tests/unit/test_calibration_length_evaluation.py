@@ -320,3 +320,18 @@ def test_no_feasible_candidate_is_explicit_and_cannot_select_fit_failure():
             validation_rows,
             fixed_candidate_id="physical-a",
         )
+
+
+def test_public_selection_helper_rejects_mutable_candidates_and_unknown_phase():
+    evaluation = import_module("vntyper.scripts.calibration_length_evaluation")
+    rows = evaluation_rows()
+    protocol, roster = evaluation_protocol(rows, ("affine-a", "affine-A"))
+    fitted = fitted_training(protocol)
+    result = evaluation.evaluate_length_hypotheses(fitted.outcomes, fitted.baseline, roster, protocol, rows)
+    with pytest.raises(ValueError, match="immutable tuple"):
+        evaluation.select_length_candidates(list(result.candidates), "policy-selection")
+    with pytest.raises(ValueError, match="phase"):
+        evaluation.select_length_candidates(result.candidates, "development")
+    malformed = replace(result.candidates[0], acceptance=object())
+    with pytest.raises(ValueError, match="typed evaluations"):
+        evaluation.select_length_candidates((malformed,), "policy-selection")

@@ -169,7 +169,7 @@ version = {attr = "vntyper.version.__version__"}
     # Every file under vntyper/templates/ is named here, not matched by a glob, so
     # adding one is a deliberate packaging decision rather than an accident of the
     # pattern. `_report_base.html` was missing until #242: a wheel built without it
-    # raised TemplateNotFound at render time for *both* reports, and nothing caught
+    # raised TemplateNotFound at render time for the reports, and nothing caught
     # it because an editable checkout always has the file on disk.
     "templates/_report_base.html",
     "templates/report_template.html",
@@ -177,6 +177,7 @@ version = {attr = "vntyper.version.__version__"}
     "templates/igv_report_template.html",
     "templates/calibration_report.html",
     "templates/calibration_caller_report.html",
+    "templates/calibration_length_report.html",
     # The vendored igv.js, gzipped, and the notice recording where it came from,
     # under what licence, and with which digests. Named one by one for the same
     # reason the templates are.
