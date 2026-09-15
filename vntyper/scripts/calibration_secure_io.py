@@ -100,7 +100,7 @@ def read_regular_path(path: Path) -> bytes:
 
     Raises:
         ValueError: If no-follow opens are unsupported, or the path is unreadable,
-            a symlink, or not a regular file.
+            a symlink, not a regular file, or changes while being read.
     """
     if not isinstance(path, Path) or not _NOFOLLOW or not _NONBLOCK:
         raise ValueError("secure calibration payload reads require Path, O_NOFOLLOW, and O_NONBLOCK support")
@@ -117,9 +117,16 @@ def read_regular_path(path: Path) -> bytes:
 
 
 def _read_descriptor(descriptor: int) -> bytes:
+    before = os.fstat(descriptor)
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
     chunks: list[bytes] = []
+    size = 0
     while True:
         chunk = os.read(descriptor, 1024 * 1024)
         if not chunk:
+            after = os.fstat(descriptor)
+            if size != before.st_size or any(getattr(before, field) != getattr(after, field) for field in fields):
+                raise ValueError("secure calibration payload changed during read")
             return b"".join(chunks)
         chunks.append(chunk)
+        size += len(chunk)
