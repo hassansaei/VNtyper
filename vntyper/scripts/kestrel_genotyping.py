@@ -35,43 +35,31 @@ import pandas as pd
 
 from vntyper.scripts.artifact_publish import discard_partial, partial_path, publish_partial
 from vntyper.scripts.command_builders import build_sam_to_bam_command, build_samtools_index_command, quote_path
-from vntyper.scripts.confidence_assignment import (
-    calculate_depth_score_and_assign_confidence,
-)
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.flagging import (
     KESTREL_FLAG_COLUMNS,
     CompiledFlagRules,
-    add_artifact_gate,
     add_flags,
     compile_flag_rules,
     validate_duplicate_flagging_config,
 )
-from vntyper.scripts.identity_candidate_persistence import (
-    IDENTITY_CAPTURE_COLUMNS,
-    IDENTITY_SELECTION_COLUMNS,
-    candidate_capture_cells,
-    complete_candidate_projection_cells,
-    selected_candidate_cells,
-)
+from vntyper.scripts.identity_candidate_persistence import IDENTITY_CAPTURE_COLUMNS
 from vntyper.scripts.identity_candidates import (
     IdentityTranslationComponent,
-    capture_kestrel_observations,
-    overlay_legacy_projection,
     translation_component_from_config,
-    with_candidate_evidence,
 )
 from vntyper.scripts.identity_dominance_selection import select_identity_dominance_variant
 from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH, execute_attempt
 from vntyper.scripts.kestrel_decision_config import KestrelSelection, project_kestrel_selection
 from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
+from vntyper.scripts.kestrel_postprocessing import (
+    FILTER_COLUMNS,
+    evaluate_kestrel_candidates,
+    filter_and_select_kestrel_candidates,
+)
 from vntyper.scripts.kestrel_result_artifacts import write_empty_kestrel_artifacts
 from vntyper.scripts.kestrel_vcf_contract import describe_unusable_vcf
-from vntyper.scripts.molecular_identity_presentation import (
-    IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS,
-    identity_translation_diagnostic_cells,
-)
 from vntyper.scripts.motif_processing import (
     load_additional_motifs,
     load_muc1_reference,
@@ -84,19 +72,11 @@ from vntyper.scripts.run_configuration import (
     resolve_compatibility_component,
     resolve_compatibility_runtime_component,
 )
-from vntyper.scripts.scoring import (
-    extract_frameshifts,
-    split_depth_and_calculate_frame_score,
-    split_frame_score,
-)
 from vntyper.scripts.subthreshold import detect_from_file, format_note
 from vntyper.scripts.utils import load_config, run_command
 
 # Modularized functions for variant parsing/scoring/confidence
-from vntyper.scripts.variant_parsing import (
-    filter_by_alt_values_and_finalize,
-    read_vcf_without_comments,
-)
+from vntyper.scripts.variant_parsing import read_vcf_without_comments
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
@@ -122,22 +102,6 @@ def load_kestrel_config(config_path=None):
         # Default path to kestrel_config.json
         config_path = os.path.join(os.path.dirname(__file__), "kestrel_config.json")
     return load_config(config_path)
-
-
-#: The boolean gate columns :func:`filter_final_dataframe` requires and ANDs, in order.
-#:
-#: A module constant rather than a list inside that function because
-#: :func:`vntyper.scripts.subthreshold.detect` is handed it: eligibility for the #266
-#: below-reporting-floor note is "fails ``depth_confidence_pass`` and nothing else", and
-#: restating the gates there would let a seventh gate be added here and silently widen it.
-FILTER_COLUMNS: tuple[str, ...] = (
-    "is_frameshift",
-    "is_valid_frameshift",
-    "depth_confidence_pass",
-    "alt_filter_pass",
-    "motif_filter_pass",
-    "flag_filter_pass",
-)
 
 
 def generate_header(reference_vntr, version=VERSION):
@@ -910,123 +874,37 @@ def process_kmer_results(
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
     """
-    selection = _resolve_selection(
-        kestrel_config,
-        custom_context_active=custom_context_active,
-        strategy=strategy,
-    )
-    if compiled_flag_rules is None:
-        compiled_flag_rules = compile_flag_rules(kestrel_config.get("flagging_rules", {}), KESTREL_FLAG_COLUMNS)
-    duplicates_config = kestrel_config.get("duplicate_flagging", {})
-    validate_duplicate_flagging_config(duplicates_config, compiled_flag_rules)
+    selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active, strategy=strategy)
 
-    if combined_df.empty:
-        return combined_df
+    def write_prefilter(frame: pd.DataFrame) -> None:
+        pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
+        frame.to_csv(pre_result_path, sep="\t", index=False)
+        logger.info("Wrote pre-filter DataFrame to %s", pre_result_path)
 
-    # (1) Split depth fields & calculate initial frame score
-    df = split_depth_and_calculate_frame_score(combined_df, modulus=selection.modulus)
-    if df.empty:
-        return df
-
-    # (2) Split frame score into numeric 'direction'/'frameshift_amount'
-    df = split_frame_score(df, modulus=selection.modulus)
-    if df.empty:
-        return df
-
-    # (3) Extract frameshifts by analyzing the pattern of 3n+1 or 3n+2
-    df = extract_frameshifts(
-        df,
-        frameshift={
-            "insertion_remainder": selection.insertion_remainder,
-            "deletion_remainder": selection.deletion_remainder,
-        },
-    )
-    if df.empty:
-        return df
-
-    # (4) Assign confidence via coverage-based heuristics from config
-    df = calculate_depth_score_and_assign_confidence(df, kestrel_config)
-    if df.empty:
-        return df
-
-    identity_candidates = None
-    if identity_component is not None:
-        capture_records = df.to_dict("records")
-        for record in capture_records:
-            record["Motif_sequence"] = str(record["Motif_sequence"])
-        identity_candidates = capture_kestrel_observations(capture_records, identity_component)
-        capture_rows = [candidate_capture_cells(candidate) for candidate in identity_candidates.candidates]
-        df = df.copy()
-        for column in IDENTITY_CAPTURE_COLUMNS:
-            df[column] = [cells[column] for cells in capture_rows]
-        diagnostic_rows = [
-            identity_translation_diagnostic_cells(candidate.observation.translation)
-            for candidate in identity_candidates.candidates
-        ]
-        for column in IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS:
-            df[column] = [cells[column] for cells in diagnostic_rows]
-
-    # (4.5) Add haplo_count after confidence assignment
-    df = add_haplo_count(df)
-
-    # (5) Filter certain ALT values (e.g., discarding 'GG' if below threshold)
-    df = filter_by_alt_values_and_finalize(df, kestrel_config)
-    if df.empty:
-        return df
-
-    # (6) Motif correction & annotation
-    df = motif_correction_and_annotation(df, merged_motifs, kestrel_config)
-    if df.empty:
-        return df
-
-    # (6.5) Apply flagging BEFORE selection so flags inform variant choice.
-    # All columns needed by flagging rules (Depth_Score, Motif, REF, ALT)
-    # are available after step (6). Moving flagging here fixes #145: previously,
-    # a flagged variant could be selected over an unflagged one because
-    # select_single_best_variant ran before add_flags.
-    if compiled_flag_rules.rules or duplicates_config.get("enabled", False):
-        df = add_flags(df, compiled_flag_rules, duplicates_config=duplicates_config)
-
-    # (6.5b) #174: derive the artifact gate. Unconditional, unlike add_flags above: a
-    # frame that reached the final filter without `flag_filter_pass` would abort the run
-    # on a missing required gate column (#185). Which flags are artifacts is
-    # configuration; an absent or empty `artifact_flags` list excludes nothing, which is
-    # exactly the pre-#174 behaviour.
-    df = add_artifact_gate(df, kestrel_config.get("artifact_flags", []))
-
-    evidenced_candidates = None
-    passing_identity_ordinals: tuple[int, ...] = ()
-    if identity_candidates is not None:
-        evidenced_candidates = with_candidate_evidence(identity_candidates, df.to_dict("records"))
-        passing_mask = df[list(selection.final_filter_columns)].all(axis=1)
-        passing_identity_ordinals = tuple(
-            int(serialized) for serialized in df.loc[passing_mask, IDENTITY_CAPTURE_COLUMNS[5]]
+    try:
+        evaluation = evaluate_kestrel_candidates(
+            combined_df,
+            merged_motifs,
+            kestrel_config,
+            selection=selection,
+            add_haplo_count_fn=add_haplo_count,
+            select_single_best_variant_fn=lambda frame, resolved: select_single_best_variant(frame, selection=resolved),
+            compiled_flag_rules=compiled_flag_rules,
+            identity_component=identity_component,
+            retain_complete_identity_candidates=retain_complete_identity_candidates,
+            motif_annotation_fn=motif_correction_and_annotation,
+            prefilter_observer=write_prefilter,
         )
-        if retain_complete_identity_candidates:
-            projections = complete_candidate_projection_cells(evidenced_candidates, passing_identity_ordinals)
-            for column in IDENTITY_SELECTION_COLUMNS:
-                df[column] = ""
-            for row_index in df.index[passing_mask]:
-                ordinal = int(df.loc[row_index, IDENTITY_CAPTURE_COLUMNS[5]])
-                for column, value in projections[ordinal].items():
-                    df.loc[row_index, column] = value
+    except ValueError as error:
+        logger.error(str(error))
+        raise
+    if not evaluation.reached_final_filter:
+        return evaluation.selected
 
-    # (7) Final Filter
-    df = filter_final_dataframe(df, output_dir, selection=selection)
+    df = evaluation.selected
     if df.empty:
         logger.info("All rows failed one or more filter criteria. Returning empty.")
         return df
-
-    if evidenced_candidates is not None:
-        df = df.drop(columns=list(IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS))
-        selected_ordinal = int(df.iloc[0][IDENTITY_CAPTURE_COLUMNS[5]])
-        selected_candidates = overlay_legacy_projection(
-            evidenced_candidates,
-            passing_identity_ordinals,
-            selected_ordinal,
-        )
-        for column, value in selected_candidate_cells(selected_candidates).items():
-            df[column] = value
 
     # (8) Now generate the BED file from the fully filtered result
     bed_file_path = generate_bed_file(df, output_dir)
@@ -1335,47 +1213,18 @@ def filter_final_dataframe(
 
     resolved_selection = _resolve_selection(selection, strategy=strategy)
 
-    # Columns every non-empty frame is required to carry
-    filter_cols = resolved_selection.final_filter_columns
-
-    # Build a mask requiring all existing boolean filters == True
-    final_mask = pd.Series(True, index=df.index)
-    for col in filter_cols:
-        if col in df.columns:
-            before_count = final_mask.sum()
-            final_mask &= df[col]
-            after_count = final_mask.sum()
-            logger.info(
-                "Filter column '%s' exists; %d -> %d rows remain after requiring True.",
-                col,
-                before_count,
-                after_count,
-            )
-        else:
-            # #185: a missing gate is an error, not a permit. @hassansaei:
-            # "a missing required gate column should raise (abort the run), not
-            # be skipped [...] That is not acceptable for this pipeline."
-            # Reachability: this function's only caller is process_kmer_results,
-            # behind six `if df.empty: return df` guards, so any frame arriving
-            # here is non-empty and has traversed every stage that adds a gate
-            # column. An empty frame short-circuits above -- that is the explicit
-            # empty-result path his decision carves out.
-            msg = (
-                f"Required filter column '{col}' is missing from a non-empty Kestrel result frame. "
-                "An upstream stage stopped emitting it, so its safety gate would silently become a "
-                "permit. Aborting rather than reporting unfiltered variants. See issue #185."
-            )
-            logger.error(msg)
-            raise ValueError(msg)
-
-    filtered_df = df[final_mask].copy()
+    try:
+        filtered_df = filter_and_select_kestrel_candidates(
+            df,
+            selection=resolved_selection,
+            select_single_best_variant_fn=lambda frame, resolved: select_single_best_variant(frame, selection=resolved),
+        )
+    except ValueError as error:
+        logger.error(str(error))
+        raise
     logger.info("Final DataFrame has %d rows after all filters.", len(filtered_df))
 
-    # Select single best variant using multi-key priority sorting or identity dominance
-    if len(filtered_df) > 1:
-        filtered_df = select_single_best_variant(filtered_df, selection=resolved_selection)
-        logger.info("Selected 1 best variant from %d candidates.", len(df[final_mask]))
-    elif len(filtered_df) == 1:
+    if len(filtered_df) == 1:
         logger.info("Only 1 variant passed all filters (no selection needed).")
     else:
         logger.info("No variants passed all filters.")
