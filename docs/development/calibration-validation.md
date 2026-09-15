@@ -1,6 +1,11 @@
 # Calibration validation and the open external-evidence gate
 
-The calibration engine is future-facing and opt-in. It evaluates dominance and whole-locus abstention from retained artifacts; it does not recalibrate caller cutoffs, change the packaged profile, alter a default run, or auto-select a generated profile.
+The dominance calibration engine is future-facing and opt-in. It evaluates dominance and whole-locus abstention from retained artifacts; it does not recalibrate caller cutoffs, change the packaged profile, alter a default run, or auto-select a generated profile.
+
+The separate [caller and length targets](../cli/calibration-targets.md) extend the
+framework with caller-policy and regression evaluation. They retain explicit
+research, validation, and external locked roles; this page describes the earlier
+dominance replay and its independent-evidence gate.
 
 ## Development replay pinned in this repository
 

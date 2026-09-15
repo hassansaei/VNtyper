@@ -2,7 +2,12 @@
 
 Audit local study inputs, then build and evaluate explicit opt-in calibration profiles. Calibration never modifies the packaged profile, alters shipped cutoffs, or activates outputs automatically.
 
-## Operations
+For caller cutoffs, background models, and total diploid VNTR length, see
+[Caller and VNTR length calibration](calibration-targets.md). These use explicit
+`--target callers` or `--target length`; the workflow below retains the default
+`dominance` target.
+
+## Dominance operations
 
 ```text
 vntyper calibrate intake --manifest INTAKE --output AUDIT \
@@ -40,7 +45,7 @@ CRAM intake additionally takes `--cram-references PATH`. The file uses a closed 
 
 Omit `--cram-references` when the declaration has no CRAM artifacts. Reference paths are absolute, local, and SHA-256 pinned; ambient reference downloads are not used.
 
-All options shown for the other operations are required. `fit` accepts only `lexicographic-safety-v1`, which must match the objective hashed into the evidence protocol. Argument parsing errors exit 2. Malformed intake or unexecutable operations exit 1 without writing partial outputs. Failed `validate` or `evaluate` runs exit 1 after recording attestations, reports, checksums, and retirement logs.
+All options shown for the other operations are required. Dominance `fit` accepts only `lexicographic-safety-v1`, which must match the objective hashed into the evidence protocol. Argument parsing errors exit 2. Malformed intake or unexecutable operations exit 1 without writing partial outputs. Failed `validate` or `evaluate` runs exit 1 after recording attestations, reports, checksums, and retirement logs.
 
 Outputs stage as private sibling directories and appear at `--output` atomically. Publication currently requires Linux libc and filesystem support for `renameat2(RENAME_NOREPLACE)`. VNtyper fails before intake evidence reads when that no-clobber primitive is unavailable. Existing files, directories, and symlinks at the destination are never replaced.
 
