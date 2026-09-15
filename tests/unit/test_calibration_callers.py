@@ -270,9 +270,7 @@ def test_advntr_native_decision_policy_changes_use_verified_scalar_replay(pointe
         ("/components/advntr/calibrated_calling/prune_reverse", True),
     ],
 )
-def test_advntr_capture_policy_change_is_recapture_and_needs_no_scalar_attestation(
-    pointer: str, value: object
-) -> None:
+def test_advntr_capture_policy_change_is_recapture_and_needs_no_scalar_attestation(pointer: str, value: object) -> None:
     callers = import_module("vntyper.scripts.calibration_callers")
     artifacts = import_module("vntyper.scripts.calibration_caller_artifacts")
     baseline = decode_caller_policy_values(policy_document())

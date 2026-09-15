@@ -78,7 +78,9 @@ def _shown(value: float, precision: int) -> str:
     return f"{value:.{precision}f}".rstrip("0").rstrip(".")
 
 
-def _configuration(report_config: Mapping[str, object]) -> tuple[str, str, str, Mapping[str, object], Mapping[str, object]] | None:
+def _configuration(
+    report_config: Mapping[str, object],
+) -> tuple[str, str, str, Mapping[str, object], Mapping[str, object]] | None:
     raw = report_config.get("length_estimation")
     if raw is None:
         return None
@@ -187,7 +189,10 @@ def build_length_presentation(
     features = summary.get("length_features")
     features_sha256 = summary.get("length_features_sha256")
     if status == "disabled":
-        if any(value is not None for value in (estimate, calibration_id, model_sha256, features, features_sha256)) or reasons:
+        if (
+            any(value is not None for value in (estimate, calibration_id, model_sha256, features, features_sha256))
+            or reasons
+        ):
             raise ValueError("disabled length presentation contains measured or model values")
         feature_values: tuple[tuple[str, str], ...] = ()
     else:
