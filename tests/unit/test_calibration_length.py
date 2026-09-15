@@ -226,6 +226,14 @@ def test_large_finite_truth_does_not_overflow_the_training_mean():
     assert result.outcomes[0].status in {"fitted", "ineligible"}
 
 
+def test_training_rejects_fractional_values_as_nonexact_repeat_truth():
+    training = import_module("vntyper.scripts.calibration_length")
+    rows = (training_row("1", 1, 60.5), training_row("2", 2, 110))
+    roster = roster_for(rows)
+    with pytest.raises(ValueError, match="integral exact repeat count"):
+        training.fit_length_hypotheses(rows, roster, protocol_for("affine-A"), metadata_for(rows, roster))
+
+
 @pytest.mark.parametrize(
     "change,match",
     [

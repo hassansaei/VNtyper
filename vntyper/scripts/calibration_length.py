@@ -174,6 +174,13 @@ def _positive_number(value: object, label: str) -> float:
     return result
 
 
+def _exact_repeat_count(value: object, label: str) -> float:
+    result = _positive_number(value, label)
+    if not result.is_integer():
+        _fail(f"length training {label} must be an integral exact repeat count")
+    return result
+
+
 def _metadata_qc(value: object) -> Mapping[str, int | float]:
     raw = _object(value, _QC_FIELDS, "QC")
     model_qc = decode_length_model_qc({**raw, "fragment_evidence_kind": "read-pair-identity-qc-proxy"})
@@ -369,7 +376,7 @@ def _training_rows(
             _fail("length training rows must have the training role")
         if row.truth_boundary_definition != TARGET_BOUNDARY_DEFINITION:
             _fail("length training truth boundary definition is incompatible")
-        _positive_number(row.total_truth_repeat_count, "total truth repeat count")
+        _exact_repeat_count(row.total_truth_repeat_count, "total truth repeat count")
         if not isinstance(row.evidence_domain, str) or row.evidence_domain not in {"synthetic", "external"}:
             _fail("length training evidence domain must be synthetic or external")
         encode_length_features(row.features)
