@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
-import shutil
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
+
+from vntyper.scripts.calibration_atomic_io import atomic_output
 
 logger = logging.getLogger(__name__)
 
@@ -53,24 +52,8 @@ def handle_calibrate(
 
 
 def _atomic_output(output: Path, producer: Callable[[Path], bool]) -> bool:
-    """Build a sibling directory and rename it only after complete success."""
-    if not isinstance(output, Path):
-        raise ValueError("calibration output must be a Path")
-    if output.exists() or output.is_symlink():
-        raise ValueError(f"calibration output already exists: {output}")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
-    try:
-        successful = producer(staging)
-        if not isinstance(successful, bool):
-            raise ValueError("calibration operation must return a completed-operation success value")
-        if not any(staging.iterdir()):
-            raise ValueError("calibration operation produced no artifacts")
-        os.rename(staging, output)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    return successful
+    """Delegate CLI publication to the shared no-clobber directory primitive."""
+    return atomic_output(output, producer)
 
 
 def _extract(args: argparse.Namespace, output: Path) -> bool:
