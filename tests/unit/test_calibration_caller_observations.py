@@ -153,7 +153,7 @@ def test_replayed_observation_uses_complete_kestrel_capture_and_retains_no_call(
     assert no_call.disposition == "no-call"
 
 
-def test_replayed_observation_never_turns_empty_capture_or_audit_failure_negative() -> None:
+def test_replayed_observation_distinguishes_zero_candidates_from_audit_failure() -> None:
     truth = decode_caller_truth(_truth(), ("case-known", "case-missing", "control", "unknown"))
     capture = _capture(_raw().iloc[0:0], kestrel_config())
     member = EligibleCallerMember("control", "group-control", ("all",))
@@ -165,12 +165,25 @@ def test_replayed_observation_never_turns_empty_capture_or_audit_failure_negativ
         policy=capture.baseline_policy,
         capture_policy_sha256=capture.provenance.capture_policy_sha256,
         advntr_calls=(),
-        advntr_assessable=False,
+        advntr_assessable=True,
         source_evidence_sha256="d" * 64,
     )
 
-    assert row.observation.called_positive is None
-    assert row.disposition == "unsupported"
+    assert row.observation.called_positive is False
+    assert row.disposition == "zero-candidate"
+
+    failed = replayed_caller_observation(
+        member,
+        truth,
+        kestrel_capture=capture,
+        policy=capture.baseline_policy,
+        capture_policy_sha256=capture.provenance.capture_policy_sha256,
+        advntr_calls=(),
+        advntr_assessable=False,
+        source_evidence_sha256="e" * 64,
+    )
+    assert failed.observation.called_positive is None
+    assert failed.disposition == "unsupported"
 
 
 def _json(value: object) -> bytes:

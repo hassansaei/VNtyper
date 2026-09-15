@@ -516,7 +516,7 @@ def replayed_caller_observation(
             disposition = "called"
             tier_a = variants if result.decision.tier == "A" else ()
         elif replay.source_row_count == 0:
-            disposition, called_positive, variants, tier_a = "unsupported", None, (), ()
+            disposition, called_positive, variants, tier_a = "zero-candidate", False, (), ()
         else:
             disposition, called_positive, variants, tier_a = "no-call", None, (), ()
     truth_positive, truth_variants = _truth_values(truth.by_key[member.key])
