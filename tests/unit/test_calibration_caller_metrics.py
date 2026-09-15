@@ -19,7 +19,7 @@ def _row(key: str, truth: bool | None, call: bool | None, /, **changes: object) 
         CallerObservation(
             key, key, truth, None if truth is None else (("v1",) if truth else ()), call, ("v1",) if call else (), ()
         ),
-        **changes,
+        **changes,  # type: ignore[arg-type]  # Deliberately malformed fields exercise validation.
     )
 
 
@@ -151,6 +151,8 @@ def test_metrics_are_order_invariant_and_rate_uncertainty_is_central_95_percent(
     rows = (_row("a", True, True), _row("b", False, False))
     result = calculate_caller_metrics(rows)
     assert result == calculate_caller_metrics(tuple(reversed(rows)))
+    assert result.sensitivity.lower is not None
     assert float(result.sensitivity.lower) == pytest.approx(0.025)
     assert result.sensitivity.upper == 1
+    assert result.fpr_one_sided_upper is not None
     assert float(result.fpr_one_sided_upper) == pytest.approx(0.95)

@@ -63,6 +63,20 @@ def test_report_is_offline_escaped_and_contains_counts_intervals_and_rejections(
     assert "lexicographic-safety-v1" in html
 
 
+def test_nonempty_negative_population_labels_empty_metric_denominators() -> None:
+    candidates, _ = _inputs()
+    negative_rows = candidates[0].observations[1:]
+    candidates = tuple(replace(candidate, observations=negative_rows) for candidate in candidates)
+    roster = decode_caller_eligible_roster([{"key": negative_rows[0].key, "group_key": "g2", "strata": ["nominal"]}])
+
+    html = _render(candidates, roster, required_strata=("nominal",))
+
+    assert "Eligible independent groups</th><td>1</td>" in html
+    for label in ("Sensitivity", "Precision (study prevalence)", "Exact variant-set recovery"):
+        assert f"{label}</th><td>undefined (0/0; empty metric denominator)</td>" in html
+    assert "undefined (0 eligible groups)" not in html
+
+
 def test_report_rejects_an_omitted_no_call_before_calculating_denominators():
     candidates, roster = _inputs()
     incomplete = replace(candidates[1], observations=candidates[1].observations[1:])

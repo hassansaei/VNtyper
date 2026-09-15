@@ -78,7 +78,7 @@ def _metric_rows(metrics: CallerMetrics) -> list[tuple[str, str]]:
         ("Exact variant-set recovery", metrics.exact_variant_recovery),
     ):
         value = (
-            "undefined (0 eligible groups)"
+            "undefined (0/0; empty metric denominator)"
             if rate.estimate is None or rate.lower is None or rate.upper is None
             else (
                 f"{rate.events}/{rate.total} ({100 * float(rate.estimate):.2f}%; "

@@ -60,7 +60,7 @@ def test_fixed_no_calls_remain_visible_in_curve_denominators() -> None:
 @pytest.mark.parametrize("phase", ["training", "validation", "locked-heldout", "development-assessment", None])
 def test_no_search_curve_from_validation_or_other_outcomes(phase: object) -> None:
     with pytest.raises(ValueError, match="policy-selection"):
-        build_caller_curves((_point(9, (True, False, False, False)),), comparison=">=", phase=phase)
+        build_caller_curves((_point(9, (True, False, False, False)),), comparison=">=", phase=phase)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("mode", ["reversed-decision", "availability", "truth", "roster", "policy", "threshold", "id"])
@@ -91,7 +91,7 @@ def test_incomparable_or_inconsistent_operating_points_fail(mode: str) -> None:
     "changes", [{"threshold": 0.5}, {"candidate_id": "bad"}, {"fixed_policy_sha256": "bad"}, {"observations": []}]
 )
 def test_malformed_point_contracts_fail(changes: dict[str, object]) -> None:
-    point = replace(_point(9, (True, False, False, False)), **changes)
+    point = replace(_point(9, (True, False, False, False)), **changes)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         build_caller_curves((point,), comparison=">=", phase="policy-selection")
 
@@ -102,7 +102,7 @@ def test_malformed_point_contracts_fail(changes: dict[str, object]) -> None:
 )
 def test_invalid_collections_and_comparators_fail(points: object, comparison: str) -> None:
     with pytest.raises(ValueError):
-        build_caller_curves(points, comparison=comparison, phase="policy-selection")
+        build_caller_curves(points, comparison=comparison, phase="policy-selection")  # type: ignore[arg-type]
 
 
 def test_single_truth_class_is_explicitly_unassessable_for_roc() -> None:
