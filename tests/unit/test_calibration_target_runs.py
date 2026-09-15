@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from copy import deepcopy
 from dataclasses import replace
+from typing import cast
 
 import pytest
 
@@ -46,7 +48,7 @@ def test_manifest_is_immutable_and_keeps_same_artifact_policy_arms() -> None:
     raw["runs"][0]["assets"]["length_features"]["sha256"] = "0" * 64
     assert decoded.runs[0].assets["length_features"].sha256 == "d" * 64
     with pytest.raises(TypeError):
-        decoded.runs[0].assets["other"] = decoded.runs[0].assets["length_features"]
+        cast(MutableMapping, decoded.runs[0].assets)["other"] = decoded.runs[0].assets["length_features"]
 
 
 @pytest.mark.parametrize(
