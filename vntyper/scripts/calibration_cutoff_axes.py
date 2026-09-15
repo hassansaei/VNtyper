@@ -222,9 +222,29 @@ def _scalar(spec: _AxisSpec, value: Fraction) -> int | float | None:
     return int(value) if value.denominator == 1 else None
 
 
-def _overrides(spec: _AxisSpec, scalar: int | float) -> dict[str, CallerPolicyScalar]:
+def _overrides(baseline: CallerPolicyValues, spec: _AxisSpec, scalar: int | float) -> dict[str, CallerPolicyScalar]:
+    """Resolve every pointer one breakpoint moves, keeping the policy admissible.
+
+    The linked depth axis is the detection floor. Two production rules constrain it.
+    A score at or above the floor but below the mid-band edge matches no confidence
+    rule and falls through to Negative, so the edge must never sit above the floor.
+    The policy decoder separately requires ``low <= high``. Setting the edge to
+    ``min(floor, high)`` satisfies both: below the shipped edge the three gates move
+    together, and above it the edge stays at ``high`` so the floor can keep rising.
+    Clamping rather than refusing is what keeps the tightening arm of the curve
+    reachable; refusing would truncate every sweep at the shipped edge.
+
+    Args:
+        baseline: Complete baseline policy supplying the unmoved values.
+        spec: Static definition of the axis being moved.
+        scalar: One admissible breakpoint on that axis.
+
+    Returns:
+        Pointer-to-value overrides to apply on top of the baseline.
+    """
     if spec.primary == _FLOOR:
-        return {_FLOOR: scalar, _LOW: scalar, _GG: scalar}
+        high = cast("int | float", baseline.values[_HIGH])
+        return {_FLOOR: scalar, _LOW: min(scalar, high), _GG: scalar}
     if spec.primary == _ALT_LOW:
         return {_ALT_LOW: scalar, _ALT_MID_LOW: cast(int, scalar) + 1}
     return {spec.primary: scalar}
@@ -233,7 +253,7 @@ def _overrides(spec: _AxisSpec, scalar: int | float) -> dict[str, CallerPolicySc
 def _policy(baseline: CallerPolicyValues, spec: _AxisSpec, scalar: int | float) -> CallerPolicyValues:
     raw = caller_policy_values_document(baseline)
     values = dict(baseline.values)
-    values.update(_overrides(spec, scalar))
+    values.update(_overrides(baseline, spec, scalar))
     return decode_caller_policy_values({**raw, "values": values})
 
 
@@ -469,7 +489,9 @@ def axis_candidates(baseline: CallerPolicyValues, axis: AxisBreakpoints) -> tupl
     for index, value in enumerate(axis.values):
         policy = _policy(baseline, spec, value)
         changed = {
-            pointer: scalar for pointer, scalar in _overrides(spec, value).items() if baseline.values[pointer] != scalar
+            pointer: scalar
+            for pointer, scalar in _overrides(baseline, spec, value).items()
+            if baseline.values[pointer] != scalar
         }
         candidates.append(CutoffCandidate(f"{axis.axis}-{index:04d}", policy, MappingProxyType(changed)))
     return tuple(candidates)

@@ -213,9 +213,11 @@ def test_max_values_keeps_a_boundary_baseline_and_does_not_cap_a_short_axis():
 
 def test_out_of_range_breakpoints_are_rejected_with_a_reason_rather_than_raising():
     base = baseline()
+    # 0.9 is an extreme but admissible depth-score ratio and is kept; only a value
+    # outside the decoder's [0, 1] range is refused, and it is refused with a reason.
     axis = derive_axis(DEPTH_FLOOR_LINKED, {"s1": fractions(0.001, 0.9, 1.5)}, baseline=base)
-    assert axis.values == (0.001, 0.00469)
-    assert [value for value, _ in axis.rejected] == [0.9, 1.5]
+    assert axis.values == (0.001, 0.00469, 0.9)
+    assert [value for value, _ in axis.rejected] == [1.5]
     assert all(isinstance(reason, str) and reason for _, reason in axis.rejected)
     assert axis.observed_count == 3
 
@@ -227,9 +229,31 @@ def test_non_integral_breakpoints_are_rejected_on_integer_axes():
     assert [value for value, _ in axis.rejected] == [10.5, 99.0]
 
 
-def test_a_baseline_that_cannot_move_along_its_own_axis_is_refused():
-    with pytest.raises(ValueError):
-        derive_axis(DEPTH_FLOOR_LINKED, {}, baseline=baseline(**{FLOOR: 0.9}))
+def test_an_inadmissible_alternate_depth_baseline_is_refused_before_any_axis_exists():
+    """The band partition is a policy invariant, so it fails at construction.
+
+    ``mid_low`` must be ``low + 1`` and ``mid_high`` at least ``mid_low + 1``, so a
+    baseline on that ceiling is never decoded in the first place and no axis can be
+    derived from it. Asserting the refusal here, rather than around ``derive_axis``,
+    keeps the test honest about which call raises.
+    """
+    with pytest.raises(ValueError, match="alternate-depth partition"):
+        baseline(**{ALT_LOW: 99, ALT_MID_LOW: 100})
+
+
+def test_every_axis_can_hold_its_own_baseline_value():
+    """Re-encoding a decoded baseline at its own anchor is always admissible.
+
+    This is what makes the "baseline value is always present" guarantee safe: the
+    anchor reproduces an already-valid policy, so it can never be screened out. The
+    anchor guard in the screening loop therefore protects a future axis whose
+    coupling could invalidate its own anchor, not any axis shipped today.
+    """
+    base = baseline()
+    for axis_name in (DEPTH_FLOOR_LINKED, GG_GATE_INDEPENDENT, DEPTH_SCORE_HIGH, ALT_DEPTH_BAND, ACTIVE_REGION):
+        axis = derive_axis(axis_name, {}, baseline=base)
+        assert axis.rejected == ()
+        assert len(axis.values) == 1
 
 
 def test_declared_axis_is_baseline_anchored_and_validated():
@@ -279,12 +303,12 @@ def test_axis_candidates_refuse_forged_axes_and_unusable_values():
 
 def test_axis_document_round_trips():
     base = baseline()
-    axis = derive_axis(DEPTH_FLOOR_LINKED, {"s1": fractions(0.001, 0.9)}, baseline=base)
+    axis = derive_axis(DEPTH_FLOOR_LINKED, {"s1": fractions(0.001, 1.5)}, baseline=base)
     document = axis_document(axis)
     assert document["schema_version"] == "calibration-cutoff-axis-v1"
     assert document["axis"] == DEPTH_FLOOR_LINKED and document["statistic"] == "Depth_Score"
     assert document["pointers"] == list(axis.pointers) and document["values"] == list(axis.values)
-    assert document["rejected"] == [{"value": 0.9, "reason": document["rejected"][0]["reason"]}]
+    assert document["rejected"] == [{"value": 1.5, "reason": document["rejected"][0]["reason"]}]
     assert json.loads(json.dumps(document)) == document
     assert canonical_sha256(document) == canonical_sha256(axis_document(axis))
     rebuilt = declared_axis(document["axis"], document["values"], baseline=base)
@@ -316,3 +340,45 @@ def test_axis_breakpoints_are_frozen_and_immutable():
     assert isinstance(axis, AxisBreakpoints)
     with pytest.raises(AttributeError):
         axis.values = ()
+
+
+def test_linked_axis_reaches_thresholds_above_the_band_edge_by_clamping_low():
+    """The upper ROC arm must be reachable, or the curve is truncated.
+
+    Raising the detection floor above the mid-band edge is a valid tightening: the
+    floor rule fires before the mid-band rule, so detection narrows. Only ``low`` is
+    constrained by ``low <= high``, so the axis clamps the band edge instead of
+    refusing the breakpoint. Refusing it would truncate the sweep at 0.00515 and make
+    any optimum found at the top of the tested range an artifact of the truncation.
+    """
+    base = baseline()
+
+    axis = derive_axis(DEPTH_FLOOR_LINKED, {"s": fractions(0.002, 0.01, 0.05)}, baseline=base)
+
+    assert axis.rejected == ()
+    assert float(Fraction(1, 100)) in axis.values
+    assert float(Fraction(1, 20)) in axis.values
+    candidates = {candidate.parameters.get(FLOOR): candidate for candidate in axis_candidates(base, axis)}
+    raised = candidates[0.01]
+    assert raised.policy.values[FLOOR] == 0.01
+    assert raised.policy.values[GG] == 0.01
+    assert raised.policy.values[LOW] == SHIPPED[HIGH]
+    lowered = candidates[0.002]
+    assert lowered.policy.values[LOW] == 0.002
+
+
+def test_linked_axis_never_strands_a_score_in_the_negative_fallback():
+    """Every admitted score must land in a labelled confidence band.
+
+    A score at or above the floor but below ``low`` matches no confidence rule and
+    falls through to Negative, which is the defect that made earlier single-gate
+    grids change nothing. The axis must keep ``low <= floor`` at every breakpoint.
+    """
+    base = baseline()
+
+    axis = derive_axis(DEPTH_FLOOR_LINKED, {"s": fractions(0.0009, 0.003, 0.00469, 0.02)}, baseline=base)
+
+    for candidate in axis_candidates(base, axis):
+        floor = candidate.policy.values[FLOOR]
+        assert candidate.policy.values[LOW] <= floor
+        assert candidate.policy.values[GG] == floor
