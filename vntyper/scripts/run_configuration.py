@@ -6,10 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from vntyper.scripts.canonical_json import load_strict_json_object
 from vntyper.scripts.decision_profile import ResolvedDecisionProfile, resolve_decision_profile
+
+if TYPE_CHECKING:
+    from vntyper.scripts.pipeline_caller_configuration import CallerPipelineConfiguration
 
 StageName = Literal["kestrel", "advntr", "shark", "nomenclature", "cross_match", "dominance"]
 
@@ -41,6 +44,7 @@ class RunConfiguration:
     kestrel_runtime: Mapping[str, object]
     advntr_runtime: Mapping[str, object]
     shark_runtime: Mapping[str, object]
+    caller_calibration: CallerPipelineConfiguration | None = None
 
 
 def _load_runtime_components() -> dict[str, Mapping[str, object]]:
@@ -65,20 +69,37 @@ def _load_runtime_components() -> dict[str, Mapping[str, object]]:
     }
 
 
-def resolve_run_configuration(path: str | Path | None = None) -> RunConfiguration:
+def resolve_run_configuration(
+    path: str | Path | None = None,
+    *,
+    calibration_bundle: str | Path | None = None,
+    calibration_context: str | Path | None = None,
+) -> RunConfiguration:
     """Resolve and recursively freeze all decision components once.
 
     Args:
         path: Explicit complete decision profile, or None for the package default.
+        calibration_bundle: Approved portable caller bundle, exclusive with path.
+        calibration_context: Paired explicit applicability context.
 
     Returns:
         Frozen run configuration.
     """
-    profile = resolve_decision_profile(path)
+    if (calibration_bundle is None) != (calibration_context is None):
+        raise ValueError("calibration bundle and context must be paired together")
+    if path is not None and calibration_bundle is not None:
+        raise ValueError("decision profile and calibration bundle are exclusive")
+    caller_calibration = None
+    if calibration_bundle is not None and calibration_context is not None:
+        from vntyper.scripts.pipeline_caller_configuration import resolve_caller_pipeline_configuration
+
+        caller_calibration = resolve_caller_pipeline_configuration(Path(calibration_bundle), Path(calibration_context))
+    profile = resolve_decision_profile(path) if caller_calibration is None else caller_calibration.bundle.profile
     frozen = {name: _freeze(component) for name, component in profile.components.items()}
     runtime = {name: _freeze(component) for name, component in _load_runtime_components().items()}
     return RunConfiguration(
         decision_profile=profile,
+        caller_calibration=caller_calibration,
         kestrel=cast_mapping(frozen["kestrel"]),
         advntr=cast_mapping(frozen["advntr"]),
         shark=cast_mapping(frozen["shark"]),
