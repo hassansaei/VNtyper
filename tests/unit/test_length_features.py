@@ -89,6 +89,12 @@ def _context(annotation: LengthAnnotation, **changes: object) -> LengthFeatureCo
             "arguments_sha256": "d" * 64,
             "primary_secondary_marking": "primary-only",
         },
+        "fragment_reader": {
+            "name": "pysam",
+            "version": "0.22.1",
+            "htslib_version": "1.18",
+            "alignment_semantics": "explicit-filtered-aligned-pairs-v1",
+        },
         "preprocessing_id": "synthetic-preprocessing-v1",
         "counting_policy": {
             "policy_id": "primary-mapq0-baseq0-overlap-count-v1",
@@ -221,6 +227,12 @@ def test_context_query_union_must_match_exact_annotation_positions() -> None:
             "version": context_document.aligner.version,
             "arguments_sha256": context_document.aligner.arguments_sha256,
             "primary_secondary_marking": context_document.aligner.primary_secondary_marking,
+        },
+        "fragment_reader": {
+            "name": context_document.fragment_reader.name,
+            "version": context_document.fragment_reader.version,
+            "htslib_version": context_document.fragment_reader.htslib_version,
+            "alignment_semantics": context_document.fragment_reader.alignment_semantics,
         },
         "preprocessing_id": context_document.preprocessing_id,
         "counting_policy": {

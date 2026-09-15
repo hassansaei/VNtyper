@@ -39,6 +39,12 @@ def context_raw(**changes: object) -> dict[str, object]:
             "arguments_sha256": "4" * 64,
             "primary_secondary_marking": "primary-only",
         },
+        "fragment_reader": {
+            "name": "pysam",
+            "version": "0.22.1",
+            "htslib_version": "1.18",
+            "alignment_semantics": "explicit-filtered-aligned-pairs-v1",
+        },
         "preprocessing_id": "synthetic-preprocessing-v1",
         "counting_policy": {
             "policy_id": "primary-mapq0-baseq0-overlap-count-v1",
@@ -95,6 +101,7 @@ def test_context_encoding_binds_complete_measurement_identity_and_policy() -> No
         {"original_contig": "alias-contig"},
         {"preprocessing_id": "synthetic-preprocessing-v2"},
         {"aligner": {**_context_object("aligner"), "version": "2.0"}},
+        {"fragment_reader": {**_context_object("fragment_reader"), "htslib_version": "1.19"}},
         {
             "counting_policy": {
                 **_context_object("counting_policy"),
@@ -115,6 +122,7 @@ def test_each_material_context_change_changes_its_digest(mutation: dict[str, obj
     [
         ("root", {**context_raw(), "unknown": "field"}),
         ("aligner", {**_context_object("aligner"), "unknown": "field"}),
+        ("fragment_reader", {**_context_object("fragment_reader"), "unknown": "field"}),
         ("counting_policy", {**_context_object("counting_policy"), "unknown": "field"}),
     ],
 )

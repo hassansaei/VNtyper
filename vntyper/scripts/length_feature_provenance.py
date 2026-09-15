@@ -36,6 +36,16 @@ class AlignerIdentity:
 
 
 @dataclass(frozen=True)
+class FragmentReaderIdentity:
+    """Library identity for the independent fragment-support record reader."""
+
+    name: str
+    version: str
+    htslib_version: str
+    alignment_semantics: str
+
+
+@dataclass(frozen=True)
 class CountingPolicy:
     """Complete base-depth policy and exact queried interval union."""
 
@@ -65,6 +75,7 @@ class LengthFeatureContext:
     reference_fasta_sha256: str
     annotation_sha256: str
     aligner: AlignerIdentity
+    fragment_reader: FragmentReaderIdentity
     preprocessing_id: str
     counting_policy: CountingPolicy
     sha256: str
@@ -164,6 +175,7 @@ def decode_length_feature_context(value: object) -> LengthFeatureContext:
             "reference_fasta_sha256",
             "annotation_sha256",
             "aligner",
+            "fragment_reader",
             "preprocessing_id",
             "counting_policy",
         },
@@ -175,6 +187,7 @@ def decode_length_feature_context(value: object) -> LengthFeatureContext:
     if input_scope not in {"full", "regional"}:
         raise ValueError("length feature input scope must be full or regional")
     aligner = _decode_aligner(root["aligner"])
+    fragment_reader = _decode_fragment_reader(root["fragment_reader"])
     policy = _decode_counting_policy(root["counting_policy"])
     context = LengthFeatureContext(
         schema_version=LENGTH_FEATURE_CONTEXT_SCHEMA_VERSION,
@@ -187,6 +200,7 @@ def decode_length_feature_context(value: object) -> LengthFeatureContext:
         reference_fasta_sha256=_digest(root["reference_fasta_sha256"], "length feature reference FASTA digest"),
         annotation_sha256=_digest(root["annotation_sha256"], "length feature annotation digest"),
         aligner=aligner,
+        fragment_reader=fragment_reader,
         preprocessing_id=_text(root["preprocessing_id"], "length feature preprocessing ID"),
         counting_policy=policy,
         sha256="",
@@ -209,7 +223,11 @@ def encode_length_feature_context(context: LengthFeatureContext) -> dict[str, ob
     """
     if not isinstance(context, LengthFeatureContext):
         raise ValueError("length feature context must be a LengthFeatureContext")
-    if not isinstance(context.aligner, AlignerIdentity) or not isinstance(context.counting_policy, CountingPolicy):
+    if (
+        not isinstance(context.aligner, AlignerIdentity)
+        or not isinstance(context.fragment_reader, FragmentReaderIdentity)
+        or not isinstance(context.counting_policy, CountingPolicy)
+    ):
         raise ValueError("length feature context contains invalid typed policy values")
     document = _encode_context_unchecked(context)
     decoded = decode_length_feature_context(document)
@@ -310,6 +328,24 @@ def _decode_aligner(value: object) -> AlignerIdentity:
         version=_text(raw["version"], "length feature aligner version"),
         arguments_sha256=_digest(raw["arguments_sha256"], "length feature aligner arguments digest"),
         primary_secondary_marking=_text(raw["primary_secondary_marking"], "length feature primary/secondary marking"),
+    )
+
+
+def _decode_fragment_reader(value: object) -> FragmentReaderIdentity:
+    raw = _exact_object(
+        value,
+        {"name", "version", "htslib_version", "alignment_semantics"},
+        "length feature fragment reader",
+    )
+    if raw["name"] != "pysam":
+        raise ValueError("length feature fragment reader name must be pysam")
+    if raw["alignment_semantics"] != "explicit-filtered-aligned-pairs-v1":
+        raise ValueError("length feature fragment reader alignment semantics are invalid")
+    return FragmentReaderIdentity(
+        name="pysam",
+        version=_text(raw["version"], "length feature fragment reader version"),
+        htslib_version=_text(raw["htslib_version"], "length feature fragment reader htslib version"),
+        alignment_semantics="explicit-filtered-aligned-pairs-v1",
     )
 
 
@@ -420,6 +456,12 @@ def _encode_context_unchecked(context: LengthFeatureContext) -> dict[str, object
             "version": context.aligner.version,
             "arguments_sha256": context.aligner.arguments_sha256,
             "primary_secondary_marking": context.aligner.primary_secondary_marking,
+        },
+        "fragment_reader": {
+            "name": context.fragment_reader.name,
+            "version": context.fragment_reader.version,
+            "htslib_version": context.fragment_reader.htslib_version,
+            "alignment_semantics": context.fragment_reader.alignment_semantics,
         },
         "preprocessing_id": context.preprocessing_id,
         "counting_policy": _encode_counting_policy(context.counting_policy),
