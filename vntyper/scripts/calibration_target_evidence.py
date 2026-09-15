@@ -56,7 +56,7 @@ def _sources(root: Path, study: TargetStudy, runs: TargetRuns) -> tuple[RoleSour
             runs=runs,
             expected_role=role,
         )
-        local_truth = source.truth_asset.path.parent == role_root
+        local_truth = source.truth_asset.path.parent == role_root.absolute()
         expected_names = {"source.json", source.truth_asset.path.name} if local_truth else {"source.json"}
         if {path.name for path in role_root.iterdir()} != expected_names:
             _fail("target evidence role source inventory differs")

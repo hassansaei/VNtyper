@@ -2,6 +2,7 @@
 
 from argparse import Namespace
 from importlib import import_module
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -60,6 +61,46 @@ def test_target_extract_does_not_parse_or_hash_sealed_truth(tmp_path):
             length_annotation_path=args.evidence / "annotation.json",
         )
     reader.assert_not_called()
+
+
+def test_target_extract_accepts_relative_cli_paths_with_absolute_truth_commitments(tmp_path, monkeypatch):
+    module = import_module("vntyper.scripts.calibration_target_evidence")
+    args, _ = fit_fixture(tmp_path)
+    output = tmp_path / "extracted"
+    output.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert module.extract_target_evidence(
+        Path("evidence/study.json"),
+        Path("evidence/runs.json"),
+        Path("evidence"),
+        output,
+        expected_target="length",
+        length_annotation_path=Path("evidence/annotation.json"),
+    )
+    assert (output / "checksums.json").is_file()
+
+
+def test_target_extract_relative_path_normalization_does_not_follow_role_symlinks(tmp_path, monkeypatch):
+    module = import_module("vntyper.scripts.calibration_target_evidence")
+    args, _ = fit_fixture(tmp_path)
+    role = args.evidence / "roles" / "training"
+    real_role = tmp_path / "training-source"
+    role.rename(real_role)
+    role.symlink_to(real_role, target_is_directory=True)
+    output = tmp_path / "extracted"
+    output.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="role source inventory"):
+        module.extract_target_evidence(
+            Path("evidence/study.json"),
+            Path("evidence/runs.json"),
+            Path("evidence"),
+            output,
+            expected_target="length",
+            length_annotation_path=Path("evidence/annotation.json"),
+        )
 
 
 @pytest.mark.parametrize(
