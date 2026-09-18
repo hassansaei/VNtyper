@@ -21,12 +21,39 @@ _COMMANDS = {
 
 
 @pytest.mark.parametrize(("operation", "options"), sorted(_COMMANDS.items()))
-def test_exact_four_calibration_operations_parse(operation: str, options: list[str]) -> None:
+def test_existing_four_calibration_operations_keep_their_parser_contract(operation: str, options: list[str]) -> None:
     args = build_parser().parse_args(["calibrate", operation, *options, "--output", "out"])
 
     assert args.command == "calibrate"
     assert args.calibration_operation == operation
     assert args.output == Path("out")
+
+
+def test_intake_dispatch_does_not_wrap_its_atomic_producer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = build_parser().parse_args(
+        [
+            "calibrate",
+            "intake",
+            "--manifest",
+            str(tmp_path / "intake.json"),
+            "--output",
+            str(tmp_path / "bundle"),
+            "--preprocessing-priority",
+            "raw-v1",
+        ]
+    )
+    called = False
+
+    def run_intake(observed) -> None:
+        nonlocal called
+        called = True
+        assert observed is args
+
+    monkeypatch.setattr("vntyper.scripts.cli_calibration_intake.run_calibration_intake", run_intake)
+    monkeypatch.setattr(cli_calibrate, "_atomic_output", lambda *_args, **_kwargs: pytest.fail("nested atomic output"))
+
+    cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+    assert called is True
 
 
 def test_fit_objective_is_mandatory_and_closed() -> None:
@@ -38,6 +65,70 @@ def test_fit_objective_is_mandatory_and_closed() -> None:
 
     assert missing.value.code == 2
     assert unknown.value.code == 2
+
+
+def test_optimize_dispatches_through_the_shared_atomic_adapter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "derived"
+    args = build_parser().parse_args(
+        [
+            "calibrate",
+            "optimize",
+            "--manifest",
+            str(tmp_path / "cohort.tsv"),
+            "--captures",
+            str(tmp_path / "captures.tsv"),
+            "--objective",
+            "youden-j",
+            "--output",
+            str(output),
+        ]
+    )
+    seen: list[Path] = []
+
+    def produce(observed, staging: Path) -> bool:
+        assert observed is args
+        assert observed.axes is None  # the entry point owns the repeatable option's default
+        seen.append(staging)
+        (staging / "report.json").write_text("{}\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr("vntyper.scripts.calibration_cutoff_optimize.run_cutoff_optimization", produce)
+    cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+
+    assert len(seen) == 1
+    assert tuple(path.name for path in output.iterdir()) == ("report.json",)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--objective", "max-sensitivity-at-specificity"],
+        ["--objective", "youden-j", "--caller", "both"],
+        ["--objective", "youden-j", "--caller", "advntr"],
+    ],
+)
+def test_optimize_cross_argument_requirements_are_usage_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], extra: list[str]
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "calibrate",
+            "optimize",
+            "--manifest",
+            str(tmp_path / "cohort.tsv"),
+            "--captures",
+            str(tmp_path / "captures.tsv"),
+            "--output",
+            str(tmp_path / "derived"),
+            *extra,
+        ]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+
+    assert excinfo.value.code == 2
+    assert "require" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("operation", sorted(_COMMANDS))
@@ -98,6 +189,25 @@ def test_atomic_output_cleans_exact_staging_on_base_exception(
     assert neighbour.is_dir()
     assert not output.exists()
     assert set(tmp_path.glob(".candidate.*")) == {neighbour}
+
+
+def test_atomic_output_seam_refuses_a_destination_created_during_production(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "candidate"
+
+    def race(_args, staging: Path) -> bool:
+        (staging / "complete.json").write_text("{}\n", encoding="utf-8")
+        output.mkdir()
+        return True
+
+    monkeypatch.setitem(cli_calibrate.OPERATIONS, "fit", race)
+    args = build_parser().parse_args(["calibrate", "fit", *_path_options("fit", tmp_path), "--output", str(output)])
+
+    with pytest.raises(ValueError, match="already exists"):
+        cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+    assert output.is_dir()
+    assert not tuple(output.iterdir())
 
 
 def test_completed_failed_operation_is_installed_before_cli_exit_one(

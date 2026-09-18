@@ -140,9 +140,13 @@ MUC1_FASTAS = (
 #: Extracted out of `vntr_db_advntr.zip`; the zip itself is a build input, not an asset.
 ADVNTR_DATABASES = ("vntr_db_advntr_v2/hg19_muc1.db", "vntr_db_advntr_v2/hg38_muc1.db")
 
+#: Standard length calibration model for GRCh38
+STANDARD_LENGTH_MODEL = "grch38-standard-length-model-v1.json"
+
 MUC1_MEMBERS: tuple[str, ...] = (
     *(name for fasta in MUC1_FASTAS for name in (fasta, f"{fasta}.fai")),
     *ADVNTR_DATABASES,
+    STANDARD_LENGTH_MODEL,
 )
 
 #: Committed in the data repository rather than derived or downloaded.
@@ -151,7 +155,7 @@ SEED_FASTAS = ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa")
 #: Every non-derivable artefact the data repository commits, and therefore everything the
 #: release spec has to pin by digest: a build can reproduce anything else from an upstream
 #: source, but these exist only because someone committed them.
-REQUIRED_SEEDS = (*SEED_FASTAS, "vntr_db_advntr_v2.zip", "filter_config.json")
+REQUIRED_SEEDS = (*SEED_FASTAS, "vntr_db_advntr_v2.zip", "filter_config.json", STANDARD_LENGTH_MODEL)
 
 #: The MUC1 FASTAs that are not seeds are, by construction, derivation outputs - so the
 #: spec must declare a derivation for each. Derived from the frozen member set rather than
@@ -986,7 +990,7 @@ def file_provenance(relative: str, asset: Asset, spec: dict[str, Any]) -> dict[s
     for item in spec.get("derivations", []):
         if item.get("output") == relative:
             return {"produced_by": item["command"], "expected_sha256": item["expected_sha256"]}
-    if relative in SEED_FASTAS:
+    if relative in SEED_FASTAS or relative == STANDARD_LENGTH_MODEL:
         return {"produced_by": "seed committed in the data repository"}
     if relative in ADVNTR_DATABASES:
         return {"produced_by": "extracted from vntr_db_advntr_v2.zip"}

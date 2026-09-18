@@ -6,10 +6,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from vntyper.scripts.canonical_json import load_strict_json_object
-from vntyper.scripts.decision_profile import ResolvedDecisionProfile, resolve_decision_profile
+from vntyper.scripts.decision_profile import (
+    ResolvedDecisionProfile,
+    resolve_decision_profile,
+    resolve_research_decision_profile,
+)
+
+if TYPE_CHECKING:
+    from vntyper.scripts.pipeline_caller_configuration import CallerPipelineConfiguration
 
 StageName = Literal["kestrel", "advntr", "shark", "nomenclature", "cross_match", "dominance"]
 
@@ -41,6 +48,7 @@ class RunConfiguration:
     kestrel_runtime: Mapping[str, object]
     advntr_runtime: Mapping[str, object]
     shark_runtime: Mapping[str, object]
+    caller_calibration: CallerPipelineConfiguration | None = None
 
 
 def _load_runtime_components() -> dict[str, Mapping[str, object]]:
@@ -65,20 +73,55 @@ def _load_runtime_components() -> dict[str, Mapping[str, object]]:
     }
 
 
-def resolve_run_configuration(path: str | Path | None = None) -> RunConfiguration:
+def resolve_run_configuration(
+    path: str | Path | None = None,
+    *,
+    research_profile: str | Path | None = None,
+    calibration_bundle: str | Path | None = None,
+    calibration_context: str | Path | None = None,
+) -> RunConfiguration:
     """Resolve and recursively freeze all decision components once.
+
+    Exactly one decision source is permitted: the packaged default, one explicit
+    profile, one derived caller research profile, or one approved portable bundle.
+    A research profile carries derived cutoffs and no deployment approval, so it is
+    admitted through its own argument rather than by relaxing either of the others.
 
     Args:
         path: Explicit complete decision profile, or None for the package default.
+        research_profile: Derived caller research profile, exclusive with the others.
+        calibration_bundle: Approved portable caller bundle, exclusive with path.
+        calibration_context: Paired explicit applicability context.
 
     Returns:
         Frozen run configuration.
+
+    Raises:
+        ValueError: If more than one decision source is supplied, or if the bundle and
+            its context are not paired.
     """
-    profile = resolve_decision_profile(path)
+    if (calibration_bundle is None) != (calibration_context is None):
+        raise ValueError("calibration bundle and context must be paired together")
+    if path is not None and calibration_bundle is not None:
+        raise ValueError("decision profile and calibration bundle are exclusive")
+    if research_profile is not None and (path is not None or calibration_bundle is not None):
+        raise ValueError("research decision profile is exclusive with an explicit profile or calibration bundle")
+    caller_calibration = None
+    if calibration_bundle is not None and calibration_context is not None:
+        from vntyper.scripts.pipeline_caller_configuration import resolve_caller_pipeline_configuration
+
+        caller_calibration = resolve_caller_pipeline_configuration(Path(calibration_bundle), Path(calibration_context))
+    if caller_calibration is not None:
+        profile = caller_calibration.bundle.profile
+    elif research_profile is not None:
+        profile = resolve_research_decision_profile(research_profile)
+    else:
+        profile = resolve_decision_profile(path)
     frozen = {name: _freeze(component) for name, component in profile.components.items()}
     runtime = {name: _freeze(component) for name, component in _load_runtime_components().items()}
     return RunConfiguration(
         decision_profile=profile,
+        caller_calibration=caller_calibration,
         kestrel=cast_mapping(frozen["kestrel"]),
         advntr=cast_mapping(frozen["advntr"]),
         shark=cast_mapping(frozen["shark"]),

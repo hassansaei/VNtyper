@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from typing import Literal, cast
 
 from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
 from vntyper.scripts.decision_profile_schema import component_projection, validate_complete_inventory
+
+logger = logging.getLogger(__name__)
 
 ProfileKind = Literal["packaged", "explicit-custom", "generated"]
 ProfileSource = Literal["package", "explicit-cli"]
@@ -96,6 +99,7 @@ def parse_decision_profile(
     raw: bytes | str,
     *,
     packaged_document: Mapping[str, object],
+    allow_caller_generated: bool = False,
 ) -> ResolvedDecisionProfile:
     """Parse and validate one complete explicitly selected decision profile.
 
@@ -103,6 +107,7 @@ def parse_decision_profile(
         raw: UTF-8 JSON bytes or text from the explicit path.
         packaged_document: Verified packaged baseline used for completeness and
             immutable-field checks.
+        allow_caller_generated: Internal bundle-validation admission for schema v2.
 
     Returns:
         Canonical resolved explicit profile.
@@ -111,6 +116,8 @@ def parse_decision_profile(
         ValueError: If JSON decoding or any closed-schema rule fails.
     """
     document = load_strict_json_object(raw)
+    if document.get("schema_version") == 2 and not allow_caller_generated:
+        raise ValueError("caller-generated decision profiles require a complete calibration bundle")
     return _resolved(document, source="explicit-cli", packaged_document=packaged_document)
 
 
@@ -162,3 +169,48 @@ def resolve_decision_profile(path: str | Path | None = None) -> ResolvedDecision
     except OSError as error:
         raise ValueError(f"cannot read explicit decision profile {candidate}: {error}") from error
     return parse_decision_profile(raw, packaged_document=packaged.document)
+
+
+def resolve_research_decision_profile(path: str | Path) -> ResolvedDecisionProfile:
+    """Resolve one derived caller research profile for an explicitly opted-in run.
+
+    A profile emitted by ``vntyper calibrate optimize`` is a *research candidate*: it
+    records cutoffs derived from a labelled cohort and carries no deployment approval.
+    It is admitted here, and only here, so that a derived operating point can be applied
+    without hand-editing an installed file. ``resolve_decision_profile`` continues to
+    refuse the same document, and an approved portable bundle remains a separate path,
+    so admitting research evidence never widens either of those contracts.
+
+    Args:
+        path: Complete caller-generated profile emitted by the calibration workflow.
+
+    Returns:
+        Verified resolved profile whose caller fields carry the derived values.
+
+    Raises:
+        ValueError: If the path cannot be read, the document is invalid, or it is not a
+            caller-generated research profile.
+    """
+    candidate = Path(path)
+    try:
+        raw = candidate.read_bytes()
+    except OSError as error:
+        message = f"cannot read research decision profile {candidate}: {error}"
+        logger.error(message)
+        raise ValueError(message) from error
+    packaged = load_packaged_decision_profile()
+    resolved = parse_decision_profile(raw, packaged_document=packaged.document, allow_caller_generated=True)
+    metadata = resolved.document.get("generated_metadata")
+    target = metadata.get("generation_target") if isinstance(metadata, Mapping) else None
+    if resolved.profile_kind != "generated" or target != "callers":
+        message = f"research decision profile {candidate} is not a caller-generated calibration profile"
+        logger.error(message)
+        raise ValueError(message)
+    logger.warning(
+        "Research caller calibration profile %s (revision %s, sha256 %s) is active. Cutoffs were derived "
+        "from a local cohort and carry no deployment approval; results are research use only.",
+        resolved.profile_id,
+        resolved.profile_revision,
+        resolved.digest,
+    )
+    return resolved

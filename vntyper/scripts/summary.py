@@ -53,8 +53,9 @@ logger = logging.getLogger(__name__)
 #: derived from an input path - and the report has to, because the second is a
 #: ``Path.stem`` it must finish deriving while the first is a name to print verbatim.
 #: Schema 3 requires the complete molecular-identity quartet on positive caller rows
-#: and records the exact run-local decision-profile snapshot identity.
-SUMMARY_SCHEMA_VERSION = 3
+#: and records the exact run-local decision-profile snapshot identity. Schema 4 adds
+#: explicit optional VNTR length measurement, estimate, and provenance fields.
+SUMMARY_SCHEMA_VERSION = 4
 
 #: Packaged caller-selection policy recorded by current summaries.
 DEFAULT_DECISION_POLICY = "legacy-selection-v1"

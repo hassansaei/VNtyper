@@ -80,8 +80,14 @@ DERIVED = (
     "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
 )
 
-#: The four non-derivable artefacts the data repository commits.
-SEEDS = ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa", "vntr_db_advntr_v2.zip", "filter_config.json")
+#: The non-derivable artefacts the data repository commits.
+SEEDS = (
+    "MUC1_motifs_Rev_com.fa",
+    "code-adVNTR_RUs.fa",
+    "vntr_db_advntr_v2.zip",
+    "filter_config.json",
+    "grch38-standard-length-model-v1.json",
+)
 
 TAG = "refs-v1"
 
@@ -132,6 +138,7 @@ def refs(tmp_path: Path) -> Path:
     _write(root / "vntr_db_advntr_v2" / "hg38_muc1.db", b"hg38 advntr database")
     _write(root / "vntr_db_advntr_v2.zip", b"PK the advntr database archive")
     _write(root / "filter_config.json", b'{"1": ["2"]}')
+    _write(root / "grch38-standard-length-model-v1.json", b'{"model": true}')
     _write(root / "install_references.log", b"2026-08-11 [INFO] Logging initialized.\n")
     return root
 
@@ -257,7 +264,11 @@ class TestAssetGrouping:
     def test_the_muc1_asset_carries_every_muc1_fasta_its_index_and_both_databases(self, refs: Path) -> None:
         (asset,) = [a for a in bundle_release.plan_assets(refs, TAG, []) if a.reference_id is None]
         expected = {name for fasta in MUC1_FASTAS for name in (fasta, f"{fasta}.fai")}
-        expected |= {"vntr_db_advntr_v2/hg19_muc1.db", "vntr_db_advntr_v2/hg38_muc1.db"}
+        expected |= {
+            "vntr_db_advntr_v2/hg19_muc1.db",
+            "vntr_db_advntr_v2/hg38_muc1.db",
+            "grch38-standard-length-model-v1.json",
+        }
         assert set(asset.members) == expected
 
 

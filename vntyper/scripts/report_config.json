@@ -813,5 +813,34 @@
       "grade": "finding"
     }
   ],
-  "confidence_grade_default": "not-established"
+  "confidence_grade_default": "not-established",
+  "length_estimation": {
+    "label": "Approximate total diploid VNTR repeat count",
+    "unit": "repeat units",
+    "help": "Research-only estimate of the total repeat count across both alleles. It does not affect variant calls or screening conclusions.",
+    "status_labels": {
+      "not-recorded": "Not recorded by this run",
+      "disabled": "Not requested",
+      "measured-only": "Features measured; no model applied",
+      "estimated": "Estimated",
+      "unavailable": "Unavailable"
+    },
+    "feature_labels": {
+      "A": "Core/invariant depth ratio (A)",
+      "F": "Array/flank depth ratio (F)"
+    }
+  },
+  "standard_length_estimation": {
+    "help": "Research-only estimate across both alleles; variant calls and screening conclusions are unchanged.",
+    "sources": {
+      "packaged-research": "Uses the packaged development model.",
+      "local-research": "Uses a locally fitted development model."
+    },
+    "count_conventions": {
+      "source-reported": "Predicts assay-reported repeat counts; inclusion of terminal invariant units is unspecified.",
+      "complete": "Predicts complete repeat counts including invariant units.",
+      "canonical-only": "Predicts canonical repeat counts excluding invariant units."
+    },
+    "extrapolation_help": "Some measurements are outside the model training range; the estimate involves extrapolation."
+  }
 }

@@ -165,10 +165,10 @@ def _decode_member(value: object) -> PartitionMember:
     if not isinstance(key, str) or not key:
         raise ValueError("calibration partition member key must be a non-empty string")
     role = raw["role"]
-    if role not in _ROLES:
+    if not isinstance(role, str) or role not in _ROLES:
         raise ValueError(f"unsupported calibration partition role: {role!r}")
     provenance = raw["provenance"]
-    if provenance not in _PROVENANCE:
+    if not isinstance(provenance, str) or provenance not in _PROVENANCE:
         raise ValueError(f"unsupported calibration partition provenance: {provenance!r}")
     if role == "locked-heldout" and provenance != "external-custodian":
         raise ValueError("locked held-out partition members require external custodian provenance")

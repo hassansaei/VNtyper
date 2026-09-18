@@ -76,6 +76,29 @@ ASSEMBLY_CHOICES = ("GRCh37", "GRCh38", "hg19", "hg19_ensembl", "hg19_ncbi", "hg
 #: silently added or removed.
 REPORT_IGV_CHOICES = ("embedded", "sidecar", "off")
 
+#: ``--target`` on the operations that still default to the dominance workflow.
+DOMINANCE_TARGETS = ("dominance", "callers", "length")
+
+#: ``calibrate optimize``'s axis and objective choices, stated as literals for the same
+#: reason as ``REPORT_IGV_CHOICES``. Separate tests below compare them against the axis
+#: constants and the objective inventory they are meant to mirror, so a value added in
+#: one place and not the other is a failure rather than an agreement with itself.
+CUTOFF_AXIS_CHOICES = (
+    "depth_floor_linked",
+    "gg_gate_independent",
+    "depth_score_high",
+    "alt_depth_band",
+    "var_active_region",
+)
+CUTOFF_OBJECTIVE_CHOICES = (
+    "max-sensitivity-at-specificity",
+    "youden-j",
+    "max-f1",
+    "balanced-accuracy",
+    "sensitivity",
+    "specificity",
+)
+
 SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
     "calibrate": {},
     "pipeline": {
@@ -96,12 +119,45 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "cram": (("--cram",), "_StoreAction", "str", None, False, None, None),
         "custom_regions": (("--custom-regions",), "_StoreAction", "str", None, False, None, None),
         "decision_profile": (("--decision-profile",), "_StoreAction", "Path", None, False, None, None),
+        "research_decision_profile": (
+            ("--research-decision-profile",),
+            "_StoreAction",
+            "Path",
+            None,
+            False,
+            None,
+            None,
+        ),
+        "calibration_bundle": (("--calibration-bundle",), "_StoreAction", "Path", None, False, None, None),
+        "calibration_context": (("--calibration-context",), "_StoreAction", "Path", None, False, None, None),
         "delete_intermediates": (("--delete-intermediates",), "_StoreTrueAction", None, False, False, None, 0),
         "extra_modules": (("--extra-modules",), "_AppendAction", None, [], False, None, None),
         "fast_mode": (("--fast-mode",), "_StoreTrueAction", None, False, False, None, 0),
         "fastq1": (("--fastq1",), "_StoreAction", "str", None, False, None, None),
         "fastq2": (("--fastq2",), "_StoreAction", "str", None, False, None, None),
         "keep_intermediates": (("--keep-intermediates",), "_StoreTrueAction", None, False, False, None, 0),
+        "length_annotation": (("--length-annotation",), "_StoreAction", "Path", None, False, None, None),
+        "length_context": (("--length-context",), "_StoreAction", "Path", None, False, None, None),
+        "length_model": (("--length-model",), "_StoreAction", "Path", None, False, None, None),
+        "standard_length_model": (("--standard-length-model",), "_StoreAction", "Path", None, False, None, None),
+        "estimate_vntr_length": (
+            ("--estimate-vntr-length", "--no-estimate-vntr-length"),
+            "BooleanOptionalAction",
+            None,
+            None,
+            False,
+            None,
+            0,
+        ),
+        "measure_vntr_length_features": (
+            ("--measure-vntr-length-features",),
+            "_StoreTrueAction",
+            None,
+            False,
+            False,
+            None,
+            0,
+        ),
         "output_dir": (("-o", "--output-dir"), "_StoreAction", "str", None, False, None, None),
         "output_name": (("-n", "--output-name"), "_StoreAction", "str", None, False, None, None),
         "reference_assembly": (
@@ -207,6 +263,144 @@ MINIMAL_ARGV: dict[str, list[str]] = {
     "online": ["online", "--bam", "in.bam"],
 }
 
+#: ``calibrate``'s own options are empty on purpose - everything it accepts lives on a
+#: nested subparser, one per operation. ``SUBCOMMAND_CONTRACT["calibrate"]`` therefore
+#: cannot see a single one of them, and adding an operation or an option to an existing
+#: operation used to be invisible to this file. This second table closes that hole with
+#: the same contract in the same shape: one row per option, compared wholesale.
+CALIBRATE_OPERATION_CONTRACT: dict[str, dict[str, ParserRow]] = {
+    "assess": {
+        "exposure_ledger": (("--exposure-ledger",), "_StoreAction", "Path", None, True, None, None),
+        "intake": (("--intake",), "_StoreAction", "Path", None, True, None, None),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "profile": (("--profile",), "_StoreAction", "Path", None, True, None, None),
+        "runs": (("--runs",), "_StoreAction", "Path", None, True, None, None),
+        "target": (("--target",), "_StoreAction", None, None, True, ("callers", "length"), None),
+    },
+    "cohort": {
+        "caller_policies": (("--caller-policies",), "_StoreAction", "Path", None, False, None, None),
+        "caller_runs": (("--caller-runs",), "_StoreAction", "Path", None, False, None, None),
+        "count_convention": (
+            ("--count-convention",),
+            "_StoreAction",
+            None,
+            "source-reported",
+            False,
+            ("source-reported", "complete", "canonical-only"),
+            None,
+        ),
+        "folds": (("--folds",), "_StoreAction", "int", 5, False, None, None),
+        "manifest": (("--manifest",), "_StoreAction", "Path", None, True, None, None),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "reference": (("--reference",), "_StoreAction", "Path", None, False, None, None),
+        "seed": (("--seed",), "_StoreAction", "int", 20260915, False, None, None),
+        "target": (("--target",), "_StoreAction", None, "auto", False, ("auto", "length", "callers", "both"), None),
+    },
+    "evaluate": {
+        "authority": (("--authority",), "_StoreAction", "Path", None, False, None, None),
+        "custody": (("--custody",), "_StoreAction", "Path", None, False, None, None),
+        "evidence": (("--evidence",), "_StoreAction", "Path", None, True, None, None),
+        "exposure_ledger": (("--exposure-ledger",), "_StoreAction", "Path", None, False, None, None),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "profile": (("--profile",), "_StoreAction", "Path", None, True, None, None),
+        "target": (("--target",), "_StoreAction", None, "dominance", False, DOMINANCE_TARGETS, None),
+        "validation": (("--validation",), "_StoreAction", "Path", None, False, None, None),
+    },
+    "export": {
+        "authority": (("--authority",), "_StoreAction", "Path", None, True, None, None),
+        "completion": (("--completion",), "_StoreAction", "Path", None, True, None, None),
+        "evaluation": (("--evaluation",), "_StoreAction", "Path", None, True, None, None),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "profile": (("--profile",), "_StoreAction", "Path", None, True, None, None),
+        "target": (("--target",), "_StoreAction", None, None, True, ("callers", "length"), None),
+        "validation": (("--validation",), "_StoreAction", "Path", None, True, None, None),
+    },
+    "extract": {
+        "length_annotation": (("--length-annotation",), "_StoreAction", "Path", None, False, None, None),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "partitions": (("--partitions",), "_StoreAction", "Path", None, False, None, None),
+        "runs": (("--runs",), "_StoreAction", "Path", None, True, None, None),
+        "sources": (("--sources",), "_StoreAction", "Path", None, False, None, None),
+        "study": (("--study",), "_StoreAction", "Path", None, False, None, None),
+        "target": (("--target",), "_StoreAction", None, "dominance", False, DOMINANCE_TARGETS, None),
+        "truth": (("--truth",), "_StoreAction", "Path", None, False, None, None),
+    },
+    "fit": {
+        "advntr_executable": (("--advntr-executable",), "_StoreAction", "Path", None, False, None, None),
+        "evidence": (("--evidence",), "_StoreAction", "Path", None, True, None, None),
+        "exposure_ledger": (("--exposure-ledger",), "_StoreAction", "Path", None, False, None, None),
+        "objective": (
+            ("--objective",),
+            "_StoreAction",
+            None,
+            None,
+            True,
+            ("lexicographic-safety-v1", "caller-safety-v1", "length-total-v1"),
+            None,
+        ),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "target": (("--target",), "_StoreAction", None, "dominance", False, DOMINANCE_TARGETS, None),
+    },
+    "intake": {
+        "cram_references": (("--cram-references",), "_StoreAction", "Path", None, False, None, None),
+        "manifest": (("--manifest",), "_StoreAction", "Path", None, True, None, None),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "preprocessing_priority": (("--preprocessing-priority",), "_StoreAction", None, None, True, None, "+"),
+        "temporary_directory": (("--temporary-directory",), "_StoreAction", "Path", None, False, None, None),
+    },
+    "optimize": {
+        "advntr_executable": (("--advntr-executable",), "_StoreAction", "Path", None, False, None, None),
+        "axes": (("--axis",), "_AppendAction", None, None, False, CUTOFF_AXIS_CHOICES, None),
+        "caller": (("--caller",), "_StoreAction", None, "kestrel", False, ("kestrel", "advntr", "both"), None),
+        "captures": (("--captures",), "_StoreAction", "Path", None, True, None, None),
+        "folds": (("--folds",), "_StoreAction", "int", 5, False, None, None),
+        "manifest": (("--manifest",), "_StoreAction", "Path", None, True, None, None),
+        "max_breakpoints": (("--max-breakpoints",), "_StoreAction", "int", None, False, None, None),
+        "min_sensitivity": (("--min-sensitivity",), "_StoreAction", "float", None, False, None, None),
+        "min_specificity": (("--min-specificity",), "_StoreAction", "float", None, False, None, None),
+        "objective": (("--objective",), "_StoreAction", None, None, True, CUTOFF_OBJECTIVE_CHOICES, None),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "seed": (("--seed",), "_StoreAction", "int", 20260915, False, None, None),
+        "workers": (("--workers",), "_StoreAction", "int", 1, False, None, None),
+    },
+    "validate": {
+        "authority": (("--authority",), "_StoreAction", "Path", None, False, None, None),
+        "custody": (("--custody",), "_StoreAction", "Path", None, False, None, None),
+        "evidence": (("--evidence",), "_StoreAction", "Path", None, True, None, None),
+        "exposure_ledger": (("--exposure-ledger",), "_StoreAction", "Path", None, False, None, None),
+        "output": (("--output",), "_StoreAction", "Path", None, True, None, None),
+        "profile": (("--profile",), "_StoreAction", "Path", None, True, None, None),
+        "target": (("--target",), "_StoreAction", None, "dominance", False, DOMINANCE_TARGETS, None),
+        "validation": (("--validation",), "_StoreAction", "Path", None, False, None, None),
+    },
+}
+
+#: Smallest argv that parses, per calibration operation, mirroring ``MINIMAL_ARGV``.
+MINIMAL_CALIBRATE_ARGV: dict[str, list[str]] = {
+    "assess": ["--target", "callers", "--profile", "p", "--intake", "i", "--runs", "r", "--exposure-ledger", "e"],
+    "cohort": ["--manifest", "m"],
+    "evaluate": ["--profile", "p", "--evidence", "e"],
+    "export": [
+        "--target",
+        "callers",
+        "--profile",
+        "p",
+        "--validation",
+        "v",
+        "--evaluation",
+        "x",
+        "--authority",
+        "a",
+        "--completion",
+        "c",
+    ],
+    "extract": ["--runs", "r"],
+    "fit": ["--evidence", "e", "--objective", "lexicographic-safety-v1"],
+    "intake": ["--manifest", "m", "--preprocessing-priority", "id"],
+    "optimize": ["--manifest", "m", "--captures", "c", "--objective", "youden-j"],
+    "validate": ["--profile", "p", "--evidence", "e"],
+}
+
 
 def _describe(action: argparse.Action) -> ParserRow:
     """Reduce an argparse action to the tuple the contract table states.
@@ -262,6 +456,104 @@ def _subparsers(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentP
 def test_the_contract_table_covers_every_subcommand() -> None:
     """A new subcommand must arrive with its own contract row, not silently."""
     assert set(_subparsers(build_parser())) == set(SUBCOMMAND_CONTRACT)
+
+
+def _calibrate_operations() -> dict[str, argparse.ArgumentParser]:
+    """Return the ``calibrate`` operation parsers by name.
+
+    Returns:
+        dict[str, argparse.ArgumentParser]: Operation name -> its parser.
+    """
+    calibrate = _subparsers(build_parser())["calibrate"]
+    actions = [action for action in calibrate._actions if isinstance(action, argparse._SubParsersAction)]
+    assert len(actions) == 1, f"expected exactly one calibrate operation action, found {len(actions)}"
+    return dict(actions[0].choices)
+
+
+def test_the_calibrate_operation_table_covers_every_operation() -> None:
+    """A new calibration operation must arrive with its own contract rows."""
+    assert set(_calibrate_operations()) == set(CALIBRATE_OPERATION_CONTRACT)
+    assert set(MINIMAL_CALIBRATE_ARGV) == set(CALIBRATE_OPERATION_CONTRACT)
+
+
+@pytest.mark.parametrize("operation", sorted(CALIBRATE_OPERATION_CONTRACT))
+def test_every_calibrate_operation_option_matches_the_contract(operation: str) -> None:
+    """Flags, types, defaults and required-ness of one operation, as one table.
+
+    Args:
+        operation: The calibration operation under test.
+    """
+    actual = _options(_calibrate_operations()[operation])
+    expected = CALIBRATE_OPERATION_CONTRACT[operation]
+    assert actual == expected, (
+        f"calibrate {operation}'s options drifted from the contract; "
+        f"only in parser: {sorted(set(actual) - set(expected))}; "
+        f"only in contract: {sorted(set(expected) - set(actual))}"
+    )
+
+
+@pytest.mark.parametrize("operation", sorted(CALIBRATE_OPERATION_CONTRACT))
+def test_calibrate_operation_defaults_survive_a_minimal_parse(operation: str) -> None:
+    """The declared defaults are what a minimal invocation actually produces.
+
+    Args:
+        operation: The calibration operation under test.
+    """
+    argv = ["calibrate", operation, *MINIMAL_CALIBRATE_ARGV[operation], "--output", "out"]
+    args = build_parser().parse_args(argv)
+    assert args.calibration_operation == operation
+    for dest, row in CALIBRATE_OPERATION_CONTRACT[operation].items():
+        if any(flag in argv for flag in row[0]):
+            continue  # supplied on the command line, so its default is not observable
+        assert getattr(args, dest) == row[3], f"calibrate {operation} --{dest} defaulted to {getattr(args, dest)!r}"
+
+
+@pytest.mark.parametrize("operation", sorted(CALIBRATE_OPERATION_CONTRACT))
+def test_every_calibrate_operation_rejects_an_unknown_argument(operation: str) -> None:
+    """An unknown flag on an operation is a usage error, never an absorbed positional.
+
+    Args:
+        operation: The calibration operation under test.
+    """
+    argv = ["calibrate", operation, *MINIMAL_CALIBRATE_ARGV[operation], "--output", "out", "--not-a-real-option"]
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(argv)
+    assert excinfo.value.code == 2
+
+
+@pytest.mark.parametrize("operation", sorted(CALIBRATE_OPERATION_CONTRACT))
+def test_every_calibrate_operation_requires_its_output(operation: str) -> None:
+    """Dropping ``required=True`` on ``--output`` would send ``None`` to ``atomic_output``.
+
+    Args:
+        operation: The calibration operation under test.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(["calibrate", operation, *MINIMAL_CALIBRATE_ARGV[operation]])
+    assert excinfo.value.code == 2
+
+
+def test_the_cutoff_axis_choices_are_exactly_the_declared_axes() -> None:
+    """An axis the CLI cannot name is unreachable; a name the axes reject fails deep."""
+    from vntyper.scripts import calibration_cutoff_axes as axes
+    from vntyper.scripts.cli_calibration_parser import CUTOFF_AXIS_CHOICES as declared
+
+    constants = {
+        axes.DEPTH_FLOOR_LINKED,
+        axes.GG_GATE_INDEPENDENT,
+        axes.DEPTH_SCORE_HIGH,
+        axes.ALT_DEPTH_BAND,
+        axes.ACTIVE_REGION,
+    }
+    assert set(CUTOFF_AXIS_CHOICES) == constants
+    assert declared == CUTOFF_AXIS_CHOICES
+
+
+def test_the_cutoff_objective_choices_are_exactly_the_supported_objectives() -> None:
+    """The CLI offers every selectable objective, and nothing the selector refuses."""
+    from vntyper.scripts.calibration_cutoff_selection import OBJECTIVES
+
+    assert CUTOFF_OBJECTIVE_CHOICES == OBJECTIVES
 
 
 def test_the_top_level_options_match_the_contract() -> None:

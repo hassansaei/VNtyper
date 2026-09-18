@@ -306,3 +306,48 @@ def staged_install(target: Path, *, seed_from_existing: bool = True) -> Iterator
         # Activation is confirmed; only now is the old tree disposable.
         if previous is not None:
             shutil.rmtree(previous, ignore_errors=True)
+
+
+def install_supplemental_common_references(
+    install_config: dict[str, Any],
+    staging: Path,
+    downloader: Any,
+) -> None:
+    """Download any declared common references that were not provided by bundle archives.
+
+    Allows new common reference files (such as pre-fitted length models) to be staged and
+    recorded with full digest and source provenance even when the deployed release bundle
+    archive predates their addition.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        staging: The staging directory being populated.
+        downloader: Callable with signature ``(url, dest_path) -> bool``.
+    """
+    from vntyper.scripts.reference_integrity import fetch_verified_asset
+    from vntyper.scripts.reference_provenance import build_record, merge, relative_posix
+
+    raw_by_target = {
+        item["target_path"]: item
+        for item in install_config.get("own_repository_references", {}).get("raw_files", [])
+        if isinstance(item, dict) and "target_path" in item and "url" in item and "source_sha256" in item
+    }
+    for entry in install_config.get("common_references", []):
+        if not isinstance(entry, dict):
+            continue
+        rel_path = entry.get("installed_path")
+        if not rel_path:
+            continue
+        target = staging / rel_path
+        if target.exists():
+            continue
+        raw_file = raw_by_target.get(rel_path)
+        if raw_file is None:
+            continue
+        url = raw_file["url"]
+        expected = raw_file["source_sha256"]
+        logger.info(f"Installing supplemental common reference {rel_path} from {url}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fetch_verified_asset(rel_path, url, target, expected, downloader)
+        relative = relative_posix(target, staging)
+        merge(staging, {relative: build_record(sha256=expected, source="from-source", source_url=url)})

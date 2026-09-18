@@ -270,7 +270,7 @@ class TestProvenance:
         hits = sorted(
             str(path)
             for path in Path("vntyper").rglob("*.py")
-            if "advntr_calibration" in path.read_text(encoding="utf-8")
+            if "advntr_calibration.json" in path.read_text(encoding="utf-8")
         )
 
         assert not hits, f"advntr_calibration.json is read by production code: {hits}"

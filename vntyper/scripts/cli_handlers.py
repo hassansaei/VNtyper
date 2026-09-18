@@ -37,6 +37,8 @@ from vntyper.scripts.cli_lazy_imports import (
 )
 from vntyper.scripts.cohort_pseudonyms import _mapping_at
 from vntyper.scripts.pipeline import run_pipeline
+from vntyper.scripts.pipeline_length import resolve_length_pipeline_configuration
+from vntyper.scripts.pipeline_standard_length import resolve_standard_length_configuration
 from vntyper.scripts.reference_registry import get_reference_source, physical_reference_id, reference_keys
 from vntyper.scripts.reference_resolution import ResolvedReference, resolve_from_mapping
 from vntyper.scripts.report_assets import DEFAULT_REPORT_IGV
@@ -321,11 +323,27 @@ def handle_pipeline(
         log_level_value: The already-resolved ``logging`` level.
         log_file_str: The already-resolved log file path, or None.
     """
-    # If log_file was not explicitly provided and output_dir is set, ensure log_file is correctly set
-    if not args.log_file and args.output_dir:
-        log_file = Path(args.output_dir) / "pipeline.log"
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Setting log file to {log_file}")
+    length_model_path = getattr(args, "length_model", None)
+    length_annotation_path = getattr(args, "length_annotation", None)
+    length_context_path = getattr(args, "length_context", None)
+    length_configuration = resolve_length_pipeline_configuration(
+        measurement_enabled=getattr(args, "measure_vntr_length_features", False),
+        model_path=length_model_path,
+        annotation_path=length_annotation_path,
+        context_path=length_context_path,
+    )
+    standard_model_path = getattr(args, "standard_length_model", None)
+    standard_configuration = resolve_standard_length_configuration(
+        config,
+        enabled=getattr(args, "estimate_vntr_length", None),
+        model_path=standard_model_path,
+        approved_enabled=length_configuration.measurement_enabled,
+    )
+    length_operator_paths = tuple(
+        path
+        for path in (length_model_path, length_annotation_path, length_context_path, standard_model_path)
+        if path is not None
+    )
 
     if args.output_dir is None:
         args.output_dir = get_conf(config, "output_dir", "out")
@@ -415,7 +433,11 @@ def handle_pipeline(
     # at all does not abort a run that never needed one; a FASTQ run still fails closed,
     # with `pipeline_inputs`'s own message one layer down if this resolves to None anyway.
     is_fastq_input = not args.bam and not args.cram
-    resolved_bwa_reference = _resolve_bwa_reference(config, args.reference_assembly, required=is_fastq_input)
+    resolved_bwa_reference = _resolve_bwa_reference(
+        config,
+        args.reference_assembly,
+        required=is_fastq_input or length_configuration.measurement_enabled,
+    )
     bwa_reference = resolved_bwa_reference.value if resolved_bwa_reference is not None else None
     reference_key_used = resolved_bwa_reference.key if resolved_bwa_reference is not None else None
     reference_source_effective = None
@@ -490,6 +512,9 @@ def handle_pipeline(
         # the option (#242).
         report_igv=getattr(args, "report_igv", DEFAULT_REPORT_IGV),
         run_configuration=getattr(args, "run_configuration", None),
+        length_configuration=length_configuration,
+        length_operator_paths=length_operator_paths,
+        standard_length_configuration=standard_configuration,
         resume=getattr(args, "resume", False),
     )
 

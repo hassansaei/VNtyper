@@ -58,6 +58,7 @@ SEED_SHA256 = {
     "MUC1_motifs_Rev_com.fa": "7e6589f2388f3a08da6fb3bffa1fe22f10a5e03ec618b883fa6f07bcf1cb3e47",
     "code-adVNTR_RUs.fa": "c21d631cf894e388c8cb76d7bbd2a51ebf4a27cd1a9158f50971cd831d8aa26e",
     "filter_config.json": "d2190ed78695efe9b1b8105c97479391b81129cf641410dfb88feb1c1ffea085",
+    "grch38-standard-length-model-v1.json": "0d910946ab14d38cf5b3bd33a0b16e1b985c8377a9d2b466d98693a324ca3b51",
     "vntr_db_advntr_v2.zip": "b7e7a8a10e26b5058eedb766ec38d01a900e29780c4d48dabeaec67199615190",
 }
 
@@ -1859,6 +1860,7 @@ class TestPartialSelectionAgainstTheShippedConfig:
             "filter_config.json": hashlib.sha256((tmp_path / "filter_config.json").read_bytes()).hexdigest(),
             "code-adVNTR_RUs.fa": hashlib.sha256(b">seed\nACGT\n").hexdigest(),
             "vntr_db_advntr_v2.zip": hashlib.sha256(advntr_zip).hexdigest(),
+            "grch38-standard-length-model-v1.json": hashlib.sha256(b">seed\nACGT\n").hexdigest(),
         }
         for entry in config["own_repository_references"]["raw_files"]:
             digest = seed_digests.get(entry["target_path"])
@@ -2228,6 +2230,7 @@ class TestShippedConfig:
         }
         digests = {name: raw_files[name] for name in ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa")}
         digests["filter_config.json"] = raw_files["filter_config.json"]
+        digests["grch38-standard-length-model-v1.json"] = raw_files["grch38-standard-length-model-v1.json"]
         digests["vntr_db_advntr_v2.zip"] = config["vntyper_references"]["vntr_db_advntr"]["source_sha256"]
 
         assert digests == SEED_SHA256

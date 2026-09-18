@@ -95,3 +95,108 @@ def test_read_regular_path_refuses_to_degrade_without_no_follow_support(tmp_path
         read_regular_path(payload)
 
     assert read_regular_path(payload) == b"{}\n"
+
+
+def test_regular_path_and_pinned_child_request_nonblocking_admission(tmp_path: Path) -> None:
+    payload = tmp_path / "payload.json"
+    payload.write_bytes(b"{}\n")
+    path_descriptor = os.open(payload, os.O_RDONLY)
+
+    with patch.object(calibration_secure_io.os, "open", return_value=path_descriptor) as path_open:
+        assert read_regular_path(payload) == b"{}\n"
+    assert path_open.call_args.args[1] & os.O_NONBLOCK
+
+    with SecureDirectoryReader.open(tmp_path, {"payload.json"}) as reader:
+        real_open = os.open
+        observed_flags = 0
+
+        def record_open(path, flags, *args, **kwargs):
+            nonlocal observed_flags
+            observed_flags = flags
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(calibration_secure_io.os, "open", side_effect=record_open):
+            assert reader.read_file("payload.json") == b"{}\n"
+    assert observed_flags & os.O_NONBLOCK
+
+
+def test_read_regular_path_rejects_a_fifo_without_a_writer(tmp_path: Path) -> None:
+    fifo = tmp_path / "payload.fifo"
+    os.mkfifo(fifo)
+
+    with pytest.raises(ValueError, match="regular"):
+        read_regular_path(fifo)
+
+
+@pytest.mark.parametrize("directory_reader", [False, True])
+def test_secure_reads_reject_in_place_mutation_during_chunked_read(tmp_path: Path, directory_reader: bool) -> None:
+    """Pinned descriptors must not turn torn file contents into trusted evidence."""
+    payload = tmp_path / "payload.json"
+    chunk_size = 1024 * 1024
+    payload.write_bytes(b"A" * (2 * chunk_size))
+    before = payload.stat()
+    real_read = os.read
+    changed = False
+
+    def mutate_after_first_chunk(descriptor: int, count: int) -> bytes:
+        nonlocal changed
+        data = real_read(descriptor, count)
+        if data and not changed:
+            changed = True
+            with payload.open("r+b") as writer:
+                writer.seek(chunk_size)
+                writer.write(b"B" * chunk_size)
+            os.utime(payload, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+        return data
+
+    with (
+        patch.object(calibration_secure_io.os, "read", side_effect=mutate_after_first_chunk),
+        pytest.raises(ValueError, match="changed during"),
+    ):
+        if directory_reader:
+            with SecureDirectoryReader.open(tmp_path, {payload.name}) as reader:
+                reader.read_file(payload.name)
+        else:
+            read_regular_path(payload)
+    assert changed
+
+
+def test_secure_read_rejects_mutation_even_when_mtime_is_restored(tmp_path: Path) -> None:
+    """Restoring modification time must not hide a changed inode change time."""
+    payload = tmp_path / "payload.json"
+    payload.write_bytes(b"original")
+    metadata = payload.stat()
+    changed_metadata = type(
+        "ChangedMetadata",
+        (),
+        {
+            "st_dev": metadata.st_dev,
+            "st_ino": metadata.st_ino,
+            "st_size": metadata.st_size,
+            "st_mtime_ns": metadata.st_mtime_ns,
+            "st_ctime_ns": metadata.st_ctime_ns + 1,
+            "st_mode": metadata.st_mode,
+        },
+    )()
+    with (
+        patch.object(calibration_secure_io.os, "fstat", side_effect=[metadata, metadata, changed_metadata]),
+        pytest.raises(ValueError, match="changed during"),
+    ):
+        read_regular_path(payload)
+
+
+@pytest.mark.parametrize("data", [b"", b"short"])
+def test_secure_read_rejects_premature_end_of_file(tmp_path: Path, data: bytes) -> None:
+    payload = tmp_path / "payload.json"
+    payload.write_bytes(b"complete evidence")
+    with (
+        patch.object(calibration_secure_io.os, "read", side_effect=[data, b""]),
+        pytest.raises(ValueError, match="changed during"),
+    ):
+        read_regular_path(payload)
+
+
+def test_secure_read_accepts_a_stable_empty_file(tmp_path: Path) -> None:
+    payload = tmp_path / "payload.json"
+    payload.write_bytes(b"")
+    assert read_regular_path(payload) == b""

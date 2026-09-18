@@ -48,6 +48,7 @@ from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_cove
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
 from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs, build_fastp_measurement
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
+from vntyper.scripts.length_presentation import build_length_presentation
 from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.profile_provenance import resolve_summary_profile
@@ -451,6 +452,7 @@ def generate_summary_report(
     # Load the pipeline summary JSON.
     summary_file_path = Path(output_dir) / "pipeline_summary.json"
     pipeline_summary = load_pipeline_summary(summary_file_path)
+    length_presentation = build_length_presentation(pipeline_summary, report_config)
     recorded_decision_profile = resolve_summary_profile(pipeline_summary, output_dir)
     from vntyper.modules.advntr.artifact_evidence import resolve_recorded_artifact_evidence
 
@@ -1126,6 +1128,7 @@ def generate_summary_report(
         "nomenclature_legend": nomenclature_legend(kestrel_df_raw, advntr_df),
         "run_id": pipeline_summary.get("report_integrity", {}).get("run_id"),
         "report_integrity_digest": pipeline_summary.get("report_integrity", {}).get("report_integrity_digest"),
+        "length_presentation": length_presentation,
     }
 
     try:

@@ -553,12 +553,12 @@ summary | release-summary | none | always records success, failure, skipped jobs
    `kestrel_config.json`'s `artifact_flags`; **no flag name is written inline in Python**,
    and emptying that list restores the pre-#174 behaviour with no code change.
 
-   **Two tripwires fire on any change to the gate list, and they are not in the same
-   file.** `tests/unit/test_kestrel_filtering.py` reads `kestrel_genotyping.py` as *source
-   text* and asserts the exact count; `tests/builders.py`'s `STAGE_COLUMNS["flagged"]` and
-   `["final"]` feed `kestrel_stage_frame()` to the real `filter_final_dataframe`, so a gate
-   missing from those tuples raises `ValueError` rather than failing an assertion. Change
-   both, deliberately, in the same commit.
+    **Two tripwires fire on any change to the gate list, and they are not in the same
+    file.** `tests/unit/test_kestrel_filtering.py` asserts the exact count of `FILTER_COLUMNS`
+    (defined in `kestrel_postprocessing.py` and re-exported by `kestrel_genotyping.py`);
+    `tests/builders.py`'s `STAGE_COLUMNS["flagged"]` and `["final"]` feed `kestrel_stage_frame()`
+    to the real `filter_final_dataframe`, so a gate missing from those tuples raises `ValueError`
+    rather than failing an assertion. Change both, deliberately, in the same commit.
 5. **Summary step names are string literals.** `"Kestrel Genotyping"`,
    `"adVNTR Genotyping"`, `"Coverage Calculation"`, `"BAM Header Parsing"`,
    `"Cross-Match Variant Comparison"` are matched exactly by `generate_report.py`,
@@ -710,7 +710,11 @@ summary | release-summary | none | always records success, failure, skipped jobs
     passing unit tests. Adding `scripts/integration_compatibility_observations.py`
     (#293, the version-selected append-only report-observation policy) took it to all
     43 Python files and `make test-scripts-cov` to 94.00% over 8,138 collected unit
-    tests. **A new file under `scripts/` must update this sentence** -
+    tests. Adding `scripts/calibration_sim/` (the package initializer and independent
+    haplotype/read generators) took the directory to 46 Python files. Adding its
+    finite simulation protocol brought coverage scope to 47 Python files; the atomic
+    simulation generation/inventory helper and CLI bring it to all 49 Python files.
+    **A new file under `scripts/` must update this sentence** -
     `tests/unit/test_coverage_gate.py::test_contributor_docs_match_the_scripts_quality_scope`
     counts root `scripts/**/*.py` and fails until it does, which is the tripwire working,
     not a flaky test. Package modules under `vntyper/scripts/` do not change that root-only

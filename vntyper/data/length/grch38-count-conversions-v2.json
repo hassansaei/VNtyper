@@ -1,0 +1,14 @@
+{
+  "conversions": [
+    {
+      "allele_1_adjustment": 9,
+      "allele_2_adjustment": 9,
+      "conversion_id": "canonical-only-plus-nine-terminals-v1",
+      "repeat_unit_bp": 60,
+      "source_boundary_definition": "canonical-variable-only-units-v1",
+      "source_unit": "repeat-count",
+      "target_boundary_definition": "complete-core-plus-invariant-units-v1"
+    }
+  ],
+  "schema_version": "calibration-length-conversions-v2"
+}

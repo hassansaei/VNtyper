@@ -82,10 +82,28 @@ def _selected_bwa_reference(args: argparse.Namespace, config: dict[str, Any]) ->
 
 def _pipeline_operator_paths(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Path, ...]:
     paths: list[Path] = []
-    for attribute in ("fastq1", "fastq2", "bed_file"):
+    for attribute in (
+        "fastq1",
+        "fastq2",
+        "bed_file",
+        "standard_length_model",
+        "decision_profile",
+        "research_decision_profile",
+        "length_annotation",
+        "length_context",
+        "length_model",
+        "calibration_bundle",
+        "calibration_context",
+    ):
         value = getattr(args, attribute, None)
         if value is not None:
             paths.append(Path(value))
+
+    reference_data = config.get("reference_data", {})
+    if isinstance(reference_data, dict):
+        reference_model = reference_data.get("standard_length_model_grch38")
+        if isinstance(reference_model, str) and reference_model:
+            paths.append(Path(reference_model))
 
     explicit_reference = getattr(args, "reference_fasta", None)
     if explicit_reference is not None:
@@ -181,6 +199,13 @@ def validate_pipeline_log_destination(
         protected_variants = (protected_absolute, protected_absolute.resolve(strict=False))
         if any(log_variant in protected_variants for log_variant in log_variants) or _same_file(log_path, protected):
             raise ValueError(f"Pipeline log file aliases operator-owned input: {log_path}")
+        if any(
+            _is_within(log_variant, protected_variant)
+            for log_variant in log_variants
+            for protected_variant in protected_variants
+            if protected_variant.is_dir()
+        ):
+            raise ValueError(f"Pipeline log file is inside an operator-owned input: {log_path}")
     input_trees = _alignment_input_trees(args)
     if any(_is_within(log_variant, tree) for log_variant in log_variants for tree in input_trees):
         raise ValueError(f"Pipeline log file is inside an operator-owned input tree: {log_path}")

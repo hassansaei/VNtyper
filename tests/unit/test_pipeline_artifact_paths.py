@@ -297,7 +297,7 @@ def test_advntr_run_snapshots_and_threads_one_verified_evidence_value(tmp_path: 
 
     assert snapshot.read_bytes() == evidence.canonical_bytes
     assert profile_snapshot.read_bytes() == profile.canonical_bytes
-    assert recorded["schema_version"] == 3
+    assert recorded["schema_version"] == 4
     assert recorded["advntr_evidence_digest"] == evidence.digest
     assert recorded["decision_profile_sha256"] == profile.digest
     assert recorded["decision_profile_snapshot"] == "provenance/decision_profile.json"

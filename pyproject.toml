@@ -51,7 +51,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+calibration = ["scikit-learn>=1.5,<2"]
 dev = [
+    "scikit-learn>=1.5,<2",  # Exercise the optional length fitter in development and CI.
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3.0",  # Prevent stuck tests
@@ -166,16 +168,21 @@ version = {attr = "vntyper.version.__version__"}
 ]
 "vntyper" = [
     "config.json",
+    "data/length/grch38-count-conversions-v2.json",
+    "data/length/grch38-length-annotation-v1.json",
     # Every file under vntyper/templates/ is named here, not matched by a glob, so
     # adding one is a deliberate packaging decision rather than an accident of the
     # pattern. `_report_base.html` was missing until #242: a wheel built without it
-    # raised TemplateNotFound at render time for *both* reports, and nothing caught
+    # raised TemplateNotFound at render time for the reports, and nothing caught
     # it because an editable checkout always has the file on disk.
     "templates/_report_base.html",
     "templates/report_template.html",
     "templates/cohort_summary_template.html",
     "templates/igv_report_template.html",
     "templates/calibration_report.html",
+    "templates/calibration_caller_report.html",
+    "templates/calibration_length_report.html",
+    "templates/calibration_cohort_report.html",
     # The vendored igv.js, gzipped, and the notice recording where it came from,
     # under what licence, and with which digests. Named one by one for the same
     # reason the templates are.

@@ -125,6 +125,7 @@ nav:
     - cohort: cli/cohort.md
     - online: cli/online.md
     - calibrate: cli/calibrate.md
+    - Caller and length calibration: cli/calibration-targets.md
   - Pipeline & Methods:
     - pipeline/index.md
     - Input Processing: pipeline/input-processing.md

@@ -147,6 +147,11 @@
         "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/9f57431e289a9b742a98407c0a83f7a67da65ee7/seeds/filter_config.json",
         "target_path": "filter_config.json",
         "source_sha256": "d2190ed78695efe9b1b8105c97479391b81129cf641410dfb88feb1c1ffea085"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/19cc75859cee3b4c62db8c05403050b903112fc8/seeds/grch38-standard-length-model-v1.json",
+        "target_path": "grch38-standard-length-model-v1.json",
+        "source_sha256": "0d910946ab14d38cf5b3bd33a0b16e1b985c8377a9d2b466d98693a324ca3b51"
       }
     ]
   },
@@ -179,6 +184,7 @@
     {"config_key": "muc1_motifs_rev_com",        "installed_path": "MUC1_motifs_Rev_com.fa"},
     {"config_key": "code_adVNTR_RUs",            "installed_path": "code-adVNTR_RUs.fa"},
     {"config_key": "advntr_reference_vntr_hg19", "installed_path": "vntr_db_advntr_v2/hg19_muc1.db"},
-    {"config_key": "advntr_reference_vntr_hg38", "installed_path": "vntr_db_advntr_v2/hg38_muc1.db"}
+    {"config_key": "advntr_reference_vntr_hg38", "installed_path": "vntr_db_advntr_v2/hg38_muc1.db"},
+    {"config_key": "standard_length_model_grch38", "installed_path": "grch38-standard-length-model-v1.json"}
   ]
 }

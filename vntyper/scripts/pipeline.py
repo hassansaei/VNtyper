@@ -42,6 +42,7 @@ from vntyper.scripts.pipeline_advntr_cleanup import (
     validate_pipeline_log_outside_advntr_preflight,
     validate_pipeline_log_outside_selected_advntr_model,
 )
+from vntyper.scripts.pipeline_advntr_execution import execute_advntr_genotype
 from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight, plan_valid_advntr_preflight
 from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
 from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext, prepare_advntr_run_context
@@ -51,10 +52,23 @@ from vntyper.scripts.pipeline_alignment import (
     prepare_input_alignment_preflight,
     resolve_summary_reference_provenance,
 )
+from vntyper.scripts.pipeline_caller_activation import (
+    caller_calibration_identities,
+    snapshot_caller_calibration,
+    validate_caller_output_destination,
+    validate_caller_pipeline_request,
+)
+from vntyper.scripts.pipeline_caller_native import prepare_caller_native_execution
 from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
+from vntyper.scripts.pipeline_length_execution import LengthMeasurementRunner, length_summary_fields
+from vntyper.scripts.pipeline_length_routing import (
+    build_length_consumer,
+    completed_length_summary,
+    validate_pipeline_length,
+)
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.pipeline_resume_planning import (
     build_analysis_settings,
@@ -65,6 +79,11 @@ from vntyper.scripts.pipeline_resume_planning import (
     resolve_effective_advntr_runtime,
     resolve_effective_kestrel_runtime,
     resolve_effective_shark_runtime,
+)
+from vntyper.scripts.pipeline_standard_length import (
+    StandardLengthConfiguration,
+    encode_standard_length_configuration,
+    resolve_standard_length_configuration,
 )
 from vntyper.scripts.profile_provenance import snapshot_decision_profile
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
@@ -207,6 +226,9 @@ def run_pipeline(
     summary_formats=None,  # New parameter: list of additional summary output formats (e.g., ['csv', 'tsv'])
     report_igv=DEFAULT_REPORT_IGV,
     run_configuration=None,
+    length_configuration=None,
+    length_operator_paths=(),
+    standard_length_configuration=None,
     resume=False,
 ):
     """
@@ -222,7 +244,7 @@ def run_pipeline(
         fastq2 (str, optional): Path to the second FASTQ file.
         bam (str, optional): Path to the BAM file.
         cram (str, optional): Path to the CRAM file.
-        reference_fasta (Path, optional): Explicit reference FASTA for CRAM decoding.
+        reference_fasta (Path, optional): Explicit FASTA for CRAM decoding or standard BAM length estimation.
         threads (int, optional): Number of threads to use. Default is 4.
         reference_assembly (str, optional): Reference assembly ("hg19" or "hg38").
         reference_key_used (str, optional): The `reference_data` config key that
@@ -257,6 +279,9 @@ def run_pipeline(
             `vntyper report` (#242).
         run_configuration: Immutable decision profile and stage components resolved
             before the run. Direct compatibility callers load the packaged profile.
+        length_configuration: Immutable optional length measurement/model preflight.
+        length_operator_paths: Exact operator-owned model, annotation, and context paths.
+        standard_length_configuration: Resolved packaged or locally fitted research model selection.
 
     Raises:
         ValueError: Various input validation errors.
@@ -267,6 +292,14 @@ def run_pipeline(
         run_configuration = resolve_run_configuration()
     elif not isinstance(run_configuration, RunConfiguration):
         raise ValueError("pipeline run_configuration must be a resolved RunConfiguration")
+    length_configuration = validate_pipeline_length(length_configuration, length_operator_paths)
+    if standard_length_configuration is None:
+        standard_length_configuration = resolve_standard_length_configuration(
+            config, enabled=None, model_path=None, approved_enabled=length_configuration.measurement_enabled
+        )
+    elif not isinstance(standard_length_configuration, StandardLengthConfiguration):
+        raise ValueError("pipeline standard_length_configuration must be resolved")
+    encode_standard_length_configuration(standard_length_configuration)
 
     if log_file is not None:
         early_advntr_preflight = plan_valid_advntr_preflight(
@@ -294,9 +327,33 @@ def run_pipeline(
     overall_start = timeit.default_timer()
     logger.info("Pipeline execution started.")
 
+    caller_operator_paths = validate_caller_pipeline_request(
+        run_configuration,
+        assembly=reference_assembly,
+        extra_modules=extra_modules or (),
+        threads=threads,
+        additional_commands=(module_args or {}).get("advntr", {}).get("additional_commands"),
+        output=Path(output_dir),
+    )
+    if run_configuration.caller_calibration is not None and log_file is not None:
+        validate_caller_output_destination(run_configuration.caller_calibration, Path(log_file))
+    calibration_background = None
+
     input_type, input_files = resolve_pipeline_input(fastq1, fastq2, bam, cram, bwa_reference, extra_modules)
     archive_protected_paths = tuple(
-        path for path in (bam, cram, fastq1, fastq2, reference_fasta, bed_file, bwa_reference) if path
+        path
+        for path in (
+            bam,
+            cram,
+            fastq1,
+            fastq2,
+            reference_fasta,
+            bed_file,
+            bwa_reference,
+            *length_operator_paths,
+            *caller_operator_paths,
+        )
+        if path
     )
     previous_ref_path = None
     reference_resolution_pinned = False
@@ -306,7 +363,11 @@ def run_pipeline(
         advntr_preflight = plan_advntr_preflight(config, extra_modules, module_args, reference_assembly)
         needs_advntr = advntr_preflight.enabled
         advntr_reference = advntr_preflight.reference
-        additional_operator_paths = (advntr_reference,) if advntr_reference is not None else ()
+        additional_operator_paths = (
+            *((advntr_reference,) if advntr_reference is not None else ()),
+            *length_operator_paths,
+            *caller_operator_paths,
+        )
         canonical_input_files, input_fingerprints = build_canonical_inputs_and_fingerprints(
             input_type, fastq1, fastq2, bam, cram, bed_file
         )
@@ -322,6 +383,15 @@ def run_pipeline(
             extra_modules=extra_modules,
             input_type=input_type,
         )
+        # Old summaries predate optional length measurement. Keep their absent key
+        # equivalent to today's disabled mode, while an enabled configuration becomes
+        # an exact resume input and therefore invalidates incompatible prior work.
+        if length_configuration.measurement_enabled:
+            analysis_settings["length_configuration_sha256"] = length_configuration.sha256
+        elif standard_length_configuration.enabled:
+            analysis_settings["length_configuration_sha256"] = standard_length_configuration.sha256
+        if run_configuration.caller_calibration is not None:
+            analysis_settings.update(caller_calibration_identities(run_configuration.caller_calibration))
 
         effective_reference_path = None
         if input_type == "FASTQ" and bwa_reference:
@@ -492,6 +562,11 @@ def run_pipeline(
                 revoke_outputs=not resume,
                 revoke_published=resume,
             )
+            if (
+                run_configuration.caller_calibration is not None
+                and run_configuration.caller_calibration.bundle.advntr_policy is not None
+            ):
+                prepare_caller_native_execution(run_configuration.caller_calibration, advntr_context)
             advntr_version_overrides["advntr"] = ".".join(str(part) for part in advntr_context.version)
             (
                 effective_advntr_runtime,
@@ -554,6 +629,8 @@ def run_pipeline(
         dirs = create_output_directories(output_dir)
         logger.info(f"Created output directories in: {output_dir}")
 
+        if run_configuration.caller_calibration is not None:
+            calibration_background = snapshot_caller_calibration(run_configuration.caller_calibration, Path(output_dir))
         snapshot_decision_profile(
             run_configuration.decision_profile,
             Path(output_dir) / DECISION_PROFILE_SNAPSHOT_RELATIVE,
@@ -593,11 +670,10 @@ def run_pipeline(
         )
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
-        # What the run actually used, not what BWA was configured with (MAJOR 5,
-        # milestone-5 PR-2 review): a BAM run never reads a reference, and a CRAM run
-        # decodes against whatever `alignment_plan` resolved above, which can differ
-        # entirely from the configured BWA path. Only FASTQ's own BWA resolution is
-        # correct as recorded, so it passes through unchanged.
+        # Record alignment/decoding provenance. BAM decoding needs no reference;
+        # optional standard length measurement records its own locus digest below.
+        # CRAM uses the reference proved by the plan, which can differ from BWA's
+        # configured path. FASTQ retains the BWA reference used for alignment.
         reference_provenance = resolve_summary_reference_provenance(
             input_type=input_type,
             bwa_reference_key=reference_key_used,
@@ -640,6 +716,8 @@ def run_pipeline(
             advntr_evidence_digest=advntr_evidence.digest if advntr_evidence is not None else None,
             decision_profile=run_configuration.decision_profile,
         )
+        if not length_configuration.measurement_enabled:
+            summary.update(length_summary_fields(length_configuration, None))
 
         compatibility = evaluate_resume_compatibility(
             prior_summary,
@@ -999,6 +1077,16 @@ def run_pipeline(
         if alignment_plan is None:
             raise RuntimeError("Alignment preflight did not produce a plan for coverage.")
         cov_start = datetime.now(timezone.utc).replace(tzinfo=None)
+        length_runner = build_length_consumer(
+            length_configuration,
+            standard_length_configuration,
+            assembly=reference_assembly,
+            reference=bwa_reference,
+            project_root=project_root,
+            samtools=config.get("tools", {}).get("samtools", "samtools"),
+            explicit_bam_reference=reference_fasta if input_type == "BAM" else None,
+            approved_factory=LengthMeasurementRunner,
+        )
         vntr_region = calculate_alignment_coverage(
             plan=alignment_plan,
             region=vntr_region,
@@ -1008,7 +1096,12 @@ def run_pipeline(
             output_dir=dirs["coverage"],
             coverage_calculator=calculate_vntr_coverage,
             region_resolver=get_region_string_with_fallback,
+            length_consumer=length_runner,
         )
+        if length_runner is not None:
+            summary.update(
+                completed_length_summary(length_configuration, length_runner, approved_projector=length_summary_fields)
+            )
         # The exact span the coverage stage consumed - resolved here and, until
         # #242, thrown away. The report could not otherwise state it: reading
         # `config["default_values"]["reference_assembly"]` back would mislabel any
@@ -1157,28 +1250,17 @@ def run_pipeline(
                             coverage_prefix="advntr_precheck",
                         )
                     advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                    advntr_execution_config = {**config, "tools": dict(advntr_context.tools)}
-                    advntr_runtime_component = run_configuration.advntr_runtime
-                    if advntr_additional_commands is not None:
-                        advntr_runtime_component = {
-                            **run_configuration.advntr_runtime,
-                            "settings": {
-                                **run_configuration.advntr_runtime.get("settings", {}),
-                                "additional_commands": advntr_additional_commands,
-                            },
-                        }
-                    advntr_status = run_advntr(
-                        advntr_context.model_snapshot,
-                        sorted_bam,
-                        dirs["advntr"],
-                        "output",
-                        config=advntr_execution_config,
+                    advntr_status = execute_advntr_genotype(
+                        configuration=run_configuration,
+                        native_context=advntr_context,
+                        config=config,
+                        alignment=sorted_bam,
+                        output=dirs["advntr"],
                         cwd=project_root,
-                        pipeline_threads=threads,
-                        resolved_component=run_configuration.advntr,
-                        runtime_component=advntr_runtime_component,
-                        custom_context_active=run_configuration.decision_profile.source == "explicit-cli",
-                        advntr_version=advntr_context.version,
+                        threads=threads,
+                        additional_commands=advntr_additional_commands,
+                        background=calibration_background,
+                        invoke=run_advntr,
                     )
                     if advntr_status != 0:
                         msg = f"adVNTR genotyping returned non-zero status {advntr_status}; result parsing was not attempted."

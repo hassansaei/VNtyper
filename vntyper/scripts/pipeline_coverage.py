@@ -44,6 +44,7 @@ def calculate_alignment_coverage(
     output_dir: str,
     coverage_calculator: Callable[..., object],
     region_resolver: Callable[..., str],
+    length_consumer: Callable[[AlignmentPlan], None] | None = None,
 ) -> str:
     """Run the final alignment consumer and release its descriptor binding.
 
@@ -56,6 +57,8 @@ def calculate_alignment_coverage(
         output_dir: Coverage artifact directory.
         coverage_calculator: Coverage stage callable.
         region_resolver: Legacy region fallback callable.
+        length_consumer: Optional measurement callback invoked before the proven
+            alignment plan is released.
 
     Returns:
         The exact region consumed by the coverage stage.
@@ -80,6 +83,8 @@ def calculate_alignment_coverage(
             index_path=plan.stable_index_path,
             assembly_config=_assembly_geometry(config, reference_assembly),
         )
+        if length_consumer is not None:
+            length_consumer(plan)
     except BaseException:
         primary_failure = True
         raise

@@ -27,6 +27,7 @@ from tests.golden.identity_oracle import (
 from tests.golden.root_requirements import resolve_explicit_roots
 from vntyper.modules.advntr.advntr_genotyping import process_advntr_output
 from vntyper.scripts import nomenclature_annotate, nomenclature_bam_adapter
+from vntyper.scripts.flagging import add_artifact_gate
 from vntyper.scripts.identity_candidate_persistence import (
     IDENTITY_CAPTURE_COLUMNS,
     candidate_capture_cells,
@@ -38,11 +39,8 @@ from vntyper.scripts.identity_candidates import (
     translation_component_from_config,
     with_candidate_evidence,
 )
-from vntyper.scripts.kestrel_genotyping import (
-    FILTER_COLUMNS,
-    add_artifact_gate,
-    filter_final_dataframe,
-)
+from vntyper.scripts.kestrel_genotyping import filter_final_dataframe
+from vntyper.scripts.kestrel_postprocessing import FILTER_COLUMNS
 from vntyper.scripts.molecular_identity_presentation import (
     IDENTITY_TRANSLATION_DIAGNOSTIC_COLUMNS,
     identity_translation_diagnostic_cells,

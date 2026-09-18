@@ -107,7 +107,12 @@ def main(argv: list[str] | None = None) -> None:
     # verify the snapshot recorded by an existing run and never infer current defaults.
     if args.command == "pipeline":
         try:
-            args.run_configuration = resolve_run_configuration(args.decision_profile)
+            args.run_configuration = resolve_run_configuration(
+                args.decision_profile,
+                calibration_bundle=args.calibration_bundle,
+                calibration_context=args.calibration_context,
+                research_profile=args.research_decision_profile,
+            )
         except ValueError as exc:
             logger.critical(str(exc))
             sys.exit(1)
@@ -171,6 +176,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "pipeline" and log_file_path is not None:
         try:
             validate_pipeline_log_destination(log_file_path, args, config)
+            calibration = getattr(args.run_configuration, "caller_calibration", None)
+            if calibration is not None:
+                from vntyper.scripts.pipeline_caller_activation import validate_caller_output_destination
+
+                validate_caller_output_destination(calibration, log_file_path)
         except ValueError as exc:
             logger.critical(str(exc))
             sys.exit(1)
