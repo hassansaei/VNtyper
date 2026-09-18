@@ -102,9 +102,15 @@ def resolve_standard_length_configuration(
         model_path is not None and enabled is False
     ):
         raise ValueError("explicit standard length options conflict with the selected length mode")
+    reference_data = config.get("reference_data")
+    reference_model = (
+        reference_data.get("standard_length_model_grch38") if isinstance(reference_data, Mapping) else None
+    )
+    reference_path = Path(str(reference_model)) if reference_model else None
+    resolved_path = model_path or (reference_path if reference_path and reference_path.is_file() else None)
     active = not approved_enabled and (model_path is not None or (default if enabled is None else enabled))
     source = ("packaged-research" if model_path is None else "local-research") if active else None
-    model = _load_model(model_path) if active else None
+    model = _load_model(resolved_path) if active else None
     identity = {
         "schema_version": "standard-length-configuration-v1",
         "enabled": active,

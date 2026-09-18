@@ -6,8 +6,6 @@ include LICENSE
 include vntyper/config.json
 include vntyper/data/length/grch38-count-conversions-v2.json
 include vntyper/data/length/grch38-length-annotation-v1.json
-include vntyper/data/length/grch38-standard-length-model-v1.json
-include vntyper/data/length/grch38-standard-length-model-v1.json.sha256
 include vntyper/profiles/decision_profile.json
 include vntyper/profiles/decision_profile.sha256
 include vntyper/profiles/decision_projection.json

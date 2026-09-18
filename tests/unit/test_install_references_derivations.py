@@ -1859,6 +1859,7 @@ class TestPartialSelectionAgainstTheShippedConfig:
             "filter_config.json": hashlib.sha256((tmp_path / "filter_config.json").read_bytes()).hexdigest(),
             "code-adVNTR_RUs.fa": hashlib.sha256(b">seed\nACGT\n").hexdigest(),
             "vntr_db_advntr_v2.zip": hashlib.sha256(advntr_zip).hexdigest(),
+            "grch38-standard-length-model-v1.json": hashlib.sha256(b">seed\nACGT\n").hexdigest(),
         }
         for entry in config["own_repository_references"]["raw_files"]:
             digest = seed_digests.get(entry["target_path"])

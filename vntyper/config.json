@@ -10,7 +10,7 @@
     "reference_assembly": "hg19"
   },
   "length_estimation": {
-    "enabled": true
+    "enabled": false
   },
   "cli_defaults": {
     "log_level": "INFO",
@@ -36,7 +36,8 @@
     "cram_reference_hg19": null,
     "cram_reference_hg38": null,
     "code_adVNTR_RUs": "reference/code-adVNTR_RUs.fa",
-    "muc1_motifs_rev_com": "reference/MUC1_motifs_Rev_com.fa"
+    "muc1_motifs_rev_com": "reference/MUC1_motifs_Rev_com.fa",
+    "standard_length_model_grch38": "reference/grch38-standard-length-model-v1.json"
   },
   "bam": {
     "unmapped_scan": "auto"

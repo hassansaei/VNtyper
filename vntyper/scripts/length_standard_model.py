@@ -249,13 +249,13 @@ def encode_standard_length_model(model: StandardLengthModel) -> dict[str, object
     return payload
 
 
-def load_standard_length_model(path: Path | None = None) -> StandardLengthModel:
-    """Load the packaged standard research model or one explicit local model."""
-    selected = (
-        Path(__file__).resolve().parents[1] / "data" / "length" / "grch38-standard-length-model-v1.json"
-        if path is None
-        else path
-    )
+def load_standard_length_model(
+    path: Path | None = None,
+    *,
+    expected_source: ModelSource | None = None,
+) -> StandardLengthModel:
+    """Load one explicit local or reference-installed standard research model."""
+    selected = Path("reference/grch38-standard-length-model-v1.json") if path is None else path
     if not isinstance(selected, Path) or not selected.is_file():
         raise ValueError("standard length model path must be an existing file")
     raw = read_regular_path(selected)
@@ -266,15 +266,15 @@ def load_standard_length_model(path: Path | None = None) -> StandardLengthModel:
     if canonical_json_bytes(value) != raw:
         raise ValueError("standard length model must use canonical JSON bytes")
     model = decode_standard_length_model(value)
-    expected_source = "packaged-research" if path is None else "local-research"
-    if model.model_source != expected_source:
-        raise ValueError(f"standard length model source must be {expected_source}")
-    if path is None:
-        companion_path = selected.with_suffix(selected.suffix + ".sha256")
+    expected = expected_source or ("packaged-research" if path is None else model.model_source)
+    if model.model_source != expected:
+        raise ValueError(f"standard length model source must be {expected}")
+    companion_path = selected.with_suffix(selected.suffix + ".sha256")
+    if companion_path.is_file():
         companion = read_regular_path(companion_path)
         expected_digest = hashlib.sha256(raw).hexdigest().encode("ascii") + b"\n"
         if companion != expected_digest or model.sha256 != expected_digest.decode("ascii").strip():
-            raise ValueError("packaged standard length model digest companion differs")
+            raise ValueError("standard length model digest companion differs")
     return model
 
 

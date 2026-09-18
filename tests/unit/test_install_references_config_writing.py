@@ -39,7 +39,7 @@ class TestCanonicalKeys:
         from vntyper.scripts.reference_registry import REFERENCE_KINDS, list_assemblies, reference_keys
 
         known = {k for kind in REFERENCE_KINDS for a in list_assemblies() for k in reference_keys(kind, a)}
-        known |= {"muc1_reference_vntr", "code_adVNTR_RUs", "muc1_motifs_rev_com"}
+        known |= {"muc1_reference_vntr", "code_adVNTR_RUs", "muc1_motifs_rev_com", "standard_length_model_grch38"}
         assert set(canonical_reference_keys(install_config, tmp_path)) <= known
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from vntyper.scripts.canonical_json import canonical_json_bytes
+from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256
 from vntyper.scripts.length_features import DepthPosition
 from vntyper.scripts.length_standard_features import (
     STANDARD_ANNOTATION_SHA256,
@@ -129,20 +129,30 @@ def test_standard_model_is_closed_and_rejects_nonfinite_or_wrong_order() -> None
             decode_standard_length_model(document)
 
 
-def test_load_standard_model_uses_strict_json_and_packaged_default(tmp_path) -> None:
-    model = load_standard_length_model()
-    assert model.model_source == "packaged-research"
+def test_load_standard_model_uses_strict_json_and_validates_source(tmp_path) -> None:
     path = tmp_path / "model.json"
     document = _model_document()
     document["model_source"] = "local-research"
     path.write_bytes(canonical_json_bytes(document))
     assert load_standard_length_model(path) == decode_standard_length_model(document)
+    assert load_standard_length_model(path, expected_source="local-research") == decode_standard_length_model(document)
+    with pytest.raises(ValueError, match="source must be packaged-research"):
+        load_standard_length_model(path, expected_source="packaged-research")
     path.write_text('{"schema_version":"standard-length-linear-model-v1","schema_version":"x"}', encoding="utf-8")
     with pytest.raises(ValueError):
         load_standard_length_model(path)
 
 
-def test_packaged_standard_model_companion_matches_raw_model() -> None:
-    model = load_standard_length_model()
-    assert model.model_version == "standard13-bayesian-v1"
+def test_standard_model_companion_matches_raw_model(tmp_path) -> None:
+    path = tmp_path / "model.json"
+    document = _model_document()
+    raw = canonical_json_bytes(document)
+    path.write_bytes(raw)
+    companion = path.with_suffix(path.suffix + ".sha256")
+    companion.write_text(f"{canonical_sha256(document)}\n", encoding="ascii")
+    model = load_standard_length_model(path)
+    assert model.model_version == "synthetic-v1"
     assert model.count_convention == "source-reported"
+    companion.write_text("0" * 64 + "\n", encoding="ascii")
+    with pytest.raises(ValueError, match="digest companion differs"):
+        load_standard_length_model(path)
