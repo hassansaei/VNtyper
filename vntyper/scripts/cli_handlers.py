@@ -338,6 +338,7 @@ def handle_pipeline(
         enabled=getattr(args, "estimate_vntr_length", None),
         model_path=standard_model_path,
         approved_enabled=length_configuration.measurement_enabled,
+        warning_threshold=getattr(args, "vntr_length_warning_threshold", None),
     )
     length_operator_paths = tuple(
         path

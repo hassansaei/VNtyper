@@ -358,6 +358,19 @@
         .tier-b b { color: var(--state-caution); }
         .tier-c { border-color: var(--hairline); }
         .tier-c b { color: var(--ink-muted); }
+        .length-warning-badge {
+            display: inline-flex;
+            align-items: baseline;
+            gap: var(--s-2);
+            margin-left: var(--s-2);
+            padding: var(--s-1) var(--s-3);
+            border: 1px solid var(--state-caution);
+            border-radius: 999px;
+            font-size: var(--step--1);
+            color: var(--state-caution);
+            font-weight: 600;
+            white-space: nowrap;
+        }
 
         /* The qualifiers, as label/value pairs rather than as a paragraph: they are
            read by looking for one of them, not by reading the sentence they would make.
@@ -1150,6 +1163,11 @@
                         <span><strong>Warning:</strong> {{ header_warning }}</span>
                     </li>
                 {% endif %}
+                {% if length_presentation and length_presentation.notice_text %}
+                    <li class="notice notice-warning" role="alert">
+                        <span><strong>Warning:</strong> {{ length_presentation.notice_text }}</span>
+                    </li>
+                {% endif %}
                 <li class="notice">
                     <span><strong>{{ research_use_statement }}.</strong></span>
                 </li>
@@ -1430,6 +1448,9 @@
                     <strong>{{ length_presentation.label }}:</strong>
                     {{ length_presentation.value }}
                     {%- if length_presentation.status == "estimated" %} {{ length_presentation.unit }}{% endif %}
+                    {%- if length_presentation.warning_badge %}
+                        <span class="length-warning-badge" role="status">{{ length_presentation.warning_badge }}</span>
+                    {%- endif %}
                     <br><small>{{ length_presentation.help }}</small>
                 </p>
                 <p class="metric"><strong>Status:</strong> {{ length_presentation.status_text }}</p>

@@ -54,6 +54,9 @@ class LengthPresentation:
     reasons: tuple[str, ...]
     calibration_id: str | None
     model_sha256: str | None
+    warning_badge: str | None = None
+    notice_text: str | None = None
+    has_sensitivity_warning: bool = False
 
 
 def _text(value: object, label: str) -> str:
@@ -139,12 +142,15 @@ def _reasons(value: object) -> tuple[str, ...]:
 def build_length_presentation(
     summary: Mapping[str, object],
     report_config: Mapping[str, object],
+    *,
+    is_positive: bool | None = None,
 ) -> LengthPresentation | None:
     """Validate and format optional length summary values for the report.
 
     Args:
         summary: Loaded pipeline summary mapping.
         report_config: Report wording configuration.
+        is_positive: Whether the overall screening finding is positive.
 
     Returns:
         A frozen presentation, or ``None`` when an older config has no wording.
@@ -157,7 +163,7 @@ def build_length_presentation(
     if "length_model_source" in summary:
         from vntyper.scripts.length_standard_presentation import build_standard_length_presentation
 
-        return build_standard_length_presentation(summary, report_config)
+        return build_standard_length_presentation(summary, report_config, is_positive=is_positive)
     configured = _configuration(report_config)
     if configured is None:
         return None
