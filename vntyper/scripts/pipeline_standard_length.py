@@ -13,7 +13,7 @@ from vntyper.scripts.canonical_json import canonical_sha256
 
 if TYPE_CHECKING:
     from vntyper.scripts.length_standard_features import StandardLengthMeasurement
-    from vntyper.scripts.length_standard_model import StandardLengthModel, StandardLengthPrediction
+    from vntyper.scripts.length_standard_model import ModelSource, StandardLengthModel, StandardLengthPrediction
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +63,10 @@ def encode_standard_length_configuration(configuration: StandardLengthConfigurat
     return document
 
 
-def _load_model(path: Path | None) -> StandardLengthModel:
+def _load_model(path: Path, *, expected_source: ModelSource | None = None) -> StandardLengthModel:
     from vntyper.scripts.length_standard_model import load_standard_length_model
 
-    return load_standard_length_model(path)
+    return load_standard_length_model(path, expected_source=expected_source)
 
 
 def resolve_standard_length_configuration(
@@ -107,10 +107,17 @@ def resolve_standard_length_configuration(
         reference_data.get("standard_length_model_grch38") if isinstance(reference_data, Mapping) else None
     )
     reference_path = Path(str(reference_model)) if reference_model else None
-    resolved_path = model_path or (reference_path if reference_path and reference_path.is_file() else None)
+    resolved_path = model_path or reference_path
     active = not approved_enabled and (model_path is not None or (default if enabled is None else enabled))
-    source = ("packaged-research" if model_path is None else "local-research") if active else None
-    model = _load_model(resolved_path) if active else None
+    if active:
+        if resolved_path is None:
+            raise ValueError("standard length model reference is not configured in reference_data")
+        expected_source: ModelSource | None = "packaged-research" if model_path is None else None
+        model = _load_model(resolved_path, expected_source=expected_source)
+        source = model.model_source
+    else:
+        model = None
+        source = None
     identity = {
         "schema_version": "standard-length-configuration-v1",
         "enabled": active,
@@ -214,10 +221,10 @@ class StandardLengthRunner:
             raise ValueError("standard length runner requires a model")
         try:
             measurement = read_standard_length_features(
-                Path(plan.view_path),
-                reference,
+                Path(plan.view_path).resolve(),
+                reference.resolve(),
                 assembly=self.assembly,
-                index_path=None if plan.stable_index_path is None else Path(plan.stable_index_path),
+                index_path=None if plan.stable_index_path is None else Path(plan.stable_index_path).resolve(),
             )
             prediction = predict_standard_length(measurement, self.configuration.model)
         except (OSError, RuntimeError, ValueError) as error:

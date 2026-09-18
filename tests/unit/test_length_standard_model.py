@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from vntyper.scripts.canonical_json import canonical_json_bytes, canonical_sha256
@@ -156,3 +158,20 @@ def test_standard_model_companion_matches_raw_model(tmp_path) -> None:
     companion.write_text("0" * 64 + "\n", encoding="ascii")
     with pytest.raises(ValueError, match="digest companion differs"):
         load_standard_length_model(path)
+
+
+def test_load_standard_model_supports_symlink(tmp_path: Path) -> None:
+    real_path = tmp_path / "real_model.json"
+    document = _model_document()
+    raw = canonical_json_bytes(document)
+    real_path.write_bytes(raw)
+    real_companion = real_path.with_suffix(real_path.suffix + ".sha256")
+    real_companion.write_text(f"{canonical_sha256(document)}\n", encoding="ascii")
+
+    symlink_path = tmp_path / "symlink_model.json"
+    symlink_path.symlink_to(real_path)
+    symlink_companion = symlink_path.with_suffix(symlink_path.suffix + ".sha256")
+    symlink_companion.symlink_to(real_companion)
+
+    loaded = load_standard_length_model(symlink_path)
+    assert loaded == decode_standard_length_model(document)

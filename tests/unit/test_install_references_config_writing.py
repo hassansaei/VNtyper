@@ -35,6 +35,11 @@ class TestCanonicalKeys:
         keys = canonical_reference_keys(install_config, tmp_path)
         assert set(keys) >= {"muc1_region_fasta_hg19", "muc1_region_fasta_hg38"}
 
+    def test_the_standard_length_model_key_is_written(self, tmp_path, install_config):
+        keys = canonical_reference_keys(install_config, tmp_path)
+        assert "standard_length_model_grch38" in keys
+        assert str(keys["standard_length_model_grch38"]).endswith("grch38-standard-length-model-v1.json")
+
     def test_every_written_key_is_one_the_registry_knows(self, tmp_path, install_config):
         from vntyper.scripts.reference_registry import REFERENCE_KINDS, list_assemblies, reference_keys
 

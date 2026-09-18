@@ -103,8 +103,10 @@ def test_validation_publishes_actual_scientific_outcome_and_cannot_retry(tmp_pat
     assert attestation["metrics_sha256"] == canonical_sha256({"scientific_passed": passed})
     assert calls == ["validation"]
     assert not (output / "completion.json").exists()
+    before_retry = args.exposure_ledger.read_bytes()
     with pytest.raises(ValueError):
         module.confirm_calibration_bundle(args, output, role="validation")
+    assert args.exposure_ledger.read_bytes() == before_retry
     assert calls == ["validation"]
 
 
@@ -285,3 +287,59 @@ def test_unknown_target_cannot_open_a_research_profile(tmp_path):
     module = import_module("vntyper.scripts.calibration_confirmation_controller")
     with pytest.raises(ValueError, match="target"):
         module.load_confirmation_backend("unknown", tmp_path)
+
+
+def test_invalid_custody_refused_before_exposure(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    module, args, backend, calls = setup_case(tmp_path, monkeypatch)
+    args.evidence, _ = source_dir(tmp_path, backend, "validation")
+    before = args.exposure_ledger.read_bytes()
+    args.custody = Path("relative-custody-error")
+    with pytest.raises(ValueError, match="absolute external nonsymlink directory"):
+        module.confirm_calibration_bundle(args, tmp_path / "output", role="validation")
+    assert args.exposure_ledger.read_bytes() == before
+    assert not calls
+
+    args.custody = tmp_path / "nonexistent-custody"
+    with pytest.raises(ValueError, match="existing directory"):
+        module.confirm_calibration_bundle(args, tmp_path / "output", role="validation")
+    assert args.exposure_ledger.read_bytes() == before
+    assert not calls
+
+
+def test_preflight_custody_refuses_terminal_or_missing_prior_validation_before_exposure(tmp_path, monkeypatch):
+    module, args, backend, calls = setup_case(tmp_path, monkeypatch)
+    args.evidence, _ = source_dir(tmp_path, backend, "validation")
+    output = tmp_path / "val-output"
+    output.mkdir()
+    assert module.confirm_calibration_bundle(args, output, role="validation")
+    assert calls == ["validation"]
+
+    # Re-running validation fails in preflight before recording exposure
+    before = args.exposure_ledger.read_bytes()
+    with pytest.raises(ValueError, match="validation was already claimed or completed"):
+        module.confirm_calibration_bundle(args, tmp_path / "retry-output", role="validation")
+    assert args.exposure_ledger.read_bytes() == before
+    assert calls == ["validation"]
+
+    # Retired candidate fails in preflight before recording exposure
+    from vntyper.scripts.calibration_artifact_io import write_json
+
+    prefix = backend.candidate.sha256
+    write_json(
+        args.custody / f"{prefix}.retired.json",
+        {
+            "schema_version": "calibration-target-retirement-v2",
+            "target": args.target,
+            "candidate_sha256": prefix,
+            "confirmation_sha256": "0" * 64,
+            "exposure_receipt_sha256": "0" * 64,
+            "reason": "operational-failure-after-claim",
+        },
+    )
+    before = args.exposure_ledger.read_bytes()
+    with pytest.raises(ValueError, match="already claimed, consumed or terminal"):
+        module.confirm_calibration_bundle(args, tmp_path / "retry-output-2", role="validation")
+    assert args.exposure_ledger.read_bytes() == before
+    assert calls == ["validation"]

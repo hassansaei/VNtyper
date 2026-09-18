@@ -30,7 +30,7 @@ from vntyper.scripts.calibration_target_attestation import (
 from vntyper.scripts.calibration_target_authority import decode_target_custodian_authority
 from vntyper.scripts.calibration_target_completion import encode_target_completion
 from vntyper.scripts.calibration_target_contract import TargetStudy
-from vntyper.scripts.calibration_target_custody import claim_target_confirmation
+from vntyper.scripts.calibration_target_custody import claim_target_confirmation, preflight_target_custody
 from vntyper.scripts.calibration_target_runs import TargetRuns, decode_target_runs
 from vntyper.scripts.canonical_json import canonical_sha256, load_strict_json_object
 
@@ -224,6 +224,7 @@ def confirm_calibration_bundle(args: Namespace, output: Path, *, role: str) -> b
         authority=authority,
     )
     forbidden = (args.profile, args.evidence, output)
+    preflight_target_custody(args.custody, confirmation, forbidden_roots=forbidden)
     receipt = record_exposure(
         args.exposure_ledger,
         expected_ledger_id=backend.study.exposure_ledger_id,

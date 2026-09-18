@@ -305,3 +305,27 @@ def test_concurrent_validation_claims_have_only_one_winner(tmp_path: Path):
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(attempt, (1, 2))) == [False, True]
     assert len(list(root.glob("*.validation-result.json"))) == 1
+
+
+def test_preflight_target_custody_validation_and_lifecycle(tmp_path: Path):
+    confirmation, exposure, validation = _validation()
+    root = _root(tmp_path, confirmation)
+    module = _module()
+
+    # Clean custody passes validation preflight
+    module.preflight_target_custody(root, confirmation)
+
+    # Corrupt lock file fails preflight
+    prefix = confirmation.candidate.sha256
+    lock_file = root / f"{prefix}.lock"
+    lock_file.write_bytes(b"non-empty")
+    with pytest.raises(ValueError, match="lock is not an empty regular file"):
+        module.preflight_target_custody(root, confirmation)
+    lock_file.unlink()
+
+    # Completed validation candidate passes locked preflight and fails validation preflight
+    locked_confirmation, _ = _locked(root)
+    module.preflight_target_custody(root, locked_confirmation)
+
+    with pytest.raises(ValueError, match="validation was already claimed or completed"):
+        module.preflight_target_custody(root, confirmation)

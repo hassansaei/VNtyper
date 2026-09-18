@@ -65,7 +65,12 @@ def handle_calibrate(
         message = f"unsupported calibration operation: {operation!r}"
         logger.error(message)
         raise ValueError(message)
-    successful = _atomic_output(args.output, lambda staging: producer(args, staging))
+    try:
+        successful = _atomic_output(args.output, lambda staging: producer(args, staging))
+    except (RuntimeError, OSError) as error:
+        message = str(error)
+        logger.error(message)
+        raise ValueError(message) from error
     if not successful:
         logger.error(
             f"calibration {operation} completed with a failed outcome; "

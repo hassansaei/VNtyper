@@ -553,12 +553,12 @@ summary | release-summary | none | always records success, failure, skipped jobs
    `kestrel_config.json`'s `artifact_flags`; **no flag name is written inline in Python**,
    and emptying that list restores the pre-#174 behaviour with no code change.
 
-   **Two tripwires fire on any change to the gate list, and they are not in the same
-   file.** `tests/unit/test_kestrel_filtering.py` reads `kestrel_genotyping.py` as *source
-   text* and asserts the exact count; `tests/builders.py`'s `STAGE_COLUMNS["flagged"]` and
-   `["final"]` feed `kestrel_stage_frame()` to the real `filter_final_dataframe`, so a gate
-   missing from those tuples raises `ValueError` rather than failing an assertion. Change
-   both, deliberately, in the same commit.
+    **Two tripwires fire on any change to the gate list, and they are not in the same
+    file.** `tests/unit/test_kestrel_filtering.py` asserts the exact count of `FILTER_COLUMNS`
+    (defined in `kestrel_postprocessing.py` and re-exported by `kestrel_genotyping.py`);
+    `tests/builders.py`'s `STAGE_COLUMNS["flagged"]` and `["final"]` feed `kestrel_stage_frame()`
+    to the real `filter_final_dataframe`, so a gate missing from those tuples raises `ValueError`
+    rather than failing an assertion. Change both, deliberately, in the same commit.
 5. **Summary step names are string literals.** `"Kestrel Genotyping"`,
    `"adVNTR Genotyping"`, `"Coverage Calculation"`, `"BAM Header Parsing"`,
    `"Cross-Match Variant Comparison"` are matched exactly by `generate_report.py`,

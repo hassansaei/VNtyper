@@ -28,9 +28,12 @@ _EXCLUDED_FLAGS = 0x704
 
 
 def _path(path: object, label: str) -> Path:
-    if not isinstance(path, Path) or not path.is_absolute() or not path.is_file():
-        raise ValueError(f"standard length {label} must be an existing absolute file Path")
-    return path
+    if not isinstance(path, (Path, str)):
+        raise ValueError(f"standard length {label} must be a Path or str")
+    resolved = Path(path).resolve()
+    if not resolved.is_file():
+        raise ValueError(f"standard length {label} must be an existing file Path: '{path}'")
+    return resolved
 
 
 def _cram(path: Path) -> bool:

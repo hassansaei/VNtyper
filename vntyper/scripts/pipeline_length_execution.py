@@ -113,8 +113,8 @@ def measure_pipeline_length(
     if plan.file_format == "cram" and plan.reference_path != str(reference_path):
         raise ValueError("length measurement CRAM reference differs from the proven alignment plan")
     depths = read_length_depth(
-        Path(plan.view_path),
-        reference_path,
+        Path(plan.view_path).resolve(),
+        reference_path.resolve(),
         configuration.annotation,
         configuration.measurement_context,
         samtools_path,

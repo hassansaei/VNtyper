@@ -160,7 +160,7 @@ def _validate_arguments(args: object, output: Path) -> tuple[Path, Path | None, 
             raise ValueError("cohort caller asset arguments must be Paths")
     if not output.is_dir() or output.is_symlink() or any(output.iterdir()):
         raise ValueError("cohort output must be an empty staged directory")
-    return manifest, reference, target, folds, seed, convention
+    return manifest.resolve(), None if reference is None else reference.resolve(), target, folds, seed, convention
 
 
 def run_cohort_calibration(args: object, output: Path) -> bool:

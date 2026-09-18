@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import math
-from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn, cast
 
@@ -51,6 +49,11 @@ from vntyper.scripts.calibration_length_metrics import (
     LengthEligibleRoster,
     length_eligible_roster_document,
 )
+from vntyper.scripts.calibration_length_policy import (
+    decode_length_source_truth,
+    length_measurement_policy_sha256,
+    length_protocol_for_roster,
+)
 from vntyper.scripts.calibration_length_profile import (
     LengthResearchProfile,
     build_length_payload,
@@ -58,8 +61,6 @@ from vntyper.scripts.calibration_length_profile import (
 )
 from vntyper.scripts.calibration_length_protocol import (
     LengthProtocol,
-    decode_length_protocol,
-    length_protocol_document,
 )
 from vntyper.scripts.calibration_length_report import render_length_evaluation
 from vntyper.scripts.calibration_payload import payload_manifest_document
@@ -85,34 +86,12 @@ from vntyper.scripts.length_model import TARGET_BOUNDARY_DEFINITION
 
 logger = logging.getLogger(__name__)
 
+_truth = decode_length_source_truth
+
 
 def _fail(message: str) -> NoReturn:
     logger.error(message)
     raise ValueError(message)
-
-
-def length_measurement_policy_sha256(study: TargetStudy) -> str:
-    """Derive the complete geometry/counting policy identity for length runs.
-
-    Args:
-        study: Frozen length study with a declared measurement baseline.
-
-    Returns:
-        Canonical hash of the annotation and counting policy, independent of fit.
-
-    Raises:
-        ValueError: If the study does not declare a length baseline.
-    """
-    target_study_document(study)
-    if not isinstance(study.baseline, LengthBaselinePlan):
-        _fail("length extraction requires a length study")
-    return canonical_sha256(
-        {
-            "schema_version": "length-measurement-policy-v1",
-            "annotation_sha256": study.baseline.annotation_sha256,
-            "counting_policy_sha256": study.baseline.counting_policy_sha256,
-        }
-    )
 
 
 def _require_exposure(source: RoleSource, study: TargetStudy, receipt: ExposureReceipt) -> None:
@@ -130,39 +109,6 @@ def _require_exposure(source: RoleSource, study: TargetStudy, receipt: ExposureR
     }
     if any(getattr(receipt, name) != value for name, value in expected.items()):
         _fail("length extraction exposure receipt differs from the authorized source")
-
-
-def _truth(value: object, keys: tuple[str, ...]) -> dict[str, float]:
-    fields = {"schema_version", "boundary_definition", "rows"}
-    if not isinstance(value, Mapping) or set(value) != fields:
-        _fail("length source truth fields differ")
-    if (
-        value["schema_version"] != "calibration-length-truth-v1"
-        or value["boundary_definition"] != TARGET_BOUNDARY_DEFINITION
-    ):
-        _fail("length source truth requires the declared exact repeat-count boundary")
-    raw_rows = value["rows"]
-    if not isinstance(raw_rows, list):
-        _fail("length source truth rows must be a list")
-    result = {}
-    for row in raw_rows:
-        if not isinstance(row, Mapping) or set(row) != {"key", "total_repeat_count"}:
-            _fail("length source truth row fields differ")
-        key, number = row["key"], row["total_repeat_count"]
-        if not isinstance(key, str) or key in result:
-            _fail("length source truth contains an invalid or duplicate key")
-        if isinstance(number, bool) or not isinstance(number, (int, float)):
-            _fail("length source truth requires positive integral counts")
-        try:
-            numeric = float(number)
-        except OverflowError:
-            _fail("length source truth count exceeds numeric range")
-        if not math.isfinite(numeric) or numeric <= 0 or not numeric.is_integer():
-            _fail("length source truth requires positive integral counts")
-        result[key] = numeric
-    if tuple(result) != keys:
-        _fail("length source truth does not match the exact eligible artifact roster")
-    return result
 
 
 def load_length_source_rows(
@@ -280,21 +226,6 @@ def _expose(ledger: Path, source: RoleSource, study: TargetStudy, evidence_root:
         identities=[{"namespace": namespace, "sha256": digest} for namespace, digest in source.identities],
         forbidden_roots=(evidence_root, output),
     )
-
-
-def length_protocol_for_roster(protocol: LengthProtocol, roster: LengthEligibleRoster) -> LengthProtocol:
-    """Derive the frozen protocol for one separately declared eligible roster.
-
-    Args:
-        protocol: Study protocol whose scientific policy remains unchanged.
-        roster: Role-specific eligible population frozen before outcomes.
-
-    Returns:
-        A strict protocol differing only in its eligible-roster commitment.
-    """
-    raw = length_protocol_document(protocol)
-    raw["eligible_roster_sha256"] = roster.sha256
-    return decode_length_protocol(raw)
 
 
 def evaluate_fixed_length_source(

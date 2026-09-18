@@ -62,7 +62,7 @@ def test_pipeline_resolves_profile_exactly_once_before_dispatch(monkeypatch: pyt
     order: list[str] = []
     sentinel = object()
 
-    def resolve(path: object = None) -> object:
+    def resolve(path: object = None, **_kwargs: object) -> object:
         assert path is None
         order.append("resolve")
         return sentinel

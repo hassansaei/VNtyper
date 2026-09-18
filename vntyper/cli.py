@@ -107,19 +107,12 @@ def main(argv: list[str] | None = None) -> None:
     # verify the snapshot recorded by an existing run and never infer current defaults.
     if args.command == "pipeline":
         try:
-            if args.calibration_bundle is not None or args.calibration_context is not None:
-                args.run_configuration = resolve_run_configuration(
-                    args.decision_profile,
-                    calibration_bundle=args.calibration_bundle,
-                    calibration_context=args.calibration_context,
-                )
-            elif args.research_decision_profile is not None:
-                args.run_configuration = resolve_run_configuration(
-                    args.decision_profile,
-                    research_profile=args.research_decision_profile,
-                )
-            else:
-                args.run_configuration = resolve_run_configuration(args.decision_profile)
+            args.run_configuration = resolve_run_configuration(
+                args.decision_profile,
+                calibration_bundle=args.calibration_bundle,
+                calibration_context=args.calibration_context,
+                research_profile=args.research_decision_profile,
+            )
         except ValueError as exc:
             logger.critical(str(exc))
             sys.exit(1)

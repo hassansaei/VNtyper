@@ -271,7 +271,7 @@ def canonical_intake_bytes(declaration: IntakeDeclaration) -> bytes:
 def _decode_specimen(value: object) -> Specimen:
     raw = _exact_object(value, _SPECIMEN_FIELDS, "calibration specimen")
     status = raw["identity_status"]
-    if status not in _IDENTITY_STATUSES:
+    if not isinstance(status, str) or status not in _IDENTITY_STATUSES:
         raise ValueError(f"unsupported calibration specimen identity status: {status!r}")
     previously_examined = raw["previously_examined"]
     if not isinstance(previously_examined, bool):
@@ -288,10 +288,10 @@ def _decode_specimen(value: object) -> Specimen:
 def _decode_artifact(value: object) -> InputArtifact:
     raw = _exact_object(value, _ARTIFACT_FIELDS, "calibration artifact")
     artifact_format = raw["format"]
-    if artifact_format not in _ARTIFACT_FORMATS:
+    if not isinstance(artifact_format, str) or artifact_format not in _ARTIFACT_FORMATS:
         raise ValueError(f"unsupported calibration artifact format: {artifact_format!r}")
     scope = raw["input_scope"]
-    if scope not in _INPUT_SCOPES:
+    if not isinstance(scope, str) or scope not in _INPUT_SCOPES:
         raise ValueError(f"unsupported calibration artifact input scope: {scope!r}")
     mate_path = _optional_string(raw["mate_path"], "calibration artifact mate path")
     if artifact_format == "FASTQ_PAIR" and mate_path is None:
@@ -319,7 +319,7 @@ def _decode_artifact(value: object) -> InputArtifact:
 def _decode_alias(value: object) -> SpecimenAlias:
     raw = _exact_object(value, _ALIAS_FIELDS, "calibration alias")
     evidence = raw["evidence"]
-    if evidence not in _ALIAS_EVIDENCE:
+    if not isinstance(evidence, str) or evidence not in _ALIAS_EVIDENCE:
         raise ValueError(f"unsupported calibration alias evidence: {evidence!r}")
     return SpecimenAlias(
         _nonempty_string(raw["alias"], "calibration alias"),
@@ -331,10 +331,10 @@ def _decode_alias(value: object) -> SpecimenAlias:
 def _decode_truth(value: object) -> TruthRecord:
     raw = _exact_object(value, _TRUTH_FIELDS, "calibration truth")
     genotype = raw["genotype"]
-    if genotype not in _GENOTYPES:
+    if not isinstance(genotype, str) or genotype not in _GENOTYPES:
         raise ValueError(f"unsupported calibration truth genotype: {genotype!r}")
     status = raw["status"]
-    if status not in _TRUTH_STATUSES:
+    if not isinstance(status, str) or status not in _TRUTH_STATUSES:
         raise ValueError(f"unsupported calibration truth status: {status!r}")
     digest = raw["source_digest"]
     if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
@@ -360,10 +360,10 @@ def _decode_truth(value: object) -> TruthRecord:
 def _decode_length(value: object) -> LengthTruth:
     raw = _exact_object(value, _LENGTH_FIELDS, "calibration length truth")
     unit = raw["unit"]
-    if unit not in _LENGTH_UNITS:
+    if not isinstance(unit, str) or unit not in _LENGTH_UNITS:
         raise ValueError(f"unsupported calibration length unit: {unit!r}")
     measurement = raw["measurement"]
-    if measurement not in _MEASUREMENTS:
+    if not isinstance(measurement, str) or measurement not in _MEASUREMENTS:
         raise ValueError(f"unsupported calibration length measurement: {measurement!r}")
     allele_1 = _optional_positive_number(raw["allele_1"], "calibration length allele 1")
     allele_2 = _optional_positive_number(raw["allele_2"], "calibration length allele 2")
@@ -404,10 +404,10 @@ def _decode_length(value: object) -> LengthTruth:
 def _decode_assignment(value: object) -> Assignment:
     raw = _exact_object(value, _ASSIGNMENT_FIELDS, "calibration assignment")
     role = raw["role"]
-    if role not in _ROLES:
+    if not isinstance(role, str) or role not in _ROLES:
         raise ValueError(f"unsupported calibration assignment role: {role!r}")
     provenance = raw["provenance"]
-    if provenance not in _PROVENANCE:
+    if not isinstance(provenance, str) or provenance not in _PROVENANCE:
         raise ValueError(f"unsupported calibration assignment provenance: {provenance!r}")
     if role == "locked-heldout" and provenance != "external-custodian":
         raise ValueError("locked calibration assignment requires external custodian provenance")

@@ -12,13 +12,23 @@ from vntyper.scripts import pipeline_standard_length as subject
 pytestmark = pytest.mark.unit
 
 
-def _model(path=None):
+_DEFAULT_CONFIG = {"reference_data": {"standard_length_model_grch38": "reference/grch38-standard-length-model-v1.json"}}
+
+
+def _model(path=None, *, expected_source=None):
     from tests.unit.test_length_standard_model import _model_document
     from vntyper.scripts.length_standard_model import decode_standard_length_model
 
     document = _model_document()
-    document["model_source"] = "packaged-research" if path is None else "local-research"
-    return decode_standard_length_model(document)
+    document["model_source"] = (
+        "packaged-research"
+        if path is None or path == Path("reference/grch38-standard-length-model-v1.json")
+        else "local-research"
+    )
+    model = decode_standard_length_model(document)
+    if expected_source is not None and model.model_source != expected_source:
+        raise ValueError(f"standard length model source must be {expected_source}")
+    return model
 
 
 @pytest.mark.parametrize("change", ["model", "source", "sha256"])
@@ -26,7 +36,9 @@ def test_replaced_configuration_cannot_reuse_resume_identity(monkeypatch: pytest
     from vntyper.scripts.length_standard_model import decode_standard_length_model, encode_standard_length_model
 
     monkeypatch.setattr(subject, "_load_model", _model)
-    config = subject.resolve_standard_length_configuration({}, enabled=True, model_path=None, approved_enabled=False)
+    config = subject.resolve_standard_length_configuration(
+        _DEFAULT_CONFIG, enabled=True, model_path=None, approved_enabled=False
+    )
     if change == "model":
         assert config.model is not None
         document = encode_standard_length_model(config.model)
@@ -81,7 +93,10 @@ def test_malformed_config_enabled_is_rejected(invalid: object) -> None:
 def test_configuration_identity_binds_model_and_source(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subject, "_load_model", _model)
     packaged = subject.resolve_standard_length_configuration(
-        {"length_estimation": {"enabled": True}}, enabled=None, model_path=None, approved_enabled=False
+        {"length_estimation": {"enabled": True}, **_DEFAULT_CONFIG},
+        enabled=None,
+        model_path=None,
+        approved_enabled=False,
     )
     local = subject.resolve_standard_length_configuration(
         {}, enabled=None, model_path=Path("model.json"), approved_enabled=False
@@ -94,7 +109,7 @@ def test_configuration_identity_binds_model_and_source(monkeypatch: pytest.Monke
 def test_unavailable_summary_keeps_approval_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subject, "_load_model", _model)
     configuration = subject.resolve_standard_length_configuration(
-        {}, enabled=True, model_path=None, approved_enabled=False
+        _DEFAULT_CONFIG, enabled=True, model_path=None, approved_enabled=False
     )
     result = subject.standard_length_summary(configuration, None, None, ("unsupported-assembly",))
     assert result["length_estimation_status"] == "unavailable"
@@ -108,7 +123,7 @@ def test_unavailable_summary_keeps_approval_absent(monkeypatch: pytest.MonkeyPat
 def test_unsupported_assembly_skips_reader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subject, "_load_model", _model)
     configuration = subject.resolve_standard_length_configuration(
-        {}, enabled=True, model_path=None, approved_enabled=False
+        _DEFAULT_CONFIG, enabled=True, model_path=None, approved_enabled=False
     )
     runner = subject.StandardLengthRunner(configuration, "hg19", None, Path("/work"))
     runner(Mock())
@@ -138,7 +153,7 @@ def test_actual_pipeline_records_standard_model_inside_retained_lifetime(
 
     model = decode_standard_length_model(_model_document())
     measured = _measurement()
-    monkeypatch.setattr(subject, "_load_model", lambda _path: model)
+    monkeypatch.setattr(subject, "_load_model", lambda _path, **_kw: model)
     configuration = subject.resolve_standard_length_configuration(
         {}, enabled=True, model_path=tmp_path / "model.json", approved_enabled=False
     )
@@ -176,9 +191,68 @@ def test_optional_reader_failure_yields_unavailable_length(
     from tests.unit.test_pipeline_length_execution import _plan
 
     monkeypatch.setattr(subject, "_load_model", _model)
-    config = subject.resolve_standard_length_configuration({}, enabled=True, model_path=None, approved_enabled=False)
+    config = subject.resolve_standard_length_configuration(
+        _DEFAULT_CONFIG, enabled=True, model_path=None, approved_enabled=False
+    )
     monkeypatch.setattr("vntyper.scripts.length_standard_io.read_standard_length_features", Mock(side_effect=error))
     runner = subject.StandardLengthRunner(config, "hg38", tmp_path / "reference.fa", tmp_path)
     runner(_plan())
     assert runner.summary["estimated_total_repeat_count"] is None
     assert runner.summary["length_estimation_reasons"] == ["measurement-unavailable"]
+
+
+def test_missing_reference_model_file_fails_with_path(tmp_path: Path) -> None:
+    nonexistent = tmp_path / "missing_model.json"
+    with pytest.raises(ValueError, match=f"standard length model path must be an existing file: '{nonexistent}'"):
+        subject.resolve_standard_length_configuration(
+            {"reference_data": {"standard_length_model_grch38": str(nonexistent)}},
+            enabled=True,
+            model_path=None,
+            approved_enabled=False,
+        )
+
+
+def test_missing_reference_configuration_fails_when_enabled() -> None:
+    with pytest.raises(ValueError, match="standard length model reference is not configured in reference_data"):
+        subject.resolve_standard_length_configuration({}, enabled=True, model_path=None, approved_enabled=False)
+
+
+def test_explicit_packaged_model_path_resolves_packaged_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subject, "_load_model", _model)
+    config = subject.resolve_standard_length_configuration(
+        {},
+        enabled=None,
+        model_path=Path("reference/grch38-standard-length-model-v1.json"),
+        approved_enabled=False,
+    )
+    assert config.enabled is True
+    assert config.source == "packaged-research"
+    assert config.model is not None
+    assert config.model.model_source == "packaged-research"
+    encoded = subject.encode_standard_length_configuration(config)
+    assert encoded["source"] == "packaged-research"
+
+
+def test_packaged_reference_model_enforces_packaged_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.test_length_standard_model import _model_document
+    from vntyper.scripts.length_standard_model import decode_standard_length_model
+
+    doc = _model_document()
+    doc["model_source"] = "local-research"
+    wrong_model = decode_standard_length_model(doc)
+    monkeypatch.setattr(
+        subject,
+        "_load_model",
+        lambda _p, *, expected_source=None: (
+            wrong_model
+            if expected_source is None
+            else (_ for _ in ()).throw(ValueError(f"standard length model source must be {expected_source}"))
+        ),
+    )
+    with pytest.raises(ValueError, match="source must be packaged-research"):
+        subject.resolve_standard_length_configuration(
+            {"length_estimation": {"enabled": True}, **_DEFAULT_CONFIG},
+            enabled=None,
+            model_path=None,
+            approved_enabled=False,
+        )

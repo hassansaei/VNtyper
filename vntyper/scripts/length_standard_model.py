@@ -250,14 +250,16 @@ def encode_standard_length_model(model: StandardLengthModel) -> dict[str, object
 
 
 def load_standard_length_model(
-    path: Path | None = None,
+    path: Path,
     *,
     expected_source: ModelSource | None = None,
 ) -> StandardLengthModel:
     """Load one explicit local or reference-installed standard research model."""
-    selected = Path("reference/grch38-standard-length-model-v1.json") if path is None else path
-    if not isinstance(selected, Path) or not selected.is_file():
-        raise ValueError("standard length model path must be an existing file")
+    if not isinstance(path, Path):
+        raise ValueError("standard length model path must be a Path")
+    selected = path.resolve()
+    if not selected.is_file():
+        raise ValueError(f"standard length model path must be an existing file: '{selected}'")
     raw = read_regular_path(selected)
     try:
         value = load_strict_json_object(raw)
@@ -266,12 +268,12 @@ def load_standard_length_model(
     if canonical_json_bytes(value) != raw:
         raise ValueError("standard length model must use canonical JSON bytes")
     model = decode_standard_length_model(value)
-    expected = expected_source or ("packaged-research" if path is None else model.model_source)
+    expected = expected_source or model.model_source
     if model.model_source != expected:
         raise ValueError(f"standard length model source must be {expected}")
     companion_path = selected.with_suffix(selected.suffix + ".sha256")
     if companion_path.is_file():
-        companion = read_regular_path(companion_path)
+        companion = read_regular_path(companion_path.resolve())
         expected_digest = hashlib.sha256(raw).hexdigest().encode("ascii") + b"\n"
         if companion != expected_digest or model.sha256 != expected_digest.decode("ascii").strip():
             raise ValueError("standard length model digest companion differs")

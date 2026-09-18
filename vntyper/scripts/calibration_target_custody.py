@@ -373,6 +373,59 @@ class TargetCustodyClaim:
             self.close()
 
 
+def preflight_target_custody(
+    path: Path,
+    confirmation: TargetConfirmation,
+    *,
+    forbidden_roots: tuple[Path, ...] = (),
+) -> None:
+    """Preflight target custody path, identity, and candidate state before exposure is recorded.
+
+    Args:
+        path: Explicitly initialized external target custody directory.
+        confirmation: Pure preflight lineage, checked against custody identity.
+        forbidden_roots: All study/input/output roots excluded from custody.
+
+    Raises:
+        ValueError: If custody path, inventory, permissions, ledger identity, or candidate state differ.
+    """
+    confirmation_document(confirmation)
+    resolved = _external_root(path, forbidden_roots)
+    if not resolved.is_dir():
+        _fail("target custody requires an existing directory")
+    names = set(os.listdir(resolved))
+    if "identity.json" not in names or any(name != "identity.json" and not _NAMES.fullmatch(name) for name in names):
+        _fail("target custody inventory is incomplete or unknown")
+    reader = SecureDirectoryReader.open(resolved, names)
+    try:
+        _check_root(reader)
+        identity = _read(reader, "identity.json")
+        if identity != {
+            "schema_version": "calibration-target-custody-v2",
+            "exposure_ledger_id": confirmation.study.exposure_ledger_id,
+        }:
+            _fail("target custody ledger identity differs")
+        prefix = confirmation.candidate.sha256
+        for suffix in ("locked-started.json", "locked-consumption.json", "locked-result.json", "retired.json"):
+            if _read(reader, prefix + "." + suffix) is not None:
+                _fail("target custody candidate is already claimed, consumed or terminal")
+        phase = "validation" if confirmation.role == "validation" else "locked"
+        if phase == "validation":
+            if any(
+                _read(reader, prefix + "." + suffix) is not None
+                for suffix in ("validation-started.json", "validation-result.json")
+            ):
+                _fail("target custody validation was already claimed or completed")
+        else:
+            _prior_validation(reader, confirmation, prefix)
+        if (prefix + ".lock") in reader.names:
+            st = os.stat(prefix + ".lock", dir_fd=reader.descriptor, follow_symlinks=False)
+            if not stat.S_ISREG(st.st_mode) or st.st_size != 0:
+                _fail("target custody lock is not an empty regular file")
+    finally:
+        reader.close()
+
+
 def claim_target_confirmation(
     path: Path,
     confirmation: TargetConfirmation,
@@ -398,6 +451,8 @@ def claim_target_confirmation(
     confirmation_document(confirmation)
     _exposure(confirmation, exposure)
     path = _external_root(path, forbidden_roots)
+    if not path.is_dir():
+        _fail("target custody requires an existing directory")
     names = set(os.listdir(path))
     if "identity.json" not in names or any(name != "identity.json" and not _NAMES.fullmatch(name) for name in names):
         _fail("target custody inventory is incomplete or unknown")
