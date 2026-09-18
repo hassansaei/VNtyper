@@ -23,7 +23,14 @@ from typing import Any
 # here joins the base-image content hash. Anything not provisioned there is imported
 # inside the function that needs it.
 from vntyper.scripts.install_references_logging import InstallLogHandler, attach_install_log, finish_install_log
-from vntyper.scripts.reference_bundle import safe_extract, safe_extract_zip, sha256_of, staged_install, verify_sha256
+from vntyper.scripts.reference_bundle import (
+    install_supplemental_common_references,
+    safe_extract,
+    safe_extract_zip,
+    sha256_of,
+    staged_install,
+    verify_sha256,
+)
 from vntyper.scripts.reference_download import download_file
 from vntyper.scripts.reference_integrity import fetch_verified_asset, verify_existing_asset
 
@@ -1884,6 +1891,8 @@ def install_from_bundle(install_config: dict[str, Any], output_dir: Path, refere
     ):
         for asset in assets:
             _install_bundle_asset(bundle["repository"], bundle["release_tag"], asset, Path(download_dir), staging)
+
+        install_supplemental_common_references(install_config, staging, download_file)
 
 
 def setup_logging(output_dir: Path, log_file: Path | None = None) -> InstallLogHandler:

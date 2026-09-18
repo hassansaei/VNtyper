@@ -850,3 +850,56 @@ class TestInstallLogSurvivesActivation:
 
         # No orphaned sibling log file left beside output_dir.
         assert not list(tmp_path.glob(".refs.install-references.log"))
+
+
+class TestInstallSupplementalCommonReferences:
+    def test_supplemental_common_reference_downloads_and_records_provenance(self, tmp_path, monkeypatch):
+        release_dir = tmp_path / "release"
+        output_dir = tmp_path / "refs"
+        hg19_asset = "vntyper-references-refs-v1-ucsc-hg19.tar.gz"
+        hg19_sha256 = _write_bundle_asset(release_dir, hg19_asset, _genome_files("hg19"), reference_id="hg19")
+        common_sha256 = _write_bundle_asset(release_dir, COMMON_ASSET_NAME, _common_files(), reference_id=None)
+
+        supplemental_payload = b'{"supplemental": true}'
+        supplemental_sha256 = _sha256_bytes(supplemental_payload)
+        supplemental_url = "https://example.com/supplemental.json"
+
+        def _fake_download(url: str, dest: Path) -> bool:
+            if url == supplemental_url:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(supplemental_payload)
+                return True
+            return _fake_download_from(release_dir)(url, dest)
+
+        config = _install_config(
+            ucsc={"hg19": _genome_entry("hg19", hg19_asset, hg19_sha256)},
+            bundle=_bundle_pointer(common_asset=COMMON_ASSET_NAME, common_asset_sha256=common_sha256),
+        )
+        config["common_references"] = [
+            {"config_key": "muc1_motifs_rev_com", "installed_path": "MUC1_motifs_Rev_com.fa"},
+            {"config_key": "supplemental_key", "installed_path": "models/extra_model.json"},
+        ]
+        config["own_repository_references"] = {
+            "raw_files": [
+                {
+                    "url": supplemental_url,
+                    "target_path": "models/extra_model.json",
+                    "source_sha256": supplemental_sha256,
+                }
+            ]
+        }
+        monkeypatch.setattr(install_references, "download_file", _fake_download)
+        monkeypatch.setattr(install_references, "_local_bwa_version", lambda: "9.9.9")
+
+        install_references.install_from_bundle(config, output_dir, ["hg19"])
+
+        installed_file = output_dir / "models" / "extra_model.json"
+        assert installed_file.is_file()
+        assert installed_file.read_bytes() == supplemental_payload
+
+        from vntyper.scripts.reference_provenance import load_provenance
+
+        records = load_provenance(output_dir)
+        assert "models/extra_model.json" in records
+        assert records["models/extra_model.json"]["sha256"] == supplemental_sha256
+        assert records["models/extra_model.json"]["source"] == "from-source"
