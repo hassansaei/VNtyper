@@ -6,6 +6,16 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.36 (2026-09-18)
+
+### MUC1 VNTR length estimation and cohort caller calibration ([#269](https://github.com/hassansaei/VNtyper/issues/269), [#332](https://github.com/hassansaei/VNtyper/issues/332), [#333](https://github.com/hassansaei/VNtyper/pull/333))
+
+- **Standard MUC1 VNTR Length Estimation**: Added opt-in standard length estimation via `--estimate-vntr-length` and `--length-model` ([#269](https://github.com/hassansaei/VNtyper/issues/269)). Features affine linear regression trained on sequence-verified PacBio long-read ground truth ($N=76$ clean exomes across German and French cohorts, LOO-CV MAE 10.80, $R^2 = 0.659$).
+- **Reference Model Integration**: Installed reference model `grch38-standard-length-model-v1.json` via `vntyper install-references` from `vntyper-data` release `refs-v3`, keeping python package wheel data lean while provisioning automated model installation.
+- **Cohort Calibration Optimization**: Added `vntyper calibrate cohort` and `vntyper calibrate optimize` commands ([#332](https://github.com/hassansaei/VNtyper/issues/332)), enabling empirical cutoff derivation and parameter fitting for Kestrel and adVNTR callers across cohort data.
+- **Custody Ledger & Exposure Safety**: Hardened calibration target exposure tracking with atomic lock acquisition and defensive ledger preflight to prevent one-use confirmation races and data exposure leaks.
+- **Supplemental Reference Downloading**: Added automated supplemental raw file installation to `install_from_bundle`, ensuring new common reference assets are downloaded and verified with provenance during bundle installations.
+
 ## 2.0.35 (2026-09-10)
 
 ### adVNTR v2.3.0 upgrade and adapter read-through filtering ([#331](https://github.com/hassansaei/VNtyper/pull/331))
