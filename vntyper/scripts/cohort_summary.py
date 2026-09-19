@@ -90,24 +90,39 @@ def generate_donut_chart(values, labels, total, title, colors):
     if sum(values) == 0:
         logger.warning(f"No data to plot for donut chart '{title}'.")
         return ""
+    palette_map = {
+        "#FF0000": "#dc2626",
+        "#FFA500": "#d97706",
+        "#404040": "#475569",
+        "#B0B0B0": "#94a3b8",
+    }
+    plot_colors = [palette_map.get(c, c) for c in colors]
     fig = go.Figure(
         go.Pie(
             labels=labels,
             values=values,
-            hole=0.6,
-            marker={"colors": colors, "line": {"color": "black", "width": 2}},
+            hole=0.62,
+            marker={"colors": plot_colors, "line": {"color": "rgba(128, 128, 128, 0.25)", "width": 1.5}},
             textinfo="none",
+            hoverinfo="label+value+percent",
         )
     )
     fig.update_layout(
-        title={"text": title, "y": 0.95, "x": 0.5, "xanchor": "center", "yanchor": "top"},
-        annotations=[{"text": f"<b>{total}</b>", "x": 0.5, "y": 0.5, "font_size": 40, "showarrow": False}],
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        title={"text": title, "y": 0.92, "x": 0.5, "xanchor": "center", "yanchor": "top", "font": {"size": 15}},
+        annotations=[{"text": f"<b>{total}</b>", "x": 0.5, "y": 0.5, "font_size": 36, "showarrow": False}],
         showlegend=False,
-        margin={"t": 50, "b": 50, "l": 50, "r": 50},
-        height=500,
-        width=500,
+        margin={"t": 40, "b": 30, "l": 30, "r": 30},
+        height=320,
+        width=320,
     )
-    return pio.to_html(fig, full_html=False, include_plotlyjs=False)
+    return pio.to_html(
+        fig,
+        full_html=False,
+        include_plotlyjs=False,
+        config={"displayModeBar": False, "responsive": True},
+    )
 
 
 def load_report_config():
@@ -331,6 +346,21 @@ def generate_cohort_summary_report(
         "advntr_evidence_provenance": advntr_evidence_provenance or (),
         "decision_profile_groups": profile_group_context,
         "pooled_decision_metrics_suppressed": pooled_metrics_suppressed,
+        "total_samples": len(sample_names or ()),
+        "kestrel_counts": {
+            "positive": k_pos,
+            "flagged": k_pos_flag,
+            "negative": k_neg,
+            "unestablished": k_unest,
+            "total": total_kestrel,
+        },
+        "advntr_counts": {
+            "positive": a_pos,
+            "flagged": a_pos_flag,
+            "negative": a_neg,
+            "unestablished": a_unest,
+            "total": total_advntr,
+        },
     }
 
     try:

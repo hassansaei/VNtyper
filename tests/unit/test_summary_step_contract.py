@@ -48,6 +48,7 @@ STEP_NAME_MODULES = (
     "generate_report.py",
     "cohort_summary.py",
     "cohort_inputs.py",
+    "cohort_summary_parsing.py",
     "cross_match.py",
 )
 
@@ -55,17 +56,17 @@ STEP_NAME_MODULES = (
 #: counts of bare literals the modules carried before adoption; dropping below one
 #: means a site was deleted rather than converted.
 #:
-#: `cohort_summary.py` is absent because its four matches moved wholesale into
-#: `cohort_inputs.py` when the file was split (Task 22 of the #181-#197 follow-ups),
-#: taking the count with them. Every module that matches a step name is still required
-#: to reference the constants; a module that matches none is declared in
-#: `MODULES_MATCHING_NO_STEP_NAME` below rather than being listed here with a zero,
+#: `cohort_summary.py` is absent because its four matches moved into
+#: `cohort_inputs.py` and subsequently into `cohort_summary_parsing.py` when the
+#: parser was split, taking the count with them. Every module that matches a step name
+#: is still required to reference the constants; a module that matches none is declared
+#: in `MODULES_MATCHING_NO_STEP_NAME` below rather than being listed here with a zero,
 #: because a zero is a passing assertion about nothing.
 MINIMUM_CONSTANT_REFERENCES = {
     "pipeline.py": 9,
     "pipeline_kestrel.py": 1,
     "generate_report.py": 5,
-    "cohort_inputs.py": 4,
+    "cohort_summary_parsing.py": 4,
     "cross_match.py": 2,
 }
 
@@ -74,7 +75,7 @@ MINIMUM_CONSTANT_REFERENCES = {
 #: `test_every_scanned_module_is_classified` fails if a module is added to
 #: `STEP_NAME_MODULES` without appearing in exactly one of the two, which is the
 #: `KeyError` the old single-list parametrisation used to raise.
-MODULES_MATCHING_NO_STEP_NAME = frozenset({"cohort_summary.py"})
+MODULES_MATCHING_NO_STEP_NAME = frozenset({"cohort_summary.py", "cohort_inputs.py"})
 
 # One producer call site builds its name from an f-string, guarded by
 # `if input_type in ["BAM", "CRAM"]`. Expand it so the tests reason about the names

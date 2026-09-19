@@ -410,7 +410,7 @@ pytestmark = pytest.mark.unit
 # skeleton moves only because the new false Jinja branches contribute surrounding
 # whitespace. Mixed-profile content is pinned separately in
 # ``test_cohort_profile_provenance.py``.
-EXPECTED_FINGERPRINT = "a0b0d32a43778937677bc53d156c386416aabd32679c2f24258814af073f99b0"
+EXPECTED_FINGERPRINT = "4c5afe3b714e7ab576a4eccfd4705af3b0ac2c9af5c245a65dffb6f378cd37d5"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid

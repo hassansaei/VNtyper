@@ -10,7 +10,8 @@
     "reference_assembly": "hg19"
   },
   "length_estimation": {
-    "enabled": false
+    "enabled": false,
+    "warning_threshold": 110.0
   },
   "cli_defaults": {
     "log_level": "INFO",

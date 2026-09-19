@@ -58,7 +58,7 @@
            horizontal scroll with it. */
         h1 {
             font-size: clamp(1.5rem, 1.1rem + 2vw, var(--step-3));
-            line-height: 1.15;
+            line-height: 1.25;
             letter-spacing: -0.02em;
             margin: 0 0 var(--s-1);
             overflow-wrap: anywhere;
@@ -88,7 +88,7 @@
         h2 {
             font-size: var(--step-1);
             font-weight: 600;
-            line-height: 1.3;
+            line-height: 1.4;
             letter-spacing: 0;
             color: var(--ink-muted);
             margin: var(--s-8) 0 var(--s-4);
@@ -103,15 +103,19 @@
         tr {
             cursor: default;
         }
+
         .selected {
             background-color: var(--sunken) !important;
-            outline: 2px solid var(--accent) !important;
+            font-weight: bold;
         }
-        /* Per-row control of the IGV variant table. `<tr onclick>` had no keyboard
-           path at all; a real button brings Enter, Space and a focus ring free. */
+
+        /* The select button inside a variant row. It takes no width of its own, so
+           the table stays nineteen columns wide and the control lives inside the Name
+           cell rather than adding a twentieth column. */
         .variant-select {
             font: inherit;
-            padding: .1rem .6rem;
+            font-size: var(--step--1);
+            padding: var(--s-1) var(--s-2);
             border: 1px solid var(--hairline);
             border-radius: var(--radius);
             background: var(--surface);
@@ -156,8 +160,8 @@
         .masthead {
             background: var(--surface);
             border: 1px solid var(--hairline);
-            border-top: 2px solid var(--state-accent, var(--state-none));
             border-radius: var(--radius);
+            box-shadow: inset 0 2px 0 0 var(--state-accent, var(--state-none));
             padding: var(--s-5);
             margin-bottom: var(--s-6);
             break-inside: avoid;
@@ -271,7 +275,7 @@
         .chip-value {
             font-size: var(--step-0);
             font-weight: 600;
-            line-height: 1.3;
+            line-height: 1.4;
             color: var(--chip-color, var(--ink));
         }
         /* A measurement, not a word: tabular figures and the mono face, so the two
@@ -306,15 +310,13 @@
            the size of the name and the space around it; a filled box here would put
            three competing surfaces (masthead, panel, chips) inside one another, and a
            nested card is the tell of generated UI. */
-        /* The named allele sits under the verdict in the masthead's left column, which
-           is where the space already was: four chips stack taller than three sentences,
-           so the prose column was carrying about 90px of nothing and the allele was
-           below the whole grid, pushing the first results table further down the page
-           for no reason at all. */
+        /* The name sits on its own line above the qualifiers rather than beside
+           them, so a long qualified name has the whole width of the masthead
+           instead of squeezing the qualifiers into a ragged column. */
         .allele {
-            margin: var(--s-5) 0 0;
-            padding-top: var(--s-4);
-            border-top: 1px solid var(--hairline);
+            margin: 0 0 var(--s-4);
+            padding-bottom: var(--s-4);
+            border-bottom: 1px solid var(--hairline);
         }
         .allele-name {
             display: flex;
@@ -331,7 +333,7 @@
             font-size: var(--step-3);
             font-weight: 700;
             letter-spacing: -0.02em;
-            line-height: 1.1;
+            line-height: 1.35;
             overflow-wrap: anywhere;
         }
         /* The tier, as a letter and the words for it. Both, always: the letter is what
@@ -345,6 +347,7 @@
             border: 1px solid var(--hairline);
             border-radius: 999px;
             font-size: var(--step--1);
+            line-height: 1.45;
             white-space: nowrap;
         }
         .tier-badge b {
@@ -358,6 +361,160 @@
         .tier-b b { color: var(--state-caution); }
         .tier-c { border-color: var(--hairline); }
         .tier-c b { color: var(--ink-muted); }
+        .length-warning-badge {
+            display: inline-flex;
+            align-items: baseline;
+            gap: var(--s-2);
+            padding: var(--s-1) var(--s-3);
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            background: var(--sunken);
+            font-size: var(--step--1);
+            color: var(--state-caution);
+            font-weight: 600;
+            line-height: 1.4;
+            white-space: nowrap;
+        }
+        .vntr-length-card {
+            background: var(--surface);
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            padding: var(--s-5);
+            margin-bottom: var(--s-6);
+            break-inside: avoid;
+        }
+        .vntr-length-card[data-length-warning="true"] {
+            box-shadow: inset 0 2px 0 0 var(--state-caution);
+        }
+        .length-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: var(--s-4);
+            padding-bottom: var(--s-4);
+            border-bottom: 1px solid var(--hairline);
+        }
+        .length-metric-label {
+            display: block;
+            font-size: var(--step--1);
+            font-weight: 600;
+            color: var(--ink-muted);
+            margin-bottom: var(--s-2);
+        }
+        .length-value-group {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: var(--s-3);
+        }
+        .length-metric-value {
+            font-size: var(--step-2);
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--ink);
+            line-height: 1.2;
+        }
+        .length-status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--s-2);
+            padding: var(--s-2) var(--s-3);
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            background: var(--sunken);
+            font-size: var(--step--1);
+            white-space: nowrap;
+        }
+        .length-status-pill .chip-label {
+            font-size: var(--step--2);
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+            font-weight: 600;
+            color: var(--ink-muted);
+        }
+        .length-status-pill .chip-value {
+            font-weight: 600;
+            color: var(--ink);
+        }
+        .length-status-pill[data-status="estimated"] .chip-value {
+            color: var(--state-ok);
+        }
+        .length-status-pill[data-status="unavailable"] .chip-value {
+            color: var(--state-caution);
+        }
+        .length-status-pill[data-status="disabled"] .chip-value,
+        .length-status-pill[data-status="not-recorded"] .chip-value {
+            color: var(--ink-muted);
+        }
+        .length-help-box {
+            margin-top: var(--s-4);
+            padding: var(--s-3) var(--s-4);
+            background: var(--sunken);
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            max-width: var(--measure);
+            font-size: var(--step--1);
+            color: var(--ink-muted);
+            line-height: 1.55;
+        }
+        .length-help-box p {
+            margin: 0;
+        }
+        .length-features-section {
+            margin-top: var(--s-4);
+            padding-top: var(--s-4);
+            border-top: 1px solid var(--hairline);
+        }
+        .length-features-heading {
+            display: block;
+            font-size: var(--step--2);
+            font-weight: 600;
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+            margin-bottom: var(--s-2);
+        }
+        .length-features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+            gap: var(--s-3);
+        }
+        .length-feature-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding: var(--s-2) var(--s-3);
+            background: var(--sunken);
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+        }
+        .length-feature-label {
+            font-size: var(--step--1);
+            color: var(--ink-muted);
+        }
+        .length-feature-value {
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
+            font-size: var(--step-0);
+            font-weight: 600;
+            color: var(--ink);
+        }
+        .length-card-meta {
+            margin-top: var(--s-4);
+            padding-top: var(--s-3);
+            border-top: 1px solid var(--hairline);
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--s-2) var(--s-5);
+            font-size: var(--step--1);
+            color: var(--ink-muted);
+            overflow-wrap: anywhere;
+        }
+        .length-card-meta strong {
+            font-weight: 600;
+            color: var(--ink-muted);
+        }
 
         /* The qualifiers, as label/value pairs rather than as a paragraph: they are
            read by looking for one of them, not by reading the sentence they would make.
@@ -427,6 +584,14 @@
             color: var(--ink-muted);
             max-width: var(--measure);
         }
+        .table-key,
+        .kestrel-bam-semantics {
+            font-size: var(--step--1);
+            color: var(--ink-muted);
+            line-height: 1.55;
+            max-width: var(--measure);
+            margin: var(--s-3) 0;
+        }
 
         /* --- the reading key --------------------------------------------------
            Every coded value the tables above actually print, in words, under the
@@ -446,10 +611,8 @@
         }
         .reading-key > p {
             margin: 0 0 var(--s-3);
-            font-size: var(--step--2);
+            font-size: var(--step--1);
             font-weight: 600;
-            letter-spacing: 0.07em;
-            text-transform: uppercase;
             color: var(--ink-muted);
         }
         .reading-key dl {
@@ -515,7 +678,7 @@
            own ink is the honest weight for it. */
         .headline {
             font-size: var(--step-2);
-            line-height: 1.28;
+            line-height: 1.35;
             font-weight: 600;
             letter-spacing: -0.014em;
             margin: 0 0 var(--s-3);
@@ -537,6 +700,7 @@
             font-family: var(--font-mono);
             font-size: var(--step--2);
             color: var(--ink-muted);
+            max-width: var(--measure);
         }
 
         /* Research use only, on screen as well as on paper. It used to print and
@@ -559,7 +723,9 @@
             border: 1px solid var(--hairline);
             border-radius: var(--radius);
             background: var(--sunken);
-            font-size: var(--step--1);
+            font-size: var(--step-0);
+            line-height: 1.55;
+            max-width: var(--measure);
             color: var(--ink-muted);
         }
         .notice {
@@ -568,6 +734,7 @@
             gap: var(--s-3);
             align-items: baseline;
             padding: var(--s-3) var(--s-4);
+            line-height: 1.55;
         }
         .notice + .notice { border-top: 1px solid var(--hairline); }
         .notice::before {
@@ -608,8 +775,18 @@
             gap: var(--s-4) var(--s-6);
             align-items: start;
         }
-        .metric { margin: 0; }
-        .metric small { color: var(--ink-muted); }
+        .metric {
+            margin: 0;
+            line-height: 1.55;
+        }
+        .metric small {
+            display: block;
+            margin-top: var(--s-2);
+            font-size: var(--step--1);
+            line-height: 1.55;
+            max-width: var(--measure);
+            color: var(--ink-muted);
+        }
 
         /* --- run provenance ---------------------------------------------------
            **Where it is, and why it moved.** Ten labelled values - the input files, two
@@ -634,13 +811,15 @@
         .header-info {
             display: grid;
             grid-template-columns: minmax(11rem, auto) 1fr;
-            gap: var(--s-2) var(--s-4);
+            gap: var(--s-3) var(--s-5);
+            max-width: min(100%, 56rem);
             margin-bottom: var(--s-4);
-            padding: var(--s-4);
+            padding: var(--s-5);
             border: 1px solid var(--hairline);
             border-radius: var(--radius);
             background-color: var(--sunken);
-            font-size: var(--step--1);
+            font-size: var(--step-0);
+            line-height: 1.55;
             /* Inherited, and it has to be: with `display: contents` on each `<p>` the
                value beside a label is an anonymous grid item and no selector can reach
                it. The igv.js digest is 64 unbroken hex characters, and it was one of
@@ -1150,6 +1329,11 @@
                         <span><strong>Warning:</strong> {{ header_warning }}</span>
                     </li>
                 {% endif %}
+                {% if length_presentation and length_presentation.notice_text %}
+                    <li class="notice notice-warning" role="alert">
+                        <span><strong>Warning:</strong> {{ length_presentation.notice_text }}</span>
+                    </li>
+                {% endif %}
                 <li class="notice">
                     <span><strong>{{ research_use_statement }}.</strong></span>
                 </li>
@@ -1425,39 +1609,69 @@
 
         {% if length_presentation %}
             <h2>VNTR Length Research Result</h2>
-            <div class="metrics" data-length-status="{{ length_presentation.status }}">
-                <p class="metric">
-                    <strong>{{ length_presentation.label }}:</strong>
-                    {{ length_presentation.value }}
-                    {%- if length_presentation.status == "estimated" %} {{ length_presentation.unit }}{% endif %}
-                    <br><small>{{ length_presentation.help }}</small>
-                </p>
-                <p class="metric"><strong>Status:</strong> {{ length_presentation.status_text }}</p>
-            </div>
-            {% if length_presentation.feature_values %}
-                <dl class="allele-facts">
-                    {% for feature_label, feature_value in length_presentation.feature_values %}
-                        <div>
-                            <dt>{{ feature_label }}</dt>
-                            <dd>{{ feature_value }}</dd>
+            <div class="vntr-length-card" data-length-status="{{ length_presentation.status }}"
+                 {%- if length_presentation.has_sensitivity_warning %} data-length-warning="true"{% endif %}>
+                <div class="length-card-header">
+                    <div class="length-primary-result">
+                        <span class="length-metric-label">{{ length_presentation.label }}</span>
+                        <div class="length-value-group">
+                            <span class="length-metric-value">
+                                {{- length_presentation.value -}}
+                                {%- if length_presentation.status == "estimated" %}
+                                    {{- " " -}}{{ length_presentation.unit }}
+                                {%- endif -%}
+                            </span>
+                            {%- if length_presentation.warning_badge %}
+                                <span class="length-warning-badge" role="status">
+                                    {{- length_presentation.warning_badge -}}
+                                </span>
+                            {%- endif %}
                         </div>
-                    {% endfor %}
-                </dl>
-            {% endif %}
-            {% if length_presentation.calibration_id %}
-                <p><strong>Calibration ID:</strong> {{ length_presentation.calibration_id }}</p>
-            {% endif %}
-            {% if length_presentation.model_sha256 %}
-                <p><strong>Model SHA-256:</strong>
-                    <span class="mono length-model-digest">{{ length_presentation.model_sha256 }}</span></p>
-            {% endif %}
-            {% if length_presentation.reasons %}
-                <p><strong>Availability reasons:</strong>
-                    {% for reason in length_presentation.reasons %}
-                        <code>{{ reason }}</code>{% if not loop.last %}, {% endif %}
-                    {% endfor %}
-                </p>
-            {% endif %}
+                    </div>
+                    <div class="length-status-pill" data-status="{{ length_presentation.status }}">
+                        <span class="chip-label">Status</span>
+                        <span class="chip-value">{{ length_presentation.status_text }}</span>
+                    </div>
+                </div>
+                {% if length_presentation.help %}
+                    <div class="length-help-box">
+                        <p>{{ length_presentation.help }}</p>
+                    </div>
+                {% endif %}
+                {% if length_presentation.feature_values %}
+                    <div class="length-features-section">
+                        <span class="length-features-heading">Model Depth Features</span>
+                        <div class="length-features-grid">
+                            {% for feature_label, feature_value in length_presentation.feature_values %}
+                                <div class="length-feature-card">
+                                    <span class="length-feature-label">{{ feature_label }}</span>
+                                    <span class="length-feature-value">{{ feature_value }}</span>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endif %}
+                {% if length_presentation.calibration_id or length_presentation.model_sha256
+                      or length_presentation.reasons %}
+                    <div class="length-card-meta">
+                        {% if length_presentation.calibration_id %}
+                            <div><strong>Calibration ID:</strong> {{ length_presentation.calibration_id }}</div>
+                        {% endif %}
+                        {% if length_presentation.model_sha256 %}
+                            <div><strong>Model SHA-256:</strong>
+                                <span class="mono length-model-digest">{{ length_presentation.model_sha256 }}</span>
+                            </div>
+                        {% endif %}
+                        {% if length_presentation.reasons %}
+                            <div><strong>Availability reasons:</strong>
+                                {% for reason in length_presentation.reasons %}
+                                    <code>{{ reason }}</code>{% if not loop.last %}, {% endif %}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            </div>
         {% endif %}
 
         <!-- Conditionally show fastp metrics if available -->
@@ -1723,7 +1937,9 @@
         <div class="header-info" id="provenance">
             <p><strong>Reference assembly requested:</strong> {{ assembly_declared }}</p>
             <p><strong>Assembly detected from BAM header:</strong> {{ assembly_detected }}
-                {%- if assembly_contig %} (Contig: {{ assembly_contig }}){% endif %}</p>
+                {%- if assembly_contig and assembly_contig != not_recorded
+                       and assembly_contig != 'Not detected'
+                       and assembly_contig != assembly_detected %} (Contig: {{ assembly_contig }}){% endif %}</p>
             <p><strong>Region analysed:</strong> {{ region_resolved }}</p>
             <p><strong>Summary schema version:</strong> {{ summary_schema_version }}</p>
             <p><strong>Decision policy:</strong> {{ decision_policy }}</p>

@@ -175,3 +175,51 @@ def test_load_standard_model_supports_symlink(tmp_path: Path) -> None:
 
     loaded = load_standard_length_model(symlink_path)
     assert loaded == decode_standard_length_model(document)
+
+
+@pytest.mark.parametrize(
+    ("intercept", "threshold", "expect_warning"),
+    [
+        (9.9, 110.0, False),  # prediction = 109.9 < 110.0 -> no warning
+        (10.0, 110.0, False),  # prediction = 110.0 == 110.0 -> boundary: no warning
+        (10.1, 110.0, True),  # prediction = 110.1 > 110.0 -> warning triggered
+        (20.0, 120.0, False),  # custom threshold 120.0, prediction 120.0 -> boundary: no warning
+        (20.1, 120.0, True),  # custom threshold 120.0, prediction 120.1 -> warning triggered
+    ],
+)
+def test_standard_length_sensitivity_cutoff_threshold_boundaries(
+    intercept: float, threshold: float, expect_warning: bool
+) -> None:
+    from vntyper.scripts.length_standard_model import LENGTH_WARNING_SENSITIVITY_CUTOFF
+
+    document = _model_document()
+    document["intercept"] = intercept
+    model = decode_standard_length_model(document)
+    result = predict_standard_length(_measurement(), model, warning_threshold=threshold)
+    assert result.status == "estimated"
+    if expect_warning:
+        assert LENGTH_WARNING_SENSITIVITY_CUTOFF in result.warnings
+        assert result.warnings == (LENGTH_WARNING_SENSITIVITY_CUTOFF,)
+    else:
+        assert LENGTH_WARNING_SENSITIVITY_CUTOFF not in result.warnings
+        assert result.warnings == ()
+
+
+def test_sensitivity_cutoff_cleanly_coexists_with_feature_extrapolation_warning() -> None:
+    from vntyper.scripts.length_standard_model import LENGTH_WARNING_SENSITIVITY_CUTOFF
+
+    document = _model_document()
+    document["intercept"] = 10.5  # prediction = 110.5 > 110.0
+    document["feature_bounds"]["A"] = {"minimum": 0, "maximum": 1}  # type: ignore[index]
+    model = decode_standard_length_model(document)
+    result = predict_standard_length(_measurement(), model, warning_threshold=110.0)
+    assert result.status == "estimated"
+    assert result.estimated_repeat_count == 110.5
+    assert result.warnings == ("feature_A_outside_training_range", LENGTH_WARNING_SENSITIVITY_CUTOFF)
+
+
+@pytest.mark.parametrize("invalid", [0, -5.0, True, False, float("nan"), float("inf"), "110"])
+def test_invalid_warning_threshold_is_rejected(invalid: object) -> None:
+    model = decode_standard_length_model(_model_document())
+    with pytest.raises(ValueError, match="standard length warning threshold must be a positive number"):
+        predict_standard_length(_measurement(), model, warning_threshold=invalid)  # type: ignore[arg-type]
