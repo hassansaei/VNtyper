@@ -364,11 +364,13 @@
             gap: var(--s-2);
             margin-left: var(--s-2);
             padding: var(--s-1) var(--s-3);
-            border: 1px solid var(--state-caution);
-            border-radius: 999px;
+            border: 1px solid var(--hairline);
+            border-radius: var(--radius);
+            background: var(--sunken);
             font-size: var(--step--1);
             color: var(--state-caution);
             font-weight: 600;
+            line-height: 1.4;
             white-space: nowrap;
         }
 
@@ -459,10 +461,8 @@
         }
         .reading-key > p {
             margin: 0 0 var(--s-3);
-            font-size: var(--step--2);
+            font-size: var(--step--1);
             font-weight: 600;
-            letter-spacing: 0.07em;
-            text-transform: uppercase;
             color: var(--ink-muted);
         }
         .reading-key dl {
@@ -572,7 +572,9 @@
             border: 1px solid var(--hairline);
             border-radius: var(--radius);
             background: var(--sunken);
-            font-size: var(--step--1);
+            font-size: var(--step-0);
+            line-height: 1.55;
+            max-width: var(--measure);
             color: var(--ink-muted);
         }
         .notice {
@@ -581,6 +583,7 @@
             gap: var(--s-3);
             align-items: baseline;
             padding: var(--s-3) var(--s-4);
+            line-height: 1.55;
         }
         .notice + .notice { border-top: 1px solid var(--hairline); }
         .notice::before {
@@ -621,8 +624,18 @@
             gap: var(--s-4) var(--s-6);
             align-items: start;
         }
-        .metric { margin: 0; }
-        .metric small { color: var(--ink-muted); }
+        .metric {
+            margin: 0;
+            line-height: 1.55;
+        }
+        .metric small {
+            display: block;
+            margin-top: var(--s-2);
+            font-size: var(--step--1);
+            line-height: 1.55;
+            max-width: var(--measure);
+            color: var(--ink-muted);
+        }
 
         /* --- run provenance ---------------------------------------------------
            **Where it is, and why it moved.** Ten labelled values - the input files, two
@@ -1451,7 +1464,7 @@
                     {%- if length_presentation.warning_badge %}
                         <span class="length-warning-badge" role="status">{{ length_presentation.warning_badge }}</span>
                     {%- endif %}
-                    <br><small>{{ length_presentation.help }}</small>
+                    <small>{{ length_presentation.help }}</small>
                 </p>
                 <p class="metric"><strong>Status:</strong> {{ length_presentation.status_text }}</p>
             </div>
@@ -1744,7 +1757,9 @@
         <div class="header-info" id="provenance">
             <p><strong>Reference assembly requested:</strong> {{ assembly_declared }}</p>
             <p><strong>Assembly detected from BAM header:</strong> {{ assembly_detected }}
-                {%- if assembly_contig %} (Contig: {{ assembly_contig }}){% endif %}</p>
+                {%- if assembly_contig and assembly_contig != not_recorded
+                       and assembly_contig != 'Not detected'
+                       and assembly_contig != assembly_detected %} (Contig: {{ assembly_contig }}){% endif %}</p>
             <p><strong>Region analysed:</strong> {{ region_resolved }}</p>
             <p><strong>Summary schema version:</strong> {{ summary_schema_version }}</p>
             <p><strong>Decision policy:</strong> {{ decision_policy }}</p>

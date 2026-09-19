@@ -831,23 +831,23 @@
     }
   },
   "standard_length_estimation": {
-    "help": "Research-only diploid length estimate; variant calls and screening conclusions are unchanged.",
+    "help": "Research-only diploid length estimate; variant calls unaffected.",
     "sources": {
-      "packaged-research": "Uses packaged research model (standard13-bayesian-v1, trained on exomes).",
-      "local-research": "Uses a locally fitted development model."
+      "packaged-research": "Model: standard13-bayesian-v1 (exome-trained).",
+      "local-research": "Model: locally fitted development model."
     },
     "count_conventions": {
-      "source-reported": "Predicts assay-reported repeat counts; inclusion of terminal invariant units is unspecified.",
-      "complete": "Predicts complete repeat counts including invariant units.",
+      "source-reported": "Predicts assay-reported repeat counts; invariant units unspecified.",
+      "complete": "Predicts complete repeat count including invariant units.",
       "canonical-only": "Predicts canonical repeat counts excluding invariant units."
     },
-    "extrapolation_help": "Features exceed exome training bounds (e.g., custom capture panels or differing enrichment kits); estimate involves extrapolation.",
+    "extrapolation_help": "Features exceed exome training bounds (e.g., custom panels); estimate is extrapolated.",
     "sensitivity_warning": {
       "warning_code": "vntr_length_exceeds_sensitivity_cutoff",
       "badge": "⚠️ > {threshold} repeats: Reduced Sensitivity",
       "notice_negative": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. Sensitivity is reduced on long alleles; interpret negative results with caution and consider orthogonal testing.",
       "notice_positive": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats; sensitivity is reduced on long alleles.",
-      "help": "Total VNTR length exceeds {threshold} repeats; sensitivity is reduced on long alleles."
+      "help": "Total length > {threshold} repeats; reduced sensitivity on long alleles."
     }
   }
 }
