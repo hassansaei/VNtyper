@@ -129,16 +129,147 @@
       width: 100%;
       margin: var(--s-3) 0 var(--s-5);
     }
-    .plot {
+    /* --- Executive KPI summary cards -------------------------------------- */
+    .cohort-kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: var(--s-3);
+      margin: var(--s-4) 0 var(--s-6);
+    }
+    .kpi-card {
+      padding: var(--s-3) var(--s-4);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-1);
+    }
+    .kpi-label {
+      font-size: var(--step--2);
+      font-weight: 600;
+      color: var(--ink-muted);
+    }
+    .kpi-value {
+      font-size: var(--step-2);
+      font-weight: 700;
+      line-height: 1.2;
+      color: var(--ink);
+    }
+    .kpi-sub {
+      font-size: var(--step--2);
+      color: var(--ink-muted);
+    }
+
+    /* --- Plot layout & dark mode integration ------------------------------ */
+    .plot-card {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--s-5);
       margin: var(--s-3) 0 var(--s-5);
-      padding: var(--s-4);
+    }
+    .plot {
+      margin: 0;
+      padding: var(--s-3);
       background: var(--surface);
       border: 1px solid var(--hairline);
       border-radius: var(--radius);
-      display: flex;
+      display: inline-flex;
       justify-content: center;
       align-items: center;
-      max-width: 540px;
+      max-width: 100%;
+    }
+    .plot svg.main-svg {
+      background: transparent !important;
+    }
+    .plot svg text.gtitle {
+      fill: var(--ink) !important;
+      font-family: var(--font-sans) !important;
+      font-size: var(--step-0) !important;
+      font-weight: 600 !important;
+    }
+    .plot svg text.annotation-text {
+      fill: var(--ink) !important;
+      font-family: var(--font-sans) !important;
+      font-size: var(--step-2) !important;
+      font-weight: 700 !important;
+    }
+    .plot svg .hovertext text {
+      font-family: var(--font-sans) !important;
+    }
+    .plot-breakdown {
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-2);
+      padding: var(--s-4) var(--s-5);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      background: var(--surface);
+      max-width: var(--measure);
+      flex: 1 1 320px;
+    }
+    .plot-breakdown h3 {
+      margin: 0 0 var(--s-1);
+      font-size: var(--step-0);
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .breakdown-sub {
+      margin: 0 0 var(--s-2);
+      font-size: var(--step--2);
+      color: var(--ink-muted);
+    }
+    .breakdown-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-2);
+    }
+    .breakdown-item {
+      display: flex;
+      align-items: center;
+      gap: var(--s-2);
+      font-size: var(--step--1);
+      flex-wrap: wrap;
+    }
+    .breakdown-badge {
+      display: inline-block;
+      min-width: 8.5rem;
+      padding: var(--s-1) var(--s-2);
+      border-radius: var(--radius);
+      font-weight: 600;
+      font-size: var(--step--2);
+      border: 1px solid var(--hairline);
+    }
+    .badge-finding {
+      background: var(--sunken);
+      color: var(--state-finding);
+    }
+    .badge-caution {
+      background: var(--sunken);
+      color: var(--state-caution);
+    }
+    .badge-none {
+      background: var(--sunken);
+      color: var(--state-none);
+    }
+    .badge-unest {
+      background: var(--sunken);
+      color: var(--ink-muted);
+    }
+    .breakdown-count {
+      font-weight: 700;
+      color: var(--ink);
+      min-width: 1.5rem;
+    }
+    .breakdown-pct {
+      color: var(--ink-muted);
+      font-size: var(--step--2);
+      min-width: 3.5rem;
+    }
+    .breakdown-desc {
+      color: var(--ink-muted);
+      font-size: var(--step--2);
     }
     .reading-key {
       margin: var(--s-4) 0 var(--s-6);
@@ -267,6 +398,34 @@
   <main class="container">
     <h1>Cohort Summary Report</h1>
     <p class="cohort-meta"><strong>Report Date:</strong> {{ report_date }}</p>
+
+    {% if total_samples is defined and total_samples > 0 and kestrel_counts %}
+    <div class="cohort-kpis">
+      <div class="kpi-card">
+        <div class="kpi-label">Cohort Size</div>
+        <div class="kpi-value">{{ total_samples }}</div>
+        <div class="kpi-sub">Total samples analyzed</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Kestrel Positive</div>
+        <div class="kpi-value">{{ kestrel_counts.positive + kestrel_counts.flagged }}</div>
+        <div class="kpi-sub">
+          {{ "{:.1f}".format((kestrel_counts.positive + kestrel_counts.flagged) / total_samples * 100) }}% positive rate
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">High Precision Calls</div>
+        <div class="kpi-value">{{ kestrel_counts.positive }}</div>
+        <div class="kpi-sub">Confidence grade Finding</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">adVNTR Genotyped</div>
+        <div class="kpi-value">{{ advntr_counts.positive + advntr_counts.flagged + advntr_counts.negative }}</div>
+        <div class="kpi-sub">{{ advntr_counts.unestablished }} unestablished</div>
+      </div>
+    </div>
+    {% endif %}
+
     {% if advntr_evidence_provenance %}
     <h2>adVNTR artifact-evidence provenance</h2>
     <ul class="advntr-provenance-list">
@@ -316,14 +475,54 @@
 
     <h2>Kestrel Results</h2>{# The pre-rendered table carries the complete molecular-identity quartet;
       the template performs no inference or client-side completion. #}
+    {% if kestrel_positive and kestrel_positive.strip() %}
     <div class="table-container">
       {{ kestrel_positive | safe }}
     </div>
+    {% else %}
+    <p class="table-status">No Kestrel variant calls were recorded across this cohort.</p>
+    {% endif %}
 
     {% if not pooled_decision_metrics_suppressed %}
     <h2>Kestrel Summary Plot</h2>
-    <div class="plot">
-      {{ kestrel_plot_interactive | safe }}
+    <div class="plot-card">
+      <div class="plot">
+        {{ kestrel_plot_interactive | safe }}
+      </div>
+      {% if kestrel_counts and total_samples %}
+      <div class="plot-breakdown">
+        <h3>Kestrel Cohort Categorisation</h3>
+        <p class="breakdown-sub">Sample-level verdict distribution across {{ total_samples }} samples</p>
+        <div class="breakdown-list">
+          <div class="breakdown-item">
+            <span class="breakdown-badge badge-finding">Positive</span>
+            <span class="breakdown-count">{{ kestrel_counts.positive }}</span>
+            <span class="breakdown-pct">({{ "{:.1f}".format(kestrel_counts.positive / total_samples * 100) }}%)</span>
+            <span class="breakdown-desc">High precision pathogenic variant</span>
+          </div>
+          <div class="breakdown-item">
+            <span class="breakdown-badge badge-caution">Positive (Flagged)</span>
+            <span class="breakdown-count">{{ kestrel_counts.flagged }}</span>
+            <span class="breakdown-pct">({{ "{:.1f}".format(kestrel_counts.flagged / total_samples * 100) }}%)</span>
+            <span class="breakdown-desc">Candidate with quality flag</span>
+          </div>
+          <div class="breakdown-item">
+            <span class="breakdown-badge badge-none">Negative</span>
+            <span class="breakdown-count">{{ kestrel_counts.negative }}</span>
+            <span class="breakdown-pct">({{ "{:.1f}".format(kestrel_counts.negative / total_samples * 100) }}%)</span>
+            <span class="breakdown-desc">No pathogenic candidate</span>
+          </div>
+          <div class="breakdown-item">
+            <span class="breakdown-badge badge-unest">Unestablished</span>
+            <span class="breakdown-count">{{ kestrel_counts.unestablished }}</span>
+            <span class="breakdown-pct">
+              ({{ "{:.1f}".format(kestrel_counts.unestablished / total_samples * 100) }}%)
+            </span>
+            <span class="breakdown-desc">No result rows contributed</span>
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
     {% if kestrel_missing %}
@@ -332,14 +531,54 @@
     {% endif %}
 
     <h2>adVNTR Results</h2>{# The same server-rendered quartet contract applies here without JavaScript/network. #}
+    {% if advntr_positive and advntr_positive.strip() %}
     <div class="table-container">
       {{ advntr_positive | safe }}
     </div>
+    {% else %}
+    <p class="table-status">No adVNTR variant calls were recorded across this cohort.</p>
+    {% endif %}
 
     {% if not pooled_decision_metrics_suppressed %}
     <h2>adVNTR Summary Plot</h2>
-    <div class="plot">
-      {{ advntr_plot_interactive | safe }}
+    <div class="plot-card">
+      <div class="plot">
+        {{ advntr_plot_interactive | safe }}
+      </div>
+      {% if advntr_counts and total_samples %}
+      <div class="plot-breakdown">
+        <h3>adVNTR Cohort Categorisation</h3>
+        <p class="breakdown-sub">Sample-level verdict distribution across {{ total_samples }} samples</p>
+        <div class="breakdown-list">
+          <div class="breakdown-item">
+            <span class="breakdown-badge badge-finding">Positive</span>
+            <span class="breakdown-count">{{ advntr_counts.positive }}</span>
+            <span class="breakdown-pct">({{ "{:.1f}".format(advntr_counts.positive / total_samples * 100) }}%)</span>
+            <span class="breakdown-desc">adVNTR called variant</span>
+          </div>
+          <div class="breakdown-item">
+            <span class="breakdown-badge badge-caution">Positive (Flagged)</span>
+            <span class="breakdown-count">{{ advntr_counts.flagged }}</span>
+            <span class="breakdown-pct">({{ "{:.1f}".format(advntr_counts.flagged / total_samples * 100) }}%)</span>
+            <span class="breakdown-desc">Candidate with quality flag</span>
+          </div>
+          <div class="breakdown-item">
+            <span class="breakdown-badge badge-none">Negative</span>
+            <span class="breakdown-count">{{ advntr_counts.negative }}</span>
+            <span class="breakdown-pct">({{ "{:.1f}".format(advntr_counts.negative / total_samples * 100) }}%)</span>
+            <span class="breakdown-desc">No variant called</span>
+          </div>
+          <div class="breakdown-item">
+            <span class="breakdown-badge badge-unest">Unestablished</span>
+            <span class="breakdown-count">{{ advntr_counts.unestablished }}</span>
+            <span class="breakdown-pct">
+              ({{ "{:.1f}".format(advntr_counts.unestablished / total_samples * 100) }}%)
+            </span>
+            <span class="breakdown-desc">adVNTR not run / no rows</span>
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
     {% if advntr_missing %}
