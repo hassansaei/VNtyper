@@ -831,9 +831,9 @@
     }
   },
   "standard_length_estimation": {
-    "help": "Research-only estimate across both alleles; variant calls and screening conclusions are unchanged.",
+    "help": "Research-only diploid length estimate; variant calls and screening conclusions are unchanged.",
     "sources": {
-      "packaged-research": "Uses the packaged development model.",
+      "packaged-research": "Uses packaged research model (standard13-bayesian-v1, trained on exomes).",
       "local-research": "Uses a locally fitted development model."
     },
     "count_conventions": {
@@ -841,7 +841,7 @@
       "complete": "Predicts complete repeat counts including invariant units.",
       "canonical-only": "Predicts canonical repeat counts excluding invariant units."
     },
-    "extrapolation_help": "Some measurements are outside the model training range; the estimate involves extrapolation.",
+    "extrapolation_help": "Features exceed exome training bounds (e.g., custom capture panels or differing enrichment kits); estimate involves extrapolation.",
     "sensitivity_warning": {
       "warning_code": "vntr_length_exceeds_sensitivity_cutoff",
       "badge": "⚠️ > {threshold} repeats: Reduced Sensitivity",
