@@ -844,10 +844,10 @@
     "extrapolation_help": "Some measurements are outside the model training range; the estimate involves extrapolation.",
     "sensitivity_warning": {
       "warning_code": "vntr_length_exceeds_sensitivity_cutoff",
-      "badge": "⚠️ > {threshold} repeats: Reduced Sensitivity Risk",
-      "notice_negative": "Estimated total VNTR length ({estimate} repeats) exceeds the sensitivity cutoff ({threshold} repeats). False negatives for pathogenic MUC1 frameshifts are enriched above this threshold due to k-mer dilution and mapping drop-off across expanded repeat arrays. In individuals with clinical suspicion of ADTKD-MUC1, a negative or inconclusive result should be interpreted with caution, and orthogonal testing (e.g., PacBio long-read sequencing or SNaPshot minisequencing) is recommended.",
-      "notice_positive": "Estimated total VNTR length ({estimate} repeats) exceeds the sensitivity cutoff ({threshold} repeats), where short-read detection sensitivity is reduced due to k-mer dilution.",
-      "help": "Total VNTR length exceeds the sensitivity cutoff ({threshold} repeats); short-read detection sensitivity is reduced due to k-mer dilution."
+      "badge": "⚠️ > {threshold} repeats: Reduced Sensitivity",
+      "notice_negative": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. Sensitivity is reduced on long alleles; interpret negative results with caution and consider orthogonal testing.",
+      "notice_positive": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats; sensitivity is reduced on long alleles.",
+      "help": "Total VNTR length exceeds {threshold} repeats; sensitivity is reduced on long alleles."
     }
   }
 }

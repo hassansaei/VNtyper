@@ -112,7 +112,7 @@ WORDS_WITH_SENSITIVITY: dict[str, Any] = {
     **WORDS,
     "sensitivity_warning": {
         "warning_code": "vntr_length_exceeds_sensitivity_cutoff",
-        "badge": "⚠️ > {threshold} repeats: Reduced Sensitivity Risk",
+        "badge": "⚠️ > {threshold} repeats: Reduced Sensitivity",
         "notice_negative": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. False negatives enriched.",
         "notice_positive": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. Sensitivity reduced.",
         "help": "Length exceeds {threshold} repeats with reduced sensitivity.",
@@ -142,7 +142,7 @@ def test_sensitivity_warning_presentation_negative_and_positive_calls() -> None:
     )
     assert neg_result is not None
     assert neg_result.has_sensitivity_warning is True
-    assert neg_result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity Risk"
+    assert neg_result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity"
     assert neg_result.notice_text == (
         "Estimated total VNTR length (115.5 repeats) exceeds 110 repeats. False negatives enriched."
     )
@@ -156,7 +156,7 @@ def test_sensitivity_warning_presentation_negative_and_positive_calls() -> None:
     )
     assert pos_result is not None
     assert pos_result.has_sensitivity_warning is True
-    assert pos_result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity Risk"
+    assert pos_result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity"
     assert pos_result.notice_text == (
         "Estimated total VNTR length (115.5 repeats) exceeds 110 repeats. Sensitivity reduced."
     )
@@ -183,7 +183,7 @@ def test_sensitivity_warning_and_extrapolation_coexistence_in_presentation() -> 
     )
     assert result is not None
     assert result.has_sensitivity_warning is True
-    assert result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity Risk"
+    assert result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity"
     assert WORDS["extrapolation_help"] in result.help
     assert "Length exceeds 110 repeats with reduced sensitivity." in result.help
 

@@ -257,10 +257,10 @@ def test_length_sensitivity_warning_renders_banner_and_badge_for_negative_call(t
 
     assert '<li class="notice notice-warning" role="alert">' in html
     assert '<span class="length-warning-badge" role="status">' in html
-    assert "⚠️ &gt; 110 repeats: Reduced Sensitivity Risk" in html
-    assert "Estimated total VNTR length (115.5 repeats) exceeds the sensitivity cutoff (110 repeats)." in html
-    assert "False negatives for pathogenic MUC1 frameshifts are enriched above this threshold" in html
-    assert "a negative or inconclusive result should be interpreted with caution" in html
+    assert "⚠️ &gt; 110 repeats: Reduced Sensitivity" in html
+    assert "Estimated total VNTR length (115.5 repeats) exceeds 110 repeats." in html
+    assert "Sensitivity is reduced on long alleles" in html
+    assert "interpret negative results with caution and consider orthogonal testing." in html
 
 
 def test_length_sensitivity_warning_renders_positive_banner_for_positive_call(tmp_path: Path) -> None:
@@ -281,10 +281,10 @@ def test_length_sensitivity_warning_renders_positive_banner_for_positive_call(tm
 
     assert '<li class="notice notice-warning" role="alert">' in html
     assert '<span class="length-warning-badge" role="status">' in html
-    assert "⚠️ &gt; 110 repeats: Reduced Sensitivity Risk" in html
-    assert "Estimated total VNTR length (115.5 repeats) exceeds the sensitivity cutoff (110 repeats)" in html
-    assert "where short-read detection sensitivity is reduced due to k-mer dilution." in html
-    assert "a negative or inconclusive result should be interpreted with caution" not in html
+    assert "⚠️ &gt; 110 repeats: Reduced Sensitivity" in html
+    assert "Estimated total VNTR length (115.5 repeats) exceeds 110 repeats" in html
+    assert "sensitivity is reduced on long alleles." in html
+    assert "interpret negative results with caution" not in html
 
 
 def test_length_without_sensitivity_warning_does_not_render_banner_or_badge(tmp_path: Path) -> None:
