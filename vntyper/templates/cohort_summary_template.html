@@ -31,13 +31,160 @@
   {% endif %}
 
   <style>
-    body { margin: 20px; }
-    h1, h2, h3 { text-align: center; margin-top: 20px; }
-    .container { max-width: 1600px; margin-left: auto; margin-right: auto; }
+    .container {
+      max-width: 1280px;
+      margin-inline: auto;
+      padding: var(--s-6) var(--s-5) var(--s-8);
+    }
+    h1 {
+      font-size: clamp(1.5rem, 1.1rem + 2vw, var(--step-3));
+      line-height: 1.25;
+      letter-spacing: -0.02em;
+      margin: 0 0 var(--s-1);
+    }
+    h2 {
+      font-size: var(--step-1);
+      font-weight: 600;
+      line-height: 1.4;
+      letter-spacing: 0;
+      color: var(--ink-muted);
+      margin: var(--s-8) 0 var(--s-4);
+      padding-bottom: var(--s-2);
+      border-bottom: 1px solid var(--hairline);
+    }
+    h3 {
+      font-size: var(--step-0);
+      font-weight: 600;
+      line-height: 1.4;
+      color: var(--ink);
+      margin: var(--s-4) 0 var(--s-2);
+    }
+    h4 {
+      font-size: var(--step--1);
+      font-weight: 600;
+      line-height: 1.4;
+      color: var(--ink-muted);
+      margin: var(--s-3) 0 var(--s-2);
+    }
+    .cohort-meta {
+      font-size: var(--step--1);
+      color: var(--ink-muted);
+      margin-bottom: var(--s-5);
+    }
+    .cohort-meta strong {
+      color: var(--ink);
+    }
+    .advntr-provenance-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-2);
+      list-style: none;
+      padding: var(--s-4) var(--s-5);
+      margin: 0 0 var(--s-5);
+      background: var(--sunken);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      font-size: var(--step--1);
+      line-height: 1.55;
+      max-width: min(100%, 56rem);
+    }
+    .advntr-provenance-list li {
+      margin: 0;
+      overflow-wrap: anywhere;
+      color: var(--ink-muted);
+    }
+    .advntr-provenance-list strong {
+      color: var(--ink);
+    }
+    .decision-profile-group {
+      margin-bottom: var(--s-4);
+      padding: var(--s-4) var(--s-5);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      background: var(--sunken);
+      max-width: min(100%, 56rem);
+    }
+    .decision-profile-group h3 {
+      margin: 0 0 var(--s-2);
+      font-size: var(--step-0);
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .decision-profile-group p {
+      margin: 0 0 var(--s-2);
+      font-size: var(--step--1);
+      color: var(--ink-muted);
+      overflow-wrap: anywhere;
+      line-height: 1.55;
+    }
+    .decision-profile-group p strong {
+      color: var(--ink);
+    }
+    .decision-profile-group p:last-child {
+      margin-bottom: 0;
+    }
     /* `.table-container` itself is defined in the token layer, which is where its
-       horizontal scroll comes from; the width and centring are the cohort's own. */
-    .table-container { width: 90%; margin: 0 auto; text-align: center; }
-    .plot { margin: 20px auto; display: block; max-width: 500px; }
+       horizontal scroll comes from; the width and margin are the cohort's own. */
+    .table-container {
+      width: 100%;
+      margin: var(--s-3) 0 var(--s-5);
+    }
+    .plot {
+      margin: var(--s-3) 0 var(--s-5);
+      padding: var(--s-4);
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      max-width: 540px;
+    }
+    .reading-key {
+      margin: var(--s-4) 0 var(--s-6);
+      padding: var(--s-4) var(--s-5);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      background: var(--sunken);
+      max-width: min(100%, 56rem);
+    }
+    .reading-key > p {
+      margin: 0 0 var(--s-3);
+      font-size: var(--step--1);
+      font-weight: 600;
+      color: var(--ink-muted);
+    }
+    .reading-key dl {
+      display: grid;
+      grid-template-columns: minmax(9rem, auto) 1fr;
+      gap: var(--s-2) var(--s-4);
+      margin: 0;
+      font-size: var(--step--1);
+    }
+    .reading-key dt {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .reading-key dt span {
+      display: block;
+      font-family: var(--font-sans);
+      font-weight: 400;
+      color: var(--ink-muted);
+    }
+    .reading-key dd {
+      margin: 0;
+      max-width: var(--measure);
+      line-height: 1.55;
+    }
+    .kestrel-bam-semantics,
+    .call-frequency-help {
+      font-size: var(--step--1);
+      color: var(--ink-muted);
+      line-height: 1.55;
+      max-width: var(--measure);
+      margin: var(--s-2) 0 var(--s-4);
+    }
 
     /* The zebra. It used to come from Bootstrap's `.table-striped`, at a specificity
        (0,2,2) that outranked everything the token layer said about a row; the class is
@@ -59,11 +206,16 @@
       flex-wrap: wrap;
       gap: var(--s-2) var(--s-4);
       align-items: center;
-      justify-content: center;
-      margin: var(--s-3) auto var(--s-2);
+      justify-content: flex-end;
+      margin: var(--s-3) 0 var(--s-2);
       font-size: var(--step--1);
     }
-    .table-toolbar label { display: inline-flex; align-items: center; gap: var(--s-2); margin: 0; }
+    .table-toolbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-2);
+      margin: 0;
+    }
     .table-toolbar input[type="search"],
     .table-toolbar select {
       font: inherit;
@@ -78,8 +230,8 @@
       flex-wrap: wrap;
       gap: var(--s-2) var(--s-3);
       align-items: center;
-      justify-content: center;
-      margin: var(--s-2) auto var(--s-5);
+      justify-content: flex-end;
+      margin: var(--s-2) 0 var(--s-5);
       font-size: var(--step--1);
       color: var(--ink-muted);
     }
@@ -92,12 +244,21 @@
       color: var(--ink);
       cursor: pointer;
     }
-    .table-pager button[disabled] { color: var(--ink-muted); cursor: default; }
+    .table-pager button[disabled] {
+      color: var(--ink-muted);
+      cursor: default;
+    }
     /* The count line is what says how many rows are being withheld and why. It is the
        one thing DataTables' own "Showing 1 to 10 of 57 entries" footer did that is
        worth keeping, and it is kept only because the reader here has controls that
        withhold rows on purpose. */
-    .table-status { font-size: var(--step--1); color: var(--ink-muted); }
+    .table-status {
+      font-size: var(--step--1);
+      color: var(--ink-muted);
+      line-height: 1.55;
+      margin: var(--s-2) 0 var(--s-4);
+      max-width: var(--measure);
+    }
   </style>
 </head>
 <body>
@@ -105,10 +266,10 @@
        screen reader user skipping to the content lands on the report itself. -->
   <main class="container">
     <h1>Cohort Summary Report</h1>
-    <p><strong>Report Date:</strong> {{ report_date }}</p>
+    <p class="cohort-meta"><strong>Report Date:</strong> {{ report_date }}</p>
     {% if advntr_evidence_provenance %}
     <h2>adVNTR artifact-evidence provenance</h2>
-    <ul>
+    <ul class="advntr-provenance-list">
       {% for item in advntr_evidence_provenance %}
       <li>
         <strong>{{ item.sample }}:</strong> {{ item.revision }}
