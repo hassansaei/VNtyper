@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from vntyper.scripts.length_sensitivity import LengthSensitivityPolicy, apply_length_sensitivity
 from vntyper.scripts.pipeline_length import (
     LengthPipelineConfiguration,
     encode_length_pipeline_configuration,
@@ -86,6 +87,7 @@ def completed_length_summary(
     runner: LengthMeasurementRunner | StandardLengthRunner,
     *,
     approved_projector: Callable[..., dict[str, object]] = length_summary_fields,
+    sensitivity_policy: LengthSensitivityPolicy | None = None,
 ) -> dict[str, object]:
     """Return recorded results after the selected callback consumed its plan.
 
@@ -93,6 +95,8 @@ def completed_length_summary(
         configuration: Existing approved/measurement-only configuration.
         runner: The callback passed to the coverage stage.
         approved_projector: Existing injectable strict summary projection.
+        sensitivity_policy: Length sensitivity tier policy recorded with the estimate, or
+            None when the run configuration has no policy.
 
     Returns:
         Completed summary fields for the selected model source.
@@ -103,5 +107,7 @@ def completed_length_summary(
     if isinstance(runner, StandardLengthRunner):
         if not runner.summary:
             raise ValueError("standard length callback did not complete")
-        return dict(runner.summary)
-    return approved_projector(configuration, runner.result)
+        fields = dict(runner.summary)
+    else:
+        fields = approved_projector(configuration, runner.result)
+    return apply_length_sensitivity(fields, sensitivity_policy)

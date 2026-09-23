@@ -6,9 +6,12 @@ from unittest.mock import Mock
 import pytest
 
 from vntyper.scripts import pipeline_length_routing as subject
+from vntyper.scripts.length_sensitivity import CAUTION_CODE, HIGH_CODE, LengthSensitivityPolicy
 from vntyper.scripts.pipeline_standard_length import StandardLengthConfiguration, StandardLengthRunner
 
 pytestmark = pytest.mark.unit
+
+POLICY = LengthSensitivityPolicy(110.0, 150.0, 14.3)
 
 
 def test_legacy_default_configuration_remains_disabled() -> None:
@@ -83,3 +86,33 @@ def test_completed_approved_summary_uses_existing_validation(monkeypatch: pytest
         "length_estimation_status": "measured-only"
     }
     projector.assert_called_once_with(config, legacy_result)
+
+
+def test_standard_summary_receives_the_tier() -> None:
+    config = subject.validate_pipeline_length(None, ())
+    runner = StandardLengthRunner(StandardLengthConfiguration(True, None, None, "a" * 64), "hg38", None, Path("/run"))
+    runner.summary = {
+        "length_estimation_status": "estimated",
+        "estimated_total_repeat_count": 155.0,
+        "length_estimation_warnings": [],
+    }
+    result = subject.completed_length_summary(config, runner, sensitivity_policy=POLICY)
+    assert result["length_sensitivity_tier"] == "high"
+    assert result["length_estimation_warnings"] == [CAUTION_CODE, HIGH_CODE]
+    assert "length_sensitivity_tier" not in runner.summary
+
+
+def test_approved_summary_receives_the_tier() -> None:
+    config = subject.validate_pipeline_length(None, ())
+    legacy = Mock(result=object())
+    projector = Mock(return_value={"length_estimation_status": "estimated", "estimated_total_repeat_count": 120.0})
+    result = subject.completed_length_summary(config, legacy, approved_projector=projector, sensitivity_policy=POLICY)
+    assert result["length_sensitivity_tier"] == "caution"
+    assert result["length_estimation_warnings"] == [CAUTION_CODE]
+
+
+def test_without_policy_summary_is_unchanged() -> None:
+    config = subject.validate_pipeline_length(None, ())
+    runner = StandardLengthRunner(StandardLengthConfiguration(True, None, None, "a" * 64), "hg38", None, Path("/run"))
+    runner.summary = {"length_estimation_status": "estimated", "estimated_total_repeat_count": 155.0}
+    assert subject.completed_length_summary(config, runner) == runner.summary
