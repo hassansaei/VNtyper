@@ -392,9 +392,11 @@ def test_only_the_group_representative_is_scored_and_no_group_straddles_a_fold(t
 
 def test_the_held_out_evaluation_is_reported_separately_from_the_full_data_fit(tmp_path: Path) -> None:
     """Selection happens inside training folds; the pooled held-out counts stand apart."""
-    _, document, _ = _run(tmp_path)
+    _, document, output = _run(tmp_path)
     evaluation = document["evaluation"]
+    page = (output / "report.html").read_text(encoding="utf-8")
 
+    assert page.index("Held-out performance (cross-validated)") < page.index("Every tested cutoff (descriptive")
     assert evaluation["held_out"] is not None
     assert evaluation["full_data_operating_points"].keys() >= {"baseline"}
     assert "descriptive" in evaluation["full_data_operating_points_scope"]

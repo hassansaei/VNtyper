@@ -278,6 +278,14 @@ in every fold. With 27 negatives, no fold can be left without negatives unless m
 27 folds are requested. The labels only steer allocation; each fold's selection still reads
 training truth alone. Length evaluation keeps its unstratified allocation.
 
+The HTML report shows the held-out estimate first. It gives the pooled held-out TP, FN,
+TN and FP, sensitivity and specificity with exact 95% intervals, and each fold's policy
+and admissible-candidate count. The intervals cover the pooled held-out calls and exclude
+selection uncertainty. A warning appears when a held-out rate falls below the floor the
+objective requested. The floor is enforced on training folds, so held-out performance can
+fall short of it. The selection and the table of every tested cutoff follow, labelled as
+descriptive searched-cohort points. They are not validated performance.
+
 ### Endpoints are reported separately
 
 A binary detection change, a confidence relabelling, an artifact flag and an exact-variant
