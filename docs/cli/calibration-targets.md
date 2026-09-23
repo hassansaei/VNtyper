@@ -55,7 +55,7 @@ estimate is available, the pipeline records a sensitivity tier in
 
 | Tier | Estimate | Summary code | Report |
 |---|---|---|---|
-| `below` | at or under the caution threshold | none | estimate with its uncertainty |
+| `below` | at or under the caution threshold | none | estimate with the model's typical error |
 | `caution` | above `caution_threshold` | `vntr_length_exceeds_sensitivity_cutoff` | badge and help text |
 | `high` | above `high_threshold` | the caution code and `vntr_length_high_sensitivity_risk` | badge, help text, and a header notice when the sample has no finding |
 | `not-assessed` | no estimate | none | nothing |
@@ -65,7 +65,7 @@ The policy lives in the run configuration and is recorded next to the tier as
 
 ```json
 "length_estimation": {
-  "sensitivity": {"caution_threshold": 110.0, "high_threshold": 150.0, "uncertainty_repeats": 14.3}
+  "sensitivity": {"caution_threshold": 110.0, "high_threshold": 150.0, "typical_error_repeats": 14.3}
 }
 ```
 
@@ -74,8 +74,10 @@ displays, so a report never shows a value that "exceeds" a cutoff it equals. The
 in the complete-count frame the cutoffs are defined on. A `canonical-only` estimate is moved into that frame by the
 packaged conversion (+9 terminal units per allele, +18 in total); a `source-reported`
 estimate has no known frame and is recorded as `not-assessed`. Approved-path models are
-complete by contract. The report shows `± uncertainty_repeats` only for the packaged
-model, whose held-out error it is. A configuration without the block records no tier. Report wording comes from the `length_sensitivity` block of
+complete by contract. For the packaged model only, the report shows
+`typical_error_repeats` beside the estimate, worded as a typical error. It is never shown
+as "± 14", because it is not an interval (see below). A configuration without the block
+records no tier. Report wording comes from the `length_sensitivity` block of
 `report_config.json`. The cutoffs are not part of the resume identity.
 
 Basis for the defaults, measured on the 76 PacBio-truth exomes with leave-one-out
@@ -86,7 +88,34 @@ predictions:
   130 are under-estimated by about 12 repeats on average. The high trigger therefore sits
   below the length it targets: 150 on the estimate catches 7 of the 8 arrays truly above
   160, where simulated Kestrel sensitivity falls to 0.75 and lower.
-- `uncertainty_repeats` is the leave-one-out RMSE of the packaged model (14.26).
+- `typical_error_repeats` is the leave-one-out RMSE of the packaged model (14.26). It is
+  a typical error, not an interval. Only 55 of the 76 leave-one-out residuals fall within
+  ±14. The empirical 2.5% and 97.5% residual quantiles are −29.4 and +28.2, so an
+  empirical 95% band would be about ±29 repeats. The report therefore words the value as
+  "typical error ≈14 repeats" and never attaches it to the estimate as "±". Summaries
+  recorded before this rename carry the same value as `uncertainty_repeats`, and the
+  report still reads them.
+
+#### Limits of the tier evidence
+
+- **The cutoffs were chosen on the numbers that describe them.** 110 and 150 were picked
+  on the same 76 leave-one-out predictions that the figures above report. No held-out
+  set confirms them.
+- **The high tier is imprecise.** At 150 on the estimate, the tier catches 7 of the 8
+  arrays truly above 160 repeats (Wilson 95% CI 53–98%). It flags 15 of the 76 samples,
+  and only 7 of those 15 are truly above 160.
+- **The pooled length performance is selection-adjusted.** The leave-one-out MAE of 10.80
+  repeats (95% bootstrap CI 8.8–13.0) was measured after several candidate models were
+  compared on the same predictions. It is therefore optimistic for this model.
+- **Transfer between cohorts is asymmetric.** Trained on the German cohort and applied to
+  the French one, MAE is 10.1. Trained on the French cohort and applied to the German
+  one, MAE is 27.1 with R² −0.69. See
+  [#336](https://github.com/hassansaei/VNtyper/issues/336).
+- **Out-of-range input still gets an estimate.** Features outside the training range add
+  an extrapolation warning, but the estimate and its tier are still reported. The model
+  contract binds no assay or aligner, so nothing stops other input from being scored.
+  Input other than Twist exome data is out of scope, and its estimates and tiers are not
+  supported by this evidence.
 
 ## Development calibration with optional truth
 
