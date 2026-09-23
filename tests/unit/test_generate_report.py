@@ -233,6 +233,7 @@ def _standard_length_summary(estimate: float, tier: str) -> dict[str, object]:
             **base_summary(),
             "length_estimation_status": "estimated",
             "estimated_total_repeat_count": estimate,
+            "length_count_convention": "complete",
             "length_estimation_reasons": [],
             "length_estimation_warnings": [],
             "length_standard_features": encode_standard_length_measurement(measurement),

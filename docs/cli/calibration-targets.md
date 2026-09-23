@@ -69,8 +69,12 @@ The policy lives in the run configuration and is recorded next to the tier as
 }
 ```
 
-Comparisons are strict (`>`) on the point estimate. A configuration without the block
-records no tier. Report wording comes from the `length_sensitivity` block of
+Comparisons are strict (`>`) on the point estimate, in the complete-count frame the
+cutoffs are defined on. A `canonical-only` estimate is moved into that frame by the
+packaged conversion (+9 terminal units per allele, +18 in total); a `source-reported`
+estimate has no known frame and is recorded as `not-assessed`. Approved-path models are
+complete by contract. The report shows `± uncertainty_repeats` only for the packaged
+model, whose held-out error it is. A configuration without the block records no tier. Report wording comes from the `length_sensitivity` block of
 `report_config.json`. The cutoffs are not part of the resume identity.
 
 Basis for the defaults, measured on the 76 PacBio-truth exomes with leave-one-out

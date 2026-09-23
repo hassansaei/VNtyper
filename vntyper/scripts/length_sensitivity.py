@@ -18,6 +18,12 @@ HIGH_CODE = "vntr_length_high_sensitivity_risk"
 SensitivityTier = Literal["below", "caution", "high", "not-assessed"]
 TIERS: tuple[SensitivityTier, ...] = ("below", "caution", "high", "not-assessed")
 _POLICY_FIELDS = ("caution_threshold", "high_threshold", "uncertainty_repeats")
+#: Cutoffs are defined on complete counts (all units, including the nine invariant
+#: terminal units per allele). A canonical-only estimate is moved into that frame by the
+#: packaged ``canonical-only-plus-nine-terminals-v1`` conversion; a source-reported one
+#: has no known frame and is not assessed. Approved-path models are complete by contract
+#: and record no convention.
+_COMPLETE_FRAME_OFFSET = {None: 0.0, "complete": 0.0, "canonical-only": 18.0}
 
 
 @dataclass(frozen=True)
@@ -79,27 +85,33 @@ def resolve_length_sensitivity_policy(config: Mapping[str, object]) -> LengthSen
     return None if raw is None else decode_length_sensitivity_policy(raw)
 
 
-def classify_length_sensitivity(status: object, estimate: object, policy: LengthSensitivityPolicy) -> SensitivityTier:
-    """Tier a recorded estimate; anything but a finite ``estimated`` value is not assessed.
+def classify_length_sensitivity(
+    status: object, estimate: object, policy: LengthSensitivityPolicy, convention: object = None
+) -> SensitivityTier:
+    """Tier a recorded estimate in the complete-count frame the cutoffs are defined on.
 
     Args:
         status: Recorded ``length_estimation_status``.
         estimate: Recorded ``estimated_total_repeat_count``.
         policy: The cutoffs to compare against.
+        convention: Recorded ``length_count_convention``; ``None`` for the approved path.
 
     Returns:
-        The sensitivity tier.
+        The sensitivity tier; ``not-assessed`` for anything but a finite ``estimated``
+        value in a count frame that can be placed on the complete frame.
     """
     if (
-        status != "estimated"
+        convention not in _COMPLETE_FRAME_OFFSET
+        or status != "estimated"
         or isinstance(estimate, bool)
         or not isinstance(estimate, (int, float))
         or not math.isfinite(estimate)
     ):
         return "not-assessed"
-    if estimate > policy.high_threshold:
+    complete = estimate + _COMPLETE_FRAME_OFFSET[convention]
+    if complete > policy.high_threshold:
         return "high"
-    if estimate > policy.caution_threshold:
+    if complete > policy.caution_threshold:
         return "caution"
     return "below"
 
@@ -118,7 +130,10 @@ def apply_length_sensitivity(fields: Mapping[str, object], policy: LengthSensiti
     if policy is None or fields.get("length_estimation_status") == "disabled":
         return result
     tier = classify_length_sensitivity(
-        fields.get("length_estimation_status"), fields.get("estimated_total_repeat_count"), policy
+        fields.get("length_estimation_status"),
+        fields.get("estimated_total_repeat_count"),
+        policy,
+        fields.get("length_count_convention"),
     )
     recorded = fields.get("length_estimation_warnings") or []
     warnings = [str(code) for code in recorded] if isinstance(recorded, list) else []
@@ -198,20 +213,28 @@ def build_sensitivity_view(
     policy = decode_length_sensitivity_policy(summary.get("length_sensitivity_policy"))
     tier = summary["length_sensitivity_tier"]
     estimate = summary.get("estimated_total_repeat_count")
-    expected = classify_length_sensitivity(summary.get("length_estimation_status"), estimate, policy)
+    expected = classify_length_sensitivity(
+        summary.get("length_estimation_status"), estimate, policy, summary.get("length_count_convention")
+    )
     if tier != expected:
         raise ValueError("recorded length sensitivity tier differs from the recorded estimate and policy")
     if expected == "not-assessed":
         return SensitivityView(expected, None, None, None, None)
-    uncertainty = _count(float(round(policy.uncertainty_repeats)))
+    # The recorded uncertainty is the packaged model's own held-out error; other models
+    # never earned it, so their estimates are shown bare.
+    uncertainty = (
+        f"± {_count(float(round(policy.uncertainty_repeats)))}"
+        if summary.get("length_model_source") == "packaged-research"
+        else None
+    )
     if expected == "below":
-        return SensitivityView(expected, None, None, None, f"± {uncertainty}")
+        return SensitivityView(expected, None, None, None, uncertainty)
     block = words[expected]
     threshold = policy.high_threshold if expected == "high" else policy.caution_threshold
+    shown = f"{cast(float, estimate):.2f}".rstrip("0").rstrip(".")
     values = {
         "threshold": _count(threshold),
-        "estimate": f"{cast(float, estimate):.2f}".rstrip("0").rstrip("."),
-        "uncertainty": uncertainty,
+        "estimate": shown if uncertainty is None else f"{shown} {uncertainty}",
     }
     notice = block["notice_not_positive"].format(**values) if expected == "high" and not is_positive else None
     return SensitivityView(
@@ -219,5 +242,5 @@ def build_sensitivity_view(
         block["badge"].format(**values),
         notice,
         block["help"].format(**values),
-        f"± {uncertainty}",
+        uncertainty,
     )

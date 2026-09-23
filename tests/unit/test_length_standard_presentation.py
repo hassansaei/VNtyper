@@ -125,6 +125,7 @@ def estimated_summary(estimate: float, tier: str | None, warnings: list[str]) ->
         **summary(),
         "length_estimation_status": "estimated",
         "estimated_total_repeat_count": estimate,
+        "length_count_convention": "complete",
         "length_estimation_reasons": [],
         "length_estimation_warnings": warnings,
         "length_standard_features": encode_standard_length_measurement(measurement),
@@ -153,7 +154,7 @@ def test_high_tier_without_finding_carries_notice_badge_and_uncertainty() -> Non
     assert result is not None
     assert result.sensitivity_tier == "high"
     assert result.warning_badge == "Above 150: high"
-    assert result.notice_text == "Notice 160.5."
+    assert result.notice_text == "Notice 160.5 ± 14."
     assert result.uncertainty_text == "± 14"
     positive = build_length_presentation(value, FULL_CONFIG, is_positive=True)
     assert positive is not None and positive.notice_text is None and positive.warning_badge == "Above 150: high"

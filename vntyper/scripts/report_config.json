@@ -851,7 +851,7 @@
     "high": {
       "badge": "Above {threshold} repeats: detection sensitivity substantially reduced",
       "help": "The total VNTR array (both alleles) is estimated above {threshold} repeats. Kestrel's depth-ratio floor makes frameshift detection substantially less sensitive at this length, and the estimate tends to under-state very long arrays.",
-      "notice_not_positive": "Estimated total VNTR length ({estimate} ± {uncertainty} repeats) exceeds {threshold} repeats. Short-read detection sensitivity is substantially reduced for arrays this long; a result without a finding does not exclude a frameshift variant. Orthogonal long-read or minisequencing testing may resolve it."
+      "notice_not_positive": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. Short-read detection sensitivity is substantially reduced for arrays this long; a result without a finding does not exclude a frameshift variant. Orthogonal long-read or minisequencing testing may resolve it."
     }
   }
 }

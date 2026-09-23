@@ -133,7 +133,7 @@ WORDS = {
         "high": {
             "badge": "Above {threshold} repeats: high",
             "help": "High help {threshold}.",
-            "notice_not_positive": "Estimate {estimate} ± {uncertainty} exceeds {threshold}.",
+            "notice_not_positive": "Estimate {estimate} exceeds {threshold}.",
         },
     }
 }
@@ -145,6 +145,8 @@ def _summary(estimate, tier):
         "estimated_total_repeat_count": estimate,
         "length_sensitivity_tier": tier,
         "length_sensitivity_policy": dict(RAW),
+        "length_model_source": "packaged-research",
+        "length_count_convention": "complete",
     }
 
 
@@ -215,3 +217,42 @@ def test_view_rejects_unknown_tier() -> None:
 def test_view_rejects_malformed_wording(words) -> None:
     with pytest.raises(ValueError, match="length sensitivity"):
         subject.build_sensitivity_view(_summary(160.0, "high"), words, is_positive=False)
+
+
+@pytest.mark.parametrize(
+    ("convention", "estimate", "tier"),
+    [
+        (None, 120.0, "caution"),
+        ("complete", 120.0, "caution"),
+        ("canonical-only", 95.0, "caution"),
+        ("canonical-only", 92.0, "below"),
+        ("canonical-only", 140.0, "high"),
+        ("source-reported", 160.0, "not-assessed"),
+        ("unknown", 160.0, "not-assessed"),
+    ],
+)
+def test_tier_is_compared_in_the_complete_count_frame(convention, estimate, tier) -> None:
+    fields = {"length_estimation_status": "estimated", "estimated_total_repeat_count": estimate}
+    if convention is not None:
+        fields["length_count_convention"] = convention
+    assert subject.apply_length_sensitivity(fields, POLICY)["length_sensitivity_tier"] == tier
+
+
+def test_canonical_only_view_rechecks_in_the_complete_frame() -> None:
+    summary = {**_summary(95.0, "caution"), "length_count_convention": "canonical-only"}
+    view = subject.build_sensitivity_view(summary, WORDS, is_positive=False)
+    assert view is not None and view.tier == "caution"
+
+
+@pytest.mark.parametrize("source", ["local-research", None])
+def test_uncertainty_is_shown_only_for_the_packaged_model(source) -> None:
+    summary = _summary(160.456, "high")
+    if source is None:
+        del summary["length_model_source"]
+        del summary["length_count_convention"]
+    else:
+        summary["length_model_source"] = source
+    view = subject.build_sensitivity_view(summary, WORDS, is_positive=False)
+    assert view is not None
+    assert view.uncertainty is None
+    assert view.notice == "Estimate 160.46 exceeds 150."
