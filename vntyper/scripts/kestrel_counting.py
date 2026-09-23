@@ -28,6 +28,8 @@ import logging
 import shutil
 from pathlib import Path
 
+from vntyper.scripts.kestrel_log_contract import describe_kestrel_errors, read_kestrel_errors
+
 logger = logging.getLogger(__name__)
 
 #: The IKC file name inside an attempt directory. Kestrel adopts a supplied count file
@@ -179,6 +181,16 @@ def execute_attempt(invocation, *, cwd, keep_ikc, run_command):
         if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
             logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
             raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
+
+        # Kestrel 1.0.1 exits 0 after a fatal error, so a clean exit proves nothing (#338).
+        # A logged ERROR is a failed attempt exactly like a non-zero exit: it raises rather
+        # than falling through to the next k-mer size, because every cause measured so far
+        # (an unreadable reference, a missing or empty IKC) is the same at every k.
+        errors = read_kestrel_errors(log_file)
+        if errors:
+            msg = describe_kestrel_errors(errors, kmer_size=kmer_size, log_file=log_file)
+            logger.error(msg)
+            raise RuntimeError(msg)
     finally:
         if invocation.attempt_dir is not None and not keep_ikc:
             remove_count_artifacts(invocation.attempt_dir)

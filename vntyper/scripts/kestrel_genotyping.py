@@ -471,7 +471,9 @@ def run_kestrel(
             "Kestrel produced no usable VCF for any configured k-mer size, so no result file was "
             "written. Every configured k-mer size either wrote no VCF at all, or wrote one that could "
             "not be parsed into records. Reporting this as a negative would manufacture a confident "
-            "negative genotype. See issues #212 and #223."
+            "negative genotype. The cause is in the per-attempt Kestrel logs: "
+            + ", ".join(str(invocation.log_file) for invocation in invocations)
+            + ". See issues #212, #223 and #338."
         )
         logger.error(msg)
         raise RuntimeError(msg)
