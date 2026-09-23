@@ -179,15 +179,6 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "sample_name": (("-s", "--sample-name"), "_StoreAction", "str", None, False, None, None),
         "summary_formats": (("--summary-formats",), "_StoreAction", "str", "", False, None, None),
         "threads": (("--threads",), "_StoreAction", "positive_int", None, False, None, None),
-        "vntr_length_warning_threshold": (
-            ("--vntr-length-warning-threshold",),
-            "_StoreAction",
-            "float",
-            None,
-            False,
-            None,
-            None,
-        ),
     },
     "report": {
         "bam_file": (("--bam-file",), "_StoreAction", "Path", None, False, None, None),

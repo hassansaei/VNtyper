@@ -258,73 +258,21 @@ def test_packaged_reference_model_enforces_packaged_source(monkeypatch: pytest.M
         )
 
 
-def test_resolve_configuration_default_and_explicit_warning_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(subject, "_load_model", _model)
-    # Default from config.json or absent
-    config_default = subject.resolve_standard_length_configuration(
-        _DEFAULT_CONFIG, enabled=True, model_path=None, approved_enabled=False
-    )
-    assert config_default.warning_threshold == 110.0
+def test_configuration_identity_matches_the_2_0_36_contract() -> None:
+    """A display policy must not enter the resume identity (#334)."""
+    from vntyper.scripts.canonical_json import canonical_sha256
 
-    # Config-specified threshold
-    config_specified = subject.resolve_standard_length_configuration(
-        {"length_estimation": {"warning_threshold": 125.5}, **_DEFAULT_CONFIG},
-        enabled=True,
-        model_path=None,
-        approved_enabled=False,
-    )
-    assert config_specified.warning_threshold == 125.5
-
-    # CLI explicit override takes precedence over config
-    config_override = subject.resolve_standard_length_configuration(
-        {"length_estimation": {"warning_threshold": 125.5}, **_DEFAULT_CONFIG},
-        enabled=True,
-        model_path=None,
-        approved_enabled=False,
-        warning_threshold=95.0,
-    )
-    assert config_override.warning_threshold == 95.0
-
-
-@pytest.mark.parametrize("invalid", [0, -10.0, True, False, float("nan"), float("inf"), "110"])
-def test_resolve_configuration_rejects_invalid_warning_threshold(invalid: object) -> None:
-    with pytest.raises(ValueError, match="standard length warning threshold must be a positive number"):
-        subject.resolve_standard_length_configuration(
-            _DEFAULT_CONFIG,
-            enabled=True,
-            model_path=None,
-            approved_enabled=False,
-            warning_threshold=invalid,  # type: ignore[arg-type]
-        )
-
-
-def test_standard_length_summary_records_warning_threshold_and_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(subject, "_load_model", _model)
     configuration = subject.resolve_standard_length_configuration(
-        _DEFAULT_CONFIG, enabled=True, model_path=None, approved_enabled=False, warning_threshold=105.0
+        {
+            "length_estimation": {
+                "enabled": False,
+                "sensitivity": {"caution_threshold": 1.0, "high_threshold": 2.0, "uncertainty_repeats": 1.0},
+            }
+        },
+        enabled=None,
+        model_path=None,
+        approved_enabled=False,
     )
-    from tests.unit.test_length_standard_model import _measurement
-    from vntyper.scripts.length_standard_model import predict_standard_length
-
-    assert configuration.model is not None
-    measurement = _measurement()
-    prediction = predict_standard_length(
-        measurement,
-        configuration.model,
-        warning_threshold=configuration.warning_threshold,
+    assert configuration.sha256 == canonical_sha256(
+        {"schema_version": "standard-length-configuration-v1", "enabled": False, "source": None, "model_sha256": None}
     )
-    summary = subject.standard_length_summary(configuration, measurement, prediction)
-    assert summary["length_warning_threshold"] == 105.0
-    assert summary["length_estimation_warnings"] == ["vntr_length_exceeds_sensitivity_cutoff"]
-
-
-def test_encode_configuration_rejects_invalid_warning_threshold() -> None:
-    config = subject.StandardLengthConfiguration(
-        enabled=False,
-        model=None,
-        source=None,
-        sha256="0" * 64,
-        warning_threshold=-5.0,
-    )
-    with pytest.raises(ValueError, match="standard length warning threshold must be a positive number"):
-        subject.encode_standard_length_configuration(config)

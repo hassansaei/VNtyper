@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +26,6 @@ class StandardLengthConfiguration:
     source: str | None
     model: StandardLengthModel | None
     sha256: str
-    warning_threshold: float = 110.0
 
 
 def encode_standard_length_configuration(configuration: StandardLengthConfiguration) -> dict[str, object]:
@@ -44,13 +42,6 @@ def encode_standard_length_configuration(configuration: StandardLengthConfigurat
     """
     if not isinstance(configuration, StandardLengthConfiguration) or not isinstance(configuration.enabled, bool):
         raise ValueError("standard length configuration must be resolved")
-    if (
-        isinstance(configuration.warning_threshold, bool)
-        or not isinstance(configuration.warning_threshold, (int, float))
-        or not math.isfinite(configuration.warning_threshold)
-        or configuration.warning_threshold <= 0
-    ):
-        raise ValueError("standard length warning threshold must be a positive number")
     if configuration.enabled:
         from vntyper.scripts.length_standard_model import encode_standard_length_model
 
@@ -66,7 +57,6 @@ def encode_standard_length_configuration(configuration: StandardLengthConfigurat
         "enabled": configuration.enabled,
         "source": configuration.source,
         "model_sha256": None if configuration.model is None else configuration.model.sha256,
-        "warning_threshold": configuration.warning_threshold,
     }
     if configuration.sha256 != canonical_sha256(document):
         raise ValueError("standard length configuration digest differs from its model and settings")
@@ -85,7 +75,6 @@ def resolve_standard_length_configuration(
     enabled: bool | None,
     model_path: Path | None,
     approved_enabled: bool,
-    warning_threshold: float | None = None,
 ) -> StandardLengthConfiguration:
     """Resolve configured default, explicit overrides and approved-path precedence.
 
@@ -94,7 +83,6 @@ def resolve_standard_length_configuration(
         enabled: Explicit CLI override, or None to use configuration.
         model_path: Optional locally fitted research JSON model.
         approved_enabled: Whether explicit measurement/approved inference owns length output.
-        warning_threshold: Optional sensitivity warning cutoff in repeat units (default: 110.0).
 
     Returns:
         Frozen research configuration with a path-free resume identity.
@@ -108,15 +96,6 @@ def resolve_standard_length_configuration(
     default = section.get("enabled", False)
     if not isinstance(default, bool) or (enabled is not None and not isinstance(enabled, bool)):
         raise ValueError("standard length enabled setting must be boolean")
-    raw_threshold = section.get("warning_threshold", 110.0) if warning_threshold is None else warning_threshold
-    if (
-        isinstance(raw_threshold, bool)
-        or not isinstance(raw_threshold, (int, float))
-        or not math.isfinite(raw_threshold)
-        or raw_threshold <= 0
-    ):
-        raise ValueError("standard length warning threshold must be a positive number")
-    resolved_threshold = float(raw_threshold)
     if model_path is not None and not isinstance(model_path, Path):
         raise ValueError("standard length model path must be a Path")
     if (approved_enabled and (enabled is True or model_path is not None)) or (
@@ -144,9 +123,8 @@ def resolve_standard_length_configuration(
         "enabled": active,
         "source": source,
         "model_sha256": None if model is None else model.sha256,
-        "warning_threshold": resolved_threshold,
     }
-    return StandardLengthConfiguration(active, source, model, canonical_sha256(identity), resolved_threshold)
+    return StandardLengthConfiguration(active, source, model, canonical_sha256(identity))
 
 
 def standard_length_summary(
@@ -189,7 +167,6 @@ def standard_length_summary(
     return {
         "length_estimation_status": "unavailable" if prediction is None else prediction.status,
         "estimated_total_repeat_count": None if prediction is None else prediction.estimated_repeat_count,
-        "length_warning_threshold": configuration.warning_threshold,
         "length_estimation_reasons": list(reasons if prediction is None else prediction.reasons),
         "length_estimation_warnings": [] if prediction is None else list(prediction.warnings),
         "length_model_source": configuration.source,
@@ -249,9 +226,7 @@ class StandardLengthRunner:
                 assembly=self.assembly,
                 index_path=None if plan.stable_index_path is None else Path(plan.stable_index_path).resolve(),
             )
-            prediction = predict_standard_length(
-                measurement, self.configuration.model, warning_threshold=self.configuration.warning_threshold
-            )
+            prediction = predict_standard_length(measurement, self.configuration.model)
         except (OSError, RuntimeError, ValueError) as error:
             logger.warning("Standard VNTR length measurement unavailable: %s", error)
             self.summary = standard_length_summary(self.configuration, None, None, ("measurement-unavailable",))

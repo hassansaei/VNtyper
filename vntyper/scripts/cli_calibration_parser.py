@@ -172,12 +172,6 @@ def add_pipeline_calibration_arguments(parser: argparse.ArgumentParser) -> None:
         help="Locally fitted research length model JSON in place of the packaged standard model.",
     )
     parser.add_argument(
-        "--vntr-length-warning-threshold",
-        type=float,
-        default=None,
-        help="Sensitivity warning cutoff in diploid repeat units (default from configuration, 110.0).",
-    )
-    parser.add_argument(
         "--research-decision-profile",
         type=Path,
         default=None,

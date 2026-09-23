@@ -298,27 +298,12 @@ def _qc_reasons(measurement: StandardLengthMeasurement, qc: StandardModelQc) -> 
     return tuple(reasons)
 
 
-LENGTH_WARNING_SENSITIVITY_CUTOFF = "vntr_length_exceeds_sensitivity_cutoff"
-
-
 def predict_standard_length(
-    measurement: StandardLengthMeasurement,
-    model: StandardLengthModel,
-    *,
-    warning_threshold: float | None = None,
+    measurement: StandardLengthMeasurement, model: StandardLengthModel
 ) -> StandardLengthPrediction:
     """Apply one validated raw-coefficient standard model without rounding."""
     encode_standard_length_measurement(measurement)
     encode_standard_length_model(model)
-    if warning_threshold is not None:
-        if (
-            isinstance(warning_threshold, bool)
-            or not isinstance(warning_threshold, (int, float))
-            or not math.isfinite(warning_threshold)
-            or warning_threshold <= 0
-        ):
-            raise ValueError("standard length warning threshold must be a positive number")
-        warning_threshold = float(warning_threshold)
     identity_reasons = []
     if measurement.assembly != model.assembly:
         identity_reasons.append("unsupported_assembly")
@@ -336,11 +321,11 @@ def predict_standard_length(
     if reasons:
         return StandardLengthPrediction("unavailable", None, reasons, (), measurement.sha256, model.sha256)
     values = tuple(cast(float, measurement.values[name]) for name in STANDARD_FEATURE_ORDER)
-    warnings = [
+    warnings = tuple(
         f"feature_{name}_outside_training_range"
         for name, observed in zip(STANDARD_FEATURE_ORDER, values, strict=True)
         if observed < model.feature_bounds[name].minimum or observed > model.feature_bounds[name].maximum
-    ]
+    )
     prediction = math.fsum(
         (
             model.intercept,
@@ -349,12 +334,10 @@ def predict_standard_length(
     )
     if not math.isfinite(prediction):
         return StandardLengthPrediction(
-            "unavailable", None, ("nonfinite_prediction",), tuple(warnings), measurement.sha256, model.sha256
+            "unavailable", None, ("nonfinite_prediction",), warnings, measurement.sha256, model.sha256
         )
     if prediction <= 0:
         return StandardLengthPrediction(
-            "unavailable", None, ("nonpositive_prediction",), tuple(warnings), measurement.sha256, model.sha256
+            "unavailable", None, ("nonpositive_prediction",), warnings, measurement.sha256, model.sha256
         )
-    if warning_threshold is not None and prediction > warning_threshold:
-        warnings.append(LENGTH_WARNING_SENSITIVITY_CUTOFF)
-    return StandardLengthPrediction("estimated", prediction, (), tuple(warnings), measurement.sha256, model.sha256)
+    return StandardLengthPrediction("estimated", prediction, (), warnings, measurement.sha256, model.sha256)
