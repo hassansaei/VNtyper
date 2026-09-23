@@ -59,6 +59,7 @@ from vntyper.scripts.cohort_tables import (
     kestrel_table_html,
     stats_table_html,
 )
+from vntyper.scripts.length_sensitivity import cohort_kpi_text
 from vntyper.scripts.nomenclature import (
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
     FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
@@ -117,6 +118,19 @@ def generate_donut_chart(values, labels, total, title, colors):
         include_plotlyjs=False,
         config={"displayModeBar": False, "responsive": True},
     )
+
+
+def _length_tier_kpi(report_cfg, counts):
+    """The cohort's high-tier KPI card, with its configured label and detail line.
+
+    Returns:
+        dict | None: ``label``, ``detail`` and the ``high`` count, or None when no sample
+        was assessed or the report configuration carries no length sensitivity wording.
+    """
+    text = cohort_kpi_text(report_cfg, counts)
+    if text is None or counts is None:
+        return None
+    return {"label": text[0], "detail": text[1], "high": counts["high"]}
 
 
 def load_report_config():
@@ -345,7 +359,7 @@ def generate_cohort_summary_report(
         "decision_profile_groups": profile_group_context,
         "pooled_decision_metrics_suppressed": pooled_metrics_suppressed,
         "total_samples": len(sample_names or ()),
-        "length_tier_counts": length_tier_counts,
+        "length_tier_kpi": _length_tier_kpi(report_cfg, length_tier_counts),
         "kestrel_counts": {
             "positive": k_pos,
             "flagged": k_pos_flag,

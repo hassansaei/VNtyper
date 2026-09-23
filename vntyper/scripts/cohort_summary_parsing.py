@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from vntyper.scripts.length_sensitivity import TIERS
 from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
 from vntyper.scripts.report_formatting import is_empty_result_row
 from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_BAM_HEADER, STEP_COVERAGE, STEP_KESTREL
@@ -104,7 +105,10 @@ def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[di
             round(float(estimate), 1) if isinstance(estimate, (int, float)) and not isinstance(estimate, bool) else None
         )
     if "length_sensitivity_tier" in summary:
-        additional_stats["length_sensitivity_tier"] = summary["length_sensitivity_tier"]
+        tier = summary["length_sensitivity_tier"]
+        if tier not in TIERS:
+            raise ValueError(f"unknown length sensitivity tier: {tier!r}")
+        additional_stats["length_sensitivity_tier"] = tier
 
     return kestrel_data, advntr_data, additional_stats
 

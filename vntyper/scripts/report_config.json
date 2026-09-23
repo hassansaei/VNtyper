@@ -844,6 +844,11 @@
     "extrapolation_help": "Some measurements are outside the model training range; the estimate involves extrapolation."
   },
   "length_sensitivity": {
+    "labels": {
+      "notice_prefix": "Caution:",
+      "cohort_kpi_label": "Length Tier High",
+      "cohort_kpi_detail": "{caution} caution · {assessed} with a length estimate"
+    },
     "caution": {
       "badge": "Above {threshold} repeats: detection sensitivity may be reduced",
       "help": "The total VNTR array (both alleles) is estimated above {threshold} repeats. Kestrel's depth-ratio floor makes frameshift detection less sensitive as the array grows, and the estimate tends to under-state very long arrays."

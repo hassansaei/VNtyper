@@ -116,5 +116,12 @@ def test_cohort_report_shows_length_tier_kpi_only_when_assessed(tmp_path) -> Non
     html = (tmp_path / "with" / "cohort_summary.html").read_text()
     assert 'class="kpi-card kpi-length"' in html
     assert ">2<" in html
+    assert "Length Tier High" in html
+    assert "5 caution · 9 with a length estimate" in html
     cohort_summary.generate_cohort_summary_report(output_dir=str(tmp_path / "without"), **kwargs)
     assert 'class="kpi-card kpi-length"' not in (tmp_path / "without" / "cohort_summary.html").read_text()
+
+
+def test_unknown_cohort_tier_is_rejected() -> None:
+    with pytest.raises(ValueError, match="length sensitivity tier"):
+        parse_pipeline_summary({"estimated_total_repeat_count": 120.0, "length_sensitivity_tier": "severe"})

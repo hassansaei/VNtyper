@@ -23,7 +23,7 @@ _POLICY_FIELDS = ("caution_threshold", "high_threshold", "uncertainty_repeats")
 #: packaged ``canonical-only-plus-nine-terminals-v1`` conversion; a source-reported one
 #: has no known frame and is not assessed. Approved-path models are complete by contract
 #: and record no convention.
-_COMPLETE_FRAME_OFFSET = {None: 0.0, "complete": 0.0, "canonical-only": 18.0}
+_COMPLETE_FRAME_OFFSET: dict[object, float] = {None: 0.0, "complete": 0.0, "canonical-only": 18.0}
 
 
 @dataclass(frozen=True)
@@ -108,12 +108,24 @@ def classify_length_sensitivity(
         or not math.isfinite(estimate)
     ):
         return "not-assessed"
-    complete = estimate + _COMPLETE_FRAME_OFFSET[convention]
+    complete = _complete_tenth(estimate, convention)
     if complete > policy.high_threshold:
         return "high"
     if complete > policy.caution_threshold:
         return "caution"
     return "below"
+
+
+def _complete_tenth(estimate: float, convention: object) -> float:
+    """The estimate in the complete-count frame, at the tenth the report displays.
+
+    Tiering on the displayed value means a report can never show "150.0 exceeds 150".
+    """
+    return round(estimate + _COMPLETE_FRAME_OFFSET[convention], 1)
+
+
+def _expected_codes(tier: str) -> tuple[str, ...]:
+    return {"caution": (CAUTION_CODE,), "high": (CAUTION_CODE, HIGH_CODE)}.get(tier, ())
 
 
 def apply_length_sensitivity(fields: Mapping[str, object], policy: LengthSensitivityPolicy | None) -> dict[str, object]:
@@ -125,6 +137,9 @@ def apply_length_sensitivity(fields: Mapping[str, object], policy: LengthSensiti
 
     Returns:
         A new mapping. Disabled runs and a missing policy leave the fields unchanged.
+
+    Raises:
+        ValueError: If recorded warnings are not a list of codes.
     """
     result = dict(fields)
     if policy is None or fields.get("length_estimation_status") == "disabled":
@@ -135,10 +150,11 @@ def apply_length_sensitivity(fields: Mapping[str, object], policy: LengthSensiti
         policy,
         fields.get("length_count_convention"),
     )
-    recorded = fields.get("length_estimation_warnings") or []
-    warnings = [str(code) for code in recorded] if isinstance(recorded, list) else []
-    codes = {"caution": (CAUTION_CODE,), "high": (CAUTION_CODE, HIGH_CODE)}.get(tier, ())
-    warnings.extend(code for code in codes if code not in warnings)
+    recorded = fields.get("length_estimation_warnings", [])
+    if not isinstance(recorded, list) or any(not isinstance(code, str) for code in recorded):
+        raise ValueError("length estimation warnings must be a list of codes")
+    warnings = list(recorded)
+    warnings.extend(code for code in _expected_codes(tier) if code not in warnings)
     result["length_estimation_warnings"] = warnings
     result["length_sensitivity_tier"] = tier
     result["length_sensitivity_policy"] = policy.as_dict()
@@ -148,6 +164,7 @@ def apply_length_sensitivity(fields: Mapping[str, object], policy: LengthSensiti
 _WORD_FIELDS: dict[str, frozenset[str]] = {
     "caution": frozenset({"badge", "help"}),
     "high": frozenset({"badge", "help", "notice_not_positive"}),
+    "labels": frozenset({"notice_prefix", "cohort_kpi_label", "cohort_kpi_detail"}),
 }
 
 
@@ -160,6 +177,8 @@ class SensitivityView:
     notice: str | None
     help: str | None
     uncertainty: str | None
+    value: str | None = None
+    notice_prefix: str | None = None
 
 
 def _words(report_config: Mapping[str, object]) -> dict[str, dict[str, str]] | None:
@@ -218,6 +237,12 @@ def build_sensitivity_view(
     )
     if tier != expected:
         raise ValueError("recorded length sensitivity tier differs from the recorded estimate and policy")
+    recorded = summary.get("length_estimation_warnings", [])
+    recorded_codes = (
+        {code for code in recorded if code in (CAUTION_CODE, HIGH_CODE)} if isinstance(recorded, list) else None
+    )
+    if recorded_codes != set(_expected_codes(expected)):
+        raise ValueError("recorded length sensitivity warning codes differ from the recorded tier")
     if expected == "not-assessed":
         return SensitivityView(expected, None, None, None, None)
     # The recorded uncertainty is the packaged model's own held-out error; other models
@@ -227,11 +252,13 @@ def build_sensitivity_view(
         if summary.get("length_model_source") == "packaged-research"
         else None
     )
+    # Beside a ±14 error bar, a second decimal is precision the estimate does not have.
+    value = None if uncertainty is None else f"{cast(float, estimate):.1f}"
     if expected == "below":
-        return SensitivityView(expected, None, None, None, uncertainty)
+        return SensitivityView(expected, None, None, None, uncertainty, value)
     block = words[expected]
     threshold = policy.high_threshold if expected == "high" else policy.caution_threshold
-    shown = f"{cast(float, estimate):.2f}".rstrip("0").rstrip(".")
+    shown = _count(_complete_tenth(cast(float, estimate), summary.get("length_count_convention")))
     values = {
         "threshold": _count(threshold),
         "estimate": shown if uncertainty is None else f"{shown} {uncertainty}",
@@ -243,4 +270,23 @@ def build_sensitivity_view(
         notice,
         block["help"].format(**values),
         uncertainty,
+        value,
+        words["labels"]["notice_prefix"] if notice is not None else None,
     )
+
+
+def cohort_kpi_text(report_config: Mapping[str, object], counts: Mapping[str, int] | None) -> tuple[str, str] | None:
+    """Configured label and detail line for the cohort's high-tier count.
+
+    Args:
+        report_config: Report wording configuration.
+        counts: ``high``/``caution``/``assessed`` counts, or None when nothing was assessed.
+
+    Returns:
+        ``(label, detail)``, or None when there are no counts or no configured wording.
+    """
+    words = _words(report_config)
+    if words is None or counts is None:
+        return None
+    labels = words["labels"]
+    return labels["cohort_kpi_label"], labels["cohort_kpi_detail"].format(**counts)

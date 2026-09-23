@@ -425,13 +425,11 @@
         <div class="kpi-value">{{ advntr_counts.positive + advntr_counts.flagged + advntr_counts.negative }}</div>
         <div class="kpi-sub">{{ advntr_counts.unestablished }} unestablished</div>
       </div>
-      {% if length_tier_counts %}
+      {% if length_tier_kpi %}
       <div class="kpi-card kpi-length">
-        <div class="kpi-label">Length Tier High</div>
-        <div class="kpi-value">{{ length_tier_counts.high }}</div>
-        <div class="kpi-sub">
-          {{ length_tier_counts.caution }} caution &middot; {{ length_tier_counts.assessed }} with a length estimate
-        </div>
+        <div class="kpi-label">{{ length_tier_kpi.label }}</div>
+        <div class="kpi-value">{{ length_tier_kpi.high }}</div>
+        <div class="kpi-sub">{{ length_tier_kpi.detail }}</div>
       </div>
       {% endif %}
     </div>

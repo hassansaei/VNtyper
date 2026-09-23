@@ -54,7 +54,7 @@ def test_resolve_rejects_non_mapping_section() -> None:
 
 @pytest.mark.parametrize(
     ("estimate", "tier"),
-    [(80.0, "below"), (110.0, "below"), (110.01, "caution"), (150.0, "caution"), (150.01, "high"), (175, "high")],
+    [(80.0, "below"), (110.0, "below"), (110.1, "caution"), (150.0, "caution"), (150.1, "high"), (175, "high")],
 )
 def test_tier_boundaries_are_strict(estimate, tier) -> None:
     assert subject.classify_length_sensitivity("estimated", estimate, POLICY) == tier
@@ -127,8 +127,14 @@ def test_apply_does_not_duplicate_existing_codes() -> None:
     assert subject.apply_length_sensitivity(fields, POLICY)["length_estimation_warnings"] == [subject.CAUTION_CODE]
 
 
+LABELS = {
+    "notice_prefix": "Caution:",
+    "cohort_kpi_label": "Length Tier High",
+    "cohort_kpi_detail": "{caution} caution, {assessed} assessed",
+}
 WORDS = {
     "length_sensitivity": {
+        "labels": LABELS,
         "caution": {"badge": "Above {threshold} repeats: caution", "help": "Caution help {threshold}."},
         "high": {
             "badge": "Above {threshold} repeats: high",
@@ -139,10 +145,14 @@ WORDS = {
 }
 
 
+_CODES = {"caution": [subject.CAUTION_CODE], "high": [subject.CAUTION_CODE, subject.HIGH_CODE]}
+
+
 def _summary(estimate, tier):
     return {
         "length_estimation_status": "estimated",
         "estimated_total_repeat_count": estimate,
+        "length_estimation_warnings": list(_CODES.get(tier, [])),
         "length_sensitivity_tier": tier,
         "length_sensitivity_policy": dict(RAW),
         "length_model_source": "packaged-research",
@@ -155,7 +165,7 @@ def test_view_high_not_positive_has_notice() -> None:
     assert view is not None
     assert view.tier == "high"
     assert view.badge == "Above 150 repeats: high"
-    assert view.notice == "Estimate 160.46 ± 14 exceeds 150."
+    assert view.notice == "Estimate 160.5 ± 14 exceeds 150."
     assert view.help == "High help 150."
     assert view.uncertainty == "± 14"
 
@@ -204,6 +214,7 @@ def test_view_rejects_unknown_tier() -> None:
     "words",
     [
         {"length_sensitivity": {"caution": WORDS["length_sensitivity"]["caution"]}},
+        {"length_sensitivity": {**WORDS["length_sensitivity"], "labels": {"notice_prefix": "Caution:"}}},
         {"length_sensitivity": {**WORDS["length_sensitivity"], "extra": {}}},
         {"length_sensitivity": {**WORDS["length_sensitivity"], "caution": {"badge": "x"}}},
         {
@@ -255,4 +266,71 @@ def test_uncertainty_is_shown_only_for_the_packaged_model(source) -> None:
     view = subject.build_sensitivity_view(summary, WORDS, is_positive=False)
     assert view is not None
     assert view.uncertainty is None
-    assert view.notice == "Estimate 160.46 exceeds 150."
+    assert view.notice == "Estimate 160.5 exceeds 150."
+
+
+@pytest.mark.parametrize(
+    ("estimate", "tier"),
+    [(110.01, "below"), (110.04, "below"), (110.06, "caution"), (150.04, "caution"), (150.06, "high")],
+)
+def test_tier_agrees_with_the_displayed_tenth(estimate, tier) -> None:
+    assert subject.classify_length_sensitivity("estimated", estimate, POLICY) == tier
+
+
+def test_notice_never_shows_the_threshold_as_exceeding_itself() -> None:
+    view = subject.build_sensitivity_view(_summary(150.06, "high"), WORDS, is_positive=False)
+    assert view is not None
+    assert view.notice == "Estimate 150.1 ± 14 exceeds 150."
+
+
+def test_canonical_only_notice_shows_the_complete_frame_value() -> None:
+    summary = {**_summary(140.0, "high"), "length_count_convention": "canonical-only"}
+    view = subject.build_sensitivity_view(summary, WORDS, is_positive=False)
+    assert view is not None and view.notice == "Estimate 158 ± 14 exceeds 150."
+
+
+def test_value_drops_to_one_decimal_beside_the_uncertainty() -> None:
+    view = subject.build_sensitivity_view(_summary(123.456, "caution"), WORDS, is_positive=False)
+    assert view is not None and view.value == "123.5"
+    bare = {**_summary(123.456, "caution"), "length_model_source": "local-research"}
+    bare_view = subject.build_sensitivity_view(bare, WORDS, is_positive=False)
+    assert bare_view is not None and bare_view.value is None
+
+
+def test_view_carries_the_configured_notice_prefix() -> None:
+    view = subject.build_sensitivity_view(_summary(160.0, "high"), WORDS, is_positive=False)
+    assert view is not None and view.notice_prefix == "Caution:"
+
+
+@pytest.mark.parametrize(
+    ("tier", "estimate", "codes"),
+    [
+        ("high", 160.0, [subject.CAUTION_CODE]),
+        ("caution", 120.0, []),
+        ("caution", 120.0, [subject.CAUTION_CODE, subject.HIGH_CODE]),
+        ("below", 90.0, [subject.CAUTION_CODE]),
+    ],
+)
+def test_view_rejects_codes_that_differ_from_the_tier(tier, estimate, codes) -> None:
+    summary = {**_summary(estimate, tier), "length_estimation_warnings": codes}
+    with pytest.raises(ValueError, match="warning codes differ"):
+        subject.build_sensitivity_view(summary, WORDS, is_positive=False)
+
+
+def test_apply_rejects_non_list_warnings() -> None:
+    fields = {
+        "length_estimation_status": "estimated",
+        "estimated_total_repeat_count": 120.0,
+        "length_estimation_warnings": "feature_A_outside_training_range",
+    }
+    with pytest.raises(ValueError, match="warnings must be a list"):
+        subject.apply_length_sensitivity(fields, POLICY)
+
+
+def test_cohort_kpi_text_comes_from_configuration() -> None:
+    assert subject.cohort_kpi_text(WORDS, {"high": 2, "caution": 5, "assessed": 9}) == (
+        "Length Tier High",
+        "5 caution, 9 assessed",
+    )
+    assert subject.cohort_kpi_text({}, {"high": 2, "caution": 5, "assessed": 9}) is None
+    assert subject.cohort_kpi_text(WORDS, None) is None

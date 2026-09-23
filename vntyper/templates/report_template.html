@@ -1157,7 +1157,10 @@
                     {% if length_presentation and length_presentation.notice_text %}
                         <ul class="notices notices-verdict">
                             <li class="notice notice-caution" role="note">
-                                <span><strong>Caution:</strong> {{ length_presentation.notice_text }}</span>
+                                <span>
+                                    <strong>{{ length_presentation.notice_prefix }}</strong>
+                                    {{ length_presentation.notice_text }}
+                                </span>
                             </li>
                         </ul>
                     {% endif %}

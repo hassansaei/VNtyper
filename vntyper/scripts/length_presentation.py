@@ -58,6 +58,7 @@ class LengthPresentation:
     warning_badge: str | None = None
     notice_text: str | None = None
     uncertainty_text: str | None = None
+    notice_prefix: str | None = None
 
 
 def _text(value: object, label: str) -> str:
@@ -171,11 +172,13 @@ def build_length_presentation(
         return presentation
     return replace(
         presentation,
+        value=presentation.value if view.value is None else view.value,
         help=presentation.help if view.help is None else f"{presentation.help} {view.help}",
         sensitivity_tier=view.tier,
         warning_badge=view.badge,
         notice_text=view.notice,
         uncertainty_text=view.uncertainty,
+        notice_prefix=view.notice_prefix,
     )
 
 
