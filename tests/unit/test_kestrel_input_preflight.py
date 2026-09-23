@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from vntyper.scripts.failure_help import TROUBLESHOOTING_URL
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
 from vntyper.scripts.kestrel_input_preflight import (
     REFERENCE_KEYS,
@@ -145,6 +146,7 @@ def test_a_missing_reference_message_names_path_cwd_and_install_command(tmp_path
     assert f"reference_data.muc1_reference_vntr = 'reference/m.fa' -> {tmp_path / 'reference/m.fa'} (not found)" in msg
     assert "vntyper install-references --output-dir reference" in msg
     assert "vntyper/dependencies/kestrel" not in msg
+    assert msg.endswith(f"Help: {TROUBLESHOOTING_URL}")
 
 
 def test_a_missing_jar_message_points_at_the_source_tree(tmp_path):

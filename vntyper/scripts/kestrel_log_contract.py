@@ -25,6 +25,8 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
+from vntyper.scripts.failure_help import TROUBLESHOOTING_URL, kestrel_error_hint
+
 logger = logging.getLogger(__name__)
 
 #: One Kestrel logback line at ERROR level: ``HH:MM:SS [thread] ERROR logger - message``.
@@ -97,8 +99,10 @@ def describe_kestrel_errors(errors: list[str], *, kmer_size: int, log_file: str 
     quoted = "\n  ".join(errors[:MAX_QUOTED_ERRORS])
     more = len(errors) - MAX_QUOTED_ERRORS
     tail = f"\n  ... and {more} more" if more > 0 else ""
+    hint = kestrel_error_hint(errors)
+    fix = f"Fix: {hint}\n" if hint else ""
     return (
         f"Kestrel reported {len(errors)} error(s) for k-mer size {kmer_size} but exited 0, "
         f"so this attempt is treated as failed rather than as a result:\n  {quoted}{tail}\n"
-        f"Full log: {log_file}"
+        f"{fix}Full log: {log_file}\nHelp: {TROUBLESHOOTING_URL}"
     )

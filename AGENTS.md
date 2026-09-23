@@ -127,13 +127,15 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   - `kestrel_input_preflight.py` — which files Kestrel needs (both JARs, both motif FASTAs),
     resolved against the CWD, and the operator message when one is missing. `handle_pipeline`
     runs it before `run_pipeline`, so handler tests with synthetic configs stub it (#338).
+  - `failure_help.py` — the troubleshooting URL, fix hints for known Kestrel errors, and the
+    `VNtyper failed: ... Help:` line `run_pipeline` logs at CRITICAL after the traceback.
 
 `nomenclature_bam.py` separately owns XD parsing, resolved haplotype-record voting, and
 the `BamConsensus` interface; those BAM-facing responsibilities do not belong in the
 source-vocabulary helper. `reference_resolution_environment.py` separately owns CRAM-only
 process-environment pin/restore I/O.
 
-These twenty focused modules keep pure decisions independently testable; measure their
+These twenty-one focused modules keep pure decisions independently testable; measure their
 current branch coverage rather than assuming a fixed percentage. Put new pure logic there
 rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.

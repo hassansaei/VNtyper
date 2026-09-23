@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from vntyper.scripts import kestrel_genotyping as kg
+from vntyper.scripts.failure_help import TROUBLESHOOTING_URL
 from vntyper.scripts.kestrel_counting import attempt_directory, ikc_path
 from vntyper.scripts.kestrel_log_contract import (
     MAX_QUOTED_ERRORS,
@@ -126,7 +127,9 @@ def test_the_message_names_the_cause_the_kmer_and_the_log():
     msg = describe_kestrel_errors([REFERENCE_ERROR], kmer_size=20, log_file="/out/kestrel/kestrel_kmer_20.log")
     assert "1 error(s) for k-mer size 20 but exited 0" in msg
     assert "Error reading reference sequence(s)" in msg
-    assert msg.endswith("Full log: /out/kestrel/kestrel_kmer_20.log")
+    assert "Full log: /out/kestrel/kestrel_kmer_20.log" in msg
+    assert "Fix: The MUC1 motif reference is missing, empty or corrupt." in msg
+    assert msg.endswith(f"Help: {TROUBLESHOOTING_URL}")
     assert "more" not in msg
 
 
@@ -138,6 +141,12 @@ def test_the_message_quotes_at_most_the_cap_and_counts_the_rest():
         assert f"cause {i}" in msg
     assert f"cause {MAX_QUOTED_ERRORS}" not in msg
     assert "... and 2 more" in msg
+
+
+def test_an_unknown_error_gets_no_fix_line_but_still_the_help_link():
+    msg = describe_kestrel_errors(["23:00:00 [T] ERROR x - something new"], kmer_size=20, log_file="k.log")
+    assert "Fix:" not in msg
+    assert msg.endswith(f"Help: {TROUBLESHOOTING_URL}")
 
 
 def test_exactly_the_cap_has_no_remainder_line():
@@ -253,3 +262,4 @@ def test_no_vcf_on_every_kmer_size_names_the_logs(tmp_path, monkeypatch):
     message = str(excinfo.value)
     assert "kestrel_kmer_20.log" in message and "kestrel_kmer_25.log" in message
     assert "#338" in message
+    assert TROUBLESHOOTING_URL in message

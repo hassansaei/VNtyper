@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from vntyper.scripts.failure_help import TROUBLESHOOTING_URL
 from vntyper.scripts.kestrel_counting import DEFAULT_KANALYZE_PATH
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,7 @@ def describe_missing_inputs(missing: list[KestrelInput], project_root: str | Pat
         + "\n".join(lines)
         + "\n"
         + "\n".join(fix)
+        + f"\nHelp: {TROUBLESHOOTING_URL}"
     )
 
 
