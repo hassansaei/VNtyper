@@ -90,19 +90,12 @@ def generate_donut_chart(values, labels, total, title, colors):
     if sum(values) == 0:
         logger.warning(f"No data to plot for donut chart '{title}'.")
         return ""
-    palette_map = {
-        "#FF0000": "#dc2626",
-        "#FFA500": "#d97706",
-        "#404040": "#475569",
-        "#B0B0B0": "#94a3b8",
-    }
-    plot_colors = [palette_map.get(c, c) for c in colors]
     fig = go.Figure(
         go.Pie(
             labels=labels,
             values=values,
             hole=0.62,
-            marker={"colors": plot_colors, "line": {"color": "rgba(128, 128, 128, 0.25)", "width": 1.5}},
+            marker={"colors": colors, "line": {"color": "rgba(128, 128, 128, 0.25)", "width": 1.5}},
             textinfo="none",
             hoverinfo="label+value+percent",
         )
@@ -228,7 +221,7 @@ def generate_cohort_summary_report(
     # --------------------------------------------------------------------
     # Colors: Positive=Red, Flagged=Orange, Negative=Dark Grey, Unestablished=Light Grey
     # --------------------------------------------------------------------
-    color_list = ["#FF0000", "#FFA500", "#404040", "#B0B0B0"]  # Exactly 4 colors
+    color_list = ["#dc2626", "#d97706", "#475569", "#94a3b8"]  # Exactly 4 colors
 
     profile_groups = group_decision_profiles(decision_profile_provenance or ())
     pooled_metrics_suppressed = len(profile_groups) > 1

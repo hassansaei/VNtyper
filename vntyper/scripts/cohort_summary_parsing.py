@@ -6,7 +6,7 @@ Module Purpose:
 Parse pipeline summary records for cohort aggregation.
 
 Extracts algorithm rows and per-sample statistics (runtime, version, assembly,
-pipeline, coverage, and optional length estimation metrics) from
+pipeline, coverage, and the optional length estimate and sensitivity tier) from
 ``pipeline_summary.json``.
 
 Extracted from ``cohort_inputs.py`` to keep pure parsing logic decoupled from
@@ -15,17 +15,12 @@ filesystem discovery and under file-length guidelines.
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any
 
 from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
 from vntyper.scripts.report_formatting import is_empty_result_row
 from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_BAM_HEADER, STEP_COVERAGE, STEP_KESTREL
-
-logger = logging.getLogger(__name__)
-
-PIPELINE_SUMMARY_FILENAME = "pipeline_summary.json"
 
 
 def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[dict], dict[str, Any]]:
@@ -102,14 +97,13 @@ def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[di
             if data_list:
                 additional_stats["coverage"] = data_list[0]
 
-    # Length estimation metrics and warnings if present in summary
+    # Optional length estimation: the estimate (1 decimal) and the recorded sensitivity tier.
     if "estimated_total_repeat_count" in summary:
-        additional_stats["estimated_total_repeat_count"] = summary.get("estimated_total_repeat_count")
-    if "length_estimation_warnings" in summary:
-        warnings = summary.get("length_estimation_warnings")
-        if isinstance(warnings, list):
-            additional_stats["length_warning"] = ";".join(warnings) if warnings else "none"
-        else:
-            additional_stats["length_warning"] = str(warnings)
+        estimate = summary["estimated_total_repeat_count"]
+        additional_stats["estimated_total_repeat_count"] = (
+            round(float(estimate), 1) if isinstance(estimate, (int, float)) and not isinstance(estimate, bool) else None
+        )
+    if "length_sensitivity_tier" in summary:
+        additional_stats["length_sensitivity_tier"] = summary["length_sensitivity_tier"]
 
     return kestrel_data, advntr_data, additional_stats

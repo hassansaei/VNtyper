@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from vntyper.scripts.cohort_summary_parsing import parse_pipeline_summary
-from vntyper.scripts.length_standard_model import LENGTH_WARNING_SENSITIVITY_CUTOFF
 
 pytestmark = pytest.mark.unit
 
@@ -23,44 +22,31 @@ def test_parse_pipeline_summary_empty() -> None:
     }
 
 
-def test_parse_pipeline_summary_extracts_length_stats_and_warnings() -> None:
-    summary = {
-        "estimated_total_repeat_count": 115.5,
-        "length_estimation_warnings": [LENGTH_WARNING_SENSITIVITY_CUTOFF],
-    }
-    _, _, stats = parse_pipeline_summary(summary)
-    assert stats["estimated_total_repeat_count"] == 115.5
-    assert stats["length_warning"] == LENGTH_WARNING_SENSITIVITY_CUTOFF
-
-
-def test_parse_pipeline_summary_extracts_length_stats_with_no_warnings() -> None:
-    summary = {
-        "estimated_total_repeat_count": 95.0,
-        "length_estimation_warnings": [],
-    }
-    _, _, stats = parse_pipeline_summary(summary)
-    assert stats["estimated_total_repeat_count"] == 95.0
-    assert stats["length_warning"] == "none"
-
-
-def test_parse_pipeline_summary_extracts_multiple_warnings() -> None:
-    summary = {
-        "estimated_total_repeat_count": 125.0,
-        "length_estimation_warnings": ["feature_A_outside_training_range", LENGTH_WARNING_SENSITIVITY_CUTOFF],
-    }
-    _, _, stats = parse_pipeline_summary(summary)
-    assert stats["estimated_total_repeat_count"] == 125.0
-    assert stats["length_warning"] == f"feature_A_outside_training_range;{LENGTH_WARNING_SENSITIVITY_CUTOFF}"
-
-
-def test_parse_pipeline_summary_extracts_non_list_warning() -> None:
-    summary = {
-        "estimated_total_repeat_count": 115.0,
-        "length_estimation_warnings": "unexpected_string_warning",  # type: ignore[dict-item]
-    }
-    _, _, stats = parse_pipeline_summary(summary)
-    assert stats["estimated_total_repeat_count"] == 115.0
-    assert stats["length_warning"] == "unexpected_string_warning"
+@pytest.mark.parametrize(
+    ("summary", "expected"),
+    [
+        ({}, {}),
+        (
+            {
+                "estimated_total_repeat_count": None,
+                "length_estimation_status": "unavailable",
+                "length_sensitivity_tier": "not-assessed",
+            },
+            {"estimated_total_repeat_count": None, "length_sensitivity_tier": "not-assessed"},
+        ),
+        (
+            {"estimated_total_repeat_count": 123.456789, "length_sensitivity_tier": "caution"},
+            {"estimated_total_repeat_count": 123.5, "length_sensitivity_tier": "caution"},
+        ),
+        ({"estimated_total_repeat_count": 95.0}, {"estimated_total_repeat_count": 95.0}),
+        ({"estimated_total_repeat_count": True}, {"estimated_total_repeat_count": None}),
+    ],
+)
+def test_length_columns(summary: dict[str, object], expected: dict[str, object]) -> None:
+    stats = parse_pipeline_summary(summary)[2]
+    got = {key: stats[key] for key in ("estimated_total_repeat_count", "length_sensitivity_tier") if key in stats}
+    assert got == expected
+    assert "length_warning" not in stats
 
 
 def test_parse_pipeline_summary_runtime_computation() -> None:
@@ -81,21 +67,18 @@ def test_parse_pipeline_summary_invalid_runtime_raises() -> None:
         parse_pipeline_summary(summary)
 
 
-def test_cohort_stats_table_and_frame_integration() -> None:
+def test_mixed_cohort_renders_blanks_not_placeholder_strings() -> None:
     from vntyper.scripts.cohort_tables import additional_stats_frame, stats_table_html
 
-    summary = {
-        "estimated_total_repeat_count": 115.5,
-        "length_estimation_warnings": [LENGTH_WARNING_SENSITIVITY_CUTOFF],
-    }
-    _, _, stats = parse_pipeline_summary(summary)
-    stats["Sample"] = "sample_test"
-    frame = additional_stats_frame([stats])
-    assert "estimated_total_repeat_count" in frame.columns
-    assert "length_warning" in frame.columns
-    assert frame["estimated_total_repeat_count"].iloc[0] == 115.5
-    assert frame["length_warning"].iloc[0] == LENGTH_WARNING_SENSITIVITY_CUTOFF
+    with_length = parse_pipeline_summary({"estimated_total_repeat_count": 160.25, "length_sensitivity_tier": "high"})[2]
+    without_length = parse_pipeline_summary({})[2]
+    with_length["Sample"], without_length["Sample"] = "long", "short"
+    frame = additional_stats_frame([with_length, without_length])
+    assert frame["estimated_total_repeat_count"].iloc[0] == 160.2
+    assert frame["length_sensitivity_tier"].iloc[0] == "high"
 
     html = stats_table_html(frame)
-    assert "115.5" in html
-    assert LENGTH_WARNING_SENSITIVITY_CUTOFF in html
+    assert "160.2" in html
+    assert ">high<" in html
+    for placeholder in (">None<", ">nan<", ">NaN<", ">none<"):
+        assert placeholder not in html

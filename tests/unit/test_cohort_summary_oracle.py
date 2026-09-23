@@ -939,7 +939,7 @@ def test_both_algorithms_use_the_four_labels_and_matching_colors(tmp_path, monke
     )
 
     labels = ["Positive", "Positive (Flagged)", "Negative", "Unestablished"]
-    colors = ["#FF0000", "#FFA500", "#404040", "#B0B0B0"]
+    colors = ["#dc2626", "#d97706", "#475569", "#94a3b8"]
     assert calls == [
         ("Kestrel Results", labels, colors),
         ("adVNTR Results", labels, colors),

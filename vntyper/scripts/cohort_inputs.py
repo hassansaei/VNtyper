@@ -559,7 +559,7 @@ def load_pipeline_summary_for_sample(
           - Decision_Profile_Revision: verified revision or explicit legacy text
           - Decision_Profile_SHA256: verified run digest or explicit legacy text
           - estimated_total_repeat_count (optional)
-          - length_warning (optional)
+          - length_sensitivity_tier (optional)
     """
     sample_dir = Path(sample_dir)
     summary_path = sample_dir / PIPELINE_SUMMARY_FILENAME
