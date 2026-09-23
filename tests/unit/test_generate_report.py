@@ -4630,3 +4630,17 @@ def test_confidence_grade_reaches_template_context_and_suppressed_on_older_confi
     html_stripped = render(tmp_path)
     assert captured["screening_state"]["confidence_grade"] is None
     assert "Confidence grade" not in chip_labels(html_stripped)
+
+
+def test_high_length_notice_sits_with_the_verdict_before_the_state_chips(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(160.5, "high"))
+    html = render(tmp_path)
+    assert html.index(NOTICE_CAUTION) < html.index('<ul class="chips">')
+    assert html.count("Estimated total VNTR length") == 1
+
+
+def test_uncertainty_is_shown_between_estimate_and_unit(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(120.0, "caution"))
+    html = render(tmp_path)
+    card = html[html.index('class="length-metric-value"') :]
+    assert card.index("120") < card.index("± 14") < card.index("repeat units")

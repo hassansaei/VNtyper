@@ -107,3 +107,20 @@ def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[di
         additional_stats["length_sensitivity_tier"] = summary["length_sensitivity_tier"]
 
     return kestrel_data, advntr_data, additional_stats
+
+
+def length_tier_counts(stats_list: list[dict[str, Any]]) -> dict[str, int] | None:
+    """Count recorded length sensitivity tiers across a cohort.
+
+    Args:
+        stats_list: Per-sample statistics from :func:`parse_pipeline_summary`.
+
+    Returns:
+        ``high``, ``caution`` and ``assessed`` (samples with an estimate) counts, or
+        ``None`` when no sample carries an assessed tier.
+    """
+    tiers = [stats.get("length_sensitivity_tier") for stats in stats_list]
+    assessed = sum(tier in ("below", "caution", "high") for tier in tiers)
+    if not assessed:
+        return None
+    return {"high": tiers.count("high"), "caution": tiers.count("caution"), "assessed": assessed}

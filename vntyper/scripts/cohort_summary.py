@@ -51,6 +51,7 @@ from vntyper.scripts.cohort_pseudonyms import (
     pseudonym_settings,
     pseudonymized_sample_name,
 )
+from vntyper.scripts.cohort_summary_parsing import length_tier_counts as count_length_tiers
 from vntyper.scripts.cohort_tables import (
     additional_stats_frame,
     advntr_table_html,
@@ -150,6 +151,7 @@ def generate_cohort_summary_report(
     decision_profile_provenance=None,
     call_frequency_df=None,
     rare_allele_max_frequency=None,
+    length_tier_counts=None,
 ):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results along with
@@ -179,6 +181,9 @@ def generate_cohort_summary_report(
         Per-sample run-recorded evidence revision and assertion values.
     decision_profile_provenance : sequence of mapping, optional
         Per-sample verified decision-profile ID, revision, and SHA-256.
+    length_tier_counts : mapping, optional
+        ``high``/``caution``/``assessed`` length sensitivity tier counts, or None when
+        no sample carries an assessed tier.
 
     Returns
     -------
@@ -340,6 +345,7 @@ def generate_cohort_summary_report(
         "decision_profile_groups": profile_group_context,
         "pooled_decision_metrics_suppressed": pooled_metrics_suppressed,
         "total_samples": len(sample_names or ()),
+        "length_tier_counts": length_tier_counts,
         "kestrel_counts": {
             "positive": k_pos,
             "flagged": k_pos_flag,
@@ -601,6 +607,7 @@ def aggregate_cohort(
             ],
             call_frequency_df=call_frequency_df,
             rare_allele_max_frequency=rare_allele_max_frequency,
+            length_tier_counts=count_length_tiers(additional_stats_list),
         )
     finally:
         # In a `finally` because everything above - the config read, the two identity

@@ -82,3 +82,39 @@ def test_mixed_cohort_renders_blanks_not_placeholder_strings() -> None:
     assert ">high<" in html
     for placeholder in (">None<", ">nan<", ">NaN<", ">none<"):
         assert placeholder not in html
+
+
+def test_length_tier_counts() -> None:
+    from vntyper.scripts.cohort_summary_parsing import length_tier_counts
+
+    stats = [
+        {"length_sensitivity_tier": "high"},
+        {"length_sensitivity_tier": "caution"},
+        {"length_sensitivity_tier": "below"},
+        {"length_sensitivity_tier": "not-assessed"},
+        {},
+    ]
+    assert length_tier_counts(stats) == {"high": 1, "caution": 1, "assessed": 3}
+    assert length_tier_counts([{}, {"length_sensitivity_tier": "not-assessed"}]) is None
+
+
+def test_cohort_report_shows_length_tier_kpi_only_when_assessed(tmp_path) -> None:
+    import pandas as pd
+
+    from vntyper.cli import load_config
+    from vntyper.scripts import cohort_summary
+
+    kwargs = {
+        "kestrel_df": pd.DataFrame([{"Sample": "s1", "Confidence": "Negative", "Flag": "Not flagged"}]),
+        "advntr_df": pd.DataFrame(),
+        "summary_file": "cohort_summary.html",
+        "config": load_config(None),
+    }
+    cohort_summary.generate_cohort_summary_report(
+        output_dir=str(tmp_path / "with"), length_tier_counts={"high": 2, "caution": 5, "assessed": 9}, **kwargs
+    )
+    html = (tmp_path / "with" / "cohort_summary.html").read_text()
+    assert 'class="kpi-card kpi-length"' in html
+    assert ">2<" in html
+    cohort_summary.generate_cohort_summary_report(output_dir=str(tmp_path / "without"), **kwargs)
+    assert 'class="kpi-card kpi-length"' not in (tmp_path / "without" / "cohort_summary.html").read_text()

@@ -160,6 +160,8 @@
       font-size: var(--step--2);
       color: var(--ink-muted);
     }
+    .kpi-length { border-color: color-mix(in srgb, var(--state-caution) 55%, var(--hairline)); }
+    .kpi-length .kpi-value { color: var(--state-caution); }
 
     /* --- Plot layout & dark mode integration ------------------------------ */
     .plot-card {
@@ -423,6 +425,15 @@
         <div class="kpi-value">{{ advntr_counts.positive + advntr_counts.flagged + advntr_counts.negative }}</div>
         <div class="kpi-sub">{{ advntr_counts.unestablished }} unestablished</div>
       </div>
+      {% if length_tier_counts %}
+      <div class="kpi-card kpi-length">
+        <div class="kpi-label">Length Tier High</div>
+        <div class="kpi-value">{{ length_tier_counts.high }}</div>
+        <div class="kpi-sub">
+          {{ length_tier_counts.caution }} caution &middot; {{ length_tier_counts.assessed }} with a length estimate
+        </div>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
 

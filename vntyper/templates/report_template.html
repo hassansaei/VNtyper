@@ -366,7 +366,7 @@
             align-items: baseline;
             gap: var(--s-2);
             padding: var(--s-1) var(--s-3);
-            border: 1px solid var(--hairline);
+            border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
             border-radius: var(--radius);
             background: var(--sunken);
             font-size: var(--step--1);
@@ -374,8 +374,8 @@
             font-weight: 600;
             line-height: 1.4;
         }
+        .vntr-length-card[data-length-tier="high"] .length-warning-badge { border-color: currentColor; }
         .length-uncertainty {
-            font-size: var(--step--1);
             color: var(--ink-muted);
             font-weight: 400;
         }
@@ -387,9 +387,12 @@
             margin-bottom: var(--s-6);
             break-inside: avoid;
         }
+        /* A border, not an inset shadow: printers drop shadows with background graphics. */
         .vntr-length-card[data-length-tier] {
-            box-shadow: inset 0 2px 0 0 var(--state-caution);
+            border-color: color-mix(in srgb, var(--state-caution) 55%, var(--hairline));
         }
+        /* "Estimated" is a state, not a verdict; beside a caution it must not read as all-clear. */
+        .vntr-length-card[data-length-tier] .length-status-pill .chip-value { color: var(--ink); }
         .length-card-header {
             display: flex;
             justify-content: space-between;
@@ -741,6 +744,7 @@
             line-height: 1.55;
         }
         .notice + .notice { border-top: 1px solid var(--hairline); }
+        .notices-verdict { margin-top: var(--s-4); }
         .notice::before {
             content: "";
             width: 8px;
@@ -1146,6 +1150,17 @@
                     {% if coverage_not_measured_note %}
                         <p class="detail coverage-note">{{ coverage_not_measured_note }}</p>
                     {% endif %}
+                    {#
+                      The length caution qualifies a result without a finding, so it sits
+                      with that result rather than at the foot of the masthead.
+                    #}
+                    {% if length_presentation and length_presentation.notice_text %}
+                        <ul class="notices notices-verdict">
+                            <li class="notice notice-caution" role="alert">
+                                <span><strong>Caution:</strong> {{ length_presentation.notice_text }}</span>
+                            </li>
+                        </ul>
+                    {% endif %}
 
                 {#
                   WHAT THE RUN NAMED. The second question anybody opens this report with,
@@ -1335,11 +1350,6 @@
                 {% if header_warning %}
                     <li class="notice notice-warning" role="alert">
                         <span><strong>Warning:</strong> {{ header_warning }}</span>
-                    </li>
-                {% endif %}
-                {% if length_presentation and length_presentation.notice_text %}
-                    <li class="notice notice-caution" role="alert">
-                        <span><strong>Caution:</strong> {{ length_presentation.notice_text }}</span>
                     </li>
                 {% endif %}
                 <li class="notice">
@@ -1627,13 +1637,15 @@
                         <div class="length-value-group">
                             <span class="length-metric-value">
                                 {{- length_presentation.value -}}
+                                {%- if length_presentation.uncertainty_text %}
+                                    {{- " " -}}<span class="length-uncertainty">
+                                        {{- length_presentation.uncertainty_text -}}
+                                    </span>
+                                {%- endif %}
                                 {%- if length_presentation.status == "estimated" %}
                                     {{- " " -}}{{ length_presentation.unit }}
                                 {%- endif -%}
                             </span>
-                            {%- if length_presentation.uncertainty_text %}
-                                <span class="length-uncertainty">{{ length_presentation.uncertainty_text }}</span>
-                            {%- endif %}
                             {%- if length_presentation.warning_badge %}
                                 <span class="length-warning-badge" role="status">
                                     {{- length_presentation.warning_badge -}}
