@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -61,6 +62,10 @@ DEPTHS: dict[str, tuple[int, int]] = {
     "0.0004": (2, 5000),
 }
 
+#: The endpoint sentinel just above the largest observed Depth_Score: the one tested floor
+#: that rejects every row, since production floors pass a score equal to the floor.
+SENTINEL = math.nextafter(0.014, math.inf)
+
 #: The hand-computed confusion matrix of the standard cohort at every tested floor.
 #: Three positives (alpha, bravo, echo), two negatives (charlie, delta), one unknown
 #: (foxtrot); ``echo`` has no candidates at all and is therefore a positive no-call at
@@ -71,6 +76,7 @@ ORACLE: dict[str, dict[str, int]] = {
     "0.004": {"true_positives": 2, "false_negatives": 0, "false_positives": 0, "true_negatives": 2},
     "0.00469": {"true_positives": 1, "false_negatives": 1, "false_positives": 0, "true_negatives": 2},
     "0.014": {"true_positives": 1, "false_negatives": 1, "false_positives": 0, "true_negatives": 2},
+    repr(SENTINEL): {"true_positives": 0, "false_negatives": 2, "false_positives": 0, "true_negatives": 2},
 }
 
 
@@ -592,13 +598,14 @@ def test_the_breakpoint_cap_subsamples_the_axis_and_says_so(tmp_path: Path) -> N
     _, capped, _ = _run(tmp_path / "few", axes=[DEPTH_FLOOR_LINKED], max_breakpoints=3)
 
     assert uncapped["axes"][0]["capped"] is False
-    assert uncapped["axes"][0]["values"] == [0.0004, 0.001, 0.004, 0.00469, 0.014]
+    assert uncapped["axes"][0]["values"] == [0.0004, 0.001, 0.004, 0.00469, 0.014, SENTINEL]
+    assert uncapped["axes"][0]["endpoint_sentinel"] == SENTINEL
     assert capped["max_breakpoints"] == 3
     assert capped["axes"][0]["capped"] is True
     values = capped["axes"][0]["values"]
     assert len(values) == 3
     assert values[0] == 0.0004
-    assert values[-1] == 0.014
+    assert values[-1] == SENTINEL  # the reject-everything endpoint survives the cap
     assert 0.00469 in values  # the shipped operating point is never subsampled away
 
 
@@ -757,3 +764,26 @@ def test_the_provenance_digests_cover_the_manifests_and_every_capture(tmp_path: 
         "specimen-foxtrot",
     }
     assert provenance["generator_version"]
+
+
+def test_a_specificity_floor_reachable_only_by_rejecting_everything_is_feasible(tmp_path: Path) -> None:
+    """A negative scoring above every positive can only be excluded by the endpoint sentinel."""
+    cohort: dict[str, tuple[str, tuple[str, ...], str | None]] = {
+        "specimen-bravo": ("positive", ("0.006",), None),
+        "specimen-charlie": ("negative", ("0.014",), None),
+    }
+    successful, document, _ = _run(tmp_path, cohort, objective="max-sensitivity-at-specificity", min_specificity=1.0)
+
+    assert successful is True
+    assert document["selection"]["value"] == SENTINEL
+    assert _by_value(document)[repr(SENTINEL)]["counts"]["specificity"] == 1.0
+    others = [row["counts"]["specificity"] for row in document["cutoffs"] if row["value"] != SENTINEL]
+    assert max(others) == 0.0
+
+
+def test_the_report_comparators_match_the_axis_definitions() -> None:
+    """The optimize probe table and the axis module must agree on every comparator."""
+    from vntyper.scripts.calibration_cutoff_axes import axis_comparison
+    from vntyper.scripts.calibration_cutoff_optimize import AXIS_COMPARISON
+
+    assert {name: axis_comparison(name) for name in AXIS_COMPARISON} == dict(AXIS_COMPARISON)

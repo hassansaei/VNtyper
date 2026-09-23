@@ -55,6 +55,24 @@ bounded above by the baseline ``depth_score_thresholds.high`` (it sets ``low``, 
 ``low <= high`` is an invariant), and the alternate-depth band is bounded above by
 ``mid_high - 2``.
 
+The attainable endpoint
+-----------------------
+Production floors are inclusive: ``Depth_Score < floor`` rejects, and the GG gate passes
+``Depth_Score >= threshold``. A threshold equal to the largest observed value therefore
+still passes that value, so the observed values alone never contain the operating point
+that rejects every row. Without it a specificity floor can be reported unreachable, or a
+worse cutoff chosen, even though a threshold just above the data attains it. The same
+holds mirrored for a ``<=`` axis: a threshold equal to the smallest value still has that
+value on the ``<=`` side, so the partition in which every row lies above the threshold
+is missing. :func:`derive_axis` therefore adds one endpoint sentinel on the side of the
+observed range that the comparator leaves unrepresented: the next representable float
+above the largest value for a ``>=`` axis, and the next one below the smallest for a
+``<=`` axis (``+1``/``-1`` on integer axes). It is recorded in :attr:`AxisBreakpoints.sentinel`,
+excluded from ``observed_count``, screened like any other value, and omitted when the
+baseline already lies beyond the observed range (the baseline then realizes that
+partition). Being an extreme, it survives rank-space capping like the minimum and maximum.
+Declared axes never receive one.
+
 Exactness
 ---------
 Observed values are carried as :class:`fractions.Fraction` so that unioning, sorting,
@@ -146,6 +164,8 @@ class AxisBreakpoints:
         capped: True when ``values`` is a rank-space subsample of the accepted set.
         rejected: Ascending ``(value, reason)`` pairs dropped because the resulting policy
             would not decode; the reason is the decoder's own message.
+        sentinel: The endpoint value added beyond the observed range, when it was added
+            and accepted; it is then also a member of ``values``. ``None`` otherwise.
     """
 
     axis: str
@@ -155,6 +175,7 @@ class AxisBreakpoints:
     observed_count: int
     capped: bool
     rejected: tuple[tuple[float, str], ...]
+    sentinel: float | None = None
 
 
 @dataclass(frozen=True)
@@ -165,17 +186,19 @@ class _AxisSpec:
     pointers: tuple[str, ...]
     statistic: str
     integer: bool
+    #: The production comparator the axis sweeps, ``>=`` or ``<=``.
+    comparison: str
 
 
 _SPECS: Final[Mapping[str, _AxisSpec]] = MappingProxyType(
     {
-        DEPTH_FLOOR_LINKED: _AxisSpec(_FLOOR, tuple(sorted((_FLOOR, _LOW, _GG))), "Depth_Score", False),
-        GG_GATE_INDEPENDENT: _AxisSpec(_GG, (_GG,), "Depth_Score", False),
-        DEPTH_SCORE_HIGH: _AxisSpec(_HIGH, (_HIGH,), "Depth_Score", False),
+        DEPTH_FLOOR_LINKED: _AxisSpec(_FLOOR, tuple(sorted((_FLOOR, _LOW, _GG))), "Depth_Score", False, ">="),
+        GG_GATE_INDEPENDENT: _AxisSpec(_GG, (_GG,), "Depth_Score", False, ">="),
+        DEPTH_SCORE_HIGH: _AxisSpec(_HIGH, (_HIGH,), "Depth_Score", False, "<="),
         ALT_DEPTH_BAND: _AxisSpec(
-            _ALT_LOW, tuple(sorted((_ALT_LOW, _ALT_MID_LOW))), "Estimated_Depth_AlternateVariant", True
+            _ALT_LOW, tuple(sorted((_ALT_LOW, _ALT_MID_LOW))), "Estimated_Depth_AlternateVariant", True, "<="
         ),
-        ACTIVE_REGION: _AxisSpec(_ACTIVE, (_ACTIVE,), "Estimated_Depth_Variant_ActiveRegion", True),
+        ACTIVE_REGION: _AxisSpec(_ACTIVE, (_ACTIVE,), "Estimated_Depth_Variant_ActiveRegion", True, "<="),
     }
 )
 
@@ -189,6 +212,45 @@ def _spec(axis: object) -> _AxisSpec:
     if not isinstance(axis, str) or axis not in _SPECS:
         _fail(f"cutoff axis name must be one of {sorted(_SPECS)}")
     return _SPECS[axis]
+
+
+def axis_comparison(axis: str) -> str:
+    """The production comparator one axis sweeps, ``>=`` or ``<=``.
+
+    Args:
+        axis: One of the five module-level axis names.
+
+    Returns:
+        The comparator: a row passes a ``>=`` axis at or above the threshold, and sits on
+        the ``<=`` side of a ``<=`` axis at or below it.
+
+    Raises:
+        ValueError: For an unknown axis name.
+    """
+    return _spec(axis).comparison
+
+
+def _endpoint_sentinel(spec: _AxisSpec, observed: set[Fraction], anchor: Fraction) -> Fraction | None:
+    """The value just beyond the observed range on the side the comparator leaves unrepresented.
+
+    Returns None for an empty observation set, and when the baseline already lies strictly
+    beyond the observed range, because the baseline then realizes the same partition.
+    """
+    if not observed:
+        return None
+    upward = spec.comparison == ">="
+    edge = max(observed) if upward else min(observed)
+    if (anchor > edge) if upward else (anchor < edge):
+        return None
+    if spec.integer:
+        return Fraction(math.floor(edge) + 1) if upward else Fraction(math.ceil(edge) - 1)
+    target = math.inf if upward else -math.inf
+    value = math.nextafter(float(edge), target)
+    # ``float(edge)`` rounds a Fraction that did not come from a float; step until the
+    # sentinel is strictly beyond the exact edge.
+    while (Fraction(value) <= edge) if upward else (Fraction(value) >= edge):
+        value = math.nextafter(value, target)
+    return Fraction(value)
 
 
 def _passes(value: object) -> bool:
@@ -304,12 +366,14 @@ def _build(
     observed_count: int,
     source: str,
     max_values: int | None,
+    sentinel: Fraction | None = None,
 ) -> AxisBreakpoints:
     accepted, rejected = _screen(baseline, spec, candidates, anchor)
     capped = max_values is not None and len(accepted) > max_values
     if capped:
         index = [value for value, _ in accepted].index(anchor)
         accepted = [accepted[rank] for rank in _ranks(len(accepted), cast(int, max_values), index)]
+    kept = next((scalar for value, scalar in accepted if value == sentinel), None)
     return AxisBreakpoints(
         axis=axis,
         pointers=spec.pointers,
@@ -318,6 +382,7 @@ def _build(
         observed_count=observed_count,
         capped=capped,
         rejected=tuple(rejected),
+        sentinel=kept if sentinel is not None else None,
     )
 
 
@@ -327,6 +392,8 @@ def _require_axis(axis: object) -> _AxisSpec:
     spec = _spec(axis.axis)
     if axis.pointers != spec.pointers or axis.source not in _SOURCES or not axis.values:
         _fail(f"cutoff axis {axis.axis} content differs from its definition")
+    if axis.sentinel is not None and (axis.source != "observed-breakpoints" or axis.sentinel not in axis.values):
+        _fail(f"cutoff axis {axis.axis} sentinel must be one of its observed-breakpoint values")
     return spec
 
 
@@ -377,7 +444,10 @@ def derive_axis(
     """Union the per-sample observed values into ascending decision breakpoints.
 
     The union is taken over samples because a threshold is a cohort-wide decision: a value
-    observed in one sample is a breakpoint for every sample it is compared against.
+    observed in one sample is a breakpoint for every sample it is compared against. One
+    endpoint sentinel just beyond the observed range is added, above the maximum for a
+    ``>=`` axis and below the minimum for a ``<=`` axis, so the partition no observed value
+    can represent is reachable (see the module docstring).
 
     Args:
         axis: One of the five module-level axis names.
@@ -385,7 +455,8 @@ def derive_axis(
             :func:`eligible_statistic_values`. An empty mapping is valid.
         baseline: The shipped complete policy; its primary-pointer value is always kept.
         max_values: Optional cap of at least three, applied by even rank-space
-            subsampling that retains the minimum, the maximum and the baseline value.
+            subsampling that retains the minimum, the maximum and the baseline value. The
+            sentinel is the minimum or the maximum, so it is retained too.
 
     Returns:
         The axis, with breakpoints the policy decoder refuses recorded in ``rejected``.
@@ -411,15 +482,18 @@ def derive_axis(
                 _fail(f"cutoff axis values for sample {sample} must be exact Fractions")
             observed.add(item)
     anchor = _baseline_value(baseline, spec)
+    sentinel = _endpoint_sentinel(spec, observed, anchor)
+    extra = {anchor} if sentinel is None else {anchor, sentinel}
     return _build(
         axis,
         spec,
         baseline,
-        sorted(observed | {anchor}),
+        sorted(observed | extra),
         anchor=anchor,
         observed_count=len(observed),
         source="observed-breakpoints",
         max_values=max_values,
+        sentinel=sentinel,
     )
 
 
@@ -505,8 +579,8 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
 
     Returns:
         A JSON-compatible object carrying the axis name, the statistic it reads, the
-        pointers it moves, its values, provenance, cap state and every rejected value
-        with the reason it was dropped.
+        pointers it moves, its values, provenance, cap state, every rejected value
+        with the reason it was dropped, and the endpoint sentinel (or null).
 
     Raises:
         ValueError: If the axis content differs from its module-level definition.
@@ -522,4 +596,5 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
         "observed_count": axis.observed_count,
         "capped": axis.capped,
         "rejected": [{"value": value, "reason": reason} for value, reason in axis.rejected],
+        "endpoint_sentinel": axis.sentinel,
     }

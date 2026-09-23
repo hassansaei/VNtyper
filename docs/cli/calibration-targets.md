@@ -183,6 +183,17 @@ returns those values as the axis breakpoints, always including the baseline valu
 shipped operating point appears on every curve. Breakpoints the policy decoder refuses are
 recorded with the decoder's own message rather than dropped.
 
+Production floors are inclusive: a score equal to the floor passes. A threshold equal to
+the largest observed value therefore still passes that value, so the observed values alone
+never include the operating point that rejects every row. Each derived axis therefore adds
+one **endpoint sentinel**: the next representable value above the largest observation on a
+`>=` axis, or below the smallest on a `<=` axis (`+1`/`-1` on integer axes). The report
+records it as `endpoint_sentinel` in the axis document. The sentinel is left out when the
+baseline value already lies beyond the observed range, and it is recorded as rejected when
+the policy decoder refuses it. It is kept when `--max-breakpoints` caps the axis. Without
+it, a specificity floor that only "reject everything" can meet would be reported as
+unreachable.
+
 `calibration_cutoff_grid.build_cutoff_grid` remains available for an explicitly declared
 grid. Declared values are a supplement to the derived breakpoints, not a replacement.
 
