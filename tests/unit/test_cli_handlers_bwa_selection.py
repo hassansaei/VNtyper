@@ -22,6 +22,19 @@ from vntyper.scripts.cli_parser import build_parser
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _stub_kestrel_input_preflight():
+    """Keep this module about what it tests, not about the Kestrel file preflight (#338).
+
+    ``handle_pipeline`` checks that the Kestrel JARs and motif references exist before it
+    reaches ``run_pipeline``, which these tests stub. Their configs are synthetic, so the
+    check is stubbed here and exercised on its own in ``test_kestrel_input_preflight.py``
+    and ``test_cli_handlers_kestrel_preflight.py``.
+    """
+    with mock.patch.object(cli_handlers, "check_kestrel_inputs", autospec=True) as stub:
+        yield stub
+
+
 def config_with(**reference_data):
     return {"reference_data": dict(reference_data)}
 

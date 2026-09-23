@@ -16,6 +16,19 @@ from vntyper.scripts.pipeline_inputs import resolve_pipeline_input
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _stub_kestrel_input_preflight():
+    """Keep this module about what it tests, not about the Kestrel file preflight (#338).
+
+    ``handle_pipeline`` checks that the Kestrel JARs and motif references exist before it
+    reaches ``run_pipeline``, which these tests stub. Their configs are synthetic, so the
+    check is stubbed here and exercised on its own in ``test_kestrel_input_preflight.py``
+    and ``test_cli_handlers_kestrel_preflight.py``.
+    """
+    with mock.patch.object(cli_handlers, "check_kestrel_inputs", autospec=True) as stub:
+        yield stub
+
+
 def test_extracted_input_contract_preserves_the_missing_input_diagnostic() -> None:
     """The focused input module retains the orchestrator's curated failure path."""
     with pytest.raises(ValueError, match="No input files provided"):
