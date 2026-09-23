@@ -77,7 +77,10 @@ def build_standard_length_presentation(
             _text(conventions[convention], "standard count convention"),
         )
     )
-    if _reasons(summary.get("length_estimation_warnings", [])):
+    from vntyper.scripts.length_sensitivity import CAUTION_CODE, HIGH_CODE
+
+    # Sensitivity codes describe the array, not the features; only the rest mean extrapolation.
+    if set(_reasons(summary.get("length_estimation_warnings", []))) - {CAUTION_CODE, HIGH_CODE}:
         help_text += " " + _text(words["extrapolation_help"], "standard extrapolation help")
     return LengthPresentation(
         status,

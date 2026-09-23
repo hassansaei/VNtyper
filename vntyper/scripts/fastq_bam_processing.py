@@ -20,6 +20,7 @@ from vntyper.scripts.alignment_target_io import (
     validate_fastq_processing_destinations,
 )
 from vntyper.scripts.artifact_publish import discard_partial, partial_path, publish_partial
+from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length, is_chr1_name
 from vntyper.scripts.command_builders import (
     build_fastp_command,
     build_samtools_depth_command,
@@ -668,6 +669,13 @@ def detect_assembly_from_contigs(header: str, config: dict, threshold: float | N
         match_percentage = match_count / len(expected_contigs)
         if match_percentage >= threshold:
             return assembly_data["name"]
+
+    chr1_assembly = detect_assembly_from_chr1_length(bam_contigs)
+    if chr1_assembly:
+        chr1_contig = next((c for c in bam_contigs if is_chr1_name(c.get("name", ""))), None)
+        if chr1_contig and chr1_contig.get("name", "").startswith("chr"):
+            return "hg38" if chr1_assembly in ("GRCh38", "hg38") else "hg19"
+        return chr1_assembly
     return "Not detected"
 
 
@@ -688,15 +696,22 @@ def parse_header_pipeline_info(
         output_name (str): Base name for the output file. Defaults to 'pipeline_info.json'.
     """
     lower_header = header.lower()
-
-    # Text matching for assembly detection
-    if "hg19" in lower_header or "hs37" in lower_header or "grch37" in lower_header:
+    assembly_contig = detect_assembly_from_contigs(header, config)
+    has_hg19_text = "hg19" in lower_header or "hs37" in lower_header or "grch37" in lower_header
+    has_hg38_text = "hg38" in lower_header or "hs38" in lower_header or "grch38" in lower_header
+    # Header text is reported as text, so the report can still show a text/contig
+    # mismatch. Only when the text names both assemblies (e.g. an hg19 FASTQ path
+    # realigned to hg38) does the contig evidence break the tie.
+    if has_hg19_text and has_hg38_text:
+        assembly_text = {"hg38": "hg38", "GRCh38": "hg38", "hg19": "hg19", "GRCh37": "hg19"}.get(
+            assembly_contig, "Not detected"
+        )
+    elif has_hg19_text:
         assembly_text = "hg19"
-    elif "hg38" in lower_header or "hs38" in lower_header or "grch38" in lower_header or "hs38dh" in lower_header:
+    elif has_hg38_text:
         assembly_text = "hg38"
     else:
-        assembly_text = "Not detected"  # Contig matching
-    assembly_contig = detect_assembly_from_contigs(header, config)
+        assembly_text = "Not detected"
 
     # Determine the alignment pipeline.
     if "dragen" in lower_header:

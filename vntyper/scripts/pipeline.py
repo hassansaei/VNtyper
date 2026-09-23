@@ -34,6 +34,7 @@ from vntyper.scripts.fastq_bam_processing import (
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
+from vntyper.scripts.length_sensitivity import resolve_length_sensitivity_policy
 
 # Import cross-match functions from cross_match.py
 from vntyper.scripts.nomenclature_annotate import DominanceSeamOutcome, reconcile_caller_outputs
@@ -300,6 +301,7 @@ def run_pipeline(
     elif not isinstance(standard_length_configuration, StandardLengthConfiguration):
         raise ValueError("pipeline standard_length_configuration must be resolved")
     encode_standard_length_configuration(standard_length_configuration)
+    length_sensitivity_policy = resolve_length_sensitivity_policy(config)
 
     if log_file is not None:
         early_advntr_preflight = plan_valid_advntr_preflight(
@@ -1100,7 +1102,12 @@ def run_pipeline(
         )
         if length_runner is not None:
             summary.update(
-                completed_length_summary(length_configuration, length_runner, approved_projector=length_summary_fields)
+                completed_length_summary(
+                    length_configuration,
+                    length_runner,
+                    approved_projector=length_summary_fields,
+                    sensitivity_policy=length_sensitivity_policy,
+                )
             )
         # The exact span the coverage stage consumed - resolved here and, until
         # #242, thrown away. The report could not otherwise state it: reading

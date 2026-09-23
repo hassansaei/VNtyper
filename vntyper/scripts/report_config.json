@@ -842,5 +842,21 @@
       "canonical-only": "Predicts canonical repeat counts excluding invariant units."
     },
     "extrapolation_help": "Some measurements are outside the model training range; the estimate involves extrapolation."
+  },
+  "length_sensitivity": {
+    "labels": {
+      "notice_prefix": "Caution:",
+      "cohort_kpi_label": "Length Tier High",
+      "cohort_kpi_detail": "{caution} caution · {assessed} with a length estimate"
+    },
+    "caution": {
+      "badge": "Above {threshold} repeats: detection sensitivity may be reduced",
+      "help": "The total VNTR array (both alleles) is estimated above {threshold} repeats. Kestrel's depth-ratio floor makes frameshift detection less sensitive as the array grows, and the estimate tends to under-state very long arrays."
+    },
+    "high": {
+      "badge": "Above {threshold} repeats: detection sensitivity substantially reduced",
+      "help": "The total VNTR array (both alleles) is estimated above {threshold} repeats. Kestrel's depth-ratio floor makes frameshift detection substantially less sensitive at this length, and the estimate tends to under-state very long arrays.",
+      "notice_not_positive": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. Short-read detection sensitivity is substantially reduced for arrays this long; a result without a finding does not exclude a frameshift variant. Orthogonal long-read or minisequencing testing may resolve it."
+    }
   }
 }

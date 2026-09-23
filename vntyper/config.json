@@ -10,7 +10,12 @@
     "reference_assembly": "hg19"
   },
   "length_estimation": {
-    "enabled": false
+    "enabled": false,
+    "sensitivity": {
+      "caution_threshold": 110.0,
+      "high_threshold": 150.0,
+      "uncertainty_repeats": 14.3
+    }
   },
   "cli_defaults": {
     "log_level": "INFO",

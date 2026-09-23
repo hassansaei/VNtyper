@@ -410,7 +410,7 @@ pytestmark = pytest.mark.unit
 # skeleton moves only because the new false Jinja branches contribute surrounding
 # whitespace. Mixed-profile content is pinned separately in
 # ``test_cohort_profile_provenance.py``.
-EXPECTED_FINGERPRINT = "a0b0d32a43778937677bc53d156c386416aabd32679c2f24258814af073f99b0"
+EXPECTED_FINGERPRINT = "03babd471c62e2efb0fe7166cccf6dc3f3322ec8fe2c0312bf3e665d51e677a3"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Normalize the whole rendered field structurally. ``%Z`` is platform-defined: valid
@@ -939,7 +939,7 @@ def test_both_algorithms_use_the_four_labels_and_matching_colors(tmp_path, monke
     )
 
     labels = ["Positive", "Positive (Flagged)", "Negative", "Unestablished"]
-    colors = ["#FF0000", "#FFA500", "#404040", "#B0B0B0"]
+    colors = ["#dc2626", "#d97706", "#475569", "#94a3b8"]
     assert calls == [
         ("Kestrel Results", labels, colors),
         ("adVNTR Results", labels, colors),

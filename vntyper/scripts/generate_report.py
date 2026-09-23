@@ -452,7 +452,6 @@ def generate_summary_report(
     # Load the pipeline summary JSON.
     summary_file_path = Path(output_dir) / "pipeline_summary.json"
     pipeline_summary = load_pipeline_summary(summary_file_path)
-    length_presentation = build_length_presentation(pipeline_summary, report_config)
     recorded_decision_profile = resolve_summary_profile(pipeline_summary, output_dir)
     from vntyper.modules.advntr.artifact_evidence import resolve_recorded_artifact_evidence
 
@@ -840,6 +839,11 @@ def generate_summary_report(
         cross_match_is_positive=cross_match_is_positive,
     )
     logger.debug("Summary text generated: %s", screening.text)
+    length_presentation = build_length_presentation(
+        pipeline_summary,
+        report_config,
+        is_positive=screening.is_positive,
+    )
 
     def shown(value):
         """Render a coverage figure, or say it was not calculated."""

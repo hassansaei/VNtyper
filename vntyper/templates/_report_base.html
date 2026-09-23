@@ -46,7 +46,7 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
                "Liberation Mono", monospace;
 
-  --step--2: 0.6875rem;   /* 11px  labels */
+  --step--2: 0.75rem;     /* 12px  labels */
   --step--1: 0.8125rem;   /* 13px  tables, notes */
   --step-0:  1rem;        /* 16px  body */
   --step-1:  1.125rem;    /* 18px  h3 */
@@ -56,7 +56,7 @@
   --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
   --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
 
-  --measure: 68ch;
+  --measure: 65ch;
   --radius: 6px;
 
   /* Light palette. Every pair below is asserted >= 4.5:1 by
@@ -140,6 +140,7 @@ body {
    scroll, or a table wider than the page pushes the whole document sideways. */
 .table-container {
   overflow-x: auto;
+  padding: var(--s-3);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   background: var(--surface);

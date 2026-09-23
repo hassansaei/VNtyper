@@ -51,6 +51,7 @@ from vntyper.scripts.cohort_pseudonyms import (
     pseudonym_settings,
     pseudonymized_sample_name,
 )
+from vntyper.scripts.cohort_summary_parsing import length_tier_counts as count_length_tiers
 from vntyper.scripts.cohort_tables import (
     additional_stats_frame,
     advntr_table_html,
@@ -58,6 +59,7 @@ from vntyper.scripts.cohort_tables import (
     kestrel_table_html,
     stats_table_html,
 )
+from vntyper.scripts.length_sensitivity import cohort_kpi_text
 from vntyper.scripts.nomenclature import (
     FLAG_LOW_HAPLOTYPE_RECORD_SUPPORT,
     FLAG_THIN_HAPLOTYPE_RECORD_SUPPORT,
@@ -94,20 +96,41 @@ def generate_donut_chart(values, labels, total, title, colors):
         go.Pie(
             labels=labels,
             values=values,
-            hole=0.6,
-            marker={"colors": colors, "line": {"color": "black", "width": 2}},
+            hole=0.62,
+            marker={"colors": colors, "line": {"color": "rgba(128, 128, 128, 0.25)", "width": 1.5}},
             textinfo="none",
+            hoverinfo="label+value+percent",
         )
     )
     fig.update_layout(
-        title={"text": title, "y": 0.95, "x": 0.5, "xanchor": "center", "yanchor": "top"},
-        annotations=[{"text": f"<b>{total}</b>", "x": 0.5, "y": 0.5, "font_size": 40, "showarrow": False}],
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        title={"text": title, "y": 0.92, "x": 0.5, "xanchor": "center", "yanchor": "top", "font": {"size": 15}},
+        annotations=[{"text": f"<b>{total}</b>", "x": 0.5, "y": 0.5, "font_size": 36, "showarrow": False}],
         showlegend=False,
-        margin={"t": 50, "b": 50, "l": 50, "r": 50},
-        height=500,
-        width=500,
+        margin={"t": 40, "b": 30, "l": 30, "r": 30},
+        height=320,
+        width=320,
     )
-    return pio.to_html(fig, full_html=False, include_plotlyjs=False)
+    return pio.to_html(
+        fig,
+        full_html=False,
+        include_plotlyjs=False,
+        config={"displayModeBar": False, "responsive": True},
+    )
+
+
+def _length_tier_kpi(report_cfg, counts):
+    """The cohort's high-tier KPI card, with its configured label and detail line.
+
+    Returns:
+        dict | None: ``label``, ``detail`` and the ``high`` count, or None when no sample
+        was assessed or the report configuration carries no length sensitivity wording.
+    """
+    text = cohort_kpi_text(report_cfg, counts)
+    if text is None or counts is None:
+        return None
+    return {"label": text[0], "detail": text[1], "high": counts["high"]}
 
 
 def load_report_config():
@@ -142,6 +165,7 @@ def generate_cohort_summary_report(
     decision_profile_provenance=None,
     call_frequency_df=None,
     rare_allele_max_frequency=None,
+    length_tier_counts=None,
 ):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results along with
@@ -171,6 +195,9 @@ def generate_cohort_summary_report(
         Per-sample run-recorded evidence revision and assertion values.
     decision_profile_provenance : sequence of mapping, optional
         Per-sample verified decision-profile ID, revision, and SHA-256.
+    length_tier_counts : mapping, optional
+        ``high``/``caution``/``assessed`` length sensitivity tier counts, or None when
+        no sample carries an assessed tier.
 
     Returns
     -------
@@ -213,7 +240,7 @@ def generate_cohort_summary_report(
     # --------------------------------------------------------------------
     # Colors: Positive=Red, Flagged=Orange, Negative=Dark Grey, Unestablished=Light Grey
     # --------------------------------------------------------------------
-    color_list = ["#FF0000", "#FFA500", "#404040", "#B0B0B0"]  # Exactly 4 colors
+    color_list = ["#dc2626", "#d97706", "#475569", "#94a3b8"]  # Exactly 4 colors
 
     profile_groups = group_decision_profiles(decision_profile_provenance or ())
     pooled_metrics_suppressed = len(profile_groups) > 1
@@ -331,6 +358,22 @@ def generate_cohort_summary_report(
         "advntr_evidence_provenance": advntr_evidence_provenance or (),
         "decision_profile_groups": profile_group_context,
         "pooled_decision_metrics_suppressed": pooled_metrics_suppressed,
+        "total_samples": len(sample_names or ()),
+        "length_tier_kpi": _length_tier_kpi(report_cfg, length_tier_counts),
+        "kestrel_counts": {
+            "positive": k_pos,
+            "flagged": k_pos_flag,
+            "negative": k_neg,
+            "unestablished": k_unest,
+            "total": total_kestrel,
+        },
+        "advntr_counts": {
+            "positive": a_pos,
+            "flagged": a_pos_flag,
+            "negative": a_neg,
+            "unestablished": a_unest,
+            "total": total_advntr,
+        },
     }
 
     try:
@@ -578,6 +621,7 @@ def aggregate_cohort(
             ],
             call_frequency_df=call_frequency_df,
             rare_allele_max_frequency=rare_allele_max_frequency,
+            length_tier_counts=count_length_tiers(additional_stats_list),
         )
     finally:
         # In a `finally` because everything above - the config read, the two identity

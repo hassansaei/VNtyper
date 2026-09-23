@@ -221,6 +221,72 @@ def test_length_section_renders_measurement_only_and_unavailable_states(
     assert expected in render(tmp_path)
 
 
+def _standard_length_summary(estimate: float, tier: str) -> dict[str, object]:
+    from tests.unit.test_length_standard_model import _measurement
+    from tests.unit.test_length_standard_presentation import summary as base_summary
+    from vntyper.scripts.length_sensitivity import LengthSensitivityPolicy, apply_length_sensitivity
+    from vntyper.scripts.length_standard_features import encode_standard_length_measurement
+
+    measurement = _measurement()
+    fields = apply_length_sensitivity(
+        {
+            **base_summary(),
+            "length_estimation_status": "estimated",
+            "estimated_total_repeat_count": estimate,
+            "length_count_convention": "complete",
+            "length_estimation_reasons": [],
+            "length_estimation_warnings": [],
+            "length_standard_features": encode_standard_length_measurement(measurement),
+            "length_standard_features_sha256": measurement.sha256,
+        },
+        LengthSensitivityPolicy(110.0, 150.0, 14.3),
+    )
+    assert fields["length_sensitivity_tier"] == tier
+    return fields
+
+
+NOTICE_CAUTION = '<li class="notice notice-caution" role="note">'
+BADGE = '<span class="length-warning-badge" role="status">'
+
+
+def test_high_length_tier_without_finding_renders_caution_banner_and_badge(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(160.5, "high"))
+    html = render(tmp_path)
+    assert NOTICE_CAUTION in html
+    assert "Estimated total VNTR length (160.5 ± 14 repeats) exceeds 150 repeats." in html
+    assert BADGE in html
+    assert "Above 150 repeats: detection sensitivity substantially reduced" in html
+    assert "± 14" in html
+
+
+def test_high_length_tier_with_finding_renders_badge_without_banner(tmp_path: Path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        **_standard_length_summary(160.5, "high"),
+    )
+    html = render(tmp_path)
+    assert NOTICE_CAUTION not in html
+    assert "Estimated total VNTR length" not in html
+    assert BADGE in html
+
+
+def test_caution_length_tier_renders_badge_only(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(120.0, "caution"))
+    html = render(tmp_path)
+    assert NOTICE_CAUTION not in html
+    assert "Above 110 repeats: detection sensitivity may be reduced" in html
+
+
+def test_below_length_tier_renders_no_badge(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(95.0, "below"))
+    html = render(tmp_path)
+    assert BADGE not in html
+    assert NOTICE_CAUTION not in html
+    assert "± 14" in html
+
+
 def test_a_report_without_a_bam_still_explains_kestrel_bam_evidence(tmp_path) -> None:
     """The artifact contract is report help, not a claim that this run retained a BAM."""
     html = render(tmp_path, report_igv=report_assets.REPORT_IGV_OFF)
@@ -4565,3 +4631,17 @@ def test_confidence_grade_reaches_template_context_and_suppressed_on_older_confi
     html_stripped = render(tmp_path)
     assert captured["screening_state"]["confidence_grade"] is None
     assert "Confidence grade" not in chip_labels(html_stripped)
+
+
+def test_high_length_notice_sits_with_the_verdict_before_the_state_chips(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(160.5, "high"))
+    html = render(tmp_path)
+    assert html.index(NOTICE_CAUTION) < html.index('<ul class="chips">')
+    assert html.count("Estimated total VNTR length") == 1
+
+
+def test_uncertainty_is_shown_between_estimate_and_unit(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(120.0, "caution"))
+    html = render(tmp_path)
+    card = html[html.index('class="length-metric-value"') :]
+    assert card.index("120") < card.index("± 14") < card.index("repeat units")

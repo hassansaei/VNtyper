@@ -256,3 +256,23 @@ def test_packaged_reference_model_enforces_packaged_source(monkeypatch: pytest.M
             model_path=None,
             approved_enabled=False,
         )
+
+
+def test_configuration_identity_matches_the_2_0_36_contract() -> None:
+    """A display policy must not enter the resume identity (#334)."""
+    from vntyper.scripts.canonical_json import canonical_sha256
+
+    configuration = subject.resolve_standard_length_configuration(
+        {
+            "length_estimation": {
+                "enabled": False,
+                "sensitivity": {"caution_threshold": 1.0, "high_threshold": 2.0, "uncertainty_repeats": 1.0},
+            }
+        },
+        enabled=None,
+        model_path=None,
+        approved_enabled=False,
+    )
+    assert configuration.sha256 == canonical_sha256(
+        {"schema_version": "standard-length-configuration-v1", "enabled": False, "source": None, "model_sha256": None}
+    )
