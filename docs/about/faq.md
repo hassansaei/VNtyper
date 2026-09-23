@@ -52,6 +52,13 @@ vntyper pipeline --fastq1 R1.fastq.gz --fastq2 R2.fastq.gz \
 
 Execute individual samples with `vntyper pipeline`, then aggregate the sample output directories with `vntyper cohort`. This generates cohort-wide summary reports, category breakdowns, and allele frequency tables. See [Cohort Analysis](../user-guide/cohort-analysis.md).
 
+## A run failed with an error. Where do I start?
+
+Search [Troubleshooting](../user-guide/troubleshooting.md) for the first line of the error.
+It covers missing references ("Kestrel cannot run because required files are missing"),
+Kestrel errors, "no usable VCF", CRAM decoding, and running thousands of samples on a
+cluster.
+
 ## Where can I get help?
 
 Open an issue on [GitHub](https://github.com/hassansaei/VNtyper/issues). Search open and resolved issues before creating new tickets.

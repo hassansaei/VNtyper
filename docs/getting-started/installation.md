@@ -80,6 +80,28 @@ VNtyper 2 requires the following external tools on your system:
     pip install -e .
     ```
 
+## Install the References
+
+Conda and source installations need the reference bundle before `vntyper pipeline` can
+run. Install it into `reference/` **from the repository root**:
+
+```bash
+cd vntyper
+vntyper install-references -d reference
+```
+
+!!! important "Run the pipeline from the repository root"
+    Every tool and reference path in the shipped `vntyper/config.json` is relative to the
+    directory you run `vntyper` from: `./vntyper/dependencies/kestrel/` for the Kestrel
+    JARs and `./reference/` for the references. On a cluster, `cd` into the checkout at the
+    top of the job script. When you upgrade by cloning a new version into a new directory,
+    install the references there too. If a file is missing, the pipeline stops before
+    reading any input and prints the path it tried. See
+    [Troubleshooting](../user-guide/troubleshooting.md#where-vntyper-looks-for-its-files).
+
+The Docker image ships with the references installed. See [Reference Setup](reference-setup.md)
+for assemblies beyond hg19/hg38.
+
 ## Verify Installation
 
 Confirm VNtyper 2 is installed correctly:

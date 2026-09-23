@@ -89,13 +89,13 @@ Specific check boundaries:
 Install reference bundles before executing the pipeline. Standard runs download pre-indexed, checksummed releases from [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data):
 
 ```bash
-vntyper install-references -d /path/to/references
+vntyper install-references -d reference
 ```
 
 To install specific physical targets:
 
 ```bash
-vntyper install-references -d /path/to/references --references hg19 hg38 GRCh37 GRCh38
+vntyper install-references -d reference --references hg19 hg38 GRCh37 GRCh38
 ```
 
 Selecting `--references hg19` installs common MUC1 motif FASTAs and both adVNTR databases alongside the assembly index.

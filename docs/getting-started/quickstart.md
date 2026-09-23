@@ -11,10 +11,17 @@ Follow the [Installation guide](installation.md) to install VNtyper 2 and its de
 VNtyper 2 needs reference sequences and motif databases before it can run. Download them to a local directory:
 
 ```bash
-vntyper install-references -d ./references
+cd /path/to/VNtyper                 # the repository root
+vntyper install-references -d reference
 ```
 
 This downloads chromosome 1 references (hg19/hg38) and MUC1 motif databases, then builds BWA indices. See [Reference Setup](reference-setup.md) for details.
+
+!!! important "Install into `reference/` and run from the same directory"
+    The shipped `vntyper/config.json` resolves every path against the directory you run
+    `vntyper` from, and expects the references in `./reference/`. Installing them anywhere
+    else, or running the pipeline from another directory, leaves Kestrel without its motif
+    reference. See [Where VNtyper looks for its files](../user-guide/troubleshooting.md#where-vntyper-looks-for-its-files).
 
 ## 3. Run the Pipeline
 

@@ -56,7 +56,7 @@ conda activate vntyper
 pip install -e .
 
 # Install reference assets
-vntyper install-references -d ./references
+vntyper install-references -d reference   # from the repository root
 
 # Run pipeline
 vntyper pipeline --bam inputs/sample.bam -o results/sample/

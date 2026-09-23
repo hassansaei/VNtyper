@@ -117,6 +117,7 @@ nav:
     - Docker & Containers: user-guide/docker.md
     - Cohort Analysis: user-guide/cohort-analysis.md
     - Online Mode: user-guide/online-mode.md
+    - Troubleshooting: user-guide/troubleshooting.md
   - CLI Reference:
     - cli/index.md
     - pipeline: cli/pipeline.md

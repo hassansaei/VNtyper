@@ -55,11 +55,18 @@ The reference installation includes:
 
 ## Basic Installation
 
-Download references with default settings (hg19 + hg38, BWA aligner):
+From the repository root, download references with default settings (hg19 + hg38, BWA aligner):
 
 ```bash
-vntyper install-references -d /path/to/references
+vntyper install-references -d reference
 ```
+
+`reference` is not an arbitrary name. The shipped `vntyper/config.json` reads every
+reference from `reference/` **relative to the working directory**, so install there and
+run `vntyper pipeline` from the same directory. To keep references elsewhere, pass a
+copy of the config with the global `--config-path`, and `install-references` writes
+absolute paths into it (see [Output Directory Structure](#output-directory-structure) and
+[Keeping references outside the checkout](../user-guide/troubleshooting.md#keeping-references-outside-the-checkout)).
 
 Fetching and verifying the bundle is fast; most wall time is BWA re-indexing, which
 only runs if the locally installed `bwa` differs in version from the one the bundle index
@@ -84,19 +91,19 @@ was built with. `--skip-indexing` and `-t`/`--threads` therefore only apply to
 Download only hg38 references:
 
 ```bash
-vntyper install-references -d ./references --references hg38
+vntyper install-references -d reference --references hg38
 ```
 
 Download all supported physical references, including NCBI and Ensembl naming:
 
 ```bash
-vntyper install-references -d ./references --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl
+vntyper install-references -d reference --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl
 ```
 
 Rebuild from upstream sources instead of the published bundle (slower; fetches the four MUC1/adVNTR seed files from `berntpopp/vntyper-data` unless already staged):
 
 ```bash
-vntyper install-references -d ./references --from-source
+vntyper install-references -d reference --from-source
 ```
 
 ## Downloaded files and derived files
@@ -135,7 +142,7 @@ pre-built, and `--from-source` builds them at the end of its run.
 nothing**:
 
 ```bash
-vntyper install-references -d /path/to/references --derive-only
+vntyper install-references -d reference --derive-only
 ```
 
 Below is output from a run against the Docker reference tree (message text only):
@@ -193,9 +200,12 @@ for key, path in missing:
 "
 ```
 
-If `All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa` is missing, Kestrel exits 0
-without writing a VCF, and the pipeline refuses to report that as a negative result. Check
-the reference tree before debugging pipeline code.
+`vntyper pipeline` runs the same check for the files Kestrel needs (both JARs and both
+motif FASTAs) before it reads any input, and stops with the path it tried and the working
+directory it resolved against. That matters because the pinned Kestrel exits 0 even when
+it cannot read its reference. Since [#338](https://github.com/hassansaei/VNtyper/issues/338)
+VNtyper also reads Kestrel's log and treats any logged error as a failed run, never as a
+negative result.
 
 ## Output Directory Structure
 
