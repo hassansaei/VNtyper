@@ -10,17 +10,13 @@ if TYPE_CHECKING:
 
 
 def build_standard_length_presentation(
-    summary: Mapping[str, object],
-    report_config: Mapping[str, object],
-    *,
-    is_positive: bool | None = None,
+    summary: Mapping[str, object], report_config: Mapping[str, object]
 ) -> LengthPresentation | None:
     """Project a research result with explicit source and repeat-count convention.
 
     Args:
         summary: Pipeline summary containing a standard research model result.
         report_config: Configured report wording, including standard model vocabulary.
-        is_positive: Whether the overall screening finding is positive.
 
     Returns:
         Validated report presentation, or None for an older report configuration.
@@ -42,28 +38,11 @@ def build_standard_length_presentation(
     configured = _configuration(report_config)
     if words is None or configured is None:
         return None
-    base_keys = {"help", "sources", "count_conventions", "extrapolation_help"}
-    if (
-        not isinstance(words, Mapping)
-        or not base_keys.issubset(set(words))
-        or not set(words).issubset(base_keys | {"sensitivity_warning"})
-    ):
+    if not isinstance(words, Mapping) or set(words) != {"help", "sources", "count_conventions", "extrapolation_help"}:
         raise ValueError("standard length report vocabulary differs")
     sources, conventions = words["sources"], words["count_conventions"]
     if not isinstance(sources, Mapping) or not isinstance(conventions, Mapping):
         raise ValueError("standard length report vocabularies must be mappings")
-    sensitivity_cfg = words.get("sensitivity_warning")
-    if sensitivity_cfg is not None:
-        if not isinstance(sensitivity_cfg, Mapping) or set(sensitivity_cfg) != {
-            "warning_code",
-            "badge",
-            "notice_negative",
-            "notice_positive",
-            "help",
-        }:
-            raise ValueError("standard length sensitivity warning vocabulary differs")
-        for key in ("warning_code", "badge", "notice_negative", "notice_positive", "help"):
-            _text(sensitivity_cfg[key], f"sensitivity warning {key}")
     source = summary.get("length_model_source")
     convention = summary.get("length_count_convention")
     if source not in ("packaged-research", "local-research") or source not in sources:
@@ -91,44 +70,18 @@ def build_standard_length_presentation(
         shown = _shown(value, 2)
     else:
         shown = _text(status_labels[status], "standard unavailable value")
-    warnings = _reasons(summary.get("length_estimation_warnings", []))
-    has_extrapolation = any(w.startswith(("feature_", "feature-range")) for w in warnings)
-    sensitivity_code = (
-        sensitivity_cfg["warning_code"] if sensitivity_cfg is not None else "vntr_length_exceeds_sensitivity_cutoff"
+    help_text = " ".join(
+        (
+            _text(words["help"], "standard help"),
+            _text(sources[source], "standard source"),
+            _text(conventions[convention], "standard count convention"),
+        )
     )
-    has_sensitivity_warning = status == "estimated" and sensitivity_cfg is not None and sensitivity_code in warnings
+    from vntyper.scripts.length_sensitivity import CAUTION_CODE, HIGH_CODE
 
-    warning_badge: str | None = None
-    notice_text: str | None = None
-
-    if has_sensitivity_warning and sensitivity_cfg is not None:
-        threshold_val = summary.get("length_warning_threshold", 110.0)
-        threshold_num = _number(threshold_val, "length warning threshold")
-        threshold_str = str(int(threshold_num)) if threshold_num.is_integer() else _shown(threshold_num, 1)
-        badge_template = _text(sensitivity_cfg["badge"], "sensitivity warning badge")
-        notice_template = _text(
-            sensitivity_cfg["notice_positive"] if is_positive else sensitivity_cfg["notice_negative"],
-            "sensitivity warning notice",
-        )
-        warning_badge = badge_template.format(threshold=threshold_str, estimate=shown)
-        notice_text = notice_template.format(threshold=threshold_str, estimate=shown)
-
-    help_parts = [
-        _text(words["help"], "standard help"),
-        _text(sources[source], "standard source"),
-        _text(conventions[convention], "standard count convention"),
-    ]
-    if has_extrapolation:
-        help_parts.append(_text(words["extrapolation_help"], "standard extrapolation help"))
-    if has_sensitivity_warning and sensitivity_cfg is not None:
-        threshold_val = summary.get("length_warning_threshold", 110.0)
-        threshold_num = _number(threshold_val, "length warning threshold")
-        threshold_str = str(int(threshold_num)) if threshold_num.is_integer() else _shown(threshold_num, 1)
-        help_parts.append(
-            _text(sensitivity_cfg["help"], "sensitivity help").format(threshold=threshold_str, estimate=shown)
-        )
-
-    help_text = " ".join(help_parts)
+    # Sensitivity codes describe the array, not the features; only the rest mean extrapolation.
+    if set(_reasons(summary.get("length_estimation_warnings", []))) - {CAUTION_CODE, HIGH_CODE}:
+        help_text += " " + _text(words["extrapolation_help"], "standard extrapolation help")
     return LengthPresentation(
         status,
         _text(status_labels[status], "standard status"),
@@ -140,9 +93,6 @@ def build_standard_length_presentation(
         reasons,
         None,
         model_sha,
-        warning_badge=warning_badge,
-        notice_text=notice_text,
-        has_sensitivity_warning=has_sensitivity_warning,
     )
 
 

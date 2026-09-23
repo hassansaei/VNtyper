@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 from vntyper.scripts.canonical_json import canonical_sha256
@@ -54,9 +54,10 @@ class LengthPresentation:
     reasons: tuple[str, ...]
     calibration_id: str | None
     model_sha256: str | None
+    sensitivity_tier: str | None = None
     warning_badge: str | None = None
     notice_text: str | None = None
-    has_sensitivity_warning: bool = False
+    uncertainty_text: str | None = None
 
 
 def _text(value: object, label: str) -> str:
@@ -160,10 +161,29 @@ def build_length_presentation(
     """
     if not isinstance(summary, Mapping) or not isinstance(report_config, Mapping):
         raise ValueError("length presentation inputs must be mappings")
+    presentation = _build_base(summary, report_config)
+    if presentation is None:
+        return None
+    from vntyper.scripts.length_sensitivity import build_sensitivity_view
+
+    view = build_sensitivity_view(summary, report_config, is_positive=is_positive)
+    if view is None:
+        return presentation
+    return replace(
+        presentation,
+        help=presentation.help if view.help is None else f"{presentation.help} {view.help}",
+        sensitivity_tier=view.tier,
+        warning_badge=view.badge,
+        notice_text=view.notice,
+        uncertainty_text=view.uncertainty,
+    )
+
+
+def _build_base(summary: Mapping[str, object], report_config: Mapping[str, object]) -> LengthPresentation | None:
     if "length_model_source" in summary:
         from vntyper.scripts.length_standard_presentation import build_standard_length_presentation
 
-        return build_standard_length_presentation(summary, report_config, is_positive=is_positive)
+        return build_standard_length_presentation(summary, report_config)
     configured = _configuration(report_config)
     if configured is None:
         return None

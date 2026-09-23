@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 CAUTION_CODE = "vntr_length_exceeds_sensitivity_cutoff"
 HIGH_CODE = "vntr_length_high_sensitivity_risk"
@@ -128,3 +128,96 @@ def apply_length_sensitivity(fields: Mapping[str, object], policy: LengthSensiti
     result["length_sensitivity_tier"] = tier
     result["length_sensitivity_policy"] = policy.as_dict()
     return result
+
+
+_WORD_FIELDS: dict[str, frozenset[str]] = {
+    "caution": frozenset({"badge", "help"}),
+    "high": frozenset({"badge", "help", "notice_not_positive"}),
+}
+
+
+@dataclass(frozen=True)
+class SensitivityView:
+    """Report-ready sensitivity wording; ``None`` members render nothing."""
+
+    tier: SensitivityTier
+    badge: str | None
+    notice: str | None
+    help: str | None
+    uncertainty: str | None
+
+
+def _words(report_config: Mapping[str, object]) -> dict[str, dict[str, str]] | None:
+    raw = report_config.get("length_sensitivity")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping) or set(raw) != set(_WORD_FIELDS):
+        raise ValueError("length sensitivity wording differs from the closed contract")
+    words: dict[str, dict[str, str]] = {}
+    for tier, fields in _WORD_FIELDS.items():
+        block = raw[tier]
+        if not isinstance(block, Mapping) or set(block) != fields:
+            raise ValueError(f"length sensitivity {tier} wording differs from the closed contract")
+        words[tier] = {}
+        for name in fields:
+            text = block[name]
+            if not isinstance(text, str) or not text or text.strip() != text:
+                raise ValueError(f"length sensitivity {tier} {name} must be non-empty trimmed text")
+            words[tier][name] = text
+    return words
+
+
+def _count(value: float) -> str:
+    return str(int(value)) if value.is_integer() else f"{value:.1f}"
+
+
+def build_sensitivity_view(
+    summary: Mapping[str, object], report_config: Mapping[str, object], *, is_positive: bool | None
+) -> SensitivityView | None:
+    """Re-check the recorded tier and project the configured wording for it.
+
+    Args:
+        summary: Loaded pipeline summary mapping.
+        report_config: Report wording configuration.
+        is_positive: Whether the overall screening finding is positive. The banner
+            notice is produced only when it is not.
+
+    Returns:
+        The view, or ``None`` for a summary without a recorded tier or a report
+        configuration without sensitivity wording.
+
+    Raises:
+        ValueError: If the recorded tier, policy or configured wording is malformed, or
+            the tier differs from the recorded estimate and policy.
+    """
+    if "length_sensitivity_tier" not in summary:
+        return None
+    words = _words(report_config)
+    if words is None:
+        return None
+    policy = decode_length_sensitivity_policy(summary.get("length_sensitivity_policy"))
+    tier = summary["length_sensitivity_tier"]
+    estimate = summary.get("estimated_total_repeat_count")
+    expected = classify_length_sensitivity(summary.get("length_estimation_status"), estimate, policy)
+    if tier != expected:
+        raise ValueError("recorded length sensitivity tier differs from the recorded estimate and policy")
+    if expected == "not-assessed":
+        return SensitivityView(expected, None, None, None, None)
+    uncertainty = _count(float(round(policy.uncertainty_repeats)))
+    if expected == "below":
+        return SensitivityView(expected, None, None, None, f"± {uncertainty}")
+    block = words[expected]
+    threshold = policy.high_threshold if expected == "high" else policy.caution_threshold
+    values = {
+        "threshold": _count(threshold),
+        "estimate": f"{cast(float, estimate):.2f}".rstrip("0").rstrip("."),
+        "uncertainty": uncertainty,
+    }
+    notice = block["notice_not_positive"].format(**values) if expected == "high" and not is_positive else None
+    return SensitivityView(
+        expected,
+        block["badge"].format(**values),
+        notice,
+        block["help"].format(**values),
+        f"± {uncertainty}",
+    )

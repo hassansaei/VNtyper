@@ -373,7 +373,11 @@
             color: var(--state-caution);
             font-weight: 600;
             line-height: 1.4;
-            white-space: nowrap;
+        }
+        .length-uncertainty {
+            font-size: var(--step--1);
+            color: var(--ink-muted);
+            font-weight: 400;
         }
         .vntr-length-card {
             background: var(--surface);
@@ -383,7 +387,7 @@
             margin-bottom: var(--s-6);
             break-inside: avoid;
         }
-        .vntr-length-card[data-length-warning="true"] {
+        .vntr-length-card[data-length-tier] {
             box-shadow: inset 0 2px 0 0 var(--state-caution);
         }
         .length-card-header {
@@ -749,6 +753,10 @@
         .notice-warning { color: var(--state-finding); }
         .notice-warning::before { background: currentColor; }
         .notice-warning strong { color: var(--state-finding); }
+        /* A length caution is not a finding: it takes the caution tone, never the finding red. */
+        .notice-caution { color: var(--state-caution); }
+        .notice-caution::before { background: currentColor; }
+        .notice-caution strong { color: var(--state-caution); }
 
         /* --- prose keeps a measure ---------------------------------------------
            `--measure` was declared and reached three selectors. Everything else ran the
@@ -1330,8 +1338,8 @@
                     </li>
                 {% endif %}
                 {% if length_presentation and length_presentation.notice_text %}
-                    <li class="notice notice-warning" role="alert">
-                        <span><strong>Warning:</strong> {{ length_presentation.notice_text }}</span>
+                    <li class="notice notice-caution" role="alert">
+                        <span><strong>Caution:</strong> {{ length_presentation.notice_text }}</span>
                     </li>
                 {% endif %}
                 <li class="notice">
@@ -1610,7 +1618,9 @@
         {% if length_presentation %}
             <h2>VNTR Length Research Result</h2>
             <div class="vntr-length-card" data-length-status="{{ length_presentation.status }}"
-                 {%- if length_presentation.has_sensitivity_warning %} data-length-warning="true"{% endif %}>
+                 {%- if length_presentation.sensitivity_tier in ("caution", "high") %}
+                     data-length-tier="{{ length_presentation.sensitivity_tier }}"
+                 {%- endif %}>
                 <div class="length-card-header">
                     <div class="length-primary-result">
                         <span class="length-metric-label">{{ length_presentation.label }}</span>
@@ -1621,6 +1631,9 @@
                                     {{- " " -}}{{ length_presentation.unit }}
                                 {%- endif -%}
                             </span>
+                            {%- if length_presentation.uncertainty_text %}
+                                <span class="length-uncertainty">{{ length_presentation.uncertainty_text }}</span>
+                            {%- endif %}
                             {%- if length_presentation.warning_badge %}
                                 <span class="length-warning-badge" role="status">
                                     {{- length_presentation.warning_badge -}}

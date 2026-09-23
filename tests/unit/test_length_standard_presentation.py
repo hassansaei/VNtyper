@@ -108,138 +108,80 @@ def test_invalid_estimated_count_is_rejected(value: object) -> None:
         )
 
 
-WORDS_WITH_SENSITIVITY: dict[str, Any] = {
-    **WORDS,
-    "sensitivity_warning": {
-        "warning_code": "vntr_length_exceeds_sensitivity_cutoff",
-        "badge": "⚠️ > {threshold} repeats: Reduced Sensitivity",
-        "notice_negative": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. False negatives enriched.",
-        "notice_positive": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. Sensitivity reduced.",
-        "help": "Length exceeds {threshold} repeats with reduced sensitivity.",
-    },
+SENSITIVITY_WORDS: dict[str, Any] = {
+    "caution": {"badge": "Above {threshold}: caution", "help": "Caution help."},
+    "high": {"badge": "Above {threshold}: high", "help": "High help.", "notice_not_positive": "Notice {estimate}."},
 }
+POLICY = {"caution_threshold": 110.0, "high_threshold": 150.0, "uncertainty_repeats": 14.3}
+FULL_CONFIG = {**CONFIG, "standard_length_estimation": WORDS, "length_sensitivity": SENSITIVITY_WORDS}
 
 
-def test_sensitivity_warning_presentation_negative_and_positive_calls() -> None:
+def estimated_summary(estimate: float, tier: str | None, warnings: list[str]) -> dict[str, object]:
     from tests.unit.test_length_standard_model import _measurement
     from vntyper.scripts.length_standard_features import encode_standard_length_measurement
 
     measurement = _measurement()
-    base_summary = {
+    value: dict[str, object] = {
         **summary(),
         "length_estimation_status": "estimated",
-        "estimated_total_repeat_count": 115.5,
-        "length_warning_threshold": 110.0,
+        "estimated_total_repeat_count": estimate,
         "length_estimation_reasons": [],
-        "length_estimation_warnings": ["vntr_length_exceeds_sensitivity_cutoff"],
+        "length_estimation_warnings": warnings,
         "length_standard_features": encode_standard_length_measurement(measurement),
         "length_standard_features_sha256": measurement.sha256,
     }
-
-    # Negative call (default / is_positive=False)
-    neg_result = build_length_presentation(
-        base_summary, {**CONFIG, "standard_length_estimation": WORDS_WITH_SENSITIVITY}, is_positive=False
-    )
-    assert neg_result is not None
-    assert neg_result.has_sensitivity_warning is True
-    assert neg_result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity"
-    assert neg_result.notice_text == (
-        "Estimated total VNTR length (115.5 repeats) exceeds 110 repeats. False negatives enriched."
-    )
-    assert "Length exceeds 110 repeats with reduced sensitivity." in neg_result.help
-    # Extrapolation help is not present because only sensitivity cutoff warning fired
-    assert WORDS["extrapolation_help"] not in neg_result.help
-
-    # Positive call (is_positive=True)
-    pos_result = build_length_presentation(
-        base_summary, {**CONFIG, "standard_length_estimation": WORDS_WITH_SENSITIVITY}, is_positive=True
-    )
-    assert pos_result is not None
-    assert pos_result.has_sensitivity_warning is True
-    assert pos_result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity"
-    assert pos_result.notice_text == (
-        "Estimated total VNTR length (115.5 repeats) exceeds 110 repeats. Sensitivity reduced."
-    )
+    if tier is not None:
+        value["length_sensitivity_tier"] = tier
+        value["length_sensitivity_policy"] = dict(POLICY)
+    return value
 
 
-def test_sensitivity_warning_and_extrapolation_coexistence_in_presentation() -> None:
-    from tests.unit.test_length_standard_model import _measurement
-    from vntyper.scripts.length_standard_features import encode_standard_length_measurement
+def test_sensitivity_code_alone_does_not_claim_extrapolation() -> None:
+    from vntyper.scripts.length_sensitivity import CAUTION_CODE
 
-    measurement = _measurement()
-    combined_summary = {
-        **summary(),
-        "length_estimation_status": "estimated",
-        "estimated_total_repeat_count": 118.0,
-        "length_warning_threshold": 110.0,
-        "length_estimation_reasons": [],
-        "length_estimation_warnings": ["feature_A_outside_training_range", "vntr_length_exceeds_sensitivity_cutoff"],
-        "length_standard_features": encode_standard_length_measurement(measurement),
-        "length_standard_features_sha256": measurement.sha256,
-    }
-
-    result = build_length_presentation(
-        combined_summary, {**CONFIG, "standard_length_estimation": WORDS_WITH_SENSITIVITY}, is_positive=False
-    )
+    result = build_length_presentation(estimated_summary(120.0, "caution", [CAUTION_CODE]), FULL_CONFIG)
     assert result is not None
-    assert result.has_sensitivity_warning is True
-    assert result.warning_badge == "⚠️ > 110 repeats: Reduced Sensitivity"
-    assert WORDS["extrapolation_help"] in result.help
-    assert "Length exceeds 110 repeats with reduced sensitivity." in result.help
-
-
-def test_no_sensitivity_warning_when_warnings_empty_or_only_extrapolation() -> None:
-    from tests.unit.test_length_standard_model import _measurement
-    from vntyper.scripts.length_standard_features import encode_standard_length_measurement
-
-    measurement = _measurement()
-    normal_summary = {
-        **summary(),
-        "length_estimation_status": "estimated",
-        "estimated_total_repeat_count": 95.0,
-        "length_warning_threshold": 110.0,
-        "length_estimation_reasons": [],
-        "length_estimation_warnings": [],
-        "length_standard_features": encode_standard_length_measurement(measurement),
-        "length_standard_features_sha256": measurement.sha256,
-    }
-
-    result = build_length_presentation(
-        normal_summary, {**CONFIG, "standard_length_estimation": WORDS_WITH_SENSITIVITY}, is_positive=False
-    )
-    assert result is not None
-    assert result.has_sensitivity_warning is False
-    assert result.warning_badge is None
-    assert result.notice_text is None
     assert WORDS["extrapolation_help"] not in result.help
-    assert "reduced sensitivity" not in result.help
+    assert result.help.endswith("Caution help.")
 
 
-@pytest.mark.parametrize(
-    "bad_key",
-    ["warning_code", "badge", "notice_negative", "notice_positive", "help"],
-)
-def test_malformed_sensitivity_warning_config_fails_closed(bad_key: str) -> None:
-    broken_sensitivity = dict(WORDS_WITH_SENSITIVITY["sensitivity_warning"])
-    del broken_sensitivity[bad_key]
-    with pytest.raises(ValueError, match="sensitivity warning vocabulary differs"):
-        build_length_presentation(
-            summary(),
-            {
-                **CONFIG,
-                "standard_length_estimation": {**WORDS, "sensitivity_warning": broken_sensitivity},
-            },
-        )
+def test_high_tier_without_finding_carries_notice_badge_and_uncertainty() -> None:
+    from vntyper.scripts.length_sensitivity import CAUTION_CODE, HIGH_CODE
 
-
-def test_shipped_report_config_validates_cleanly() -> None:
-    import json
-    from pathlib import Path
-
-    import vntyper
-
-    config_path = Path(vntyper.__file__).resolve().parent / "scripts" / "report_config.json"
-    shipped = json.loads(config_path.read_text(encoding="utf-8"))
-    result = build_length_presentation(summary(), shipped)
+    value = estimated_summary(160.5, "high", [CAUTION_CODE, HIGH_CODE])
+    result = build_length_presentation(value, FULL_CONFIG, is_positive=False)
     assert result is not None
-    assert result.status == "unavailable"
+    assert result.sensitivity_tier == "high"
+    assert result.warning_badge == "Above 150: high"
+    assert result.notice_text == "Notice 160.5."
+    assert result.uncertainty_text == "± 14"
+    positive = build_length_presentation(value, FULL_CONFIG, is_positive=True)
+    assert positive is not None and positive.notice_text is None and positive.warning_badge == "Above 150: high"
+
+
+def test_approved_path_receives_the_same_projection() -> None:
+    from tests.unit.test_length_presentation import _summary as approved_summary
+
+    value = {
+        **approved_summary("estimated", 120.0),
+        "length_sensitivity_tier": "caution",
+        "length_sensitivity_policy": dict(POLICY),
+    }
+    result = build_length_presentation(value, {**CONFIG, "length_sensitivity": SENSITIVITY_WORDS}, is_positive=False)
+    assert result is not None
+    assert result.warning_badge == "Above 110: caution"
+    assert result.notice_text is None
+
+
+def test_summary_without_tier_has_no_sensitivity_fields() -> None:
+    from vntyper.scripts.length_sensitivity import CAUTION_CODE
+
+    value = {**estimated_summary(120.0, None, [CAUTION_CODE]), "length_warning_threshold": 110.0}
+    result = build_length_presentation(value, FULL_CONFIG, is_positive=False)
+    assert result is not None
+    assert (result.sensitivity_tier, result.warning_badge, result.notice_text, result.uncertainty_text) == (
+        None,
+        None,
+        None,
+        None,
+    )

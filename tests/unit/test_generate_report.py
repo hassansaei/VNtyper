@@ -221,80 +221,69 @@ def test_length_section_renders_measurement_only_and_unavailable_states(
     assert expected in render(tmp_path)
 
 
-def _standard_length_summary(
-    status: str,
-    estimate: float | None,
-    warnings: list[str] | None = None,
-) -> dict[str, object]:
+def _standard_length_summary(estimate: float, tier: str) -> dict[str, object]:
     from tests.unit.test_length_standard_model import _measurement
     from tests.unit.test_length_standard_presentation import summary as base_summary
+    from vntyper.scripts.length_sensitivity import LengthSensitivityPolicy, apply_length_sensitivity
     from vntyper.scripts.length_standard_features import encode_standard_length_measurement
 
     measurement = _measurement()
-    has_estimate = status == "estimated" and estimate is not None
-    return {
-        **base_summary(),
-        "length_estimation_status": status,
-        "estimated_total_repeat_count": estimate,
-        "length_warning_threshold": 110.0,
-        "length_estimation_reasons": [] if status != "unavailable" else ["unsupported-assembly"],
-        "length_estimation_warnings": warnings if warnings is not None else [],
-        "length_standard_features": encode_standard_length_measurement(measurement) if has_estimate else None,
-        "length_standard_features_sha256": measurement.sha256 if has_estimate else None,
-    }
-
-
-def test_length_sensitivity_warning_renders_banner_and_badge_for_negative_call(tmp_path: Path) -> None:
-    from vntyper.scripts.length_standard_model import LENGTH_WARNING_SENSITIVITY_CUTOFF
-
-    summary_fields = _standard_length_summary(
-        "estimated",
-        115.5,
-        warnings=[LENGTH_WARNING_SENSITIVITY_CUTOFF],
+    fields = apply_length_sensitivity(
+        {
+            **base_summary(),
+            "length_estimation_status": "estimated",
+            "estimated_total_repeat_count": estimate,
+            "length_estimation_reasons": [],
+            "length_estimation_warnings": [],
+            "length_standard_features": encode_standard_length_measurement(measurement),
+            "length_standard_features_sha256": measurement.sha256,
+        },
+        LengthSensitivityPolicy(110.0, 150.0, 14.3),
     )
-    write_summary(tmp_path, **summary_fields)
+    assert fields["length_sensitivity_tier"] == tier
+    return fields
+
+
+NOTICE_CAUTION = '<li class="notice notice-caution" role="alert">'
+BADGE = '<span class="length-warning-badge" role="status">'
+
+
+def test_high_length_tier_without_finding_renders_caution_banner_and_badge(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(160.5, "high"))
     html = render(tmp_path)
-
-    assert '<li class="notice notice-warning" role="alert">' in html
-    assert '<span class="length-warning-badge" role="status">' in html
-    assert "⚠️ &gt; 110 repeats: Reduced Sensitivity" in html
-    assert "Estimated total VNTR length (115.5 repeats) exceeds 110 repeats." in html
-    assert "Sensitivity is reduced on long alleles" in html
-    assert "interpret negative results with caution and consider orthogonal testing." in html
+    assert NOTICE_CAUTION in html
+    assert "Estimated total VNTR length (160.5 ± 14 repeats) exceeds 150 repeats." in html
+    assert BADGE in html
+    assert "Above 150 repeats: detection sensitivity substantially reduced" in html
+    assert "± 14" in html
 
 
-def test_length_sensitivity_warning_renders_positive_banner_for_positive_call(tmp_path: Path) -> None:
-    from vntyper.scripts.length_standard_model import LENGTH_WARNING_SENSITIVITY_CUTOFF
-
-    summary_fields = _standard_length_summary(
-        "estimated",
-        115.5,
-        warnings=[LENGTH_WARNING_SENSITIVITY_CUTOFF],
-    )
+def test_high_length_tier_with_finding_renders_badge_without_banner(tmp_path: Path) -> None:
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
         tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
-        **summary_fields,
+        **_standard_length_summary(160.5, "high"),
     )
     html = render(tmp_path)
-
-    assert '<li class="notice notice-warning" role="alert">' in html
-    assert '<span class="length-warning-badge" role="status">' in html
-    assert "⚠️ &gt; 110 repeats: Reduced Sensitivity" in html
-    assert "Estimated total VNTR length (115.5 repeats) exceeds 110 repeats" in html
-    assert "sensitivity is reduced on long alleles." in html
-    assert "interpret negative results with caution" not in html
+    assert NOTICE_CAUTION not in html
+    assert "Estimated total VNTR length" not in html
+    assert BADGE in html
 
 
-def test_length_without_sensitivity_warning_does_not_render_banner_or_badge(tmp_path: Path) -> None:
-    summary_fields = _standard_length_summary("estimated", 95.0, warnings=[])
-    write_summary(tmp_path, **summary_fields)
+def test_caution_length_tier_renders_badge_only(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(120.0, "caution"))
     html = render(tmp_path)
+    assert NOTICE_CAUTION not in html
+    assert "Above 110 repeats: detection sensitivity may be reduced" in html
 
-    assert '<span class="length-warning-badge"' not in html
-    assert "Reduced Sensitivity Risk" not in html
-    assert "exceeds the sensitivity cutoff" not in html
+
+def test_below_length_tier_renders_no_badge(tmp_path: Path) -> None:
+    write_summary(tmp_path, **_standard_length_summary(95.0, "below"))
+    html = render(tmp_path)
+    assert BADGE not in html
+    assert NOTICE_CAUTION not in html
+    assert "± 14" in html
 
 
 def test_a_report_without_a_bam_still_explains_kestrel_bam_evidence(tmp_path) -> None:

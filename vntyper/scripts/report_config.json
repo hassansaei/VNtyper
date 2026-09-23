@@ -831,23 +831,27 @@
     }
   },
   "standard_length_estimation": {
-    "help": "Research-only diploid length estimate; variant calls unaffected.",
+    "help": "Research-only estimate across both alleles; variant calls and screening conclusions are unchanged.",
     "sources": {
-      "packaged-research": "Model: standard13-bayesian-v1 (exome-trained).",
-      "local-research": "Model: locally fitted development model."
+      "packaged-research": "Uses the packaged development model.",
+      "local-research": "Uses a locally fitted development model."
     },
     "count_conventions": {
-      "source-reported": "Predicts assay-reported repeat counts; invariant units unspecified.",
-      "complete": "Predicts complete repeat count including invariant units.",
+      "source-reported": "Predicts assay-reported repeat counts; inclusion of terminal invariant units is unspecified.",
+      "complete": "Predicts complete repeat counts including invariant units.",
       "canonical-only": "Predicts canonical repeat counts excluding invariant units."
     },
-    "extrapolation_help": "Features exceed exome training bounds (e.g., custom panels); estimate is extrapolated.",
-    "sensitivity_warning": {
-      "warning_code": "vntr_length_exceeds_sensitivity_cutoff",
-      "badge": "⚠️ > {threshold} repeats: Reduced Sensitivity",
-      "notice_negative": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. Sensitivity is reduced on long alleles; interpret negative results with caution and consider orthogonal testing.",
-      "notice_positive": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats; sensitivity is reduced on long alleles.",
-      "help": "Total length > {threshold} repeats; reduced sensitivity on long alleles."
+    "extrapolation_help": "Some measurements are outside the model training range; the estimate involves extrapolation."
+  },
+  "length_sensitivity": {
+    "caution": {
+      "badge": "Above {threshold} repeats: detection sensitivity may be reduced",
+      "help": "The total VNTR array (both alleles) is estimated above {threshold} repeats. Kestrel's depth-ratio floor makes frameshift detection less sensitive as the array grows, and the estimate tends to under-state very long arrays."
+    },
+    "high": {
+      "badge": "Above {threshold} repeats: detection sensitivity substantially reduced",
+      "help": "The total VNTR array (both alleles) is estimated above {threshold} repeats. Kestrel's depth-ratio floor makes frameshift detection substantially less sensitive at this length, and the estimate tends to under-state very long arrays.",
+      "notice_not_positive": "Estimated total VNTR length ({estimate} ± {uncertainty} repeats) exceeds {threshold} repeats. Short-read detection sensitivity is substantially reduced for arrays this long; a result without a finding does not exclude a frameshift variant. Orthogonal long-read or minisequencing testing may resolve it."
     }
   }
 }
