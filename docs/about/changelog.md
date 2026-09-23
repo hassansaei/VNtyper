@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.37 (2026-09-23)
+
 ### VNTR length sensitivity tiers ([#334](https://github.com/hassansaei/VNtyper/issues/334), [#335](https://github.com/hassansaei/VNtyper/pull/335))
 
 - **Sensitivity tiers**: A length estimate above 110 repeats records a `caution` tier and above 150 a `high` tier, with warning codes in `length_estimation_warnings`, for both the research and the approved length paths. Cutoffs and the displayed uncertainty (±14, the model's LOO RMSE) are configured under `length_estimation.sensitivity` and stay out of the resume identity.
