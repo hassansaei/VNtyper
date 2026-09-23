@@ -266,7 +266,7 @@ def test_configuration_identity_matches_the_2_0_36_contract() -> None:
         {
             "length_estimation": {
                 "enabled": False,
-                "sensitivity": {"caution_threshold": 1.0, "high_threshold": 2.0, "uncertainty_repeats": 1.0},
+                "sensitivity": {"caution_threshold": 1.0, "high_threshold": 2.0, "typical_error_repeats": 1.0},
             }
         },
         enabled=None,

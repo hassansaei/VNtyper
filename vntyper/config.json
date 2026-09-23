@@ -11,10 +11,11 @@
   },
   "length_estimation": {
     "enabled": false,
+    "_comment_sensitivity": "typical_error_repeats is the packaged length model's leave-one-out RMSE (14.26 repeats on the 76-exome training set). It is a typical error, not an interval: only 55 of 76 leave-one-out residuals fall within +/-14, and the empirical 2.5/97.5% residual quantiles are -29.4/+28.2. The report words it as a typical error from report_config.json and never renders it as a bare '±'.",
     "sensitivity": {
       "caution_threshold": 110.0,
       "high_threshold": 150.0,
-      "uncertainty_repeats": 14.3
+      "typical_error_repeats": 14.3
     }
   },
   "cli_defaults": {

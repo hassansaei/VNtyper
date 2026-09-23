@@ -253,10 +253,11 @@ def test_high_length_tier_without_finding_renders_caution_banner_and_badge(tmp_p
     write_summary(tmp_path, **_standard_length_summary(160.5, "high"))
     html = render(tmp_path)
     assert NOTICE_CAUTION in html
-    assert "Estimated total VNTR length (160.5 ± 14 repeats) exceeds 150 repeats." in html
+    assert "Estimated total VNTR length (160.5 repeats) exceeds 150 repeats." in html
     assert BADGE in html
     assert "Above 150 repeats: detection sensitivity substantially reduced" in html
-    assert "± 14" in html
+    assert "(typical error ≈14 repeats, leave-one-out RMSE; not an interval)" in html
+    assert "± 14" not in html
 
 
 def test_high_length_tier_with_finding_renders_badge_without_banner(tmp_path: Path) -> None:
@@ -284,7 +285,8 @@ def test_below_length_tier_renders_no_badge(tmp_path: Path) -> None:
     html = render(tmp_path)
     assert BADGE not in html
     assert NOTICE_CAUTION not in html
-    assert "± 14" in html
+    assert "(typical error ≈14 repeats, leave-one-out RMSE; not an interval)" in html
+    assert "± 14" not in html
 
 
 def test_a_report_without_a_bam_still_explains_kestrel_bam_evidence(tmp_path) -> None:
@@ -4640,8 +4642,14 @@ def test_high_length_notice_sits_with_the_verdict_before_the_state_chips(tmp_pat
     assert html.count("Estimated total VNTR length") == 1
 
 
-def test_uncertainty_is_shown_between_estimate_and_unit(tmp_path: Path) -> None:
+def test_typical_error_follows_the_estimate_and_its_unit(tmp_path: Path) -> None:
+    """The RMSE reads as a separate typical error, not as "120 ± 14", which implies an interval."""
     write_summary(tmp_path, **_standard_length_summary(120.0, "caution"))
     html = render(tmp_path)
     card = html[html.index('class="length-metric-value"') :]
-    assert card.index("120") < card.index("± 14") < card.index("repeat units")
+    assert (
+        card.index("120")
+        < card.index("repeat units")
+        < card.index("(typical error ≈14 repeats, leave-one-out RMSE; not an interval)")
+    )
+    assert "± 14" not in card

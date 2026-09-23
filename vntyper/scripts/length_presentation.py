@@ -57,7 +57,7 @@ class LengthPresentation:
     sensitivity_tier: str | None = None
     warning_badge: str | None = None
     notice_text: str | None = None
-    uncertainty_text: str | None = None
+    typical_error_text: str | None = None
     notice_prefix: str | None = None
 
 
@@ -177,7 +177,7 @@ def build_length_presentation(
         sensitivity_tier=view.tier,
         warning_badge=view.badge,
         notice_text=view.notice,
-        uncertainty_text=view.uncertainty,
+        typical_error_text=view.typical_error,
         notice_prefix=view.notice_prefix,
     )
 

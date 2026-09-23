@@ -109,11 +109,16 @@ def test_invalid_estimated_count_is_rejected(value: object) -> None:
 
 
 SENSITIVITY_WORDS: dict[str, Any] = {
-    "labels": {"notice_prefix": "Heads-up:", "cohort_kpi_label": "High", "cohort_kpi_detail": "{caution}"},
+    "labels": {
+        "notice_prefix": "Heads-up:",
+        "cohort_kpi_label": "High",
+        "cohort_kpi_detail": "{caution}",
+        "typical_error": "(typical error ≈{error})",
+    },
     "caution": {"badge": "Above {threshold}: caution", "help": "Caution help."},
     "high": {"badge": "Above {threshold}: high", "help": "High help.", "notice_not_positive": "Notice {estimate}."},
 }
-POLICY = {"caution_threshold": 110.0, "high_threshold": 150.0, "uncertainty_repeats": 14.3}
+POLICY = {"caution_threshold": 110.0, "high_threshold": 150.0, "typical_error_repeats": 14.3}
 FULL_CONFIG = {**CONFIG, "standard_length_estimation": WORDS, "length_sensitivity": SENSITIVITY_WORDS}
 
 
@@ -147,7 +152,7 @@ def test_sensitivity_code_alone_does_not_claim_extrapolation() -> None:
     assert result.help.endswith("Caution help.")
 
 
-def test_high_tier_without_finding_carries_notice_badge_and_uncertainty() -> None:
+def test_high_tier_without_finding_carries_notice_badge_and_typical_error() -> None:
     from vntyper.scripts.length_sensitivity import CAUTION_CODE, HIGH_CODE
 
     value = estimated_summary(160.5, "high", [CAUTION_CODE, HIGH_CODE])
@@ -155,8 +160,8 @@ def test_high_tier_without_finding_carries_notice_badge_and_uncertainty() -> Non
     assert result is not None
     assert result.sensitivity_tier == "high"
     assert result.warning_badge == "Above 150: high"
-    assert result.notice_text == "Notice 160.5 ± 14."
-    assert result.uncertainty_text == "± 14"
+    assert result.notice_text == "Notice 160.5."
+    assert result.typical_error_text == "(typical error ≈14)"
     positive = build_length_presentation(value, FULL_CONFIG, is_positive=True)
     assert positive is not None and positive.notice_text is None and positive.warning_badge == "Above 150: high"
 
@@ -183,7 +188,7 @@ def test_summary_without_tier_has_no_sensitivity_fields() -> None:
     value = {**estimated_summary(120.0, None, [CAUTION_CODE]), "length_warning_threshold": 110.0}
     result = build_length_presentation(value, FULL_CONFIG, is_positive=False)
     assert result is not None
-    assert (result.sensitivity_tier, result.warning_badge, result.notice_text, result.uncertainty_text) == (
+    assert (result.sensitivity_tier, result.warning_badge, result.notice_text, result.typical_error_text) == (
         None,
         None,
         None,
@@ -191,13 +196,13 @@ def test_summary_without_tier_has_no_sensitivity_fields() -> None:
     )
 
 
-def test_estimate_is_shown_to_one_decimal_beside_the_uncertainty() -> None:
+def test_estimate_is_shown_to_one_decimal_beside_the_typical_error() -> None:
     from vntyper.scripts.length_sensitivity import CAUTION_CODE
 
     result = build_length_presentation(estimated_summary(123.456, "caution", [CAUTION_CODE]), FULL_CONFIG)
     assert result is not None
     assert result.value == "123.5"
-    assert result.uncertainty_text == "± 14"
+    assert result.typical_error_text == "(typical error ≈14)"
 
 
 def test_notice_prefix_comes_from_configuration() -> None:

@@ -12,7 +12,7 @@ from vntyper.scripts import length_sensitivity as subject
 pytestmark = pytest.mark.unit
 
 POLICY = subject.LengthSensitivityPolicy(110.0, 150.0, 14.3)
-RAW = {"caution_threshold": 110.0, "high_threshold": 150.0, "uncertainty_repeats": 14.3}
+RAW = {"caution_threshold": 110.0, "high_threshold": 150.0, "typical_error_repeats": 14.3}
 
 
 def test_resolve_reads_the_shipped_default() -> None:
@@ -31,13 +31,14 @@ def test_resolve_without_block_is_none() -> None:
         None,
         [],
         {**RAW, "extra": 1},
-        {k: v for k, v in RAW.items() if k != "uncertainty_repeats"},
+        {k: v for k, v in RAW.items() if k != "typical_error_repeats"},
+        {**RAW, "uncertainty_repeats": 14.3},
         {**RAW, "caution_threshold": True},
         {**RAW, "caution_threshold": "110"},
         {**RAW, "high_threshold": math.inf},
-        {**RAW, "uncertainty_repeats": math.nan},
+        {**RAW, "typical_error_repeats": math.nan},
         {**RAW, "caution_threshold": 0},
-        {**RAW, "uncertainty_repeats": -1},
+        {**RAW, "typical_error_repeats": -1},
         {**RAW, "caution_threshold": 150.0},
         {**RAW, "caution_threshold": 160.0},
     ],
@@ -131,6 +132,7 @@ LABELS = {
     "notice_prefix": "Caution:",
     "cohort_kpi_label": "Length Tier High",
     "cohort_kpi_detail": "{caution} caution, {assessed} assessed",
+    "typical_error": "(typical error ≈{error} repeats)",
 }
 WORDS = {
     "length_sensitivity": {
@@ -165,9 +167,9 @@ def test_view_high_not_positive_has_notice() -> None:
     assert view is not None
     assert view.tier == "high"
     assert view.badge == "Above 150 repeats: high"
-    assert view.notice == "Estimate 160.5 ± 14 exceeds 150."
+    assert view.notice == "Estimate 160.5 exceeds 150."
     assert view.help == "High help 150."
-    assert view.uncertainty == "± 14"
+    assert view.typical_error == "(typical error ≈14 repeats)"
 
 
 def test_view_high_positive_has_no_notice() -> None:
@@ -182,17 +184,22 @@ def test_view_caution_badge_only() -> None:
     assert view.notice is None
 
 
-def test_view_below_has_uncertainty_only() -> None:
+def test_view_below_has_typical_error_only() -> None:
     view = subject.build_sensitivity_view(_summary(90.0, "below"), WORDS, is_positive=False)
     assert view is not None
-    assert (view.badge, view.notice, view.help, view.uncertainty) == (None, None, None, "± 14")
+    assert (view.badge, view.notice, view.help, view.typical_error) == (
+        None,
+        None,
+        None,
+        "(typical error ≈14 repeats)",
+    )
 
 
 def test_view_not_assessed_is_silent() -> None:
     summary = {**_summary(None, "not-assessed"), "length_estimation_status": "unavailable"}
     view = subject.build_sensitivity_view(summary, WORDS, is_positive=False)
     assert view is not None
-    assert (view.badge, view.notice, view.help, view.uncertainty) == (None, None, None, None)
+    assert (view.badge, view.notice, view.help, view.typical_error) == (None, None, None, None)
 
 
 def test_view_absent_without_recorded_tier_or_wording() -> None:
@@ -256,7 +263,7 @@ def test_canonical_only_view_rechecks_in_the_complete_frame() -> None:
 
 
 @pytest.mark.parametrize("source", ["local-research", None])
-def test_uncertainty_is_shown_only_for_the_packaged_model(source) -> None:
+def test_typical_error_is_shown_only_for_the_packaged_model(source) -> None:
     summary = _summary(160.456, "high")
     if source is None:
         del summary["length_model_source"]
@@ -265,7 +272,7 @@ def test_uncertainty_is_shown_only_for_the_packaged_model(source) -> None:
         summary["length_model_source"] = source
     view = subject.build_sensitivity_view(summary, WORDS, is_positive=False)
     assert view is not None
-    assert view.uncertainty is None
+    assert view.typical_error is None
     assert view.notice == "Estimate 160.5 exceeds 150."
 
 
@@ -280,16 +287,16 @@ def test_tier_agrees_with_the_displayed_tenth(estimate, tier) -> None:
 def test_notice_never_shows_the_threshold_as_exceeding_itself() -> None:
     view = subject.build_sensitivity_view(_summary(150.06, "high"), WORDS, is_positive=False)
     assert view is not None
-    assert view.notice == "Estimate 150.1 ± 14 exceeds 150."
+    assert view.notice == "Estimate 150.1 exceeds 150."
 
 
 def test_canonical_only_notice_shows_the_complete_frame_value() -> None:
     summary = {**_summary(140.0, "high"), "length_count_convention": "canonical-only"}
     view = subject.build_sensitivity_view(summary, WORDS, is_positive=False)
-    assert view is not None and view.notice == "Estimate 158 ± 14 exceeds 150."
+    assert view is not None and view.notice == "Estimate 158 exceeds 150."
 
 
-def test_value_drops_to_one_decimal_beside_the_uncertainty() -> None:
+def test_value_drops_to_one_decimal_beside_the_typical_error() -> None:
     view = subject.build_sensitivity_view(_summary(123.456, "caution"), WORDS, is_positive=False)
     assert view is not None and view.value == "123.5"
     bare = {**_summary(123.456, "caution"), "length_model_source": "local-research"}
@@ -334,3 +341,34 @@ def test_cohort_kpi_text_comes_from_configuration() -> None:
     )
     assert subject.cohort_kpi_text({}, {"high": 2, "caution": 5, "assessed": 9}) is None
     assert subject.cohort_kpi_text(WORDS, None) is None
+
+
+def test_a_summary_recorded_under_the_old_field_name_still_decodes() -> None:
+    """Summaries written before the rename carry the same RMSE as ``uncertainty_repeats``."""
+    legacy = {"caution_threshold": 110.0, "high_threshold": 150.0, "uncertainty_repeats": 14.3}
+    assert subject.decode_length_sensitivity_policy(legacy) == POLICY
+    summary = {**_summary(160.456, "high"), "length_sensitivity_policy": legacy}
+    view = subject.build_sensitivity_view(summary, WORDS, is_positive=False)
+    assert view is not None and view.typical_error == "(typical error ≈14 repeats)"
+    assert (
+        subject.apply_length_sensitivity(
+            {"length_estimation_status": "estimated", "estimated_total_repeat_count": 90.0}, POLICY
+        )["length_sensitivity_policy"]
+        == RAW
+    )
+
+
+def test_the_typical_error_is_never_rendered_as_a_plus_minus_interval() -> None:
+    """The RMSE is not a 95% interval (55/76 residuals within 14), so no view text says "±"."""
+    for estimate, tier in ((90.0, "below"), (120.0, "caution"), (160.456, "high")):
+        view = subject.build_sensitivity_view(_summary(estimate, tier), WORDS, is_positive=False)
+        assert view is not None
+        rendered = (view.badge, view.notice, view.help, view.typical_error, view.value)
+        assert all("±" not in text for text in rendered if text is not None)
+
+
+def test_the_shipped_wording_names_the_rmse_as_a_typical_error() -> None:
+    config = json.loads((Path(vntyper.__file__).parent / "scripts" / "report_config.json").read_text())
+    view = subject.build_sensitivity_view(_summary(90.0, "below"), config, is_positive=False)
+    assert view is not None
+    assert view.typical_error == "(typical error ≈14 repeats, leave-one-out RMSE; not an interval)"
