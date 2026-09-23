@@ -15,20 +15,44 @@ from vntyper.scripts.calibration_caller_metrics import (
     validate_caller_observations,
 )
 
+_STRATUM_TYPES = (bool, int, str, type(None))
 
-def group_folds(groups: Mapping[str, str], *, folds: int, seed: int) -> dict[str, int]:
+
+def _stratified_order(ordered: list[str], strata: object, generator: random.Random) -> list[str]:
+    """Groups shuffled within each stratum, strata concatenated in a fixed label order."""
+    if not isinstance(strata, Mapping) or any(group not in strata for group in ordered):
+        raise ValueError("cohort fold strata must map every group to its label")
+    if any(type(strata[group]) not in _STRATUM_TYPES for group in ordered):
+        raise ValueError("cohort fold strata labels must be booleans, integers, strings or None")
+    labels = sorted({strata[group] for group in ordered}, key=lambda label: (type(label).__name__, repr(label)))
+    result: list[str] = []
+    for label in labels:
+        members = [group for group in ordered if strata[group] == label and type(strata[group]) is type(label)]
+        generator.shuffle(members)
+        result.extend(members)
+    return result
+
+
+def group_folds(
+    groups: Mapping[str, str], *, folds: int, seed: int, strata: Mapping[str, object] | None = None
+) -> dict[str, int]:
     """Assign every declared biological group wholly to one reproducible fold.
 
     Args:
         groups: Sample to biological group mapping.
         folds: Requested folds, at least two; reduced to the available groups.
         seed: Explicit deterministic random seed.
+        strata: Optional group to label mapping (for example truth class). Groups are
+            then shuffled within each label and dealt round-robin across folds with one
+            running position over all labels, so a label with at least as many groups as
+            folds reaches every fold and fold sizes still differ by at most one. ``None``
+            keeps the unstratified assignment exactly.
 
     Returns:
         Sample to zero-based fold mapping, or empty when fewer than two groups exist.
 
     Raises:
-        ValueError: For invalid folds, seed or identities.
+        ValueError: For invalid folds, seed, identities or strata.
     """
     if type(folds) is not int or folds < 2 or type(seed) is not int:
         raise ValueError("cohort folds must be an integer >=2 and seed must be an integer")
@@ -39,7 +63,11 @@ def group_folds(groups: Mapping[str, str], *, folds: int, seed: int) -> dict[str
     ordered = sorted(set(groups.values()))
     if len(ordered) < 2:
         return {}
-    random.Random(seed).shuffle(ordered)
+    generator = random.Random(seed)
+    if strata is None:
+        generator.shuffle(ordered)
+    else:
+        ordered = _stratified_order(ordered, strata, generator)
     assignments = {group: index % min(folds, len(ordered)) for index, group in enumerate(ordered)}
     return {key: assignments[groups[key]] for key in sorted(groups)}
 

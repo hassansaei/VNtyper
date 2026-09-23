@@ -101,7 +101,9 @@ def evaluate_cutoff_arms(
         arms: Actual replay/native outcomes over the same complete primary roster.
         baseline_id: Unchanged policy retained in the candidate inventory.
         spec: Explicit training objective and optional class-rate constraints.
-        folds: Requested number of outcome-independent outer folds, at least two.
+        folds: Requested number of outer folds, at least two. Groups are allocated
+            stratified by truth label, so a class with at least ``folds`` groups is
+            present in every fold.
         seed: Seed for group allocation and descriptive paired uncertainty.
         contributors: Optional map from a data-derived candidate ID to the sample keys
             whose observed feature values produced its threshold. Inside an outer fold
@@ -126,7 +128,15 @@ def evaluate_cutoff_arms(
     validated = _bound_arms(arms, baseline_id)
     derived = _bound_contributors(contributors, validated, baseline_id)
     baseline = validated[baseline_id]
-    assignments = group_folds({r.key: r.group_key for r in baseline}, folds=folds, seed=seed)
+    # Rows are one representative per independent group, so each group has exactly one
+    # truth label. Stratifying on it keeps a class with at least ``folds`` groups present
+    # in every fold; the labels steer allocation only, never a fold's selection.
+    assignments = group_folds(
+        {r.key: r.group_key for r in baseline},
+        folds=folds,
+        seed=seed,
+        strata={r.group_key: r.truth_positive for r in baseline},
+    )
     indices = {name: {row.key: row for row in rows} for name, rows in validated.items()}
     heldout: dict[str, CallerObservation] = {}
     used_policy: dict[str, str] = {}

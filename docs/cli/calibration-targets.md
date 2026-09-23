@@ -271,6 +271,13 @@ states how many candidates were admissible (`admissible_candidates`), and the ev
 records `fold_admissibility: "training-observed-breakpoints"`. The full-data selection,
 which produces the exported profile, still searches every candidate.
 
+Outer folds are allocated stratified by truth label (positive, negative, unknown). Each
+scored row is the only representative of its group. Groups are shuffled within each label
+and dealt across folds in turn, so a class with at least as many groups as folds is present
+in every fold. With 27 negatives, no fold can be left without negatives unless more than
+27 folds are requested. The labels only steer allocation; each fold's selection still reads
+training truth alone. Length evaluation keeps its unstratified allocation.
+
 ### Endpoints are reported separately
 
 A binary detection change, a confidence relabelling, an artifact flag and an exact-variant

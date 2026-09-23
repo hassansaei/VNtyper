@@ -39,10 +39,24 @@ def test_complete_evaluation_retains_actual_training_and_held_out_predictions():
     assert result["paired_differences"]["sensitivity"]["delta"] == 0.5
 
 
-def test_mutating_held_out_truth_cannot_change_its_fold_selection():
+def test_mutating_held_out_truth_cannot_change_its_fold_selection(monkeypatch):
+    """Given a fold allocation, selection reads training truth only.
+
+    Allocation is stratified by truth label, so relabelling a sample may legitimately move
+    it to another fold. The allocation is therefore frozen at the original one here, which
+    isolates the property under test: a held-out label never reaches its fold's selection.
+    """
+    from vntyper.scripts import calibration_cutoff_evaluation as module
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
     original = arms()
+    frozen = module.group_folds(
+        {row.key: row.group_key for row in original["baseline"]},
+        folds=2,
+        seed=7,
+        strata={row.group_key: row.truth_positive for row in original["baseline"]},
+    )
+    monkeypatch.setattr(module, "group_folds", lambda *args, **kwargs: dict(frozen))
     first = evaluate_cutoff_arms(original, spec=SearchSpec("balanced-accuracy"), folds=2, seed=7)
     fold = first["folds"][0]
     held = set(fold["held_out_keys"])
@@ -136,6 +150,20 @@ def test_missing_baseline_or_empty_population_is_refused(values):
 
     with pytest.raises(ValueError):
         evaluate_cutoff_arms(values, spec=SearchSpec("balanced-accuracy"))
+
+
+def test_outer_folds_are_stratified_by_truth_so_no_fold_lacks_a_class():
+    """27 negatives and 55 positives: every one of ten folds holds both classes."""
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    truth = (False,) * 27 + (True,) * 55
+    records = {"baseline": rows(truth, truth)}
+    for seed in (3, 7, 20260915):
+        result = evaluate_cutoff_arms(records, spec=SearchSpec("balanced-accuracy"), folds=10, seed=seed)
+        for fold in result["folds"]:
+            held = set(fold["held_out_keys"])
+            classes = {row.truth_positive for row in records["baseline"] if row.key in held}
+            assert classes == {False, True}, (seed, fold["fold"])
 
 
 def _leaky_arms():
