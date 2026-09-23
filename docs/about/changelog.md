@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.38 (2026-09-23)
+
 ### Kestrel failures are reported with their cause, not as "no usable VCF" ([#338](https://github.com/hassansaei/VNtyper/issues/338))
 
 - **Kestrel log contract**: The pinned Kestrel 1.0.1 exits 0 after a fatal error. A missing or unreadable motif reference then writes no VCF, and a missing or empty k-mer count file writes a header-only VCF that would have read as a negative. VNtyper now reads each attempt's `kestrel_kmer_<k>.log` and treats any ERROR line as a failed attempt. The raised message quotes Kestrel's error and names the log. Across 32,545 existing Kestrel logs, the check flagged only the 3 runs that had genuinely failed.
