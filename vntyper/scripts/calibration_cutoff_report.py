@@ -396,6 +396,7 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
         ValueError: If a section the page renders is missing or malformed.
     """
     objective = _mapping(document.get("objective"), "objective")
+    scope = _mapping(document.get("search_scope"), "search scope")
     truth = _mapping(document.get("truth_set"), "truth set")
     provenance = _mapping(document.get("provenance"), "provenance")
     parity = _mapping(document.get("baseline_parity"), "baseline parity")
@@ -422,10 +423,13 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
                 ("minimum sensitivity", objective.get("min_sensitivity")),
                 ("minimum specificity", objective.get("min_specificity")),
                 ("caller", document.get("caller")),
+                ("searched axes", ", ".join(str(name) for name in _sequence(scope.get("searched_axes"), "axes"))),
+                ("adVNTR policy", scope.get("advntr_policy")),
                 ("folds requested", document.get("folds_requested")),
                 ("seed", document.get("seed")),
             ]
         ),
+        f"<p class='note'>{_escape(scope.get('note'))}</p>",
         _selection_section(document),
         "<h2>Old versus derived</h2>",
         _table(

@@ -636,16 +636,13 @@ def _advntr_result(policy_ids: Sequence[str], keys: Sequence[str], positive: str
     )
 
 
-@pytest.mark.parametrize(("caller", "expected_true_positives"), [("both", 3), ("advntr", 1)])
-def test_the_advntr_arm_is_replayed_natively_and_never_approximated(
-    tmp_path: Path, caller: str, expected_true_positives: int
-) -> None:
+def test_the_advntr_arm_is_replayed_natively_and_never_approximated(tmp_path: Path) -> None:
     """adVNTR statistics come from the installed evaluator; this only mocks the seam."""
     from vntyper.scripts import calibration_cutoff_optimize as module
 
     cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
     args = _namespace(
-        cohort_path, captures_path, caller=caller, advntr_executable=tmp_path / "advntr", min_specificity=1.0
+        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
     )
     seen: dict[str, Any] = {}
 
@@ -659,7 +656,7 @@ def test_the_advntr_arm_is_replayed_natively_and_never_approximated(
         atomic_output(output, lambda staging: module.run_cutoff_optimization(args, staging))
     document = json.loads((output / "report.json").read_bytes())
 
-    assert document["caller"] == caller
+    assert document["caller"] == "both"
     assert seen["executable_path"] == tmp_path / "advntr"
     assert set(seen["captures"]) == {
         "specimen-alpha",
@@ -671,7 +668,75 @@ def test_the_advntr_arm_is_replayed_natively_and_never_approximated(
     }
     assert document["provenance"]["advntr"] == {"sha256": "d" * 64}
     best = max(row["counts"]["true_positives"] for row in document["cutoffs"])
-    assert best == expected_true_positives
+    assert best == 3
+
+
+def test_caller_both_states_that_only_kestrel_axes_are_searched(tmp_path: Path) -> None:
+    """The adVNTR arm of ``--caller both`` is replayed at its baseline policy, and says so."""
+    from vntyper.scripts import calibration_cutoff_optimize as module
+    from vntyper.scripts.calibration_cutoff_report import render_cutoff_report_html
+
+    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
+    args = _namespace(
+        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
+    )
+
+    def grid(capture_paths: Any, policies: Any, **kwargs: Any) -> Any:
+        return _advntr_result(sorted(policies), sorted(capture_paths), "specimen-echo")
+
+    output = tmp_path / "derived"
+    with patch.object(module, "evaluate_advntr_cutoff_grid", grid):
+        atomic_output(output, lambda staging: module.run_cutoff_optimization(args, staging))
+    document = json.loads((output / "report.json").read_bytes())
+    scope = document["search_scope"]
+
+    assert scope["searched_caller"] == "kestrel"
+    assert scope["searched_axes"] == [DEPTH_FLOOR_LINKED]
+    assert scope["advntr_policy"] == "held-at-baseline"
+    assert scope["advntr_distinct_executions"] == 1
+    assert "#269" in scope["note"]
+    page = render_cutoff_report_html(document)
+    assert "adVNTR arm was replayed at its baseline policy" in page
+
+
+def test_a_kestrel_run_records_that_advntr_was_not_evaluated(tmp_path: Path) -> None:
+    """The scope section is present on every run, not only on the adVNTR ones."""
+    _, document, _ = _run(tmp_path)
+
+    assert document["search_scope"]["advntr_policy"] == "not-evaluated"
+    assert document["search_scope"]["advntr_distinct_executions"] is None
+
+
+def test_an_advntr_grid_that_varies_the_advntr_policy_contradicts_the_scope_and_aborts(tmp_path: Path) -> None:
+    """ "Held at baseline" is checked against the grid, never assumed."""
+    from vntyper.scripts import calibration_cutoff_optimize as module
+
+    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
+    args = _namespace(
+        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
+    )
+
+    def grid(capture_paths: Any, policies: Any, **kwargs: Any) -> Any:
+        result = _advntr_result(sorted(policies), sorted(capture_paths), "specimen-echo")
+        varied = tuple(replace(entry, execution_id=f"exec-{index}") for index, entry in enumerate(result.policies))
+        return replace(result, policies=varied)
+
+    with patch.object(module, "evaluate_advntr_cutoff_grid", grid), pytest.raises(ValueError, match="baseline"):
+        atomic_output(tmp_path / "derived", lambda staging: module.run_cutoff_optimization(args, staging))
+
+
+def test_caller_advntr_is_refused_because_no_advntr_axis_is_derived(tmp_path: Path) -> None:
+    """An adVNTR-only search would tie every candidate back to the baseline, so it is refused."""
+    from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
+
+    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
+    args = _namespace(cohort_path, captures_path, caller="advntr", advntr_executable=tmp_path / "advntr")
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+
+    with pytest.raises(ValueError, match=r"adVNTR cutoff axes are not derived yet.*#269"):
+        run_cutoff_optimization(args, staging)
+    assert not any(staging.iterdir())
 
 
 def test_the_provenance_digests_cover_the_manifests_and_every_capture(tmp_path: Path) -> None:

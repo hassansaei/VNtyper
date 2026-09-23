@@ -80,16 +80,23 @@ def handle_calibrate(
 
 
 def _optimize_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    """Reject the two cross-argument combinations argparse alone cannot express.
+    """Reject the cross-argument combinations argparse alone cannot express.
+
+    ``--caller advntr`` stays a parser choice so the refusal can say why: no adVNTR cutoff
+    axis is derived yet (#269), so the search would only replay the baseline.
 
     Args:
         args: Parsed ``calibrate optimize`` arguments.
         parser: Top-level parser, which owns the exit code for a usage error.
     """
+    from vntyper.scripts.calibration_cutoff_optimize import ADVNTR_AXES_UNAVAILABLE
+
     if getattr(args, "objective", None) == "max-sensitivity-at-specificity" and args.min_specificity is None:
         parser.error("--objective max-sensitivity-at-specificity requires --min-specificity")
-    if getattr(args, "caller", "kestrel") in {"advntr", "both"} and getattr(args, "advntr_executable", None) is None:
-        parser.error("--caller advntr and --caller both require --advntr-executable")
+    if getattr(args, "caller", "kestrel") == "advntr":
+        parser.error(ADVNTR_AXES_UNAVAILABLE)
+    if getattr(args, "caller", "kestrel") == "both" and getattr(args, "advntr_executable", None) is None:
+        parser.error("--caller both requires --advntr-executable")
 
 
 def _target_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser, target: str, operation: str) -> None:

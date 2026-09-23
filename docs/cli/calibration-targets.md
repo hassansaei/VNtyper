@@ -211,6 +211,21 @@ are replayed through every production gate and through selection; a final result
 cannot substitute for replay, because it no longer contains the candidates that were
 filtered out.
 
+### Which caller is searched
+
+`vntyper calibrate optimize` derives and searches Kestrel axes only. No adVNTR cutoff
+axis is derived yet (tracked in [#269](https://github.com/hassansaei/VNtyper/issues/269)).
+
+- `--caller kestrel` (the default) searches the Kestrel axes against Kestrel calls.
+- `--caller both` searches the same Kestrel axes. It pairs every Kestrel candidate with
+  the adVNTR arm replayed natively at its **baseline** policy. The adVNTR policy never
+  varies. The report records this under `search_scope`
+  (`advntr_policy: "held-at-baseline"`) and states it on the HTML page. The run fails if
+  the adVNTR grid executed more than one adVNTR policy.
+- `--caller advntr` is refused with a usage error. Without an adVNTR axis every
+  candidate would replay the same adVNTR policy, so selection could only return the
+  baseline.
+
 ### Choosing an operating point
 
 `calibration_cutoff_selection.SearchSpec` requires an objective. There is no default.

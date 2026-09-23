@@ -71,7 +71,15 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="Required by --objective max-sensitivity-at-specificity.",
     )
-    optimize.add_argument("--caller", choices=["kestrel", "advntr", "both"], default="kestrel")
+    optimize.add_argument(
+        "--caller",
+        choices=["kestrel", "advntr", "both"],
+        default="kestrel",
+        help=(
+            "Only Kestrel axes are searched. 'both' pairs every Kestrel candidate with the adVNTR arm replayed "
+            "at its baseline policy; 'advntr' is refused because no adVNTR cutoff axis is derived yet (#269)."
+        ),
+    )
     optimize.add_argument(
         "--axis",
         dest="axes",
@@ -94,7 +102,7 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--advntr-executable",
         type=Path,
         default=None,
-        help="Pinned installed adVNTR executable; required when --caller includes advntr.",
+        help="Pinned installed adVNTR executable; required by --caller both.",
     )
 
     intake = operations.add_parser("intake", help="Audit and normalize declared local calibration inputs.")

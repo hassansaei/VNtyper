@@ -85,6 +85,13 @@ def _document(**overrides: Any) -> dict[str, Any]:
         "successful": True,
         "usage_hint": "vntyper pipeline --research-decision-profile <output>/research-decision-profile.json",
         "caller": "kestrel",
+        "search_scope": {
+            "searched_caller": "kestrel",
+            "searched_axes": ["depth_floor_linked"],
+            "advntr_policy": "not-evaluated",
+            "advntr_distinct_executions": None,
+            "note": "Only Kestrel axes were searched; adVNTR was not evaluated.",
+        },
         "objective": {"objective": "youden-j", "min_sensitivity": None, "min_specificity": 1.0},
         "folds_requested": 3,
         "seed": 20260915,
@@ -369,6 +376,23 @@ def test_the_html_states_the_objective_the_selection_and_the_plateau(tmp_path: P
     assert "step function" in html
     assert "no negative-truth sample lies inside the tested band" in html
     assert "research-decision-profile" in html
+
+
+def test_the_html_states_which_caller_the_search_varied(tmp_path: Path) -> None:
+    """A ``--caller both`` page must say the adVNTR arm was held at its baseline policy."""
+    scope = {
+        "searched_caller": "kestrel",
+        "searched_axes": ["depth_floor_linked", "gg_gate_independent"],
+        "advntr_policy": "held-at-baseline",
+        "advntr_distinct_executions": 1,
+        "note": "The adVNTR arm was replayed at its baseline policy for every candidate (issue #269).",
+    }
+    output = _write(tmp_path, _document(caller="both", search_scope=scope))
+    html = (output / "report.html").read_text(encoding="utf-8")
+
+    assert "depth_floor_linked, gg_gate_independent" in html
+    assert "held-at-baseline" in html
+    assert "replayed at its baseline policy for every candidate (issue #269)" in html
 
 
 def test_the_html_escapes_untrusted_text(tmp_path: Path) -> None:
