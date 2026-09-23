@@ -244,7 +244,7 @@ def _standard_length_summary(estimate: float, tier: str) -> dict[str, object]:
     return fields
 
 
-NOTICE_CAUTION = '<li class="notice notice-caution" role="alert">'
+NOTICE_CAUTION = '<li class="notice notice-caution" role="note">'
 BADGE = '<span class="length-warning-badge" role="status">'
 
 
