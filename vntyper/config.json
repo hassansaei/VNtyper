@@ -11,7 +11,11 @@
   },
   "length_estimation": {
     "enabled": false,
-    "warning_threshold": 110.0
+    "sensitivity": {
+      "caution_threshold": 110.0,
+      "high_threshold": 150.0,
+      "uncertainty_repeats": 14.3
+    }
   },
   "cli_defaults": {
     "log_level": "INFO",
