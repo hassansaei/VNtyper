@@ -24,6 +24,7 @@ from vntyper.scripts.cross_match import (
     extract_results_from_pipeline_summary,
     write_results_tsv,
 )
+from vntyper.scripts.failure_help import summarize_failure
 from vntyper.scripts.fastq_bam_processing import (
     calculate_vntr_coverage,
     downsample_bam_if_needed,
@@ -1441,9 +1442,12 @@ def run_pipeline(
 
         logger.info("Pipeline finished successfully.")
 
-    except Exception:
+    except Exception as exc:
         primary_outcome_is_active = True
         logger.exception("An error occurred")
+        # The traceback is for bug reports; the operator's last line is the cause and
+        # where to get help, so a setup error does not end the log as a stack (#338).
+        logger.critical(summarize_failure(exc))
         sys.exit(1)
     except BaseException:
         primary_outcome_is_active = True

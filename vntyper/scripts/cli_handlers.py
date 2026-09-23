@@ -22,6 +22,7 @@ so they can forward them to the stage they invoke.
 import argparse
 import logging
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any, Protocol
@@ -36,6 +37,7 @@ from vntyper.scripts.cli_lazy_imports import (
     run_online_mode,
 )
 from vntyper.scripts.cohort_pseudonyms import _mapping_at
+from vntyper.scripts.kestrel_input_preflight import check_kestrel_inputs
 from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.pipeline_length import resolve_length_pipeline_configuration
 from vntyper.scripts.pipeline_standard_length import resolve_standard_length_configuration
@@ -479,6 +481,16 @@ def handle_pipeline(
     summary_formats = []
     if args.summary_formats:
         summary_formats = [fmt.strip().lower() for fmt in args.summary_formats.split(",") if fmt.strip()]
+
+    # Fail before any alignment work if a file Kestrel reads is missing. Otherwise it
+    # surfaces only at the end of the run, as Kestrel's silent exit 0, on every sample
+    # (#338). Here rather than inside `run_pipeline`: this is where an operator's run
+    # starts, and the stage itself separately refuses a Kestrel log that records an error.
+    check_kestrel_inputs(
+        config,
+        os.getcwd(),
+        runtime_component=getattr(getattr(args, "run_configuration", None), "kestrel_runtime", None),
+    )
 
     run_pipeline(
         bwa_reference=bwa_reference,

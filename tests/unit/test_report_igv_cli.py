@@ -44,6 +44,17 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(autouse=True)
+def _stub_kestrel_input_preflight(monkeypatch):
+    """Keep this module about ``--report-igv``, not the Kestrel file preflight (#338).
+
+    ``handle_pipeline`` checks that the Kestrel JARs and motif references exist before it
+    reaches the spied ``run_pipeline``. A checkout without ``reference/`` (CI) has none, so
+    the check is stubbed here and exercised in ``test_kestrel_input_preflight.py``.
+    """
+    monkeypatch.setattr(cli_handlers, "check_kestrel_inputs", lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_logging_reconfiguration(monkeypatch):
     """Keep ``setup_logging`` from tearing down pytest's log capture."""
     monkeypatch.setattr(cli, "setup_logging", lambda log_level=logging.INFO, log_file=None: None)

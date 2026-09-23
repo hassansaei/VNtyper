@@ -70,10 +70,12 @@ pip install vntyper
 Before running the pipeline locally, install the required human reference genomes and MUC1 target models:
 
 ```bash
-vntyper install-references --output-dir /path/to/reference/
+vntyper install-references --output-dir reference   # run from the repository root
 ```
 
 This downloads and verifies the pre-built reference bundle with SHA-256 checksums.
+
+> **Run `vntyper pipeline` from the repository root too.** Every tool and reference path in `vntyper/config.json` is relative to the working directory, so the defaults expect `./reference/` and `./vntyper/dependencies/kestrel/`. A job script should `cd` into the checkout first. If a file is missing, the pipeline stops before reading any input and names the path it tried. See [Troubleshooting](https://hassansaei.github.io/VNtyper/user-guide/troubleshooting/).
 
 ---
 

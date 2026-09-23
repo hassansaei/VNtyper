@@ -29,6 +29,20 @@ from vntyper.scripts.pipeline import run_pipeline
 
 pytestmark = pytest.mark.unit
 
+
+@pytest.fixture(autouse=True)
+def _stub_kestrel_input_preflight():
+    """Keep this module about what it tests, not about the Kestrel file preflight (#338).
+
+    ``handle_pipeline`` checks that the Kestrel JARs and motif references exist before it
+    reaches ``run_pipeline``, which these tests stub. Their configs are synthetic, so the
+    check is stubbed here and exercised on its own in ``test_kestrel_input_preflight.py``
+    and ``test_cli_handlers_kestrel_preflight.py``.
+    """
+    with mock.patch.object(cli_handlers, "check_kestrel_inputs", autospec=True) as stub:
+        yield stub
+
+
 #: `_resolve_bwa_reference` now fails closed on a configured-but-missing file (Important
 #: 1), so a fake, never-written path like the old "/refs/hg19.fa" would make every
 #: FASTQ-input test below raise before `run_pipeline` was ever reached. Pointing at this

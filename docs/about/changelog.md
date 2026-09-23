@@ -6,6 +6,16 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.38 (2026-09-23)
+
+### Kestrel failures are reported with their cause, not as "no usable VCF" ([#338](https://github.com/hassansaei/VNtyper/issues/338))
+
+- **Kestrel log contract**: The pinned Kestrel 1.0.1 exits 0 after a fatal error. A missing or unreadable motif reference then writes no VCF, and a missing or empty k-mer count file writes a header-only VCF that would have read as a negative. VNtyper now reads each attempt's `kestrel_kmer_<k>.log` and treats any ERROR line as a failed attempt. The raised message quotes Kestrel's error and names the log. Across 32,545 existing Kestrel logs, the check flagged only the 3 runs that had genuinely failed.
+- **Input preflight**: `vntyper pipeline` checks that both Kestrel JARs and both motif FASTAs exist before reading any input. If one is missing, it stops in under a second with the resolved path, the working directory it resolved against, and the fix, instead of failing every sample at the genotyping step.
+- **Terminal message**: "Kestrel produced no usable VCF" now lists the per-attempt logs to read.
+- **Loud failures with help**: Known Kestrel errors print a `Fix:` line, every new failure message links the Troubleshooting page, and a failed run now ends with one `VNtyper failed: <cause>. ... Help: <link>` line after the traceback.
+- **Docs**: New [Troubleshooting](../user-guide/troubleshooting.md) page. Every `install-references` example now installs into `reference/`, the directory the shipped config reads (several used `./references` or `/path/to/references`, which reproduced this failure). The docs state that `pipeline` must run from the repository root, record that `pipeline --reference-fasta` exists from v2.0.10, and add a SLURM array example for large cohorts.
+
 ## 2.0.37 (2026-09-23)
 
 ### VNTR length sensitivity tiers ([#334](https://github.com/hassansaei/VNtyper/issues/334), [#335](https://github.com/hassansaei/VNtyper/pull/335))

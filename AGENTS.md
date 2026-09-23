@@ -121,13 +121,21 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     thin-support configuration-key resolver.
   - `nomenclature_presentation.py` — source-specific report flag meanings, tier blockers,
     column help and the Kestrel BAM semantics clarification.
+  - `kestrel_log_contract.py` — finding ERROR lines in the Kestrel call log. The pinned
+    Kestrel exits 0 after a fatal error, so `kestrel_counting.execute_attempt` fails an
+    attempt on a logged ERROR exactly as on a non-zero exit (#338).
+  - `kestrel_input_preflight.py` — which files Kestrel needs (both JARs, both motif FASTAs),
+    resolved against the CWD, and the operator message when one is missing. `handle_pipeline`
+    runs it before `run_pipeline`, so handler tests with synthetic configs stub it (#338).
+  - `failure_help.py` — the troubleshooting URL, fix hints for known Kestrel errors, and the
+    `VNtyper failed: ... Help:` line `run_pipeline` logs at CRITICAL after the traceback.
 
 `nomenclature_bam.py` separately owns XD parsing, resolved haplotype-record voting, and
 the `BamConsensus` interface; those BAM-facing responsibilities do not belong in the
 source-vocabulary helper. `reference_resolution_environment.py` separately owns CRAM-only
 process-environment pin/restore I/O.
 
-These eighteen focused modules keep pure decisions independently testable; measure their
+These twenty-one focused modules keep pure decisions independently testable; measure their
 current branch coverage rather than assuming a fixed percentage. Put new pure logic there
 rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
@@ -569,8 +577,13 @@ summary | release-summary | none | always records success, failure, skipped jobs
 7. **All tool and reference paths in `config.json` are relative to the process CWD.**
    `pipeline.py` pins `project_root = os.getcwd()` and threads it as `cwd=` into Java
    and samtools calls — do not remove that plumbing.
+   Users hit this too: a checkout without `install-references -d reference`, or a job that
+   runs from another directory, has no motif reference. `kestrel_input_preflight` turns that
+   into an immediate, named error. Keep every docs example installing into `reference/`.
 8. **Kestrel is pinned to 1.0.1.** Scoring thresholds are calibrated to it; 1.0.2 output
-   differs. Do not upgrade the JAR.
+   differs. Do not upgrade the JAR. It also **exits 0 after fatal errors** (unreadable reference,
+   missing or empty IKC), sometimes after writing a header-only VCF that parses as a genuine
+   empty result. Its exit status proves nothing; `kestrel_log_contract` is the check (#338).
 9. **`run_command` uses `shell=True`** deliberately, for process substitution in the CRAM
    unmapped-read path. Converting it to `shell=False` breaks that branch.
 10. **The image is split in two, and the halves are bound by a content hash.**

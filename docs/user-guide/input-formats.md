@@ -17,7 +17,9 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
 === "CRAM"
 
     ```bash
-    vntyper pipeline --cram inputs/sample.cram -o results/sample/
+    vntyper pipeline --cram inputs/sample.cram \
+        --reference-fasta /ref/Homo_sapiens_assembly38.fasta \
+        --reference-assembly hg38 -o results/sample/
     ```
 
     Requirements:
@@ -26,7 +28,10 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
     - Aligned to a supported reference assembly
     - Reference FASTA must be accessible (CRAM compression depends on reference sequence)
     - A local reference named in the CRAM header must resolve inside the directory containing
-      the CRAM. For a reference elsewhere, specify `--reference-fasta` or configure it in `config.json`.
+      the CRAM. For a reference elsewhere, specify `--reference-fasta` (v2.0.10+) or configure it in `config.json`.
+    - `--reference-fasta` must be the exact full-genome FASTA the CRAM was written against. A
+      different GRCh38 build with other contig names or sequences cannot decode it. See
+      [Troubleshooting](troubleshooting.md#cram-critical-command-failed-samtools-view).
     - Validated with `samtools quickcheck` before processing
 
 === "FASTQ"

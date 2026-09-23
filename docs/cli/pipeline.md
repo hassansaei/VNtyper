@@ -28,7 +28,7 @@ Provide exactly one input format: BAM, CRAM, or paired FASTQ files.
 |--------|------|---------|-------------|
 | `--bam` | path | None | Path to input BAM file |
 | `--cram` | path | None | Path to input CRAM file |
-| `--reference-fasta` | path | None | Path to reference FASTA for CRAM decoding |
+| `--reference-fasta` | path | None | Full-genome FASTA the CRAM was written against, used to decode it (added in v2.0.10). Contig names and sequences must match the CRAM header |
 | `--fastq1` | path | None | Path to first FASTQ mate file (paired-end) |
 | `--fastq2` | path | None | Path to second FASTQ mate file (paired-end) |
 

@@ -52,6 +52,21 @@ from app.tasks import build_vntyper_command, resolve_index_path  # noqa: E402
 from app.uploads import safe_upload_path  # noqa: E402
 
 from vntyper.scripts import cli_handlers  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _stub_kestrel_input_preflight():
+    """Keep this module about what it tests, not about the Kestrel file preflight (#338).
+
+    ``handle_pipeline`` checks that the Kestrel JARs and motif references exist before it
+    reaches ``run_pipeline``, which these tests stub. Their configs are synthetic, so the
+    check is stubbed here and exercised on its own in ``test_kestrel_input_preflight.py``
+    and ``test_cli_handlers_kestrel_preflight.py``.
+    """
+    with mock.patch.object(cli_handlers, "check_kestrel_inputs", autospec=True) as stub:
+        yield stub
+
+
 from vntyper.scripts.artifact_names import PIPELINE_BASENAME  # noqa: E402
 from vntyper.scripts.cli_parser import build_parser  # noqa: E402
 from vntyper.scripts.utils import validate_bam_file  # noqa: E402

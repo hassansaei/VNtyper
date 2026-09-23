@@ -37,6 +37,7 @@ import pandas as pd
 from vntyper.scripts.artifact_publish import discard_partial, partial_path, publish_partial
 from vntyper.scripts.calibration_artifact_io import thaw_json
 from vntyper.scripts.command_builders import build_sam_to_bam_command, build_samtools_index_command, quote_path
+from vntyper.scripts.failure_help import TROUBLESHOOTING_URL
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.flagging import (
     KESTREL_FLAG_COLUMNS,
@@ -471,7 +472,9 @@ def run_kestrel(
             "Kestrel produced no usable VCF for any configured k-mer size, so no result file was "
             "written. Every configured k-mer size either wrote no VCF at all, or wrote one that could "
             "not be parsed into records. Reporting this as a negative would manufacture a confident "
-            "negative genotype. See issues #212 and #223."
+            "negative genotype. The cause is in the per-attempt Kestrel logs: "
+            + ", ".join(str(invocation.log_file) for invocation in invocations)
+            + f". See issues #212, #223 and #338. Help: {TROUBLESHOOTING_URL}"
         )
         logger.error(msg)
         raise RuntimeError(msg)
