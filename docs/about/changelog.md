@@ -4,7 +4,13 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### VNTR length sensitivity tiers ([#334](https://github.com/hassansaei/VNtyper/issues/334), [#335](https://github.com/hassansaei/VNtyper/pull/335))
+
+- **Sensitivity tiers**: A length estimate above 110 repeats records a `caution` tier and above 150 a `high` tier, with warning codes in `length_estimation_warnings`, for both the research and the approved length paths. Cutoffs and the displayed uncertainty (±14, the model's LOO RMSE) are configured under `length_estimation.sensitivity` and stay out of the resume identity.
+- **Report**: The length card shows the estimate with its uncertainty and a tier badge. A caution-toned header notice appears only for the `high` tier on samples without a finding. Wording is configured in the new `length_sensitivity` block of `report_config.json`.
+- **Cohort**: The statistics table and CSV/TSV/JSON exports add `estimated_total_repeat_count` (one decimal) and `length_sensitivity_tier`.
+- **Assembly detection**: Contig detection falls back to the chr1 length, so subset BAMs are recognised. Header text is still reported as text, except that a header naming both hg19 and hg38 is resolved by the contig evidence.
+- **Docs**: The packaged length model's count convention is documented as `complete`.
 
 ## 2.0.36 (2026-09-18)
 

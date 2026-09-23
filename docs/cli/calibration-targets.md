@@ -39,12 +39,49 @@ Its scaler and regression are collapsed into an intercept and 13 coefficients st
 in closed, checksummed JSON. Extrapolation is flagged; estimates are not clipped to a
 training maximum.
 
-The packaged model predicts **assay-reported total diploid repeat counts**. Its
-`source-reported` count convention does not assert whether the assay includes invariant
-terminal units. The report states that convention explicitly. Reference measurement
-geometry includes invariant units, which is distinct from the truth assay's counting
-convention. Standard length estimates remain research outputs and do not alter mutation
-calls, confidence assignments, or screening conclusions.
+The packaged model predicts **complete total diploid repeat counts**: every repeat unit on
+both alleles, including the nine invariant terminal units per allele. Its model file
+declares `count_convention: complete`, and its PacBio truth counts follow the same
+convention (canonical units plus 18). The report states the convention explicitly.
+Standard length estimates remain research outputs and do not alter mutation calls,
+confidence assignments, or screening conclusions.
+
+### Sensitivity tiers
+
+Kestrel's depth ratio falls as roughly one over the total array length, so short-read
+frameshift detection becomes less sensitive as the total array grows. When a length
+estimate is available, the pipeline records a sensitivity tier in
+`pipeline_summary.json` for both length paths:
+
+| Tier | Estimate | Summary code | Report |
+|---|---|---|---|
+| `below` | at or under the caution threshold | none | estimate with its uncertainty |
+| `caution` | above `caution_threshold` | `vntr_length_exceeds_sensitivity_cutoff` | badge and help text |
+| `high` | above `high_threshold` | the caution code and `vntr_length_high_sensitivity_risk` | badge, help text, and a header notice when the sample has no finding |
+| `not-assessed` | no estimate | none | nothing |
+
+The policy lives in the run configuration and is recorded next to the tier as
+`length_sensitivity_policy`:
+
+```json
+"length_estimation": {
+  "sensitivity": {"caution_threshold": 110.0, "high_threshold": 150.0, "uncertainty_repeats": 14.3}
+}
+```
+
+Comparisons are strict (`>`) on the point estimate. A configuration without the block
+records no tier. Report wording comes from the `length_sensitivity` block of
+`report_config.json`. The cutoffs are not part of the resume identity.
+
+Basis for the defaults, measured on the 76 PacBio-truth exomes with leave-one-out
+predictions:
+
+- 82% of samples have a true total above 110 repeats, so 110 is a caution, not a banner.
+- Predictions regress toward the mean (slope of prediction on truth 0.66): arrays above
+  130 are under-estimated by about 12 repeats on average. The high trigger therefore sits
+  below the length it targets: 150 on the estimate catches 7 of the 8 arrays truly above
+  160, where simulated Kestrel sensitivity falls to 0.75 and lower.
+- `uncertainty_repeats` is the leave-one-out RMSE of the packaged model (14.26).
 
 ## Development calibration with optional truth
 
