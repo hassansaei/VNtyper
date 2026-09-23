@@ -288,15 +288,32 @@ def _observed_breakpoints(
 
 def _derive_axes(
     request: _Request, baseline: CallerPolicyValues, captures: Mapping[str, KestrelCapture]
-) -> tuple[DerivedAxis, ...]:
-    """Turn each requested axis into observed breakpoints and complete replayable policies."""
+) -> tuple[tuple[DerivedAxis, ...], dict[str, frozenset[str]]]:
+    """Turn each requested axis into observed breakpoints and complete replayable policies.
+
+    Returns:
+        The derived axes, and for every data-derived candidate the capture keys whose
+        observed values produced its threshold. The anchor reproducing the baseline and
+        the endpoint sentinel are omitted from that map: neither was produced by a sample,
+        so both stay admissible in every outer fold.
+    """
     derived: list[DerivedAxis] = []
+    contributors: dict[str, frozenset[str]] = {}
     for name in request.axes:
         permissive, statistic = _permissive_axis(name, baseline)
         observed = _observed_breakpoints(captures, permissive.policy, statistic)
         axis = derive_axis(name, observed, baseline=baseline, max_values=request.max_breakpoints)
-        derived.append((axis, axis_candidates(baseline, axis)))
-    return tuple(derived)
+        candidates = axis_candidates(baseline, axis)
+        for value, candidate in zip(axis.values, candidates, strict=True):
+            if not candidate.parameters or value == axis.sentinel:
+                continue
+            exact = Fraction(value)
+            keys = frozenset(key for key, values in observed.items() if exact in values)
+            if not keys:
+                _fail(f"cutoff optimize breakpoint {value} of axis {name} has no contributing sample")
+            contributors[candidate.candidate_id] = keys
+        derived.append((axis, candidates))
+    return tuple(derived), contributors
 
 
 def _anchor(candidates: Sequence[CutoffCandidate]) -> CutoffCandidate:
@@ -477,7 +494,7 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
     native_paths = {key: declared.native_kestrel[key] for key in keys}
     captures = {key: _decode_capture(path, key) for key, path in sorted(capture_paths.items())}
     baseline = _capture_baseline(captures)
-    derived = _derive_axes(request, baseline, captures)
+    derived, contributors = _derive_axes(request, baseline, captures)
     policies = {candidate.candidate_id: candidate.policy for _, candidates in derived for candidate in candidates}
     anchors = {axis.axis: _anchor(candidates) for axis, candidates in derived}
     try:
@@ -497,8 +514,17 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
             primary,
         )
         arms = _combine_arms(arms, advntr)
+    # Contributors are capture keys; fold selection matches them against arm row keys,
+    # so the two rosters must be the same set or admissibility would silently misfire.
+    if {row.key for row in arms[BASELINE_ID]} != set(captures):
+        _fail("cutoff optimize arm rows are not keyed by the capture sample identifiers")
     evaluation = evaluate_cutoff_arms(
-        arms, baseline_id=BASELINE_ID, spec=request.spec, folds=request.folds, seed=request.seed
+        arms,
+        baseline_id=BASELINE_ID,
+        spec=request.spec,
+        folds=request.folds,
+        seed=request.seed,
+        contributors=contributors,
     )
     document = build_cutoff_report_document(
         CutoffReportInputs(

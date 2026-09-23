@@ -781,6 +781,28 @@ def test_a_specificity_floor_reachable_only_by_rejecting_everything_is_feasible(
     assert max(others) == 0.0
 
 
+def test_every_fold_selects_only_breakpoints_its_training_samples_observed(tmp_path: Path) -> None:
+    """A held-out sample's Depth_Score must never become the cutoff its own fold uses."""
+    _, document, _ = _run(tmp_path)
+    evaluation = document["evaluation"]
+    scores = {name: {float(score) for score in values} for name, (_, values, _) in STANDARD_COHORT.items()}
+    rows = {row["policy_id"]: row for row in document["cutoffs"]}
+    anchor = document["baseline_parity"]["anchor_candidate_ids"][DEPTH_FLOOR_LINKED]
+    always = {"baseline", anchor, *(row["policy_id"] for row in rows.values() if row["value"] == SENTINEL)}
+
+    assert evaluation["fold_admissibility"] == "training-observed-breakpoints"
+    assert any(fold["admissible_candidates"] < len(rows) for fold in evaluation["folds"])
+    for fold in evaluation["folds"]:
+        training = set(fold["training_keys"])
+        admissible = {
+            policy
+            for policy, row in rows.items()
+            if policy in always or any(row["value"] in scores[key] for key in training)
+        }
+        assert fold["admissible_candidates"] == len(admissible)
+        assert fold["used_policy"] in admissible
+
+
 def test_the_report_comparators_match_the_axis_definitions() -> None:
     """The optimize probe table and the axis module must agree on every comparator."""
     from vntyper.scripts.calibration_cutoff_axes import axis_comparison

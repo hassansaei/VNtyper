@@ -261,6 +261,16 @@ describe the searched cohort; pooled held-out predictions assess fold-selected p
 separately. Neither is independent validation once the data or the search design has been
 examined.
 
+The breakpoints are the union of the values observed in every sample, so a breakpoint can
+exist only because one sample produced it. Inside an outer fold, a candidate is therefore
+admissible only when at least one **training** sample of that fold observed its value.
+Otherwise a held-out sample's own feature values would decide which cutoffs its fold can
+select, and the held-out estimate would be optimistic. The baseline, the candidate that
+reproduces it, and the endpoint sentinel are admissible in every fold. Each fold record
+states how many candidates were admissible (`admissible_candidates`), and the evaluation
+records `fold_admissibility: "training-observed-breakpoints"`. The full-data selection,
+which produces the exported profile, still searches every candidate.
+
 ### Endpoints are reported separately
 
 A binary detection change, a confidence relabelling, an artifact flag and an exact-variant
