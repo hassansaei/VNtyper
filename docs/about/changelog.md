@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.39 (2026-09-24)
+
 ### Cutoff optimization and length-tier reporting corrections
 
 - **`calibrate optimize --caller advntr` is refused**: No adVNTR cutoff axis is derived yet ([#269](https://github.com/hassansaei/VNtyper/issues/269)), so every candidate replayed the same adVNTR policy and selection could only return the baseline. `--caller both` searches the Kestrel axes only. It holds the adVNTR arm at its baseline policy, records this under `search_scope` in `report.json` and states it on the page.
