@@ -87,12 +87,12 @@ class TestGRChSupport:
         [
             (
                 "@SQ\tSN:1\tLN:248956422\n@PG\tID:bwa\tCL:bwa mem GRCh38.fa\n",
-                "GRCh38",
+                "hg38",
                 "GRCh38",
             ),
             (
                 "@SQ\tSN:1\tLN:249250621\n@PG\tID:bwa\tCL:bwa mem GRCh37.fa\n",
-                "GRCh37",
+                "hg19",
                 "GRCh37",
             ),
             (
@@ -112,7 +112,7 @@ class TestGRChSupport:
             ),
             (
                 "@HD\tVN:1.5\n@PG\tID:bwa\tCL:bwa mem hg38.fa sample_hg19.fq\n",
-                "hg38",
+                "Not detected",
                 "Not detected",
             ),
             (
@@ -132,3 +132,12 @@ class TestGRChSupport:
 
         assert data["assembly_text"] == expected_text
         assert data["assembly_contig"] == expected_contig
+
+    def test_subset_bam_without_text_keeps_text_undetected(self, tmp_path):
+        """Header text and contig evidence stay separate, so the report can show both."""
+        from vntyper.scripts.fastq_bam_processing import parse_header_pipeline_info
+
+        parse_header_pipeline_info("@SQ\tSN:chr1\tLN:248956422\n", tmp_path, self.config)
+        data = json.loads((tmp_path / "pipeline_info.json").read_text())
+        assert data["assembly_text"] == "Not detected"
+        assert data["assembly_contig"] == "hg38"

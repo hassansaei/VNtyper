@@ -697,26 +697,19 @@ def parse_header_pipeline_info(
     """
     lower_header = header.lower()
     assembly_contig = detect_assembly_from_contigs(header, config)
-
-    # Text matching for assembly detection
     has_hg19_text = "hg19" in lower_header or "hs37" in lower_header or "grch37" in lower_header
-    has_hg38_text = (
-        "hg38" in lower_header or "hs38" in lower_header or "grch38" in lower_header or "hs38dh" in lower_header
-    )
-
-    if assembly_contig != "Not detected":
-        if assembly_contig in ("hg38", "GRCh38"):
-            assembly_text = assembly_contig if (not has_hg19_text and "grch38" in lower_header) else "hg38"
-        elif assembly_contig in ("hg19", "GRCh37"):
-            assembly_text = assembly_contig if (not has_hg38_text and "grch37" in lower_header) else "hg19"
-        else:
-            assembly_text = assembly_contig
-    elif has_hg38_text and not has_hg19_text:
-        assembly_text = "hg38"
-    elif has_hg19_text and not has_hg38_text:
+    has_hg38_text = "hg38" in lower_header or "hs38" in lower_header or "grch38" in lower_header
+    # Header text is reported as text, so the report can still show a text/contig
+    # mismatch. Only when the text names both assemblies (e.g. an hg19 FASTQ path
+    # realigned to hg38) does the contig evidence break the tie.
+    if has_hg19_text and has_hg38_text:
+        assembly_text = {"hg38": "hg38", "GRCh38": "hg38", "hg19": "hg19", "GRCh37": "hg19"}.get(
+            assembly_contig, "Not detected"
+        )
+    elif has_hg19_text:
         assembly_text = "hg19"
-    elif has_hg38_text and has_hg19_text:
-        assembly_text = "hg38" if ("hg38" in lower_header or "grch38" in lower_header) else "hg19"
+    elif has_hg38_text:
+        assembly_text = "hg38"
     else:
         assembly_text = "Not detected"
 
