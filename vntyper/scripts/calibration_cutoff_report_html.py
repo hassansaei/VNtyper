@@ -48,6 +48,16 @@ _CAPPED_WARNING: Final[str] = (
 _UNREJECTABLE_NOTE: Final[str] = (
     "{n} sample(s) have a legacy p-value of exactly 0; no admissible cutoff can reject them."
 )
+#: What the held-out floor warning may say about training: a fold that fell back to the
+#: baseline never met the floor, so the floor is said to be met only where a fold selected.
+FLOOR_MET_EVERY_FOLD: Final[str] = "The floor was met on training folds only."
+FLOOR_MET_SOME_FOLDS: Final[str] = "The floor was met on the training data of {met} of {total} folds only."
+FOLDS_WITHOUT_A_CONSTRAINED_CANDIDATE: Final[str] = (
+    "In {n} of {total} folds no candidate met the constraint on training data; those folds used the baseline."
+)
+FOLDS_WITHOUT_A_TRUTH_CLASS: Final[str] = (
+    "In {n} of {total} folds a truth class was missing from the training data; those folds used the baseline."
+)
 _NOT_REPLAYED: Final[str] = "not replayed"
 _NOT_CHECKED: Final[str] = "not checked"
 _NO_CURVE: Final[str] = "No ROC/PR curve: "
@@ -273,6 +283,24 @@ def _rate_cell(rate: object) -> str:
     )
 
 
+def _training_floor_statement(folds: Sequence[Mapping[str, Any]]) -> str:
+    """What the folds' training data say about a requested floor, fold fallbacks included."""
+    total = len(folds)
+    reasons = [fold.get("fallback_reason") for fold in folds]
+    met = reasons.count(None)
+    unmet = reasons.count("no-candidate-satisfies-constraints")
+    sentences = []
+    if met == total:
+        sentences.append(FLOOR_MET_EVERY_FOLD)
+    elif met:
+        sentences.append(FLOOR_MET_SOME_FOLDS.format(met=met, total=total))
+    if unmet:
+        sentences.append(FOLDS_WITHOUT_A_CONSTRAINED_CANDIDATE.format(n=unmet, total=total))
+    if total - met - unmet:
+        sentences.append(FOLDS_WITHOUT_A_TRUTH_CLASS.format(n=total - met - unmet, total=total))
+    return " ".join(sentences)
+
+
 def _held_out_section(document: Mapping[str, Any]) -> str:
     """Pooled held-out performance of the fold-selected policies, before any full-data number."""
     evaluation = document_mapping(document.get("evaluation"), "evaluation")
@@ -286,6 +314,8 @@ def _held_out_section(document: Mapping[str, Any]) -> str:
     counts = document_mapping(held.get("counts"), "held-out counts")
     exact = document_mapping(held.get("exact"), "held-out exact metrics")
     objective = document_mapping(document.get("objective"), "objective")
+    folds = [document_mapping(item, "fold") for item in document_sequence(evaluation.get("folds"), "evaluation folds")]
+    training = _escape(_training_floor_statement(folds))
     warnings = ""
     for label, floor_name, rate_name in (
         ("specificity", "min_specificity", "specificity"),
@@ -295,9 +325,8 @@ def _held_out_section(document: Mapping[str, Any]) -> str:
         if floor is not None and reached is not None and float(reached) < float(floor):
             warnings += (
                 f"<div class='warn'>Held-out {label} {float(reached):.3f} is below the requested floor "
-                f"{_escape(floor)}. The floor was met on training folds only.</div>"
+                f"{_escape(floor)}. {training}</div>"
             )
-    folds = [document_mapping(item, "fold") for item in document_sequence(evaluation.get("folds"), "evaluation folds")]
     fold_table = _table(
         ("fold", "used policy", "admissible candidates", "training", "held out", "fallback"),
         [

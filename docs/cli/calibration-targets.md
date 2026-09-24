@@ -400,7 +400,8 @@ TN and FP, sensitivity and specificity with exact 95% intervals, and each fold's
 and admissible-candidate count. The intervals cover the pooled held-out calls and exclude
 selection uncertainty. A warning appears when a held-out rate falls below the floor the
 objective requested. The floor is enforced on training folds, so held-out performance can
-fall short of it. The selection and the table of every tested cutoff follow, labelled as
+fall short of it. A fold in which no candidate met the floor on its training data uses the
+baseline instead, and the warning states how many folds did so. The selection and the table of every tested cutoff follow, labelled as
 descriptive searched-cohort points. They are not validated performance.
 
 ### Endpoints are reported separately

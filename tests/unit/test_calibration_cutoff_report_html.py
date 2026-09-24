@@ -259,3 +259,54 @@ def test_the_unavailable_prefixes_are_rendered_from_their_constants(tmp_path: Pa
 
     assert f"<div class='warn'>{escape(_NO_CURVE)}{escape(_CURVE_UNAVAILABLE)}.</div>" in html
     assert f"<div class='warn'>{escape(_NO_BOUNDARY_SUPPORT)}{escape(_CURVE_UNAVAILABLE)}.</div>" in html
+
+
+def _fold(fold: int, fallback: str | None) -> dict[str, Any]:
+    return {
+        "fold": fold,
+        "training_keys": ["specimen-alpha"],
+        "held_out_keys": ["specimen-charlie"],
+        "used_policy": "baseline" if fallback else "depth_floor_linked-0001",
+        "admissible_candidates": 7,
+        "fallback_reason": fallback,
+        "selection": {"policy_id": None if fallback else "depth_floor_linked-0001", "reason": fallback or "selected"},
+    }
+
+
+def _floor_page(tmp_path: Path, folds: list[dict[str, Any]]) -> str:
+    objective = {"objective": "max-sensitivity-at-specificity", "min_sensitivity": None, "min_specificity": 0.85}
+    document = _document(objective=objective)
+    document["evaluation"] = {**document["evaluation"], "folds": folds}
+    return (_write(tmp_path, document) / "report.html").read_text(encoding="utf-8")
+
+
+def test_the_floor_is_said_to_be_met_on_training_data_only_when_every_fold_selected(tmp_path: Path) -> None:
+    from vntyper.scripts.calibration_cutoff_report_html import FLOOR_MET_EVERY_FOLD
+
+    html = _floor_page(tmp_path, [_fold(0, None), _fold(1, None)])
+
+    assert "Held-out specificity 0.815 is below the requested floor 0.85." in html
+    assert FLOOR_MET_EVERY_FOLD in html
+    assert "used the baseline" not in html
+
+
+def test_baseline_fallback_folds_are_described_instead_of_claiming_the_floor_was_met(tmp_path: Path) -> None:
+    """Codex's X3: a fold whose training data no candidate satisfied did not meet the floor."""
+    from vntyper.scripts.calibration_cutoff_report_html import (
+        FLOOR_MET_EVERY_FOLD,
+        FLOOR_MET_SOME_FOLDS,
+        FOLDS_WITHOUT_A_CONSTRAINED_CANDIDATE,
+        FOLDS_WITHOUT_A_TRUTH_CLASS,
+    )
+
+    unmet = "no-candidate-satisfies-constraints"
+    none_met = _floor_page(tmp_path / "none", [_fold(0, unmet), _fold(1, unmet)])
+    assert FLOOR_MET_EVERY_FOLD not in none_met
+    assert "met on the training data of" not in none_met
+    assert FOLDS_WITHOUT_A_CONSTRAINED_CANDIDATE.format(n=2, total=2) in none_met
+
+    mixed = _floor_page(tmp_path / "mixed", [_fold(0, None), _fold(1, unmet), _fold(2, "training-truth-class-missing")])
+    assert FLOOR_MET_EVERY_FOLD not in mixed
+    assert FLOOR_MET_SOME_FOLDS.format(met=1, total=3) in mixed
+    assert FOLDS_WITHOUT_A_CONSTRAINED_CANDIDATE.format(n=1, total=3) in mixed
+    assert FOLDS_WITHOUT_A_TRUTH_CLASS.format(n=1, total=3) in mixed
