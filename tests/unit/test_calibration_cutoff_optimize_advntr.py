@@ -20,7 +20,6 @@ from tests.unit.cutoff_optimize_fakes import (
     ADV_CUT,
     PROBE_VISITS,
     advntr_baseline_policy,
-    advntr_signature,
     run_advntr,
     run_optimize,
     up,
@@ -28,6 +27,7 @@ from tests.unit.cutoff_optimize_fakes import (
 )
 from vntyper.modules.advntr.advntr_calibration_policy import advntr_capabilities_document
 from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
+from vntyper.scripts.calibration_cutoff_advntr import advntr_signature
 from vntyper.scripts.calibration_cutoff_advntr_axes import derive_advntr_axis
 from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, DEPTH_FLOOR_LINKED
 

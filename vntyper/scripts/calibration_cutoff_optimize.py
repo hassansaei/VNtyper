@@ -64,14 +64,15 @@ from types import MappingProxyType
 from typing import Any, Final, NoReturn
 
 from vntyper.scripts.calibration_caller_metrics import CallerObservation
-from vntyper.scripts.calibration_caller_policy import (
-    ADVNTR_CALLER_POLICY_POINTERS,
-    CallerPolicyValues,
-)
+from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
 from vntyper.scripts.calibration_caller_profile import build_caller_generated_profile
 from vntyper.scripts.calibration_cohort_manifest import CohortSample, read_cohort_manifest
 from vntyper.scripts.calibration_cohort_metrics import group_folds
-from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult, evaluate_advntr_cutoff_grid
+from vntyper.scripts.calibration_cutoff_advntr import (
+    AdvntrCutoffGridResult,
+    advntr_signature,
+    evaluate_advntr_cutoff_grid,
+)
 from vntyper.scripts.calibration_cutoff_advntr_axes import (
     AdvntrAxisSearch,
     advntr_baseline_parity,
@@ -436,11 +437,6 @@ def _export_profile(output: Path, request: _Request, selected: CallerPolicyValue
     }
 
 
-def _advntr_signature(policy: CallerPolicyValues) -> tuple[object, ...]:
-    """The adVNTR part of a policy: two policies with equal signatures share one native execution."""
-    return tuple(policy.values[pointer] for pointer in ADVNTR_CALLER_POLICY_POINTERS)
-
-
 def _advntr_arms(
     request: _Request,
     output: Path,
@@ -467,7 +463,7 @@ def _advntr_arms(
         output=output / "advntr",
     )
     seconds = time.monotonic() - started
-    expected = len({_advntr_signature(policy) for policy in policies.values()})
+    expected = len({advntr_signature(policy) for policy in policies.values()})
     executions = {entry.execution_id for entry in result.policies}
     if len(executions) != expected:
         _fail(

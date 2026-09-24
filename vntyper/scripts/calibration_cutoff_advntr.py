@@ -220,7 +220,18 @@ def _validate_policies(
     return tuple(rows)
 
 
-def _signature(policy: CallerPolicyValues) -> tuple[object, ...]:
+def advntr_signature(policy: CallerPolicyValues) -> tuple[object, ...]:
+    """The adVNTR part of a complete policy, which decides its native execution.
+
+    Two policies with equal signatures differ only in other callers' values, so the grid
+    replays them once, and the optimize execution guard counts them once.
+
+    Args:
+        policy: A complete caller policy that includes adVNTR.
+
+    Returns:
+        The adVNTR policy values, in ``ADVNTR_CALLER_POLICY_POINTERS`` order.
+    """
     return tuple(policy.values[pointer] for pointer in ADVNTR_CALLER_POLICY_POINTERS)
 
 
@@ -330,7 +341,7 @@ def evaluate_advntr_cutoff_grid(
     policy_rows = _validate_policies(policies, baseline_policy_id, context)
     grouped: dict[tuple[object, ...], list[tuple[str, CallerPolicyValues]]] = {}
     for row in policy_rows:
-        grouped.setdefault(_signature(row[1]), []).append(row)
+        grouped.setdefault(advntr_signature(row[1]), []).append(row)
     built: list[AdvntrCutoffPolicyResult] = []
     observed_capabilities: AdvntrCapabilities | None = None
     document_holder: list[dict[str, object]] = []
@@ -387,7 +398,7 @@ def evaluate_advntr_cutoff_grid(
         if observed_capabilities is None:
             _fail("adVNTR cutoff grid produced no native executions")
         for policy_id, policy in policy_rows:
-            execution_id, samples = outcomes[_signature(policy)]
+            execution_id, samples = outcomes[advntr_signature(policy)]
             built.append(AdvntrCutoffPolicyResult(policy_id, policy.sha256, execution_id, samples))
         document = _result_document(baseline_policy_id, context, observed_capabilities, tuple(built))
         document_holder.append(document)
@@ -413,5 +424,6 @@ __all__ = [
     "AdvntrCutoffGridResult",
     "AdvntrCutoffPolicyResult",
     "AdvntrCutoffSample",
+    "advntr_signature",
     "evaluate_advntr_cutoff_grid",
 ]

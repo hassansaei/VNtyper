@@ -343,3 +343,15 @@ def test_failed_native_replay_never_publishes_partial_results(
 
     assert len(tool.replay_calls) == 1
     assert not output.exists()
+
+
+def test_the_advntr_signature_ignores_kestrel_values_and_names_every_advntr_value() -> None:
+    """One public signature decides which policies share a native execution (grid and guard alike)."""
+    from vntyper.scripts.calibration_cutoff_advntr import advntr_signature
+
+    baseline = _policy()
+
+    assert advntr_signature(baseline) == advntr_signature(_policy(kestrel_floor=0.25))
+    assert advntr_signature(baseline) != advntr_signature(_policy(cutoff=0.002))
+    assert advntr_signature(baseline) != advntr_signature(_policy(support=4))
+    assert len(advntr_signature(baseline)) == 7

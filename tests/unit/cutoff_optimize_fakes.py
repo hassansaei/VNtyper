@@ -25,7 +25,6 @@ from tests.unit.test_calibration_cutoff_kestrel import _native_negative, _native
 from tests.unit.test_calibration_kestrel_replay import _capture, _policy, _raw
 from vntyper.scripts.calibration_atomic_io import atomic_output
 from vntyper.scripts.calibration_caller_policy import (
-    ADVNTR_CALLER_POLICY_POINTERS,
     CallerPolicyValues,
     caller_policy_values_document,
     decode_caller_policy_values,
@@ -291,8 +290,3 @@ def run_advntr(
     document = json.loads((output / "report.json").read_bytes())
     assert isinstance(document, dict)
     return successful, document, output
-
-
-def advntr_signature(policy: CallerPolicyValues) -> tuple[object, ...]:
-    """The adVNTR part of a policy; equal signatures share one native execution."""
-    return tuple(policy.values[pointer] for pointer in ADVNTR_CALLER_POLICY_POINTERS)
