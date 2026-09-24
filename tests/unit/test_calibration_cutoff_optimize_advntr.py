@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -424,3 +425,21 @@ def test_both_advntr_axes_with_mixed_supports_match_the_hand_oracle(tmp_path: Pa
     probe, main = seen
     assert sorted(probe["policies"]) == ["baseline", f"probe-{ADVNTR_CUTOFF}", f"probe-{ADVNTR_MIN_SUPPORT}"]
     assert len({advntr_signature(policy) for policy in main["policies"].values()}) == 13
+
+
+def test_optimize_breaks_selection_ties_by_policy_content(tmp_path: Path) -> None:
+    """Candidate IDs follow global inventory rank, so optimize hands selection the policy digests."""
+    from vntyper.scripts import calibration_cutoff_optimize as module
+
+    real = module.evaluate_cutoff_arms
+    seen: list[dict[str, Any]] = []
+
+    def record(*call_args: Any, **call_kwargs: Any) -> Any:
+        seen.append(call_kwargs)
+        return real(*call_args, **call_kwargs)
+
+    with patch.object(module, "evaluate_cutoff_arms", record):
+        _, document, _ = run_advntr(tmp_path, caller="both", min_specificity=1.0)
+
+    digests = {row["policy_id"]: row["policy_sha256"] for row in document["cutoffs"] if row["policy_id"] != "baseline"}
+    assert seen[0]["tie_keys"] == digests

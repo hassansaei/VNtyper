@@ -356,7 +356,9 @@ For this application the useful objective is usually maximum sensitivity subject
 specificity constraint, so a balanced score chosen by default would trade sensitivity away
 silently. `select_cutoff_policy` reads training observations only. Ties prefer fewer false
 positives, then more true positives, then fewer no-calls, then the baseline, then a stable
-policy identifier. A missing truth class prevents selection, and unsatisfiable constraints
+key. `vntyper calibrate optimize` uses each candidate's policy digest as that key, because
+candidate identifiers number the merged inventory, which held-out samples help build;
+called without keys, `select_cutoff_policy` compares the identifiers. A missing truth class prevents selection, and unsatisfiable constraints
 return an explicit no-selection result rather than a nearest match.
 
 Sensitivity and specificity keep no-calls inside their truth-class denominators, and

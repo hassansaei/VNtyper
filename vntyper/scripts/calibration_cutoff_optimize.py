@@ -561,6 +561,9 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
         folds=request.folds,
         seed=request.seed,
         fold_inventories=inventories,
+        # Candidate IDs number the merged inventory, which held-out values help build, so a
+        # tie is broken by policy content instead (Codex final review, X1).
+        tie_keys={policy_id: policy.sha256 for policy_id, policy in policies.items()},
     )
     # The inventories were built on the folds computed above; the evaluation's own folds must
     # be the same allocation, not just the same fold numbers, or admissibility would misfire.

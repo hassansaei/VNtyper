@@ -192,6 +192,8 @@ def select_cutoff_policy(
     training_keys: Sequence[str],
     baseline_id: str,
     spec: SearchSpec,
+    *,
+    tie_keys: Mapping[str, str] | None = None,
 ) -> CutoffSelection:
     """Optimize a declared objective using only the explicitly supplied training keys.
 
@@ -203,15 +205,21 @@ def select_cutoff_policy(
             constraints. ``max-sensitivity-at-specificity`` maximizes sensitivity
             among the candidates that satisfy its required ``min_specificity``
             floor; candidates below the floor are dropped before ranking.
+        tie_keys: Optional map from every non-baseline candidate ID to a content key,
+            such as the policy digest. The last tie-break then compares these keys
+            instead of the IDs, so an ID that encodes a rank in some larger inventory
+            cannot decide a tie. The candidate ID still separates equal keys.
 
     Returns:
         Selection with exact training counts. Both known truth classes are required.
         Every objective is compared as an exact Fraction over integer counts.
-        Ties prefer fewer FP, more TP, fewer no-calls, baseline, then stable ID.
+        Ties prefer fewer FP, more TP, fewer no-calls, baseline, then the tie key (the
+        stable ID when ``tie_keys`` is None).
 
     Raises:
         ValueError: For missing/duplicate training rows, inconsistent truth/group
-            bindings, absent baseline or invalid constraints.
+            bindings, absent baseline, invalid constraints, or tie keys that do not map
+            every candidate ID to text.
     """
     if not isinstance(spec, SearchSpec):
         _fail("cutoff selection requires a typed SearchSpec")
@@ -226,13 +234,18 @@ def select_cutoff_policy(
         training_keys
     ):
         _fail("cutoff training keys must be unique nonempty strings")
+    if tie_keys is not None and (
+        not isinstance(tie_keys, Mapping)
+        or any(name != baseline_id and not isinstance(tie_keys.get(name), str) for name in arms)
+    ):
+        _fail("cutoff selection tie keys must map every candidate ID to text")
     keys = set(training_keys)
     baseline_rows = _training_rows(arms[baseline_id], keys)
     baseline = cutoff_counts(baseline_rows)
     if not baseline.positive_count or not baseline.negative_count:
         return CutoffSelection(None, "training-truth-class-missing", len(keys), 0, None, baseline)
     identity = tuple((r.key, r.group_key, r.truth_positive, r.truth_variants) for r in baseline_rows)
-    eligible: list[tuple[Fraction, int, int, int, bool, str, CutoffCounts]] = []
+    eligible: list[tuple[Fraction, int, int, int, bool, str, str, CutoffCounts]] = []
     for name, observations in arms.items():
         rows = _training_rows(observations, keys)
         if tuple((r.key, r.group_key, r.truth_positive, r.truth_variants) for r in rows) != identity:
@@ -254,6 +267,7 @@ def select_cutoff_policy(
                 -counts.true_positives,
                 counts.no_calls,
                 name != baseline_id,
+                "" if tie_keys is None or name == baseline_id else tie_keys[name],
                 name,
                 counts,
             )
@@ -261,4 +275,4 @@ def select_cutoff_policy(
     if not eligible:
         return CutoffSelection(None, "no-candidate-satisfies-constraints", len(keys), 0, None, baseline)
     chosen = min(eligible)
-    return CutoffSelection(chosen[5], "selected", len(keys), len(eligible), chosen[6], baseline)
+    return CutoffSelection(chosen[6], "selected", len(keys), len(eligible), chosen[7], baseline)

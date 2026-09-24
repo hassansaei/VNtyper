@@ -342,3 +342,40 @@ def test_empty_fold_inventories_keep_the_unavailable_result_of_a_singleton_cohor
     assert {**inventoried, "fold_admissibility": None} == {**plain, "fold_admissibility": None}
     with pytest.raises(ValueError, match="fold inventor"):
         evaluate_cutoff_arms(records, spec=SearchSpec("balanced-accuracy"), fold_inventories={0: frozenset()})
+
+
+def _renumbered(first: str, second: str):
+    """The same two contents under inventory-rank IDs; only sample ``0`` separates them."""
+    truth = (True, True, True, True, False, False, False, False)
+    return {
+        "baseline": rows((False,) * 8, truth),
+        first: rows((True, True, True, True, False, False, False, False), truth),
+        second: rows((False, True, True, True, False, False, False, False), truth),
+    }
+
+
+def test_held_out_breakpoints_that_renumber_candidates_cannot_change_a_fold_selection():
+    """Codex's X1 in miniature: shifting global ranks across an ID width must not flip a tie.
+
+    Held-out values below the training breakpoints shift every candidate's inventory rank.
+    Across the width boundary ``axis-9996 < axis-9998`` becomes ``axis-10001 < axis-9999``,
+    reversing the order of the same two contents. In the fold that holds sample ``0`` out,
+    both contents tie on training, so an ID tie-break would flip ``0``'s held-out call.
+    """
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    spec = SearchSpec("balanced-accuracy")
+    outcomes = []
+    for calls_zero, other in (("axis-9996", "axis-9998"), ("axis-9999", "axis-10001")):
+        values = _renumbered(calls_zero, other)
+        by_id = evaluate_cutoff_arms(values, spec=spec, folds=2, seed=7)
+        by_content = evaluate_cutoff_arms(
+            values, spec=spec, folds=2, seed=7, tie_keys={calls_zero: "content-calls-0", other: "content-other"}
+        )
+        outcomes.append((by_id, by_content))
+
+    def held_out_zero(result):
+        return next(row["held_out"] for row in result["rows"] if row["key"] == "0")
+
+    assert held_out_zero(outcomes[0][0]) != held_out_zero(outcomes[1][0])  # the leak, by ID
+    assert held_out_zero(outcomes[0][1]) == held_out_zero(outcomes[1][1]) is True

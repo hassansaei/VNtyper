@@ -140,6 +140,7 @@ def evaluate_cutoff_arms(
     seed: int = 20260915,
     contributors: Mapping[str, frozenset[str]] | None = None,
     fold_inventories: Mapping[int, frozenset[str]] | None = None,
+    tie_keys: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Compare a fixed native baseline with training-selected held-out predictions.
 
@@ -167,6 +168,11 @@ def evaluate_cutoff_arms(
             create, remove or displace a threshold its own fold may select. The keys must
             equal the computed folds; with too few groups to cross-validate that is ``{}``.
             The full-data selection always searches every candidate.
+        tie_keys: Optional map from every non-baseline candidate ID to a content key,
+            passed to every fold and full-data selection (``select_cutoff_policy``). A
+            caller whose IDs encode a rank in an inventory that held-out samples helped
+            build must pass content keys, or a held-out value could renumber the
+            candidates and flip a tie its own fold resolves.
 
     Returns:
         JSON-compatible counts, exact metric intervals, fold decisions and individual
@@ -212,7 +218,7 @@ def evaluate_cutoff_arms(
                 for name, rows in validated.items()
                 if derived is None or name not in derived or not derived[name].isdisjoint(seen)
             }
-        selection = select_cutoff_policy(admissible, training, baseline_id, spec)
+        selection = select_cutoff_policy(admissible, training, baseline_id, spec, tie_keys=tie_keys)
         policy_id = selection.policy_id if selection.policy_id is not None else baseline_id
         for key in held:
             heldout[key] = indices[policy_id][key]
@@ -228,7 +234,7 @@ def evaluate_cutoff_arms(
                 "fallback_reason": selection.reason if selection.policy_id is None else None,
             }
         )
-    final = select_cutoff_policy(validated, [row.key for row in baseline], baseline_id, spec)
+    final = select_cutoff_policy(validated, [row.key for row in baseline], baseline_id, spec, tie_keys=tie_keys)
     heldout_rows = tuple(heldout[row.key] for row in baseline) if assignments else ()
     return {
         "schema_version": "calibration-cutoff-evaluation-v1",
