@@ -43,6 +43,12 @@ def _fail(message: str) -> NoReturn:
     raise ValueError(message)
 
 
+def _log_refusals(axis: str, refused: Mapping[tuple[float, str], None]) -> None:
+    """Report each dropped breakpoint once, whichever inventories dropped it; it is routine, not an error."""
+    for value, reason in refused:
+        logger.info("cutoff axis %s breakpoint %r refused: %s", axis, value, reason)
+
+
 def fold_axis(
     derive: Callable[[Mapping[str, T]], AxisBreakpoints],
     per_sample: Mapping[str, T],
@@ -67,7 +73,9 @@ def fold_axis(
             function refuses the data.
     """
     full = derive(per_sample)
+    refused = dict.fromkeys(full.rejected)
     if not assignments:
+        _log_refusals(full.axis, refused)
         return full, {}
     unassigned = sorted(key for key in per_sample if key not in assignments)
     if unassigned:
@@ -77,9 +85,11 @@ def fold_axis(
     for fold in sorted(set(assignments.values())):
         training = {key: value for key, value in per_sample.items() if assignments[key] != fold}
         axis = derive(training)
+        refused.update(dict.fromkeys(axis.rejected))
         inventories[fold] = frozenset(axis.values)
         if axis.capped:
             capped.append(fold)
+    _log_refusals(full.axis, refused)
     extra = set().union(*inventories.values())
     return replace(merge_axis_values(full, extra), fold_capped=tuple(capped)), inventories
 

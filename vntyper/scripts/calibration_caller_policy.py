@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, NoReturn, TypeAlias, cast
@@ -74,9 +76,33 @@ class CallerPolicyValues:
     sha256: str
 
 
+#: Set while a caller screens values it expects the decoder may refuse (see
+#: :func:`expected_refusals`); a context variable, so other threads keep their ERROR log.
+_REFUSALS_EXPECTED: ContextVar[bool] = ContextVar("caller_policy_refusals_expected", default=False)
+
+
 def _fail(message: str) -> NoReturn:
-    logger.error(message)
+    if not _REFUSALS_EXPECTED.get():
+        logger.error(message)
     raise ValueError(message)
+
+
+@contextmanager
+def expected_refusals() -> Iterator[None]:
+    """Decode inside this block without logging refusals at ERROR.
+
+    A caller that screens candidate values (a breakpoint, a probe rung) expects some to be
+    refused: it catches the ``ValueError`` and reports the refusal itself, so the decoder's
+    own ERROR record would be a false alarm. The refusal is still raised.
+
+    Yields:
+        Nothing; the suppression ends when the block exits.
+    """
+    token = _REFUSALS_EXPECTED.set(True)
+    try:
+        yield
+    finally:
+        _REFUSALS_EXPECTED.reset(token)
 
 
 def _object(value: object, fields: set[str], label: str) -> Mapping[str, object]:

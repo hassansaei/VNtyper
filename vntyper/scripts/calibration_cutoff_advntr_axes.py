@@ -46,6 +46,7 @@ from vntyper.scripts.calibration_caller_policy import (
     CallerPolicyValues,
     caller_policy_values_document,
     decode_caller_policy_values,
+    expected_refusals,
 )
 from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult, evaluate_advntr_cutoff_grid
 from vntyper.scripts.calibration_cutoff_axes import (
@@ -144,9 +145,10 @@ def advntr_probe_policy(axis: str, baseline: CallerPolicyValues) -> CallerPolicy
     _require_legacy(baseline)
     for rung in PROBE_LADDERS[axis]:
         try:
-            return _with_value(baseline, pointer, rung)
-        except ValueError:
-            continue
+            with expected_refusals():
+                return _with_value(baseline, pointer, rung)
+        except ValueError as error:
+            logger.info("cutoff axis %s probe rung %r refused: %s", axis, rung, error)
     _fail(f"adVNTR cutoff axis {axis} has no admissible permissive projection")
 
 

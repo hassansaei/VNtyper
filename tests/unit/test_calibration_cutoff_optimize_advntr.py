@@ -518,3 +518,30 @@ def test_the_exported_advntr_profile_is_rendered_through_the_research_argv_build
 
     (argv,) = rendered
     assert argv[:4] == ("-t", "1", "--frameshift-pvalue-cutoff", repr(document["selection"]["value"]))
+
+
+def test_expected_decoder_refusals_are_reported_at_info_and_never_as_errors(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Screening a breakpoint the decoder refuses is routine, and the axis document records it.
+
+    Every visit at p = 1 makes the cutoff axis test ``nextafter(1, +inf)``, which the decoder
+    refuses in the full-data and in every fold inventory, and the Kestrel probe ladders
+    include rungs the decoder refuses. None of that is an error; each refusal is logged once.
+    """
+    import logging
+
+    from vntyper.scripts.calibration_cutoff_optimize import AXIS_PROBE
+
+    caplog.set_level(logging.INFO)
+    flat = {key: (visit(5, 1.0),) for key in PROBE_VISITS}
+    _, document, _ = run_advntr(
+        tmp_path / "advntr", visits=flat, caller="advntr", axes=[ADVNTR_CUTOFF], min_specificity=1.0
+    )
+    run_optimize(tmp_path / "kestrel", axes=list(AXIS_PROBE), objective="youden-j", min_specificity=None)
+
+    assert document["axes"][0]["rejected"], "the test needs a refused breakpoint"
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
+    refusals = [record.getMessage() for record in caplog.records if " refused: " in record.getMessage()]
+    assert refusals and len(refusals) == len(set(refusals))
+    assert any(ADVNTR_CUTOFF in message for message in refusals)

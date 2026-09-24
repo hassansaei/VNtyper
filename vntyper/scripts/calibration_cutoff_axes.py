@@ -117,6 +117,7 @@ from vntyper.scripts.calibration_caller_policy import (
     CallerPolicyValues,
     caller_policy_values_document,
     decode_caller_policy_values,
+    expected_refusals,
 )
 from vntyper.scripts.calibration_cutoff_grid import CutoffCandidate
 
@@ -395,7 +396,8 @@ def _screen(
             rejected.append((float(value), f"{spec.primary} requires an integral breakpoint value"))
             continue
         try:
-            _policy(baseline, spec, scalar)
+            with expected_refusals():
+                _policy(baseline, spec, scalar)
         except ValueError as error:
             if value == anchor:
                 _fail(f"cutoff axis {spec.primary} cannot hold its own baseline value: {error}")

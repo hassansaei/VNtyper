@@ -303,6 +303,8 @@ def _permissive_axis(name: str, baseline: CallerPolicyValues) -> tuple[CutoffCan
     """
     ladder = AXIS_PROBE[name][1]
     probe = declared_axis(name, list(ladder), baseline=baseline)
+    for value, reason in probe.rejected:
+        logger.info("cutoff axis %s probe rung %r refused: %s", name, value, reason)
     accepted = [value for value in ladder if value in probe.values]
     if not accepted:
         _fail(f"cutoff optimize found no admissible permissive projection for axis {name}")
