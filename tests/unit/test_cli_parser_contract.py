@@ -89,6 +89,8 @@ CUTOFF_AXIS_CHOICES = (
     "depth_score_high",
     "alt_depth_band",
     "var_active_region",
+    "advntr_cutoff",
+    "advntr_min_support",
 )
 CUTOFF_OBJECTIVE_CHOICES = (
     "max-sensitivity-at-specificity",
@@ -544,6 +546,8 @@ def test_the_cutoff_axis_choices_are_exactly_the_declared_axes() -> None:
         axes.DEPTH_SCORE_HIGH,
         axes.ALT_DEPTH_BAND,
         axes.ACTIVE_REGION,
+        axes.ADVNTR_CUTOFF,
+        axes.ADVNTR_MIN_SUPPORT,
     }
     assert set(CUTOFF_AXIS_CHOICES) == constants
     assert declared == CUTOFF_AXIS_CHOICES

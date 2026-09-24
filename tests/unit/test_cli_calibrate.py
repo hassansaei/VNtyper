@@ -130,11 +130,8 @@ def test_optimize_cross_argument_requirements_are_usage_errors(
     assert "require" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("executable", [[], ["--advntr-executable", "/opt/advntr"]])
-def test_optimize_caller_advntr_is_a_usage_error_naming_the_missing_axes(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], executable: list[str]
-) -> None:
-    args = build_parser().parse_args(
+def _optimize_args(tmp_path: Path, *extra: str):
+    return build_parser().parse_args(
         [
             "calibrate",
             "optimize",
@@ -146,21 +143,52 @@ def test_optimize_caller_advntr_is_a_usage_error_naming_the_missing_axes(
             str(tmp_path / "derived"),
             "--objective",
             "youden-j",
-            "--caller",
-            "advntr",
-            *executable,
+            *extra,
         ]
     )
+
+
+@pytest.mark.parametrize("caller", ["advntr", "both"])
+def test_optimize_an_advntr_caller_without_the_executable_is_a_usage_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], caller: str
+) -> None:
+    args = _optimize_args(tmp_path, "--caller", caller)
 
     with pytest.raises(SystemExit) as excinfo:
         cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
 
     assert excinfo.value.code == 2
-    error = capsys.readouterr().err
-    assert "adVNTR cutoff axes are not derived yet" in error
-    assert "#269" in error
-    assert "--caller both" in error
+    assert f"--caller {caller} requires --advntr-executable" in capsys.readouterr().err
     assert not (tmp_path / "derived").exists()
+
+
+@pytest.mark.parametrize(
+    ("caller", "axes"),
+    [
+        ("advntr", []),
+        ("advntr", ["--axis", "advntr_cutoff", "--axis", "advntr_min_support"]),
+        ("both", ["--axis", "depth_floor_linked", "--axis", "advntr_cutoff"]),
+    ],
+)
+def test_optimize_an_advntr_caller_with_the_executable_reaches_the_optimizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caller: str, axes: list[str]
+) -> None:
+    args = _optimize_args(tmp_path, "--caller", caller, "--advntr-executable", "/opt/advntr", *axes)
+    seen: list[str] = []
+
+    def produce(observed, staging: Path) -> bool:
+        assert observed.caller == caller
+        assert observed.advntr_executable == Path("/opt/advntr")
+        assert observed.axes == (axes[1::2] or None)
+        seen.append(observed.caller)
+        (staging / "report.json").write_text("{}\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr("vntyper.scripts.calibration_cutoff_optimize.run_cutoff_optimization", produce)
+    cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+
+    assert seen == [caller]
+    assert tuple(path.name for path in (tmp_path / "derived").iterdir()) == ("report.json",)
 
 
 @pytest.mark.parametrize("operation", sorted(_COMMANDS))
