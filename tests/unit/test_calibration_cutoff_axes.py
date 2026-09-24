@@ -4,6 +4,7 @@ import json
 import math
 from dataclasses import replace
 from fractions import Fraction
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -612,13 +613,22 @@ def test_declared_axis_also_refuses_an_advntr_axis_against_a_kestrel_only_baseli
 
 def test_observed_axis_rejects_malformed_candidates_and_caps() -> None:
     base = _advntr_baseline(cutoff=0.001, support=3)
-    for invalid in ("0.1", [0.1], [True]):
-        with pytest.raises(ValueError):
-            observed_axis(ADVNTR_CUTOFF, invalid, baseline=base, observed_count=1, sentinel=None, max_values=None)
-    for cap in (0, 2, 1.0, True):
+    malformed_candidates: tuple[object, ...] = ("0.1", [0.1], [True])
+    for invalid in malformed_candidates:
         with pytest.raises(ValueError):
             observed_axis(
-                ADVNTR_CUTOFF, [Fraction(0.001)], baseline=base, observed_count=1, sentinel=None, max_values=cap
+                ADVNTR_CUTOFF, cast(Any, invalid), baseline=base, observed_count=1, sentinel=None, max_values=None
+            )
+    malformed_caps: tuple[object, ...] = (0, 2, 1.0, True)
+    for cap in malformed_caps:
+        with pytest.raises(ValueError):
+            observed_axis(
+                ADVNTR_CUTOFF,
+                [Fraction(0.001)],
+                baseline=base,
+                observed_count=1,
+                sentinel=None,
+                max_values=cast(Any, cap),
             )
 
 
@@ -659,9 +669,10 @@ def test_merge_axis_values_refuses_forged_axes_and_non_numbers() -> None:
     axis = derive_axis(ACTIVE_REGION, {"s1": [Fraction(150)]}, baseline=baseline())
     with pytest.raises(ValueError):
         merge_axis_values(object(), [1])  # type: ignore[arg-type]
-    for extra in ([True], ["7"], [7.5], [math.nan]):
+    malformed_values: tuple[object, ...] = ([True], ["7"], [7.5], [math.nan])
+    for extra in malformed_values:
         with pytest.raises(ValueError):
-            merge_axis_values(axis, extra)
+            merge_axis_values(axis, cast(Any, extra))
 
 
 def test_axis_document_states_breakpoint_completeness_per_inventory() -> None:
