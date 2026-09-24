@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import subprocess
@@ -12,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.advntr_grid_fakes import FIRST_VNTR_ID, advntr_grid_result, parity_capture
+from tests.unit.advntr_grid_fakes import visit_document as _visit
 from tests.unit.test_calibration_cutoff_advntr import _capture, _json_bytes, _policy, _ReplayTool
-from vntyper.modules.advntr.advntr_calibration_policy import AdvntrCapabilities
-from vntyper.modules.advntr.advntr_replay import ReplayLocus
 from vntyper.scripts.calibration_caller_policy import (
     CallerPolicyValues,
     caller_policy_values_document,
@@ -22,8 +21,6 @@ from vntyper.scripts.calibration_caller_policy import (
 )
 from vntyper.scripts.calibration_cutoff_advntr import (
     AdvntrCutoffGridResult,
-    AdvntrCutoffPolicyResult,
-    AdvntrCutoffSample,
     evaluate_advntr_cutoff_grid,
 )
 from vntyper.scripts.calibration_cutoff_advntr_axes import (
@@ -244,14 +241,6 @@ def test_derive_refuses_statistics_that_are_not_exact_floats(value: Fraction) ->
 # --- probe_visits: statistics read from the native replay receipt ---------------------------------
 
 
-def _visit(disposition: str, support: object, pvalue: object, *, statistic: bool = True) -> dict[str, object]:
-    return {
-        "disposition": disposition,
-        "plan": {"read_support": support},
-        "statistic": {"pvalue": pvalue} if statistic else None,
-    }
-
-
 class _VisitReplayTool(_ReplayTool):
     """The replay fake, with the decision visits of each sample key injected into its receipt."""
 
@@ -362,110 +351,7 @@ def test_probe_visits_refuse_a_receipt_without_a_visit_list(tmp_path: Path, monk
         probe_visits(result, "baseline")
 
 
-# --- a synthetic native grid (no subprocess); Task 5 imports advntr_grid_result ---------------------
-
-#: First synthetic VNTR identifier; sample ``n`` (sorted roster order) uses ``_FIRST_VNTR_ID + n``.
-_FIRST_VNTR_ID = 17
-
-
-def _locus_raw(vntr_id: int, visits: Sequence[Mapping[str, object]], called: bool | None) -> bytes:
-    """A complete upstream locus result document (every ``_LOCUS_RESULT_FIELDS`` key)."""
-    document = {
-        "schema_version": "advntr-frameshift-replay-result-v1",
-        "vntr_id": vntr_id,
-        "capture_record_sha256": "e" * 64,
-        "policy_sha256": "c" * 64,
-        "capture_producer": {"package_version": "2.4.0", "build_id": "a" * 64, "source_revision": "b" * 40},
-        "capture_assets": {},
-        "loaded_background_sha256": None,
-        "baseline_parity": True,
-        "decision_visits": list(visits),
-        "calls": [{"state": "I22_2_G_LEN1"}] if called else [],
-        "warnings": [],
-        "capture_audit": {
-            "attribution_outside_trials": ["synthetic audit failure"] if called is None else [],
-            "calibrated_policy_domain_errors": [],
-        },
-    }
-    return _json_bytes(document).rstrip(b"\n")
-
-
-def _visit_documents(visits: Sequence[AdvntrVisit], cutoff: float, support: int) -> list[dict[str, object]]:
-    """Native-shaped decision visits: unscored below the support, else called or cutoff."""
-    documents: list[dict[str, object]] = []
-    for visit in visits:
-        if visit.read_support < support:
-            documents.append(_visit("insufficient-read-support", visit.read_support, None, statistic=False))
-            continue
-        called = visit.pvalue < Fraction(cutoff)
-        documents.append(
-            {
-                "disposition": "called" if called else "cutoff",
-                "plan": {"read_support": visit.read_support},
-                "statistic": {"pvalue": float(visit.pvalue), "called": called},
-            }
-        )
-    return documents
-
-
-def advntr_grid_result(
-    policies: Mapping[str, Mapping[str, bool | None] | None],
-    *,
-    visits: Mapping[str, Mapping[str, Sequence[AdvntrVisit] | None]] | None = None,
-    thresholds: Mapping[str, tuple[float, int]] | None = None,
-    baseline_policy_id: str | None = None,
-) -> AdvntrCutoffGridResult:
-    """A synthetic native adVNTR grid result; the executable itself is never run.
-
-    Args:
-        policies: Policy ID to its explicit per-sample native calls (``None`` marks an
-            unassessable sample), or ``None`` to compute every call with
-            :func:`predicted_call` from that policy's ``visits`` and ``thresholds``.
-        visits: Policy ID to per-sample scored visits written into each locus result's
-            ``decision_visits`` (``None`` marks an unassessable sample); a policy without
-            visits has empty decision visits.
-        thresholds: Policy ID to its legacy ``(cutoff, minimum_read_support)``; required
-            for a policy whose calls are computed, and it also sets the visit
-            dispositions and the execution ID. Defaults to the baseline ``(0.001, 3)``.
-        baseline_policy_id: The grid's baseline policy; defaults to the first policy.
-
-    Returns:
-        A grid with one locus per sample (VNTR ``17 + n`` in sorted roster order).
-    """
-    visits = visits or {}
-    thresholds = thresholds or {}
-    policy_rows = []
-    for policy_id, explicit in policies.items():
-        cutoff, support = thresholds.get(policy_id, (0.001, 3))
-        sample_visits = visits.get(policy_id, {})
-        if explicit is None:
-            if policy_id not in thresholds or policy_id not in visits:
-                raise AssertionError(f"policy {policy_id} needs visits and thresholds to compute its calls")
-            calls: Mapping[str, bool | None] = {
-                key: predicted_call(None if items is None else tuple(items), cutoff, support)
-                for key, items in sample_visits.items()
-            }
-        else:
-            calls = explicit
-        samples = []
-        for index, key in enumerate(sorted(calls)):
-            items = sample_visits.get(key, ())
-            raw = _locus_raw(_FIRST_VNTR_ID + index, _visit_documents(items or (), cutoff, support), calls[key])
-            locus = ReplayLocus(
-                key, _FIRST_VNTR_ID + index, calls[key] is not None, raw, hashlib.sha256(raw).hexdigest()
-            )
-            samples.append(AdvntrCutoffSample(key, calls[key] is not None, calls[key], (locus,)))
-        execution = f"exec-{cutoff!r}-{support}" if policy_id in thresholds else f"exec-{policy_id}"
-        policy_rows.append(AdvntrCutoffPolicyResult(policy_id, "c" * 64, execution, tuple(samples)))
-    capabilities = AdvntrCapabilities("2.3.0", "synthetic", None, (), (), (), (), "a" * 64)
-    return AdvntrCutoffGridResult(
-        Path("/nonexistent"),
-        baseline_policy_id or next(iter(policies)),
-        "b" * 64,
-        capabilities,
-        tuple(policy_rows),
-        "d" * 64,
-    )
+# --- the synthetic native grid (tests/unit/advntr_grid_fakes.py) ---------------------------------------
 
 
 def test_the_synthetic_grid_is_readable_by_probe_visits_and_predicts_its_calls() -> None:
@@ -615,30 +501,11 @@ def test_replay_consistency_refuses_a_non_legacy_or_advntr_less_candidate_policy
 # --- adVNTR baseline parity against the captures' own native decisions ------------------------------
 
 
-def _parity_capture(path: Path, vntr_id: int, called: bool | None) -> Path:
-    """A capture whose one decision visit records the native call; ``None`` fails its audit."""
-    _capture(path, vntr_id=vntr_id, baseline=_policy())
-    document = json.loads(path.read_bytes())
-    document["decision_visits"] = [
-        {"statistic": None, "plan": None, "disposition": "insufficient-read-support"},
-        {
-            "disposition": "called" if called else "cutoff",
-            "mean_coverage": 30.0,
-            "plan": {"state": "I22_2_G_LEN1", "read_support": 5},
-            "statistic": {"called": bool(called), "pvalue": 0.0004 if called else 0.4},
-        },
-    ]
-    if called is None:
-        document["warnings"] = [{"origin": "calibration-audit", "message": "synthetic"}]
-    path.write_bytes(_json_bytes(document))
-    return path
-
-
 def _parity_inputs(
     tmp_path: Path, native: Mapping[str, bool | None], replayed: Mapping[str, bool | None]
 ) -> tuple[AdvntrCutoffGridResult, dict[str, Path]]:
     paths = {
-        key: _parity_capture(tmp_path / f"{key}.jsonl", _FIRST_VNTR_ID + index, native[key])
+        key: parity_capture(tmp_path / f"{key}.jsonl", FIRST_VNTR_ID + index, native[key])
         for index, key in enumerate(sorted(native))
     }
     return advntr_grid_result({"baseline": replayed, "probe": replayed}), paths
@@ -669,7 +536,7 @@ def test_baseline_parity_refuses_an_absent_anchor_and_a_different_roster(tmp_pat
 
 def test_baseline_parity_refuses_a_capture_of_a_different_locus(tmp_path: Path) -> None:
     result, paths = _parity_inputs(tmp_path, _NATIVE, _NATIVE)
-    _parity_capture(paths["pos-a"], 99, True)
+    parity_capture(paths["pos-a"], 99, True)
     with pytest.raises(ValueError, match="capture for pos-a covers different loci than its replay"):
         advntr_baseline_parity(result, "baseline", paths)
 
