@@ -70,8 +70,8 @@ from vntyper.scripts.calibration_cohort_manifest import CohortSample, read_cohor
 from vntyper.scripts.calibration_cohort_metrics import group_folds
 from vntyper.scripts.calibration_cutoff_advntr import (
     AdvntrCutoffGridResult,
-    advntr_signature,
     evaluate_advntr_cutoff_grid,
+    require_one_execution_per_signature,
 )
 from vntyper.scripts.calibration_cutoff_advntr_axes import (
     AdvntrAxisSearch,
@@ -463,13 +463,7 @@ def _advntr_arms(
         output=output / "advntr",
     )
     seconds = time.monotonic() - started
-    expected = len({advntr_signature(policy) for policy in policies.values()})
-    executions = {entry.execution_id for entry in result.policies}
-    if len(executions) != expected:
-        _fail(
-            f"cutoff optimize adVNTR executions ({len(executions)}) differ from the distinct adVNTR "
-            f"policies requested ({expected})"
-        )
+    require_one_execution_per_signature(result, policies)
     checked = 0
     if search is not None:
         require_same_evidence(search.probe, result, snapshot, advntr_paths)

@@ -8,7 +8,7 @@ while adVNTR baseline parity runs for real against one-record capture files.
 from __future__ import annotations
 
 import html
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -106,7 +106,7 @@ def test_a_kestrel_run_records_that_advntr_was_not_evaluated(tmp_path: Path) -> 
 
 
 def test_an_unexpected_extra_advntr_execution_aborts_the_run(tmp_path: Path) -> None:
-    """The execution count is checked against the distinct adVNTR policies, never assumed."""
+    """One adVNTR policy replayed by two executions is refused, never assumed away."""
 
     def extra(result: Any, policies: Mapping[str, CallerPolicyValues]) -> Any:
         rows = list(result.policies)
@@ -114,8 +114,63 @@ def test_an_unexpected_extra_advntr_execution_aborts_the_run(tmp_path: Path) -> 
         rows[kestrel_only] = replace(rows[kestrel_only], execution_id="exec-unexpected")
         return replace(result, policies=tuple(rows))
 
-    with pytest.raises(ValueError, match=r"adVNTR executions \(2\) differ from the distinct adVNTR policies"):
+    with pytest.raises(ValueError, match=r"one distinct adVNTR policy was replayed by 2 executions"):
         run_advntr(tmp_path, override=extra, caller="both", axes=[DEPTH_FLOOR_LINKED])
+
+
+def _main_grid_only(edit: Callable[[list[Any], Mapping[str, CallerPolicyValues]], None]) -> Any:
+    """An override that edits the candidate grid's rows and leaves the probe grid intact."""
+
+    def override(result: Any, policies: Mapping[str, CallerPolicyValues]) -> Any:
+        if "baseline" in policies:
+            return result
+        rows = list(result.policies)
+        edit(rows, policies)
+        return replace(result, policies=tuple(rows))
+
+    return override
+
+
+def _set_execution(rows: list[Any], policy_id: str, execution_id: str) -> None:
+    index = next(index for index, row in enumerate(rows) if row.policy_id == policy_id)
+    rows[index] = replace(rows[index], execution_id=execution_id)
+
+
+def _advntr_axis_ids(policies: Mapping[str, CallerPolicyValues]) -> list[str]:
+    """The adVNTR-axis candidates that move the cutoff, in id order."""
+    return sorted(pid for pid, policy in policies.items() if policy.values[ADV_CUT] != 0.001)
+
+
+def test_two_advntr_policies_sharing_one_execution_abort_the_run(tmp_path: Path) -> None:
+    """Distinct adVNTR policies must not be served by one native execution."""
+
+    def merge(rows: list[Any], policies: Mapping[str, CallerPolicyValues]) -> None:
+        first, second = _advntr_axis_ids(policies)[:2]
+        shared = next(row.execution_id for row in rows if row.policy_id == first)
+        _set_execution(rows, second, shared)
+
+    with pytest.raises(ValueError, match=r"execution exec-\S+ served 2 distinct adVNTR policies"):
+        run_advntr(tmp_path, override=_main_grid_only(merge), caller="advntr", min_specificity=1.0)
+
+
+def test_a_split_and_a_merge_that_keep_the_execution_count_still_abort_the_run(tmp_path: Path) -> None:
+    """Equal counts are not enough: the guard binds every signature to exactly one execution.
+
+    Under ``--caller both`` the Kestrel candidates share the baseline adVNTR signature. One of
+    them gets an execution of its own (a split), and two adVNTR-axis candidates share one
+    execution (a merge), so the number of distinct executions still equals the number of
+    distinct signatures.
+    """
+
+    def split_and_merge(rows: list[Any], policies: Mapping[str, CallerPolicyValues]) -> None:
+        kestrel = next(pid for pid in sorted(policies) if pid.startswith(DEPTH_FLOOR_LINKED))
+        _set_execution(rows, kestrel, "exec-split")
+        first, second = _advntr_axis_ids(policies)[:2]
+        _set_execution(rows, second, next(row.execution_id for row in rows if row.policy_id == first))
+        assert len({row.execution_id for row in rows}) == len({advntr_signature(p) for p in policies.values()})
+
+    with pytest.raises(ValueError, match="adVNTR policy"):
+        run_advntr(tmp_path, override=_main_grid_only(split_and_merge), caller="both", min_specificity=1.0)
 
 
 def test_caller_advntr_searches_the_advntr_cutoff_axis_by_native_replay(tmp_path: Path) -> None:
