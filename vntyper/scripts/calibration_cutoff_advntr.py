@@ -420,6 +420,22 @@ def evaluate_advntr_cutoff_grid(
     )
 
 
+def read_capture_policy(capture_paths: Mapping[str, Path]) -> CapturePolicy:
+    """The one capture policy every adVNTR capture declares, read before any replay.
+
+    Args:
+        capture_paths: Sample key to complete upstream v2 capture JSONL.
+
+    Returns:
+        The shared capture policy.
+
+    Raises:
+        ValueError: If a capture is malformed or the captures disagree about their
+            capture policy, baseline caller policy or producer.
+    """
+    return _load_capture_context(capture_paths).capture_policy
+
+
 def require_one_execution_per_signature(
     result: AdvntrCutoffGridResult, policies: Mapping[str, CallerPolicyValues]
 ) -> int:
@@ -473,5 +489,6 @@ __all__ = [
     "AdvntrCutoffSample",
     "advntr_signature",
     "evaluate_advntr_cutoff_grid",
+    "read_capture_policy",
     "require_one_execution_per_signature",
 ]

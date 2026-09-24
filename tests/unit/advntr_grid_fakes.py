@@ -179,10 +179,20 @@ def advntr_grid_result(
     )
 
 
-def parity_capture(path: Path, vntr_id: int, called: bool | None, baseline: CallerPolicyValues | None = None) -> Path:
-    """A one-record capture whose decision visit records the native call; ``None`` fails its audit."""
+def parity_capture(
+    path: Path,
+    vntr_id: int,
+    called: bool | None,
+    baseline: CallerPolicyValues | None = None,
+    capture_parameters: Mapping[str, object] | None = None,
+) -> Path:
+    """A one-record capture whose decision visit records the native call; ``None`` fails its audit.
+
+    ``capture_parameters`` overrides fields of the record's capture policy.
+    """
     _capture(path, vntr_id=vntr_id, baseline=baseline or _policy())
     document = json.loads(path.read_bytes())
+    document["capture_policy"]["parameters"].update(capture_parameters or {})
     document["decision_visits"] = [
         {"statistic": None, "plan": None, "disposition": "insufficient-read-support"},
         {

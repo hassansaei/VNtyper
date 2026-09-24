@@ -201,3 +201,25 @@ def test_an_optimize_exported_advntr_profile_runs_adVNTR_at_its_selected_cutoff(
         calibrated_policy_arguments=invoke.call_args.kwargs["calibrated_policy_arguments"],
     )
     assert f"--frameshift-pvalue-cutoff {selected}" in command
+
+
+def test_research_capture_differences_name_every_non_caller_field_but_threads() -> None:
+    from tests.unit.test_advntr_calibration_policy import capture_policy
+    from vntyper.modules.advntr.advntr_calibration_policy import decode_capture_policy
+
+    policy = policy_document(include_advntr=True)
+    values = policy["values"]
+    assert isinstance(values, dict)
+    values[f"{_PREFIX}mode"] = "legacy"
+    values[f"{_PREFIX}minimum_read_match_ratio"] = 0.6
+    caller = decode_caller_policy_values(policy)
+    document = capture_policy()
+    parameters = document["parameters"]
+    assert isinstance(parameters, dict)
+    matching = decode_capture_policy({**document, "parameters": {**parameters, "threads": 9}})
+    drifted = decode_capture_policy(
+        {**document, "parameters": {**parameters, "use_reference_alignment": False, "mapq_cutoff": 5}}
+    )
+
+    assert module().research_capture_differences(matching, caller) == ()
+    assert module().research_capture_differences(drifted, caller) == ("use_reference_alignment", "mapq_cutoff")

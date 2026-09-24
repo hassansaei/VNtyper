@@ -282,6 +282,12 @@ refuses an adVNTR axis, and `--caller advntr` refuses a Kestrel axis. The report
 searched callers under `search_scope.searched_callers` and states the adVNTR policy
 (`searched`, `held-at-baseline` or `not-evaluated`) on the HTML page.
 
+A derived research profile runs adVNTR under fixed capture parameters (see
+[Applying a derived profile](#applying-a-derived-profile)), so the adVNTR captures must have
+been produced under those same parameters; only the thread count may differ. With
+`--caller advntr` or `--caller both`, a run whose captures differ stops before any adVNTR
+replay and names the differing fields.
+
 #### The adVNTR axes
 
 adVNTR's legacy frameshift caller scores a candidate only when its read support reaches

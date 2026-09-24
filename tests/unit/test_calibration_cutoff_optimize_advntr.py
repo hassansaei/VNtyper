@@ -463,3 +463,21 @@ def test_a_multi_axis_search_holding_only_baseline_anchors_publishes_no_joint_po
     assert not (output / "joint-points.tsv").exists()
     assert (output / "report.html").is_file()
     assert successful is True
+
+
+def test_captures_the_research_runtime_cannot_reproduce_are_refused_before_probing(tmp_path: Path) -> None:
+    """A profile exported from these captures would run adVNTR under different capture semantics."""
+    seen: list[dict[str, Any]] = []
+    with pytest.raises(
+        ValueError, match=r"capture settings the research runtime cannot reproduce: use_reference_alignment"
+    ):
+        run_advntr(tmp_path, seen=seen, caller="advntr", capture_parameters={"use_reference_alignment": False})
+
+    assert seen == []  # neither the probe grid nor the candidate grid ran
+    assert not (tmp_path / "derived").exists()
+
+
+def test_the_capture_thread_count_is_not_part_of_the_research_contract(tmp_path: Path) -> None:
+    successful, _, _ = run_advntr(tmp_path, caller="advntr", min_specificity=1.0, capture_parameters={"threads": 16})
+
+    assert successful is True

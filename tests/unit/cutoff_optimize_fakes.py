@@ -95,6 +95,7 @@ def write_manifests(
     advntr: bool = False,
     advntr_baseline: bool = False,
     advntr_calls: Mapping[str, bool | None] | None = None,
+    capture_parameters: Mapping[str, object] | None = None,
 ) -> tuple[Path, Path]:
     """Write the cohort TSV, the capture TSV and every capture the pair references.
 
@@ -107,6 +108,7 @@ def write_manifests(
         advntr_baseline: Whether the Kestrel captures declare an adVNTR-bearing baseline.
         advntr_calls: Sample -> the native baseline adVNTR call its one-record capture
             records, so adVNTR baseline parity is proven against real capture files.
+        capture_parameters: Overrides of every adVNTR capture's capture-policy fields.
 
     Returns:
         The cohort manifest path and the capture association manifest path.
@@ -138,7 +140,9 @@ def write_manifests(
             if advntr_calls is None:
                 locus.write_text("{}\n", encoding="utf-8")
             else:
-                parity_capture(locus, 17 + len(capture_lines), advntr_calls.get(name, False))
+                parity_capture(
+                    locus, 17 + len(capture_lines), advntr_calls.get(name, False), capture_parameters=capture_parameters
+                )
             row += f"\t{locus.name}"
         capture_lines.append(row)
     cohort_path.write_text("\n".join(cohort_lines) + "\n", encoding="utf-8")
@@ -265,6 +269,7 @@ def run_advntr(
     seen: list[dict[str, Any]] | None = None,
     visits: Mapping[str, tuple[AdvntrVisit, ...] | None] = PROBE_VISITS,
     override: GridOverride | None = None,
+    capture_parameters: Mapping[str, object] | None = None,
     **overrides: Any,
 ) -> tuple[bool, dict[str, Any], Path]:
     """Run an adVNTR-bearing optimize with both native grid seams replaced by one fake.
@@ -277,7 +282,12 @@ def run_advntr(
 
     calls = {key: predicted_call(items, 0.001, 3) for key, items in visits.items()}
     cohort_path, captures_path = write_manifests(
-        tmp_path, cohort or STANDARD_COHORT, advntr=True, advntr_baseline=True, advntr_calls=calls
+        tmp_path,
+        cohort or STANDARD_COHORT,
+        advntr=True,
+        advntr_baseline=True,
+        advntr_calls=calls,
+        capture_parameters=capture_parameters,
     )
     args = namespace(cohort_path, captures_path, advntr_executable=tmp_path / "advntr", **overrides)
     grid = native_grid([] if seen is None else seen, visits=visits, override=override)

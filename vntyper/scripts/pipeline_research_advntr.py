@@ -12,10 +12,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import fields
 from types import MappingProxyType
 from typing import Final, NoReturn
 
-from vntyper.modules.advntr.advntr_calibration_policy import capture_policy_for_caller, decode_capture_policy
+from vntyper.modules.advntr.advntr_calibration_policy import (
+    CapturePolicy,
+    capture_policy_for_caller,
+    decode_capture_policy,
+)
 from vntyper.modules.advntr.advntr_capture import calibrated_policy_argv
 from vntyper.scripts.calibration_caller_policy import (
     ADVNTR_CALLER_POLICY_POINTERS,
@@ -92,6 +97,45 @@ def project_caller_policy(
     )
 
 
+def research_capture_policy(caller: CallerPolicyValues, threads: int) -> CapturePolicy:
+    """The complete capture policy a research profile runs adVNTR under.
+
+    Args:
+        caller: A complete caller policy that includes adVNTR.
+        threads: The native ``-t`` value.
+
+    Returns:
+        :data:`RESEARCH_CAPTURE_PARAMETERS` with ``threads``, with the caller's adVNTR
+        values projected on (``capture_policy_for_caller``).
+
+    Raises:
+        ValueError: If the caller policy does not include adVNTR or is invalid.
+    """
+    baseline = decode_capture_policy(
+        {"schema_version": _CAPTURE_SCHEMA, "parameters": {**RESEARCH_CAPTURE_PARAMETERS, "threads": threads}}
+    )
+    return capture_policy_for_caller(baseline, caller)
+
+
+def research_capture_differences(capture: CapturePolicy, caller: CallerPolicyValues) -> tuple[str, ...]:
+    """The capture fields a research profile could not reproduce at runtime.
+
+    Args:
+        capture: The capture policy some evidence was produced under.
+        caller: The caller policy whose adVNTR values the evidence was produced with.
+
+    Returns:
+        The names of the fields that differ from :func:`research_capture_policy`, in
+        ``CapturePolicy`` order; the thread count is not part of the contract.
+    """
+    expected = research_capture_policy(caller, capture.threads)
+    return tuple(
+        field.name
+        for field in fields(CapturePolicy)
+        if field.name not in {"threads", "sha256"} and getattr(capture, field.name) != getattr(expected, field.name)
+    )
+
+
 def research_advntr_policy_argv(configuration: RunConfiguration, threads: int) -> tuple[str, ...] | None:
     """Render explicit native adVNTR arguments for a research decision profile.
 
@@ -124,8 +168,4 @@ def research_advntr_policy_argv(configuration: RunConfiguration, threads: int) -
             "research decision profiles support only legacy adVNTR calling; "
             "exact mode requires an approved calibration bundle"
         )
-    baseline = decode_capture_policy(
-        {"schema_version": _CAPTURE_SCHEMA, "parameters": {**RESEARCH_CAPTURE_PARAMETERS, "threads": threads}}
-    )
-    policy = capture_policy_for_caller(baseline, caller)
-    return tuple(calibrated_policy_argv(policy, caller, None))
+    return tuple(calibrated_policy_argv(research_capture_policy(caller, threads), caller, None))

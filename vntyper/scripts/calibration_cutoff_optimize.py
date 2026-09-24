@@ -71,6 +71,7 @@ from vntyper.scripts.calibration_cohort_metrics import group_folds
 from vntyper.scripts.calibration_cutoff_advntr import (
     AdvntrCutoffGridResult,
     evaluate_advntr_cutoff_grid,
+    read_capture_policy,
     require_one_execution_per_signature,
 )
 from vntyper.scripts.calibration_cutoff_advntr_axes import (
@@ -123,7 +124,7 @@ from vntyper.scripts.calibration_kestrel_replay import kestrel_replay_prefilter_
 from vntyper.scripts.calibration_secure_io import read_regular_path
 from vntyper.scripts.canonical_json import load_strict_json_object
 from vntyper.scripts.decision_profile import resolve_research_decision_profile
-from vntyper.scripts.pipeline_research_advntr import project_caller_policy
+from vntyper.scripts.pipeline_research_advntr import project_caller_policy, research_capture_differences
 from vntyper.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -347,6 +348,21 @@ def _derive_axes(
     return tuple(derived), fold_values
 
 
+def _require_research_capture(advntr_paths: Mapping[str, Path], baseline: CallerPolicyValues) -> None:
+    """Refuse adVNTR evidence whose capture settings an exported research profile cannot reproduce.
+
+    The research runtime renders adVNTR's capture settings from fixed constants
+    (``RESEARCH_CAPTURE_PARAMETERS``) and only the caller values from the profile, so a
+    cutoff derived under any other capture setting would be applied under different semantics.
+    """
+    differing = research_capture_differences(read_capture_policy(advntr_paths), baseline)
+    if differing:
+        _fail(
+            "cutoff optimize adVNTR captures were produced under capture settings the research runtime cannot "
+            f"reproduce: {', '.join(differing)}; an exported profile would run adVNTR under different semantics"
+        )
+
+
 def _anchor(candidates: Sequence[CutoffCandidate]) -> CutoffCandidate:
     """The candidate that reproduces the shipped policy exactly."""
     anchors = [candidate for candidate in candidates if not candidate.parameters]
@@ -517,6 +533,8 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
     derived, fold_values = _derive_axes(request, baseline, captures, assignments)
     advntr_names = tuple(name for name in request.axes if axis_caller(name) == "advntr")
     advntr_paths = {key: declared.advntr[key] for key in keys} if request.caller != "kestrel" else {}
+    if advntr_paths:
+        _require_research_capture(advntr_paths, baseline)
     snapshot = capture_snapshot(advntr_paths) if advntr_names else {}
     search: AdvntrAxisSearch | None = None
     if advntr_names:
