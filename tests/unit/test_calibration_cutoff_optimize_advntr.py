@@ -443,3 +443,23 @@ def test_optimize_breaks_selection_ties_by_policy_content(tmp_path: Path) -> Non
 
     digests = {row["policy_id"]: row["policy_sha256"] for row in document["cutoffs"] if row["policy_id"] != "baseline"}
     assert seen[0]["tie_keys"] == digests
+
+
+def test_a_multi_axis_search_holding_only_baseline_anchors_publishes_no_joint_points(tmp_path: Path) -> None:
+    """Every visit has p = 1, so neither adVNTR axis observes a breakpoint beyond its anchor.
+
+    The cutoff axis sees q = 1 everywhere: its next-up value exceeds 1 and is refused, and the
+    baseline 0.001 already rejects every sample, so there is no sentinel. The support axis
+    sees no visit below the baseline cutoff at all. Both axes hold their anchor alone, so
+    there is no non-baseline point to tabulate.
+    """
+    flat = {key: (visit(5, 1.0),) for key in PROBE_VISITS}
+    successful, document, output = run_advntr(
+        tmp_path, visits=flat, caller="advntr", axes=[ADVNTR_CUTOFF, ADVNTR_MIN_SUPPORT], min_specificity=1.0
+    )
+
+    assert [len(axis["values"]) for axis in document["axes"]] == [1, 1]
+    assert document["joint_points"] is None
+    assert not (output / "joint-points.tsv").exists()
+    assert (output / "report.html").is_file()
+    assert successful is True

@@ -331,7 +331,11 @@ def _boundary_support(curve: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _joint_points(inputs: CutoffReportInputs) -> dict[str, Any] | None:
-    """The labelled multi-axis table, which exists only when more than one axis was swept."""
+    """The labelled multi-axis table of non-baseline points, when more than one axis was swept.
+
+    An axis can hold only its baseline anchor (no observed value beyond it), so several
+    axes may still leave no point to tabulate; the table is then absent, as for one axis.
+    """
     if len(inputs.derived) < 2:
         return None
     labelled = {
@@ -340,6 +344,8 @@ def _joint_points(inputs: CutoffReportInputs) -> dict[str, Any] | None:
         for index, candidate in enumerate(candidates)
         if candidate.parameters
     }
+    if not labelled:
+        return None
     return joint_points_document(build_joint_points(labelled, inputs.anchors[inputs.derived[0][0].axis]))
 
 
