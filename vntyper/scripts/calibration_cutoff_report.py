@@ -79,6 +79,7 @@ _FOLD_COLUMNS: Final[tuple[str, ...]] = (
     "fallback_reason",
     "training_count",
     "held_out_count",
+    "admissible_candidates",
 )
 
 _SVG_WIDTH: Final[int] = 320
@@ -201,6 +202,7 @@ def _fold_rows(document: Mapping[str, Any]) -> list[list[object]]:
                 fold.get("fallback_reason"),
                 len(_sequence(fold.get("training_keys"), "fold training keys")),
                 len(_sequence(fold.get("held_out_keys"), "fold held-out keys")),
+                fold.get("admissible_candidates"),
             ]
         )
     return rows
@@ -347,6 +349,11 @@ def _selection_section(document: Mapping[str, Any]) -> str:
             ("policy sha256", selection.get("policy_sha256")),
         ]
     )
+    body += (
+        "<p class='note'>This policy was selected on the full searched cohort and is the one exported. "
+        "Its full-data counts are descriptive of that search, not validated performance; the held-out "
+        "estimate above is the performance estimate.</p>"
+    )
     if isinstance(plateau, Mapping):
         body += (
             f"<p class='note'>A threshold sweep is a step function, so the selected value is one member of an "
@@ -356,6 +363,77 @@ def _selection_section(document: Mapping[str, Any]) -> str:
             f"<code>{_escape(plateau.get('open_above'))}</code>. {_escape(plateau.get('note'))}</p>"
         )
     return f"<h2>Selection</h2>{body}"
+
+
+def _rate_cell(rate: object) -> str:
+    """One held-out rate as ``events/total = estimate (95% CI lower-upper)``."""
+    if not isinstance(rate, Mapping) or rate.get("estimate") is None:
+        return "undefined (no eligible samples)"
+    return (
+        f"{rate.get('events')}/{rate.get('total')} = {float(rate['estimate']):.3f} "
+        f"(95% CI {float(rate.get('lower') or 0.0):.3f}-{float(rate.get('upper') or 0.0):.3f})"
+    )
+
+
+def _held_out_section(document: Mapping[str, Any]) -> str:
+    """Pooled held-out performance of the fold-selected policies, before any full-data number."""
+    evaluation = _mapping(document.get("evaluation"), "evaluation")
+    held = evaluation.get("held_out")
+    heading = "<h2>Held-out performance (cross-validated)</h2>"
+    if not isinstance(held, Mapping):
+        return (
+            f"{heading}<div class='warn'>No held-out estimate is available: "
+            f"{_escape(evaluation.get('status_reason'))}. Only descriptive full-data points follow.</div>"
+        )
+    counts = _mapping(held.get("counts"), "held-out counts")
+    exact = _mapping(held.get("exact"), "held-out exact metrics")
+    objective = _mapping(document.get("objective"), "objective")
+    warnings = ""
+    for label, floor_name, rate_name in (
+        ("specificity", "min_specificity", "specificity"),
+        ("sensitivity", "min_sensitivity", "sensitivity"),
+    ):
+        floor, reached = objective.get(floor_name), counts.get(rate_name)
+        if floor is not None and reached is not None and float(reached) < float(floor):
+            warnings += (
+                f"<div class='warn'>Held-out {label} {float(reached):.3f} is below the requested floor "
+                f"{_escape(floor)}. The floor was met on training folds only.</div>"
+            )
+    folds = [_mapping(item, "fold") for item in _sequence(evaluation.get("folds"), "evaluation folds")]
+    fold_table = _table(
+        ("fold", "used policy", "admissible candidates", "training", "held out", "fallback"),
+        [
+            [
+                fold.get("fold"),
+                fold.get("used_policy"),
+                fold.get("admissible_candidates"),
+                len(_sequence(fold.get("training_keys"), "fold training keys")),
+                len(_sequence(fold.get("held_out_keys"), "fold held-out keys")),
+                fold.get("fallback_reason"),
+            ]
+            for fold in folds
+        ],
+    )
+    return (
+        heading + "<p class='note'>Each outer fold selected a policy on its training samples only and applied it to "
+        "its held-out samples; the pooled held-out calls below are the performance estimate of this "
+        "procedure. The 95% intervals are exact binomial intervals for the pooled calls and exclude "
+        "selection uncertainty.</p>"
+        + warnings
+        + _facts(
+            [
+                ("true positives", counts.get("true_positives")),
+                ("false negatives", counts.get("false_negatives")),
+                ("true negatives", counts.get("true_negatives")),
+                ("false positives", counts.get("false_positives")),
+                ("no-calls", counts.get("no_calls")),
+                ("sensitivity", _rate_cell(exact.get("sensitivity"))),
+                ("specificity", _rate_cell(exact.get("specificity"))),
+                ("fold admissibility", evaluation.get("fold_admissibility")),
+            ]
+        )
+        + fold_table
+    )
 
 
 def _profile_section(document: Mapping[str, Any]) -> str:
@@ -396,6 +474,7 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
         ValueError: If a section the page renders is missing or malformed.
     """
     objective = _mapping(document.get("objective"), "objective")
+    scope = _mapping(document.get("search_scope"), "search scope")
     truth = _mapping(document.get("truth_set"), "truth set")
     provenance = _mapping(document.get("provenance"), "provenance")
     parity = _mapping(document.get("baseline_parity"), "baseline parity")
@@ -422,10 +501,14 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
                 ("minimum sensitivity", objective.get("min_sensitivity")),
                 ("minimum specificity", objective.get("min_specificity")),
                 ("caller", document.get("caller")),
+                ("searched axes", ", ".join(str(name) for name in _sequence(scope.get("searched_axes"), "axes"))),
+                ("adVNTR policy", scope.get("advntr_policy")),
                 ("folds requested", document.get("folds_requested")),
                 ("seed", document.get("seed")),
             ]
         ),
+        f"<p class='note'>{_escape(scope.get('note'))}</p>",
+        _held_out_section(document),
         _selection_section(document),
         "<h2>Old versus derived</h2>",
         _table(
@@ -449,7 +532,10 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
             ]
         ),
         "".join(_curve_figures(_mapping(curve, "curve")) for curve in _sequence(document.get("curves"), "curves")),
-        "<h2>Every tested cutoff</h2>",
+        "<h2>Every tested cutoff (descriptive, full searched cohort)</h2>",
+        "<p class='note'>Descriptive searched-cohort points: every row is scored on the same samples the "
+        "search ran on, so these counts and intervals are not validated performance. Use the held-out "
+        "section for that.</p>",
         _table(columns, rows, key_columns=2),
         "<h2>Rejected candidate values</h2>",
         _table(

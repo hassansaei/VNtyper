@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -61,6 +62,10 @@ DEPTHS: dict[str, tuple[int, int]] = {
     "0.0004": (2, 5000),
 }
 
+#: The endpoint sentinel just above the largest observed Depth_Score: the one tested floor
+#: that rejects every row, since production floors pass a score equal to the floor.
+SENTINEL = math.nextafter(0.014, math.inf)
+
 #: The hand-computed confusion matrix of the standard cohort at every tested floor.
 #: Three positives (alpha, bravo, echo), two negatives (charlie, delta), one unknown
 #: (foxtrot); ``echo`` has no candidates at all and is therefore a positive no-call at
@@ -71,6 +76,7 @@ ORACLE: dict[str, dict[str, int]] = {
     "0.004": {"true_positives": 2, "false_negatives": 0, "false_positives": 0, "true_negatives": 2},
     "0.00469": {"true_positives": 1, "false_negatives": 1, "false_positives": 0, "true_negatives": 2},
     "0.014": {"true_positives": 1, "false_negatives": 1, "false_positives": 0, "true_negatives": 2},
+    repr(SENTINEL): {"true_positives": 0, "false_negatives": 2, "false_positives": 0, "true_negatives": 2},
 }
 
 
@@ -386,9 +392,11 @@ def test_only_the_group_representative_is_scored_and_no_group_straddles_a_fold(t
 
 def test_the_held_out_evaluation_is_reported_separately_from_the_full_data_fit(tmp_path: Path) -> None:
     """Selection happens inside training folds; the pooled held-out counts stand apart."""
-    _, document, _ = _run(tmp_path)
+    _, document, output = _run(tmp_path)
     evaluation = document["evaluation"]
+    page = (output / "report.html").read_text(encoding="utf-8")
 
+    assert page.index("Held-out performance (cross-validated)") < page.index("Every tested cutoff (descriptive")
     assert evaluation["held_out"] is not None
     assert evaluation["full_data_operating_points"].keys() >= {"baseline"}
     assert "descriptive" in evaluation["full_data_operating_points_scope"]
@@ -592,13 +600,14 @@ def test_the_breakpoint_cap_subsamples_the_axis_and_says_so(tmp_path: Path) -> N
     _, capped, _ = _run(tmp_path / "few", axes=[DEPTH_FLOOR_LINKED], max_breakpoints=3)
 
     assert uncapped["axes"][0]["capped"] is False
-    assert uncapped["axes"][0]["values"] == [0.0004, 0.001, 0.004, 0.00469, 0.014]
+    assert uncapped["axes"][0]["values"] == [0.0004, 0.001, 0.004, 0.00469, 0.014, SENTINEL]
+    assert uncapped["axes"][0]["endpoint_sentinel"] == SENTINEL
     assert capped["max_breakpoints"] == 3
     assert capped["axes"][0]["capped"] is True
     values = capped["axes"][0]["values"]
     assert len(values) == 3
     assert values[0] == 0.0004
-    assert values[-1] == 0.014
+    assert values[-1] == SENTINEL  # the reject-everything endpoint survives the cap
     assert 0.00469 in values  # the shipped operating point is never subsampled away
 
 
@@ -636,16 +645,13 @@ def _advntr_result(policy_ids: Sequence[str], keys: Sequence[str], positive: str
     )
 
 
-@pytest.mark.parametrize(("caller", "expected_true_positives"), [("both", 3), ("advntr", 1)])
-def test_the_advntr_arm_is_replayed_natively_and_never_approximated(
-    tmp_path: Path, caller: str, expected_true_positives: int
-) -> None:
+def test_the_advntr_arm_is_replayed_natively_and_never_approximated(tmp_path: Path) -> None:
     """adVNTR statistics come from the installed evaluator; this only mocks the seam."""
     from vntyper.scripts import calibration_cutoff_optimize as module
 
     cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
     args = _namespace(
-        cohort_path, captures_path, caller=caller, advntr_executable=tmp_path / "advntr", min_specificity=1.0
+        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
     )
     seen: dict[str, Any] = {}
 
@@ -659,7 +665,7 @@ def test_the_advntr_arm_is_replayed_natively_and_never_approximated(
         atomic_output(output, lambda staging: module.run_cutoff_optimization(args, staging))
     document = json.loads((output / "report.json").read_bytes())
 
-    assert document["caller"] == caller
+    assert document["caller"] == "both"
     assert seen["executable_path"] == tmp_path / "advntr"
     assert set(seen["captures"]) == {
         "specimen-alpha",
@@ -671,7 +677,75 @@ def test_the_advntr_arm_is_replayed_natively_and_never_approximated(
     }
     assert document["provenance"]["advntr"] == {"sha256": "d" * 64}
     best = max(row["counts"]["true_positives"] for row in document["cutoffs"])
-    assert best == expected_true_positives
+    assert best == 3
+
+
+def test_caller_both_states_that_only_kestrel_axes_are_searched(tmp_path: Path) -> None:
+    """The adVNTR arm of ``--caller both`` is replayed at its baseline policy, and says so."""
+    from vntyper.scripts import calibration_cutoff_optimize as module
+    from vntyper.scripts.calibration_cutoff_report import render_cutoff_report_html
+
+    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
+    args = _namespace(
+        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
+    )
+
+    def grid(capture_paths: Any, policies: Any, **kwargs: Any) -> Any:
+        return _advntr_result(sorted(policies), sorted(capture_paths), "specimen-echo")
+
+    output = tmp_path / "derived"
+    with patch.object(module, "evaluate_advntr_cutoff_grid", grid):
+        atomic_output(output, lambda staging: module.run_cutoff_optimization(args, staging))
+    document = json.loads((output / "report.json").read_bytes())
+    scope = document["search_scope"]
+
+    assert scope["searched_caller"] == "kestrel"
+    assert scope["searched_axes"] == [DEPTH_FLOOR_LINKED]
+    assert scope["advntr_policy"] == "held-at-baseline"
+    assert scope["advntr_distinct_executions"] == 1
+    assert "#269" in scope["note"]
+    page = render_cutoff_report_html(document)
+    assert "adVNTR arm was replayed at its baseline policy" in page
+
+
+def test_a_kestrel_run_records_that_advntr_was_not_evaluated(tmp_path: Path) -> None:
+    """The scope section is present on every run, not only on the adVNTR ones."""
+    _, document, _ = _run(tmp_path)
+
+    assert document["search_scope"]["advntr_policy"] == "not-evaluated"
+    assert document["search_scope"]["advntr_distinct_executions"] is None
+
+
+def test_an_advntr_grid_that_varies_the_advntr_policy_contradicts_the_scope_and_aborts(tmp_path: Path) -> None:
+    """ "Held at baseline" is checked against the grid, never assumed."""
+    from vntyper.scripts import calibration_cutoff_optimize as module
+
+    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
+    args = _namespace(
+        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
+    )
+
+    def grid(capture_paths: Any, policies: Any, **kwargs: Any) -> Any:
+        result = _advntr_result(sorted(policies), sorted(capture_paths), "specimen-echo")
+        varied = tuple(replace(entry, execution_id=f"exec-{index}") for index, entry in enumerate(result.policies))
+        return replace(result, policies=varied)
+
+    with patch.object(module, "evaluate_advntr_cutoff_grid", grid), pytest.raises(ValueError, match="baseline"):
+        atomic_output(tmp_path / "derived", lambda staging: module.run_cutoff_optimization(args, staging))
+
+
+def test_caller_advntr_is_refused_because_no_advntr_axis_is_derived(tmp_path: Path) -> None:
+    """An adVNTR-only search would tie every candidate back to the baseline, so it is refused."""
+    from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
+
+    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
+    args = _namespace(cohort_path, captures_path, caller="advntr", advntr_executable=tmp_path / "advntr")
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+
+    with pytest.raises(ValueError, match=r"adVNTR cutoff axes are not derived yet.*#269"):
+        run_cutoff_optimization(args, staging)
+    assert not any(staging.iterdir())
 
 
 def test_the_provenance_digests_cover_the_manifests_and_every_capture(tmp_path: Path) -> None:
@@ -692,3 +766,48 @@ def test_the_provenance_digests_cover_the_manifests_and_every_capture(tmp_path: 
         "specimen-foxtrot",
     }
     assert provenance["generator_version"]
+
+
+def test_a_specificity_floor_reachable_only_by_rejecting_everything_is_feasible(tmp_path: Path) -> None:
+    """A negative scoring above every positive can only be excluded by the endpoint sentinel."""
+    cohort: dict[str, tuple[str, tuple[str, ...], str | None]] = {
+        "specimen-bravo": ("positive", ("0.006",), None),
+        "specimen-charlie": ("negative", ("0.014",), None),
+    }
+    successful, document, _ = _run(tmp_path, cohort, objective="max-sensitivity-at-specificity", min_specificity=1.0)
+
+    assert successful is True
+    assert document["selection"]["value"] == SENTINEL
+    assert _by_value(document)[repr(SENTINEL)]["counts"]["specificity"] == 1.0
+    others = [row["counts"]["specificity"] for row in document["cutoffs"] if row["value"] != SENTINEL]
+    assert max(others) == 0.0
+
+
+def test_every_fold_selects_only_breakpoints_its_training_samples_observed(tmp_path: Path) -> None:
+    """A held-out sample's Depth_Score must never become the cutoff its own fold uses."""
+    _, document, _ = _run(tmp_path)
+    evaluation = document["evaluation"]
+    scores = {name: {float(score) for score in values} for name, (_, values, _) in STANDARD_COHORT.items()}
+    rows = {row["policy_id"]: row for row in document["cutoffs"]}
+    anchor = document["baseline_parity"]["anchor_candidate_ids"][DEPTH_FLOOR_LINKED]
+    always = {"baseline", anchor, *(row["policy_id"] for row in rows.values() if row["value"] == SENTINEL)}
+
+    assert evaluation["fold_admissibility"] == "training-observed-breakpoints"
+    assert any(fold["admissible_candidates"] < len(rows) for fold in evaluation["folds"])
+    for fold in evaluation["folds"]:
+        training = set(fold["training_keys"])
+        admissible = {
+            policy
+            for policy, row in rows.items()
+            if policy in always or any(row["value"] in scores[key] for key in training)
+        }
+        assert fold["admissible_candidates"] == len(admissible)
+        assert fold["used_policy"] in admissible
+
+
+def test_the_report_comparators_match_the_axis_definitions() -> None:
+    """The optimize probe table and the axis module must agree on every comparator."""
+    from vntyper.scripts.calibration_cutoff_axes import axis_comparison
+    from vntyper.scripts.calibration_cutoff_optimize import AXIS_COMPARISON
+
+    assert {name: axis_comparison(name) for name in AXIS_COMPARISON} == dict(AXIS_COMPARISON)

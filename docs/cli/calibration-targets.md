@@ -55,7 +55,7 @@ estimate is available, the pipeline records a sensitivity tier in
 
 | Tier | Estimate | Summary code | Report |
 |---|---|---|---|
-| `below` | at or under the caution threshold | none | estimate with its uncertainty |
+| `below` | at or under the caution threshold | none | estimate with the model's typical error |
 | `caution` | above `caution_threshold` | `vntr_length_exceeds_sensitivity_cutoff` | badge and help text |
 | `high` | above `high_threshold` | the caution code and `vntr_length_high_sensitivity_risk` | badge, help text, and a header notice when the sample has no finding |
 | `not-assessed` | no estimate | none | nothing |
@@ -65,7 +65,7 @@ The policy lives in the run configuration and is recorded next to the tier as
 
 ```json
 "length_estimation": {
-  "sensitivity": {"caution_threshold": 110.0, "high_threshold": 150.0, "uncertainty_repeats": 14.3}
+  "sensitivity": {"caution_threshold": 110.0, "high_threshold": 150.0, "typical_error_repeats": 14.3}
 }
 ```
 
@@ -74,8 +74,10 @@ displays, so a report never shows a value that "exceeds" a cutoff it equals. The
 in the complete-count frame the cutoffs are defined on. A `canonical-only` estimate is moved into that frame by the
 packaged conversion (+9 terminal units per allele, +18 in total); a `source-reported`
 estimate has no known frame and is recorded as `not-assessed`. Approved-path models are
-complete by contract. The report shows `± uncertainty_repeats` only for the packaged
-model, whose held-out error it is. A configuration without the block records no tier. Report wording comes from the `length_sensitivity` block of
+complete by contract. For the packaged model only, the report shows
+`typical_error_repeats` beside the estimate, worded as a typical error. It is never shown
+as "± 14", because it is not an interval (see below). A configuration without the block
+records no tier. Report wording comes from the `length_sensitivity` block of
 `report_config.json`. The cutoffs are not part of the resume identity.
 
 Basis for the defaults, measured on the 76 PacBio-truth exomes with leave-one-out
@@ -86,7 +88,34 @@ predictions:
   130 are under-estimated by about 12 repeats on average. The high trigger therefore sits
   below the length it targets: 150 on the estimate catches 7 of the 8 arrays truly above
   160, where simulated Kestrel sensitivity falls to 0.75 and lower.
-- `uncertainty_repeats` is the leave-one-out RMSE of the packaged model (14.26).
+- `typical_error_repeats` is the leave-one-out RMSE of the packaged model (14.26). It is
+  a typical error, not an interval. Only 55 of the 76 leave-one-out residuals fall within
+  ±14. The empirical 2.5% and 97.5% residual quantiles are −29.4 and +28.2, so an
+  empirical 95% band would be about ±29 repeats. The report therefore words the value as
+  "typical error ≈14 repeats" and never attaches it to the estimate as "±". Summaries
+  recorded before this rename carry the same value as `uncertainty_repeats`, and the
+  report still reads them.
+
+#### Limits of the tier evidence
+
+- **The cutoffs were chosen on the numbers that describe them.** 110 and 150 were picked
+  on the same 76 leave-one-out predictions that the figures above report. No held-out
+  set confirms them.
+- **The high tier is imprecise.** At 150 on the estimate, the tier catches 7 of the 8
+  arrays truly above 160 repeats (Wilson 95% CI 53–98%). It flags 15 of the 76 samples,
+  and only 7 of those 15 are truly above 160.
+- **The pooled length performance is selection-adjusted.** The leave-one-out MAE of 10.80
+  repeats (95% bootstrap CI 8.8–13.0) was measured after several candidate models were
+  compared on the same predictions. It is therefore optimistic for this model.
+- **Transfer between cohorts is asymmetric.** Trained on the German cohort and applied to
+  the French one, MAE is 10.1. Trained on the French cohort and applied to the German
+  one, MAE is 27.1 with R² −0.69. See
+  [#336](https://github.com/hassansaei/VNtyper/issues/336).
+- **Out-of-range input still gets an estimate.** Features outside the training range add
+  an extrapolation warning, but the estimate and its tier are still reported. The model
+  contract binds no assay or aligner, so nothing stops other input from being scored.
+  Input other than Twist exome data is out of scope, and its estimates and tiers are not
+  supported by this evidence.
 
 ## Development calibration with optional truth
 
@@ -183,6 +212,17 @@ returns those values as the axis breakpoints, always including the baseline valu
 shipped operating point appears on every curve. Breakpoints the policy decoder refuses are
 recorded with the decoder's own message rather than dropped.
 
+Production floors are inclusive: a score equal to the floor passes. A threshold equal to
+the largest observed value therefore still passes that value, so the observed values alone
+never include the operating point that rejects every row. Each derived axis therefore adds
+one **endpoint sentinel**: the next representable value above the largest observation on a
+`>=` axis, or below the smallest on a `<=` axis (`+1`/`-1` on integer axes). The report
+records it as `endpoint_sentinel` in the axis document. The sentinel is left out when the
+baseline value already lies beyond the observed range, and it is recorded as rejected when
+the policy decoder refuses it. It is kept when `--max-breakpoints` caps the axis. Without
+it, a specificity floor that only "reject everything" can meet would be reported as
+unreachable.
+
 `calibration_cutoff_grid.build_cutoff_grid` remains available for an explicitly declared
 grid. Declared values are a supplement to the derived breakpoints, not a replacement.
 
@@ -211,6 +251,21 @@ are replayed through every production gate and through selection; a final result
 cannot substitute for replay, because it no longer contains the candidates that were
 filtered out.
 
+### Which caller is searched
+
+`vntyper calibrate optimize` derives and searches Kestrel axes only. No adVNTR cutoff
+axis is derived yet (tracked in [#269](https://github.com/hassansaei/VNtyper/issues/269)).
+
+- `--caller kestrel` (the default) searches the Kestrel axes against Kestrel calls.
+- `--caller both` searches the same Kestrel axes. It pairs every Kestrel candidate with
+  the adVNTR arm replayed natively at its **baseline** policy. The adVNTR policy never
+  varies. The report records this under `search_scope`
+  (`advntr_policy: "held-at-baseline"`) and states it on the HTML page. The run fails if
+  the adVNTR grid executed more than one adVNTR policy.
+- `--caller advntr` is refused with a usage error. Without an adVNTR axis every
+  candidate would replay the same adVNTR policy, so selection could only return the
+  baseline.
+
 ### Choosing an operating point
 
 `calibration_cutoff_selection.SearchSpec` requires an objective. There is no default.
@@ -234,6 +289,31 @@ samples of unknown truth stay visible in their own denominator. Full-data operat
 describe the searched cohort; pooled held-out predictions assess fold-selected policies
 separately. Neither is independent validation once the data or the search design has been
 examined.
+
+The breakpoints are the union of the values observed in every sample, so a breakpoint can
+exist only because one sample produced it. Inside an outer fold, a candidate is therefore
+admissible only when at least one **training** sample of that fold observed its value.
+Otherwise a held-out sample's own feature values would decide which cutoffs its fold can
+select, and the held-out estimate would be optimistic. The baseline, the candidate that
+reproduces it, and the endpoint sentinel are admissible in every fold. Each fold record
+states how many candidates were admissible (`admissible_candidates`), and the evaluation
+records `fold_admissibility: "training-observed-breakpoints"`. The full-data selection,
+which produces the exported profile, still searches every candidate.
+
+Outer folds are allocated stratified by truth label (positive, negative, unknown). Each
+scored row is the only representative of its group. Groups are shuffled within each label
+and dealt across folds in turn, so a class with at least as many groups as folds is present
+in every fold. With 27 negatives, no fold can be left without negatives unless more than
+27 folds are requested. The labels only steer allocation; each fold's selection still reads
+training truth alone. Length evaluation keeps its unstratified allocation.
+
+The HTML report shows the held-out estimate first. It gives the pooled held-out TP, FN,
+TN and FP, sensitivity and specificity with exact 95% intervals, and each fold's policy
+and admissible-candidate count. The intervals cover the pooled held-out calls and exclude
+selection uncertainty. A warning appears when a held-out rate falls below the floor the
+objective requested. The floor is enforced on training folds, so held-out performance can
+fall short of it. The selection and the table of every tested cutoff follow, labelled as
+descriptive searched-cohort points. They are not validated performance.
 
 ### Endpoints are reported separately
 

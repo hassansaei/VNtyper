@@ -67,6 +67,25 @@ def _bound_arms(
     return validated
 
 
+def _bound_contributors(
+    contributors: object, arms: Mapping[str, tuple[CallerObservation, ...]], baseline_id: str
+) -> dict[str, frozenset[str]] | None:
+    """Validate the candidate-to-contributing-samples map against the bound roster."""
+    if contributors is None:
+        return None
+    if not isinstance(contributors, Mapping):
+        _fail("cutoff evaluation contributors must map candidate IDs to sample keys")
+    roster = {row.key for row in arms[baseline_id]}
+    bound: dict[str, frozenset[str]] = {}
+    for name, keys in contributors.items():
+        if name not in arms or name == baseline_id:
+            _fail(f"cutoff evaluation contributors name {name!r}, which is not a non-baseline candidate")
+        if not isinstance(keys, frozenset) or not keys or not keys <= roster:
+            _fail(f"cutoff evaluation contributors for {name!r} must be a nonempty frozenset of roster keys")
+        bound[name] = keys
+    return bound
+
+
 def evaluate_cutoff_arms(
     arms: Mapping[str, Sequence[CallerObservation]],
     *,
@@ -74,6 +93,7 @@ def evaluate_cutoff_arms(
     spec: SearchSpec,
     folds: int = 5,
     seed: int = 20260915,
+    contributors: Mapping[str, frozenset[str]] | None = None,
 ) -> dict[str, Any]:
     """Compare a fixed native baseline with training-selected held-out predictions.
 
@@ -81,21 +101,42 @@ def evaluate_cutoff_arms(
         arms: Actual replay/native outcomes over the same complete primary roster.
         baseline_id: Unchanged policy retained in the candidate inventory.
         spec: Explicit training objective and optional class-rate constraints.
-        folds: Requested number of outcome-independent outer folds, at least two.
+        folds: Requested number of outer folds, at least two. Groups are allocated
+            stratified by truth label, so a class with at least ``folds`` groups is
+            present in every fold.
         seed: Seed for group allocation and descriptive paired uncertainty.
+        contributors: Optional map from a data-derived candidate ID to the sample keys
+            whose observed feature values produced its threshold. Inside an outer fold
+            such a candidate is admissible only when at least one contributor is a
+            training sample, so a held-out sample's feature values cannot create the
+            breakpoint its own fold selects. Candidates absent from the map (the
+            baseline, anchors reproducing it, endpoint sentinels) are always admissible.
+            ``None`` keeps every candidate admissible in every fold. The full-data
+            selection always searches every candidate.
 
     Returns:
         JSON-compatible counts, exact metric intervals, fold decisions and individual
         held-out predictions. Full-data selection and operating points are separate.
         An absent training class uses the unchanged baseline as an explicit fallback.
-        No final selection or insufficient groups produces unavailable status.
+        No final selection or insufficient groups produces unavailable status. Each
+        fold records how many candidates were admissible to its selection.
 
     Raises:
-        ValueError: For incomplete/inconsistent rosters, invalid folds or search spec.
+        ValueError: For incomplete/inconsistent rosters, invalid folds or search spec,
+            or contributors naming an unknown candidate, the baseline, or non-roster keys.
     """
     validated = _bound_arms(arms, baseline_id)
+    derived = _bound_contributors(contributors, validated, baseline_id)
     baseline = validated[baseline_id]
-    assignments = group_folds({r.key: r.group_key for r in baseline}, folds=folds, seed=seed)
+    # Rows are one representative per independent group, so each group has exactly one
+    # truth label. Stratifying on it keeps a class with at least ``folds`` groups present
+    # in every fold; the labels steer allocation only, never a fold's selection.
+    assignments = group_folds(
+        {r.key: r.group_key for r in baseline},
+        folds=folds,
+        seed=seed,
+        strata={r.group_key: r.truth_positive for r in baseline},
+    )
     indices = {name: {row.key: row for row in rows} for name, rows in validated.items()}
     heldout: dict[str, CallerObservation] = {}
     used_policy: dict[str, str] = {}
@@ -103,7 +144,13 @@ def evaluate_cutoff_arms(
     for fold in sorted(set(assignments.values())):
         training = sorted(key for key, value in assignments.items() if value != fold)
         held = sorted(key for key, value in assignments.items() if value == fold)
-        selection = select_cutoff_policy(validated, training, baseline_id, spec)
+        seen = set(training)
+        admissible = {
+            name: rows
+            for name, rows in validated.items()
+            if derived is None or name not in derived or not derived[name].isdisjoint(seen)
+        }
+        selection = select_cutoff_policy(admissible, training, baseline_id, spec)
         policy_id = selection.policy_id if selection.policy_id is not None else baseline_id
         for key in held:
             heldout[key] = indices[policy_id][key]
@@ -113,6 +160,7 @@ def evaluate_cutoff_arms(
                 "fold": fold,
                 "training_keys": training,
                 "held_out_keys": held,
+                "admissible_candidates": len(admissible),
                 "selection": _selection_document(selection),
                 "used_policy": policy_id,
                 "fallback_reason": selection.reason if selection.policy_id is None else None,
@@ -130,6 +178,7 @@ def evaluate_cutoff_arms(
         "objective": spec.objective,
         "min_sensitivity": spec.min_sensitivity,
         "min_specificity": spec.min_specificity,
+        "fold_admissibility": "all-candidates" if derived is None else "training-observed-breakpoints",
         "final_selection": _selection_document(final),
         "folds": fold_records,
         "rows": [

@@ -17,7 +17,10 @@ CAUTION_CODE = "vntr_length_exceeds_sensitivity_cutoff"
 HIGH_CODE = "vntr_length_high_sensitivity_risk"
 SensitivityTier = Literal["below", "caution", "high", "not-assessed"]
 TIERS: tuple[SensitivityTier, ...] = ("below", "caution", "high", "not-assessed")
-_POLICY_FIELDS = ("caution_threshold", "high_threshold", "uncertainty_repeats")
+_POLICY_FIELDS = ("caution_threshold", "high_threshold", "typical_error_repeats")
+#: Summaries recorded before the rename carry the same value under its old, misleading
+#: name. It is the model's leave-one-out RMSE, a typical error, never an interval.
+_LEGACY_FIELDS = ("caution_threshold", "high_threshold", "uncertainty_repeats")
 #: Cutoffs are defined on complete counts (all units, including the nine invariant
 #: terminal units per allele). A canonical-only estimate is moved into that frame by the
 #: packaged ``canonical-only-plus-nine-terminals-v1`` conversion; a source-reported one
@@ -28,11 +31,17 @@ _COMPLETE_FRAME_OFFSET: dict[object, float] = {None: 0.0, "complete": 0.0, "cano
 
 @dataclass(frozen=True)
 class LengthSensitivityPolicy:
-    """Validated cutoffs (repeat units, strict ``>``) and the displayed estimate uncertainty."""
+    """Validated cutoffs (repeat units, strict ``>``) and the model's typical error.
+
+    ``typical_error_repeats`` is the packaged model's leave-one-out RMSE (14.26 repeats on
+    the 76-exome training set). It is a typical error, not an interval: only 55 of the 76
+    leave-one-out residuals fall within +/-14, and the empirical 2.5/97.5% residual
+    quantiles are -29.4/+28.2. The report therefore never renders it with a bare "±".
+    """
 
     caution_threshold: float
     high_threshold: float
-    uncertainty_repeats: float
+    typical_error_repeats: float
 
     def as_dict(self) -> dict[str, float]:
         """Return the policy as recorded in ``pipeline_summary.json``."""
@@ -49,7 +58,9 @@ def decode_length_sensitivity_policy(raw: object) -> LengthSensitivityPolicy:
     """Validate a policy mapping with exactly the three closed fields.
 
     Args:
-        raw: The configured or recorded policy mapping.
+        raw: The configured or recorded policy mapping. A summary recorded before the
+            rename spells the third field ``uncertainty_repeats``; it is read as
+            ``typical_error_repeats``.
 
     Returns:
         The validated policy.
@@ -58,6 +69,8 @@ def decode_length_sensitivity_policy(raw: object) -> LengthSensitivityPolicy:
         ValueError: On missing or extra keys, non-numeric, non-finite or non-positive
             values, or a caution cutoff not below the high cutoff.
     """
+    if isinstance(raw, Mapping) and set(raw) == set(_LEGACY_FIELDS):
+        raw = dict(zip(_POLICY_FIELDS, (raw[name] for name in _LEGACY_FIELDS), strict=True))
     if not isinstance(raw, Mapping) or set(raw) != set(_POLICY_FIELDS):
         raise ValueError("length sensitivity policy fields differ from the closed contract")
     policy = LengthSensitivityPolicy(*(_positive(raw[name], name) for name in _POLICY_FIELDS))
@@ -164,7 +177,7 @@ def apply_length_sensitivity(fields: Mapping[str, object], policy: LengthSensiti
 _WORD_FIELDS: dict[str, frozenset[str]] = {
     "caution": frozenset({"badge", "help"}),
     "high": frozenset({"badge", "help", "notice_not_positive"}),
-    "labels": frozenset({"notice_prefix", "cohort_kpi_label", "cohort_kpi_detail"}),
+    "labels": frozenset({"notice_prefix", "cohort_kpi_label", "cohort_kpi_detail", "typical_error"}),
 }
 
 
@@ -176,7 +189,7 @@ class SensitivityView:
     badge: str | None
     notice: str | None
     help: str | None
-    uncertainty: str | None
+    typical_error: str | None
     value: str | None = None
     notice_prefix: str | None = None
 
@@ -245,31 +258,31 @@ def build_sensitivity_view(
         raise ValueError("recorded length sensitivity warning codes differ from the recorded tier")
     if expected == "not-assessed":
         return SensitivityView(expected, None, None, None, None)
-    # The recorded uncertainty is the packaged model's own held-out error; other models
-    # never earned it, so their estimates are shown bare.
-    uncertainty = (
-        f"± {_count(float(round(policy.uncertainty_repeats)))}"
+    # The recorded typical error is the packaged model's own leave-one-out RMSE; other
+    # models never earned it, so their estimates are shown bare. It is worded by the
+    # configuration as a typical error and never attached to the estimate as "±", which
+    # would read as an interval it is not (see LengthSensitivityPolicy).
+    typical_error = (
+        words["labels"]["typical_error"].format(error=_count(float(round(policy.typical_error_repeats))))
         if summary.get("length_model_source") == "packaged-research"
         else None
     )
-    # Beside a ±14 error bar, a second decimal is precision the estimate does not have.
-    value = None if uncertainty is None else f"{cast(float, estimate):.1f}"
+    # With a typical error of about 14 repeats, a second decimal is precision the estimate
+    # does not have.
+    value = None if typical_error is None else f"{cast(float, estimate):.1f}"
     if expected == "below":
-        return SensitivityView(expected, None, None, None, uncertainty, value)
+        return SensitivityView(expected, None, None, None, typical_error, value)
     block = words[expected]
     threshold = policy.high_threshold if expected == "high" else policy.caution_threshold
     shown = _count(_complete_tenth(cast(float, estimate), summary.get("length_count_convention")))
-    values = {
-        "threshold": _count(threshold),
-        "estimate": shown if uncertainty is None else f"{shown} {uncertainty}",
-    }
+    values = {"threshold": _count(threshold), "estimate": shown}
     notice = block["notice_not_positive"].format(**values) if expected == "high" and not is_positive else None
     return SensitivityView(
         expected,
         block["badge"].format(**values),
         notice,
         block["help"].format(**values),
-        uncertainty,
+        typical_error,
         value,
         words["labels"]["notice_prefix"] if notice is not None else None,
     )

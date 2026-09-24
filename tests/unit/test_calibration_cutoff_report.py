@@ -77,6 +77,25 @@ def _curve(axis: str) -> dict[str, Any]:
     }
 
 
+#: Pooled held-out metrics in the exact shape ``evaluate_cutoff_arms`` publishes: held-out
+#: specificity 22/27 = 0.815 sits below a requested 0.85 floor the full data met.
+_HELD_OUT: dict[str, Any] = {
+    "counts": {
+        "true_positives": 50,
+        "false_negatives": 5,
+        "true_negatives": 22,
+        "false_positives": 5,
+        "no_calls": 0,
+        "sensitivity": 50 / 55,
+        "specificity": 22 / 27,
+    },
+    "exact": {
+        "sensitivity": {"events": 50, "total": 55, "estimate": 50 / 55, "lower": 0.8005, "upper": 0.9698},
+        "specificity": {"events": 22, "total": 27, "estimate": 22 / 27, "lower": 0.6192, "upper": 0.9370},
+    },
+}
+
+
 def _document(**overrides: Any) -> dict[str, Any]:
     """A complete report document; the writers must not need anything beyond this."""
     document: dict[str, Any] = {
@@ -85,6 +104,13 @@ def _document(**overrides: Any) -> dict[str, Any]:
         "successful": True,
         "usage_hint": "vntyper pipeline --research-decision-profile <output>/research-decision-profile.json",
         "caller": "kestrel",
+        "search_scope": {
+            "searched_caller": "kestrel",
+            "searched_axes": ["depth_floor_linked"],
+            "advntr_policy": "not-evaluated",
+            "advntr_distinct_executions": None,
+            "note": "Only Kestrel axes were searched; adVNTR was not evaluated.",
+        },
         "objective": {"objective": "youden-j", "min_sensitivity": None, "min_specificity": 1.0},
         "folds_requested": 3,
         "seed": 20260915,
@@ -170,11 +196,13 @@ def _document(**overrides: Any) -> dict[str, Any]:
                     "training_keys": ["specimen-alpha"],
                     "held_out_keys": ["specimen-charlie"],
                     "used_policy": "depth_floor_linked-0001",
+                    "admissible_candidates": 7,
                     "fallback_reason": None,
                     "selection": {"policy_id": "depth_floor_linked-0001", "reason": "selected"},
                 }
             ],
-            "held_out": {"counts": {"true_positives": 2, "false_positives": 0}},
+            "fold_admissibility": "training-observed-breakpoints",
+            "held_out": _HELD_OUT,
             "full_data_operating_points": {},
             "full_data_operating_points_scope": "descriptive searched-cohort points",
             "rows": [],
@@ -369,6 +397,67 @@ def test_the_html_states_the_objective_the_selection_and_the_plateau(tmp_path: P
     assert "step function" in html
     assert "no negative-truth sample lies inside the tested band" in html
     assert "research-decision-profile" in html
+
+
+def test_the_html_states_which_caller_the_search_varied(tmp_path: Path) -> None:
+    """A ``--caller both`` page must say the adVNTR arm was held at its baseline policy."""
+    scope = {
+        "searched_caller": "kestrel",
+        "searched_axes": ["depth_floor_linked", "gg_gate_independent"],
+        "advntr_policy": "held-at-baseline",
+        "advntr_distinct_executions": 1,
+        "note": "The adVNTR arm was replayed at its baseline policy for every candidate (issue #269).",
+    }
+    output = _write(tmp_path, _document(caller="both", search_scope=scope))
+    html = (output / "report.html").read_text(encoding="utf-8")
+
+    assert "depth_floor_linked, gg_gate_independent" in html
+    assert "held-at-baseline" in html
+    assert "replayed at its baseline policy for every candidate (issue #269)" in html
+
+
+def test_the_html_shows_held_out_performance_before_any_full_data_number(tmp_path: Path) -> None:
+    """The validated-looking full-data table must not be the first performance a reader sees."""
+    objective = {"objective": "max-sensitivity-at-specificity", "min_sensitivity": None, "min_specificity": 0.85}
+    output = _write(tmp_path, _document(objective=objective))
+    html = (output / "report.html").read_text(encoding="utf-8")
+
+    held = html.index("Held-out performance (cross-validated)")
+    assert held < html.index("<h2>Selection</h2>") < html.index("Every tested cutoff (descriptive")
+    assert "50/55 = 0.909 (95% CI 0.800-0.970)" in html
+    assert "22/27 = 0.815 (95% CI 0.619-0.937)" in html
+    assert "exclude selection uncertainty" in html
+    assert "Held-out specificity 0.815 is below the requested floor 0.85" in html
+    assert "Descriptive searched-cohort points" in html
+    assert "not validated performance" in html
+    assert "training-observed-breakpoints" in html
+    section = html[held : html.index("<h2>Selection</h2>")]
+    assert "depth_floor_linked-0001" in section and "<td>7</td>" in section
+
+
+def test_the_html_says_so_when_no_held_out_estimate_exists(tmp_path: Path) -> None:
+    document = _document()
+    document["evaluation"] = {**document["evaluation"], "held_out": None, "status_reason": "insufficient-groups"}
+    html = (_write(tmp_path, document) / "report.html").read_text(encoding="utf-8")
+
+    assert "No held-out estimate is available: insufficient-groups" in html
+
+
+def test_a_held_out_rate_without_eligible_samples_is_shown_as_undefined(tmp_path: Path) -> None:
+    document = _document()
+    held = {**_HELD_OUT, "exact": {**_HELD_OUT["exact"], "specificity": {"estimate": None}}}
+    document["evaluation"] = {**document["evaluation"], "held_out": held}
+    html = (_write(tmp_path, document) / "report.html").read_text(encoding="utf-8")
+
+    assert "undefined (no eligible samples)" in html
+
+
+def test_the_fold_tsv_records_how_many_candidates_each_fold_could_select(tmp_path: Path) -> None:
+    output = _write(tmp_path, _document())
+    lines = (output / "folds.tsv").read_text(encoding="utf-8").splitlines()
+
+    assert lines[0].split("\t")[-1] == "admissible_candidates"
+    assert lines[1].split("\t")[-1] == "7"
 
 
 def test_the_html_escapes_untrusted_text(tmp_path: Path) -> None:

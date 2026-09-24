@@ -375,7 +375,7 @@
             line-height: 1.4;
         }
         .vntr-length-card[data-length-tier="high"] .length-warning-badge { border-color: currentColor; }
-        .length-uncertainty {
+        .length-typical-error {
             color: var(--ink-muted);
             font-weight: 400;
         }
@@ -1640,14 +1640,14 @@
                         <div class="length-value-group">
                             <span class="length-metric-value">
                                 {{- length_presentation.value -}}
-                                {%- if length_presentation.uncertainty_text %}
-                                    {{- " " -}}<span class="length-uncertainty">
-                                        {{- length_presentation.uncertainty_text -}}
-                                    </span>
-                                {%- endif %}
                                 {%- if length_presentation.status == "estimated" %}
                                     {{- " " -}}{{ length_presentation.unit }}
                                 {%- endif -%}
+                                {%- if length_presentation.typical_error_text %}
+                                    {{- " " -}}<span class="length-typical-error">
+                                        {{- length_presentation.typical_error_text -}}
+                                    </span>
+                                {%- endif %}
                             </span>
                             {%- if length_presentation.warning_badge %}
                                 <span class="length-warning-badge" role="status">

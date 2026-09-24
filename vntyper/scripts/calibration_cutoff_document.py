@@ -64,6 +64,13 @@ _PLATEAU_NOTE: Final[str] = (
     "so quoting the selected number alone is false precision."
 )
 _NO_SELECTION: Final[str] = "no tested cutoff satisfied the declared objective and its constraints"
+_SCOPE_NOTES: Final[Mapping[str, str]] = {
+    "held-at-baseline": (
+        "Only Kestrel axes were searched. The adVNTR arm was replayed at its baseline policy for every "
+        "candidate, because no adVNTR cutoff axis is derived yet (issue #269)."
+    ),
+    "not-evaluated": "Only Kestrel axes were searched; adVNTR was not evaluated.",
+}
 
 #: Per-axis candidates and their breakpoints, in ascending axis-value order.
 DerivedAxis = tuple[AxisBreakpoints, tuple[CutoffCandidate, ...]]
@@ -309,6 +316,21 @@ def _joint_points(inputs: CutoffReportInputs) -> dict[str, Any] | None:
     return joint_points_document(build_joint_points(labelled, inputs.anchors[inputs.derived[0][0].axis]))
 
 
+def _search_scope(inputs: CutoffReportInputs) -> dict[str, Any]:
+    """Which caller the search varied, and what happened to the adVNTR arm."""
+    policy = "held-at-baseline" if inputs.caller == "both" else "not-evaluated"
+    executions = (
+        None if inputs.advntr_result is None else len({entry.execution_id for entry in inputs.advntr_result.policies})
+    )
+    return {
+        "searched_caller": "kestrel",
+        "searched_axes": [axis.axis for axis, _ in inputs.derived],
+        "advntr_policy": policy,
+        "advntr_distinct_executions": executions,
+        "note": _SCOPE_NOTES[policy],
+    }
+
+
 def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
     """Assemble the complete ``calibration-cutoff-report-v1`` document.
 
@@ -354,6 +376,7 @@ def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
         "successful": selected is not None,
         "usage_hint": USAGE_HINT,
         "caller": inputs.caller,
+        "search_scope": _search_scope(inputs),
         "objective": {
             "objective": inputs.objective.objective,
             "min_sensitivity": inputs.objective.min_sensitivity,

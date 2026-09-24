@@ -39,10 +39,24 @@ def test_complete_evaluation_retains_actual_training_and_held_out_predictions():
     assert result["paired_differences"]["sensitivity"]["delta"] == 0.5
 
 
-def test_mutating_held_out_truth_cannot_change_its_fold_selection():
+def test_mutating_held_out_truth_cannot_change_its_fold_selection(monkeypatch):
+    """Given a fold allocation, selection reads training truth only.
+
+    Allocation is stratified by truth label, so relabelling a sample may legitimately move
+    it to another fold. The allocation is therefore frozen at the original one here, which
+    isolates the property under test: a held-out label never reaches its fold's selection.
+    """
+    from vntyper.scripts import calibration_cutoff_evaluation as module
     from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
 
     original = arms()
+    frozen = module.group_folds(
+        {row.key: row.group_key for row in original["baseline"]},
+        folds=2,
+        seed=7,
+        strata={row.group_key: row.truth_positive for row in original["baseline"]},
+    )
+    monkeypatch.setattr(module, "group_folds", lambda *args, **kwargs: dict(frozen))
     first = evaluate_cutoff_arms(original, spec=SearchSpec("balanced-accuracy"), folds=2, seed=7)
     fold = first["folds"][0]
     held = set(fold["held_out_keys"])
@@ -136,3 +150,87 @@ def test_missing_baseline_or_empty_population_is_refused(values):
 
     with pytest.raises(ValueError):
         evaluate_cutoff_arms(values, spec=SearchSpec("balanced-accuracy"))
+
+
+def test_outer_folds_are_stratified_by_truth_so_no_fold_lacks_a_class():
+    """27 negatives and 55 positives: every one of ten folds holds both classes."""
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    truth = (False,) * 27 + (True,) * 55
+    records = {"baseline": rows(truth, truth)}
+    for seed in (3, 7, 20260915):
+        result = evaluate_cutoff_arms(records, spec=SearchSpec("balanced-accuracy"), folds=10, seed=seed)
+        for fold in result["folds"]:
+            held = set(fold["held_out_keys"])
+            classes = {row.truth_positive for row in records["baseline"] if row.key in held}
+            assert classes == {False, True}, (seed, fold["fold"])
+
+
+def _leaky_arms():
+    """``leaky`` is the best candidate everywhere, but only sample ``0`` produced its value."""
+    values = arms()
+    return {"baseline": values["baseline"], "leaky": values["candidate"]}
+
+
+def test_a_candidate_contributed_only_by_held_out_samples_is_not_admissible_in_that_fold():
+    """Held-out feature values must not create the breakpoints a fold selects from."""
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    result = evaluate_cutoff_arms(
+        _leaky_arms(),
+        spec=SearchSpec("balanced-accuracy"),
+        folds=2,
+        seed=7,
+        contributors={"leaky": frozenset({"0"})},
+    )
+    by_holdout = {"0" in fold["held_out_keys"]: fold for fold in result["folds"]}
+
+    assert by_holdout[True]["used_policy"] == "baseline"
+    assert by_holdout[True]["admissible_candidates"] == 1
+    assert by_holdout[True]["selection"]["eligible_candidates"] == 1
+    assert by_holdout[False]["used_policy"] == "leaky"
+    assert by_holdout[False]["admissible_candidates"] == 2
+    # The full-data selection is not a fold, so it still searches the complete grid.
+    assert result["final_selection"]["policy_id"] == "leaky"
+    assert result["fold_admissibility"] == "training-observed-breakpoints"
+
+
+def test_without_contributors_every_candidate_stays_admissible_in_every_fold():
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    result = evaluate_cutoff_arms(_leaky_arms(), spec=SearchSpec("balanced-accuracy"), folds=2, seed=7)
+
+    assert all(fold["used_policy"] == "leaky" for fold in result["folds"])
+    assert all(fold["admissible_candidates"] == 2 for fold in result["folds"])
+    assert result["fold_admissibility"] == "all-candidates"
+
+
+def test_a_candidate_contributed_by_any_training_sample_stays_admissible():
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    every = frozenset(str(index) for index in range(8))
+    result = evaluate_cutoff_arms(
+        _leaky_arms(), spec=SearchSpec("balanced-accuracy"), folds=2, seed=7, contributors={"leaky": every}
+    )
+
+    assert all(fold["used_policy"] == "leaky" for fold in result["folds"])
+
+
+@pytest.mark.parametrize(
+    "contributors",
+    [
+        {"unknown-policy": frozenset({"0"})},
+        {"baseline": frozenset({"0"})},
+        {"leaky": frozenset({"not-a-sample"})},
+        {"leaky": frozenset()},
+        {"leaky": ["0"]},
+        [("leaky", frozenset({"0"}))],
+    ],
+)
+def test_malformed_contributors_are_refused(contributors):
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    with pytest.raises(ValueError, match="contributors"):
+        evaluate_cutoff_arms(
+            _leaky_arms(), spec=SearchSpec("balanced-accuracy"), folds=2, seed=7, contributors=contributors
+        )

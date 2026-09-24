@@ -104,7 +104,6 @@ def test_optimize_dispatches_through_the_shared_atomic_adapter(tmp_path: Path, m
     [
         ["--objective", "max-sensitivity-at-specificity"],
         ["--objective", "youden-j", "--caller", "both"],
-        ["--objective", "youden-j", "--caller", "advntr"],
     ],
 )
 def test_optimize_cross_argument_requirements_are_usage_errors(
@@ -129,6 +128,39 @@ def test_optimize_cross_argument_requirements_are_usage_errors(
 
     assert excinfo.value.code == 2
     assert "require" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("executable", [[], ["--advntr-executable", "/opt/advntr"]])
+def test_optimize_caller_advntr_is_a_usage_error_naming_the_missing_axes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], executable: list[str]
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "calibrate",
+            "optimize",
+            "--manifest",
+            str(tmp_path / "cohort.tsv"),
+            "--captures",
+            str(tmp_path / "captures.tsv"),
+            "--output",
+            str(tmp_path / "derived"),
+            "--objective",
+            "youden-j",
+            "--caller",
+            "advntr",
+            *executable,
+        ]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_calibrate.handle_calibrate(args, {}, build_parser(), logging.INFO, None)
+
+    assert excinfo.value.code == 2
+    error = capsys.readouterr().err
+    assert "adVNTR cutoff axes are not derived yet" in error
+    assert "#269" in error
+    assert "--caller both" in error
+    assert not (tmp_path / "derived").exists()
 
 
 @pytest.mark.parametrize("operation", sorted(_COMMANDS))

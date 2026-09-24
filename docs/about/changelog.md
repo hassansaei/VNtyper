@@ -6,6 +6,18 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.39 (2026-09-24)
+
+### Cutoff optimization and length-tier reporting corrections
+
+- **`calibrate optimize --caller advntr` is refused**: No adVNTR cutoff axis is derived yet ([#269](https://github.com/hassansaei/VNtyper/issues/269)), so every candidate replayed the same adVNTR policy and selection could only return the baseline. `--caller both` searches the Kestrel axes only. It holds the adVNTR arm at its baseline policy, records this under `search_scope` in `report.json` and states it on the page.
+- **Held-out estimate without leakage**: Inside an outer fold, a candidate cutoff is admissible only if a training sample of that fold observed its value. Before this, a held-out sample's own feature value could create the cutoff its fold selected, which made the held-out estimate optimistic. Each fold records `admissible_candidates`.
+- **Reject-everything endpoint**: Production floors pass a score equal to the floor, so the observed values alone never included the cutoff that rejects every row. Each derived axis now adds one endpoint sentinel just beyond the observed range (`endpoint_sentinel`).
+- **Truth-stratified folds**: Cutoff outer folds are allocated stratified by truth label, so no fold is left without negatives when there are at least as many negatives as folds. Length evaluation is unchanged.
+- **Report page**: The optimize `report.html` now shows the pooled held-out TP/FN/TN/FP, sensitivity and specificity with their intervals before any full-data number. It warns when a held-out rate falls below the requested floor and labels the full-data table as descriptive.
+- **Length typical error**: The length estimate is no longer shown as "± 14". That value is the model's leave-one-out RMSE, not an interval: only 55 of 76 residuals fall within ±14, and the empirical 95% band is about ±29. The configuration field is now `typical_error_repeats`, and recorded `uncertainty_repeats` summaries still render.
+- **Docs**: The [sensitivity tier](../cli/calibration-targets.md#sensitivity-tiers) documentation now covers the limits of the tier evidence: cutoffs chosen on the same predictions, the high tier's 7/8 recall (Wilson 95% CI 53–98%), the selection-adjusted MAE, the asymmetric cross-cohort transfer ([#336](https://github.com/hassansaei/VNtyper/issues/336)), and out-of-scope input.
+
 ## 2.0.38 (2026-09-23)
 
 ### Kestrel failures are reported with their cause, not as "no usable VCF" ([#338](https://github.com/hassansaei/VNtyper/issues/338))

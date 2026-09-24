@@ -1,6 +1,7 @@
 """Observed-value cutoff axes enumerate exactly the decisions labelled data can change."""
 
 import json
+import math
 from dataclasses import replace
 from fractions import Fraction
 
@@ -18,6 +19,7 @@ from vntyper.scripts.calibration_cutoff_axes import (
     STRUCTURAL_GATE_COLUMNS,
     AxisBreakpoints,
     axis_candidates,
+    axis_comparison,
     axis_document,
     declared_axis,
     derive_axis,
@@ -162,16 +164,17 @@ def test_alt_depth_band_keeps_mid_low_one_above_low_and_stays_integral():
     base = baseline()
     axis = derive_axis(ALT_DEPTH_BAND, {"s1": [Fraction(10), Fraction(20)]}, baseline=base)
     assert axis.pointers == tuple(sorted((ALT_LOW, ALT_MID_LOW)))
-    assert axis.values == (10, 20)
+    # 9 is the endpoint sentinel below the smallest observed value of this ``<=`` axis.
+    assert axis.values == (9, 10, 20) and axis.sentinel == 9
     assert all(type(value) is int for value in axis.values)
-    candidate = axis_candidates(base, axis)[0]
+    candidate = axis_candidates(base, axis)[1]
     assert candidate.policy.values[ALT_LOW] == 10 and candidate.policy.values[ALT_MID_LOW] == 11
 
 
 def test_active_region_axis_is_integral_and_moves_only_its_own_threshold():
     base = baseline()
     axis = derive_axis(ACTIVE_REGION, {"s1": [Fraction(150)]}, baseline=base)
-    assert axis.pointers == (ACTIVE,) and axis.values == (150, 200)
+    assert axis.pointers == (ACTIVE,) and axis.values == (149, 150, 200) and axis.sentinel == 149
     assert all(type(value) is int for value in axis.values)
     assert set(axis_candidates(base, axis)[0].parameters) == {ACTIVE}
 
@@ -197,9 +200,11 @@ def test_max_values_caps_in_rank_space_keeping_minimum_maximum_and_baseline():
     base = baseline()
     observed = fractions(0.0005, 0.001, 0.0015, 0.002, 0.0025, 0.003, 0.0035, 0.004, 0.0045, 0.005)
     axis = derive_axis(DEPTH_FLOOR_LINKED, {"s1": observed}, baseline=base, max_values=5)
-    assert axis.values == (0.0005, 0.0015, 0.003, 0.00469, 0.005)
-    assert axis.capped is True and axis.observed_count == 10
-    assert min(axis.values) == 0.0005 and max(axis.values) == 0.005 and 0.00469 in axis.values
+    sentinel = math.nextafter(0.005, math.inf)
+    # The sentinel above the observed maximum is the new maximum, so capping keeps it.
+    assert axis.values == (0.0005, 0.002, 0.0035, 0.00469, sentinel)
+    assert axis.capped is True and axis.observed_count == 10 and axis.sentinel == sentinel
+    assert min(axis.values) == 0.0005 and max(axis.values) == sentinel and 0.00469 in axis.values
 
 
 def test_max_values_keeps_a_boundary_baseline_and_does_not_cap_a_short_axis():
@@ -217,7 +222,9 @@ def test_out_of_range_breakpoints_are_rejected_with_a_reason_rather_than_raising
     # outside the decoder's [0, 1] range is refused, and it is refused with a reason.
     axis = derive_axis(DEPTH_FLOOR_LINKED, {"s1": fractions(0.001, 0.9, 1.5)}, baseline=base)
     assert axis.values == (0.001, 0.00469, 0.9)
-    assert [value for value, _ in axis.rejected] == [1.5]
+    # The sentinel beyond 1.5 is out of range too, so it is rejected the same way.
+    assert [value for value, _ in axis.rejected] == [1.5, math.nextafter(1.5, math.inf)]
+    assert axis.sentinel is None
     assert all(isinstance(reason, str) and reason for _, reason in axis.rejected)
     assert axis.observed_count == 3
 
@@ -308,7 +315,8 @@ def test_axis_document_round_trips():
     assert document["schema_version"] == "calibration-cutoff-axis-v1"
     assert document["axis"] == DEPTH_FLOOR_LINKED and document["statistic"] == "Depth_Score"
     assert document["pointers"] == list(axis.pointers) and document["values"] == list(axis.values)
-    assert document["rejected"] == [{"value": 1.5, "reason": document["rejected"][0]["reason"]}]
+    assert [entry["value"] for entry in document["rejected"]] == [1.5, math.nextafter(1.5, math.inf)]
+    assert document["endpoint_sentinel"] is None
     assert json.loads(json.dumps(document)) == document
     assert canonical_sha256(document) == canonical_sha256(axis_document(axis))
     rebuilt = declared_axis(document["axis"], document["values"], baseline=base)
@@ -382,3 +390,90 @@ def test_linked_axis_never_strands_a_score_in_the_negative_fallback():
         floor = candidate.policy.values[FLOOR]
         assert candidate.policy.values[LOW] <= floor
         assert candidate.policy.values[GG] == floor
+
+
+def test_a_threshold_just_above_the_data_is_reachable_on_a_floor_axis():
+    """Inclusive floors pass the maximum itself, so rejecting everything needs a sentinel.
+
+    A positive at 0.005 and a negative at 0.01: without the sentinel the axis is
+    (0.00469, 0.005, 0.01) and every candidate passes the negative, so no candidate reaches
+    specificity 1.0. The next float above 0.01 rejects both rows.
+    """
+    base = baseline()
+    axis = derive_axis(DEPTH_FLOOR_LINKED, {"positive": fractions(0.005), "negative": fractions(0.01)}, baseline=base)
+    sentinel = math.nextafter(0.01, math.inf)
+
+    assert axis.values == (0.00469, 0.005, 0.01, sentinel)
+    assert axis.sentinel == sentinel and axis.observed_count == 2
+    top = axis_candidates(base, axis)[-1]
+    assert top.policy.values[FLOOR] == sentinel and top.policy.values[GG] == sentinel
+    assert top.policy.values[LOW] == SHIPPED[HIGH]
+    assert not top.policy.values[FLOOR] <= 0.01  # the production comparator now rejects the maximum
+
+
+def test_the_sentinel_of_a_less_or_equal_axis_lies_below_the_minimum():
+    """The minimum sits between the shipped low (0.00469) and high, so ``low <= high`` holds."""
+    base = baseline()
+    axis = derive_axis(DEPTH_SCORE_HIGH, {"s1": fractions(0.005, 0.02)}, baseline=base)
+    sentinel = math.nextafter(0.005, -math.inf)
+
+    assert axis.values == (sentinel, 0.005, 0.00515, 0.02) and axis.sentinel == sentinel
+
+
+def test_no_sentinel_when_the_baseline_already_lies_beyond_the_observed_range():
+    base = baseline()
+    floor = derive_axis(DEPTH_FLOOR_LINKED, {"s1": fractions(0.001, 0.002)}, baseline=base)
+    high = derive_axis(DEPTH_SCORE_HIGH, {"s1": fractions(0.01)}, baseline=base)
+
+    assert floor.values == (0.001, 0.002, 0.00469) and floor.sentinel is None
+    assert high.values == (0.00515, 0.01) and high.sentinel is None
+    assert derive_axis(DEPTH_FLOOR_LINKED, {}, baseline=base).sentinel is None
+
+
+def test_the_sentinel_is_added_when_the_baseline_equals_the_observed_edge():
+    base = baseline()
+    axis = derive_axis(DEPTH_FLOOR_LINKED, {"s1": fractions(0.001, 0.00469)}, baseline=base)
+
+    assert axis.values == (0.001, 0.00469, math.nextafter(0.00469, math.inf))
+
+
+def test_a_sentinel_the_decoder_refuses_lands_in_rejected():
+    """An integer ``<=`` axis at zero cannot go to -1; the refusal is reported, not raised."""
+    base = baseline()
+    axis = derive_axis(ACTIVE_REGION, {"s1": [Fraction(0), Fraction(150)]}, baseline=base)
+
+    assert axis.values == (0, 150, 200) and axis.sentinel is None
+    assert [value for value, _ in axis.rejected] == [-1.0]
+
+
+def test_a_sentinel_is_strictly_beyond_an_edge_that_is_not_a_float():
+    """A Fraction with no exact float still gets a sentinel strictly beyond it."""
+    base = baseline()
+    edge = Fraction(1, 30)
+    upward = derive_axis(DEPTH_FLOOR_LINKED, {"s1": [edge]}, baseline=base)
+    downward = derive_axis(DEPTH_SCORE_HIGH, {"s1": [Fraction(1, 199)]}, baseline=base)
+
+    assert upward.sentinel is not None and Fraction(upward.sentinel) > edge
+    assert downward.sentinel is not None and Fraction(downward.sentinel) < Fraction(1, 199)
+
+
+def test_declared_axes_never_carry_a_sentinel_and_forged_sentinels_are_refused():
+    base = baseline()
+    declared = declared_axis(GG_GATE_INDEPENDENT, [0.002, 0.01], baseline=base)
+    derived = derive_axis(GG_GATE_INDEPENDENT, {"s1": fractions(0.01)}, baseline=base)
+
+    assert declared.sentinel is None and axis_document(declared)["endpoint_sentinel"] is None
+    assert axis_document(derived)["endpoint_sentinel"] == math.nextafter(0.01, math.inf)
+    with pytest.raises(ValueError, match="sentinel"):
+        axis_candidates(base, replace(declared, sentinel=0.01))
+    with pytest.raises(ValueError, match="sentinel"):
+        axis_candidates(base, replace(derived, sentinel=0.5))
+
+
+def test_every_axis_declares_its_production_comparator():
+    for name in (DEPTH_FLOOR_LINKED, GG_GATE_INDEPENDENT):
+        assert axis_comparison(name) == ">="
+    for name in (DEPTH_SCORE_HIGH, ALT_DEPTH_BAND, ACTIVE_REGION):
+        assert axis_comparison(name) == "<="
+    with pytest.raises(ValueError):
+        axis_comparison("not_an_axis")

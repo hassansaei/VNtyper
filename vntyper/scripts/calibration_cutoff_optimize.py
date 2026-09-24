@@ -34,6 +34,13 @@ or straddle a training split. Kestrel captures are required for every caller sel
 because the axes are Kestrel decision axes and their breakpoints can only be observed in
 Kestrel evidence. The output directory holds cohort results and is written ``0700`` with
 ``0600`` files throughout.
+
+*Only Kestrel axes are searched.* No adVNTR cutoff axis is derived yet (issue #269), so
+``--caller advntr`` is refused: every candidate would replay the one baseline adVNTR policy
+and selection could only tie back to the baseline. ``--caller both`` searches the Kestrel
+axes and pairs each candidate with the adVNTR arm replayed at its baseline policy; the
+report states that scope, and the run fails if the adVNTR grid ever executed more than one
+adVNTR policy, because the statement would then be false.
 """
 
 from __future__ import annotations
@@ -117,6 +124,15 @@ AXIS_COMPARISON: Final[Mapping[str, str]] = MappingProxyType(
     {name: comparison for name, (comparison, _ladder) in AXIS_PROBE.items()}
 )
 
+#: Why ``--caller advntr`` is refused. Shared with the CLI so the usage error and the
+#: programmatic error say the same thing.
+ADVNTR_AXES_UNAVAILABLE: Final[str] = (
+    "cutoff optimize --caller advntr is not supported: adVNTR cutoff axes are not derived yet (see issue #269), "
+    "so every candidate would replay the baseline adVNTR policy and selection could only return the baseline. "
+    "Use --caller kestrel, or --caller both to search the Kestrel axes with the adVNTR arm held at its "
+    "baseline policy."
+)
+
 
 @dataclass(frozen=True)
 class _Request:
@@ -176,6 +192,8 @@ def _validate_arguments(args: object, output: Path) -> _Request:
     caller = getattr(args, "caller", "kestrel")
     if caller not in _CALLERS:
         _fail("cutoff optimize caller must be kestrel, advntr, or both")
+    if caller == "advntr":
+        _fail(ADVNTR_AXES_UNAVAILABLE)
     requested = getattr(args, "axes", None)
     if requested is None:
         # ``--axis`` is repeatable, so argparse leaves it unset rather than defaulted.
@@ -270,15 +288,32 @@ def _observed_breakpoints(
 
 def _derive_axes(
     request: _Request, baseline: CallerPolicyValues, captures: Mapping[str, KestrelCapture]
-) -> tuple[DerivedAxis, ...]:
-    """Turn each requested axis into observed breakpoints and complete replayable policies."""
+) -> tuple[tuple[DerivedAxis, ...], dict[str, frozenset[str]]]:
+    """Turn each requested axis into observed breakpoints and complete replayable policies.
+
+    Returns:
+        The derived axes, and for every data-derived candidate the capture keys whose
+        observed values produced its threshold. The anchor reproducing the baseline and
+        the endpoint sentinel are omitted from that map: neither was produced by a sample,
+        so both stay admissible in every outer fold.
+    """
     derived: list[DerivedAxis] = []
+    contributors: dict[str, frozenset[str]] = {}
     for name in request.axes:
         permissive, statistic = _permissive_axis(name, baseline)
         observed = _observed_breakpoints(captures, permissive.policy, statistic)
         axis = derive_axis(name, observed, baseline=baseline, max_values=request.max_breakpoints)
-        derived.append((axis, axis_candidates(baseline, axis)))
-    return tuple(derived)
+        candidates = axis_candidates(baseline, axis)
+        for value, candidate in zip(axis.values, candidates, strict=True):
+            if not candidate.parameters or value == axis.sentinel:
+                continue
+            exact = Fraction(value)
+            keys = frozenset(key for key, values in observed.items() if exact in values)
+            if not keys:
+                _fail(f"cutoff optimize breakpoint {value} of axis {name} has no contributing sample")
+            contributors[candidate.candidate_id] = keys
+        derived.append((axis, candidates))
+    return tuple(derived), contributors
 
 
 def _anchor(candidates: Sequence[CutoffCandidate]) -> CutoffCandidate:
@@ -399,6 +434,13 @@ def _advntr_arms(
         executable_path=request.advntr_executable,
         output=output / "advntr",
     )
+    executions = {entry.execution_id for entry in result.policies}
+    if len(executions) != 1:
+        _fail(
+            "cutoff optimize adVNTR grid executed "
+            f"{len(executions)} distinct adVNTR policies, but only Kestrel axes are searched and the adVNTR arm "
+            "must be held at its baseline policy"
+        )
     arms = advntr_observation_arms(result, primary)
     arms[BASELINE_ID] = arms[anchor_id]
     return arms, result
@@ -452,7 +494,7 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
     native_paths = {key: declared.native_kestrel[key] for key in keys}
     captures = {key: _decode_capture(path, key) for key, path in sorted(capture_paths.items())}
     baseline = _capture_baseline(captures)
-    derived = _derive_axes(request, baseline, captures)
+    derived, contributors = _derive_axes(request, baseline, captures)
     policies = {candidate.candidate_id: candidate.policy for _, candidates in derived for candidate in candidates}
     anchors = {axis.axis: _anchor(candidates) for axis, candidates in derived}
     try:
@@ -462,7 +504,7 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
     parity = _prove_baseline_parity(replay, {axis: anchor.candidate_id for axis, anchor in anchors.items()})
     arms: dict[str, tuple[CallerObservation, ...]] = kestrel_observation_arms(replay, primary)
     advntr_result: AdvntrCutoffGridResult | None = None
-    if request.caller != "kestrel":
+    if request.caller == "both":
         advntr, advntr_result = _advntr_arms(
             request,
             output,
@@ -471,9 +513,18 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
             anchors[request.axes[0]].candidate_id,
             primary,
         )
-        arms = _combine_arms(arms, advntr) if request.caller == "both" else advntr
+        arms = _combine_arms(arms, advntr)
+    # Contributors are capture keys; fold selection matches them against arm row keys,
+    # so the two rosters must be the same set or admissibility would silently misfire.
+    if {row.key for row in arms[BASELINE_ID]} != set(captures):
+        _fail("cutoff optimize arm rows are not keyed by the capture sample identifiers")
     evaluation = evaluate_cutoff_arms(
-        arms, baseline_id=BASELINE_ID, spec=request.spec, folds=request.folds, seed=request.seed
+        arms,
+        baseline_id=BASELINE_ID,
+        spec=request.spec,
+        folds=request.folds,
+        seed=request.seed,
+        contributors=contributors,
     )
     document = build_cutoff_report_document(
         CutoffReportInputs(
@@ -506,6 +557,7 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
 
 
 __all__ = [
+    "ADVNTR_AXES_UNAVAILABLE",
     "AXIS_COMPARISON",
     "AXIS_PROBE",
     "BASELINE_ID",

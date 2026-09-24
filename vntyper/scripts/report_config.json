@@ -847,7 +847,8 @@
     "labels": {
       "notice_prefix": "Caution:",
       "cohort_kpi_label": "Length Tier High",
-      "cohort_kpi_detail": "{caution} caution · {assessed} with a length estimate"
+      "cohort_kpi_detail": "{caution} caution · {assessed} with a length estimate",
+      "typical_error": "(typical error ≈{error} repeats, leave-one-out RMSE; not an interval)"
     },
     "caution": {
       "badge": "Above {threshold} repeats: detection sensitivity may be reduced",
