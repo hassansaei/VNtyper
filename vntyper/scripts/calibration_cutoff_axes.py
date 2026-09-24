@@ -82,6 +82,20 @@ becomes a policy value, and :attr:`AxisBreakpoints.values` stores the converted 
 so the axis document and the policy it produces agree bit for bit. Integer axes convert
 to ``int`` instead, and a non-integral breakpoint on such an axis is rejected rather
 than rounded.
+
+The two adVNTR axes
+--------------------
+:data:`ADVNTR_CUTOFF` and :data:`ADVNTR_MIN_SUPPORT` register the other caller's two
+tunable pointers alongside the five Kestrel axes above, but their comparators are
+adVNTR's own p-value gate: ``calibrated_calling.cutoff`` is a strict ``<`` (a call needs
+a p-value strictly below the threshold), and ``calibrated_calling.minimum_read_support``
+is an inclusive ``>=`` (a call needs read support at or above the threshold). Neither
+axis's breakpoints are enumerated from a Kestrel-style prefilter frame -- there is no
+per-row ``Depth_Score`` equivalent for adVNTR's statistics -- so they are built by the
+public :func:`observed_axis` from breakpoints a native replay already computed; see
+``calibration_cutoff_advntr_axes`` for how those breakpoints and their statistics are
+derived. :func:`derive_axis` refuses both axes outright, so the Kestrel path can never
+be asked to enumerate them from data it cannot read.
 """
 
 from __future__ import annotations
@@ -97,6 +111,7 @@ from typing import Final, NoReturn, cast
 import pandas as pd
 
 from vntyper.scripts.calibration_caller_policy import (
+    ADVNTR_CALLER_POLICY_POINTERS,
     KESTREL_CALLER_POLICY_POINTERS,
     CallerPolicyScalar,
     CallerPolicyValues,
@@ -114,6 +129,8 @@ GG_GATE_INDEPENDENT: Final[str] = "gg_gate_independent"
 DEPTH_SCORE_HIGH: Final[str] = "depth_score_high"
 ALT_DEPTH_BAND: Final[str] = "alt_depth_band"
 ACTIVE_REGION: Final[str] = "var_active_region"
+ADVNTR_CUTOFF: Final[str] = "advntr_cutoff"
+ADVNTR_MIN_SUPPORT: Final[str] = "advntr_min_support"
 
 #: Every final Kestrel gate except the two depth-linked ones. ``depth_confidence_pass``
 #: and ``alt_filter_pass`` are exactly what an axis moves, so a row may not be excluded
@@ -145,13 +162,19 @@ _ALT_LOW: Final[str] = _KESTREL["confidence_assignment/alt_depth_thresholds/low"
 _ALT_MID_LOW: Final[str] = _KESTREL["confidence_assignment/alt_depth_thresholds/mid_low"]
 _ACTIVE: Final[str] = _KESTREL["confidence_assignment/var_active_region_threshold"]
 
+_ADVNTR: Final[Mapping[str, str]] = MappingProxyType(
+    {pointer.removeprefix("/components/advntr/"): pointer for pointer in ADVNTR_CALLER_POLICY_POINTERS}
+)
+_ADV_CUTOFF: Final[str] = _ADVNTR["calibrated_calling/cutoff"]
+_ADV_SUPPORT: Final[str] = _ADVNTR["calibrated_calling/minimum_read_support"]
+
 
 @dataclass(frozen=True)
 class AxisBreakpoints:
     """One axis of complete decision breakpoints anchored on the shipped operating point.
 
     Attributes:
-        axis: Stable axis name, one of the five module-level axis constants.
+        axis: Stable axis name, one of the module-level axis constants.
         pointers: Sorted decision-profile JSON pointers this axis moves together.
         values: Ascending, deduplicated candidate values, always containing the baseline
             value of the axis's primary pointer. ``float`` for the depth-score axes and
@@ -186,19 +209,30 @@ class _AxisSpec:
     pointers: tuple[str, ...]
     statistic: str
     integer: bool
-    #: The production comparator the axis sweeps, ``>=`` or ``<=``.
+    #: The production comparator the axis sweeps, ``>=``, ``<=`` or ``<``.
     comparison: str
+    #: The caller whose policy pointers this axis moves, ``"kestrel"`` or ``"advntr"``.
+    #: Kept last so existing positional constructions of this dataclass keep working.
+    caller: str
 
 
 _SPECS: Final[Mapping[str, _AxisSpec]] = MappingProxyType(
     {
-        DEPTH_FLOOR_LINKED: _AxisSpec(_FLOOR, tuple(sorted((_FLOOR, _LOW, _GG))), "Depth_Score", False, ">="),
-        GG_GATE_INDEPENDENT: _AxisSpec(_GG, (_GG,), "Depth_Score", False, ">="),
-        DEPTH_SCORE_HIGH: _AxisSpec(_HIGH, (_HIGH,), "Depth_Score", False, "<="),
-        ALT_DEPTH_BAND: _AxisSpec(
-            _ALT_LOW, tuple(sorted((_ALT_LOW, _ALT_MID_LOW))), "Estimated_Depth_AlternateVariant", True, "<="
+        DEPTH_FLOOR_LINKED: _AxisSpec(
+            _FLOOR, tuple(sorted((_FLOOR, _LOW, _GG))), "Depth_Score", False, ">=", "kestrel"
         ),
-        ACTIVE_REGION: _AxisSpec(_ACTIVE, (_ACTIVE,), "Estimated_Depth_Variant_ActiveRegion", True, "<="),
+        GG_GATE_INDEPENDENT: _AxisSpec(_GG, (_GG,), "Depth_Score", False, ">=", "kestrel"),
+        DEPTH_SCORE_HIGH: _AxisSpec(_HIGH, (_HIGH,), "Depth_Score", False, "<=", "kestrel"),
+        ALT_DEPTH_BAND: _AxisSpec(
+            _ALT_LOW, tuple(sorted((_ALT_LOW, _ALT_MID_LOW))), "Estimated_Depth_AlternateVariant", True, "<=", "kestrel"
+        ),
+        ACTIVE_REGION: _AxisSpec(_ACTIVE, (_ACTIVE,), "Estimated_Depth_Variant_ActiveRegion", True, "<=", "kestrel"),
+        ADVNTR_CUTOFF: _AxisSpec(
+            _ADV_CUTOFF, (_ADV_CUTOFF,), "advntr_min_pvalue_at_baseline_support", False, "<", "advntr"
+        ),
+        ADVNTR_MIN_SUPPORT: _AxisSpec(
+            _ADV_SUPPORT, (_ADV_SUPPORT,), "advntr_max_read_support_below_baseline_cutoff", True, ">=", "advntr"
+        ),
     }
 )
 
@@ -215,19 +249,36 @@ def _spec(axis: object) -> _AxisSpec:
 
 
 def axis_comparison(axis: str) -> str:
-    """The production comparator one axis sweeps, ``>=`` or ``<=``.
+    """The production comparator one axis sweeps, ``>=``, ``<=`` or ``<``.
 
     Args:
-        axis: One of the five module-level axis names.
+        axis: One of the module-level axis names.
 
     Returns:
-        The comparator: a row passes a ``>=`` axis at or above the threshold, and sits on
-        the ``<=`` side of a ``<=`` axis at or below it.
+        The comparator: a row passes a ``>=`` axis at or above the threshold, sits on
+        the ``<=`` side of a ``<=`` axis at or below it, and passes :data:`ADVNTR_CUTOFF`
+        only strictly below the threshold.
 
     Raises:
         ValueError: For an unknown axis name.
     """
     return _spec(axis).comparison
+
+
+def axis_caller(axis: str) -> str:
+    """The caller whose policy pointers one axis moves.
+
+    Args:
+        axis: One of the module-level axis names.
+
+    Returns:
+        ``"kestrel"`` for the five Kestrel axes, ``"advntr"`` for :data:`ADVNTR_CUTOFF`
+        and :data:`ADVNTR_MIN_SUPPORT`.
+
+    Raises:
+        ValueError: For an unknown axis name.
+    """
+    return _spec(axis).caller
 
 
 def _endpoint_sentinel(spec: _AxisSpec, observed: set[Fraction], anchor: Fraction) -> Fraction | None:
@@ -319,8 +370,10 @@ def _policy(baseline: CallerPolicyValues, spec: _AxisSpec, scalar: int | float) 
     return decode_caller_policy_values({**raw, "values": values})
 
 
-def _baseline_value(baseline: CallerPolicyValues, spec: _AxisSpec) -> Fraction:
+def _baseline_value(baseline: CallerPolicyValues, spec: _AxisSpec, axis: str) -> Fraction:
     caller_policy_values_document(baseline)
+    if spec.primary not in baseline.values:
+        _fail(f"cutoff axis {axis} requires a baseline policy that includes {spec.caller}")
     value = baseline.values[spec.primary]
     return Fraction(cast("int | float", value))
 
@@ -450,7 +503,7 @@ def derive_axis(
     can represent is reachable (see the module docstring).
 
     Args:
-        axis: One of the five module-level axis names.
+        axis: One of the five Kestrel module-level axis names.
         values_by_sample: Per-sample exact values, normally from
             :func:`eligible_statistic_values`. An empty mapping is valid.
         baseline: The shipped complete policy; its primary-pointer value is always kept.
@@ -462,10 +515,13 @@ def derive_axis(
         The axis, with breakpoints the policy decoder refuses recorded in ``rejected``.
 
     Raises:
-        ValueError: If the axis name, the mapping, the cap or the baseline is invalid, or
-            if the baseline value itself cannot be encoded on this axis.
+        ValueError: If the axis name, the mapping, the cap or the baseline is invalid, if
+            the axis is an adVNTR axis, or if the baseline value itself cannot be encoded
+            on this axis.
     """
     spec = _spec(axis)
+    if spec.caller != "kestrel":
+        _fail(f"cutoff axis {axis} is an adVNTR axis; derive it with derive_advntr_axis")
     if max_values is not None and (type(max_values) is not int or max_values < _MINIMUM_CAP):
         _fail(f"cutoff axis max_values must be an integer of at least {_MINIMUM_CAP}")
     if not isinstance(values_by_sample, Mapping) or any(
@@ -481,7 +537,7 @@ def derive_axis(
             if not isinstance(item, Fraction):
                 _fail(f"cutoff axis values for sample {sample} must be exact Fractions")
             observed.add(item)
-    anchor = _baseline_value(baseline, spec)
+    anchor = _baseline_value(baseline, spec, axis)
     sentinel = _endpoint_sentinel(spec, observed, anchor)
     extra = {anchor} if sentinel is None else {anchor, sentinel}
     return _build(
@@ -505,7 +561,7 @@ def declared_axis(axis: str, values: Sequence[float], *, baseline: CallerPolicyV
     :func:`derive_axis`, so a declared axis is not a way around the policy bounds.
 
     Args:
-        axis: One of the five module-level axis names.
+        axis: One of the module-level axis names.
         values: Nonempty finite declared values; duplicates are collapsed.
         baseline: The shipped complete policy; its primary-pointer value is always kept.
 
@@ -525,7 +581,7 @@ def declared_axis(axis: str, values: Sequence[float], *, baseline: CallerPolicyV
         if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
             _fail("declared cutoff axis values must be finite numbers, never booleans")
         declared.add(Fraction(item))
-    anchor = _baseline_value(baseline, spec)
+    anchor = _baseline_value(baseline, spec, axis)
     return _build(
         axis,
         spec,
@@ -535,6 +591,67 @@ def declared_axis(axis: str, values: Sequence[float], *, baseline: CallerPolicyV
         observed_count=len(declared),
         source="declared",
         max_values=None,
+    )
+
+
+def observed_axis(
+    axis: str,
+    candidates: Sequence[Fraction],
+    *,
+    baseline: CallerPolicyValues,
+    observed_count: int,
+    sentinel: Fraction | None,
+    max_values: int | None,
+) -> AxisBreakpoints:
+    """Build an axis from breakpoints a caller already computed, still baseline-anchored.
+
+    This is the public counterpart of :func:`derive_axis` for axes whose breakpoints are
+    not enumerated from a Kestrel-style prefilter frame -- most importantly the two adVNTR
+    axes, whose breakpoints come from replaying capture evidence natively (see
+    ``calibration_cutoff_advntr_axes``). Unlike :func:`derive_axis`, it does not union
+    per-sample values or compute the endpoint sentinel itself; the caller supplies both
+    the already-unioned candidates and the sentinel, and this function only adds the
+    baseline anchor, screens every value against the policy decoder, and applies the same
+    rank-space capping.
+
+    Args:
+        axis: One of the module-level axis names.
+        candidates: Exact breakpoints already observed, deduplicated or not.
+        baseline: The shipped complete policy; its primary-pointer value is always kept.
+        observed_count: Distinct statistic values seen before any cap, as defined on
+            :attr:`AxisBreakpoints.observed_count`.
+        sentinel: The endpoint sentinel to record, or ``None`` when the caller determined
+            none is needed.
+        max_values: Optional cap of at least three, applied by even rank-space
+            subsampling that retains the minimum, the maximum and the baseline value.
+
+    Returns:
+        The axis, with breakpoints the policy decoder refuses recorded in ``rejected``.
+
+    Raises:
+        ValueError: If the axis name, the candidates, the cap or the baseline is invalid,
+            or if the baseline value itself cannot be encoded on this axis.
+    """
+    spec = _spec(axis)
+    if max_values is not None and (type(max_values) is not int or max_values < _MINIMUM_CAP):
+        _fail(f"cutoff axis max_values must be an integer of at least {_MINIMUM_CAP}")
+    if isinstance(candidates, str) or not isinstance(candidates, Sequence):
+        _fail(f"cutoff axis {axis} candidates must be a sequence of Fractions")
+    for item in candidates:
+        if not isinstance(item, Fraction):
+            _fail(f"cutoff axis {axis} candidates must be exact Fractions")
+    anchor = _baseline_value(baseline, spec, axis)
+    extra = {anchor} | ({sentinel} if sentinel is not None else set())
+    return _build(
+        axis,
+        spec,
+        baseline,
+        sorted(set(candidates) | extra),
+        anchor=anchor,
+        observed_count=observed_count,
+        source="observed-breakpoints",
+        max_values=max_values,
+        sentinel=sentinel,
     )
 
 
@@ -548,7 +665,8 @@ def axis_candidates(baseline: CallerPolicyValues, axis: AxisBreakpoints) -> tupl
 
     Args:
         baseline: The shipped complete policy the candidates are built from.
-        axis: Breakpoints produced by :func:`derive_axis` or :func:`declared_axis`.
+        axis: Breakpoints produced by :func:`derive_axis`, :func:`declared_axis` or
+            :func:`observed_axis`.
 
     Returns:
         One candidate per breakpoint in ascending value order, ids ordered with them.
@@ -575,12 +693,14 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
     """Project one axis as fresh canonical ``calibration-cutoff-axis-v1`` JSON.
 
     Args:
-        axis: Breakpoints produced by :func:`derive_axis` or :func:`declared_axis`.
+        axis: Breakpoints produced by :func:`derive_axis`, :func:`declared_axis` or
+            :func:`observed_axis`.
 
     Returns:
-        A JSON-compatible object carrying the axis name, the statistic it reads, the
-        pointers it moves, its values, provenance, cap state, every rejected value
-        with the reason it was dropped, and the endpoint sentinel (or null).
+        A JSON-compatible object carrying the axis name, the caller it moves, the
+        statistic it reads, the pointers it moves, its values, provenance, cap state,
+        every rejected value with the reason it was dropped, and the endpoint sentinel
+        (or null).
 
     Raises:
         ValueError: If the axis content differs from its module-level definition.
@@ -589,6 +709,7 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
     return {
         "schema_version": _SCHEMA,
         "axis": axis.axis,
+        "caller": spec.caller,
         "statistic": spec.statistic,
         "pointers": list(axis.pointers),
         "values": list(axis.values),

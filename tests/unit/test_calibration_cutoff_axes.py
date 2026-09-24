@@ -9,21 +9,25 @@ import pandas as pd
 import pytest
 
 from tests.unit.test_calibration_caller_policy import policy_document, policy_values
-from vntyper.scripts.calibration_caller_policy import decode_caller_policy_values
+from vntyper.scripts.calibration_caller_policy import CallerPolicyValues, decode_caller_policy_values
 from vntyper.scripts.calibration_cutoff_axes import (
     ACTIVE_REGION,
+    ADVNTR_CUTOFF,
+    ADVNTR_MIN_SUPPORT,
     ALT_DEPTH_BAND,
     DEPTH_FLOOR_LINKED,
     DEPTH_SCORE_HIGH,
     GG_GATE_INDEPENDENT,
     STRUCTURAL_GATE_COLUMNS,
     AxisBreakpoints,
+    axis_caller,
     axis_candidates,
     axis_comparison,
     axis_document,
     declared_axis,
     derive_axis,
     eligible_statistic_values,
+    observed_axis,
 )
 from vntyper.scripts.canonical_json import canonical_sha256
 
@@ -47,6 +51,39 @@ def baseline(**overrides: object):
     values.update(SHIPPED)
     values.update(overrides)
     return decode_caller_policy_values(raw)
+
+
+def _advntr_baseline(*, cutoff: float = 0.001, support: int = 3, kestrel_floor: float = 0.5) -> CallerPolicyValues:
+    """A complete ``["advntr", "kestrel"]`` baseline policy (full pointer set, both callers).
+
+    Copied from ``tests/unit/test_calibration_cutoff_advntr.py::_policy`` -- this module's
+    own ``baseline()`` above only builds Kestrel-only policies, and the adVNTR axes need a
+    baseline that carries their pointers too.
+    """
+    values: dict[str, object] = {
+        "/components/kestrel/alt_filtering/gg_depth_score_threshold": 0.5,
+        "/components/kestrel/confidence_assignment/reporting_floor": kestrel_floor,
+        "/components/kestrel/confidence_assignment/var_active_region_threshold": 1,
+        "/components/kestrel/confidence_assignment/depth_score_thresholds/low": 0.2,
+        "/components/kestrel/confidence_assignment/depth_score_thresholds/high": 0.8,
+        "/components/kestrel/confidence_assignment/alt_depth_thresholds/low": 1,
+        "/components/kestrel/confidence_assignment/alt_depth_thresholds/mid_low": 2,
+        "/components/kestrel/confidence_assignment/alt_depth_thresholds/mid_high": 3,
+        "/components/advntr/calibrated_calling/mode": "legacy",
+        "/components/advntr/calibrated_calling/cutoff": cutoff,
+        "/components/advntr/calibrated_calling/minimum_read_support": support,
+        "/components/advntr/calibrated_calling/rare_unit_fraction": None,
+        "/components/advntr/calibrated_calling/adapter_filter": False,
+        "/components/advntr/calibrated_calling/minimum_read_match_ratio": 0.6,
+        "/components/advntr/calibrated_calling/prune_reverse": False,
+    }
+    return decode_caller_policy_values(
+        {
+            "schema_version": "calibration-caller-policy-values-v1",
+            "required_callers": ["advntr", "kestrel"],
+            "values": values,
+        }
+    )
 
 
 def frame(*rows: dict[str, object]) -> pd.DataFrame:
@@ -477,3 +514,102 @@ def test_every_axis_declares_its_production_comparator():
         assert axis_comparison(name) == "<="
     with pytest.raises(ValueError):
         axis_comparison("not_an_axis")
+
+
+def test_advntr_axes_are_registered_with_their_caller_and_comparator() -> None:
+    assert axis_caller(ADVNTR_CUTOFF) == "advntr"
+    assert axis_caller(ADVNTR_MIN_SUPPORT) == "advntr"
+    assert axis_caller(DEPTH_FLOOR_LINKED) == "kestrel"
+    assert axis_comparison(ADVNTR_CUTOFF) == "<"
+    assert axis_comparison(ADVNTR_MIN_SUPPORT) == ">="
+    with pytest.raises(ValueError):
+        axis_caller("not_an_axis")
+
+
+def test_observed_axis_builds_complete_advntr_candidates_anchored_on_the_baseline() -> None:
+    baseline = _advntr_baseline(cutoff=0.001, support=3)
+    axis = observed_axis(
+        ADVNTR_CUTOFF,
+        [Fraction(0.0005), Fraction(0.004)],
+        baseline=baseline,
+        observed_count=2,
+        sentinel=None,
+        max_values=None,
+    )
+    assert axis.values == (0.0005, 0.001, 0.004)
+    candidates = axis_candidates(baseline, axis)
+    assert [c.candidate_id for c in candidates] == ["advntr_cutoff-0000", "advntr_cutoff-0001", "advntr_cutoff-0002"]
+    assert dict(candidates[1].parameters) == {}
+    assert dict(candidates[2].parameters) == {"/components/advntr/calibrated_calling/cutoff": 0.004}
+    assert axis_document(axis)["caller"] == "advntr"
+
+
+def test_observed_axis_records_decoder_rejections_for_out_of_range_cutoffs() -> None:
+    baseline = _advntr_baseline(cutoff=0.001, support=3)
+    axis = observed_axis(
+        ADVNTR_CUTOFF,
+        [Fraction(math.nextafter(1.0, 2.0))],
+        baseline=baseline,
+        observed_count=1,
+        sentinel=None,
+        max_values=None,
+    )
+    assert axis.values == (0.001,)
+    assert len(axis.rejected) == 1 and axis.rejected[0][0] == math.nextafter(1.0, 2.0)
+
+
+def test_observed_axis_keeps_integer_support_values_integral() -> None:
+    baseline = _advntr_baseline(cutoff=0.001, support=3)
+    axis = observed_axis(
+        ADVNTR_MIN_SUPPORT,
+        [Fraction(2), Fraction(9)],
+        baseline=baseline,
+        observed_count=2,
+        sentinel=Fraction(10),
+        max_values=None,
+    )
+    assert axis.values == (2, 3, 9, 10) and all(type(v) is int for v in axis.values)
+    assert axis.sentinel == 10
+
+
+def test_derive_axis_refuses_advntr_axes() -> None:
+    with pytest.raises(ValueError, match="derive_advntr_axis"):
+        derive_axis(ADVNTR_CUTOFF, {}, baseline=_advntr_baseline(cutoff=0.001, support=3))
+
+
+def test_kestrel_axis_documents_name_their_caller() -> None:
+    axis = derive_axis(DEPTH_FLOOR_LINKED, {}, baseline=_advntr_baseline(cutoff=0.001, support=3))
+    assert axis_document(axis)["caller"] == "kestrel"
+
+
+def test_observed_axis_refuses_an_advntr_axis_against_a_kestrel_only_baseline() -> None:
+    """The plan-review amendment: the missing-pointer failure names the axis and the caller."""
+    with pytest.raises(ValueError, match="cutoff axis advntr_cutoff requires a baseline policy that includes advntr"):
+        observed_axis(
+            ADVNTR_CUTOFF, [Fraction(0.001)], baseline=baseline(), observed_count=1, sentinel=None, max_values=None
+        )
+
+
+def test_declared_axis_also_refuses_an_advntr_axis_against_a_kestrel_only_baseline() -> None:
+    with pytest.raises(ValueError, match="requires a baseline policy that includes advntr"):
+        declared_axis(ADVNTR_MIN_SUPPORT, [3], baseline=baseline())
+
+
+def test_observed_axis_rejects_malformed_candidates_and_caps() -> None:
+    base = _advntr_baseline(cutoff=0.001, support=3)
+    for invalid in ("0.1", [0.1], [True]):
+        with pytest.raises(ValueError):
+            observed_axis(ADVNTR_CUTOFF, invalid, baseline=base, observed_count=1, sentinel=None, max_values=None)
+    for cap in (0, 2, 1.0, True):
+        with pytest.raises(ValueError):
+            observed_axis(
+                ADVNTR_CUTOFF, [Fraction(0.001)], baseline=base, observed_count=1, sentinel=None, max_values=cap
+            )
+
+
+def test_observed_axis_dedupes_candidates_and_caps_in_rank_space() -> None:
+    base = _advntr_baseline(cutoff=0.001, support=3)
+    candidates = [Fraction(0.0002), Fraction(0.0002), Fraction(0.0004), Fraction(0.0006), Fraction(0.0008)]
+    axis = observed_axis(ADVNTR_CUTOFF, candidates, baseline=base, observed_count=4, sentinel=None, max_values=3)
+    assert axis.capped is True and 0.001 in axis.values and len(axis.values) == 3
+    assert min(axis.values) == 0.0002 and max(axis.values) == 0.001
