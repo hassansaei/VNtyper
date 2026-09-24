@@ -434,7 +434,10 @@ frameshift mode, diploid, maximum error rate 0.05, legacy error rate 0.01, MAPQ 
 quality 20, maximum low-quality fraction 0.1, enhanced HMM on, trained HMMs off,
 reference alignment on, full-RU-only off, and no minimum read length. Exact mode is
 refused for research profiles, because it needs an approved bundle with a fitted
-background. A research profile carries no tool pin, so the runtime does not enforce an
+background. `vntyper calibrate optimize` renders the adVNTR arguments of every exported
+profile this way before it publishes the run, and with any `--caller`, including
+`kestrel`, it refuses to export a policy whose adVNTR mode is not `legacy`. The run then
+publishes nothing. A research profile carries no tool pin, so the runtime does not enforce an
 adVNTR build. A derived cutoff is tied to the adVNTR build recorded under
 `provenance.advntr` in the optimize report, and should be applied with that build.
 

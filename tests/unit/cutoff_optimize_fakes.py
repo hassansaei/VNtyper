@@ -71,12 +71,13 @@ ADV_CUT = "/components/advntr/calibrated_calling/cutoff"
 ADV_SUP = "/components/advntr/calibrated_calling/minimum_read_support"
 
 
-def advntr_baseline_policy() -> CallerPolicyValues:
-    """The standard Kestrel baseline plus the seven adVNTR legacy pointers."""
+def advntr_baseline_policy(mode: str = "legacy") -> CallerPolicyValues:
+    """The standard Kestrel baseline plus the seven adVNTR pointers, in legacy ``mode`` by default."""
     kestrel = _policy(kestrel_config())
     document = caller_policy_values_document(kestrel)
+    advntr = {**_ADVNTR_BASELINE, "/components/advntr/calibrated_calling/mode": mode}
     return decode_caller_policy_values(
-        {**document, "required_callers": ["advntr", "kestrel"], "values": {**kestrel.values, **_ADVNTR_BASELINE}}
+        {**document, "required_callers": ["advntr", "kestrel"], "values": {**kestrel.values, **advntr}}
     )
 
 
@@ -93,7 +94,7 @@ def write_manifests(
     *,
     natives: dict[str, str] | None = None,
     advntr: bool = False,
-    advntr_baseline: bool = False,
+    advntr_baseline: bool | str = False,
     advntr_calls: Mapping[str, bool | None] | None = None,
     capture_parameters: Mapping[str, object] | None = None,
 ) -> tuple[Path, Path]:
@@ -105,7 +106,8 @@ def write_manifests(
         natives: Optional sample -> ``"production"``, ``"negative"`` or ``"corrupt"``.
         advntr: Whether to declare an adVNTR capture column. Without ``advntr_calls`` the
             referenced files are placeholders the mocked native grid never opens.
-        advntr_baseline: Whether the Kestrel captures declare an adVNTR-bearing baseline.
+        advntr_baseline: Whether the Kestrel captures declare an adVNTR-bearing baseline;
+            a string names its adVNTR mode (``True`` means ``"legacy"``).
         advntr_calls: Sample -> the native baseline adVNTR call its one-record capture
             records, so adVNTR baseline parity is proven against real capture files.
         capture_parameters: Overrides of every adVNTR capture's capture-policy fields.
@@ -122,7 +124,10 @@ def write_manifests(
     for name, (genotype, scores, group) in cohort.items():
         cohort_lines.append(f"{name}\t{name}.bam\tGRCh38\t{genotype}\t{group or ''}")
         capture = tmp_path / f"{name}.capture.json"
-        _write_capture(capture, scores, advntr_baseline_policy() if advntr_baseline else None)
+        baseline = None
+        if advntr_baseline:
+            baseline = advntr_baseline_policy(advntr_baseline if isinstance(advntr_baseline, str) else "legacy")
+        _write_capture(capture, scores, baseline)
         native = ""
         request = (natives or {}).get(name)
         if request is not None:

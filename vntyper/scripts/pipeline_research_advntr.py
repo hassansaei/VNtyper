@@ -58,6 +58,10 @@ RESEARCH_CAPTURE_PARAMETERS: Final[Mapping[str, object]] = MappingProxyType(
 _CAPTURE_SCHEMA: Final = "advntr-runtime-capture-policy-v1"
 _POLICY_SCHEMA: Final = "calibration-caller-policy-values-v1"
 _MODE_POINTER: Final = "/components/advntr/calibrated_calling/mode"
+#: Why a research profile cannot run exact-mode adVNTR.
+RESEARCH_LEGACY_ONLY: Final[str] = (
+    "research decision profiles support only legacy adVNTR calling; exact mode requires an approved calibration bundle"
+)
 
 
 def _fail(message: str) -> NoReturn:
@@ -136,6 +140,34 @@ def research_capture_differences(capture: CapturePolicy, caller: CallerPolicyVal
     )
 
 
+def research_policy_argv(advntr: Mapping[str, object], kestrel: Mapping[str, object], threads: int) -> tuple[str, ...]:
+    """Render the native adVNTR arguments of a research profile's resolved components.
+
+    This is the rendering :func:`research_advntr_policy_argv` performs at runtime, without a
+    run configuration, so ``vntyper calibrate optimize`` can prove an exported profile runs.
+
+    Args:
+        advntr: The resolved ``advntr`` decision component, carrying ``calibrated_calling``.
+        kestrel: The resolved ``kestrel`` decision component.
+        threads: The native ``-t`` value.
+
+    Returns:
+        The explicit genotype policy arguments.
+
+    Raises:
+        ValueError: If the components select exact mode or their values are incomplete.
+    """
+    # calibrated_calling is only ever generated alongside the Kestrel pointers, so both callers are required.
+    caller = project_caller_policy(
+        {"advntr": advntr, "kestrel": kestrel},
+        (*ADVNTR_CALLER_POLICY_POINTERS, *KESTREL_CALLER_POLICY_POINTERS),
+        ("advntr", "kestrel"),
+    )
+    if caller.values[_MODE_POINTER] != "legacy":
+        _fail(RESEARCH_LEGACY_ONLY)
+    return tuple(calibrated_policy_argv(research_capture_policy(caller, threads), caller, None))
+
+
 def research_advntr_policy_argv(configuration: RunConfiguration, threads: int) -> tuple[str, ...] | None:
     """Render explicit native adVNTR arguments for a research decision profile.
 
@@ -157,15 +189,4 @@ def research_advntr_policy_argv(configuration: RunConfiguration, threads: int) -
         or "calibrated_calling" not in configuration.advntr
     ):
         return None
-    # calibrated_calling is only ever generated alongside the Kestrel pointers, so both callers are required.
-    caller = project_caller_policy(
-        {"advntr": configuration.advntr, "kestrel": configuration.kestrel},
-        (*ADVNTR_CALLER_POLICY_POINTERS, *KESTREL_CALLER_POLICY_POINTERS),
-        ("advntr", "kestrel"),
-    )
-    if caller.values[_MODE_POINTER] != "legacy":
-        _fail(
-            "research decision profiles support only legacy adVNTR calling; "
-            "exact mode requires an approved calibration bundle"
-        )
-    return tuple(calibrated_policy_argv(research_capture_policy(caller, threads), caller, None))
+    return research_policy_argv(configuration.advntr, configuration.kestrel, threads)

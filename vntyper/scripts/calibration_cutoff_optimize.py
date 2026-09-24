@@ -61,7 +61,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, NoReturn
+from typing import Any, Final, NoReturn, cast
 
 from vntyper.scripts.calibration_caller_metrics import CallerObservation
 from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
@@ -124,13 +124,19 @@ from vntyper.scripts.calibration_kestrel_replay import kestrel_replay_prefilter_
 from vntyper.scripts.calibration_secure_io import read_regular_path
 from vntyper.scripts.canonical_json import load_strict_json_object
 from vntyper.scripts.decision_profile import resolve_research_decision_profile
-from vntyper.scripts.pipeline_research_advntr import project_caller_policy, research_capture_differences
+from vntyper.scripts.pipeline_research_advntr import (
+    RESEARCH_LEGACY_ONLY,
+    project_caller_policy,
+    research_capture_differences,
+    research_policy_argv,
+)
 from vntyper.version import __version__
 
 logger = logging.getLogger(__name__)
 
 GENERATOR_VERSION: Final[str] = f"vntyper-calibrate-optimize/{__version__}"
 _CALLERS: Final[frozenset[str]] = frozenset({"kestrel", "advntr", "both"})
+_ADVNTR_MODE: Final[str] = "/components/advntr/calibrated_calling/mode"
 
 #: Per axis: the exact production comparator, and a ladder of extreme values probed in
 #: loosening-first order. The first rung the policy decoder accepts is the permissive
@@ -429,8 +435,13 @@ def _export_profile(output: Path, request: _Request, selected: CallerPolicyValue
         The profile record published in the report, including the round-trip boolean.
 
     Raises:
-        ValueError: If the written profile does not resolve back to the selected policy.
+        ValueError: If the selected policy carries a non-legacy adVNTR mode (refused before
+            anything is written), if the written profile does not resolve back to the
+            selected policy, or if its adVNTR arguments cannot be rendered.
     """
+    mode = selected.values.get(_ADVNTR_MODE) if "advntr" in selected.required_callers else "legacy"
+    if mode != "legacy":
+        _fail(f"cutoff optimize cannot export a research profile with adVNTR mode {mode!r}: {RESEARCH_LEGACY_ONLY}")
     profile = build_caller_generated_profile(
         selected,
         dataset_manifest_hash=_digest(request.manifest),
@@ -443,6 +454,13 @@ def _export_profile(output: Path, request: _Request, selected: CallerPolicyValue
     resolved = resolve_research_decision_profile(path)
     if _project_policy(resolved.components, selected) != selected:
         _fail("cutoff optimize research profile did not round-trip to the selected policy")
+    if "advntr" in selected.required_callers:
+        # Render the profile exactly as the research runtime will; a nominal thread count suffices.
+        research_policy_argv(
+            cast(Mapping[str, object], resolved.components["advntr"]),
+            cast(Mapping[str, object], resolved.components["kestrel"]),
+            1,
+        )
     return {
         "status": "available",
         "path": PROFILE_NAME,

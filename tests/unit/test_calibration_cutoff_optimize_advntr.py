@@ -20,13 +20,17 @@ from tests.unit.advntr_grid_fakes import synthetic_capabilities
 from tests.unit.cutoff_optimize_fakes import (
     ADV_CUT,
     PROBE_VISITS,
+    STANDARD_COHORT,
     advntr_baseline_policy,
+    namespace,
     run_advntr,
     run_optimize,
     up,
     visit,
+    write_manifests,
 )
 from vntyper.modules.advntr.advntr_calibration_policy import advntr_capabilities_document
+from vntyper.scripts.calibration_atomic_io import atomic_output
 from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
 from vntyper.scripts.calibration_cutoff_advntr import advntr_signature
 from vntyper.scripts.calibration_cutoff_advntr_axes import AdvntrVisit, derive_advntr_axis
@@ -481,3 +485,36 @@ def test_the_capture_thread_count_is_not_part_of_the_research_contract(tmp_path:
     successful, _, _ = run_advntr(tmp_path, caller="advntr", min_specificity=1.0, capture_parameters={"threads": 16})
 
     assert successful is True
+
+
+def test_a_kestrel_search_over_an_exact_advntr_baseline_exports_nothing(tmp_path: Path) -> None:
+    """The research runtime refuses exact adVNTR, so the export is refused before it is written.
+
+    ``--caller kestrel`` never replays adVNTR, yet the exported profile carries the baseline's
+    adVNTR pointers, exact mode included; the atomic output then publishes nothing at all.
+    """
+    from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
+
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT, advntr_baseline="exact")
+    args = namespace(cohort_path, captures_path, caller="kestrel")
+
+    with pytest.raises(ValueError, match="cutoff optimize cannot export .* adVNTR mode 'exact'"):
+        atomic_output(tmp_path / "derived", lambda staging: run_cutoff_optimization(args, staging))
+    assert not (tmp_path / "derived").exists()
+
+
+def test_the_exported_advntr_profile_is_rendered_through_the_research_argv_builder(tmp_path: Path) -> None:
+    from vntyper.scripts import calibration_cutoff_optimize as module
+
+    real = module.research_policy_argv
+    rendered: list[tuple[str, ...]] = []
+
+    def record(*call_args: Any, **call_kwargs: Any) -> tuple[str, ...]:
+        rendered.append(real(*call_args, **call_kwargs))
+        return rendered[-1]
+
+    with patch.object(module, "research_policy_argv", record):
+        _, document, _ = run_advntr(tmp_path, caller="advntr", min_specificity=1.0)
+
+    (argv,) = rendered
+    assert argv[:4] == ("-t", "1", "--frameshift-pvalue-cutoff", repr(document["selection"]["value"]))
