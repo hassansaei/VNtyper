@@ -541,7 +541,8 @@ def test_observed_axis_builds_complete_advntr_candidates_anchored_on_the_baselin
     assert [c.candidate_id for c in candidates] == ["advntr_cutoff-0000", "advntr_cutoff-0001", "advntr_cutoff-0002"]
     assert dict(candidates[1].parameters) == {}
     assert dict(candidates[2].parameters) == {"/components/advntr/calibrated_calling/cutoff": 0.004}
-    assert axis_document(axis)["caller"] == "advntr"
+    document = axis_document(axis)
+    assert document["caller"] == "advntr" and document["comparator"] == "<"
 
 
 def test_observed_axis_records_decoder_rejections_for_out_of_range_cutoffs() -> None:
@@ -570,6 +571,7 @@ def test_observed_axis_keeps_integer_support_values_integral() -> None:
     )
     assert axis.values == (2, 3, 9, 10) and all(type(v) is int for v in axis.values)
     assert axis.sentinel == 10
+    assert axis_document(axis)["comparator"] == ">="
 
 
 def test_derive_axis_refuses_advntr_axes() -> None:
@@ -579,7 +581,20 @@ def test_derive_axis_refuses_advntr_axes() -> None:
 
 def test_kestrel_axis_documents_name_their_caller() -> None:
     axis = derive_axis(DEPTH_FLOOR_LINKED, {}, baseline=_advntr_baseline(cutoff=0.001, support=3))
-    assert axis_document(axis)["caller"] == "kestrel"
+    document = axis_document(axis)
+    assert document["caller"] == "kestrel" and document["comparator"] == ">="
+
+
+def test_declared_axis_builds_an_advntr_axis_against_a_complete_baseline() -> None:
+    """Positive path: `declared_axis` is not restricted to Kestrel when the baseline has adVNTR."""
+    base = _advntr_baseline(cutoff=0.001, support=3)
+    axis = declared_axis(ADVNTR_MIN_SUPPORT, [5, 8], baseline=base)
+
+    assert axis.values == (3, 5, 8)
+    document = axis_document(axis)
+    assert document["caller"] == "advntr" and document["comparator"] == ">="
+    candidate = axis_candidates(base, axis)[1]
+    assert candidate.policy.values["/components/advntr/calibrated_calling/minimum_read_support"] == 5
 
 
 def test_observed_axis_refuses_an_advntr_axis_against_a_kestrel_only_baseline() -> None:

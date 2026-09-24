@@ -698,9 +698,9 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
 
     Returns:
         A JSON-compatible object carrying the axis name, the caller it moves, the
-        statistic it reads, the pointers it moves, its values, provenance, cap state,
-        every rejected value with the reason it was dropped, and the endpoint sentinel
-        (or null).
+        production comparator it sweeps, the statistic it reads, the pointers it moves,
+        its values, provenance, cap state, every rejected value with the reason it was
+        dropped, and the endpoint sentinel (or null).
 
     Raises:
         ValueError: If the axis content differs from its module-level definition.
@@ -710,6 +710,7 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
         "schema_version": _SCHEMA,
         "axis": axis.axis,
         "caller": spec.caller,
+        "comparator": spec.comparison,
         "statistic": spec.statistic,
         "pointers": list(axis.pointers),
         "values": list(axis.values),
