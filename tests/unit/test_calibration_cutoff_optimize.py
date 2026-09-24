@@ -1155,3 +1155,16 @@ def test_the_report_comparators_match_the_axis_definitions() -> None:
     assert {name: axis_comparison(name) for name in AXIS_COMPARISON} == dict(AXIS_COMPARISON)
     assert len(AXIS_COMPARISON) == 7
     assert AXIS_COMPARISON[ADVNTR_CUTOFF] == "<" and AXIS_COMPARISON[ADVNTR_MIN_SUPPORT] == ">="
+
+
+def test_a_kestrel_run_accepts_a_manifest_that_also_declares_advntr_captures(tmp_path: Path) -> None:
+    """One capture manifest serves every caller selection; the adVNTR column is ignored."""
+    from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
+
+    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
+    for locus in tmp_path.glob("*.advntr.jsonl"):
+        locus.unlink()
+    output = tmp_path / "derived"
+    args = _namespace(cohort_path, captures_path, caller="kestrel")
+
+    assert atomic_output(output, lambda staging: run_cutoff_optimization(args, staging)) is True

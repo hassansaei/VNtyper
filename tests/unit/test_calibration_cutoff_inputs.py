@@ -133,7 +133,8 @@ def test_both_callers_pair_captures_and_sort_by_declared_identity(tmp_path):
         ("", "kestrel"),
         ("sample_id\na\n", "kestrel"),
         ("sample_id\tkestrel_capture\n", "kestrel"),
-        ("sample_id\tadvntr_capture\tnative_kestrel\na\ta.jsonl\ta.tsv\n", "advntr"),
+        ("sample_id\tadvntr_capture\tunknown_capture\na\ta.jsonl\tx\n", "advntr"),
+        ("sample_id\tkestrel_capture\tkestrel_capture\na\ta.json\tb.json\n", "kestrel"),
         ("sample_id\tkestrel_capture\na\ta.json\tx\n", "kestrel"),
     ],
 )
@@ -176,3 +177,66 @@ def test_declared_captures_must_be_present_regular_files(tmp_path, missing):
     path.write_text("sample_id\tkestrel_capture\tnative_kestrel\na\ta.json\ta.tsv\n")
     with pytest.raises(ValueError, match="unreadable"):
         read_cutoff_captures(path, samples(tmp_path), caller="kestrel")
+
+
+@pytest.mark.parametrize("value", ["missing.jsonl", ""])
+def test_kestrel_selection_ignores_a_declared_advntr_column(tmp_path, value):
+    # One manifest serves --caller kestrel, advntr and both: the unselected caller's
+    # column is never resolved, opened or checked, so it may name an absent file or
+    # be empty, and it contributes nothing to the returned mappings.
+    from vntyper.scripts.calibration_cutoff_inputs import read_cutoff_captures
+
+    (tmp_path / "a.json").write_text("a")
+    path = tmp_path / "captures.tsv"
+    path.write_text(f"sample_id\tkestrel_capture\tadvntr_capture\na\ta.json\t{value}\n")
+    result = read_cutoff_captures(path, samples(tmp_path), caller="kestrel")
+    assert result.kestrel == {"a": tmp_path / "a.json"}
+    assert result.native_kestrel == {"a": None}
+    assert result.advntr == {}
+
+
+def test_an_ignored_column_is_not_counted_as_a_duplicate_path(tmp_path):
+    from vntyper.scripts.calibration_cutoff_inputs import read_cutoff_captures
+
+    for name in ("a", "b"):
+        (tmp_path / f"{name}.json").write_text(name)
+    path = tmp_path / "captures.tsv"
+    path.write_text("sample_id\tkestrel_capture\tadvntr_capture\na\ta.json\tb.json\nb\tb.json\tb.json\n")
+    result = read_cutoff_captures(path, samples(tmp_path), caller="kestrel")
+    assert result.kestrel == {key: tmp_path / f"{key}.json" for key in ("a", "b")}
+
+
+def test_advntr_selection_ignores_the_kestrel_and_native_kestrel_columns(tmp_path):
+    from vntyper.scripts.calibration_cutoff_inputs import read_cutoff_captures
+
+    (tmp_path / "a.jsonl").write_text("a")
+    path = tmp_path / "captures.tsv"
+    path.write_text(
+        "sample_id\tkestrel_capture\tnative_kestrel\tadvntr_capture\na\tmissing.json\tmissing.tsv\ta.jsonl\n"
+    )
+    result = read_cutoff_captures(path, samples(tmp_path), caller="advntr")
+    assert (result.kestrel, result.native_kestrel) == ({}, {})
+    assert result.advntr == {"a": tmp_path / "a.jsonl"}
+
+
+@pytest.mark.parametrize("caller", ["kestrel", "advntr"])
+def test_an_unknown_column_is_still_refused_beside_the_other_callers_columns(tmp_path, caller):
+    from vntyper.scripts.calibration_cutoff_inputs import read_cutoff_captures
+
+    (tmp_path / "a.json").write_text("a")
+    (tmp_path / "a.jsonl").write_text("a")
+    path = tmp_path / "captures.tsv"
+    path.write_text("sample_id\tkestrel_capture\tadvntr_capture\textra\na\ta.json\ta.jsonl\tx\n")
+    with pytest.raises(ValueError, match="columns"):
+        read_cutoff_captures(path, samples(tmp_path), caller=caller)
+
+
+@pytest.mark.parametrize("header", ["sample_id\tkestrel_capture", "sample_id\tadvntr_capture"])
+def test_both_still_requires_both_capture_columns(tmp_path, header):
+    from vntyper.scripts.calibration_cutoff_inputs import read_cutoff_captures
+
+    (tmp_path / "a.json").write_text("a")
+    path = tmp_path / "captures.tsv"
+    path.write_text(f"{header}\na\ta.json\n")
+    with pytest.raises(ValueError, match="columns"):
+        read_cutoff_captures(path, samples(tmp_path), caller="both")
