@@ -416,6 +416,14 @@ fall short of it. A fold in which no candidate met the floor on its training dat
 baseline instead, and the warning states how many folds did so. The selection and the table of every tested cutoff follow, labelled as
 descriptive searched-cohort points. They are not validated performance.
 
+The selection carries a plateau: the run of tested values that reproduce the selected
+outcome (`equivalent_values`, `interval_low`, `interval_high` and `width`), and
+`open_below` and `open_above`, the nearest tested values whose outcome differs. All of
+these are tested breakpoint values, not change boundaries. The outcome of an untested
+threshold strictly between two tested values is not established by this table, so `width`
+can understate the range of thresholds that reproduce the selected outcome. On a strict
+`<` axis a derived breakpoint is the smallest threshold of its partition.
+
 ### Endpoints are reported separately
 
 A binary detection change, a confidence relabelling, an artifact flag and an exact-variant

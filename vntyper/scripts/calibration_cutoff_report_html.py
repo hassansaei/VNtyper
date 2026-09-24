@@ -48,6 +48,23 @@ _CAPPED_WARNING: Final[str] = (
 _UNREJECTABLE_NOTE: Final[str] = (
     "{n} sample(s) have a legacy p-value of exactly 0; no admissible cutoff can reject them."
 )
+#: How the page presents a plateau. Every number in it is a tested breakpoint value: the
+#: neighbours are the nearest tested values whose outcome differs, not the thresholds at which
+#: the outcome changes, because an untested threshold between two tested values was never replayed.
+PLATEAU_TESTED_VALUES: Final[str] = (
+    "A threshold sweep is a step function, so the selected value is one member of an interval, not a "
+    "measurement. The tested values <code>{values}</code> all reproduce the selected outcome; the nearest "
+    "tested values whose outcome differs are <code>{below}</code> below and <code>{above}</code> above. "
+    "These are tested breakpoint values, not change boundaries: the outcome of an untested threshold "
+    "strictly between two tested values is not established by this table, so the width <code>{width}</code> "
+    "is the spread of the tested values and can understate the range of thresholds that reproduce the "
+    "selected outcome."
+)
+#: Added on a strict ``<`` axis, whose derived breakpoints sit one float step above an observed value.
+PLATEAU_STRICT_LESS_THAN: Final[str] = (
+    "On this strict <code>&lt;</code> axis a derived breakpoint is the smallest threshold of its partition, "
+    "so the thresholds that reproduce its outcome extend upward from it, not downward."
+)
 #: What the held-out floor warning may say about training: a fold that fell back to the
 #: baseline never met the floor, so the floor is said to be met only where a fold selected.
 FLOOR_MET_EVERY_FOLD: Final[str] = "The floor was met on training folds only."
@@ -267,13 +284,15 @@ def _selection_section(document: Mapping[str, Any]) -> str:
         "estimate above is the performance estimate.</p>"
     )
     if isinstance(plateau, Mapping):
-        body += (
-            f"<p class='note'>A threshold sweep is a step function, so the selected value is one member of an "
-            f"interval, not a measurement. Values <code>{_escape(plateau.get('equivalent_values'))}</code> all "
-            f"reproduce the selected outcome; the outcome changes below "
-            f"<code>{_escape(plateau.get('open_below'))}</code> and above "
-            f"<code>{_escape(plateau.get('open_above'))}</code>. {_escape(plateau.get('note'))}</p>"
+        described = PLATEAU_TESTED_VALUES.format(
+            values=_escape(plateau.get("equivalent_values")),
+            below=_escape(plateau.get("open_below")),
+            above=_escape(plateau.get("open_above")),
+            width=_escape(plateau.get("width")),
         )
+        if plateau.get("comparison") == "<":
+            described += f" {PLATEAU_STRICT_LESS_THAN}"
+        body += f"<p class='note'>{described} {_escape(plateau.get('note'))}</p>"
     return f"<h2>Selection</h2>{body}"
 
 

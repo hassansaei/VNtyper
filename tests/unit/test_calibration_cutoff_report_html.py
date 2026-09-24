@@ -46,6 +46,46 @@ def test_the_html_states_the_objective_the_selection_and_the_plateau(tmp_path: P
     assert "research-decision-profile" in html
 
 
+#: The phrase that presented the tested neighbours as the thresholds at which the outcome changes.
+_CHANGE_BOUNDARY_OVERCLAIM = "the outcome changes below"
+
+
+def test_the_plateau_is_described_as_tested_values_not_change_boundaries(tmp_path: Path) -> None:
+    """The neighbours are the nearest tested values that differ; untested values between are unknown."""
+    output = _write(tmp_path, _document())
+    html = (output / "report.html").read_text(encoding="utf-8")
+
+    assert _CHANGE_BOUNDARY_OVERCLAIM not in html
+    assert "tested values <code>[0.004, 0.00469]</code> all reproduce the selected outcome" in html
+    assert "nearest tested values whose outcome differs are <code>0.001</code> below and <code>0.014</code>" in html
+    assert "strictly between two tested values is not established by this table" in html
+    assert "width <code>0.00069</code> is the spread of the tested values" in html
+    assert "smallest threshold of its partition" not in html
+
+
+def test_a_strict_less_than_plateau_names_the_selected_value_as_the_smallest_of_its_partition(
+    tmp_path: Path,
+) -> None:
+    """On a strict ``<`` axis a derived breakpoint opens its partition from below."""
+    document = _document()
+    document["selection"]["plateau"] = {**document["selection"]["plateau"], "comparison": "<"}
+    output = _write(tmp_path, document)
+    html = (output / "report.html").read_text(encoding="utf-8")
+
+    assert "smallest threshold of its partition" in html
+    assert "not established by this table" in html
+
+
+def test_the_docs_describe_the_plateau_as_tested_values() -> None:
+    """The published page must not call the tested neighbours change boundaries either."""
+    page = (Path(__file__).resolve().parents[2] / "docs" / "cli" / "calibration-targets.md").read_text(encoding="utf-8")
+    text = " ".join(page.split())
+
+    assert "nearest tested values whose outcome differs" in text
+    assert "strictly between two tested values is not established" in text
+    assert _CHANGE_BOUNDARY_OVERCLAIM not in text
+
+
 def test_the_html_states_which_caller_the_search_varied(tmp_path: Path) -> None:
     """A ``--caller both`` page must say the adVNTR arm was held at its baseline policy."""
     scope = {

@@ -10,7 +10,7 @@ import pytest
 from tests.unit.cutoff_optimize_fakes import advntr_baseline_policy
 from tests.unit.test_calibration_cutoff_curves import scenario
 from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, ADVNTR_MIN_SUPPORT, declared_axis
-from vntyper.scripts.calibration_cutoff_document import _CURVE_UNAVAILABLE, _axis_documents, _curve
+from vntyper.scripts.calibration_cutoff_document import _CURVE_UNAVAILABLE, _PLATEAU_NOTE, _axis_documents, _curve
 
 pytestmark = pytest.mark.unit
 
@@ -77,3 +77,11 @@ def test_a_curve_with_a_fixed_no_call_set_is_built_and_marked_available(caller: 
     assert document["status"] == "available"
     assert document["axis"] == axis.axis
     assert len(document["points"]) == 3
+
+
+def test_the_plateau_note_says_its_values_are_tested_values_only() -> None:
+    """The published note must not let a reader take the tested neighbours as change boundaries."""
+    assert "tested values" in _PLATEAU_NOTE
+    assert "nearest tested values whose outcome differs" in _PLATEAU_NOTE
+    assert "strictly between two tested values is not established" in _PLATEAU_NOTE
+    assert "at which the outcome changes" not in _PLATEAU_NOTE

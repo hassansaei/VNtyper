@@ -12,7 +12,9 @@ Three of the sections need a word of explanation.
 threshold gives the identical partition of the cohort, so a selected value is a member of
 an interval, not a measurement. :func:`_plateau` walks outward from the selected candidate
 while the per-sample outcome vector is unchanged and publishes that run together with the
-neighbouring values at which the outcome does change.
+nearest tested values whose outcome differs. Every published number is a tested value: the
+outcome of an untested threshold strictly between two tested values is not established, so the
+neighbours are not the thresholds at which the outcome changes.
 
 *Failed selection.* An objective whose constraints no candidate satisfies is an outcome,
 not an error, and it is published with the constraint that could not be met and the best
@@ -64,8 +66,11 @@ LIMITATIONS: Final[str] = (
 )
 _DUPLICATE_REASON: Final[str] = "not-the-first-seen-representative-of-its-declared-group"
 _PLATEAU_NOTE: Final[str] = (
-    "A threshold sweep is a step function: every value listed here reproduces the selected outcome exactly, "
-    "so quoting the selected number alone is false precision."
+    "A threshold sweep is a step function, so quoting the selected number alone is false precision. "
+    "equivalent_values are the tested values that reproduce the selected outcome exactly, and interval_low, "
+    "interval_high and width describe those tested values; open_below and open_above are the nearest tested "
+    "values whose outcome differs. The outcome of an untested threshold strictly between two tested values is "
+    "not established by this record."
 )
 _NO_SELECTION: Final[str] = "no tested cutoff satisfied the declared objective and its constraints"
 _SCOPE_NOTES: Final[Mapping[str, str]] = {
@@ -205,7 +210,8 @@ def _plateau(
 
     Returns:
         The plateau record, naming the tested values that are indistinguishable from the
-        selected one and the neighbouring values at which the outcome changes.
+        selected one and the nearest tested values whose outcome differs. Untested thresholds
+        between two tested values were not replayed, so their outcome is not established.
 
     Raises:
         ValueError: If the selected candidate does not belong to the supplied axis.
