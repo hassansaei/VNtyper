@@ -38,7 +38,7 @@ from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
 from vntyper.scripts.calibration_cohort_manifest import CohortSample
 from vntyper.scripts.calibration_cohort_metrics import caller_metrics_document
 from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult
-from vntyper.scripts.calibration_cutoff_axes import AxisBreakpoints, axis_caller, axis_document
+from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, AxisBreakpoints, axis_caller, axis_document
 from vntyper.scripts.calibration_cutoff_curves import (
     axis_curve_document,
     build_axis_curve,
@@ -382,11 +382,15 @@ def _search_scope(inputs: CutoffReportInputs) -> dict[str, Any]:
 
 
 def _axis_documents(inputs: CutoffReportInputs) -> list[dict[str, Any]]:
-    """Each searched axis; an adVNTR axis also states how many samples no cutoff can reject."""
+    """Each searched axis; the adVNTR cutoff axis also states how many samples no cutoff can reject.
+
+    Only the cutoff axis carries ``unrejectable_samples`` (spec section 8): a p-value of
+    exactly 0 defeats every admissible cutoff, while read support has no such floor.
+    """
     documents: list[dict[str, Any]] = []
     for axis, _ in inputs.derived:
         document = dict(axis_document(axis))
-        if axis_caller(axis.axis) == "advntr":
+        if axis.axis == ADVNTR_CUTOFF:
             if inputs.advntr_search is None:
                 _fail(f"cutoff report adVNTR axis {axis.axis} has no adVNTR search record")
             document["unrejectable_samples"] = inputs.advntr_search.unrejectable[axis.axis]
@@ -403,14 +407,18 @@ def _curve(
     candidates: Sequence[CutoffCandidate],
     arms: Mapping[str, Sequence[CallerObservation]],
     comparison: str,
+    caller: str,
 ) -> dict[str, Any]:
     """One axis's ROC/PR curve, or the reason none exists (spec 14.6).
 
     On the either-caller union a positive call from one caller resolves the other caller's
     no-call, so the no-call set can change across one axis. A curve over such an axis has
-    no fixed denominators, and is published as unavailable rather than refused.
+    no fixed denominators, and is published as unavailable rather than refused. For a
+    single caller a changing no-call set is a replay defect, so ``build_axis_curve`` still
+    refuses it.
     """
-    if len({_no_call_keys(arms[candidate.candidate_id]) for candidate in candidates}) > 1:
+    changing = len({_no_call_keys(arms[candidate.candidate_id]) for candidate in candidates}) > 1
+    if caller == "both" and changing:
         return {"axis": axis.axis, "status": "unavailable", "reason": _CURVE_UNAVAILABLE}
     curve = build_axis_curve(axis, candidates, arms, comparison=comparison, phase="policy-selection")
     return {**axis_curve_document(curve), "status": "available"}
@@ -434,7 +442,8 @@ def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
             breakpoint of the axis it claims.
     """
     curves = [
-        _curve(axis, candidates, inputs.arms, inputs.comparisons[axis.axis]) for axis, candidates in inputs.derived
+        _curve(axis, candidates, inputs.arms, inputs.comparisons[axis.axis], inputs.caller)
+        for axis, candidates in inputs.derived
     ]
     selected = inputs.evaluation["final_selection"]["policy_id"]
     by_candidate = {
