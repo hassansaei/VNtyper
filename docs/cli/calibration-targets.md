@@ -277,6 +277,11 @@ filtered out.
   baseline for every candidate, and the report records
   `advntr_policy: "held-at-baseline"`.
 
+The capture manifest (`--captures`) is the declared association of each sample with its
+captures, and it is trusted: a capture from the same build assigned to the wrong sample
+cannot be detected. One manifest serves `--caller kestrel`, `advntr` and `both`; the
+columns of a caller the run does not use are ignored.
+
 `--caller advntr` and `--caller both` require `--advntr-executable`. `--caller kestrel`
 refuses an adVNTR axis, and `--caller advntr` refuses a Kestrel axis. The report lists the
 searched callers under `search_scope.searched_callers` and states the adVNTR policy
