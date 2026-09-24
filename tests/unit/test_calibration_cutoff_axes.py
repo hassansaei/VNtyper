@@ -628,3 +628,51 @@ def test_observed_axis_dedupes_candidates_and_caps_in_rank_space() -> None:
     axis = observed_axis(ADVNTR_CUTOFF, candidates, baseline=base, observed_count=4, sentinel=None, max_values=3)
     assert axis.capped is True and 0.001 in axis.values and len(axis.values) == 3
     assert min(axis.values) == 0.0002 and max(axis.values) == 0.001
+
+
+def test_merge_axis_values_unions_in_order_and_counts_fold_only_values() -> None:
+    from vntyper.scripts.calibration_cutoff_axes import merge_axis_values
+
+    axis = derive_axis(DEPTH_FLOOR_LINKED, {"s1": fractions(0.001, 0.004)}, baseline=baseline())
+    merged = merge_axis_values(axis, [0.002, 0.004, 0.003, 0.002])
+
+    assert merged.values == (0.001, 0.002, 0.003, 0.004, 0.00469)  # the baseline lies above the data: no sentinel
+    assert merged.fold_only == 2
+    assert replace(merged, values=axis.values, fold_only=0) == axis
+    assert merge_axis_values(axis, []).fold_only == 0 and merge_axis_values(axis, []).values == axis.values
+
+
+def test_merge_axis_values_keeps_integer_axes_integral() -> None:
+    from vntyper.scripts.calibration_cutoff_axes import merge_axis_values
+
+    axis = derive_axis(ACTIVE_REGION, {"s1": [Fraction(150)]}, baseline=baseline())
+    merged = merge_axis_values(axis, {7, 150})
+
+    assert 7 in merged.values and merged.fold_only == 1
+    assert all(type(value) is int for value in merged.values)
+    assert list(merged.values) == sorted(merged.values)
+
+
+def test_merge_axis_values_refuses_forged_axes_and_non_numbers() -> None:
+    from vntyper.scripts.calibration_cutoff_axes import merge_axis_values
+
+    axis = derive_axis(ACTIVE_REGION, {"s1": [Fraction(150)]}, baseline=baseline())
+    with pytest.raises(ValueError):
+        merge_axis_values(object(), [1])  # type: ignore[arg-type]
+    for extra in ([True], ["7"], [7.5], [math.nan]):
+        with pytest.raises(ValueError):
+            merge_axis_values(axis, extra)
+
+
+def test_axis_document_states_breakpoint_completeness_per_inventory() -> None:
+    axis = derive_axis(DEPTH_FLOOR_LINKED, {"s1": fractions(0.001)}, baseline=baseline())
+    document = axis_document(axis)
+    assert document["breakpoint_completeness"] == "complete"
+    assert document["full_data_capped"] is False and document["fold_capped"] == []
+    assert document["fold_only_values"] == 0
+
+    assert axis_document(replace(axis, capped=True))["breakpoint_completeness"] == "capped-subsample"
+    fold_capped = axis_document(replace(axis, fold_capped=(2,), fold_only=1))
+    assert fold_capped["breakpoint_completeness"] == "capped-subsample"
+    assert fold_capped["full_data_capped"] is False and fold_capped["fold_capped"] == [2]
+    assert fold_capped["fold_only_values"] == 1

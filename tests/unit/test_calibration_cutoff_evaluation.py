@@ -234,3 +234,111 @@ def test_malformed_contributors_are_refused(contributors):
         evaluate_cutoff_arms(
             _leaky_arms(), spec=SearchSpec("balanced-accuracy"), folds=2, seed=7, contributors=contributors
         )
+
+
+def _fold_rows(values):
+    return [(row.key, row.group_key, row.truth_positive) for row in values["baseline"]]
+
+
+def test_outer_fold_assignments_are_the_folds_the_evaluation_publishes():
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms, outer_fold_assignments
+
+    values = _leaky_arms()
+    for seed in (3, 7, 20260915):
+        assignments = outer_fold_assignments(_fold_rows(values), folds=2, seed=seed)
+        result = evaluate_cutoff_arms(values, spec=SearchSpec("balanced-accuracy"), folds=2, seed=seed)
+        assert assignments == {row["key"]: row["fold"] for row in result["rows"]}
+
+
+def test_outer_fold_assignments_are_empty_for_a_singleton_cohort():
+    from vntyper.scripts.calibration_cutoff_evaluation import outer_fold_assignments
+
+    assert outer_fold_assignments([("only", "only", True)], folds=2, seed=7) == {}
+
+
+def _inventories_without_leaky_where(values, heldout_key, seed=7):
+    """Admit ``leaky`` in every fold except the one holding ``heldout_key`` out."""
+    from vntyper.scripts.calibration_cutoff_evaluation import outer_fold_assignments
+
+    assignments = outer_fold_assignments(_fold_rows(values), folds=2, seed=seed)
+    return {
+        fold: frozenset() if fold == assignments[heldout_key] else frozenset({"leaky"})
+        for fold in set(assignments.values())
+    }
+
+
+def test_a_candidate_absent_from_a_fold_inventory_is_never_used_in_that_fold():
+    """``leaky`` scores best on every training set, yet the fold whose inventory lacks it cannot use it."""
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    values = _leaky_arms()
+    result = evaluate_cutoff_arms(
+        values,
+        spec=SearchSpec("balanced-accuracy"),
+        folds=2,
+        seed=7,
+        fold_inventories=_inventories_without_leaky_where(values, "0"),
+    )
+    by_holdout = {"0" in fold["held_out_keys"]: fold for fold in result["folds"]}
+
+    assert by_holdout[True]["used_policy"] == "baseline"
+    assert by_holdout[True]["admissible_candidates"] == 1
+    assert by_holdout[False]["used_policy"] == "leaky"
+    assert by_holdout[False]["admissible_candidates"] == 2
+    held = set(by_holdout[True]["held_out_keys"])
+    assert all(row["selected_policy"] == "baseline" for row in result["rows"] if row["key"] in held)
+    # The full-data selection is descriptive and still searches every replayed candidate.
+    assert result["final_selection"]["policy_id"] == "leaky"
+    assert result["fold_admissibility"] == "training-derived-inventories"
+
+
+def test_contributors_and_fold_inventories_are_mutually_exclusive():
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    values = _leaky_arms()
+    with pytest.raises(ValueError, match="cutoff evaluation takes contributors or fold inventories, not both"):
+        evaluate_cutoff_arms(
+            values,
+            spec=SearchSpec("balanced-accuracy"),
+            folds=2,
+            seed=7,
+            contributors={"leaky": frozenset({"0"})},
+            fold_inventories=_inventories_without_leaky_where(values, "0"),
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda inventories: {**inventories, 99: frozenset()},
+        lambda inventories: dict(list(inventories.items())[:1]),
+        lambda inventories: {},
+        lambda inventories: {fold: frozenset({"baseline"}) for fold in inventories},
+        lambda inventories: {fold: frozenset({"unknown-policy"}) for fold in inventories},
+        lambda inventories: {fold: {"leaky"} for fold in inventories},
+        lambda inventories: [(fold, ids) for fold, ids in inventories.items()],
+    ],
+)
+def test_malformed_fold_inventories_are_refused(mutate):
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    values = _leaky_arms()
+    inventories = mutate(_inventories_without_leaky_where(values, "0"))
+    with pytest.raises(ValueError, match="fold inventor"):
+        evaluate_cutoff_arms(
+            values, spec=SearchSpec("balanced-accuracy"), folds=2, seed=7, fold_inventories=inventories
+        )
+
+
+def test_empty_fold_inventories_keep_the_unavailable_result_of_a_singleton_cohort():
+    from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+
+    records = {"baseline": rows((True,), (True,))}
+    plain = evaluate_cutoff_arms(records, spec=SearchSpec("balanced-accuracy"))
+    inventoried = evaluate_cutoff_arms(records, spec=SearchSpec("balanced-accuracy"), fold_inventories={})
+
+    assert inventoried["status"] == "unavailable" and not inventoried["cross_validation_available"]
+    assert inventoried["fold_admissibility"] == "training-derived-inventories"
+    assert {**inventoried, "fold_admissibility": None} == {**plain, "fold_admissibility": None}
+    with pytest.raises(ValueError, match="fold inventor"):
+        evaluate_cutoff_arms(records, spec=SearchSpec("balanced-accuracy"), fold_inventories={0: frozenset()})

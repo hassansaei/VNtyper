@@ -102,8 +102,8 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from types import MappingProxyType
 from typing import Final, NoReturn, cast
@@ -189,6 +189,10 @@ class AxisBreakpoints:
             would not decode; the reason is the decoder's own message.
         sentinel: The endpoint value added beyond the observed range, when it was added
             and accepted; it is then also a member of ``values``. ``None`` otherwise.
+        fold_only: How many of ``values`` only a fold's training-derived inventory
+            produced (see :func:`merge_axis_values`); 0 for an axis derived once.
+        fold_capped: Ascending outer folds whose training-derived inventory was capped.
+            ``capped`` describes the full-data inventory only.
     """
 
     axis: str
@@ -199,6 +203,8 @@ class AxisBreakpoints:
     capped: bool
     rejected: tuple[tuple[float, str], ...]
     sentinel: float | None = None
+    fold_only: int = 0
+    fold_capped: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -655,6 +661,33 @@ def observed_axis(
     )
 
 
+def merge_axis_values(axis: AxisBreakpoints, extra: Iterable[int | float]) -> AxisBreakpoints:
+    """Union extra breakpoints, normally fold inventories, into an axis.
+
+    Args:
+        axis: The full-data axis.
+        extra: Values other inventories of the same axis hold; members already on the axis
+            are not counted again.
+
+    Returns:
+        The axis with ascending ``values`` covering both sets and ``fold_only`` counting
+        the values only ``extra`` contributed. Every other field is unchanged.
+
+    Raises:
+        ValueError: If the axis is forged, or an extra value is not a finite number
+            (never a boolean), or is not an integer on an integer axis.
+    """
+    spec = _require_axis(axis)
+    added: set[int | float] = set()
+    for value in extra:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            _fail(f"cutoff axis {axis.axis} merged values must be finite numbers, never booleans")
+        if spec.integer and not isinstance(value, int):
+            _fail(f"cutoff axis {axis.axis} merged values must be integers")
+        added.add(value)
+    return replace(axis, values=tuple(sorted(set(axis.values) | added)), fold_only=len(added - set(axis.values)))
+
+
 def axis_candidates(baseline: CallerPolicyValues, axis: AxisBreakpoints) -> tuple[CutoffCandidate, ...]:
     """One complete validated policy per breakpoint, with stable ``<axis>-NNNN`` ids.
 
@@ -700,7 +733,10 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
         A JSON-compatible object carrying the axis name, the caller it moves, the
         production comparator it sweeps, the statistic it reads, the pointers it moves,
         its values, provenance, cap state, every rejected value with the reason it was
-        dropped, and the endpoint sentinel (or null).
+        dropped, and the endpoint sentinel (or null). Completeness is stated per
+        inventory: ``breakpoint_completeness`` is ``"complete"`` only when neither the
+        full-data inventory nor any fold's training-derived inventory was capped, because a
+        capped inventory may miss distinct operating points.
 
     Raises:
         ValueError: If the axis content differs from its module-level definition.
@@ -719,4 +755,8 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
         "capped": axis.capped,
         "rejected": [{"value": value, "reason": reason} for value, reason in axis.rejected],
         "endpoint_sentinel": axis.sentinel,
+        "fold_only_values": axis.fold_only,
+        "full_data_capped": axis.capped,
+        "fold_capped": list(axis.fold_capped),
+        "breakpoint_completeness": "complete" if not axis.capped and not axis.fold_capped else "capped-subsample",
     }
