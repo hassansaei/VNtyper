@@ -24,13 +24,15 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, NoReturn, cast
 
 from vntyper.modules.advntr.advntr_replay import replay_locus_document
+from vntyper.scripts.calibration_caller_observations import decode_advntr_baseline_calls
 from vntyper.scripts.calibration_caller_policy import (
     CallerPolicyValues,
     caller_policy_values_document,
@@ -43,6 +45,9 @@ from vntyper.scripts.calibration_cutoff_axes import (
     AxisBreakpoints,
     observed_axis,
 )
+from vntyper.scripts.calibration_cutoff_grid import CutoffCandidate
+from vntyper.scripts.calibration_secure_io import read_regular_path
+from vntyper.scripts.canonical_json import load_strict_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +87,12 @@ def _axis_pointer(axis: str) -> str:
     return _POINTERS[axis]
 
 
-def _require_legacy(baseline: CallerPolicyValues) -> None:
-    if "advntr" not in baseline.required_callers:
-        _fail("adVNTR cutoff axes require a baseline policy that includes adVNTR")
-    mode = baseline.values[_MODE]
+def _require_legacy(policy: CallerPolicyValues, role: str = "baseline") -> None:
+    if "advntr" not in policy.required_callers:
+        _fail(f"adVNTR cutoff axes require a {role} policy that includes adVNTR")
+    mode = policy.values[_MODE]
     if mode != "legacy":
-        _fail(f"adVNTR cutoff axes require the legacy calibrated_calling mode; the baseline mode is {mode!r}")
+        _fail(f"adVNTR cutoff axes require the legacy calibrated_calling mode; the {role} mode is {mode!r}")
 
 
 def _baseline_fraction(baseline: CallerPolicyValues, axis: str) -> Fraction:
@@ -132,9 +137,9 @@ def advntr_probe_policy(axis: str, baseline: CallerPolicyValues) -> CallerPolicy
 def _visit(value: object) -> AdvntrVisit | None:
     if not isinstance(value, Mapping):
         _fail("adVNTR replay decision visit must be an object")
-    statistic, plan = value.get("statistic"), value.get("plan")
-    if statistic is None or value.get("disposition") not in _SCORED:
+    if value.get("disposition") not in _SCORED:
         return None
+    statistic, plan = value.get("statistic"), value.get("plan")
     if not isinstance(statistic, Mapping) or not isinstance(plan, Mapping):
         _fail("adVNTR replay decision visit statistic and plan must be objects")
     support, pvalue = plan.get("read_support"), statistic.get("pvalue")
@@ -152,7 +157,12 @@ def probe_visits(result: AdvntrCutoffGridResult, policy_id: str) -> dict[str, tu
 
     Only the dispositions ``called`` and ``cutoff`` carry a legacy p-value; visits with any
     other disposition (``legacy-nonfinite``, ``insufficient-read-support``,
-    ``outside-boundary``) or a null statistic are skipped (spec §14.5).
+    ``outside-boundary``) are skipped, and a scored visit must be well-formed (spec §14.5).
+
+    The grid records no policy values, so this cannot check the replayed policy's mode:
+    callers must replay a legacy-mode policy (:func:`advntr_probe_policy` keeps the
+    legacy baseline mode), because an exact-mode p-value has different semantics.
+    :func:`check_replay_consistency` checks the mode of every candidate it binds.
 
     Args:
         result: A native replay grid that contains ``policy_id``.
@@ -164,7 +174,7 @@ def probe_visits(result: AdvntrCutoffGridResult, policy_id: str) -> dict[str, tu
 
     Raises:
         ValueError: If the policy is absent from the grid, or a scored visit is malformed
-            (including a ``called``/``cutoff`` visit with a null p-value).
+            (including a ``called``/``cutoff`` visit with a null statistic or p-value).
     """
     matches = [row for row in result.policies if row.policy_id == policy_id]
     if len(matches) != 1:
@@ -223,6 +233,14 @@ def sample_statistics(axis: str, visits: SampleVisits, baseline: CallerPolicyVal
     return statistics
 
 
+def _is_float_value(value: Fraction) -> bool:
+    """Breakpoints and sentinels round through float, so a statistic must be one exactly."""
+    try:
+        return Fraction(float(value)) == value
+    except OverflowError:
+        return False
+
+
 def _next_up(value: Fraction) -> Fraction:
     return Fraction(math.nextafter(float(value), math.inf))
 
@@ -257,14 +275,16 @@ def derive_advntr_axis(
         The observed-breakpoint axis.
 
     Raises:
-        ValueError: For an unknown axis, a non-legacy or adVNTR-less baseline, an inexact
-            statistic, or an invalid cap.
+        ValueError: For an unknown axis, a non-legacy or adVNTR-less baseline, a statistic
+            that is not an exact float value, or an invalid cap.
     """
     _axis_pointer(axis)
     _require_legacy(baseline)
     observed = set(statistics.values())
     if any(not isinstance(value, Fraction) for value in observed):
         _fail("adVNTR cutoff axis statistics must be exact Fractions")
+    if any(not _is_float_value(value) for value in observed):
+        _fail("adVNTR cutoff axis statistics must be exactly representable as floats")
     anchor = _baseline_fraction(baseline, axis)
     sentinel: Fraction | None
     if axis == ADVNTR_CUTOFF:
@@ -300,3 +320,124 @@ def unrejectable_samples(axis: str, statistics: Mapping[str, Fraction]) -> int:
     """
     _axis_pointer(axis)
     return sum(1 for value in statistics.values() if value == 0) if axis == ADVNTR_CUTOFF else 0
+
+
+def predicted_call(visits: tuple[AdvntrVisit, ...] | None, cutoff: float, support: int) -> bool | None:
+    """The legacy sample call the module rule predicts.
+
+    Args:
+        visits: One sample's scored visits, or ``None`` for an unassessable sample.
+        cutoff: The legacy cutoff; a visit calls when its p-value is strictly below it.
+        support: The minimum read support; a visit is eligible when its support reaches it.
+
+    Returns:
+        Whether any eligible visit calls, or ``None`` for an unassessable sample.
+    """
+    if visits is None:
+        return None
+    threshold = Fraction(cutoff)
+    return any(visit.read_support >= support and visit.pvalue < threshold for visit in visits)
+
+
+def _moved_axis(candidate: CutoffCandidate) -> str:
+    moved = [axis for axis, pointer in _POINTERS.items() if pointer in candidate.parameters]
+    return ", ".join(moved) if moved else "baseline"
+
+
+def check_replay_consistency(
+    result: AdvntrCutoffGridResult, candidates: Sequence[CutoffCandidate], visits: SampleVisits
+) -> int:
+    """Prove every candidate's native calls equal the calls the module rule predicts.
+
+    An unassessable sample is consistent only when the replay also leaves it uncalled
+    (``None``); it never counts as a call either way.
+
+    Args:
+        result: The native replay grid holding every candidate's calls.
+        candidates: The tested candidates of one axis; each must be a legacy adVNTR policy.
+        visits: The per-sample scored visits the axis was derived from.
+
+    Returns:
+        The number of candidates checked.
+
+    Raises:
+        ValueError: If a candidate policy is not legacy adVNTR, was not replayed, or was
+            replayed over a different roster, or naming the axis, the candidate, its tested
+            cutoff and support, and the number of disagreeing samples.
+    """
+    native = {row.policy_id: {sample.key: sample.called_positive for sample in row.samples} for row in result.policies}
+    for candidate in candidates:
+        _require_legacy(candidate.policy, f"candidate {candidate.candidate_id}")
+        calls = native.get(candidate.candidate_id)
+        if calls is None:
+            _fail(f"adVNTR replay consistency: candidate {candidate.candidate_id} was not replayed")
+        if set(calls) != set(visits):
+            _fail(f"adVNTR replay consistency: candidate {candidate.candidate_id} replayed a different roster")
+        cutoff = cast(float, candidate.policy.values[_POINTERS[ADVNTR_CUTOFF]])
+        support = cast(int, candidate.policy.values[_POINTERS[ADVNTR_MIN_SUPPORT]])
+        wrong = [key for key in sorted(visits) if predicted_call(visits[key], cutoff, support) != calls[key]]
+        if wrong:
+            _fail(
+                f"adVNTR replay consistency failed on axis {_moved_axis(candidate)} for candidate "
+                f"{candidate.candidate_id} (cutoff={cutoff!r}, support={support}): the native replay disagrees "
+                f"with the legacy decision rule on {len(wrong)} samples, so the replayed operating points "
+                "cannot be trusted"
+            )
+    return len(candidates)
+
+
+def _vntr_ids(raw: bytes) -> tuple[int, ...]:
+    """The capture's VNTR identifiers, in record order."""
+    identifiers = []
+    for line in raw.splitlines():
+        locus = load_strict_json_object(line).get("locus")
+        vntr_id = locus.get("vntr_id") if isinstance(locus, Mapping) else None
+        if isinstance(vntr_id, bool) or not isinstance(vntr_id, int) or vntr_id <= 0:
+            _fail("adVNTR capture record lacks a positive VNTR identifier")
+        identifiers.append(vntr_id)
+    return tuple(identifiers)
+
+
+def advntr_baseline_parity(
+    result: AdvntrCutoffGridResult, anchor_id: str, capture_paths: Mapping[str, Path]
+) -> dict[str, object]:
+    """Require the anchor replay to reproduce each capture's own native baseline calls.
+
+    Each capture's recorded decisions are decoded independently of the replay; a sample
+    whose capture failed its calibration audit is unassessable (``None``) and must be
+    unassessable in the replay too.
+
+    Args:
+        result: The native replay grid holding the anchor policy.
+        anchor_id: The replayed policy ID of the baseline anchor.
+        capture_paths: Sample key to its capture file; the roster must equal the replay's.
+
+    Returns:
+        ``{"proven": True, "sample_count": n, "mismatches": []}``.
+
+    Raises:
+        ValueError: If the anchor was not replayed, the rosters or a sample's loci differ,
+            a capture is malformed, or any sample's replayed call differs from its capture.
+    """
+    rows = [row for row in result.policies if row.policy_id == anchor_id]
+    if len(rows) != 1:
+        _fail(f"adVNTR baseline parity: anchor {anchor_id} was not replayed")
+    samples = {sample.key: sample for sample in rows[0].samples}
+    if set(samples) != set(capture_paths):
+        _fail("adVNTR baseline parity: the replay and the captures disagree about the roster")
+    mismatches = []
+    for key in sorted(capture_paths):
+        raw = read_regular_path(capture_paths[key])
+        vntr_ids = _vntr_ids(raw)
+        if sorted(vntr_ids) != sorted(locus.vntr_id for locus in samples[key].loci):
+            _fail(f"adVNTR baseline parity: the capture for {key} covers different loci than its replay")
+        calls, assessable = decode_advntr_baseline_calls(raw, vntr_ids)
+        native = bool(calls) if assessable else None
+        if native != samples[key].called_positive:
+            mismatches.append(key)
+    if mismatches:
+        _fail(
+            "adVNTR baseline parity failed: the anchor replay disagrees with the native capture decisions "
+            f"for {len(mismatches)} samples"
+        )
+    return {"proven": True, "sample_count": len(samples), "mismatches": []}
