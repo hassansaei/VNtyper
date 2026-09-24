@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import subprocess
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from tests.unit.advntr_grid_fakes import FIRST_VNTR_ID, advntr_grid_result, parity_capture
+from tests.unit.advntr_grid_fakes import FIRST_VNTR_ID, advntr_grid_result, parity_capture, synthetic_capabilities
 from tests.unit.advntr_grid_fakes import visit_document as _visit
 from tests.unit.test_calibration_cutoff_advntr import _capture, _json_bytes, _policy, _ReplayTool
 from vntyper.scripts.calibration_caller_policy import (
@@ -28,10 +31,13 @@ from vntyper.scripts.calibration_cutoff_advntr_axes import (
     AdvntrVisit,
     advntr_baseline_parity,
     advntr_probe_policy,
+    capture_snapshot,
     check_replay_consistency,
+    derive_advntr_axes,
     derive_advntr_axis,
     predicted_call,
     probe_visits,
+    require_same_evidence,
     sample_statistics,
     unrejectable_samples,
 )
@@ -508,7 +514,7 @@ def _parity_inputs(
         key: parity_capture(tmp_path / f"{key}.jsonl", FIRST_VNTR_ID + index, native[key])
         for index, key in enumerate(sorted(native))
     }
-    return advntr_grid_result({"baseline": replayed, "probe": replayed}), paths
+    return advntr_grid_result({"baseline": replayed, "probe": replayed}, capture_paths=paths), paths
 
 
 _NATIVE = {"neg-b": False, "pos-a": True, "unassessable": None}
@@ -549,3 +555,214 @@ def test_baseline_parity_refuses_a_capture_without_a_positive_vntr_id(tmp_path: 
     paths["pos-a"].write_bytes(_json_bytes(document))
     with pytest.raises(ValueError, match="lacks a positive VNTR identifier"):
         advntr_baseline_parity(result, "baseline", paths)
+
+
+def test_baseline_parity_binds_each_capture_record_to_the_record_the_anchor_replayed(tmp_path: Path) -> None:
+    """A capture whose bytes differ from the replayed record is not evidence for that replay."""
+    result, paths = _parity_inputs(tmp_path, _NATIVE, _NATIVE)
+    document = json.loads(paths["neg-b"].read_bytes())
+    document["locus"]["selected_read_count"] = 11  # same locus, same call, different record
+    paths["neg-b"].write_bytes(_json_bytes(document))
+    with pytest.raises(ValueError, match="capture record for neg-b at VNTR 17 is not the record the anchor replayed"):
+        advntr_baseline_parity(result, "baseline", paths)
+
+
+def test_baseline_parity_names_the_first_five_mismatched_samples(tmp_path: Path) -> None:
+    native = {f"sample-{index}": False for index in range(7)}
+    result, paths = _parity_inputs(tmp_path, native, dict.fromkeys(native, True))
+    with pytest.raises(ValueError) as error:
+        advntr_baseline_parity(result, "baseline", paths)
+    message = str(error.value)
+    assert "for 7 samples" in message
+    assert "sample-0, sample-1, sample-2, sample-3, sample-4" in message
+    assert "sample-5" not in message and "sample-6" not in message
+
+
+# --- evidence binding between the probe and the candidate grid --------------------------------------
+
+
+def _evidence(tmp_path: Path) -> tuple[AdvntrCutoffGridResult, AdvntrCutoffGridResult, dict[str, Path]]:
+    result, paths = _parity_inputs(tmp_path, _NATIVE, _NATIVE)
+    main = advntr_grid_result({"anchor": _NATIVE, "other": _NATIVE}, capture_paths=paths)
+    return result, main, paths
+
+
+def test_same_evidence_accepts_two_grids_over_unchanged_captures(tmp_path: Path) -> None:
+    probe, main, paths = _evidence(tmp_path)
+    snapshot = capture_snapshot(paths)
+    assert snapshot == {key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in paths.items()}
+    require_same_evidence(probe, main, snapshot, paths)
+
+
+def test_same_evidence_refuses_a_changed_tool_identity(tmp_path: Path) -> None:
+    probe, main, paths = _evidence(tmp_path)
+    changed = replace(main, capabilities=synthetic_capabilities("2.4.1"))
+    with pytest.raises(ValueError, match="probe and candidate replays are not bound to the same evidence"):
+        require_same_evidence(probe, changed, capture_snapshot(paths), paths)
+
+
+def test_same_evidence_refuses_a_changed_capture_policy(tmp_path: Path) -> None:
+    probe, main, paths = _evidence(tmp_path)
+    changed = replace(main, capture_policy_sha256="f" * 64)
+    with pytest.raises(ValueError, match="not bound to the same evidence"):
+        require_same_evidence(probe, changed, capture_snapshot(paths), paths)
+
+
+def test_same_evidence_refuses_a_changed_record_digest(tmp_path: Path) -> None:
+    probe, _, paths = _evidence(tmp_path)
+    placeholder = advntr_grid_result({"anchor": _NATIVE})  # loci carry a placeholder record digest
+    with pytest.raises(ValueError, match="not bound to the same evidence"):
+        require_same_evidence(probe, placeholder, capture_snapshot(paths), paths)
+
+
+def test_same_evidence_refuses_capture_bytes_changed_after_the_snapshot(tmp_path: Path) -> None:
+    probe, main, paths = _evidence(tmp_path)
+    snapshot = capture_snapshot(paths)
+    paths["pos-a"].write_bytes(paths["pos-a"].read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="not bound to the same evidence"):
+        require_same_evidence(probe, main, snapshot, paths)
+
+
+def test_same_evidence_refuses_a_grid_whose_policies_disagree_on_a_record(tmp_path: Path) -> None:
+    probe, main, paths = _evidence(tmp_path)
+    placeholder = advntr_grid_result({"other": _NATIVE})
+    mixed = replace(main, policies=(main.policies[0], placeholder.policies[0]))
+    with pytest.raises(ValueError, match="not bound to the same evidence"):
+        require_same_evidence(probe, mixed, capture_snapshot(paths), paths)
+
+
+# --- derive_advntr_axes: the probe grid and the fold-local inventories ------------------------------
+
+_PROBE_VISITS: dict[str, tuple[AdvntrVisit, ...] | None] = {
+    "pos-a": (_v(5, 0.0004),),
+    "pos-b": (_v(5, 0.0008),),
+    "neg-c": (_v(5, 0.02), _v(2, 0.0001)),
+    "neg-d": (_v(4, 0.006),),
+    "gone": None,
+}
+
+
+def _probe_grid(seen: list[dict[str, Any]]) -> Any:
+    def grid(capture_paths: Any, policies: Any, **kwargs: Any) -> AdvntrCutoffGridResult:
+        seen.append({"captures": dict(capture_paths), "policies": dict(policies), **kwargs})
+        thresholds = {pid: (float(p.values[_CUT]), int(p.values[_SUP])) for pid, p in policies.items()}
+        return advntr_grid_result(
+            dict.fromkeys(policies),
+            visits=dict.fromkeys(policies, _PROBE_VISITS),
+            thresholds=thresholds,
+            baseline_policy_id=kwargs["baseline_policy_id"],
+        )
+
+    return grid
+
+
+def test_derive_advntr_axes_replays_the_probes_once_and_derives_every_fold_from_training(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vntyper.scripts.calibration_cutoff_advntr_axes as module
+
+    baseline = _policy(cutoff=0.001, support=3)
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(module, "evaluate_advntr_cutoff_grid", _probe_grid(seen))
+    paths = {key: tmp_path / f"{key}.jsonl" for key in _PROBE_VISITS}
+    assignments = {"pos-a": 0, "neg-c": 0, "pos-b": 1, "neg-d": 1, "gone": 1}
+    search = derive_advntr_axes(
+        (ADVNTR_CUTOFF, ADVNTR_MIN_SUPPORT),
+        baseline,
+        paths,
+        executable_path=tmp_path / "advntr",
+        output=tmp_path / "probe",
+        max_values=None,
+        assignments=assignments,
+    )
+
+    assert len(seen) == 1
+    call = seen[0]
+    assert sorted(call["policies"]) == ["baseline", "probe-advntr_cutoff", "probe-advntr_min_support"]
+    assert call["policies"]["baseline"] == baseline
+    assert call["policies"]["probe-advntr_cutoff"].values[_CUT] == math.nextafter(1.0, 0.0)
+    assert call["policies"]["probe-advntr_min_support"].values[_SUP] == 1
+    assert call["baseline_policy_id"] == "baseline"
+    assert call["executable_path"] == tmp_path / "advntr" and call["output"] == tmp_path / "probe"
+    assert call["captures"] == paths
+    assert search.probe.policies[0].policy_id == "baseline"
+    assert search.probe_seconds >= 0.0
+
+    # Cutoff probe (support 3): q = pos-a 0.0004, pos-b 0.0008, neg-c 0.02 (its support-2 visit is not
+    # scored), neg-d 0.006. Fold 0 trains on pos-b and neg-d: breakpoints up(0.0008), up(0.006) and the
+    # sentinel 0.0008, which only this fold derives. Fold 1 trains on pos-a and neg-c.
+    up = lambda value: math.nextafter(value, math.inf)  # noqa: E731
+    (cutoff_axis, cutoff_candidates), (support_axis, support_candidates) = search.derived
+    assert cutoff_axis.axis == ADVNTR_CUTOFF and support_axis.axis == ADVNTR_MIN_SUPPORT
+    assert search.fold_values[ADVNTR_CUTOFF] == {
+        0: frozenset({0.0008, up(0.0008), 0.001, up(0.006)}),
+        1: frozenset({0.0004, up(0.0004), 0.001, up(0.02)}),
+    }
+    assert cutoff_axis.values == (0.0004, up(0.0004), 0.0008, up(0.0008), 0.001, up(0.006), up(0.02))
+    assert cutoff_axis.fold_only == 1
+    assert len(cutoff_candidates) == len(cutoff_axis.values)
+    # Support probe (support 1, baseline cutoff 0.001): the largest support below p 0.001 is pos-a 5,
+    # pos-b 5 and neg-c 2; neg-d has none. Anchor 3, sentinel max + 1.
+    assert search.fold_values[ADVNTR_MIN_SUPPORT] == {0: frozenset({3, 5, 6}), 1: frozenset({2, 3, 5, 6})}
+    assert support_axis.values == (2, 3, 5, 6)
+    assert len(support_candidates) == 4
+    assert search.visits[ADVNTR_CUTOFF]["gone"] is None
+    assert search.visits[ADVNTR_CUTOFF]["neg-c"] == (AdvntrVisit(5, Fraction(0.02)),)
+    assert search.visits[ADVNTR_MIN_SUPPORT]["neg-c"] == (
+        AdvntrVisit(5, Fraction(0.02)),
+        AdvntrVisit(2, Fraction(0.0001)),
+    )
+    assert search.unrejectable == {ADVNTR_CUTOFF: 0, ADVNTR_MIN_SUPPORT: 0}
+
+
+def test_derive_advntr_axes_without_folds_derives_the_full_data_axis_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vntyper.scripts.calibration_cutoff_advntr_axes as module
+
+    monkeypatch.setattr(module, "evaluate_advntr_cutoff_grid", _probe_grid([]))
+    search = derive_advntr_axes(
+        (ADVNTR_CUTOFF,),
+        _policy(cutoff=0.001, support=3),
+        {key: tmp_path / key for key in _PROBE_VISITS},
+        executable_path=tmp_path / "advntr",
+        output=tmp_path / "probe",
+        max_values=None,
+        assignments={},
+    )
+    assert search.fold_values == {ADVNTR_CUTOFF: {}}
+    assert search.derived[0][0].fold_only == 0
+
+
+def test_derive_advntr_axes_refuses_a_non_legacy_probe_before_any_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vntyper.scripts.calibration_cutoff_advntr_axes as module
+
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(module, "evaluate_advntr_cutoff_grid", _probe_grid(seen))
+    monkeypatch.setattr(module, "advntr_probe_policy", lambda _axis, baseline: _with(baseline, _MODE, "exact"))
+    with pytest.raises(ValueError, match="the probe advntr_cutoff mode is 'exact'"):
+        derive_advntr_axes(
+            (ADVNTR_CUTOFF,),
+            _policy(),
+            {"pos-a": tmp_path / "a"},
+            executable_path=tmp_path / "advntr",
+            output=tmp_path / "probe",
+            max_values=None,
+            assignments={},
+        )
+    assert seen == []
+
+
+def test_derive_advntr_axes_refuses_a_kestrel_axis(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="adVNTR cutoff axis must be one of"):
+        derive_advntr_axes(
+            ("depth_floor_linked",),
+            _policy(),
+            {"pos-a": tmp_path / "a"},
+            executable_path=tmp_path / "advntr",
+            output=tmp_path / "probe",
+            max_values=None,
+            assignments={},
+        )

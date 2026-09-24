@@ -18,12 +18,19 @@ holds only for an uncapped axis (spec §14.2).
 
 The statistics come from a native replay at a permissive projection of each axis, not from
 the capture file: the capture only scores visits its own baseline support admitted.
+:func:`derive_advntr_axes` runs those probes in one grid of their own, separate from the
+candidate grid, and derives every axis once from all samples and once per outer fold from
+that fold's training samples (``calibration_cutoff_folds``). Because the probe and the
+candidate grid are two native evaluations, :func:`require_same_evidence` proves afterwards
+that both replayed the same capture bytes, records and tool.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -31,6 +38,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, NoReturn, cast
 
+from vntyper.modules.advntr.advntr_calibration_policy import advntr_canonical_sha256
 from vntyper.modules.advntr.advntr_replay import replay_locus_document
 from vntyper.scripts.calibration_caller_observations import decode_advntr_baseline_calls
 from vntyper.scripts.calibration_caller_policy import (
@@ -38,13 +46,15 @@ from vntyper.scripts.calibration_caller_policy import (
     caller_policy_values_document,
     decode_caller_policy_values,
 )
-from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult
+from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult, evaluate_advntr_cutoff_grid
 from vntyper.scripts.calibration_cutoff_axes import (
     ADVNTR_CUTOFF,
     ADVNTR_MIN_SUPPORT,
     AxisBreakpoints,
+    axis_candidates,
     observed_axis,
 )
+from vntyper.scripts.calibration_cutoff_folds import fold_axis
 from vntyper.scripts.calibration_cutoff_grid import CutoffCandidate
 from vntyper.scripts.calibration_secure_io import read_regular_path
 from vntyper.scripts.canonical_json import load_strict_json_object
@@ -62,6 +72,10 @@ PROBE_LADDERS: Final[Mapping[str, tuple[float | int, ...]]] = MappingProxyType(
 )
 #: Decision dispositions that carry a legacy p-value; every other disposition is skipped.
 _SCORED: Final[frozenset[str]] = frozenset({"called", "cutoff"})
+#: Why a run stops when its probe and candidate replays cannot be shown to share evidence.
+EVIDENCE_UNBOUND: Final[str] = "cutoff optimize adVNTR probe and candidate replays are not bound to the same evidence"
+#: How many mismatched samples a parity failure names.
+_NAMED_MISMATCHES: Final[int] = 5
 
 
 @dataclass(frozen=True)
@@ -386,16 +400,17 @@ def check_replay_consistency(
     return len(candidates)
 
 
-def _vntr_ids(raw: bytes) -> tuple[int, ...]:
-    """The capture's VNTR identifiers, in record order."""
-    identifiers = []
+def _capture_records(raw: bytes) -> tuple[tuple[int, str], ...]:
+    """The capture's ``(VNTR identifier, canonical record digest)`` pairs, in record order."""
+    records = []
     for line in raw.splitlines():
-        locus = load_strict_json_object(line).get("locus")
+        document = load_strict_json_object(line)
+        locus = document.get("locus")
         vntr_id = locus.get("vntr_id") if isinstance(locus, Mapping) else None
         if isinstance(vntr_id, bool) or not isinstance(vntr_id, int) or vntr_id <= 0:
             _fail("adVNTR capture record lacks a positive VNTR identifier")
-        identifiers.append(vntr_id)
-    return tuple(identifiers)
+        records.append((vntr_id, advntr_canonical_sha256(document)))
+    return tuple(records)
 
 
 def advntr_baseline_parity(
@@ -405,7 +420,9 @@ def advntr_baseline_parity(
 
     Each capture's recorded decisions are decoded independently of the replay; a sample
     whose capture failed its calibration audit is unassessable (``None``) and must be
-    unassessable in the replay too.
+    unassessable in the replay too. Each capture record is also bound to the replay: its
+    canonical digest must equal the ``capture_record_sha256`` the anchor replayed for that
+    sample and locus, so the parity is proven against the very bytes that were replayed.
 
     Args:
         result: The native replay grid holding the anchor policy.
@@ -417,7 +434,8 @@ def advntr_baseline_parity(
 
     Raises:
         ValueError: If the anchor was not replayed, the rosters or a sample's loci differ,
-            a capture is malformed, or any sample's replayed call differs from its capture.
+            a capture is malformed or is not the record the anchor replayed, or any
+            sample's replayed call differs from its capture (naming the first few samples).
     """
     rows = [row for row in result.policies if row.policy_id == anchor_id]
     if len(rows) != 1:
@@ -428,9 +446,17 @@ def advntr_baseline_parity(
     mismatches = []
     for key in sorted(capture_paths):
         raw = read_regular_path(capture_paths[key])
-        vntr_ids = _vntr_ids(raw)
+        records = _capture_records(raw)
+        vntr_ids = tuple(vntr_id for vntr_id, _ in records)
+        loci = {locus.vntr_id: locus for locus in samples[key].loci}
         if sorted(vntr_ids) != sorted(locus.vntr_id for locus in samples[key].loci):
             _fail(f"adVNTR baseline parity: the capture for {key} covers different loci than its replay")
+        for vntr_id, digest in records:
+            if replay_locus_document(loci[vntr_id]).get("capture_record_sha256") != digest:
+                _fail(
+                    f"adVNTR baseline parity: the capture record for {key} at VNTR {vntr_id} is not the record "
+                    "the anchor replayed"
+                )
         calls, assessable = decode_advntr_baseline_calls(raw, vntr_ids)
         native = bool(calls) if assessable else None
         if native != samples[key].called_positive:
@@ -438,6 +464,142 @@ def advntr_baseline_parity(
     if mismatches:
         _fail(
             "adVNTR baseline parity failed: the anchor replay disagrees with the native capture decisions "
-            f"for {len(mismatches)} samples"
+            f"for {len(mismatches)} samples (first: {', '.join(mismatches[:_NAMED_MISMATCHES])})"
         )
     return {"proven": True, "sample_count": len(samples), "mismatches": []}
+
+
+def capture_snapshot(capture_paths: Mapping[str, Path]) -> dict[str, str]:
+    """The exact content digest of every capture, taken before any adVNTR replay.
+
+    Args:
+        capture_paths: Sample key to its capture file.
+
+    Returns:
+        Sample key to the SHA-256 of its capture bytes.
+    """
+    return {key: hashlib.sha256(read_regular_path(path)).hexdigest() for key, path in sorted(capture_paths.items())}
+
+
+def _record_digests(result: AdvntrCutoffGridResult) -> dict[tuple[str, int], str]:
+    """Every replayed ``(sample, locus)`` record digest; the policies of one grid must agree."""
+    digests: dict[tuple[str, int], str] = {}
+    for row in result.policies:
+        for sample in row.samples:
+            for locus in sample.loci:
+                digest = replay_locus_document(locus).get("capture_record_sha256")
+                if not isinstance(digest, str) or digests.setdefault((sample.key, locus.vntr_id), digest) != digest:
+                    _fail(EVIDENCE_UNBOUND)
+    return digests
+
+
+def require_same_evidence(
+    probe: AdvntrCutoffGridResult,
+    main: AdvntrCutoffGridResult,
+    snapshot: Mapping[str, str],
+    capture_paths: Mapping[str, Path],
+) -> None:
+    """Prove the probe grid and the candidate grid replayed the same evidence with the same tool.
+
+    The axis statistics come from the probe grid and the scored arms from the candidate grid,
+    so the replay-consistency check binds the two only if both saw identical inputs.
+
+    Args:
+        probe: The probe grid the axes were derived from.
+        main: The candidate grid the arms are scored from.
+        snapshot: :func:`capture_snapshot` taken before the probe grid ran.
+        capture_paths: The same sample-to-capture mapping, re-hashed now.
+
+    Raises:
+        ValueError: If the tool identities, capture policies or per-locus record digests
+            differ, or a capture's bytes changed since the snapshot.
+    """
+    if (
+        probe.capabilities != main.capabilities
+        or probe.capture_policy_sha256 != main.capture_policy_sha256
+        or _record_digests(probe) != _record_digests(main)
+        or capture_snapshot(capture_paths) != dict(snapshot)
+    ):
+        _fail(EVIDENCE_UNBOUND)
+
+
+@dataclass(frozen=True)
+class AdvntrAxisSearch:
+    """The adVNTR axes of one optimize run, derived from their probe replays.
+
+    Attributes:
+        derived: Each merged axis (full data plus every fold) with its candidates.
+        fold_values: Axis name to outer fold to the values that fold's training samples derived.
+        visits: Axis name to the probe's per-sample scored visits.
+        unrejectable: Axis name to the count of samples no admissible value can reject.
+        probe: The probe grid (baseline plus one permissive projection per axis).
+        probe_seconds: Wall time of the probe grid.
+    """
+
+    derived: tuple[tuple[AxisBreakpoints, tuple[CutoffCandidate, ...]], ...]
+    fold_values: Mapping[str, Mapping[int, frozenset[int | float]]]
+    visits: Mapping[str, SampleVisits]
+    unrejectable: Mapping[str, int]
+    probe: AdvntrCutoffGridResult
+    probe_seconds: float
+
+
+def derive_advntr_axes(
+    names: Sequence[str],
+    baseline: CallerPolicyValues,
+    capture_paths: Mapping[str, Path],
+    *,
+    executable_path: Path,
+    output: Path,
+    max_values: int | None,
+    assignments: Mapping[str, int],
+) -> AdvntrAxisSearch:
+    """Replay the probes once and derive each adVNTR axis, full-data and fold-local.
+
+    Args:
+        names: The requested adVNTR axes, in order.
+        baseline: The complete legacy baseline policy.
+        capture_paths: Sample key to its adVNTR capture.
+        executable_path: The pinned installed adVNTR executable.
+        output: New private directory for the probe grid.
+        max_values: Optional per-inventory breakpoint cap.
+        assignments: Sample key to outer fold (``outer_fold_assignments``); empty when
+            there are too few groups to cross-validate.
+
+    Returns:
+        The derived axes, their fold inventories, the probe visits, the unrejectable
+        sample counts and the probe grid.
+
+    Raises:
+        ValueError: For an unknown axis, a non-legacy or adVNTR-less baseline or probe, or
+            any failure of the probe replay or the derivation.
+    """
+    for name in names:
+        _axis_pointer(name)
+    probes = {f"probe-{name}": advntr_probe_policy(name, baseline) for name in names}
+    for name in names:
+        _require_legacy(probes[f"probe-{name}"], f"probe {name}")
+    started = time.monotonic()
+    probe = evaluate_advntr_cutoff_grid(
+        capture_paths,
+        {"baseline": baseline, **probes},
+        baseline_policy_id="baseline",
+        executable_path=executable_path,
+        output=output,
+    )
+    seconds = time.monotonic() - started
+    derived: list[tuple[AxisBreakpoints, tuple[CutoffCandidate, ...]]] = []
+    fold_values: dict[str, Mapping[int, frozenset[int | float]]] = {}
+    visits: dict[str, SampleVisits] = {}
+    unrejectable: dict[str, int] = {}
+    for name in names:
+        visits[name] = probe_visits(probe, f"probe-{name}")
+        statistics = sample_statistics(name, visits[name], baseline)
+
+        def derive(stats: Mapping[str, Fraction], axis: str = name) -> AxisBreakpoints:
+            return derive_advntr_axis(axis, stats, baseline=baseline, max_values=max_values)
+
+        axis, fold_values[name] = fold_axis(derive, statistics, assignments)
+        derived.append((axis, axis_candidates(baseline, axis)))
+        unrejectable[name] = unrejectable_samples(name, statistics)
+    return AdvntrAxisSearch(tuple(derived), fold_values, visits, unrejectable, probe, seconds)
