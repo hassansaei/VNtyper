@@ -89,7 +89,9 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
         choices=list(CUTOFF_AXIS_CHOICES),
         default=None,
         metavar="NAME",
-        help="Repeatable cutoff axis; defaults to depth_floor_linked (kestrel), advntr_cutoff (advntr), or both (both).",
+        help=(
+            "Repeatable cutoff axis; defaults to depth_floor_linked (kestrel), advntr_cutoff (advntr), or both (both)."
+        ),
     )
     optimize.add_argument(
         "--max-breakpoints",

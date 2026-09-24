@@ -242,7 +242,8 @@ def _validate_arguments(args: object, output: Path) -> _Request:
         )
     if caller == "advntr" and kestrel_axes:
         _fail(
-            f"cutoff optimize --caller advntr cannot search the Kestrel axis {kestrel_axes}; use --caller kestrel or both"
+            f"cutoff optimize --caller advntr cannot search the Kestrel axis {kestrel_axes}; "
+            "use --caller kestrel or both"
         )
     objective = getattr(args, "objective", None)
     if not isinstance(objective, str):

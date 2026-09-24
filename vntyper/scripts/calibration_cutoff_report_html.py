@@ -78,11 +78,14 @@ table { border-collapse: collapse; width: 100%; font-size: .82rem; margin: .5rem
 th, td { border: 1px solid #d8dce1; padding: .3rem .45rem; text-align: right; }
 th { background: #eef1f4; text-align: left; font-weight: 600; }
 td.k, th.k { text-align: left; font-family: ui-monospace, monospace; }
-dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: .2rem .9rem; margin: .5rem 0 0; font-size: .88rem; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: .2rem .9rem; margin: .5rem 0 0;
+           font-size: .88rem; }
 dl.facts dt { font-weight: 600; color: #4a525c; }
 dl.facts dd { margin: 0; font-family: ui-monospace, monospace; }
-.warn { background: #fff4e5; border-left: 4px solid #d98324; padding: .55rem .8rem; margin: .6rem 0; font-size: .88rem; }
-.fail { background: #fdecec; border-left: 4px solid #c0392b; padding: .55rem .8rem; margin: .6rem 0; font-size: .88rem; }
+.warn { background: #fff4e5; border-left: 4px solid #d98324; padding: .55rem .8rem; margin: .6rem 0;
+        font-size: .88rem; }
+.fail { background: #fdecec; border-left: 4px solid #c0392b; padding: .55rem .8rem; margin: .6rem 0;
+        font-size: .88rem; }
 .note { color: #4a525c; font-size: .82rem; margin: .4rem 0 0; }
 .curves { display: flex; flex-wrap: wrap; gap: 1rem; }
 figure { margin: 0; }
@@ -237,9 +240,10 @@ def _selection_section(document: Mapping[str, Any]) -> str:
     if infeasible is not None:
         failed = document_mapping(infeasible, "infeasible selection")
         best = document_mapping(failed.get("best_achievable"), "best achievable")
+        unsatisfiable = ", ".join(str(name) for name in failed.get("unsatisfiable_constraints") or ())
         body = (
             f"<div class='fail'><strong>No cutoff satisfied the declared constraints.</strong> "
-            f"Unsatisfiable: <code>{_escape(', '.join(str(name) for name in failed.get('unsatisfiable_constraints') or ()))}</code>. "
+            f"Unsatisfiable: <code>{_escape(unsatisfiable)}</code>. "
             f"{_escape(failed.get('note'))}</div>"
             + _table(
                 ("constraint", "best achievable"),
