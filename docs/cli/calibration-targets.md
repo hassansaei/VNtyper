@@ -335,8 +335,9 @@ hold:
   distinct adVNTR policy among the candidates: one in all when only Kestrel axes are
   searched, and one plus the number of distinct adVNTR-axis candidates otherwise. The
   report publishes this count (`advntr_distinct_executions`) and the probe count
-  (`advntr_probe_executions`) separately. The probe and candidate grid digests, the adVNTR
-  tool identity and both wall times are recorded under `provenance.advntr`.
+  (`advntr_probe_executions`) separately. The probe and candidate grid digests and the
+  adVNTR tool identity are recorded under `provenance.advntr`. Both wall times are in the
+  top-level `timings` object, the only non-deterministic block of `report.json`.
 
 Cost is about one native replay execution per distinct adVNTR candidate. One execution
 over about 80 captures took about 20 s on one workstation, and executions run serially,

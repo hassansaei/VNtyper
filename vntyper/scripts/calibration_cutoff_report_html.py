@@ -448,12 +448,13 @@ def _advntr_facts(document: Mapping[str, Any], parity: Mapping[str, Any]) -> lis
         return facts
     record = document_mapping(advntr, "adVNTR provenance")
     tool = document_mapping(record.get("tool_identity"), "adVNTR tool identity")
+    timings = document_mapping(document.get("timings"), "timings")
     return [
         *facts,
         ("adVNTR package version", tool.get("package_version")),
         ("adVNTR build id", tool.get("build_id")),
-        ("adVNTR probe grid seconds", record.get("probe_seconds")),
-        ("adVNTR candidate grid seconds", record.get("main_seconds")),
+        ("adVNTR probe grid seconds", timings.get("advntr_probe_seconds")),
+        ("adVNTR candidate grid seconds", timings.get("advntr_main_seconds")),
     ]
 
 

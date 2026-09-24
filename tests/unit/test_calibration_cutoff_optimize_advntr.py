@@ -66,11 +66,14 @@ def test_the_advntr_arm_is_replayed_natively_and_never_approximated(tmp_path: Pa
     assert seen[0]["output"].name == "advntr"
     assert set(seen[0]["captures"]) == set(PROBE_VISITS)
     advntr = document["provenance"]["advntr"]
-    assert set(advntr) == {"sha256", "probe_sha256", "tool_identity", "probe_seconds", "main_seconds"}
+    assert set(advntr) == {"sha256", "probe_sha256", "tool_identity"}
     assert advntr["sha256"] == "d" * 64
-    assert advntr["probe_sha256"] is None and advntr["probe_seconds"] is None
+    assert advntr["probe_sha256"] is None
     assert advntr["tool_identity"] == advntr_capabilities_document(synthetic_capabilities())
-    assert isinstance(advntr["main_seconds"], float) and advntr["main_seconds"] >= 0.0
+    timings = document["timings"]
+    assert set(timings) == {"advntr_probe_seconds", "advntr_main_seconds"}
+    assert timings["advntr_probe_seconds"] is None
+    assert isinstance(timings["advntr_main_seconds"], float) and timings["advntr_main_seconds"] >= 0.0
     best = max(row["counts"]["true_positives"] for row in document["cutoffs"])
     assert best == 3
 
@@ -105,6 +108,7 @@ def test_a_kestrel_run_records_that_advntr_was_not_evaluated(tmp_path: Path) -> 
     assert document["search_scope"]["advntr_distinct_executions"] is None
     assert document["search_scope"]["advntr_probe_executions"] is None
     assert document["provenance"]["advntr"] is None
+    assert document["timings"] == {"advntr_probe_seconds": None, "advntr_main_seconds": None}
     assert document["baseline_parity"]["advntr"] is None
     assert document["replay_consistency"] is None
     assert all(curve["status"] == "available" for curve in document["curves"])
@@ -225,10 +229,11 @@ def test_caller_advntr_searches_the_advntr_cutoff_axis_by_native_replay(tmp_path
     assert len({advntr_signature(policy) for policy in main["policies"].values()}) == 7
     assert document["search_scope"]["advntr_distinct_executions"] == 7
     advntr = document["provenance"]["advntr"]
-    assert set(advntr) == {"sha256", "probe_sha256", "tool_identity", "probe_seconds", "main_seconds"}
+    assert set(advntr) == {"sha256", "probe_sha256", "tool_identity"}
     assert advntr["tool_identity"] == advntr_capabilities_document(synthetic_capabilities())
     assert advntr["probe_sha256"] == "d" * 64
-    assert isinstance(advntr["probe_seconds"], float) and isinstance(advntr["main_seconds"], float)
+    timings = document["timings"]
+    assert isinstance(timings["advntr_probe_seconds"], float) and isinstance(timings["advntr_main_seconds"], float)
 
 
 def test_caller_both_searches_kestrel_and_advntr_axes_on_the_union(tmp_path: Path) -> None:

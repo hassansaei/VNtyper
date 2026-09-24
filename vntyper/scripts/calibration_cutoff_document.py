@@ -350,7 +350,7 @@ def _joint_points(inputs: CutoffReportInputs) -> dict[str, Any] | None:
 
 
 def _advntr_provenance(inputs: CutoffReportInputs) -> dict[str, Any] | None:
-    """The adVNTR evidence the record commits to: both grid digests, the tool and the wall times."""
+    """The adVNTR evidence the record commits to: both grid digests and the tool."""
     result, search = inputs.advntr_result, inputs.advntr_search
     if result is None:
         return None
@@ -358,8 +358,15 @@ def _advntr_provenance(inputs: CutoffReportInputs) -> dict[str, Any] | None:
         "sha256": result.sha256,
         "probe_sha256": None if search is None else search.probe.sha256,
         "tool_identity": advntr_capabilities_document(result.capabilities),
-        "probe_seconds": None if search is None else search.probe_seconds,
-        "main_seconds": inputs.advntr_main_seconds,
+    }
+
+
+def _timings(inputs: CutoffReportInputs) -> dict[str, float | None]:
+    """Wall times: the only part of the record that differs between identical runs."""
+    search = inputs.advntr_search
+    return {
+        "advntr_probe_seconds": None if search is None else search.probe_seconds,
+        "advntr_main_seconds": inputs.advntr_main_seconds,
     }
 
 
@@ -489,6 +496,7 @@ def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
             "generator_version": inputs.generator_version,
             "advntr": _advntr_provenance(inputs),
         },
+        "timings": _timings(inputs),
         "baseline_parity": {**inputs.parity, "advntr": inputs.advntr_parity},
         "replay_consistency": inputs.replay_consistency,
         "axes": _axis_documents(inputs),

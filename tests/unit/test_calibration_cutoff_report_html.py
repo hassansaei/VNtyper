@@ -102,10 +102,9 @@ def _advntr_document(**overrides: Any) -> dict[str, Any]:
             "sha256": "4" * 64,
             "probe_sha256": "5" * 64,
             "tool_identity": {"package_version": "2.4.0", "build_id": "build-synthetic-0001"},
-            "probe_seconds": 1.25,
-            "main_seconds": 12.5,
         },
     }
+    document["timings"] = {"advntr_probe_seconds": 1.25, "advntr_main_seconds": 12.5}
     document.update(overrides)
     return document
 
