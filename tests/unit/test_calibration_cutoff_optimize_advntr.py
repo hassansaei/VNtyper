@@ -28,8 +28,8 @@ from tests.unit.cutoff_optimize_fakes import (
 from vntyper.modules.advntr.advntr_calibration_policy import advntr_capabilities_document
 from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
 from vntyper.scripts.calibration_cutoff_advntr import advntr_signature
-from vntyper.scripts.calibration_cutoff_advntr_axes import derive_advntr_axis
-from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, DEPTH_FLOOR_LINKED
+from vntyper.scripts.calibration_cutoff_advntr_axes import AdvntrVisit, derive_advntr_axis
+from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, ADVNTR_MIN_SUPPORT, DEPTH_FLOOR_LINKED
 
 pytestmark = pytest.mark.unit
 
@@ -240,7 +240,8 @@ def test_caller_both_searches_kestrel_and_advntr_axes_on_the_union(tmp_path: Pat
     assert document["search_scope"]["advntr_distinct_executions"] == 1 + 6
     assert document["search_scope"]["searched_callers"] == ["advntr", "kestrel"]
     assert document["search_scope"]["advntr_policy"] == "searched"
-    assert document["replay_consistency"]["checked_candidates"] > 0
+    # Only adVNTR-axis candidates are checked: the seven values of ADVNTR_ORACLE.
+    assert document["replay_consistency"] == {"checked_candidates": 7, "mismatches": []}
     assert document["baseline_parity"]["advntr"]["proven"] is True
     assert [curve["status"] for curve in document["curves"]] == ["available", "available"]
     advntr_values = {row["value"] for row in document["cutoffs"] if row["policy_id"].startswith(ADVNTR_CUTOFF)}
@@ -335,3 +336,91 @@ def test_advntr_fold_admissibility_uses_training_derived_inventories(tmp_path: P
         admissible = {"baseline", *(ids[float(value)] for value in derived.values)}
         assert fold["admissible_candidates"] == len(admissible)
         assert fold["used_policy"] in admissible
+
+
+#: Mixed read supports for a search of both adVNTR axes (baseline cutoff 0.001, support 3).
+#:
+#: ====================  =========================  ==============  ==============  ========
+#: Sample                visits (support, p)        q (support>=3)  m (p < 0.001)   truth
+#: ====================  =========================  ==============  ==============  ========
+#: ``specimen-alpha``    (5, 0.0004)                0.0004          5               positive
+#: ``specimen-bravo``    (2, 0.0002), (5, 0.004)    0.004           2               positive
+#: ``specimen-charlie``  (4, 0.0008)                0.0008          4               negative
+#: ``specimen-delta``    (5, 0.006)                 0.006           --              negative
+#: ``specimen-echo``     --                         --              --              positive
+#: ``specimen-foxtrot``  (1, 0.0001), (3, 0.2)      0.2             1               unknown
+#: ====================  =========================  ==============  ==============  ========
+#:
+#: Bravo's only visit below the baseline cutoff has support 2, so the baseline support 3
+#: misses it and only a lowered support rescues it.
+MIXED_VISITS: dict[str, tuple[AdvntrVisit, ...] | None] = {
+    "specimen-alpha": (visit(5, 0.0004),),
+    "specimen-bravo": (visit(2, 0.0002), visit(5, 0.004)),
+    "specimen-charlie": (visit(4, 0.0008),),
+    "specimen-delta": (visit(5, 0.006),),
+    "specimen-echo": (),
+    "specimen-foxtrot": (visit(1, 0.0001), visit(3, 0.2)),
+}
+
+#: Support axis, value -> (TP, FN, TN, FP); called when a visit has support >= value and
+#: p < 0.001. Observed m {1, 2, 4, 5}, the anchor 3 and the sentinel max(m) + 1 = 6.
+MIXED_SUPPORT_ORACLE: dict[int, tuple[int, int, int, int]] = {
+    1: (2, 1, 1, 1),  # alpha, bravo; charlie (FP); foxtrot is unknown truth
+    2: (2, 1, 1, 1),
+    3: (1, 2, 1, 1),  # the baseline: bravo is lost
+    4: (1, 2, 1, 1),
+    5: (1, 2, 2, 0),  # charlie (support 4) is rejected
+    6: (0, 3, 2, 0),  # the sentinel: calls nobody
+}
+
+#: Cutoff axis, value -> (TP, FN, TN, FP); called when a visit has support >= 3 and
+#: p < value. Full-data q {0.0004, 0.0008, 0.004, 0.006, 0.2}: next-up values, the anchor
+#: 0.001 and the sentinel min(q) = 0.0004. Fold 1 trains on bravo, charlie and foxtrot, so
+#: its own sentinel min(q) = 0.0008 is a value only a fold inventory derives.
+MIXED_CUTOFF_ORACLE: dict[float, tuple[int, int, int, int]] = {
+    0.0004: (0, 3, 2, 0),
+    up(0.0004): (1, 2, 2, 0),
+    0.0008: (1, 2, 2, 0),  # fold 1's sentinel
+    up(0.0008): (1, 2, 1, 1),
+    0.001: (1, 2, 1, 1),
+    up(0.004): (2, 1, 1, 1),
+    up(0.006): (2, 1, 0, 2),
+    up(0.2): (2, 1, 0, 2),
+}
+
+
+def test_both_advntr_axes_with_mixed_supports_match_the_hand_oracle(tmp_path: Path) -> None:
+    """Searching the cutoff and support axes together replays and checks every candidate once.
+
+    Replay consistency checks 8 cutoff + 6 support = 14 candidates. The two anchors carry
+    the same baseline adVNTR policy, so the candidate grid executes 8 + 6 - 1 = 13 distinct
+    policies; the probe grid executes the baseline and one probe per axis, 3 in all.
+    """
+    seen: list[dict[str, Any]] = []
+    _, document, _ = run_advntr(
+        tmp_path,
+        seen=seen,
+        visits=MIXED_VISITS,
+        caller="advntr",
+        axes=[ADVNTR_CUTOFF, ADVNTR_MIN_SUPPORT],
+        min_specificity=1.0,
+    )
+
+    for axis, oracle in ((ADVNTR_CUTOFF, MIXED_CUTOFF_ORACLE), (ADVNTR_MIN_SUPPORT, MIXED_SUPPORT_ORACLE)):
+        rows = {row["value"]: row["counts"] for row in document["cutoffs"] if row["policy_id"].startswith(axis)}
+        assert sorted(rows) == sorted(oracle), axis
+        for value, (tp, fn, tn, fp) in oracle.items():
+            counts = rows[value]
+            assert (counts["true_positives"], counts["false_negatives"]) == (tp, fn), (axis, value)
+            assert (counts["true_negatives"], counts["false_positives"]) == (tn, fp), (axis, value)
+    cutoff, support = document["axes"]
+    assert support["axis"] == ADVNTR_MIN_SUPPORT and support["endpoint_sentinel"] == 6
+    assert support["fold_only_values"] == 0
+    assert cutoff["endpoint_sentinel"] == 0.0004 and cutoff["fold_only_values"] == 1
+    assert document["replay_consistency"] == {"checked_candidates": 14, "mismatches": []}
+    scope = document["search_scope"]
+    assert scope["advntr_distinct_executions"] == 13
+    assert scope["advntr_probe_executions"] == 3
+    probe, main = seen
+    assert sorted(probe["policies"]) == ["baseline", f"probe-{ADVNTR_CUTOFF}", f"probe-{ADVNTR_MIN_SUPPORT}"]
+    assert len({advntr_signature(policy) for policy in main["policies"].values()}) == 13
