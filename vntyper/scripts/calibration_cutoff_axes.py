@@ -752,6 +752,7 @@ def axis_document(axis: AxisBreakpoints) -> dict[str, object]:
         "values": list(axis.values),
         "source": axis.source,
         "observed_count": axis.observed_count,
+        # The v2.0.39 key, kept for calibration-cutoff-axis-v1 readers; full_data_capped names it.
         "capped": axis.capped,
         "rejected": [{"value": value, "reason": reason} for value, reason in axis.rejected],
         "endpoint_sentinel": axis.sentinel,

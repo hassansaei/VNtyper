@@ -30,8 +30,9 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any, Final, NoReturn
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
+from vntyper.modules.advntr.advntr_calibration_policy import advntr_capabilities_document
 from vntyper.scripts.calibration_caller_metrics import CallerObservation, calculate_caller_metrics
 from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
 from vntyper.scripts.calibration_cohort_manifest import CohortSample
@@ -48,6 +49,9 @@ from vntyper.scripts.calibration_cutoff_grid import CutoffCandidate
 from vntyper.scripts.calibration_cutoff_kestrel import KestrelGridReplay
 from vntyper.scripts.calibration_cutoff_report import SCHEMA_VERSION
 from vntyper.scripts.calibration_cutoff_selection import SearchSpec, cutoff_counts, cutoff_counts_document
+
+if TYPE_CHECKING:
+    from vntyper.scripts.calibration_cutoff_advntr_axes import AdvntrAxisSearch
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +104,11 @@ class CutoffReportInputs:
         cohort_manifest_sha256: Digest of the declared cohort manifest.
         capture_manifest_sha256: Digest of the capture association manifest.
         generator_version: Identity of the generator that produced this record.
+        advntr_parity: The adVNTR baseline-parity record, when adVNTR was replayed.
+        replay_consistency: The adVNTR replay-consistency record, when adVNTR axes were
+            searched.
+        advntr_search: The adVNTR axes and their probe grid, when adVNTR axes were searched.
+        advntr_main_seconds: Wall time of the adVNTR candidate grid, when it ran.
     """
 
     objective: SearchSpec
@@ -121,6 +130,10 @@ class CutoffReportInputs:
     cohort_manifest_sha256: str
     capture_manifest_sha256: str
     generator_version: str
+    advntr_parity: Mapping[str, Any] | None = None
+    replay_consistency: Mapping[str, Any] | None = None
+    advntr_search: AdvntrAxisSearch | None = None
+    advntr_main_seconds: float | None = None
 
 
 def _fail(message: str) -> NoReturn:
@@ -316,6 +329,20 @@ def _joint_points(inputs: CutoffReportInputs) -> dict[str, Any] | None:
     return joint_points_document(build_joint_points(labelled, inputs.anchors[inputs.derived[0][0].axis]))
 
 
+def _advntr_provenance(inputs: CutoffReportInputs) -> dict[str, Any] | None:
+    """The adVNTR evidence the record commits to: both grid digests, the tool and the wall times."""
+    result, search = inputs.advntr_result, inputs.advntr_search
+    if result is None:
+        return None
+    return {
+        "sha256": result.sha256,
+        "probe_sha256": None if search is None else search.probe.sha256,
+        "tool_identity": advntr_capabilities_document(result.capabilities),
+        "probe_seconds": None if search is None else search.probe_seconds,
+        "main_seconds": inputs.advntr_main_seconds,
+    }
+
+
 def _search_scope(inputs: CutoffReportInputs) -> dict[str, Any]:
     """Which caller the search varied, and what happened to the adVNTR arm."""
     policy = "held-at-baseline" if inputs.caller == "both" else "not-evaluated"
@@ -396,7 +423,7 @@ def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
             "capture_file_sha256": dict(inputs.replay.capture_file_sha256),
             "native_file_sha256": dict(inputs.replay.native_file_sha256),
             "generator_version": inputs.generator_version,
-            "advntr": None if inputs.advntr_result is None else {"sha256": inputs.advntr_result.sha256},
+            "advntr": _advntr_provenance(inputs),
         },
         "baseline_parity": dict(inputs.parity),
         "axes": [axis_document(axis) for axis, _ in inputs.derived],

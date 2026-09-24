@@ -30,23 +30,32 @@ selected policy exactly fails the run rather than being published.
 
 Leakage control happens before anything is scored: only the first-seen representative of
 each declared ``group_id`` is retained, so biological duplicates cannot be counted twice
-or straddle a training split. Kestrel captures are required for every caller selection,
-because the axes are Kestrel decision axes and their breakpoints can only be observed in
-Kestrel evidence. The output directory holds cohort results and is written ``0700`` with
+or straddle a training split. Every axis is derived once from all samples and once per
+outer fold from that fold's training samples alone (``calibration_cutoff_folds``), and a
+fold may select only the baseline and its own training-derived candidates, so no held-out
+value can create, remove or displace a threshold its own fold uses. Kestrel captures are
+required for every caller selection, because they carry the complete baseline policy of
+both callers. The output directory holds cohort results and is written ``0700`` with
 ``0600`` files throughout.
 
-*Only Kestrel axes are searched.* No adVNTR cutoff axis is derived yet (issue #269), so
-``--caller advntr`` is refused: every candidate would replay the one baseline adVNTR policy
-and selection could only tie back to the baseline. ``--caller both`` searches the Kestrel
-axes and pairs each candidate with the adVNTR arm replayed at its baseline policy; the
-report states that scope, and the run fails if the adVNTR grid ever executed more than one
-adVNTR policy, because the statement would then be false.
+*adVNTR axes.* ``--caller advntr`` searches the legacy cutoff and read-support axes and
+scores adVNTR-only arms; ``--caller both`` searches the union of the Kestrel and adVNTR
+axes, one axis at a time, each candidate holding the other caller at baseline, and scores
+the either-caller union. adVNTR breakpoints come from a separate probe grid: the baseline
+and one permissive projection per axis replayed natively under ``advntr-probe``. Every
+candidate is then replayed natively again, and four checks bind the result: the probe and
+candidate grids replayed the same capture bytes, records and tool; every candidate's native
+calls equal the calls the legacy rule predicts from the probe statistics (replay
+consistency); the adVNTR anchor reproduces each capture's own recorded baseline calls
+(adVNTR parity); and the candidate grid executed exactly one adVNTR replay per distinct
+adVNTR policy -- one in all when only Kestrel axes are searched.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -55,18 +64,36 @@ from types import MappingProxyType
 from typing import Any, Final, NoReturn
 
 from vntyper.scripts.calibration_caller_metrics import CallerObservation
-from vntyper.scripts.calibration_caller_policy import CallerPolicyValues, decode_caller_policy_values
+from vntyper.scripts.calibration_caller_policy import (
+    ADVNTR_CALLER_POLICY_POINTERS,
+    CallerPolicyValues,
+    decode_caller_policy_values,
+)
 from vntyper.scripts.calibration_caller_profile import build_caller_generated_profile
 from vntyper.scripts.calibration_cohort_manifest import CohortSample, read_cohort_manifest
 from vntyper.scripts.calibration_cohort_metrics import group_folds
 from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult, evaluate_advntr_cutoff_grid
+from vntyper.scripts.calibration_cutoff_advntr_axes import (
+    AdvntrAxisSearch,
+    advntr_baseline_parity,
+    capture_snapshot,
+    check_replay_consistency,
+    combine_arms,
+    derive_advntr_axes,
+    require_same_evidence,
+)
 from vntyper.scripts.calibration_cutoff_axes import (
     ACTIVE_REGION,
+    ADVNTR_CUTOFF,
+    ADVNTR_MIN_SUPPORT,
     ALT_DEPTH_BAND,
     DEPTH_FLOOR_LINKED,
     DEPTH_SCORE_HIGH,
     GG_GATE_INDEPENDENT,
+    AxisBreakpoints,
+    axis_caller,
     axis_candidates,
+    axis_comparison,
     axis_document,
     declared_axis,
     derive_axis,
@@ -80,14 +107,14 @@ from vntyper.scripts.calibration_cutoff_document import (
     DerivedAxis,
     build_cutoff_report_document,
 )
-from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms
+from vntyper.scripts.calibration_cutoff_evaluation import evaluate_cutoff_arms, outer_fold_assignments
+from vntyper.scripts.calibration_cutoff_folds import fold_axis, fold_candidate_inventories
 from vntyper.scripts.calibration_cutoff_grid import CutoffCandidate
 from vntyper.scripts.calibration_cutoff_inputs import primary_samples, read_cutoff_captures
 from vntyper.scripts.calibration_cutoff_kestrel import KestrelGridReplay, replay_kestrel_grid
 from vntyper.scripts.calibration_cutoff_observations import (
     advntr_observation_arms,
     kestrel_observation_arms,
-    union_observation_arms,
 )
 from vntyper.scripts.calibration_cutoff_report import write_cutoff_reports
 from vntyper.scripts.calibration_cutoff_selection import SearchSpec
@@ -119,18 +146,15 @@ AXIS_PROBE: Final[Mapping[str, tuple[str, tuple[float, ...]]]] = MappingProxyTyp
     }
 )
 
-#: Axis name to its production comparator, which is all the report layer needs.
-AXIS_COMPARISON: Final[Mapping[str, str]] = MappingProxyType(
-    {name: comparison for name, (comparison, _ladder) in AXIS_PROBE.items()}
-)
+#: Every axis optimize can search: the Kestrel probe axes, then the two adVNTR legacy axes.
+_ALL_AXES: Final[tuple[str, ...]] = (*AXIS_PROBE, ADVNTR_CUTOFF, ADVNTR_MIN_SUPPORT)
 
-#: Why ``--caller advntr`` is refused. Shared with the CLI so the usage error and the
-#: programmatic error say the same thing.
-ADVNTR_AXES_UNAVAILABLE: Final[str] = (
-    "cutoff optimize --caller advntr is not supported: adVNTR cutoff axes are not derived yet (see issue #269), "
-    "so every candidate would replay the baseline adVNTR policy and selection could only return the baseline. "
-    "Use --caller kestrel, or --caller both to search the Kestrel axes with the adVNTR arm held at its "
-    "baseline policy."
+#: Axis name to its production comparator, which is all the report layer needs.
+AXIS_COMPARISON: Final[Mapping[str, str]] = MappingProxyType({name: axis_comparison(name) for name in _ALL_AXES})
+
+#: The axes searched when ``--axis`` is not given, per caller selection.
+_DEFAULT_AXES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {"kestrel": (DEPTH_FLOOR_LINKED,), "advntr": (ADVNTR_CUTOFF,), "both": (DEPTH_FLOOR_LINKED, ADVNTR_CUTOFF)}
 )
 
 
@@ -179,8 +203,9 @@ def _validate_arguments(args: object, output: Path) -> _Request:
         The validated request.
 
     Raises:
-        ValueError: For a malformed path, an unsupported caller, axis or objective, an
-            adVNTR run without an executable, or a non-empty staging directory.
+        ValueError: For a malformed path, an unsupported caller, axis or objective, an axis
+            of a caller the selection does not search, an adVNTR run without an
+            executable, or a non-empty staging directory.
     """
     manifest = getattr(args, "manifest", None)
     captures = getattr(args, "captures", None)
@@ -192,18 +217,26 @@ def _validate_arguments(args: object, output: Path) -> _Request:
     caller = getattr(args, "caller", "kestrel")
     if caller not in _CALLERS:
         _fail("cutoff optimize caller must be kestrel, advntr, or both")
-    if caller == "advntr":
-        _fail(ADVNTR_AXES_UNAVAILABLE)
     requested = getattr(args, "axes", None)
     if requested is None:
         # ``--axis`` is repeatable, so argparse leaves it unset rather than defaulted.
-        requested = [DEPTH_FLOOR_LINKED]
+        requested = list(_DEFAULT_AXES[caller])
     if isinstance(requested, str) or not isinstance(requested, Sequence) or not requested:
         _fail("cutoff optimize requires at least one axis")
     axes = tuple(requested)
-    unsupported = [name for name in axes if name not in AXIS_PROBE]
+    unsupported = [name for name in axes if name not in _ALL_AXES]
     if unsupported or len(set(axes)) != len(axes):
-        _fail(f"cutoff axis name must be one of {sorted(AXIS_PROBE)}, each declared at most once")
+        _fail(f"cutoff axis name must be one of {sorted(_ALL_AXES)}, each declared at most once")
+    advntr_axes = sorted(name for name in axes if axis_caller(name) == "advntr")
+    kestrel_axes = sorted(name for name in axes if axis_caller(name) == "kestrel")
+    if caller == "kestrel" and advntr_axes:
+        _fail(
+            f"cutoff optimize --caller kestrel cannot search the adVNTR axis {advntr_axes}; use --caller advntr or both"
+        )
+    if caller == "advntr" and kestrel_axes:
+        _fail(
+            f"cutoff optimize --caller advntr cannot search the Kestrel axis {kestrel_axes}; use --caller kestrel or both"
+        )
     objective = getattr(args, "objective", None)
     if not isinstance(objective, str):
         _fail("unsupported cutoff search objective")
@@ -287,33 +320,31 @@ def _observed_breakpoints(
 
 
 def _derive_axes(
-    request: _Request, baseline: CallerPolicyValues, captures: Mapping[str, KestrelCapture]
-) -> tuple[tuple[DerivedAxis, ...], dict[str, frozenset[str]]]:
-    """Turn each requested axis into observed breakpoints and complete replayable policies.
+    request: _Request,
+    baseline: CallerPolicyValues,
+    captures: Mapping[str, KestrelCapture],
+    assignments: Mapping[str, int],
+) -> tuple[tuple[DerivedAxis, ...], dict[str, Mapping[int, frozenset[int | float]]]]:
+    """Turn each requested Kestrel axis into observed breakpoints and complete replayable policies.
 
     Returns:
-        The derived axes, and for every data-derived candidate the capture keys whose
-        observed values produced its threshold. The anchor reproducing the baseline and
-        the endpoint sentinel are omitted from that map: neither was produced by a sample,
-        so both stay admissible in every outer fold.
+        The derived Kestrel axes, each merged with its fold-local values, and per axis the
+        values each outer fold's training samples derived.
     """
     derived: list[DerivedAxis] = []
-    contributors: dict[str, frozenset[str]] = {}
+    fold_values: dict[str, Mapping[int, frozenset[int | float]]] = {}
     for name in request.axes:
+        if axis_caller(name) != "kestrel":
+            continue
         permissive, statistic = _permissive_axis(name, baseline)
         observed = _observed_breakpoints(captures, permissive.policy, statistic)
-        axis = derive_axis(name, observed, baseline=baseline, max_values=request.max_breakpoints)
-        candidates = axis_candidates(baseline, axis)
-        for value, candidate in zip(axis.values, candidates, strict=True):
-            if not candidate.parameters or value == axis.sentinel:
-                continue
-            exact = Fraction(value)
-            keys = frozenset(key for key, values in observed.items() if exact in values)
-            if not keys:
-                _fail(f"cutoff optimize breakpoint {value} of axis {name} has no contributing sample")
-            contributors[candidate.candidate_id] = keys
-        derived.append((axis, candidates))
-    return tuple(derived), contributors
+
+        def derive(values: Mapping[str, tuple[Fraction, ...]], axis: str = name) -> AxisBreakpoints:
+            return derive_axis(axis, values, baseline=baseline, max_values=request.max_breakpoints)
+
+        axis, fold_values[name] = fold_axis(derive, observed, assignments)
+        derived.append((axis, axis_candidates(baseline, axis)))
+    return tuple(derived), fold_values
 
 
 def _anchor(candidates: Sequence[CutoffCandidate]) -> CutoffCandidate:
@@ -417,6 +448,11 @@ def _export_profile(output: Path, request: _Request, selected: CallerPolicyValue
     }
 
 
+def _advntr_signature(policy: CallerPolicyValues) -> tuple[object, ...]:
+    """The adVNTR part of a policy: two policies with equal signatures share one native execution."""
+    return tuple(policy.values[pointer] for pointer in ADVNTR_CALLER_POLICY_POINTERS)
+
+
 def _advntr_arms(
     request: _Request,
     output: Path,
@@ -424,9 +460,17 @@ def _advntr_arms(
     policies: Mapping[str, CallerPolicyValues],
     anchor_id: str,
     primary: Sequence[CohortSample],
-) -> tuple[dict[str, tuple[CallerObservation, ...]], AdvntrCutoffGridResult]:
-    """Replay the adVNTR grid natively; its statistics are never approximated here."""
+    search: AdvntrAxisSearch | None,
+    snapshot: Mapping[str, str],
+) -> tuple[dict[str, tuple[CallerObservation, ...]], AdvntrCutoffGridResult, dict[str, Any]]:
+    """Replay every candidate natively and prove the replay is the one the axes describe.
+
+    Returns:
+        The adVNTR arms (with the baseline arm), the candidate grid, and the adVNTR parity,
+        replay-consistency and main-grid wall-time records for the report.
+    """
     assert request.advntr_executable is not None
+    started = time.monotonic()
     result = evaluate_advntr_cutoff_grid(
         advntr_paths,
         policies,
@@ -434,35 +478,24 @@ def _advntr_arms(
         executable_path=request.advntr_executable,
         output=output / "advntr",
     )
+    seconds = time.monotonic() - started
+    expected = len({_advntr_signature(policy) for policy in policies.values()})
     executions = {entry.execution_id for entry in result.policies}
-    if len(executions) != 1:
+    if len(executions) != expected:
         _fail(
-            "cutoff optimize adVNTR grid executed "
-            f"{len(executions)} distinct adVNTR policies, but only Kestrel axes are searched and the adVNTR arm "
-            "must be held at its baseline policy"
+            f"cutoff optimize adVNTR executions ({len(executions)}) differ from the distinct adVNTR "
+            f"policies requested ({expected})"
         )
+    checked = 0
+    if search is not None:
+        require_same_evidence(search.probe, result, snapshot, advntr_paths)
+        for axis, candidates in search.derived:
+            checked += check_replay_consistency(result, candidates, search.visits[axis.axis])
+    parity = advntr_baseline_parity(result, anchor_id, advntr_paths)
     arms = advntr_observation_arms(result, primary)
     arms[BASELINE_ID] = arms[anchor_id]
-    return arms, result
-
-
-def _combine_arms(
-    kestrel: Mapping[str, tuple[CallerObservation, ...]], advntr: Mapping[str, tuple[CallerObservation, ...]]
-) -> dict[str, tuple[CallerObservation, ...]]:
-    """Pair each policy's Kestrel arm with the same policy's adVNTR arm, and only that one.
-
-    The full Cartesian product of the two inventories would pair a Kestrel policy with an
-    adVNTR policy that was never replayed beside it, so only the diagonal is kept.
-    """
-    combined: dict[str, tuple[CallerObservation, ...]] = {}
-    for policy_id, rows in kestrel.items():
-        partner = advntr.get(policy_id)
-        if partner is None:
-            _fail(f"cutoff optimize adVNTR replay produced no arm for policy {policy_id}")
-        combined[policy_id] = union_observation_arms({policy_id: rows}, {policy_id: partner})[
-            f"{policy_id}+{policy_id}"
-        ]
-    return combined
+    consistency = None if search is None else {"checked_candidates": checked, "mismatches": []}
+    return arms, result, {"advntr_parity": parity, "replay_consistency": consistency, "main_seconds": seconds}
 
 
 def run_cutoff_optimization(args: object, output: Path) -> bool:
@@ -478,8 +511,10 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
 
     Raises:
         ValueError: For malformed arguments or evidence, for captures that disagree about
-            the baseline policy, for a baseline parity failure, or for a research profile
-            that does not resolve back to the selected policy.
+            the baseline policy, for a Kestrel or adVNTR baseline parity failure, for adVNTR
+            probe and candidate replays that do not share their evidence, disagree with the
+            legacy rule, or execute an unexpected number of adVNTR policies, or for a
+            research profile that does not resolve back to the selected policy.
     """
     request = _validate_arguments(args, output)
     samples = read_cohort_manifest(request.manifest)
@@ -494,7 +529,34 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
     native_paths = {key: declared.native_kestrel[key] for key in keys}
     captures = {key: _decode_capture(path, key) for key, path in sorted(capture_paths.items())}
     baseline = _capture_baseline(captures)
-    derived, contributors = _derive_axes(request, baseline, captures)
+    # The same grouped, truth-stratified folds evaluate_cutoff_arms computes; every axis is
+    # derived per fold from training samples before anything is scored.
+    assignments = outer_fold_assignments(
+        [(sample.sample_id, sample.group_id, sample.genotype) for sample in primary],
+        folds=request.folds,
+        seed=request.seed,
+    )
+    derived, fold_values = _derive_axes(request, baseline, captures, assignments)
+    advntr_names = tuple(name for name in request.axes if axis_caller(name) == "advntr")
+    advntr_paths = {key: declared.advntr[key] for key in keys} if request.caller != "kestrel" else {}
+    snapshot = capture_snapshot(advntr_paths) if advntr_names else {}
+    search: AdvntrAxisSearch | None = None
+    if advntr_names:
+        assert request.advntr_executable is not None
+        search = derive_advntr_axes(
+            advntr_names,
+            baseline,
+            advntr_paths,
+            executable_path=request.advntr_executable,
+            output=output / "advntr-probe",
+            max_values=request.max_breakpoints,
+            assignments=assignments,
+        )
+        derived = (*derived, *search.derived)
+        fold_values = {**fold_values, **search.fold_values}
+    order = {name: index for index, name in enumerate(request.axes)}
+    derived = tuple(sorted(derived, key=lambda entry: order[entry[0].axis]))
+    inventories = fold_candidate_inventories(derived, fold_values)
     policies = {candidate.candidate_id: candidate.policy for _, candidates in derived for candidate in candidates}
     anchors = {axis.axis: _anchor(candidates) for axis, candidates in derived}
     try:
@@ -504,18 +566,14 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
     parity = _prove_baseline_parity(replay, {axis: anchor.candidate_id for axis, anchor in anchors.items()})
     arms: dict[str, tuple[CallerObservation, ...]] = kestrel_observation_arms(replay, primary)
     advntr_result: AdvntrCutoffGridResult | None = None
-    if request.caller == "both":
-        advntr, advntr_result = _advntr_arms(
-            request,
-            output,
-            {key: declared.advntr[key] for key in keys},
-            policies,
-            anchors[request.axes[0]].candidate_id,
-            primary,
+    checks: dict[str, Any] = {"advntr_parity": None, "replay_consistency": None, "main_seconds": None}
+    if request.caller != "kestrel":
+        # Under --caller advntr the Kestrel arms are replayed but not scored: they still
+        # bind the baseline through Kestrel parity and provenance.
+        advntr, advntr_result, checks = _advntr_arms(
+            request, output, advntr_paths, policies, anchors[request.axes[0]].candidate_id, primary, search, snapshot
         )
-        arms = _combine_arms(arms, advntr)
-    # Contributors are capture keys; fold selection matches them against arm row keys,
-    # so the two rosters must be the same set or admissibility would silently misfire.
+        arms = advntr if request.caller == "advntr" else combine_arms(arms, advntr)
     if {row.key for row in arms[BASELINE_ID]} != set(captures):
         _fail("cutoff optimize arm rows are not keyed by the capture sample identifiers")
     evaluation = evaluate_cutoff_arms(
@@ -524,8 +582,12 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
         spec=request.spec,
         folds=request.folds,
         seed=request.seed,
-        contributors=contributors,
+        fold_inventories=inventories,
     )
+    # The inventories were built on the folds computed above; the evaluation's own folds must
+    # be the same allocation, not just the same fold numbers, or admissibility would misfire.
+    if {row["key"]: row["fold"] for row in evaluation["rows"] if row["fold"] is not None} != assignments:
+        _fail("cutoff optimize fold inventories were derived on different outer folds than the evaluation")
     document = build_cutoff_report_document(
         CutoffReportInputs(
             objective=request.spec,
@@ -547,6 +609,10 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
             cohort_manifest_sha256=_digest(request.manifest),
             capture_manifest_sha256=_digest(request.captures),
             generator_version=GENERATOR_VERSION,
+            advntr_parity=checks["advntr_parity"],
+            replay_consistency=checks["replay_consistency"],
+            advntr_search=search,
+            advntr_main_seconds=checks["main_seconds"],
         )
     )
     selected = evaluation["final_selection"]["policy_id"]
@@ -557,7 +623,6 @@ def run_cutoff_optimization(args: object, output: Path) -> bool:
 
 
 __all__ = [
-    "ADVNTR_AXES_UNAVAILABLE",
     "AXIS_COMPARISON",
     "AXIS_PROBE",
     "BASELINE_ID",

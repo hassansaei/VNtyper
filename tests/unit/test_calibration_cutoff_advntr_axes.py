@@ -33,6 +33,7 @@ from vntyper.scripts.calibration_cutoff_advntr_axes import (
     advntr_probe_policy,
     capture_snapshot,
     check_replay_consistency,
+    combine_arms,
     derive_advntr_axes,
     derive_advntr_axis,
     predicted_call,
@@ -766,3 +767,25 @@ def test_derive_advntr_axes_refuses_a_kestrel_axis(tmp_path: Path) -> None:
             max_values=None,
             assignments={},
         )
+
+
+# --- the either-caller union of two arm inventories -------------------------------------------------
+
+
+def test_combine_arms_pairs_each_policy_only_with_its_own_advntr_arm() -> None:
+    from vntyper.scripts.calibration_caller_metrics import CallerObservation
+
+    def arm(called: bool | None) -> tuple[CallerObservation, ...]:
+        return (
+            CallerObservation("pos", "pos", True, None, called, (), ()),
+            CallerObservation("neg", "neg", False, (), False, (), ()),
+        )
+
+    kestrel = {"a": arm(False), "b": arm(None)}
+    advntr = {"a": arm(True), "b": arm(False), "c": arm(True)}
+    combined = combine_arms(kestrel, advntr)
+    assert sorted(combined) == ["a", "b"]
+    assert {row.key: row.called_positive for row in combined["a"]} == {"pos": True, "neg": False}
+    assert {row.key: row.called_positive for row in combined["b"]} == {"pos": None, "neg": False}
+    with pytest.raises(ValueError, match="adVNTR replay produced no arm for policy b"):
+        combine_arms(kestrel, {"a": arm(True)})

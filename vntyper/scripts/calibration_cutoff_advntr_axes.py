@@ -40,6 +40,7 @@ from typing import Final, NoReturn, cast
 
 from vntyper.modules.advntr.advntr_calibration_policy import advntr_canonical_sha256
 from vntyper.modules.advntr.advntr_replay import replay_locus_document
+from vntyper.scripts.calibration_caller_metrics import CallerObservation
 from vntyper.scripts.calibration_caller_observations import decode_advntr_baseline_calls
 from vntyper.scripts.calibration_caller_policy import (
     CallerPolicyValues,
@@ -56,6 +57,7 @@ from vntyper.scripts.calibration_cutoff_axes import (
 )
 from vntyper.scripts.calibration_cutoff_folds import fold_axis
 from vntyper.scripts.calibration_cutoff_grid import CutoffCandidate
+from vntyper.scripts.calibration_cutoff_observations import union_observation_arms
 from vntyper.scripts.calibration_secure_io import read_regular_path
 from vntyper.scripts.canonical_json import load_strict_json_object
 
@@ -603,3 +605,32 @@ def derive_advntr_axes(
         derived.append((axis, axis_candidates(baseline, axis)))
         unrejectable[name] = unrejectable_samples(name, statistics)
     return AdvntrAxisSearch(tuple(derived), fold_values, visits, unrejectable, probe, seconds)
+
+
+def combine_arms(
+    kestrel: Mapping[str, tuple[CallerObservation, ...]], advntr: Mapping[str, tuple[CallerObservation, ...]]
+) -> dict[str, tuple[CallerObservation, ...]]:
+    """Pair each policy's Kestrel arm with the same policy's adVNTR arm, and only that one.
+
+    The full Cartesian product of the two inventories would pair a Kestrel policy with an
+    adVNTR policy that was never replayed beside it, so only the diagonal is kept.
+
+    Args:
+        kestrel: Policy ID to its Kestrel arm.
+        advntr: Policy ID to its adVNTR arm; it must cover every Kestrel policy.
+
+    Returns:
+        Policy ID to the either-caller union of its two arms.
+
+    Raises:
+        ValueError: If a Kestrel policy has no adVNTR arm, or the union refuses the pair.
+    """
+    combined: dict[str, tuple[CallerObservation, ...]] = {}
+    for policy_id, rows in kestrel.items():
+        partner = advntr.get(policy_id)
+        if partner is None:
+            _fail(f"cutoff optimize adVNTR replay produced no arm for policy {policy_id}")
+        combined[policy_id] = union_observation_arms({policy_id: rows}, {policy_id: partner})[
+            f"{policy_id}+{policy_id}"
+        ]
+    return combined
