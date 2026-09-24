@@ -20,6 +20,7 @@ Sample                Depth_Score  Called at a floor of ...
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import math
 import stat
@@ -825,11 +826,16 @@ def test_caller_both_with_only_kestrel_axes_holds_advntr_at_baseline(tmp_path: P
     _, document, _ = _run_advntr(tmp_path, caller="both", axes=[DEPTH_FLOOR_LINKED], min_specificity=1.0)
     scope = document["search_scope"]
 
-    assert scope["searched_caller"] == "kestrel"
+    assert scope["searched_callers"] == ["kestrel"]
     assert scope["searched_axes"] == [DEPTH_FLOOR_LINKED]
     assert scope["advntr_policy"] == "held-at-baseline"
     assert scope["advntr_distinct_executions"] == 1
-    assert "#269" in scope["note"]
+    assert scope["advntr_probe_executions"] is None
+    assert scope["note"] == (
+        "Only Kestrel axes were requested. The adVNTR arm was replayed at its baseline policy for every candidate."
+    )
+    assert document["baseline_parity"]["advntr"]["proven"] is True
+    assert document["replay_consistency"] is None
     page = render_cutoff_report_html(document)
     assert "adVNTR arm was replayed at its baseline policy" in page
 
@@ -838,9 +844,14 @@ def test_a_kestrel_run_records_that_advntr_was_not_evaluated(tmp_path: Path) -> 
     """The scope section is present on every run, not only on the adVNTR ones."""
     _, document, _ = _run(tmp_path)
 
+    assert document["search_scope"]["searched_callers"] == ["kestrel"]
     assert document["search_scope"]["advntr_policy"] == "not-evaluated"
     assert document["search_scope"]["advntr_distinct_executions"] is None
+    assert document["search_scope"]["advntr_probe_executions"] is None
     assert document["provenance"]["advntr"] is None
+    assert document["baseline_parity"]["advntr"] is None
+    assert document["replay_consistency"] is None
+    assert all(curve["status"] == "available" for curve in document["curves"])
 
 
 def test_an_unexpected_extra_advntr_execution_aborts_the_run(tmp_path: Path) -> None:
@@ -882,6 +893,13 @@ def test_caller_advntr_searches_the_advntr_cutoff_axis_by_native_replay(tmp_path
     assert axis["comparator"] == "<"
     assert axis["breakpoint_completeness"] == "complete"
     assert axis["fold_only_values"] == 0
+    assert axis["unrejectable_samples"] == 0
+    scope = document["search_scope"]
+    assert scope["advntr_policy"] == "searched"
+    assert scope["searched_callers"] == ["advntr"]
+    assert scope["advntr_probe_executions"] == 2  # the baseline and one cutoff probe
+    assert document["replay_consistency"] == {"checked_candidates": 7, "mismatches": []}
+    assert document["baseline_parity"]["advntr"]["proven"] is True
     assert document["evaluation"]["fold_admissibility"] == "training-derived-inventories"
     changed = {row["pointer"]: row for row in document["old_versus_derived"] if row["changed"]}
     assert set(changed) == {_ADV_CUT}
@@ -914,8 +932,39 @@ def test_caller_both_searches_kestrel_and_advntr_axes_on_the_union(tmp_path: Pat
     # Every Kestrel candidate shares the baseline adVNTR signature; the adVNTR axis adds 6 more.
     assert len(signatures) == 7
     assert document["search_scope"]["advntr_distinct_executions"] == 1 + 6
+    assert document["search_scope"]["searched_callers"] == ["advntr", "kestrel"]
+    assert document["search_scope"]["advntr_policy"] == "searched"
+    assert document["replay_consistency"]["checked_candidates"] > 0
+    assert document["baseline_parity"]["advntr"]["proven"] is True
+    assert [curve["status"] for curve in document["curves"]] == ["available", "available"]
     advntr_values = {row["value"] for row in document["cutoffs"] if row["policy_id"].startswith(ADVNTR_CUTOFF)}
     assert advntr_values == set(ADVNTR_ORACLE)
+
+
+def test_a_union_curve_whose_no_call_set_changes_is_published_unavailable(tmp_path: Path) -> None:
+    """Echo is a Kestrel no-call everywhere; adVNTR calls it at every cutoff except the sentinel.
+
+    On the either-caller union echo is therefore called on every adVNTR candidate but the
+    sentinel 0.0001, where it stays a no-call, so the adVNTR axis has no fixed-denominator
+    curve (spec 14.6). The Kestrel axis holds adVNTR at baseline, which calls echo, so its
+    curve is unaffected.
+    """
+    from vntyper.scripts.calibration_cutoff_document import _CURVE_UNAVAILABLE
+
+    rescued = {**PROBE_VISITS, "specimen-echo": (_v(5, 0.0001),)}
+    successful, document, output = _run_advntr(tmp_path, visits=rescued, caller="both", min_specificity=1.0)
+
+    assert successful is True
+    kestrel, advntr = document["curves"]
+    assert kestrel["axis"] == DEPTH_FLOOR_LINKED and kestrel["status"] == "available"
+    assert advntr == {"axis": ADVNTR_CUTOFF, "status": "unavailable", "reason": _CURVE_UNAVAILABLE}
+    assert 0.0001 in {row["value"] for row in document["cutoffs"]}
+    assert document["selection"]["axis"] == ADVNTR_CUTOFF  # the plateau needs outcome vectors, not the curve
+    assert document["selection"]["plateau"]["selected_value"] == _up(0.004)
+    assert document["boundary_support"] == {"status": "unavailable", "reason": _CURVE_UNAVAILABLE, "warnings": []}
+    curve_axes = {line.split("\t")[0] for line in (output / "roc-pr-curves.tsv").read_text().splitlines()[1:]}
+    assert curve_axes == {DEPTH_FLOOR_LINKED}
+    assert html.escape(_CURVE_UNAVAILABLE) in (output / "report.html").read_text(encoding="utf-8")
 
 
 def test_advntr_replay_inconsistency_aborts_the_run(tmp_path: Path) -> None:

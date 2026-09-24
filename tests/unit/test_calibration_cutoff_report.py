@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import stat
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -105,10 +106,11 @@ def _document(**overrides: Any) -> dict[str, Any]:
         "usage_hint": "vntyper pipeline --research-decision-profile <output>/research-decision-profile.json",
         "caller": "kestrel",
         "search_scope": {
-            "searched_caller": "kestrel",
+            "searched_callers": ["kestrel"],
             "searched_axes": ["depth_floor_linked"],
             "advntr_policy": "not-evaluated",
             "advntr_distinct_executions": None,
+            "advntr_probe_executions": None,
             "note": "Only Kestrel axes were searched; adVNTR was not evaluated.",
         },
         "objective": {"objective": "youden-j", "min_sensitivity": None, "min_specificity": 1.0},
@@ -150,7 +152,9 @@ def _document(**overrides: Any) -> dict[str, Any]:
             "native_exact_count": 0,
             "capture_replay_authoritative_count": 1,
             "mismatches": [],
+            "advntr": None,
         },
+        "replay_consistency": None,
         "axes": [],
         "cutoffs": [
             {
@@ -402,18 +406,143 @@ def test_the_html_states_the_objective_the_selection_and_the_plateau(tmp_path: P
 def test_the_html_states_which_caller_the_search_varied(tmp_path: Path) -> None:
     """A ``--caller both`` page must say the adVNTR arm was held at its baseline policy."""
     scope = {
-        "searched_caller": "kestrel",
+        "searched_callers": ["kestrel"],
         "searched_axes": ["depth_floor_linked", "gg_gate_independent"],
         "advntr_policy": "held-at-baseline",
         "advntr_distinct_executions": 1,
-        "note": "The adVNTR arm was replayed at its baseline policy for every candidate (issue #269).",
+        "advntr_probe_executions": None,
+        "note": "The adVNTR arm was replayed at its baseline policy for every candidate.",
     }
     output = _write(tmp_path, _document(caller="both", search_scope=scope))
     html = (output / "report.html").read_text(encoding="utf-8")
 
+    assert "<dt>searched callers</dt><dd>kestrel</dd>" in html
     assert "depth_floor_linked, gg_gate_independent" in html
     assert "held-at-baseline" in html
-    assert "replayed at its baseline policy for every candidate (issue #269)" in html
+    assert "replayed at its baseline policy for every candidate." in html
+    assert "<dt>adVNTR baseline parity</dt><dd>not replayed</dd>" in html
+    assert "<dt>adVNTR replay consistency (candidates checked)</dt><dd>not checked</dd>" in html
+
+
+#: A searched adVNTR cutoff axis as ``axis_document`` publishes it, trimmed to what the page reads.
+_ADVNTR_AXIS: dict[str, Any] = {
+    "axis": "advntr_cutoff",
+    "caller": "advntr",
+    "comparator": "<",
+    "breakpoint_completeness": "complete",
+    "unrejectable_samples": 0,
+}
+
+
+def _advntr_document(**overrides: Any) -> dict[str, Any]:
+    """A ``--caller advntr`` report whose adVNTR cutoff axis was searched natively."""
+    from vntyper.scripts.calibration_cutoff_document import _SCOPE_NOTES
+
+    document = _document(caller="advntr")
+    document["search_scope"] = {
+        "searched_callers": ["advntr"],
+        "searched_axes": ["advntr_cutoff"],
+        "advntr_policy": "searched",
+        "advntr_distinct_executions": 7,
+        "advntr_probe_executions": 2,
+        "note": _SCOPE_NOTES["searched"],
+    }
+    document["axes"] = [dict(_ADVNTR_AXIS)]
+    document["baseline_parity"] = {
+        **document["baseline_parity"],
+        "advntr": {"proven": True, "sample_count": 6, "mismatches": []},
+    }
+    document["replay_consistency"] = {"checked_candidates": 7, "mismatches": []}
+    document["provenance"] = {
+        **document["provenance"],
+        "advntr": {
+            "sha256": "4" * 64,
+            "probe_sha256": "5" * 64,
+            "tool_identity": {"package_version": "2.4.0", "build_id": "build-synthetic-0001"},
+            "probe_seconds": 1.25,
+            "main_seconds": 12.5,
+        },
+    }
+    document.update(overrides)
+    return document
+
+
+def test_the_html_states_a_searched_advntr_scope_and_its_parity(tmp_path: Path) -> None:
+    """A searched adVNTR axis is named with its note, its parity and its replay-consistency count."""
+    from vntyper.scripts.calibration_cutoff_document import _SCOPE_NOTES
+
+    html = (_write(tmp_path, _advntr_document()) / "report.html").read_text(encoding="utf-8")
+
+    assert "<dt>searched callers</dt><dd>advntr</dd>" in html
+    assert "<dt>adVNTR policy</dt><dd>searched</dd>" in html
+    assert _SCOPE_NOTES["searched"] in html
+    assert "<dt>adVNTR baseline parity</dt><dd>True</dd>" in html
+    assert "<dt>adVNTR replay consistency (candidates checked)</dt><dd>7</dd>" in html
+    assert html.index("Held-out performance (cross-validated)") < html.index("Every tested cutoff")
+    assert "unrejectable" not in html and "no admissible cutoff can reject" not in html
+    assert "subsampled by --max-breakpoints" not in html
+
+
+def test_the_html_shows_the_advntr_tool_identity_and_both_durations(tmp_path: Path) -> None:
+    html = (_write(tmp_path, _advntr_document()) / "report.html").read_text(encoding="utf-8")
+
+    assert "<dt>adVNTR package version</dt><dd>2.4.0</dd>" in html
+    assert "<dt>adVNTR build id</dt><dd>build-synthetic-0001</dd>" in html
+    assert "<dt>adVNTR probe grid seconds</dt><dd>1.25</dd>" in html
+    assert "<dt>adVNTR candidate grid seconds</dt><dd>12.5</dd>" in html
+
+
+def test_a_kestrel_page_carries_no_advntr_tool_facts(tmp_path: Path) -> None:
+    html = (_write(tmp_path, _document()) / "report.html").read_text(encoding="utf-8")
+
+    assert "adVNTR package version" not in html
+    assert "adVNTR probe grid seconds" not in html
+
+
+def test_the_html_names_samples_no_admissible_cutoff_can_reject(tmp_path: Path) -> None:
+    from vntyper.scripts.calibration_cutoff_report import _UNREJECTABLE_NOTE
+
+    axis = {**_ADVNTR_AXIS, "unrejectable_samples": 2}
+    html = (_write(tmp_path, _advntr_document(axes=[axis])) / "report.html").read_text(encoding="utf-8")
+
+    assert _UNREJECTABLE_NOTE.format(n=2) in html
+    assert "2 sample(s) have a legacy p-value of exactly 0" in html
+
+
+def test_the_html_warns_when_a_searched_inventory_was_capped(tmp_path: Path) -> None:
+    """A capped search may miss distinct operating points, and the page says so (spec 14.2)."""
+    from vntyper.scripts.calibration_cutoff_report import _CAPPED_WARNING
+
+    complete = (_write(tmp_path / "complete", _advntr_document()) / "report.html").read_text(encoding="utf-8")
+    capped_axis = {**_ADVNTR_AXIS, "breakpoint_completeness": "capped-subsample"}
+    capped = (_write(tmp_path / "capped", _advntr_document(axes=[capped_axis])) / "report.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert _CAPPED_WARNING not in complete
+    assert f"<div class='warn'>{_CAPPED_WARNING}</div>" in capped
+
+
+def test_an_unavailable_union_curve_renders_its_reason_instead_of_a_plot(tmp_path: Path) -> None:
+    """A curve whose no-call set changes is published as a reason, never as an SVG or a TSV row (spec 14.6)."""
+    from vntyper.scripts.calibration_cutoff_document import _CURVE_UNAVAILABLE
+
+    unavailable = {"axis": "advntr_cutoff", "status": "unavailable", "reason": _CURVE_UNAVAILABLE}
+    document = _advntr_document(
+        caller="both",
+        curves=[{**_curve("depth_floor_linked"), "status": "available"}, unavailable],
+        boundary_support={"status": "unavailable", "reason": _CURVE_UNAVAILABLE, "warnings": []},
+    )
+    output = _write(tmp_path, document)
+    html = (output / "report.html").read_text(encoding="utf-8")
+    curve_rows = (output / "roc-pr-curves.tsv").read_text(encoding="utf-8").splitlines()
+
+    assert html.count(escape(_CURVE_UNAVAILABLE)) == 2  # the axis section and the boundary support
+    assert "<h2>Axis advntr_cutoff</h2>" in html
+    assert "ROC - advntr_cutoff" not in html
+    assert "ROC - depth_floor_linked" in html
+    assert "positives inside the tested band" not in html
+    assert {line.split("\t")[0] for line in curve_rows[1:]} == {"depth_floor_linked"}
 
 
 def test_the_html_shows_held_out_performance_before_any_full_data_number(tmp_path: Path) -> None:
@@ -511,3 +640,18 @@ def test_the_writers_refuse_a_document_that_is_not_a_report(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="calibration-cutoff-report-v1"):
         write_cutoff_reports(output, _document(schema_version="something-else"))
     assert not any(output.iterdir())
+
+
+def test_an_advntr_axis_without_its_search_record_is_refused() -> None:
+    """``unrejectable_samples`` comes from the probe search; an adVNTR axis without one is a wiring defect."""
+    from types import SimpleNamespace
+
+    from tests.unit.test_calibration_cutoff_optimize import _advntr_baseline_policy
+    from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, declared_axis
+    from vntyper.scripts.calibration_cutoff_document import _axis_documents
+
+    axis = declared_axis(ADVNTR_CUTOFF, [0.001, 0.004], baseline=_advntr_baseline_policy())
+    inputs = SimpleNamespace(derived=[(axis, ())], advntr_search=None)
+
+    with pytest.raises(ValueError, match="adVNTR axis advntr_cutoff has no adVNTR search record"):
+        _axis_documents(inputs)  # type: ignore[arg-type]

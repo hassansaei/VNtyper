@@ -82,6 +82,15 @@ _FOLD_COLUMNS: Final[tuple[str, ...]] = (
     "admissible_candidates",
 )
 
+_CAPPED_WARNING: Final[str] = (
+    "At least one searched inventory was subsampled by --max-breakpoints, so distinct operating points may be missing."
+)
+_UNREJECTABLE_NOTE: Final[str] = (
+    "{n} sample(s) have a legacy p-value of exactly 0; no admissible cutoff can reject them."
+)
+_NOT_REPLAYED: Final[str] = "not replayed"
+_NOT_CHECKED: Final[str] = "not checked"
+
 _SVG_WIDTH: Final[int] = 320
 _SVG_HEIGHT: Final[int] = 240
 _SVG_PAD: Final[int] = 34
@@ -181,6 +190,8 @@ def _curve_rows(document: Mapping[str, Any]) -> list[list[object]]:
     rows: list[list[object]] = []
     for entry in _sequence(document.get("curves"), "curves"):
         curve = _mapping(entry, "curve")
+        if curve.get("status") == "unavailable":
+            continue
         for item in _sequence(curve.get("points"), "curve points"):
             point = _mapping(item, "curve point")
             rows.append([curve.get("axis"), curve.get("comparison"), *(point.get(name) for name in _CURVE_COLUMNS)])
@@ -300,7 +311,12 @@ def _plot(title: str, x_label: str, y_label: str, points: Sequence[tuple[float, 
 
 
 def _curve_figures(curve: Mapping[str, Any]) -> str:
-    """The ROC and PR panels for one axis, drawn from its own published points."""
+    """The ROC and PR panels for one axis, drawn from its own published points, or why there are none."""
+    if curve.get("status") == "unavailable":
+        return (
+            f"<h2>Axis {_escape(curve.get('axis'))}</h2>"
+            f"<div class='warn'>No ROC/PR curve: {_escape(curve.get('reason'))}.</div>"
+        )
     points = [_mapping(item, "curve point") for item in _sequence(curve.get("points"), "curve points")]
     roc = [(float(point.get("false_positive_rate") or 0.0), float(point.get("sensitivity") or 0.0)) for point in points]
     pr = [
@@ -460,6 +476,70 @@ def _profile_section(document: Mapping[str, Any]) -> str:
     )
 
 
+def _boundary_section(boundary: Mapping[str, Any]) -> str:
+    """The selected axis's boundary support, or the reason the axis has none."""
+    heading = "<h2>Boundary support</h2>"
+    if boundary.get("status") == "unavailable":
+        return f"{heading}<div class='warn'>No boundary support: {_escape(boundary.get('reason'))}.</div>"
+    warnings = "".join(
+        f"<div class='warn'>{_escape(text)}</div>" for text in _sequence(boundary.get("warnings"), "warnings")
+    )
+    return (
+        heading
+        + warnings
+        + _facts(
+            [
+                ("positives inside the tested band", boundary.get("positives_within_band")),
+                ("negatives inside the tested band", boundary.get("negatives_within_band")),
+                ("band low", boundary.get("band_low")),
+                ("band high", boundary.get("band_high")),
+            ]
+        )
+    )
+
+
+def _search_warnings(document: Mapping[str, Any]) -> str:
+    """What the search could not see: a capped inventory, and samples no cutoff can reject."""
+    axes = [_mapping(item, "axis") for item in _sequence(document.get("axes"), "axes")]
+    warnings = ""
+    if any(axis.get("breakpoint_completeness") == "capped-subsample" for axis in axes):
+        warnings += f"<div class='warn'>{_escape(_CAPPED_WARNING)}</div>"
+    for axis in axes:
+        unrejectable = axis.get("unrejectable_samples")
+        if isinstance(unrejectable, int) and unrejectable > 0:
+            warnings += f"<div class='warn'>{_escape(_UNREJECTABLE_NOTE.format(n=unrejectable))}</div>"
+    return warnings
+
+
+def _advntr_facts(document: Mapping[str, Any], parity: Mapping[str, Any]) -> list[tuple[str, object]]:
+    """The adVNTR parity and replay-consistency lines, plus the tool and wall times when it ran."""
+    advntr_parity = parity.get("advntr")
+    consistency = document.get("replay_consistency")
+    facts: list[tuple[str, object]] = [
+        (
+            "adVNTR baseline parity",
+            _mapping(advntr_parity, "adVNTR baseline parity").get("proven") if advntr_parity else _NOT_REPLAYED,
+        ),
+        (
+            "adVNTR replay consistency (candidates checked)",
+            _mapping(consistency, "replay consistency").get("checked_candidates") if consistency else _NOT_CHECKED,
+        ),
+    ]
+    provenance = _mapping(document.get("provenance"), "provenance")
+    advntr = provenance.get("advntr")
+    if advntr is None:
+        return facts
+    record = _mapping(advntr, "adVNTR provenance")
+    tool = _mapping(record.get("tool_identity"), "adVNTR tool identity")
+    return [
+        *facts,
+        ("adVNTR package version", tool.get("package_version")),
+        ("adVNTR build id", tool.get("build_id")),
+        ("adVNTR probe grid seconds", record.get("probe_seconds")),
+        ("adVNTR candidate grid seconds", record.get("main_seconds")),
+    ]
+
+
 def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
     """Render the complete decision as one self-contained offline HTML page.
 
@@ -480,9 +560,6 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
     parity = _mapping(document.get("baseline_parity"), "baseline parity")
     boundary = _mapping(document.get("boundary_support"), "boundary support")
     columns, rows = _cutoff_rows(document)
-    warnings = "".join(
-        f"<div class='warn'>{_escape(text)}</div>" for text in _sequence(boundary.get("warnings"), "warnings")
-    )
     parity_banner = (
         ""
         if parity.get("proven") is True
@@ -501,6 +578,10 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
                 ("minimum sensitivity", objective.get("min_sensitivity")),
                 ("minimum specificity", objective.get("min_specificity")),
                 ("caller", document.get("caller")),
+                (
+                    "searched callers",
+                    ", ".join(str(name) for name in _sequence(scope.get("searched_callers"), "searched callers")),
+                ),
                 ("searched axes", ", ".join(str(name) for name in _sequence(scope.get("searched_axes"), "axes"))),
                 ("adVNTR policy", scope.get("advntr_policy")),
                 ("folds requested", document.get("folds_requested")),
@@ -508,6 +589,7 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
             ]
         ),
         f"<p class='note'>{_escape(scope.get('note'))}</p>",
+        _search_warnings(document),
         _held_out_section(document),
         _selection_section(document),
         "<h2>Old versus derived</h2>",
@@ -521,16 +603,7 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
                 )
             ],
         ),
-        "<h2>Boundary support</h2>",
-        warnings,
-        _facts(
-            [
-                ("positives inside the tested band", boundary.get("positives_within_band")),
-                ("negatives inside the tested band", boundary.get("negatives_within_band")),
-                ("band low", boundary.get("band_low")),
-                ("band high", boundary.get("band_high")),
-            ]
-        ),
+        _boundary_section(boundary),
         "".join(_curve_figures(_mapping(curve, "curve")) for curve in _sequence(document.get("curves"), "curves")),
         "<h2>Every tested cutoff (descriptive, full searched cohort)</h2>",
         "<p class='note'>Descriptive searched-cohort points: every row is scored on the same samples the "
@@ -570,6 +643,7 @@ def render_cutoff_report_html(document: Mapping[str, Any]) -> str:
                 ("grid replay sha256", provenance.get("grid_replay_sha256")),
                 ("generator version", provenance.get("generator_version")),
                 ("native-exact baselines", parity.get("native_exact_count")),
+                *_advntr_facts(document, parity),
             ]
         ),
         f"<p class='note'>{_escape(document.get('limitations'))}</p>",

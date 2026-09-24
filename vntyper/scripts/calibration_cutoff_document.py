@@ -38,7 +38,7 @@ from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
 from vntyper.scripts.calibration_cohort_manifest import CohortSample
 from vntyper.scripts.calibration_cohort_metrics import caller_metrics_document
 from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult
-from vntyper.scripts.calibration_cutoff_axes import AxisBreakpoints, axis_document
+from vntyper.scripts.calibration_cutoff_axes import AxisBreakpoints, axis_caller, axis_document
 from vntyper.scripts.calibration_cutoff_curves import (
     axis_curve_document,
     build_axis_curve,
@@ -69,12 +69,21 @@ _PLATEAU_NOTE: Final[str] = (
 )
 _NO_SELECTION: Final[str] = "no tested cutoff satisfied the declared objective and its constraints"
 _SCOPE_NOTES: Final[Mapping[str, str]] = {
+    "searched": (
+        "adVNTR legacy axes were searched: every candidate cutoff and read-support value was replayed natively "
+        "with the installed adVNTR evaluator. Exact mode, background fitting and the rare-unit coverage guard "
+        "are not searched."
+    ),
     "held-at-baseline": (
-        "Only Kestrel axes were searched. The adVNTR arm was replayed at its baseline policy for every "
-        "candidate, because no adVNTR cutoff axis is derived yet (issue #269)."
+        "Only Kestrel axes were requested. The adVNTR arm was replayed at its baseline policy for every candidate."
     ),
     "not-evaluated": "Only Kestrel axes were searched; adVNTR was not evaluated.",
 }
+_CURVE_UNAVAILABLE: Final[str] = (
+    "the no-call set changes across this axis (on the either-caller union a positive call from one caller "
+    "resolves the other caller's no-call), so no single ROC/PR curve with fixed denominators exists; the "
+    "operating points are listed in the cutoff table"
+)
 
 #: Per-axis candidates and their breakpoints, in ascending axis-value order.
 DerivedAxis = tuple[AxisBreakpoints, tuple[CutoffCandidate, ...]]
@@ -305,7 +314,12 @@ def _cutoff_rows(
 
 
 def _boundary_support(curve: Mapping[str, Any]) -> dict[str, Any]:
-    """The selected axis's boundary support, with an explicit warning when it is empty."""
+    """The selected axis's boundary support, with an explicit warning when it is empty.
+
+    An axis without a curve has no tested band to support, so its reason is carried over.
+    """
+    if curve["status"] == "unavailable":
+        return {"status": "unavailable", "reason": curve["reason"], "warnings": []}
     support = dict(curve["boundary_support"])
     support["warnings"] = [
         f"no {label}-truth sample lies inside the tested band of axis {curve['axis']}, so the selected cutoff "
@@ -344,18 +358,62 @@ def _advntr_provenance(inputs: CutoffReportInputs) -> dict[str, Any] | None:
 
 
 def _search_scope(inputs: CutoffReportInputs) -> dict[str, Any]:
-    """Which caller the search varied, and what happened to the adVNTR arm."""
-    policy = "held-at-baseline" if inputs.caller == "both" else "not-evaluated"
+    """Which callers the search varied, and what happened to the adVNTR arm."""
+    callers = sorted({axis_caller(axis.axis) for axis, _ in inputs.derived})
+    if "advntr" in callers:
+        policy = "searched"
+    elif inputs.caller == "both":
+        policy = "held-at-baseline"
+    else:
+        policy = "not-evaluated"
     executions = (
         None if inputs.advntr_result is None else len({entry.execution_id for entry in inputs.advntr_result.policies})
     )
+    search = inputs.advntr_search
+    probes = None if search is None else len({entry.execution_id for entry in search.probe.policies})
     return {
-        "searched_caller": "kestrel",
+        "searched_callers": callers,
         "searched_axes": [axis.axis for axis, _ in inputs.derived],
         "advntr_policy": policy,
         "advntr_distinct_executions": executions,
+        "advntr_probe_executions": probes,
         "note": _SCOPE_NOTES[policy],
     }
+
+
+def _axis_documents(inputs: CutoffReportInputs) -> list[dict[str, Any]]:
+    """Each searched axis; an adVNTR axis also states how many samples no cutoff can reject."""
+    documents: list[dict[str, Any]] = []
+    for axis, _ in inputs.derived:
+        document = dict(axis_document(axis))
+        if axis_caller(axis.axis) == "advntr":
+            if inputs.advntr_search is None:
+                _fail(f"cutoff report adVNTR axis {axis.axis} has no adVNTR search record")
+            document["unrejectable_samples"] = inputs.advntr_search.unrejectable[axis.axis]
+        documents.append(document)
+    return documents
+
+
+def _no_call_keys(rows: Sequence[CallerObservation]) -> frozenset[str]:
+    return frozenset(row.key for row in rows if row.called_positive is None)
+
+
+def _curve(
+    axis: AxisBreakpoints,
+    candidates: Sequence[CutoffCandidate],
+    arms: Mapping[str, Sequence[CallerObservation]],
+    comparison: str,
+) -> dict[str, Any]:
+    """One axis's ROC/PR curve, or the reason none exists (spec 14.6).
+
+    On the either-caller union a positive call from one caller resolves the other caller's
+    no-call, so the no-call set can change across one axis. A curve over such an axis has
+    no fixed denominators, and is published as unavailable rather than refused.
+    """
+    if len({_no_call_keys(arms[candidate.candidate_id]) for candidate in candidates}) > 1:
+        return {"axis": axis.axis, "status": "unavailable", "reason": _CURVE_UNAVAILABLE}
+    curve = build_axis_curve(axis, candidates, arms, comparison=comparison, phase="policy-selection")
+    return {**axis_curve_document(curve), "status": "available"}
 
 
 def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
@@ -376,16 +434,7 @@ def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
             breakpoint of the axis it claims.
     """
     curves = [
-        axis_curve_document(
-            build_axis_curve(
-                axis,
-                candidates,
-                inputs.arms,
-                comparison=inputs.comparisons[axis.axis],
-                phase="policy-selection",
-            )
-        )
-        for axis, candidates in inputs.derived
+        _curve(axis, candidates, inputs.arms, inputs.comparisons[axis.axis]) for axis, candidates in inputs.derived
     ]
     selected = inputs.evaluation["final_selection"]["policy_id"]
     by_candidate = {
@@ -425,8 +474,9 @@ def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
             "generator_version": inputs.generator_version,
             "advntr": _advntr_provenance(inputs),
         },
-        "baseline_parity": dict(inputs.parity),
-        "axes": [axis_document(axis) for axis, _ in inputs.derived],
+        "baseline_parity": {**inputs.parity, "advntr": inputs.advntr_parity},
+        "replay_consistency": inputs.replay_consistency,
+        "axes": _axis_documents(inputs),
         "cutoffs": _cutoff_rows(inputs.arms, inputs.derived),
         "curves": curves,
         "joint_points": _joint_points(inputs),

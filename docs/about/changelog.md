@@ -4,7 +4,9 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### adVNTR cutoff axes in `calibrate optimize` ([#269](https://github.com/hassansaei/VNtyper/issues/269))
+
+- **Report key replaced**: In the optimize `report.json`, `search_scope.searched_caller` (one string, which could not describe a `--caller both` search of both callers) is replaced by `search_scope.searched_callers`, a sorted list of the callers whose axes were searched. This is the only non-additive change to `calibration-cutoff-report-v1`; a consumer that read `searched_caller` must read `searched_callers` instead.
 
 ## 2.0.39 (2026-09-24)
 
