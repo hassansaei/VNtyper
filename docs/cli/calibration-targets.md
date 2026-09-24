@@ -228,7 +228,7 @@ inside every outer fold from that fold's training samples (see
 `calibration_cutoff_grid.build_cutoff_grid` remains available for an explicitly declared
 grid. Declared values are a supplement to the derived breakpoints, not a replacement.
 
-### The depth gates move together
+### What each axis moves
 
 | Axis | Pointers moved | Endpoint it changes |
 | --- | --- | --- |
@@ -241,6 +241,8 @@ grid. Declared values are a supplement to the derived breakpoints, not a replace
 | `advntr_min_support` | adVNTR `calibrated_calling/minimum_read_support` | adVNTR detection (`read support >= value`) |
 
 The two adVNTR axes are described under [Which caller is searched](#which-caller-is-searched).
+
+#### The Kestrel depth gates move together
 
 Lowering the reporting floor on its own changes nothing. The ordered confidence table
 sends a score below the floor to `Negative`, labels a score inside the closed mid-band
@@ -420,7 +422,8 @@ A research profile that carries adVNTR values runs adVNTR with the derived legac
 The native arguments are rendered from the profile under fixed, CLI-representable capture
 parameters, the same ones the calibration captures were produced under: Illumina,
 frameshift mode, diploid, maximum error rate 0.05, legacy error rate 0.01, MAPQ 0, base
-quality 20, maximum low-quality fraction 0.1, and no minimum read length. Exact mode is
+quality 20, maximum low-quality fraction 0.1, enhanced HMM on, trained HMMs off,
+reference alignment on, full-RU-only off, and no minimum read length. Exact mode is
 refused for research profiles, because it needs an approved bundle with a fitted
 background. A research profile carries no tool pin, so the runtime does not enforce an
 adVNTR build. A derived cutoff is tied to the adVNTR build recorded under
