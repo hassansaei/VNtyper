@@ -12,7 +12,9 @@ Three of the sections need a word of explanation.
 threshold gives the identical partition of the cohort, so a selected value is a member of
 an interval, not a measurement. :func:`_plateau` walks outward from the selected candidate
 while the per-sample outcome vector is unchanged and publishes that run together with the
-neighbouring values at which the outcome does change.
+nearest tested values whose outcome differs. Every published number is a tested value: the
+outcome of an untested threshold strictly between two tested values is not established, so the
+neighbours are not the thresholds at which the outcome changes.
 
 *Failed selection.* An objective whose constraints no candidate satisfies is an outcome,
 not an error, and it is published with the constraint that could not be met and the best
@@ -30,14 +32,15 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any, Final, NoReturn
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
+from vntyper.modules.advntr.advntr_calibration_policy import advntr_capabilities_document
 from vntyper.scripts.calibration_caller_metrics import CallerObservation, calculate_caller_metrics
 from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
 from vntyper.scripts.calibration_cohort_manifest import CohortSample
 from vntyper.scripts.calibration_cohort_metrics import caller_metrics_document
 from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult
-from vntyper.scripts.calibration_cutoff_axes import AxisBreakpoints, axis_document
+from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, AxisBreakpoints, axis_caller, axis_document
 from vntyper.scripts.calibration_cutoff_curves import (
     axis_curve_document,
     build_axis_curve,
@@ -48,6 +51,9 @@ from vntyper.scripts.calibration_cutoff_grid import CutoffCandidate
 from vntyper.scripts.calibration_cutoff_kestrel import KestrelGridReplay
 from vntyper.scripts.calibration_cutoff_report import SCHEMA_VERSION
 from vntyper.scripts.calibration_cutoff_selection import SearchSpec, cutoff_counts, cutoff_counts_document
+
+if TYPE_CHECKING:
+    from vntyper.scripts.calibration_cutoff_advntr_axes import AdvntrAxisSearch
 
 logger = logging.getLogger(__name__)
 
@@ -60,17 +66,29 @@ LIMITATIONS: Final[str] = (
 )
 _DUPLICATE_REASON: Final[str] = "not-the-first-seen-representative-of-its-declared-group"
 _PLATEAU_NOTE: Final[str] = (
-    "A threshold sweep is a step function: every value listed here reproduces the selected outcome exactly, "
-    "so quoting the selected number alone is false precision."
+    "A threshold sweep is a step function, so quoting the selected number alone is false precision. "
+    "equivalent_values are the tested values that reproduce the selected outcome exactly, and interval_low, "
+    "interval_high and width describe those tested values; open_below and open_above are the nearest tested "
+    "values whose outcome differs. The outcome of an untested threshold strictly between two tested values is "
+    "not established by this record."
 )
 _NO_SELECTION: Final[str] = "no tested cutoff satisfied the declared objective and its constraints"
 _SCOPE_NOTES: Final[Mapping[str, str]] = {
+    "searched": (
+        "adVNTR legacy axes were searched: every candidate cutoff and read-support value was replayed natively "
+        "with the installed adVNTR evaluator. Exact mode, background fitting and the rare-unit coverage guard "
+        "are not searched."
+    ),
     "held-at-baseline": (
-        "Only Kestrel axes were searched. The adVNTR arm was replayed at its baseline policy for every "
-        "candidate, because no adVNTR cutoff axis is derived yet (issue #269)."
+        "Only Kestrel axes were requested. The adVNTR arm was replayed at its baseline policy for every candidate."
     ),
     "not-evaluated": "Only Kestrel axes were searched; adVNTR was not evaluated.",
 }
+_CURVE_UNAVAILABLE: Final[str] = (
+    "the no-call set changes across this axis (on the either-caller union a positive call from one caller "
+    "resolves the other caller's no-call), so no single ROC/PR curve with fixed denominators exists; the "
+    "operating points are listed in the cutoff table"
+)
 
 #: Per-axis candidates and their breakpoints, in ascending axis-value order.
 DerivedAxis = tuple[AxisBreakpoints, tuple[CutoffCandidate, ...]]
@@ -100,6 +118,11 @@ class CutoffReportInputs:
         cohort_manifest_sha256: Digest of the declared cohort manifest.
         capture_manifest_sha256: Digest of the capture association manifest.
         generator_version: Identity of the generator that produced this record.
+        advntr_parity: The adVNTR baseline-parity record, when adVNTR was replayed.
+        replay_consistency: The adVNTR replay-consistency record, when adVNTR axes were
+            searched.
+        advntr_search: The adVNTR axes and their probe grid, when adVNTR axes were searched.
+        advntr_main_seconds: Wall time of the adVNTR candidate grid, when it ran.
     """
 
     objective: SearchSpec
@@ -121,6 +144,10 @@ class CutoffReportInputs:
     cohort_manifest_sha256: str
     capture_manifest_sha256: str
     generator_version: str
+    advntr_parity: Mapping[str, Any] | None = None
+    replay_consistency: Mapping[str, Any] | None = None
+    advntr_search: AdvntrAxisSearch | None = None
+    advntr_main_seconds: float | None = None
 
 
 def _fail(message: str) -> NoReturn:
@@ -183,7 +210,8 @@ def _plateau(
 
     Returns:
         The plateau record, naming the tested values that are indistinguishable from the
-        selected one and the neighbouring values at which the outcome changes.
+        selected one and the nearest tested values whose outcome differs. Untested thresholds
+        between two tested values were not replayed, so their outcome is not established.
 
     Raises:
         ValueError: If the selected candidate does not belong to the supplied axis.
@@ -292,7 +320,12 @@ def _cutoff_rows(
 
 
 def _boundary_support(curve: Mapping[str, Any]) -> dict[str, Any]:
-    """The selected axis's boundary support, with an explicit warning when it is empty."""
+    """The selected axis's boundary support, with an explicit warning when it is empty.
+
+    An axis without a curve has no tested band to support, so its reason is carried over.
+    """
+    if curve["status"] == "unavailable":
+        return {"status": "unavailable", "reason": curve["reason"], "warnings": []}
     support = dict(curve["boundary_support"])
     support["warnings"] = [
         f"no {label}-truth sample lies inside the tested band of axis {curve['axis']}, so the selected cutoff "
@@ -304,7 +337,11 @@ def _boundary_support(curve: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _joint_points(inputs: CutoffReportInputs) -> dict[str, Any] | None:
-    """The labelled multi-axis table, which exists only when more than one axis was swept."""
+    """The labelled multi-axis table of non-baseline points, when more than one axis was swept.
+
+    An axis can hold only its baseline anchor (no observed value beyond it), so several
+    axes may still leave no point to tabulate; the table is then absent, as for one axis.
+    """
     if len(inputs.derived) < 2:
         return None
     labelled = {
@@ -313,22 +350,97 @@ def _joint_points(inputs: CutoffReportInputs) -> dict[str, Any] | None:
         for index, candidate in enumerate(candidates)
         if candidate.parameters
     }
+    if not labelled:
+        return None
     return joint_points_document(build_joint_points(labelled, inputs.anchors[inputs.derived[0][0].axis]))
 
 
+def _advntr_provenance(inputs: CutoffReportInputs) -> dict[str, Any] | None:
+    """The adVNTR evidence the record commits to: both grid digests and the tool."""
+    result, search = inputs.advntr_result, inputs.advntr_search
+    if result is None:
+        return None
+    return {
+        "sha256": result.sha256,
+        "probe_sha256": None if search is None else search.probe.sha256,
+        "tool_identity": advntr_capabilities_document(result.capabilities),
+    }
+
+
+def _timings(inputs: CutoffReportInputs) -> dict[str, float | None]:
+    """Wall times: the only part of the record that differs between identical runs."""
+    search = inputs.advntr_search
+    return {
+        "advntr_probe_seconds": None if search is None else search.probe_seconds,
+        "advntr_main_seconds": inputs.advntr_main_seconds,
+    }
+
+
 def _search_scope(inputs: CutoffReportInputs) -> dict[str, Any]:
-    """Which caller the search varied, and what happened to the adVNTR arm."""
-    policy = "held-at-baseline" if inputs.caller == "both" else "not-evaluated"
+    """Which callers the search varied, and what happened to the adVNTR arm."""
+    callers = sorted({axis_caller(axis.axis) for axis, _ in inputs.derived})
+    if "advntr" in callers:
+        policy = "searched"
+    elif inputs.caller == "both":
+        policy = "held-at-baseline"
+    else:
+        policy = "not-evaluated"
     executions = (
         None if inputs.advntr_result is None else len({entry.execution_id for entry in inputs.advntr_result.policies})
     )
+    search = inputs.advntr_search
+    probes = None if search is None else len({entry.execution_id for entry in search.probe.policies})
     return {
-        "searched_caller": "kestrel",
+        "searched_callers": callers,
         "searched_axes": [axis.axis for axis, _ in inputs.derived],
         "advntr_policy": policy,
         "advntr_distinct_executions": executions,
+        "advntr_probe_executions": probes,
         "note": _SCOPE_NOTES[policy],
     }
+
+
+def _axis_documents(inputs: CutoffReportInputs) -> list[dict[str, Any]]:
+    """Each searched axis; the adVNTR cutoff axis also states how many samples no cutoff can reject.
+
+    Only the cutoff axis carries ``unrejectable_samples`` (spec section 8): a p-value of
+    exactly 0 defeats every admissible cutoff, while read support has no such floor.
+    """
+    documents: list[dict[str, Any]] = []
+    for axis, _ in inputs.derived:
+        document = dict(axis_document(axis))
+        if axis.axis == ADVNTR_CUTOFF:
+            if inputs.advntr_search is None:
+                _fail(f"cutoff report adVNTR axis {axis.axis} has no adVNTR search record")
+            document["unrejectable_samples"] = inputs.advntr_search.unrejectable[axis.axis]
+        documents.append(document)
+    return documents
+
+
+def _no_call_keys(rows: Sequence[CallerObservation]) -> frozenset[str]:
+    return frozenset(row.key for row in rows if row.called_positive is None)
+
+
+def _curve(
+    axis: AxisBreakpoints,
+    candidates: Sequence[CutoffCandidate],
+    arms: Mapping[str, Sequence[CallerObservation]],
+    comparison: str,
+    caller: str,
+) -> dict[str, Any]:
+    """One axis's ROC/PR curve, or the reason none exists (spec 14.6).
+
+    On the either-caller union a positive call from one caller resolves the other caller's
+    no-call, so the no-call set can change across one axis. A curve over such an axis has
+    no fixed denominators, and is published as unavailable rather than refused. For a
+    single caller a changing no-call set is a replay defect, so ``build_axis_curve`` still
+    refuses it.
+    """
+    changing = len({_no_call_keys(arms[candidate.candidate_id]) for candidate in candidates}) > 1
+    if caller == "both" and changing:
+        return {"axis": axis.axis, "status": "unavailable", "reason": _CURVE_UNAVAILABLE}
+    curve = build_axis_curve(axis, candidates, arms, comparison=comparison, phase="policy-selection")
+    return {**axis_curve_document(curve), "status": "available"}
 
 
 def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
@@ -349,15 +461,7 @@ def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
             breakpoint of the axis it claims.
     """
     curves = [
-        axis_curve_document(
-            build_axis_curve(
-                axis,
-                candidates,
-                inputs.arms,
-                comparison=inputs.comparisons[axis.axis],
-                phase="policy-selection",
-            )
-        )
+        _curve(axis, candidates, inputs.arms, inputs.comparisons[axis.axis], inputs.caller)
         for axis, candidates in inputs.derived
     ]
     selected = inputs.evaluation["final_selection"]["policy_id"]
@@ -396,10 +500,12 @@ def build_cutoff_report_document(inputs: CutoffReportInputs) -> dict[str, Any]:
             "capture_file_sha256": dict(inputs.replay.capture_file_sha256),
             "native_file_sha256": dict(inputs.replay.native_file_sha256),
             "generator_version": inputs.generator_version,
-            "advntr": None if inputs.advntr_result is None else {"sha256": inputs.advntr_result.sha256},
+            "advntr": _advntr_provenance(inputs),
         },
-        "baseline_parity": dict(inputs.parity),
-        "axes": [axis_document(axis) for axis, _ in inputs.derived],
+        "timings": _timings(inputs),
+        "baseline_parity": {**inputs.parity, "advntr": inputs.advntr_parity},
+        "replay_consistency": inputs.replay_consistency,
+        "axes": _axis_documents(inputs),
         "cutoffs": _cutoff_rows(inputs.arms, inputs.derived),
         "curves": curves,
         "joint_points": _joint_points(inputs),

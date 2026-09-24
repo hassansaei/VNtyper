@@ -16,6 +16,8 @@ CUTOFF_AXIS_CHOICES = (
     "depth_score_high",
     "alt_depth_band",
     "var_active_region",
+    "advntr_cutoff",
+    "advntr_min_support",
 )
 
 
@@ -76,8 +78,8 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
         choices=["kestrel", "advntr", "both"],
         default="kestrel",
         help=(
-            "Only Kestrel axes are searched. 'both' pairs every Kestrel candidate with the adVNTR arm replayed "
-            "at its baseline policy; 'advntr' is refused because no adVNTR cutoff axis is derived yet (#269)."
+            "kestrel searches Kestrel axes; advntr searches adVNTR legacy axes by native replay; both searches "
+            "both on the either-caller union, one axis at a time."
         ),
     )
     optimize.add_argument(
@@ -87,7 +89,9 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
         choices=list(CUTOFF_AXIS_CHOICES),
         default=None,
         metavar="NAME",
-        help=f"Repeatable cutoff axis; defaults to {CUTOFF_AXIS_CHOICES[0]}.",
+        help=(
+            "Repeatable cutoff axis; defaults to depth_floor_linked (kestrel), advntr_cutoff (advntr), or both (both)."
+        ),
     )
     optimize.add_argument(
         "--max-breakpoints",
@@ -102,7 +106,7 @@ def add_calibrate_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--advntr-executable",
         type=Path,
         default=None,
-        help="Pinned installed adVNTR executable; required by --caller both.",
+        help="Pinned installed adVNTR executable; required by --caller advntr and both.",
     )
 
     intake = operations.add_parser("intake", help="Audit and normalize declared local calibration inputs.")

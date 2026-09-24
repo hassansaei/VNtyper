@@ -19,32 +19,29 @@ Sample                Depth_Score  Called at a floor of ...
 
 from __future__ import annotations
 
-import argparse
-import json
 import math
 import stat
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
 from unittest.mock import patch
 
-import pandas as pd
 import pytest
 
-from tests.builders import kestrel_config
-from tests.unit.test_calibration_cutoff_kestrel import _native_negative, _native_production
-from tests.unit.test_calibration_kestrel_replay import _candidate, _capture, _raw
+from tests.unit.cutoff_optimize_fakes import STANDARD_COHORT, namespace, run_optimize, write_manifests
+from tests.unit.test_calibration_kestrel_replay import _candidate
 from vntyper.scripts.calibration_atomic_io import atomic_output
-from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
-from vntyper.scripts.calibration_cutoff_axes import DEPTH_FLOOR_LINKED, GG_GATE_INDEPENDENT
-from vntyper.scripts.calibration_kestrel_capture import (
-    decode_kestrel_capture,
-    kestrel_capture_document,
+from vntyper.scripts.calibration_cutoff_axes import (
+    ADVNTR_CUTOFF,
+    ADVNTR_MIN_SUPPORT,
+    DEPTH_FLOOR_LINKED,
+    GG_GATE_INDEPENDENT,
 )
+from vntyper.scripts.calibration_kestrel_capture import decode_kestrel_capture
 from vntyper.scripts.calibration_kestrel_replay import replay_kestrel_capture
-from vntyper.scripts.canonical_json import canonical_json_bytes, load_strict_json_object
+from vntyper.scripts.canonical_json import load_strict_json_object
 
 pytestmark = pytest.mark.unit
 
@@ -52,15 +49,6 @@ _FLOOR = "/components/kestrel/confidence_assignment/reporting_floor"
 _LOW = "/components/kestrel/confidence_assignment/depth_score_thresholds/low"
 _GG = "/components/kestrel/alt_filtering/gg_depth_score_threshold"
 
-#: ``(alternate depth, active-region depth)`` pairs whose ratio is the Depth_Score.
-DEPTHS: dict[str, tuple[int, int]] = {
-    "0.014": (7, 500),
-    "0.008": (4, 500),
-    "0.006": (3, 500),
-    "0.004": (2, 500),
-    "0.001": (5, 5000),
-    "0.0004": (2, 5000),
-}
 
 #: The endpoint sentinel just above the largest observed Depth_Score: the one tested floor
 #: that rejects every row, since production floors pass a score equal to the floor.
@@ -80,127 +68,6 @@ ORACLE: dict[str, dict[str, int]] = {
 }
 
 
-def _frame(scores: tuple[str, ...]) -> pd.DataFrame:
-    """Build a raw Kestrel frame with one candidate row per requested Depth_Score."""
-    if not scores:
-        return _raw().iloc[0:0]
-    rows = []
-    for ordinal, score in enumerate(scores):
-        alternate, region = DEPTHS[score]
-        row = _raw(depth_alt=alternate, depth_region=region)
-        row.loc[0, "POS"] = 67 + ordinal
-        rows.append(row)
-    return pd.concat(rows, ignore_index=True)
-
-
-def _write_capture(path: Path, scores: tuple[str, ...]) -> CallerPolicyValues:
-    """Serialize one complete synthetic capture and return its baseline policy."""
-    capture = _capture(_frame(scores), kestrel_config())
-    path.write_bytes(canonical_json_bytes(kestrel_capture_document(capture)))
-    return capture.baseline_policy
-
-
-def _write_manifests(
-    tmp_path: Path,
-    cohort: dict[str, tuple[str, tuple[str, ...], str | None]],
-    *,
-    natives: dict[str, str] | None = None,
-    advntr: bool = False,
-) -> tuple[Path, Path]:
-    """Write the cohort TSV, the capture TSV and every capture the pair references.
-
-    Args:
-        tmp_path: Private directory the synthetic inputs are written into.
-        cohort: Sample -> (genotype, Depth_Score labels, group id or None).
-        natives: Optional sample -> ``"production"``, ``"negative"`` or ``"corrupt"``.
-        advntr: Whether to declare an adVNTR capture column; the referenced files exist
-            but are never opened, because the native adVNTR grid is mocked out.
-
-    Returns:
-        The cohort manifest path and the capture association manifest path.
-    """
-    tmp_path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    cohort_path = tmp_path / "cohort.tsv"
-    captures_path = tmp_path / "captures.tsv"
-    cohort_lines = ["sample_id\tbam\tassembly\tgenotype\tgroup_id"]
-    header = "sample_id\tkestrel_capture\tnative_kestrel" + ("\tadvntr_capture" if advntr else "")
-    capture_lines = [header]
-    for name, (genotype, scores, group) in cohort.items():
-        cohort_lines.append(f"{name}\t{name}.bam\tGRCh38\t{genotype}\t{group or ''}")
-        capture = tmp_path / f"{name}.capture.json"
-        _write_capture(capture, scores)
-        native = ""
-        request = (natives or {}).get(name)
-        if request is not None:
-            native_path = tmp_path / f"{name}.native.tsv"
-            if request == "negative":
-                _native_negative(native_path)
-            else:
-                _native_production(
-                    native_path, capture, changes={"Depth_Score": "0.99"} if request == "corrupt" else None
-                )
-            native = native_path.name
-        row = f"{name}\t{capture.name}\t{native}"
-        if advntr:
-            locus = tmp_path / f"{name}.advntr.jsonl"
-            locus.write_text("{}\n", encoding="utf-8")
-            row += f"\t{locus.name}"
-        capture_lines.append(row)
-    cohort_path.write_text("\n".join(cohort_lines) + "\n", encoding="utf-8")
-    captures_path.write_text("\n".join(capture_lines) + "\n", encoding="utf-8")
-    return cohort_path, captures_path
-
-
-STANDARD_COHORT: dict[str, tuple[str, tuple[str, ...], str | None]] = {
-    "specimen-alpha": ("positive", ("0.014",), "family-1"),
-    "specimen-alpha-repeat": ("positive", ("0.014",), "family-1"),
-    "specimen-bravo": ("positive", ("0.004",), None),
-    "specimen-charlie": ("negative", ("0.0004",), None),
-    "specimen-delta": ("negative", ("0.001",), None),
-    "specimen-echo": ("positive", (), None),
-    "specimen-foxtrot": ("unknown", ("0.014",), None),
-}
-
-
-def _namespace(cohort_path: Path, captures_path: Path, **overrides: Any) -> argparse.Namespace:
-    """Build the parsed-argument namespace the entry point reads."""
-    values: dict[str, Any] = {
-        "manifest": cohort_path,
-        "captures": captures_path,
-        "objective": "max-sensitivity-at-specificity",
-        "min_sensitivity": None,
-        "min_specificity": 1.0,
-        "caller": "kestrel",
-        "axes": [DEPTH_FLOOR_LINKED],
-        "max_breakpoints": None,
-        "folds": 3,
-        "seed": 20260915,
-        "workers": 1,
-        "advntr_executable": None,
-    }
-    values.update(overrides)
-    return argparse.Namespace(**values)
-
-
-def _run(
-    tmp_path: Path,
-    cohort: dict[str, tuple[str, tuple[str, ...], str | None]] | None = None,
-    *,
-    natives: dict[str, str] | None = None,
-    **overrides: Any,
-) -> tuple[bool, dict[str, Any], Path]:
-    """Run the command through the real atomic adapter and read its report back."""
-    from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
-
-    cohort_path, captures_path = _write_manifests(tmp_path, cohort or STANDARD_COHORT, natives=natives)
-    output = tmp_path / "derived"
-    args = _namespace(cohort_path, captures_path, **overrides)
-    successful = atomic_output(output, lambda staging: run_cutoff_optimization(args, staging))
-    document = json.loads((output / "report.json").read_bytes())
-    assert isinstance(document, dict)
-    return successful, document, output
-
-
 def _by_value(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Index the reported cutoff rows by the axis value each one tested."""
     return {repr(row["value"]): row for row in document["cutoffs"] if row["policy_id"] != "baseline"}
@@ -208,7 +75,7 @@ def _by_value(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def test_the_reported_confusion_matrix_matches_the_hand_computed_oracle(tmp_path: Path) -> None:
     """Every tested cutoff agrees with the matrix written out in this module."""
-    successful, document, _ = _run(tmp_path)
+    successful, document, _ = run_optimize(tmp_path)
 
     assert successful is True
     assert document["schema_version"] == "calibration-cutoff-report-v1"
@@ -222,7 +89,7 @@ def test_the_reported_confusion_matrix_matches_the_hand_computed_oracle(tmp_path
 
 def test_the_declared_objective_and_its_constraints_are_reported_verbatim(tmp_path: Path) -> None:
     """The published decision states which quantity was maximized, and under what floor."""
-    _, document, _ = _run(tmp_path, objective="youden-j", min_specificity=None, min_sensitivity=0.5)
+    _, document, _ = run_optimize(tmp_path, objective="youden-j", min_specificity=None, min_sensitivity=0.5)
 
     assert document["objective"] == {
         "objective": "youden-j",
@@ -233,7 +100,7 @@ def test_the_declared_objective_and_its_constraints_are_reported_verbatim(tmp_pa
 
 def test_the_rescue_needs_all_three_linked_gates_and_not_the_floor_alone(tmp_path: Path) -> None:
     """A lowered floor on its own moves a row from one Negative verdict to another."""
-    _, document, _ = _run(tmp_path)
+    _, document, _ = run_optimize(tmp_path)
     selected = document["selection"]
 
     assert selected["value"] == 0.004
@@ -255,7 +122,7 @@ def test_the_rescue_needs_all_three_linked_gates_and_not_the_floor_alone(tmp_pat
 
 def test_lowering_the_cutoff_far_enough_admits_a_negative_and_the_report_shows_it(tmp_path: Path) -> None:
     """The specificity the rescue costs is a reported number, not an omission."""
-    _, document, _ = _run(tmp_path)
+    _, document, _ = run_optimize(tmp_path)
     rows = _by_value(document)
 
     assert rows["0.004"]["counts"]["false_positives"] == 0
@@ -270,7 +137,7 @@ def test_lowering_the_cutoff_far_enough_admits_a_negative_and_the_report_shows_i
 
 def test_the_baseline_arm_reproduces_the_shipped_outcome_exactly(tmp_path: Path) -> None:
     """The anchor candidate and the capture-derived baseline must agree per sample."""
-    _, document, _ = _run(
+    _, document, _ = run_optimize(
         tmp_path,
         {
             "specimen-alpha": ("positive", ("0.014",), None),
@@ -294,10 +161,10 @@ def test_a_corrupted_native_baseline_aborts_the_run(tmp_path: Path) -> None:
         "specimen-alpha": ("positive", ("0.014",), None),
         "specimen-charlie": ("negative", ("0.0004",), None),
     }
-    cohort_path, captures_path = _write_manifests(
+    cohort_path, captures_path = write_manifests(
         tmp_path, cohort, natives={"specimen-alpha": "corrupt", "specimen-charlie": "negative"}
     )
-    args = _namespace(cohort_path, captures_path)
+    args = namespace(cohort_path, captures_path)
 
     with pytest.raises(ValueError, match="baseline parity"):
         atomic_output(tmp_path / "derived", lambda staging: run_cutoff_optimization(args, staging))
@@ -307,8 +174,8 @@ def test_a_baseline_arm_that_disagrees_with_its_anchor_aborts_the_run(tmp_path: 
     """The parity proof is a real comparison, not a comment describing one."""
     from vntyper.scripts import calibration_cutoff_optimize as module
 
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT)
-    args = _namespace(cohort_path, captures_path)
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT)
+    args = namespace(cohort_path, captures_path)
     real = module.replay_kestrel_grid
 
     def doctored(*call_args: Any, **call_kwargs: Any) -> Any:
@@ -327,7 +194,9 @@ def test_a_baseline_arm_that_disagrees_with_its_anchor_aborts_the_run(tmp_path: 
 
 def test_an_infeasible_objective_still_writes_the_report_and_names_the_constraint(tmp_path: Path) -> None:
     """A failed selection is an explicit published outcome, not a silent fallback."""
-    successful, document, output = _run(tmp_path, objective="sensitivity", min_specificity=None, min_sensitivity=0.99)
+    successful, document, output = run_optimize(
+        tmp_path, objective="sensitivity", min_specificity=None, min_sensitivity=0.99
+    )
 
     assert successful is False
     assert document["status"] == "infeasible"
@@ -346,7 +215,9 @@ def test_constraints_that_are_reachable_apart_but_not_together_are_named_as_such
         "specimen-alpha": ("positive", ("0.004",), None),
         "specimen-charlie": ("negative", ("0.004",), None),
     }
-    successful, document, _ = _run(tmp_path, cohort, objective="youden-j", min_sensitivity=0.5, min_specificity=0.5)
+    successful, document, _ = run_optimize(
+        tmp_path, cohort, objective="youden-j", min_sensitivity=0.5, min_specificity=0.5
+    )
     infeasible = document["selection"]["infeasible"]
 
     assert successful is False
@@ -357,7 +228,7 @@ def test_constraints_that_are_reachable_apart_but_not_together_are_named_as_such
 
 def test_unknown_truth_and_no_calls_keep_fixed_denominators_at_every_cutoff(tmp_path: Path) -> None:
     """A no-call stays inside its truth class and unknown truth keeps its own count."""
-    _, document, _ = _run(tmp_path)
+    _, document, _ = run_optimize(tmp_path)
 
     for row in document["cutoffs"]:
         counts = row["counts"]
@@ -372,7 +243,7 @@ def test_unknown_truth_and_no_calls_keep_fixed_denominators_at_every_cutoff(tmp_
 
 def test_only_the_group_representative_is_scored_and_no_group_straddles_a_fold(tmp_path: Path) -> None:
     """Biological duplicates are dropped with a stated reason before anything is scored."""
-    _, document, _ = _run(tmp_path)
+    _, document, _ = run_optimize(tmp_path)
     dropped = document["truth_set"]["dropped_duplicates"]
 
     assert [row["sample_id"] for row in dropped] == ["specimen-alpha-repeat"]
@@ -392,7 +263,7 @@ def test_only_the_group_representative_is_scored_and_no_group_straddles_a_fold(t
 
 def test_the_held_out_evaluation_is_reported_separately_from_the_full_data_fit(tmp_path: Path) -> None:
     """Selection happens inside training folds; the pooled held-out counts stand apart."""
-    _, document, output = _run(tmp_path)
+    _, document, output = run_optimize(tmp_path)
     evaluation = document["evaluation"]
     page = (output / "report.html").read_text(encoding="utf-8")
 
@@ -409,7 +280,7 @@ def test_the_exported_profile_round_trips_and_equals_the_selected_policy(tmp_pat
     """The runtime resolver must recover exactly the policy the report published."""
     from vntyper.scripts.decision_profile import resolve_research_decision_profile
 
-    _, document, output = _run(tmp_path)
+    _, document, output = run_optimize(tmp_path)
     profile_path = output / "research-decision-profile.json"
 
     assert document["profile"]["round_trip_matches_selected_policy"] is True
@@ -430,7 +301,7 @@ def test_the_plateau_interval_is_wider_than_the_single_selected_value(tmp_path: 
         "specimen-golf": ("positive", ("0.008",), None),
         "specimen-charlie": ("negative", ("0.0004",), None),
     }
-    _, document, _ = _run(tmp_path, cohort, objective="youden-j", min_specificity=None)
+    _, document, _ = run_optimize(tmp_path, cohort, objective="youden-j", min_specificity=None)
     plateau = document["selection"]["plateau"]
 
     assert plateau["equivalent_values"] == [0.00469, 0.008]
@@ -438,12 +309,14 @@ def test_the_plateau_interval_is_wider_than_the_single_selected_value(tmp_path: 
     assert plateau["interval_high"] == 0.008
     assert plateau["single_value"] is False
     assert plateau["open_below"] == 0.0004
-    assert plateau["open_above"] == 0.014
+    # The fold holding out alpha trains on a maximum of 0.008, so its own sentinel just above
+    # 0.008 is replayed too; it is the nearest value at which the outcome changes (golf lost).
+    assert plateau["open_above"] == math.nextafter(0.008, math.inf)
 
 
 def test_the_boundary_support_warns_when_no_truth_sample_constrains_the_cutoff(tmp_path: Path) -> None:
     """A cutoff no labelled sample sits near is an unsupported cutoff, and says so."""
-    _, document, _ = _run(tmp_path)
+    _, document, _ = run_optimize(tmp_path)
     support = document["boundary_support"]
 
     assert support["positives_within_band"] >= 1
@@ -453,7 +326,7 @@ def test_the_boundary_support_warns_when_no_truth_sample_constrains_the_cutoff(t
 
 def test_the_axis_curve_and_the_joint_points_are_reported_separately(tmp_path: Path) -> None:
     """A two-axis run publishes one curve per axis and a labelled table beside them."""
-    _, document, _ = _run(tmp_path, axes=[DEPTH_FLOOR_LINKED, GG_GATE_INDEPENDENT])
+    _, document, _ = run_optimize(tmp_path, axes=[DEPTH_FLOOR_LINKED, GG_GATE_INDEPENDENT])
 
     axes = [curve["axis"] for curve in document["curves"]]
     assert axes == [DEPTH_FLOOR_LINKED, GG_GATE_INDEPENDENT]
@@ -468,7 +341,7 @@ def test_the_axis_curve_and_the_joint_points_are_reported_separately(tmp_path: P
 
 def test_the_rejected_candidate_values_are_published_with_their_reasons(tmp_path: Path) -> None:
     """A breakpoint the policy decoder refuses is reported, not silently dropped."""
-    _, document, _ = _run(tmp_path, axes=[DEPTH_FLOOR_LINKED])
+    _, document, _ = run_optimize(tmp_path, axes=[DEPTH_FLOOR_LINKED])
 
     assert isinstance(document["rejected_candidates"], list)
     for row in document["rejected_candidates"]:
@@ -478,7 +351,7 @@ def test_the_rejected_candidate_values_are_published_with_their_reasons(tmp_path
 
 def test_the_output_directory_and_every_file_it_holds_are_private(tmp_path: Path) -> None:
     """The output holds cohort results, so it is 0700 with 0600 files throughout."""
-    _, _, output = _run(tmp_path)
+    _, _, output = run_optimize(tmp_path)
 
     assert stat.S_IMODE(output.stat().st_mode) == 0o700
     written = sorted(path.name for path in output.iterdir())
@@ -501,8 +374,8 @@ def test_the_worker_count_reaches_the_replay(tmp_path: Path) -> None:
     """``--workers`` is plumbed through rather than accepted and discarded."""
     from vntyper.scripts import calibration_cutoff_optimize as module
 
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT)
-    args = _namespace(cohort_path, captures_path, workers=3)
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT)
+    args = namespace(cohort_path, captures_path, workers=3)
     real = module.replay_kestrel_grid
     seen: list[int] = []
 
@@ -528,14 +401,14 @@ def test_broken_capture_evidence_fails_with_a_clear_message(tmp_path: Path, dama
     """Missing, malformed and empty evidence are refused before anything is scored."""
     from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
 
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT)
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT)
     if damage == "missing":
         (tmp_path / "specimen-alpha.capture.json").unlink()
     elif damage == "malformed":
         (tmp_path / "specimen-alpha.capture.json").write_bytes(b"")
     else:
         captures_path.write_text("sample_id\tkestrel_capture\tnative_kestrel\n", encoding="utf-8")
-    args = _namespace(cohort_path, captures_path)
+    args = namespace(cohort_path, captures_path)
 
     with pytest.raises(ValueError, match=message):
         atomic_output(tmp_path / "derived", lambda staging: run_cutoff_optimization(args, staging))
@@ -548,9 +421,16 @@ def test_broken_capture_evidence_fails_with_a_clear_message(tmp_path: Path, dama
         ({"objective": None}, "unsupported cutoff search objective"),
         ({"axes": []}, "at least one axis"),
         ({"axes": ["not-an-axis"]}, "cutoff axis name must be"),
+        ({"axes": "depth_floor_linked"}, "at least one axis"),
         ({"axes": [DEPTH_FLOOR_LINKED, DEPTH_FLOOR_LINKED]}, "at most once"),
         ({"caller": "sideways"}, "caller must be kestrel, advntr, or both"),
         ({"caller": "both", "advntr_executable": None}, "requires --advntr-executable"),
+        ({"caller": "advntr", "advntr_executable": None}, "requires --advntr-executable"),
+        ({"axes": [ADVNTR_CUTOFF]}, r"--caller kestrel cannot search the adVNTR axis \['advntr_cutoff'\]"),
+        (
+            {"caller": "advntr", "axes": [DEPTH_FLOOR_LINKED, ADVNTR_CUTOFF, GG_GATE_INDEPENDENT]},
+            r"--caller advntr cannot search the Kestrel axis \['depth_floor_linked', 'gg_gate_independent'\]",
+        ),
         ({"manifest": "cohort.tsv"}, "must be Paths"),
         ({"advntr_executable": "advntr"}, "must be Paths"),
         ({"workers": 0}, "workers must be a positive integer"),
@@ -564,8 +444,8 @@ def test_invalid_arguments_are_refused_before_any_evidence_is_read(
     """Argument validation happens before dependent I/O, as the cohort path does."""
     from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
 
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT)
-    args = _namespace(cohort_path, captures_path, **overrides)
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT)
+    args = namespace(cohort_path, captures_path, **overrides)
     staging = tmp_path / "staging"
     staging.mkdir(mode=0o700)
 
@@ -577,180 +457,66 @@ def test_a_staging_directory_that_already_holds_artifacts_is_refused(tmp_path: P
     """The entry point owns an empty private directory, never one with prior content."""
     from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
 
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT)
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT)
     staging = tmp_path / "staging"
     staging.mkdir(mode=0o700)
     (staging / "stale.json").write_text("{}\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="empty staged directory"):
-        run_cutoff_optimization(_namespace(cohort_path, captures_path), staging)
+        run_cutoff_optimization(namespace(cohort_path, captures_path), staging)
 
 
 def test_an_unset_axis_option_derives_the_linked_depth_axis(tmp_path: Path) -> None:
     """``--axis`` is repeatable, so argparse leaves it None and the run owns the default."""
-    _, document, _ = _run(tmp_path, axes=None)
+    _, document, _ = run_optimize(tmp_path, axes=None)
 
     assert [entry["axis"] for entry in document["axes"]] == [DEPTH_FLOOR_LINKED]
     assert document["selection"]["axis"] == DEPTH_FLOOR_LINKED
 
 
 def test_the_breakpoint_cap_subsamples_the_axis_and_says_so(tmp_path: Path) -> None:
-    """A capped axis keeps its ends and its baseline, and the report records the cap."""
-    _, uncapped, _ = _run(tmp_path / "all", axes=[DEPTH_FLOOR_LINKED])
-    _, capped, _ = _run(tmp_path / "few", axes=[DEPTH_FLOOR_LINKED], max_breakpoints=3)
+    """Every capped inventory keeps its ends and its baseline, and the report records the cap.
+
+    With a cap of 3, each inventory keeps its smallest value, the anchor 0.00469 and its
+    sentinel S. The full-data inventory and folds 0 and 1 (which train on charlie's 0.0004)
+    keep {0.0004, 0.00469, S}; fold 2 (charlie held out) keeps {0.001, 0.00469, S}. The
+    replayed union is therefore {0.0004, 0.001, 0.00469, S}, with 0.001 derived by a fold only.
+    """
+    _, uncapped, _ = run_optimize(tmp_path / "all", axes=[DEPTH_FLOOR_LINKED])
+    _, capped, _ = run_optimize(tmp_path / "few", axes=[DEPTH_FLOOR_LINKED], max_breakpoints=3)
 
     assert uncapped["axes"][0]["capped"] is False
     assert uncapped["axes"][0]["values"] == [0.0004, 0.001, 0.004, 0.00469, 0.014, SENTINEL]
     assert uncapped["axes"][0]["endpoint_sentinel"] == SENTINEL
+    assert uncapped["axes"][0]["breakpoint_completeness"] == "complete"
     assert capped["max_breakpoints"] == 3
-    assert capped["axes"][0]["capped"] is True
-    values = capped["axes"][0]["values"]
-    assert len(values) == 3
-    assert values[0] == 0.0004
-    assert values[-1] == SENTINEL  # the reject-everything endpoint survives the cap
-    assert 0.00469 in values  # the shipped operating point is never subsampled away
+    axis = capped["axes"][0]
+    assert axis["capped"] is True and axis["full_data_capped"] is True
+    assert axis["fold_capped"] == [0, 1, 2]
+    assert axis["breakpoint_completeness"] == "capped-subsample"
+    assert axis["values"] == [0.0004, 0.001, 0.00469, SENTINEL]
+    assert axis["fold_only_values"] == 1
+    assert len(axis["values"]) - axis["fold_only_values"] <= 3  # the full-data inventory respects the cap
+    # Each fold admits at most its capped inventory plus the baseline.
+    assert [fold["admissible_candidates"] for fold in capped["evaluation"]["folds"]] == [4, 4, 4]
 
 
 def test_a_capture_manifest_that_omits_a_primary_sample_is_refused(tmp_path: Path) -> None:
     """Every scored sample must have evidence; a partial roster is a manifest defect."""
     from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
 
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT)
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT)
     kept = [line for line in captures_path.read_text(encoding="utf-8").splitlines() if "specimen-bravo" not in line]
     captures_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
-    args = _namespace(cohort_path, captures_path)
+    args = namespace(cohort_path, captures_path)
 
     with pytest.raises(ValueError, match="declare every primary cohort sample"):
         atomic_output(tmp_path / "derived", lambda staging: run_cutoff_optimization(args, staging))
 
 
-def _advntr_result(policy_ids: Sequence[str], keys: Sequence[str], positive: str) -> Any:
-    """A synthetic native adVNTR grid result; the executable itself is never run."""
-    from vntyper.modules.advntr.advntr_calibration_policy import AdvntrCapabilities
-    from vntyper.scripts.calibration_cutoff_advntr import (
-        AdvntrCutoffGridResult,
-        AdvntrCutoffPolicyResult,
-        AdvntrCutoffSample,
-    )
-
-    samples = tuple(AdvntrCutoffSample(key, True, key == positive, ()) for key in keys)
-    capabilities = AdvntrCapabilities("2.3.0", "synthetic", None, (), (), (), (), "a" * 64)
-    return AdvntrCutoffGridResult(
-        Path("/nonexistent"),
-        policy_ids[0],
-        "b" * 64,
-        capabilities,
-        tuple(AdvntrCutoffPolicyResult(name, "c" * 64, "exec", samples) for name in policy_ids),
-        "d" * 64,
-    )
-
-
-def test_the_advntr_arm_is_replayed_natively_and_never_approximated(tmp_path: Path) -> None:
-    """adVNTR statistics come from the installed evaluator; this only mocks the seam."""
-    from vntyper.scripts import calibration_cutoff_optimize as module
-
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
-    args = _namespace(
-        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
-    )
-    seen: dict[str, Any] = {}
-
-    def grid(capture_paths: Any, policies: Any, **kwargs: Any) -> Any:
-        seen.update(kwargs)
-        seen["captures"] = dict(capture_paths)
-        return _advntr_result(sorted(policies), sorted(capture_paths), "specimen-echo")
-
-    output = tmp_path / "derived"
-    with patch.object(module, "evaluate_advntr_cutoff_grid", grid):
-        atomic_output(output, lambda staging: module.run_cutoff_optimization(args, staging))
-    document = json.loads((output / "report.json").read_bytes())
-
-    assert document["caller"] == "both"
-    assert seen["executable_path"] == tmp_path / "advntr"
-    assert set(seen["captures"]) == {
-        "specimen-alpha",
-        "specimen-bravo",
-        "specimen-charlie",
-        "specimen-delta",
-        "specimen-echo",
-        "specimen-foxtrot",
-    }
-    assert document["provenance"]["advntr"] == {"sha256": "d" * 64}
-    best = max(row["counts"]["true_positives"] for row in document["cutoffs"])
-    assert best == 3
-
-
-def test_caller_both_states_that_only_kestrel_axes_are_searched(tmp_path: Path) -> None:
-    """The adVNTR arm of ``--caller both`` is replayed at its baseline policy, and says so."""
-    from vntyper.scripts import calibration_cutoff_optimize as module
-    from vntyper.scripts.calibration_cutoff_report import render_cutoff_report_html
-
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
-    args = _namespace(
-        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
-    )
-
-    def grid(capture_paths: Any, policies: Any, **kwargs: Any) -> Any:
-        return _advntr_result(sorted(policies), sorted(capture_paths), "specimen-echo")
-
-    output = tmp_path / "derived"
-    with patch.object(module, "evaluate_advntr_cutoff_grid", grid):
-        atomic_output(output, lambda staging: module.run_cutoff_optimization(args, staging))
-    document = json.loads((output / "report.json").read_bytes())
-    scope = document["search_scope"]
-
-    assert scope["searched_caller"] == "kestrel"
-    assert scope["searched_axes"] == [DEPTH_FLOOR_LINKED]
-    assert scope["advntr_policy"] == "held-at-baseline"
-    assert scope["advntr_distinct_executions"] == 1
-    assert "#269" in scope["note"]
-    page = render_cutoff_report_html(document)
-    assert "adVNTR arm was replayed at its baseline policy" in page
-
-
-def test_a_kestrel_run_records_that_advntr_was_not_evaluated(tmp_path: Path) -> None:
-    """The scope section is present on every run, not only on the adVNTR ones."""
-    _, document, _ = _run(tmp_path)
-
-    assert document["search_scope"]["advntr_policy"] == "not-evaluated"
-    assert document["search_scope"]["advntr_distinct_executions"] is None
-
-
-def test_an_advntr_grid_that_varies_the_advntr_policy_contradicts_the_scope_and_aborts(tmp_path: Path) -> None:
-    """ "Held at baseline" is checked against the grid, never assumed."""
-    from vntyper.scripts import calibration_cutoff_optimize as module
-
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
-    args = _namespace(
-        cohort_path, captures_path, caller="both", advntr_executable=tmp_path / "advntr", min_specificity=1.0
-    )
-
-    def grid(capture_paths: Any, policies: Any, **kwargs: Any) -> Any:
-        result = _advntr_result(sorted(policies), sorted(capture_paths), "specimen-echo")
-        varied = tuple(replace(entry, execution_id=f"exec-{index}") for index, entry in enumerate(result.policies))
-        return replace(result, policies=varied)
-
-    with patch.object(module, "evaluate_advntr_cutoff_grid", grid), pytest.raises(ValueError, match="baseline"):
-        atomic_output(tmp_path / "derived", lambda staging: module.run_cutoff_optimization(args, staging))
-
-
-def test_caller_advntr_is_refused_because_no_advntr_axis_is_derived(tmp_path: Path) -> None:
-    """An adVNTR-only search would tie every candidate back to the baseline, so it is refused."""
-    from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
-
-    cohort_path, captures_path = _write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
-    args = _namespace(cohort_path, captures_path, caller="advntr", advntr_executable=tmp_path / "advntr")
-    staging = tmp_path / "staging"
-    staging.mkdir(mode=0o700)
-
-    with pytest.raises(ValueError, match=r"adVNTR cutoff axes are not derived yet.*#269"):
-        run_cutoff_optimization(args, staging)
-    assert not any(staging.iterdir())
-
-
 def test_the_provenance_digests_cover_the_manifests_and_every_capture(tmp_path: Path) -> None:
     """The report commits to the exact bytes the decision was derived from."""
-    _, document, _ = _run(tmp_path)
+    _, document, _ = run_optimize(tmp_path)
     provenance = document["provenance"]
 
     assert len(provenance["cohort_manifest_sha256"]) == 64
@@ -774,7 +540,9 @@ def test_a_specificity_floor_reachable_only_by_rejecting_everything_is_feasible(
         "specimen-bravo": ("positive", ("0.006",), None),
         "specimen-charlie": ("negative", ("0.014",), None),
     }
-    successful, document, _ = _run(tmp_path, cohort, objective="max-sensitivity-at-specificity", min_specificity=1.0)
+    successful, document, _ = run_optimize(
+        tmp_path, cohort, objective="max-sensitivity-at-specificity", min_specificity=1.0
+    )
 
     assert successful is True
     assert document["selection"]["value"] == SENTINEL
@@ -784,25 +552,84 @@ def test_a_specificity_floor_reachable_only_by_rejecting_everything_is_feasible(
 
 
 def test_every_fold_selects_only_breakpoints_its_training_samples_observed(tmp_path: Path) -> None:
-    """A held-out sample's Depth_Score must never become the cutoff its own fold uses."""
-    _, document, _ = _run(tmp_path)
+    """A held-out sample's Depth_Score must never become the cutoff its own fold uses.
+
+    Hand derivation (3 folds, seed 20260915: fold 0 holds out bravo and foxtrot, fold 1 alpha
+    and delta, fold 2 charlie and echo). Each fold's inventory is its training scores, the
+    anchor 0.00469 and the sentinel just above the training maximum (0.014 in every fold):
+
+    * fold 0 trains on alpha 0.014, charlie 0.0004, delta 0.001: {0.0004, 0.001, 0.00469, 0.014, S}
+    * fold 1 trains on bravo 0.004, charlie 0.0004, foxtrot 0.014: {0.0004, 0.004, 0.00469, 0.014, S}
+    * fold 2 trains on alpha 0.014, bravo 0.004, delta 0.001, foxtrot 0.014: {0.001, 0.004, 0.00469, 0.014, S}
+
+    so each fold admits 5 candidates plus the baseline.
+    """
+    _, document, _ = run_optimize(tmp_path)
     evaluation = document["evaluation"]
     scores = {name: {float(score) for score in values} for name, (_, values, _) in STANDARD_COHORT.items()}
-    rows = {row["policy_id"]: row for row in document["cutoffs"]}
-    anchor = document["baseline_parity"]["anchor_candidate_ids"][DEPTH_FLOOR_LINKED]
-    always = {"baseline", anchor, *(row["policy_id"] for row in rows.values() if row["value"] == SENTINEL)}
+    ids = {row["value"]: row["policy_id"] for row in document["cutoffs"] if row["policy_id"] != "baseline"}
 
-    assert evaluation["fold_admissibility"] == "training-observed-breakpoints"
-    assert any(fold["admissible_candidates"] < len(rows) for fold in evaluation["folds"])
+    assert evaluation["fold_admissibility"] == "training-derived-inventories"
+    assert [fold["admissible_candidates"] for fold in evaluation["folds"]] == [6, 6, 6]
     for fold in evaluation["folds"]:
-        training = set(fold["training_keys"])
-        admissible = {
-            policy
-            for policy, row in rows.items()
-            if policy in always or any(row["value"] in scores[key] for key in training)
-        }
+        training = {value for key in fold["training_keys"] for value in scores[key]}
+        inventory = {*training, 0.00469, SENTINEL}
+        admissible = {"baseline", *(ids[value] for value in inventory)}
         assert fold["admissible_candidates"] == len(admissible)
         assert fold["used_policy"] in admissible
+
+
+def test_fold_inventories_derived_on_another_allocation_abort_the_run(tmp_path: Path) -> None:
+    """Same fold numbers are not enough: inventories must come from the evaluation's own folds."""
+    from vntyper.scripts import calibration_cutoff_optimize as module
+
+    real = module.outer_fold_assignments
+
+    def rotated(*call_args: Any, **call_kwargs: Any) -> dict[str, int]:
+        assignments = real(*call_args, **call_kwargs)
+        return {key: (fold + 1) % 3 for key, fold in assignments.items()}
+
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT)
+    args = namespace(cohort_path, captures_path)
+    with patch.object(module, "outer_fold_assignments", rotated), pytest.raises(ValueError, match="different outer"):
+        atomic_output(tmp_path / "derived", lambda staging: module.run_cutoff_optimization(args, staging))
+
+
+def test_a_singleton_cohort_degrades_to_no_fold_inventories_and_unavailable_cross_validation(
+    tmp_path: Path,
+) -> None:
+    """One independent group cannot be cross-validated: no fold inventories, no folds.
+
+    A single group carries a single truth label, so the ROC/PR curve (which needs both
+    classes) cannot be published and the run stops there, as it did before fold-local
+    inventories existed. What this pins is that the fold machinery itself degrades cleanly:
+    the evaluation receives ``fold_inventories == {}`` and reports unavailable cross-validation.
+    """
+    from vntyper.scripts import calibration_cutoff_optimize as module
+
+    cohort: dict[str, tuple[str, tuple[str, ...], str | None]] = {
+        "specimen-alpha": ("positive", ("0.014",), "family-1"),
+        "specimen-alpha-repeat": ("positive", ("0.004",), "family-1"),
+    }
+    cohort_path, captures_path = write_manifests(tmp_path, cohort)
+    args = namespace(cohort_path, captures_path, objective="sensitivity", min_specificity=None)
+    real = module.evaluate_cutoff_arms
+    seen: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+    def record(*call_args: Any, **call_kwargs: Any) -> Any:
+        result = real(*call_args, **call_kwargs)
+        seen.append((call_kwargs, result))
+        return result
+
+    with patch.object(module, "evaluate_cutoff_arms", record), pytest.raises(ValueError, match="both positive and"):
+        atomic_output(tmp_path / "derived", lambda staging: module.run_cutoff_optimization(args, staging))
+
+    ((kwargs, evaluation),) = seen
+    assert kwargs["fold_inventories"] == {}
+    assert evaluation["cross_validation_available"] is False
+    assert evaluation["status_reason"] == "insufficient-cross-validation-groups"
+    assert evaluation["folds"] == []
+    assert evaluation["fold_admissibility"] == "training-derived-inventories"
 
 
 def test_the_report_comparators_match_the_axis_definitions() -> None:
@@ -811,3 +638,18 @@ def test_the_report_comparators_match_the_axis_definitions() -> None:
     from vntyper.scripts.calibration_cutoff_optimize import AXIS_COMPARISON
 
     assert {name: axis_comparison(name) for name in AXIS_COMPARISON} == dict(AXIS_COMPARISON)
+    assert len(AXIS_COMPARISON) == 7
+    assert AXIS_COMPARISON[ADVNTR_CUTOFF] == "<" and AXIS_COMPARISON[ADVNTR_MIN_SUPPORT] == ">="
+
+
+def test_a_kestrel_run_accepts_a_manifest_that_also_declares_advntr_captures(tmp_path: Path) -> None:
+    """One capture manifest serves every caller selection; the adVNTR column is ignored."""
+    from vntyper.scripts.calibration_cutoff_optimize import run_cutoff_optimization
+
+    cohort_path, captures_path = write_manifests(tmp_path, STANDARD_COHORT, advntr=True)
+    for locus in tmp_path.glob("*.advntr.jsonl"):
+        locus.unlink()
+    output = tmp_path / "derived"
+    args = namespace(cohort_path, captures_path, caller="kestrel")
+
+    assert atomic_output(output, lambda staging: run_cutoff_optimization(args, staging)) is True

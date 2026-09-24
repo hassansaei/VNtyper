@@ -220,7 +220,18 @@ def _validate_policies(
     return tuple(rows)
 
 
-def _signature(policy: CallerPolicyValues) -> tuple[object, ...]:
+def advntr_signature(policy: CallerPolicyValues) -> tuple[object, ...]:
+    """The adVNTR part of a complete policy, which decides its native execution.
+
+    Two policies with equal signatures differ only in other callers' values, so the grid
+    replays them once, and the optimize execution guard counts them once.
+
+    Args:
+        policy: A complete caller policy that includes adVNTR.
+
+    Returns:
+        The adVNTR policy values, in ``ADVNTR_CALLER_POLICY_POINTERS`` order.
+    """
     return tuple(policy.values[pointer] for pointer in ADVNTR_CALLER_POLICY_POINTERS)
 
 
@@ -330,7 +341,7 @@ def evaluate_advntr_cutoff_grid(
     policy_rows = _validate_policies(policies, baseline_policy_id, context)
     grouped: dict[tuple[object, ...], list[tuple[str, CallerPolicyValues]]] = {}
     for row in policy_rows:
-        grouped.setdefault(_signature(row[1]), []).append(row)
+        grouped.setdefault(advntr_signature(row[1]), []).append(row)
     built: list[AdvntrCutoffPolicyResult] = []
     observed_capabilities: AdvntrCapabilities | None = None
     document_holder: list[dict[str, object]] = []
@@ -387,7 +398,7 @@ def evaluate_advntr_cutoff_grid(
         if observed_capabilities is None:
             _fail("adVNTR cutoff grid produced no native executions")
         for policy_id, policy in policy_rows:
-            execution_id, samples = outcomes[_signature(policy)]
+            execution_id, samples = outcomes[advntr_signature(policy)]
             built.append(AdvntrCutoffPolicyResult(policy_id, policy.sha256, execution_id, samples))
         document = _result_document(baseline_policy_id, context, observed_capabilities, tuple(built))
         document_holder.append(document)
@@ -409,9 +420,75 @@ def evaluate_advntr_cutoff_grid(
     )
 
 
+def read_capture_policy(capture_paths: Mapping[str, Path]) -> CapturePolicy:
+    """The one capture policy every adVNTR capture declares, read before any replay.
+
+    Args:
+        capture_paths: Sample key to complete upstream v2 capture JSONL.
+
+    Returns:
+        The shared capture policy.
+
+    Raises:
+        ValueError: If a capture is malformed or the captures disagree about their
+            capture policy, baseline caller policy or producer.
+    """
+    return _load_capture_context(capture_paths).capture_policy
+
+
+def require_one_execution_per_signature(
+    result: AdvntrCutoffGridResult, policies: Mapping[str, CallerPolicyValues]
+) -> int:
+    """Prove the grid executed each distinct adVNTR policy exactly once, and separately.
+
+    Equal counts are not enough: one policy split over two executions and two policies
+    merged into one would balance out. So every :func:`advntr_signature` among
+    ``policies`` must map to exactly one execution ID, and no execution ID may serve two
+    signatures.
+
+    Args:
+        result: The grid that replayed ``policies``.
+        policies: The complete policies passed to the grid, keyed by policy ID.
+
+    Returns:
+        The number of distinct executions, which equals the number of distinct signatures.
+
+    Raises:
+        ValueError: If a policy is absent from the grid, a signature was replayed by more
+            than one execution, or one execution served more than one signature.
+    """
+    executions = {row.policy_id: row.execution_id for row in result.policies}
+    missing = sorted(set(policies) - set(executions))
+    if missing:
+        _fail(f"cutoff optimize adVNTR grid did not replay the policies {missing[:5]}")
+    by_signature: dict[tuple[object, ...], set[str]] = {}
+    for policy_id, policy in policies.items():
+        by_signature.setdefault(advntr_signature(policy), set()).add(executions[policy_id])
+    split = [ids for ids in by_signature.values() if len(ids) != 1]
+    if split:
+        _fail(
+            f"cutoff optimize one distinct adVNTR policy was replayed by {len(split[0])} executions; "
+            "each distinct adVNTR policy must execute exactly once"
+        )
+    owners: dict[str, int] = {}
+    for ids in by_signature.values():
+        (execution,) = ids
+        owners[execution] = owners.get(execution, 0) + 1
+    shared = sorted(execution for execution, count in owners.items() if count > 1)
+    if shared:
+        _fail(
+            f"cutoff optimize adVNTR execution {shared[0]} served {owners[shared[0]]} distinct adVNTR policies; "
+            "each distinct adVNTR policy must execute separately"
+        )
+    return len(owners)
+
+
 __all__ = [
     "AdvntrCutoffGridResult",
     "AdvntrCutoffPolicyResult",
     "AdvntrCutoffSample",
+    "advntr_signature",
     "evaluate_advntr_cutoff_grid",
+    "read_capture_policy",
+    "require_one_execution_per_signature",
 ]

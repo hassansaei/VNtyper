@@ -61,11 +61,18 @@ def read_cutoff_captures(manifest: Path, samples: tuple[CohortSample, ...], *, c
     directory and returned absolute, so the association cannot silently follow the
     working directory of whoever runs the replay.
 
+    One manifest can serve every caller selection. The columns belonging to a caller
+    that is not selected (its ``<caller>_capture`` column, and ``native_kestrel`` when
+    Kestrel is not selected) are accepted and ignored: their values may be empty, and
+    they are never resolved, opened, checked for existence, counted in the duplicate
+    path check or returned. Unknown, duplicated and missing required columns are still
+    refused.
+
     Args:
         manifest: Local TSV with a required ``sample_id`` column, one
             ``<caller>_capture`` column per required caller, and an optional
             ``native_kestrel`` column naming an independently retained native final
-            Kestrel TSV per sample.
+            Kestrel TSV per sample; ignored columns of unselected callers are allowed.
         samples: Already validated cohort rows forming the declared roster.
         caller: Which capture columns are required: ``kestrel``, ``advntr`` or ``both``.
 
@@ -86,7 +93,9 @@ def read_cutoff_captures(manifest: Path, samples: tuple[CohortSample, ...], *, c
     parent = manifest.resolve().parent
     capture_columns = tuple(f"{name}_capture" for name in callers)
     required = {"sample_id", *capture_columns}
-    optional = {_NATIVE_KESTREL} if "kestrel" in callers else set()
+    known = {"sample_id", _NATIVE_KESTREL, *(f"{name}_capture" for name in _CALLER_SETS["both"])}
+    optional = known - required
+    reads_native = "kestrel" in callers
     reader = csv.DictReader(io.StringIO(read_regular_path(manifest).decode("utf-8-sig")), delimiter="\t")
     fields = reader.fieldnames
     if (
@@ -109,7 +118,7 @@ def read_cutoff_captures(manifest: Path, samples: tuple[CohortSample, ...], *, c
         if identity not in roster:
             _fail("cutoff capture manifest sample is absent from the declared cohort roster")
         captures = {column: (parent / raw[column]).resolve() for column in capture_columns}
-        native = (parent / raw[_NATIVE_KESTREL]).resolve() if raw.get(_NATIVE_KESTREL) else None
+        native = (parent / raw[_NATIVE_KESTREL]).resolve() if reads_native and raw.get(_NATIVE_KESTREL) else None
         declared = [*captures.values(), *(() if native is None else (native,))]
         if identity in identities or len(set(declared)) != len(declared) or not claimed.isdisjoint(declared):
             _fail("cutoff capture manifest declares a duplicate sample identity or duplicate capture path")

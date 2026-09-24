@@ -6,6 +6,15 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.40 (2026-09-24)
+
+### adVNTR cutoff axes in `calibrate optimize` ([#269](https://github.com/hassansaei/VNtyper/issues/269))
+
+- **adVNTR axes searched**: `--caller advntr` is no longer refused. The new `advntr_cutoff` (call when `p < cutoff`) and `advntr_min_support` (call when read support `>=` the value) axes derive their breakpoints from native probe replays, and every candidate is replayed natively. The run stops unless the probe and candidate replays share their evidence, every tested candidate matches the legacy rule (`replay_consistency`), the adVNTR baseline reproduces the captured calls (`baseline_parity.advntr`), and the execution count is exact. `--caller both` searches both callers' axes, one axis at a time, on the either-caller union. Exact mode, background fitting and the rare-unit coverage guard are not searched. See [Which caller is searched](../cli/calibration-targets.md#which-caller-is-searched).
+- **Fold-local inventories for both callers**: Each outer fold now derives its own breakpoints, endpoint sentinel and `--max-breakpoints` cap from its training samples (`fold_admissibility: "training-derived-inventories"`), so a held-out sample can no longer set its fold's sentinel or displace a capped breakpoint. Held-out Kestrel counts can change from v2.0.39 on the same cohort. Each axis states `breakpoint_completeness`.
+- **Research profiles run adVNTR**: `vntyper pipeline --research-decision-profile` now runs adVNTR with the profile's derived legacy policy under fixed capture parameters, instead of failing. Exact mode is refused. A derived cutoff is tied to the adVNTR build recorded in the optimize report's provenance.
+- **Report key replaced**: In the optimize `report.json`, `search_scope.searched_caller` (one string, which could not describe a `--caller both` search of both callers) is replaced by `search_scope.searched_callers`, a sorted list of the callers whose axes were searched. This is the only non-additive change to `calibration-cutoff-report-v1`; a consumer that read `searched_caller` must read `searched_callers` instead.
+
 ## 2.0.39 (2026-09-24)
 
 ### Cutoff optimization and length-tier reporting corrections

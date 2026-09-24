@@ -238,3 +238,21 @@ def test_public_projection_revalidates_typed_content_and_digest() -> None:
     forged_values["/components/kestrel/confidence_assignment/alt_depth_thresholds/mid_low"] = 22
     with pytest.raises(ValueError, match="alternate-depth partition"):
         policies.caller_policy_values_document(replace(policy, values=MappingProxyType(forged_values)))
+
+
+def test_expected_refusals_silence_only_the_error_log_and_only_inside_the_block(caplog):
+    import logging
+
+    from vntyper.scripts.calibration_caller_policy import decode_caller_policy_values, expected_refusals
+
+    caplog.set_level(logging.INFO)
+    document = policy_document(include_advntr=True)
+    document["values"]["/components/advntr/calibrated_calling/cutoff"] = 2.0
+
+    with expected_refusals(), pytest.raises(ValueError, match="strictly between zero and one"):
+        decode_caller_policy_values(document)
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
+
+    with pytest.raises(ValueError, match="strictly between zero and one"):
+        decode_caller_policy_values(document)
+    assert [record.levelno for record in caplog.records if record.levelno >= logging.ERROR] == [logging.ERROR]

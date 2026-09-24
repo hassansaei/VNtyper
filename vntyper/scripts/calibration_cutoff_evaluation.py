@@ -86,6 +86,51 @@ def _bound_contributors(
     return bound
 
 
+def _bound_inventories(
+    inventories: object,
+    arms: Mapping[str, tuple[CallerObservation, ...]],
+    baseline_id: str,
+    folds: set[int],
+) -> dict[int, frozenset[str]]:
+    """Validate the fold-to-admissible-candidates map against the computed folds and arms."""
+    if not isinstance(inventories, Mapping):
+        _fail("cutoff evaluation fold inventories must map outer folds to candidate IDs")
+    if set(inventories) != folds:
+        _fail(f"cutoff evaluation fold inventories name folds {sorted(inventories)}, not the computed {sorted(folds)}")
+    bound: dict[int, frozenset[str]] = {}
+    for fold, ids in inventories.items():
+        if not isinstance(ids, frozenset) or any(name not in arms or name == baseline_id for name in ids):
+            _fail(f"cutoff evaluation fold inventory {fold} must be a frozenset of non-baseline candidate IDs")
+        bound[fold] = ids
+    return bound
+
+
+def outer_fold_assignments(rows: Sequence[tuple[str, str, bool | None]], *, folds: int, seed: int) -> dict[str, int]:
+    """The outer fold of every specimen, grouped and stratified by truth label.
+
+    Rows are one representative per independent group, so each group has exactly one
+    truth label. Stratifying on it keeps a class with at least ``folds`` groups present in
+    every fold; the labels steer allocation only, never a fold's selection.
+
+    Args:
+        rows: ``(key, group_key, truth_positive)`` per specimen.
+        folds: Requested number of outer folds, at least two.
+        seed: Seed for group allocation.
+
+    Returns:
+        Specimen key to outer fold; empty when there are too few groups to cross-validate.
+
+    Raises:
+        ValueError: For invalid fold counts or seeds.
+    """
+    return group_folds(
+        {key: group for key, group, _ in rows},
+        folds=folds,
+        seed=seed,
+        strata={group: truth for _, group, truth in rows},
+    )
+
+
 def evaluate_cutoff_arms(
     arms: Mapping[str, Sequence[CallerObservation]],
     *,
@@ -94,6 +139,8 @@ def evaluate_cutoff_arms(
     folds: int = 5,
     seed: int = 20260915,
     contributors: Mapping[str, frozenset[str]] | None = None,
+    fold_inventories: Mapping[int, frozenset[str]] | None = None,
+    tie_keys: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Compare a fixed native baseline with training-selected held-out predictions.
 
@@ -113,6 +160,19 @@ def evaluate_cutoff_arms(
             baseline, anchors reproducing it, endpoint sentinels) are always admissible.
             ``None`` keeps every candidate admissible in every fold. The full-data
             selection always searches every candidate.
+        fold_inventories: Optional map from each outer fold to the candidate IDs its
+            training samples alone derived, exclusive with ``contributors``. In fold f only
+            the baseline and ``fold_inventories[f]`` are admissible. This is leak-free:
+            every admissible value -- breakpoints, endpoint sentinel and cap alike -- is a
+            function of fold f's training statistics only, so no held-out value can
+            create, remove or displace a threshold its own fold may select. The keys must
+            equal the computed folds; with too few groups to cross-validate that is ``{}``.
+            The full-data selection always searches every candidate.
+        tie_keys: Optional map from every non-baseline candidate ID to a content key,
+            passed to every fold and full-data selection (``select_cutoff_policy``). A
+            caller whose IDs encode a rank in an inventory that held-out samples helped
+            build must pass content keys, or a held-out value could renumber the
+            candidates and flip a tie its own fold resolves.
 
     Returns:
         JSON-compatible counts, exact metric intervals, fold decisions and individual
@@ -123,19 +183,22 @@ def evaluate_cutoff_arms(
 
     Raises:
         ValueError: For incomplete/inconsistent rosters, invalid folds or search spec,
-            or contributors naming an unknown candidate, the baseline, or non-roster keys.
+            or contributors naming an unknown candidate, the baseline, or non-roster keys,
+            fold inventories whose folds differ from the computed ones or that name an
+            unknown candidate or the baseline, or both contributors and fold inventories.
     """
+    if contributors is not None and fold_inventories is not None:
+        _fail("cutoff evaluation takes contributors or fold inventories, not both")
     validated = _bound_arms(arms, baseline_id)
     derived = _bound_contributors(contributors, validated, baseline_id)
     baseline = validated[baseline_id]
-    # Rows are one representative per independent group, so each group has exactly one
-    # truth label. Stratifying on it keeps a class with at least ``folds`` groups present
-    # in every fold; the labels steer allocation only, never a fold's selection.
-    assignments = group_folds(
-        {r.key: r.group_key for r in baseline},
-        folds=folds,
-        seed=seed,
-        strata={r.group_key: r.truth_positive for r in baseline},
+    assignments = outer_fold_assignments(
+        [(r.key, r.group_key, r.truth_positive) for r in baseline], folds=folds, seed=seed
+    )
+    inventories = (
+        None
+        if fold_inventories is None
+        else _bound_inventories(fold_inventories, validated, baseline_id, set(assignments.values()))
     )
     indices = {name: {row.key: row for row in rows} for name, rows in validated.items()}
     heldout: dict[str, CallerObservation] = {}
@@ -145,12 +208,17 @@ def evaluate_cutoff_arms(
         training = sorted(key for key, value in assignments.items() if value != fold)
         held = sorted(key for key, value in assignments.items() if value == fold)
         seen = set(training)
-        admissible = {
-            name: rows
-            for name, rows in validated.items()
-            if derived is None or name not in derived or not derived[name].isdisjoint(seen)
-        }
-        selection = select_cutoff_policy(admissible, training, baseline_id, spec)
+        if inventories is not None:
+            admissible = {
+                name: rows for name, rows in validated.items() if name == baseline_id or name in inventories[fold]
+            }
+        else:
+            admissible = {
+                name: rows
+                for name, rows in validated.items()
+                if derived is None or name not in derived or not derived[name].isdisjoint(seen)
+            }
+        selection = select_cutoff_policy(admissible, training, baseline_id, spec, tie_keys=tie_keys)
         policy_id = selection.policy_id if selection.policy_id is not None else baseline_id
         for key in held:
             heldout[key] = indices[policy_id][key]
@@ -166,7 +234,7 @@ def evaluate_cutoff_arms(
                 "fallback_reason": selection.reason if selection.policy_id is None else None,
             }
         )
-    final = select_cutoff_policy(validated, [row.key for row in baseline], baseline_id, spec)
+    final = select_cutoff_policy(validated, [row.key for row in baseline], baseline_id, spec, tie_keys=tie_keys)
     heldout_rows = tuple(heldout[row.key] for row in baseline) if assignments else ()
     return {
         "schema_version": "calibration-cutoff-evaluation-v1",
@@ -178,7 +246,13 @@ def evaluate_cutoff_arms(
         "objective": spec.objective,
         "min_sensitivity": spec.min_sensitivity,
         "min_specificity": spec.min_specificity,
-        "fold_admissibility": "all-candidates" if derived is None else "training-observed-breakpoints",
+        "fold_admissibility": (
+            "training-derived-inventories"
+            if inventories is not None
+            else "all-candidates"
+            if derived is None
+            else "training-observed-breakpoints"
+        ),
         "final_selection": _selection_document(final),
         "folds": fold_records,
         "rows": [

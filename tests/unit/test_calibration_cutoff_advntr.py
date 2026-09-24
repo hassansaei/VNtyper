@@ -6,11 +6,12 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tests.unit.test_advntr_calibration_policy import capabilities, capture_policy
-from vntyper.modules.advntr.advntr_calibration_policy import advntr_canonical_sha256
+from vntyper.modules.advntr.advntr_calibration_policy import advntr_canonical_sha256, decode_advntr_capabilities
 from vntyper.scripts.calibration_caller_policy import CallerPolicyValues, decode_caller_policy_values
 from vntyper.scripts.calibration_cutoff_advntr import evaluate_advntr_cutoff_grid
 
@@ -343,3 +344,38 @@ def test_failed_native_replay_never_publishes_partial_results(
 
     assert len(tool.replay_calls) == 1
     assert not output.exists()
+
+
+def test_the_advntr_signature_ignores_kestrel_values_and_names_every_advntr_value() -> None:
+    """One public signature decides which policies share a native execution (grid and guard alike)."""
+    from vntyper.scripts.calibration_cutoff_advntr import advntr_signature
+
+    baseline = _policy()
+
+    assert advntr_signature(baseline) == advntr_signature(_policy(kestrel_floor=0.25))
+    assert advntr_signature(baseline) != advntr_signature(_policy(cutoff=0.002))
+    assert advntr_signature(baseline) != advntr_signature(_policy(support=4))
+    assert len(advntr_signature(baseline)) == 7
+
+
+def _grid(executions: dict[str, str]) -> Any:
+    from vntyper.scripts.calibration_cutoff_advntr import AdvntrCutoffGridResult, AdvntrCutoffPolicyResult
+
+    rows = tuple(AdvntrCutoffPolicyResult(pid, "c" * 64, execution, ()) for pid, execution in executions.items())
+    return AdvntrCutoffGridResult(
+        Path("/nonexistent"), "a", "b" * 64, decode_advntr_capabilities(capabilities()), rows, "d" * 64
+    )
+
+
+def test_the_execution_guard_binds_each_signature_to_exactly_one_execution() -> None:
+    from vntyper.scripts.calibration_cutoff_advntr import require_one_execution_per_signature
+
+    policies = {"a": _policy(), "b": _policy(kestrel_floor=0.25), "c": _policy(cutoff=0.002)}
+
+    assert require_one_execution_per_signature(_grid({"a": "x", "b": "x", "c": "y"}), policies) == 2
+    with pytest.raises(ValueError, match=r"did not replay the policies \['c'\]"):
+        require_one_execution_per_signature(_grid({"a": "x", "b": "x"}), policies)
+    with pytest.raises(ValueError, match="replayed by 2 executions"):
+        require_one_execution_per_signature(_grid({"a": "x", "b": "z", "c": "y"}), policies)
+    with pytest.raises(ValueError, match="execution x served 2 distinct adVNTR policies"):
+        require_one_execution_per_signature(_grid({"a": "x", "b": "x", "c": "x"}), policies)

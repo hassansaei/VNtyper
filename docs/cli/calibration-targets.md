@@ -221,12 +221,14 @@ records it as `endpoint_sentinel` in the axis document. The sentinel is left out
 baseline value already lies beyond the observed range, and it is recorded as rejected when
 the policy decoder refuses it. It is kept when `--max-breakpoints` caps the axis. Without
 it, a specificity floor that only "reject everything" can meet would be reported as
-unreachable.
+unreachable. The sentinel depends on the extreme observed value, so it is derived again
+inside every outer fold from that fold's training samples (see
+[Choosing an operating point](#choosing-an-operating-point)).
 
 `calibration_cutoff_grid.build_cutoff_grid` remains available for an explicitly declared
 grid. Declared values are a supplement to the derived breakpoints, not a replacement.
 
-### The depth gates move together
+### What each axis moves
 
 | Axis | Pointers moved | Endpoint it changes |
 | --- | --- | --- |
@@ -235,6 +237,12 @@ grid. Declared values are a supplement to the derived breakpoints, not a replace
 | `depth_score_high` | depth-score high | confidence labelling |
 | `alt_depth_band` | alternate-depth low and mid-low | confidence labelling |
 | `var_active_region` | active-region threshold | confidence labelling |
+| `advntr_cutoff` | adVNTR `calibrated_calling/cutoff` | adVNTR detection (`p < cutoff`) |
+| `advntr_min_support` | adVNTR `calibrated_calling/minimum_read_support` | adVNTR detection (`read support >= value`) |
+
+The two adVNTR axes are described under [Which caller is searched](#which-caller-is-searched).
+
+#### The Kestrel depth gates move together
 
 Lowering the reporting floor on its own changes nothing. The ordered confidence table
 sends a score below the floor to `Negative`, labels a score inside the closed mid-band
@@ -253,18 +261,97 @@ filtered out.
 
 ### Which caller is searched
 
-`vntyper calibrate optimize` derives and searches Kestrel axes only. No adVNTR cutoff
-axis is derived yet (tracked in [#269](https://github.com/hassansaei/VNtyper/issues/269)).
+`vntyper calibrate optimize` searches Kestrel axes, adVNTR axes, or both
+([#269](https://github.com/hassansaei/VNtyper/issues/269)).
 
-- `--caller kestrel` (the default) searches the Kestrel axes against Kestrel calls.
-- `--caller both` searches the same Kestrel axes. It pairs every Kestrel candidate with
-  the adVNTR arm replayed natively at its **baseline** policy. The adVNTR policy never
-  varies. The report records this under `search_scope`
-  (`advntr_policy: "held-at-baseline"`) and states it on the HTML page. The run fails if
-  the adVNTR grid executed more than one adVNTR policy.
-- `--caller advntr` is refused with a usage error. Without an adVNTR axis every
-  candidate would replay the same adVNTR policy, so selection could only return the
-  baseline.
+- `--caller kestrel` (the default) searches the Kestrel axes against Kestrel calls. The
+  default axis is `depth_floor_linked`.
+- `--caller advntr` searches the adVNTR axes and scores adVNTR calls only. The default axis
+  is `advntr_cutoff`. Kestrel captures are still required, because they carry the complete
+  baseline policy of both callers. Kestrel is replayed at its baseline only, to prove
+  Kestrel parity, and is not scored.
+- `--caller both` searches the requested axes of both callers, one axis at a time, and
+  scores the either-caller union. The default axes are `depth_floor_linked` and
+  `advntr_cutoff`. Every candidate moves one caller's axis and holds the other caller at
+  its baseline. When only Kestrel axes are requested, the adVNTR arm is replayed at its
+  baseline for every candidate, and the report records
+  `advntr_policy: "held-at-baseline"`.
+
+The capture manifest (`--captures`) is the declared association of each sample with its
+captures, and it is trusted: a capture from the same build assigned to the wrong sample
+cannot be detected. One manifest serves `--caller kestrel`, `advntr` and `both`; the
+columns of a caller the run does not use are ignored.
+
+`--caller advntr` and `--caller both` require `--advntr-executable`. `--caller kestrel`
+refuses an adVNTR axis, and `--caller advntr` refuses a Kestrel axis. The report lists the
+searched callers under `search_scope.searched_callers` and states the adVNTR policy
+(`searched`, `held-at-baseline` or `not-evaluated`) on the HTML page.
+
+A derived research profile runs adVNTR under fixed capture parameters (see
+[Applying a derived profile](#applying-a-derived-profile)), so the adVNTR captures must have
+been produced under those same parameters; only the thread count may differ. With
+`--caller advntr` or `--caller both`, a run whose captures differ stops before any adVNTR
+replay and names the differing fields.
+
+#### The adVNTR axes
+
+adVNTR's legacy frameshift caller scores a candidate only when its read support reaches
+`minimum_read_support`, and calls it when the p-value is strictly below `cutoff`. A
+sample is called when any assessable locus returns a call. Each axis moves one pointer;
+every other adVNTR value, including the `legacy` mode, keeps its baseline value.
+
+| Axis | Comparator | Per-sample statistic |
+| --- | --- | --- |
+| `advntr_cutoff` | call when `p < cutoff` (strict) | smallest p-value among visits whose read support reaches the baseline support |
+| `advntr_min_support` | call when `read support >= value` (integer) | largest read support among visits whose p-value is below the baseline cutoff |
+
+Because the cutoff comparison is strict, the candidate for an observed p-value `q` is the
+next float above `q`, which is the smallest cutoff that calls that sample. The sentinel
+that calls no sample is the smallest observed p-value itself. adVNTR requires a cutoff
+above 0, so a sample with `p = 0` cannot be rejected by any cutoff. The sentinel is then
+the smallest positive float, and the cutoff axis document states the number of such
+samples as `unrejectable_samples`. The support axis uses the `>=` sentinel rule above
+(`+1` beyond the largest observation). Values the decoder refuses are recorded under
+`rejected` with the decoder's message.
+
+The capture file cannot supply these statistics: it scores only the visits its own
+baseline support admitted. The breakpoints therefore come from **one probe replay per
+axis at a permissive projection**: the largest admissible cutoff below 1 at the baseline
+support for `advntr_cutoff`, and support 1 at the baseline cutoff for
+`advntr_min_support`. The probes and the baseline run in a separate native grid
+(`advntr-probe`, at most three executions), and are never reused as candidate
+executions. Unassessable samples contribute no statistic.
+
+Every candidate is then replayed natively again, and the run stops unless four checks
+hold:
+
+- **Evidence binding.** The probe grid and the candidate grid replayed the same capture
+  bytes, the same per-locus records and the same adVNTR tool.
+- **Replay consistency.** At every tested candidate, the native calls equal the calls the
+  legacy rule predicts from the probe statistics (`replay_consistency` in `report.json`).
+  This proves agreement only at the tested values. Completeness is a separate property:
+  the observed values are the complete set of distinct outcomes only for an uncapped
+  search. Each axis document states `breakpoint_completeness: "complete"`, or
+  `"capped-subsample"` when `--max-breakpoints` subsampled the full-data or any fold
+  inventory; a capped search may miss distinct operating points.
+- **adVNTR baseline parity.** The replay of the baseline candidate reproduces, sample by
+  sample, the baseline calls recorded in each capture (`baseline_parity.advntr`).
+- **Exact execution count.** The candidate grid executes exactly one native replay per
+  distinct adVNTR policy among the candidates: one in all when only Kestrel axes are
+  searched, and one plus the number of distinct adVNTR-axis candidates otherwise. The
+  report publishes this count (`advntr_distinct_executions`) and the probe count
+  (`advntr_probe_executions`) separately. The probe and candidate grid digests and the
+  adVNTR tool identity are recorded under `provenance.advntr`. Both wall times are in the
+  top-level `timings` object, the only non-deterministic block of `report.json`.
+
+Cost is about one native replay execution per distinct adVNTR candidate. One execution
+over about 80 captures took about 20 s on one workstation, and executions run serially,
+so an uncapped search of both adVNTR axes can take over half an hour. `--max-breakpoints`
+bounds the cost.
+
+Not searched: adVNTR exact mode and its background fitting, the rare-unit coverage
+guard, and pinning adVNTR v2.3.0. The replay accepts only a `legacy` baseline for cutoff
+axes, and a non-legacy baseline stops the run with an error.
 
 ### Choosing an operating point
 
@@ -281,7 +368,9 @@ For this application the useful objective is usually maximum sensitivity subject
 specificity constraint, so a balanced score chosen by default would trade sensitivity away
 silently. `select_cutoff_policy` reads training observations only. Ties prefer fewer false
 positives, then more true positives, then fewer no-calls, then the baseline, then a stable
-policy identifier. A missing truth class prevents selection, and unsatisfiable constraints
+key. `vntyper calibrate optimize` uses each candidate's policy digest as that key, because
+candidate identifiers number the merged inventory, which held-out samples help build;
+called without keys, `select_cutoff_policy` compares the identifiers. A missing truth class prevents selection, and unsatisfiable constraints
 return an explicit no-selection result rather than a nearest match.
 
 Sensitivity and specificity keep no-calls inside their truth-class denominators, and
@@ -290,15 +379,26 @@ describe the searched cohort; pooled held-out predictions assess fold-selected p
 separately. Neither is independent validation once the data or the search design has been
 examined.
 
-The breakpoints are the union of the values observed in every sample, so a breakpoint can
-exist only because one sample produced it. Inside an outer fold, a candidate is therefore
-admissible only when at least one **training** sample of that fold observed its value.
-Otherwise a held-out sample's own feature values would decide which cutoffs its fold can
-select, and the held-out estimate would be optimistic. The baseline, the candidate that
-reproduces it, and the endpoint sentinel are admissible in every fold. Each fold record
-states how many candidates were admissible (`admissible_candidates`), and the evaluation
-records `fold_admissibility: "training-observed-breakpoints"`. The full-data selection,
-which produces the exported profile, still searches every candidate.
+A data-derived axis is a function of the samples it is derived from: its breakpoints,
+its endpoint sentinel and, under `--max-breakpoints`, which breakpoints the cap retains.
+If a held-out sample took part in that derivation, its own values could create, remove
+or displace a threshold its fold selects, and the held-out estimate would be optimistic.
+Every axis of both callers is therefore derived once from all samples and once per outer
+fold from that fold's **training** samples alone, each with its own sentinel and cap. The
+replayed inventory is the union of these values. Inside a fold, only the baseline and the
+candidates of that fold's training-derived inventory are admissible. Each axis document
+counts the values that only a fold inventory produced (`fold_only_values`), each fold
+record states how many candidates were admissible (`admissible_candidates`), and the
+evaluation records `fold_admissibility: "training-derived-inventories"`. The full-data
+selection, which produces the exported profile, still searches every replayed candidate.
+Because the sentinel and the cap are now derived per fold, Kestrel held-out results can
+differ from those of earlier releases on the same cohort.
+
+On the either-caller union of `--caller both`, a positive call from one caller resolves
+the other caller's no-call, so the set of no-call samples can change along one axis. No
+ROC or PR curve with fixed denominators then exists. The axis curve is reported with
+`status: "unavailable"` and the reason, and the page shows the reason instead of a
+curve. The operating points stay in the cutoff table.
 
 Outer folds are allocated stratified by truth label (positive, negative, unknown). Each
 scored row is the only representative of its group. Groups are shuffled within each label
@@ -312,8 +412,17 @@ TN and FP, sensitivity and specificity with exact 95% intervals, and each fold's
 and admissible-candidate count. The intervals cover the pooled held-out calls and exclude
 selection uncertainty. A warning appears when a held-out rate falls below the floor the
 objective requested. The floor is enforced on training folds, so held-out performance can
-fall short of it. The selection and the table of every tested cutoff follow, labelled as
+fall short of it. A fold in which no candidate met the floor on its training data uses the
+baseline instead, and the warning states how many folds did so. The selection and the table of every tested cutoff follow, labelled as
 descriptive searched-cohort points. They are not validated performance.
+
+The selection carries a plateau: the run of tested values that reproduce the selected
+outcome (`equivalent_values`, `interval_low`, `interval_high` and `width`), and
+`open_below` and `open_above`, the nearest tested values whose outcome differs. All of
+these are tested breakpoint values, not change boundaries. The outcome of an untested
+threshold strictly between two tested values is not established by this table, so `width`
+can understate the range of thresholds that reproduce the selected outcome. On a strict
+`<` axis a derived breakpoint is the smallest threshold of its partition.
 
 ### Endpoints are reported separately
 
@@ -331,6 +440,20 @@ artefact is involved, and the run logs that the values carry no deployment appro
 flag is exclusive with `--decision-profile` and with `--calibration-bundle`, and neither of
 those contracts changes: an explicit profile still may not alter a fixed-safety field, and
 an approved portable bundle is still the only approved path.
+
+A research profile that carries adVNTR values runs adVNTR with the derived legacy policy.
+The native arguments are rendered from the profile under fixed, CLI-representable capture
+parameters, the same ones the calibration captures were produced under: Illumina,
+frameshift mode, diploid, maximum error rate 0.05, legacy error rate 0.01, MAPQ 0, base
+quality 20, maximum low-quality fraction 0.1, enhanced HMM on, trained HMMs off,
+reference alignment on, full-RU-only off, and no minimum read length. Exact mode is
+refused for research profiles, because it needs an approved bundle with a fitted
+background. `vntyper calibrate optimize` renders the adVNTR arguments of every exported
+profile this way before it publishes the run, and with any `--caller`, including
+`kestrel`, it refuses to export a policy whose adVNTR mode is not `legacy`. The run then
+publishes nothing. A research profile carries no tool pin, so the runtime does not enforce an
+adVNTR build. A derived cutoff is tied to the adVNTR build recorded under
+`provenance.advntr` in the optimize report, and should be applied with that build.
 
 ## What each target estimates
 

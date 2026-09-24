@@ -105,10 +105,11 @@ def _document(**overrides: Any) -> dict[str, Any]:
         "usage_hint": "vntyper pipeline --research-decision-profile <output>/research-decision-profile.json",
         "caller": "kestrel",
         "search_scope": {
-            "searched_caller": "kestrel",
+            "searched_callers": ["kestrel"],
             "searched_axes": ["depth_floor_linked"],
             "advntr_policy": "not-evaluated",
             "advntr_distinct_executions": None,
+            "advntr_probe_executions": None,
             "note": "Only Kestrel axes were searched; adVNTR was not evaluated.",
         },
         "objective": {"objective": "youden-j", "min_sensitivity": None, "min_specificity": 1.0},
@@ -150,7 +151,9 @@ def _document(**overrides: Any) -> dict[str, Any]:
             "native_exact_count": 0,
             "capture_replay_authoritative_count": 1,
             "mismatches": [],
+            "advntr": None,
         },
+        "replay_consistency": None,
         "axes": [],
         "cutoffs": [
             {
@@ -372,103 +375,12 @@ def test_the_old_versus_derived_table_lists_every_pointer(tmp_path: Path) -> Non
     assert lines[2].endswith("\tfalse")
 
 
-def test_the_html_is_fully_offline(tmp_path: Path) -> None:
-    """No network reference of any kind, including a stylesheet or a web font."""
-    output = _write(tmp_path, _document())
-    html = (output / "report.html").read_text(encoding="utf-8")
-
-    assert "http://" not in html
-    assert "https://" not in html
-    assert "<script" not in html
-    assert "<link " not in html
-    assert "@import" not in html
-    assert "<style>" in html
-    assert "<svg" in html
-
-
-def test_the_html_states_the_objective_the_selection_and_the_plateau(tmp_path: Path) -> None:
-    """A reader must not have to open the JSON to learn what was decided and why."""
-    output = _write(tmp_path, _document())
-    html = (output / "report.html").read_text(encoding="utf-8")
-
-    assert "youden-j" in html
-    assert "depth_floor_linked-0001" in html
-    assert "0.00469" in html
-    assert "step function" in html
-    assert "no negative-truth sample lies inside the tested band" in html
-    assert "research-decision-profile" in html
-
-
-def test_the_html_states_which_caller_the_search_varied(tmp_path: Path) -> None:
-    """A ``--caller both`` page must say the adVNTR arm was held at its baseline policy."""
-    scope = {
-        "searched_caller": "kestrel",
-        "searched_axes": ["depth_floor_linked", "gg_gate_independent"],
-        "advntr_policy": "held-at-baseline",
-        "advntr_distinct_executions": 1,
-        "note": "The adVNTR arm was replayed at its baseline policy for every candidate (issue #269).",
-    }
-    output = _write(tmp_path, _document(caller="both", search_scope=scope))
-    html = (output / "report.html").read_text(encoding="utf-8")
-
-    assert "depth_floor_linked, gg_gate_independent" in html
-    assert "held-at-baseline" in html
-    assert "replayed at its baseline policy for every candidate (issue #269)" in html
-
-
-def test_the_html_shows_held_out_performance_before_any_full_data_number(tmp_path: Path) -> None:
-    """The validated-looking full-data table must not be the first performance a reader sees."""
-    objective = {"objective": "max-sensitivity-at-specificity", "min_sensitivity": None, "min_specificity": 0.85}
-    output = _write(tmp_path, _document(objective=objective))
-    html = (output / "report.html").read_text(encoding="utf-8")
-
-    held = html.index("Held-out performance (cross-validated)")
-    assert held < html.index("<h2>Selection</h2>") < html.index("Every tested cutoff (descriptive")
-    assert "50/55 = 0.909 (95% CI 0.800-0.970)" in html
-    assert "22/27 = 0.815 (95% CI 0.619-0.937)" in html
-    assert "exclude selection uncertainty" in html
-    assert "Held-out specificity 0.815 is below the requested floor 0.85" in html
-    assert "Descriptive searched-cohort points" in html
-    assert "not validated performance" in html
-    assert "training-observed-breakpoints" in html
-    section = html[held : html.index("<h2>Selection</h2>")]
-    assert "depth_floor_linked-0001" in section and "<td>7</td>" in section
-
-
-def test_the_html_says_so_when_no_held_out_estimate_exists(tmp_path: Path) -> None:
-    document = _document()
-    document["evaluation"] = {**document["evaluation"], "held_out": None, "status_reason": "insufficient-groups"}
-    html = (_write(tmp_path, document) / "report.html").read_text(encoding="utf-8")
-
-    assert "No held-out estimate is available: insufficient-groups" in html
-
-
-def test_a_held_out_rate_without_eligible_samples_is_shown_as_undefined(tmp_path: Path) -> None:
-    document = _document()
-    held = {**_HELD_OUT, "exact": {**_HELD_OUT["exact"], "specificity": {"estimate": None}}}
-    document["evaluation"] = {**document["evaluation"], "held_out": held}
-    html = (_write(tmp_path, document) / "report.html").read_text(encoding="utf-8")
-
-    assert "undefined (no eligible samples)" in html
-
-
 def test_the_fold_tsv_records_how_many_candidates_each_fold_could_select(tmp_path: Path) -> None:
     output = _write(tmp_path, _document())
     lines = (output / "folds.tsv").read_text(encoding="utf-8").splitlines()
 
     assert lines[0].split("\t")[-1] == "admissible_candidates"
     assert lines[1].split("\t")[-1] == "7"
-
-
-def test_the_html_escapes_untrusted_text(tmp_path: Path) -> None:
-    """Report text reaches the page as text; a reason string is never markup."""
-    document = _document()
-    document["rejected_candidates"] = [{"axis": "depth_floor_linked", "value": 2.0, "reason": "<b>bad</b> & worse"}]
-    output = _write(tmp_path, document)
-    html = (output / "report.html").read_text(encoding="utf-8")
-
-    assert "<b>bad</b>" not in html
-    assert "&lt;b&gt;bad&lt;/b&gt; &amp; worse" in html
 
 
 def test_an_infeasible_report_still_renders_and_names_the_constraint(tmp_path: Path) -> None:

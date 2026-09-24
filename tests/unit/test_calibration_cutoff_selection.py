@@ -277,3 +277,31 @@ def test_youden_j_is_reported_exactly_and_ranks_like_balanced_accuracy():
     arms["wide"] = rows((True, True, False, False))
     for objective in ("youden-j", "balanced-accuracy"):
         assert select_cutoff_policy(arms, keys, "baseline", SearchSpec(objective)).policy_id == "wide"
+
+
+def test_tie_keys_break_ties_by_content_and_not_by_candidate_id():
+    """A width-crossing ID (``-10001`` sorts before ``-9999``) must not decide a tie."""
+    from vntyper.scripts.calibration_cutoff_selection import SearchSpec, select_cutoff_policy
+
+    arms = {
+        "baseline": rows((False, False, False, False)),
+        "axis-9999": rows((True, True, False, False)),
+        "axis-10001": rows((True, True, False, False)),
+    }
+    keys, spec = ["0", "1", "2", "3"], SearchSpec("balanced-accuracy")
+
+    assert select_cutoff_policy(arms, keys, "baseline", spec).policy_id == "axis-10001"
+    tie_keys = {"axis-9999": "a" * 64, "axis-10001": "b" * 64}
+    assert select_cutoff_policy(arms, keys, "baseline", spec, tie_keys=tie_keys).policy_id == "axis-9999"
+    # The baseline keeps its preference over a tied candidate whatever the candidate's key.
+    tied = {"baseline": arms["axis-9999"], "axis-9999": arms["axis-9999"]}
+    assert select_cutoff_policy(tied, keys, "baseline", spec, tie_keys={"axis-9999": ""}).policy_id == "baseline"
+
+
+@pytest.mark.parametrize("tie_keys", [{"axis-9999": "a"}, {"axis-9999": "a", "axis-10001": 3}, ["axis-9999"]])
+def test_tie_keys_must_name_every_candidate_with_text(tie_keys):
+    from vntyper.scripts.calibration_cutoff_selection import SearchSpec, select_cutoff_policy
+
+    arms = {"baseline": rows((False,) * 4), "axis-9999": rows((True,) * 4), "axis-10001": rows((True,) * 4)}
+    with pytest.raises(ValueError, match="cutoff selection tie keys must map every candidate ID to text"):
+        select_cutoff_policy(arms, ["0", "1", "2", "3"], "baseline", SearchSpec("sensitivity"), tie_keys=tie_keys)
