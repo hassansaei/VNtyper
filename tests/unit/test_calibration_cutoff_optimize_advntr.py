@@ -11,6 +11,7 @@ import html
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from unittest.mock import patch
 
@@ -536,6 +537,7 @@ def test_expected_decoder_refusals_are_reported_at_info_and_never_as_errors(
     """
     import logging
 
+    from vntyper.scripts import calibration_cutoff_optimize as module
     from vntyper.scripts.calibration_cutoff_optimize import AXIS_PROBE
 
     caplog.set_level(logging.INFO)
@@ -543,10 +545,14 @@ def test_expected_decoder_refusals_are_reported_at_info_and_never_as_errors(
     _, document, _ = run_advntr(
         tmp_path / "advntr", visits=flat, caller="advntr", axes=[ADVNTR_CUTOFF], min_specificity=1.0
     )
-    run_optimize(tmp_path / "kestrel", axes=list(AXIS_PROBE), objective="youden-j", min_specificity=None)
+    # A floor above 1 is out of range: the linked-depth probe ladder must step past it.
+    ladder = MappingProxyType({**AXIS_PROBE, DEPTH_FLOOR_LINKED: (">=", (2.0, *AXIS_PROBE[DEPTH_FLOOR_LINKED][1]))})
+    with patch.object(module, "AXIS_PROBE", ladder):
+        run_optimize(tmp_path / "kestrel", axes=list(AXIS_PROBE), objective="youden-j", min_specificity=None)
 
     assert document["axes"][0]["rejected"], "the test needs a refused breakpoint"
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
     refusals = [record.getMessage() for record in caplog.records if " refused: " in record.getMessage()]
     assert refusals and len(refusals) == len(set(refusals))
     assert any(ADVNTR_CUTOFF in message for message in refusals)
+    assert f"cutoff axis {DEPTH_FLOOR_LINKED} probe rung 2.0 refused" in " | ".join(refusals)
