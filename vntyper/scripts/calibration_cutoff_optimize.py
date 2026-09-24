@@ -67,7 +67,6 @@ from vntyper.scripts.calibration_caller_metrics import CallerObservation
 from vntyper.scripts.calibration_caller_policy import (
     ADVNTR_CALLER_POLICY_POINTERS,
     CallerPolicyValues,
-    decode_caller_policy_values,
 )
 from vntyper.scripts.calibration_caller_profile import build_caller_generated_profile
 from vntyper.scripts.calibration_cohort_manifest import CohortSample, read_cohort_manifest
@@ -123,13 +122,13 @@ from vntyper.scripts.calibration_kestrel_replay import kestrel_replay_prefilter_
 from vntyper.scripts.calibration_secure_io import read_regular_path
 from vntyper.scripts.canonical_json import load_strict_json_object
 from vntyper.scripts.decision_profile import resolve_research_decision_profile
+from vntyper.scripts.pipeline_research_advntr import project_caller_policy
 from vntyper.version import __version__
 
 logger = logging.getLogger(__name__)
 
 GENERATOR_VERSION: Final[str] = f"vntyper-calibrate-optimize/{__version__}"
 _CALLERS: Final[frozenset[str]] = frozenset({"kestrel", "advntr", "both"})
-_POLICY_SCHEMA: Final[str] = "calibration-caller-policy-values-v1"
 
 #: Per axis: the exact production comparator, and a ladder of extreme values probed in
 #: loosening-first order. The first rung the policy decoder accepts is the permissive
@@ -398,18 +397,7 @@ def _prove_baseline_parity(replay: KestrelGridReplay, anchors: Mapping[str, str]
 
 def _project_policy(components: Mapping[str, object], policy: CallerPolicyValues) -> CallerPolicyValues:
     """Read the resolved runtime components back into a complete caller policy."""
-    values: dict[str, object] = {}
-    for pointer in policy.values:
-        parts = pointer.strip("/").split("/")
-        node: Any = components.get(parts[1])
-        for part in parts[2:]:
-            if not isinstance(node, Mapping) or part not in node:
-                _fail(f"cutoff optimize research profile does not expose {pointer} at runtime")
-            node = node[part]
-        values[pointer] = node
-    return decode_caller_policy_values(
-        {"schema_version": _POLICY_SCHEMA, "required_callers": list(policy.required_callers), "values": values}
-    )
+    return project_caller_policy(components, tuple(policy.values), policy.required_callers)
 
 
 def _export_profile(output: Path, request: _Request, selected: CallerPolicyValues) -> dict[str, Any]:

@@ -11,7 +11,7 @@ Only legacy mode is supported: exact mode needs an approved background.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, NoReturn
 
@@ -60,10 +60,26 @@ def _fail(message: str) -> NoReturn:
     raise ValueError(message)
 
 
-def _runtime_policy(components: Mapping[str, Mapping[str, object]]) -> CallerPolicyValues:
-    """Read every calibrated caller pointer back from the resolved components."""
+def project_caller_policy(
+    components: Mapping[str, object],
+    pointers: Iterable[str],
+    required_callers: Sequence[str],
+) -> CallerPolicyValues:
+    """Read calibrated caller pointers back from resolved decision components.
+
+    Args:
+        components: Resolved decision components keyed by component name.
+        pointers: Exact ``/components/<name>/...`` JSON pointers to read.
+        required_callers: Callers the rebuilt policy declares.
+
+    Returns:
+        The validated caller policy holding the values found at each pointer.
+
+    Raises:
+        ValueError: If a pointer is absent from the components or the values are invalid.
+    """
     values: dict[str, object] = {}
-    for pointer in (*ADVNTR_CALLER_POLICY_POINTERS, *KESTREL_CALLER_POLICY_POINTERS):
+    for pointer in pointers:
         parts = pointer.strip("/").split("/")
         node: object = components.get(parts[1])
         for part in parts[2:]:
@@ -72,7 +88,7 @@ def _runtime_policy(components: Mapping[str, Mapping[str, object]]) -> CallerPol
             node = node[part]
         values[pointer] = node
     return decode_caller_policy_values(
-        {"schema_version": _POLICY_SCHEMA, "required_callers": ["advntr", "kestrel"], "values": values}
+        {"schema_version": _POLICY_SCHEMA, "required_callers": list(required_callers), "values": values}
     )
 
 
@@ -97,7 +113,12 @@ def research_advntr_policy_argv(configuration: RunConfiguration, threads: int) -
         or "calibrated_calling" not in configuration.advntr
     ):
         return None
-    caller = _runtime_policy({"advntr": configuration.advntr, "kestrel": configuration.kestrel})
+    # calibrated_calling is only ever generated alongside the Kestrel pointers, so both callers are required.
+    caller = project_caller_policy(
+        {"advntr": configuration.advntr, "kestrel": configuration.kestrel},
+        (*ADVNTR_CALLER_POLICY_POINTERS, *KESTREL_CALLER_POLICY_POINTERS),
+        ("advntr", "kestrel"),
+    )
     if caller.values[_MODE_POINTER] != "legacy":
         _fail(
             "research decision profiles support only legacy adVNTR calling; "

@@ -11,7 +11,7 @@ import pytest
 
 from tests.unit.test_calibration_caller_policy import policy_document
 from vntyper.modules.advntr.advntr_command_builder import build_advntr_command
-from vntyper.scripts.calibration_caller_policy import decode_caller_policy_values
+from vntyper.scripts.calibration_caller_policy import KESTREL_CALLER_POLICY_POINTERS, decode_caller_policy_values
 from vntyper.scripts.calibration_caller_profile import build_caller_generated_profile
 from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext
 from vntyper.scripts.run_configuration import RunConfiguration, resolve_run_configuration
@@ -106,7 +106,7 @@ def test_research_profile_executes_adVNTR_with_its_derived_cutoff(tmp_path: Path
 
     arguments = invoke.call_args.kwargs["calibrated_policy_arguments"]
     assert arguments[:4] == ("-t", "3", "--frameshift-pvalue-cutoff", "0.0025")
-    # Without the research argv this exact call raised the pre-fix defect.
+    # Pins the builder guard: a calibrated component without explicit arguments is still refused.
     with pytest.raises(ValueError, match=_OLD_FAILURE):
         build_advntr_command(
             "adVNTR",
@@ -152,3 +152,52 @@ def test_packaged_profile_execution_passes_no_calibrated_arguments(tmp_path: Pat
     _execute(resolve_run_configuration(), tmp_path, invoke, threads=2)
 
     assert "calibrated_policy_arguments" not in invoke.call_args.kwargs
+
+
+def test_projecting_a_pointer_the_components_lack_names_it() -> None:
+    configuration = resolve_run_configuration()
+    missing = "/components/advntr/calibrated_calling/cutoff"
+
+    with pytest.raises(ValueError, match=f"research decision profile does not expose {missing} at runtime"):
+        module().project_caller_policy(
+            {"advntr": configuration.advntr, "kestrel": configuration.kestrel},
+            (missing, *KESTREL_CALLER_POLICY_POINTERS),
+            ("advntr", "kestrel"),
+        )
+
+
+def test_projecting_the_packaged_kestrel_pointers_rebuilds_a_kestrel_policy() -> None:
+    configuration = resolve_run_configuration()
+
+    policy = module().project_caller_policy(
+        {"kestrel": configuration.kestrel}, KESTREL_CALLER_POLICY_POINTERS, ("kestrel",)
+    )
+
+    assert policy.required_callers == ("kestrel",)
+    assert tuple(policy.values) == KESTREL_CALLER_POLICY_POINTERS
+
+
+def test_an_optimize_exported_advntr_profile_runs_adVNTR_at_its_selected_cutoff(tmp_path: Path) -> None:
+    from tests.unit.test_calibration_cutoff_optimize import _run_advntr
+
+    successful, document, output = _run_advntr(tmp_path, caller="advntr", min_specificity=1.0)
+    assert successful is True
+    selected = document["selection"]["value"]
+    configuration = resolve_run_configuration(None, research_profile=output / "research-decision-profile.json")
+    invoke = Mock(return_value=0)
+
+    _execute(configuration, tmp_path, invoke, threads=2)
+
+    command = build_advntr_command(
+        "adVNTR",
+        vid=25561,
+        alignment="input.bam",
+        result="out.vcf",
+        model="snapshot.db",
+        working_directory="out",
+        threads=2,
+        additional_commands="",
+        calibrated="calibrated_calling" in configuration.advntr,
+        calibrated_policy_arguments=invoke.call_args.kwargs["calibrated_policy_arguments"],
+    )
+    assert f"--frameshift-pvalue-cutoff {selected}" in command
