@@ -1,0 +1,282 @@
+"""``vntyper calibrate optimize`` over the adVNTR axes, against hand-computed oracles (#269).
+
+The native adVNTR grid is replaced by the synthetic fake in ``cutoff_optimize_fakes``; its
+calls follow the legacy rule over :data:`~tests.unit.cutoff_optimize_fakes.PROBE_VISITS`,
+while adVNTR baseline parity runs for real against one-record capture files.
+"""
+
+from __future__ import annotations
+
+import html
+from collections.abc import Mapping
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.unit.advntr_grid_fakes import synthetic_capabilities
+from tests.unit.cutoff_optimize_fakes import (
+    ADV_CUT,
+    PROBE_VISITS,
+    advntr_baseline_policy,
+    advntr_signature,
+    run_advntr,
+    run_optimize,
+    up,
+    visit,
+)
+from vntyper.modules.advntr.advntr_calibration_policy import advntr_capabilities_document
+from vntyper.scripts.calibration_caller_policy import CallerPolicyValues
+from vntyper.scripts.calibration_cutoff_advntr_axes import derive_advntr_axis
+from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, DEPTH_FLOOR_LINKED
+
+pytestmark = pytest.mark.unit
+
+
+#: The hand-computed adVNTR cutoff oracle over the scored roster (``alpha-repeat`` is a
+#: dropped duplicate): value -> (TP, FN, TN, FP). A sample is called when ``q < cutoff``.
+ADVNTR_ORACLE: dict[float, tuple[int, int, int, int]] = {
+    0.0004: (0, 3, 2, 0),  # the sentinel min(q): calls nobody
+    up(0.0004): (1, 2, 2, 0),  # alpha
+    0.001: (1, 2, 2, 0),  # the baseline: alpha
+    up(0.004): (2, 1, 2, 0),  # alpha, bravo
+    up(0.006): (2, 1, 1, 1),  # + delta
+    up(0.02): (2, 1, 0, 2),  # + charlie
+    up(0.2): (2, 1, 0, 2),  # + foxtrot (unknown truth)
+}
+
+
+def test_the_advntr_arm_is_replayed_natively_and_never_approximated(tmp_path: Path) -> None:
+    """adVNTR statistics come from the installed evaluator; this only mocks the seam."""
+    seen: list[dict[str, Any]] = []
+    rescued = {**PROBE_VISITS, "specimen-echo": (visit(5, 0.0001),)}  # adVNTR calls echo at baseline
+    _, document, _ = run_advntr(
+        tmp_path, seen=seen, visits=rescued, caller="both", axes=[DEPTH_FLOOR_LINKED], min_specificity=1.0
+    )
+
+    assert document["caller"] == "both"
+    assert len(seen) == 1  # no adVNTR axis, so no probe grid
+    assert seen[0]["executable_path"] == tmp_path / "advntr"
+    assert seen[0]["output"].name == "advntr"
+    assert set(seen[0]["captures"]) == set(PROBE_VISITS)
+    advntr = document["provenance"]["advntr"]
+    assert set(advntr) == {"sha256", "probe_sha256", "tool_identity", "probe_seconds", "main_seconds"}
+    assert advntr["sha256"] == "d" * 64
+    assert advntr["probe_sha256"] is None and advntr["probe_seconds"] is None
+    assert advntr["tool_identity"] == advntr_capabilities_document(synthetic_capabilities())
+    assert isinstance(advntr["main_seconds"], float) and advntr["main_seconds"] >= 0.0
+    best = max(row["counts"]["true_positives"] for row in document["cutoffs"])
+    assert best == 3
+
+
+def test_caller_both_with_only_kestrel_axes_holds_advntr_at_baseline(tmp_path: Path) -> None:
+    """With only Kestrel axes, the adVNTR arm of ``--caller both`` is replayed at its baseline policy."""
+    from vntyper.scripts.calibration_cutoff_report import render_cutoff_report_html
+
+    _, document, _ = run_advntr(tmp_path, caller="both", axes=[DEPTH_FLOOR_LINKED], min_specificity=1.0)
+    scope = document["search_scope"]
+
+    assert scope["searched_callers"] == ["kestrel"]
+    assert scope["searched_axes"] == [DEPTH_FLOOR_LINKED]
+    assert scope["advntr_policy"] == "held-at-baseline"
+    assert scope["advntr_distinct_executions"] == 1
+    assert scope["advntr_probe_executions"] is None
+    assert scope["note"] == (
+        "Only Kestrel axes were requested. The adVNTR arm was replayed at its baseline policy for every candidate."
+    )
+    assert document["baseline_parity"]["advntr"]["proven"] is True
+    assert document["replay_consistency"] is None
+    page = render_cutoff_report_html(document)
+    assert "adVNTR arm was replayed at its baseline policy" in page
+
+
+def test_a_kestrel_run_records_that_advntr_was_not_evaluated(tmp_path: Path) -> None:
+    """The scope section is present on every run, not only on the adVNTR ones."""
+    _, document, _ = run_optimize(tmp_path)
+
+    assert document["search_scope"]["searched_callers"] == ["kestrel"]
+    assert document["search_scope"]["advntr_policy"] == "not-evaluated"
+    assert document["search_scope"]["advntr_distinct_executions"] is None
+    assert document["search_scope"]["advntr_probe_executions"] is None
+    assert document["provenance"]["advntr"] is None
+    assert document["baseline_parity"]["advntr"] is None
+    assert document["replay_consistency"] is None
+    assert all(curve["status"] == "available" for curve in document["curves"])
+
+
+def test_an_unexpected_extra_advntr_execution_aborts_the_run(tmp_path: Path) -> None:
+    """The execution count is checked against the distinct adVNTR policies, never assumed."""
+
+    def extra(result: Any, policies: Mapping[str, CallerPolicyValues]) -> Any:
+        rows = list(result.policies)
+        kestrel_only = next(index for index, row in enumerate(rows) if row.policy_id != result.baseline_policy_id)
+        rows[kestrel_only] = replace(rows[kestrel_only], execution_id="exec-unexpected")
+        return replace(result, policies=tuple(rows))
+
+    with pytest.raises(ValueError, match=r"adVNTR executions \(2\) differ from the distinct adVNTR policies"):
+        run_advntr(tmp_path, override=extra, caller="both", axes=[DEPTH_FLOOR_LINKED])
+
+
+def test_caller_advntr_searches_the_advntr_cutoff_axis_by_native_replay(tmp_path: Path) -> None:
+    """The adVNTR cutoff axis is derived from probe replays and scored against the hand oracle.
+
+    Outer folds (3 folds, seed 20260915): fold 0 holds out bravo and foxtrot, fold 1 alpha and
+    delta, fold 2 charlie and echo. No fold derives a value the full-data axis lacks: fold 0
+    trains on q {0.0004, 0.006, 0.02}, fold 1 on {0.004, 0.02, 0.2} (the baseline 0.001 already
+    rejects all, so no sentinel), fold 2 on {0.0004, 0.004, 0.006, 0.2}.
+    """
+    seen: list[dict[str, Any]] = []
+    successful, document, _ = run_advntr(tmp_path, seen=seen, caller="advntr", min_specificity=1.0)
+
+    assert successful is True
+    rows = {row["value"]: row for row in document["cutoffs"] if row["policy_id"] != "baseline"}
+    assert sorted(rows) == sorted(ADVNTR_ORACLE)
+    for value, (tp, fn, tn, fp) in ADVNTR_ORACLE.items():
+        counts = rows[value]["counts"]
+        assert (counts["true_positives"], counts["false_negatives"]) == (tp, fn), value
+        assert (counts["true_negatives"], counts["false_positives"]) == (tn, fp), value
+    assert document["selection"]["axis"] == ADVNTR_CUTOFF
+    assert document["selection"]["value"] == up(0.004)
+    (axis,) = document["axes"]
+    assert axis["axis"] == ADVNTR_CUTOFF
+    assert axis["caller"] == "advntr"
+    assert axis["comparator"] == "<"
+    assert axis["breakpoint_completeness"] == "complete"
+    assert axis["fold_only_values"] == 0
+    assert axis["unrejectable_samples"] == 0
+    scope = document["search_scope"]
+    assert scope["advntr_policy"] == "searched"
+    assert scope["searched_callers"] == ["advntr"]
+    assert scope["advntr_probe_executions"] == 2  # the baseline and one cutoff probe
+    assert document["replay_consistency"] == {"checked_candidates": 7, "mismatches": []}
+    assert document["baseline_parity"]["advntr"]["proven"] is True
+    assert document["evaluation"]["fold_admissibility"] == "training-derived-inventories"
+    changed = {row["pointer"]: row for row in document["old_versus_derived"] if row["changed"]}
+    assert set(changed) == {ADV_CUT}
+    assert changed[ADV_CUT]["baseline_value"] == 0.001
+    assert changed[ADV_CUT]["derived_value"] == up(0.004)
+    assert document["profile"]["round_trip_matches_selected_policy"] is True
+
+    probe, main = seen
+    assert sorted(probe["policies"]) == ["baseline", f"probe-{ADVNTR_CUTOFF}"]
+    assert probe["output"].name == "advntr-probe" and main["output"].name == "advntr"
+    # X4: one execution per distinct adVNTR signature passed to the main grid, the anchor once.
+    assert len({advntr_signature(policy) for policy in main["policies"].values()}) == 7
+    assert document["search_scope"]["advntr_distinct_executions"] == 7
+    advntr = document["provenance"]["advntr"]
+    assert set(advntr) == {"sha256", "probe_sha256", "tool_identity", "probe_seconds", "main_seconds"}
+    assert advntr["tool_identity"] == advntr_capabilities_document(synthetic_capabilities())
+    assert advntr["probe_sha256"] == "d" * 64
+    assert isinstance(advntr["probe_seconds"], float) and isinstance(advntr["main_seconds"], float)
+
+
+def test_caller_both_searches_kestrel_and_advntr_axes_on_the_union(tmp_path: Path) -> None:
+    """``--caller both`` defaults to one Kestrel and one adVNTR axis, each holding the other caller at baseline."""
+    seen: list[dict[str, Any]] = []
+    _, document, _ = run_advntr(tmp_path, seen=seen, caller="both", min_specificity=1.0)
+
+    assert [axis["axis"] for axis in document["axes"]] == [DEPTH_FLOOR_LINKED, ADVNTR_CUTOFF]
+    assert [axis["caller"] for axis in document["axes"]] == ["kestrel", "advntr"]
+    _, main = seen
+    signatures = {advntr_signature(policy) for policy in main["policies"].values()}
+    # Every Kestrel candidate shares the baseline adVNTR signature; the adVNTR axis adds 6 more.
+    assert len(signatures) == 7
+    assert document["search_scope"]["advntr_distinct_executions"] == 1 + 6
+    assert document["search_scope"]["searched_callers"] == ["advntr", "kestrel"]
+    assert document["search_scope"]["advntr_policy"] == "searched"
+    assert document["replay_consistency"]["checked_candidates"] > 0
+    assert document["baseline_parity"]["advntr"]["proven"] is True
+    assert [curve["status"] for curve in document["curves"]] == ["available", "available"]
+    advntr_values = {row["value"] for row in document["cutoffs"] if row["policy_id"].startswith(ADVNTR_CUTOFF)}
+    assert advntr_values == set(ADVNTR_ORACLE)
+
+
+def test_a_union_curve_whose_no_call_set_changes_is_published_unavailable(tmp_path: Path) -> None:
+    """Echo is a Kestrel no-call everywhere; adVNTR calls it at every cutoff except the sentinel.
+
+    On the either-caller union echo is therefore called on every adVNTR candidate but the
+    sentinel 0.0001, where it stays a no-call, so the adVNTR axis has no fixed-denominator
+    curve (spec 14.6). The Kestrel axis holds adVNTR at baseline, which calls echo, so its
+    curve is unaffected.
+    """
+    from vntyper.scripts.calibration_cutoff_document import _CURVE_UNAVAILABLE
+
+    rescued = {**PROBE_VISITS, "specimen-echo": (visit(5, 0.0001),)}
+    successful, document, output = run_advntr(tmp_path, visits=rescued, caller="both", min_specificity=1.0)
+
+    assert successful is True
+    kestrel, advntr = document["curves"]
+    assert kestrel["axis"] == DEPTH_FLOOR_LINKED and kestrel["status"] == "available"
+    assert advntr == {"axis": ADVNTR_CUTOFF, "status": "unavailable", "reason": _CURVE_UNAVAILABLE}
+    assert 0.0001 in {row["value"] for row in document["cutoffs"]}
+    assert document["selection"]["axis"] == ADVNTR_CUTOFF  # the plateau needs outcome vectors, not the curve
+    assert document["selection"]["plateau"]["selected_value"] == up(0.004)
+    assert document["boundary_support"] == {"status": "unavailable", "reason": _CURVE_UNAVAILABLE, "warnings": []}
+    curve_axes = {line.split("\t")[0] for line in (output / "roc-pr-curves.tsv").read_text().splitlines()[1:]}
+    assert curve_axes == {DEPTH_FLOOR_LINKED}
+    assert html.escape(_CURVE_UNAVAILABLE) in (output / "report.html").read_text(encoding="utf-8")
+
+
+def test_advntr_replay_inconsistency_aborts_the_run(tmp_path: Path) -> None:
+    """A native call the probe statistics do not predict aborts the run, naming the candidate."""
+
+    def contradict(result: Any, policies: Mapping[str, CallerPolicyValues]) -> Any:
+        if "baseline" in policies:
+            return result  # the probe grid is left intact
+        target = next(pid for pid, policy in policies.items() if policy.values[ADV_CUT] == up(0.004))
+        rows = []
+        for row in result.policies:
+            if row.policy_id == target:
+                samples = tuple(
+                    replace(sample, called_positive=False) if sample.key == "specimen-bravo" else sample
+                    for sample in row.samples
+                )
+                row = replace(row, samples=samples)
+            rows.append(row)
+        return replace(result, policies=tuple(rows))
+
+    with pytest.raises(ValueError, match=rf"replay consistency failed on axis {ADVNTR_CUTOFF}"):
+        run_advntr(tmp_path, override=contradict, caller="advntr")
+
+
+def test_advntr_probe_and_candidate_grids_must_share_their_evidence(tmp_path: Path) -> None:
+    """A candidate grid replayed by a different adVNTR build is not bound to the probe's statistics."""
+
+    def rebuilt(result: Any, policies: Mapping[str, CallerPolicyValues]) -> Any:
+        return result if "baseline" in policies else replace(result, capabilities=synthetic_capabilities("2.4.1"))
+
+    with pytest.raises(ValueError, match="not bound to the same evidence"):
+        run_advntr(tmp_path, override=rebuilt, caller="advntr")
+
+
+def test_advntr_fold_admissibility_uses_training_derived_inventories(tmp_path: Path) -> None:
+    """Each fold may select only cutoffs its own training samples derived, plus the baseline.
+
+    Hand derivation (folds as in the oracle test; ``q`` from :data:`PROBE_VISITS`):
+
+    * fold 0 trains on alpha, charlie, delta, echo: q {0.0004, 0.02, 0.006} gives
+      {0.0004 (sentinel), up(0.0004), 0.001, up(0.006), up(0.02)}: 5 candidates + baseline = 6.
+    * fold 1 trains on bravo, charlie, echo, foxtrot: q {0.004, 0.02, 0.2}; the baseline 0.001
+      already rejects all, so no sentinel: {0.001, up(0.004), up(0.02), up(0.2)}: 4 + 1 = 5.
+    * fold 2 trains on alpha, bravo, delta, foxtrot: q {0.0004, 0.004, 0.006, 0.2} gives
+      {0.0004, up(0.0004), 0.001, up(0.004), up(0.006), up(0.2)}: 6 + 1 = 7.
+    """
+    _, document, _ = run_advntr(tmp_path, caller="advntr", min_specificity=1.0)
+    evaluation = document["evaluation"]
+    ids = {row["value"]: row["policy_id"] for row in document["cutoffs"] if row["policy_id"] != "baseline"}
+    baseline = advntr_baseline_policy()
+
+    assert evaluation["fold_admissibility"] == "training-derived-inventories"
+    assert [fold["admissible_candidates"] for fold in evaluation["folds"]] == [6, 5, 7]
+    for fold in evaluation["folds"]:
+        training = set(fold["training_keys"])
+        statistics = {
+            key: min(visit.pvalue for visit in items)
+            for key, items in PROBE_VISITS.items()
+            if key in training and items
+        }
+        derived = derive_advntr_axis(ADVNTR_CUTOFF, statistics, baseline=baseline, max_values=None)
+        admissible = {"baseline", *(ids[float(value)] for value in derived.values)}
+        assert fold["admissible_candidates"] == len(admissible)
+        assert fold["used_policy"] in admissible

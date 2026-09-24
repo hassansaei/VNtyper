@@ -178,9 +178,9 @@ def test_projecting_the_packaged_kestrel_pointers_rebuilds_a_kestrel_policy() ->
 
 
 def test_an_optimize_exported_advntr_profile_runs_adVNTR_at_its_selected_cutoff(tmp_path: Path) -> None:
-    from tests.unit.test_calibration_cutoff_optimize import _run_advntr
+    from tests.unit.cutoff_optimize_fakes import run_advntr
 
-    successful, document, output = _run_advntr(tmp_path, caller="advntr", min_specificity=1.0)
+    successful, document, output = run_advntr(tmp_path, caller="advntr", min_specificity=1.0)
     assert successful is True
     selected = document["selection"]["value"]
     configuration = resolve_run_configuration(None, research_profile=output / "research-decision-profile.json")

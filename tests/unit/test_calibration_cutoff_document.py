@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
+from tests.unit.cutoff_optimize_fakes import advntr_baseline_policy
 from tests.unit.test_calibration_cutoff_curves import scenario
-from tests.unit.test_calibration_cutoff_optimize import _advntr_baseline_policy
 from vntyper.scripts.calibration_cutoff_axes import ADVNTR_CUTOFF, ADVNTR_MIN_SUPPORT, declared_axis
 from vntyper.scripts.calibration_cutoff_document import _CURVE_UNAVAILABLE, _axis_documents, _curve
 
@@ -29,7 +29,7 @@ def _inputs(**fields: Any) -> Any:
 
 def test_an_advntr_cutoff_axis_without_its_search_record_is_refused() -> None:
     """``unrejectable_samples`` comes from the probe search; a cutoff axis without one is a wiring defect."""
-    axis = declared_axis(ADVNTR_CUTOFF, [0.001, 0.004], baseline=_advntr_baseline_policy())
+    axis = declared_axis(ADVNTR_CUTOFF, [0.001, 0.004], baseline=advntr_baseline_policy())
 
     with pytest.raises(ValueError, match="adVNTR axis advntr_cutoff has no adVNTR search record"):
         _axis_documents(_inputs(derived=[(axis, ())], advntr_search=None))
@@ -37,7 +37,7 @@ def test_an_advntr_cutoff_axis_without_its_search_record_is_refused() -> None:
 
 def test_only_the_advntr_cutoff_axis_carries_unrejectable_samples() -> None:
     """Spec section 8: a p-value of 0 defeats every cutoff; read support has no such floor."""
-    baseline = _advntr_baseline_policy()
+    baseline = advntr_baseline_policy()
     cutoff = declared_axis(ADVNTR_CUTOFF, [0.001, 0.004], baseline=baseline)
     support = declared_axis(ADVNTR_MIN_SUPPORT, [3, 4], baseline=baseline)
     search = SimpleNamespace(unrejectable={ADVNTR_CUTOFF: 2, ADVNTR_MIN_SUPPORT: 0})

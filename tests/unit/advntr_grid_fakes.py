@@ -1,7 +1,7 @@
 """Synthetic native adVNTR replay grids for the cutoff-axis tests; the executable is never run.
 
 This is a helper module, not a test module: it defines no tests and is imported by
-``test_calibration_cutoff_advntr_axes`` and ``test_calibration_cutoff_optimize``.
+``test_calibration_cutoff_advntr_axes`` and ``cutoff_optimize_fakes``.
 """
 
 from __future__ import annotations
