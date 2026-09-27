@@ -300,11 +300,15 @@ def igv_payload(mode: str) -> str | None:
     return payload
 
 
-def igv_provenance(mode: str) -> str:
+def igv_provenance(mode: str, *, view_available: bool = True) -> str:
     """Describe, for the report's Provenance section, what carries the alignment browser.
 
     Args:
         mode: One of :data:`REPORT_IGV_MODES`.
+        view_available: Whether this report has an alignment view at all. A sample
+            with no Kestrel call has none, and no library is written into it; the line
+            used to say "embedded in this file" regardless, which the file then
+            contradicted.
 
     Returns:
         str: A line naming the version and the verified source digest, and saying
@@ -320,6 +324,8 @@ def igv_provenance(mode: str) -> str:
         raise ValueError(msg)
     if mode == REPORT_IGV_OFF:
         return "not included (--report-igv off)"
+    if not view_available:
+        return "not included (this report has no alignment view)"
     where = (
         "embedded in this file, gzipped"
         if mode == REPORT_IGV_EMBEDDED

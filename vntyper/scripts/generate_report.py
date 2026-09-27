@@ -47,6 +47,7 @@ from vntyper.scripts.artifact_names import ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE
 from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
 from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs, build_fastp_measurement
+from vntyper.scripts.igv_absence import decide_igv_absence
 from vntyper.scripts.igv_report import extract_igv_content, run_igv_report
 from vntyper.scripts.length_presentation import build_length_presentation
 from vntyper.scripts.molecular_identity_presentation import identity_compatible_result_row
@@ -119,6 +120,7 @@ from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
     STEP_BAM_HEADER,
     STEP_COVERAGE,
+    STEP_FASTQ_QC,
     STEP_KESTREL,
     STEP_READ,
     STEP_UNREADABLE,
@@ -191,17 +193,29 @@ def load_pipeline_summary(summary_file_path):
         raise ValueError(message) from e
 
 
-def load_fastp_output(fastp_file):
+def load_fastp_output(fastp_file, expected=True):
     """
     Loads fastp JSON output (e.g., output.json) for summary metrics if available.
     Returns an empty dict only when the optional file is absent.
 
     A present unreadable or malformed artifact raises ``ValueError`` so report
     generation cannot silently misstate missing quality evidence.
+
+    Args:
+        fastp_file: Path to fastp's JSON output.
+        expected: Whether the run recorded a FASTQ quality-control step, and so should
+            have written the file. fastp runs only on FASTQ input; for a BAM or CRAM
+            run its absence is the normal state and is logged at INFO, not WARNING.
     """
     logger.debug("load_fastp_output called with fastp_file=%s", fastp_file)
     if not os.path.exists(fastp_file):
-        logger.warning("fastp output file not found: %s", fastp_file)
+        if expected:
+            logger.warning("fastp output file not found: %s", fastp_file)
+        else:
+            logger.info(
+                "No fastp quality metrics in this report: fastp runs only on FASTQ input, "
+                "and this run recorded no FASTQ quality-control step."
+            )
         return {}
     try:
         with open(fastp_file) as f:
@@ -278,9 +292,16 @@ def build_kestrel_frames(kestrel_data):
         unformatted frame to match on. Both are empty when there are no rows, and when
         the only row is the empty-result placeholder.
     """
-    kestrel_data = drop_empty_result_rows(kestrel_data) if kestrel_data else kestrel_data
     if not kestrel_data:
-        logger.warning("No Kestrel data found in pipeline summary.")
+        logger.warning(
+            "No Kestrel rows in the pipeline summary. A run that genotyped and called nothing records a "
+            "placeholder row, so zero rows means the Kestrel result was not recorded; the report's Kestrel "
+            "section shows the step's recorded state."
+        )
+        return pd.DataFrame(), pd.DataFrame()
+    kestrel_data = drop_empty_result_rows(kestrel_data)
+    if not kestrel_data:
+        logger.info("Kestrel called no variant for this sample; the report states a negative Kestrel result.")
         return pd.DataFrame(), pd.DataFrame()
 
     frame = select_display_columns(pd.DataFrame(kestrel_data), KESTREL_DISPLAY_COLUMNS)
@@ -624,11 +645,17 @@ def generate_summary_report(
 
     temporary_igv_dir = None
     igv_operation_error: Exception | None = None
-    if report_igv == report_assets.REPORT_IGV_OFF:
-        logger.info("--report-igv off: no alignment browser is produced for this run.")
+    igv_decision = decide_igv_absence(
+        report_igv=report_igv,
+        bed_file=bed_file,
+        kestrel_state=kestrel_state,
+        kestrel_has_call=not kestrel_df_raw.empty,
+    )
+    if not igv_decision.build_view:
+        logger.log(igv_decision.level, igv_decision.message)
         igv_report_file = None
         igv_content, table_json, session_dictionary = "", "", ""
-    elif bed_file and os.path.exists(bed_file):
+    else:
         logger.info("Running IGV report for BED file: %s", bed_file)
         if report_igv == report_assets.REPORT_IGV_EMBEDDED:
             temporary_igv_dir = tempfile.TemporaryDirectory(prefix=".vntyper-igv-", dir=output_dir)
@@ -695,10 +722,6 @@ def generate_summary_report(
                         type(igv_operation_error).__name__,
                         cleanup_error,
                     )
-    else:
-        logger.warning("BED file does not exist or not provided. Skipping IGV report generation.")
-        igv_report_file = None
-        igv_content, table_json, session_dictionary = "", "", ""
 
     # Whether this run has an alignment session at all. The template branches on it to
     # author the right "there is no alignment view here" sentence *in the markup*, which
@@ -716,7 +739,10 @@ def generate_summary_report(
             igv_session_available,
         )
 
-    fastp = summarise_fastp(load_fastp_output(Path(output_dir) / "fastq_bam_processing/output.json"))
+    fastq_qc_recorded = any(step.get("step") == STEP_FASTQ_QC for step in pipeline_summary.get("steps", []))
+    fastp = summarise_fastp(
+        load_fastp_output(Path(output_dir) / "fastq_bam_processing/output.json", expected=fastq_qc_recorded)
+    )
 
     coverage_icon, coverage_color = threshold_icon(mean_vntr_coverage, mean_vntr_cov_threshold, higher_better=True)
     uncovered_icon, uncovered_color = threshold_icon(
@@ -937,11 +963,14 @@ def generate_summary_report(
         "igv_mode": report_igv,
         "igv_version": report_assets.IGV_VERSION,
         "igv_session_available": igv_session_available,
+        # Why there is no alignment view, when there is none: the template words the
+        # panel from this, and the log line above was worded from the same decision.
+        "igv_absence_reason": igv_decision.reason,
         "igv_bam_track_available": igv_bam_track_available,
         # One line for the Provenance block: which library, which digest, and where it
         # is. Built in the pure module because choosing the wording is presentation
         # logic over a computed state (AGENTS.md trap 11).
-        "igv_provenance": report_assets.igv_provenance(report_igv),
+        "igv_provenance": report_assets.igv_provenance(report_igv, view_available=igv_session_available),
         # Two timestamps, labelled, because they are different facts. `report_date`
         # is `datetime.now()` at render, so re-running `vntyper report` over an
         # archived run restamped the only date on the page and the artefact

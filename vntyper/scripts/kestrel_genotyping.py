@@ -632,6 +632,9 @@ def process_kestrel_output(
     duplicates_config = kestrel_config.get("duplicate_flagging", {})
     validate_duplicate_flagging_config(duplicates_config, compiled_flag_rules)
     logger.info("Processing Kestrel VCF results...")
+    # Before the first early return below: a VCF with no indels ends the stage without
+    # reaching `process_kmer_results`, and must not keep an earlier run's BED either.
+    remove_stale_bed_file(output_dir)
 
     # Step 1) Filter the original VCF to extract INDELs
     indel_vcf = os.path.join(output_dir, "output_indel.vcf")
@@ -688,7 +691,7 @@ def process_kestrel_output(
 
     # If both are empty, produce an empty result file
     if vcf_insertion.empty and vcf_deletion.empty:
-        logger.warning("No insertion/deletion variants found. Skipping.")
+        logger.info("Kestrel called no variant: its VCF holds no insertion or deletion. Writing the empty result.")
         output_empty_result(output_dir, header)
         return None
 
@@ -705,7 +708,9 @@ def process_kestrel_output(
     combined_df = combined_df.sort_values(by=sort_columns).reset_index(drop=True)
 
     if combined_df.empty:
-        logger.warning("Empty combined DataFrame of insertions+deletions.")
+        logger.info(
+            "Kestrel called no variant: no insertion or deletion survived preprocessing. Writing the empty result."
+        )
         output_empty_result(output_dir, header)
         return None
 
@@ -737,7 +742,7 @@ def process_kestrel_output(
         )
 
     if processed_df.empty:
-        logger.warning("Final processed DataFrame is empty. Writing empty result.")
+        logger.info("Kestrel called no variant: no candidate passed the final filter. Writing the empty result.")
         selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active)
         # #266: the one empty-result branch with a scored frame behind it, and therefore the
         # only one that can say anything about what was suppressed.
@@ -887,6 +892,10 @@ def process_kmer_results(
     Returns:
         pd.DataFrame: The final, fully annotated & filtered DataFrame. Could be empty.
     """
+    # This run decides whether a BED exists. Removed before any return path, so a call
+    # rewrites it below and a run that calls nothing leaves none - rather than keeping
+    # the previous run's position for the report to draw an alignment view at.
+    remove_stale_bed_file(output_dir)
     selection = _resolve_selection(kestrel_config, custom_context_active=custom_context_active, strategy=strategy)
     if raw_capture_observer is not None:
         if identity_component is None:
@@ -936,6 +945,37 @@ def process_kmer_results(
         logger.info(f"BED file created at: {bed_file_path}")
 
     return df
+
+
+def remove_stale_bed_file(output_dir):
+    """Remove the ``output.bed`` an earlier run into the same Kestrel directory left behind.
+
+    ``generate_bed_file`` writes the BED only when a variant survives the final filter,
+    and nothing used to remove one. So a sample first run to a call and then re-run into
+    the same ``--output-dir`` to no call kept the first run's BED, and the report drew an
+    alignment view at a position the current run never called.
+
+    Args:
+        output_dir (str): The Kestrel stage directory.
+
+    Raises:
+        RuntimeError: If the file exists and cannot be removed. Continuing would put the
+            earlier run's position into this run's report.
+    """
+    bed_file_path = Path(output_dir) / "output.bed"
+    try:
+        bed_file_path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        msg = (
+            f"{bed_file_path} is left from an earlier run into this output directory and could not be "
+            f"removed ({exc}). Continuing would show that run's variant position in this run's report. "
+            "Remove the file, or use a fresh --output-dir."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg) from exc
+    logger.info(f"Removed {bed_file_path} left by an earlier run; this run writes its own if it calls a variant.")
 
 
 def generate_bed_file(df, output_dir):
