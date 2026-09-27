@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.41 (2026-09-27)
+
 ### A sample with no Kestrel call no longer reads as a failed run
 
 A cohort user asked whether their installation was broken. Every sample with no call had no IGV view, and a CRAM run logged four or five WARNINGs, none of which needed action. The missing view is expected: it is drawn around a Kestrel call, as in every release since the view was introduced. The messages and the report now say so.
