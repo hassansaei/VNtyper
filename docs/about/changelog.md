@@ -4,7 +4,16 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### A sample with no Kestrel call no longer reads as a failed run
+
+A cohort user asked whether their installation was broken, because every sample with no call had no IGV view and logged five WARNINGs. The missing view is expected: it is drawn around a Kestrel call, and has been since the view was introduced. The messages and the report now say so.
+
+- **No-call samples log at INFO**: `BED file does not exist or not provided`, `No Kestrel data found in pipeline summary`, `Final processed DataFrame is empty`, `No insertion/deletion variants found`, and, for BAM or CRAM input, `fastp output file not found` were WARNINGs on every sample with no call. Each is now an INFO line that names the cause. A FASTQ run that lost its fastp output still warns, and a summary with no Kestrel rows at all still warns.
+- **The IGV panel names its reason**: The report used to say only that "this run produced no alignment session". It now distinguishes a sample with no Kestrel call (expected) from three states that are not normal: a call whose `kestrel/output.bed` is missing, a leftover `output.bed` from an earlier run, and no readable Kestrel result. The report panel and the log line are both worded from one decision (`igv_absence.py`), so they cannot disagree.
+- **Leftover region file**: The Kestrel stage writes `kestrel/output.bed` only for a call, and nothing removed an old one. Re-running a sample that previously had a call into the same `--output-dir`, and getting no call this time, kept the old file, so the report drew an alignment view at a position the current run did not call. The stage now removes the file before it decides. A report re-rendered over such a directory ignores the file and says so.
+- **"Output directory ... is non-empty" on every run**: `vntyper pipeline` opens `<output-dir>/pipeline.log` before the pipeline checks whether the directory is empty, so the check always found that file, and every run warned that prior results may be overwritten, even into a fresh directory. The run's own log no longer counts. The warning now names what the directory already held.
+- **Provenance**: A report with no alignment view stated "igv.js … embedded in this file" in its Provenance section even though no library was written into it. It now states `not included (this report has no alignment view)`.
+- **Docs**: [Troubleshooting](../user-guide/troubleshooting.md#the-report-has-no-igv-alignment-view) explains when the view appears, and lists the log messages that are normal on a successful run. The FAQ no longer describes the view as read inspection for every sample.
 
 ## 2.0.40 (2026-09-24)
 

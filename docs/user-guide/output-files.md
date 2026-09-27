@@ -199,6 +199,12 @@ browser track while preserving all result tables. Verification benchmarks measur
 **78,486 bytes without alignment data** and **575,762 bytes with embedded alignment
 data**, compared to **2,002,405 bytes** retrieved across external CDN tags.
 
+The alignment view exists only for a sample with a Kestrel call. It is anchored on
+`kestrel/output.bed`, which the Kestrel stage writes when a variant passes the final filter
+and removes when a run calls nothing. A sample with no call therefore has no view, and its
+report and `pipeline.log` both say so. See
+[Troubleshooting](troubleshooting.md#the-report-has-no-igv-alignment-view).
+
 Embedded alignment viewing utilizes browser `DecompressionStream` support (supported
 across Chrome 80+, Safari 16.4+, Firefox 113+). On older browsers, the alignment panel
 displays a compatibility notice while the tables remain accessible.

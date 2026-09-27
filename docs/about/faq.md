@@ -37,7 +37,7 @@ A **local installation** avoids containerization overhead, but requires that BWA
 
 ## How do I interpret the HTML report?
 
-The interactive HTML report displays an executive screening summary, variant calls with confidence tiers, quality control metrics, and an embedded IGV browser for direct read inspection. Refer to [Output Files](../user-guide/output-files.md) for a comprehensive field-by-field breakdown.
+The interactive HTML report displays an executive screening summary, variant calls with confidence tiers, quality control metrics, and, for a sample with a Kestrel call, an embedded IGV view of Kestrel's resolved haplotype records around the called position. Those records are not sequencing reads (see [Kestrel output.bam evidence](../user-guide/output-files.md#kestrel-outputbam-evidence)). A sample with no Kestrel call has no alignment view, and that is expected: see [The report has no IGV alignment view](../user-guide/troubleshooting.md#the-report-has-no-igv-alignment-view). Refer to [Output Files](../user-guide/output-files.md) for a comprehensive field-by-field breakdown.
 
 ## Does SHARK support BAM input?
 
