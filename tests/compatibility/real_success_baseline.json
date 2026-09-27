@@ -3854,6 +3854,12 @@
       "provenance_commit": "bad094027f4fc11d3cef5440413e88f1f223c23b",
       "extends": "2.0.39",
       "report_overrides": []
+    },
+    {
+      "version": "2.0.41",
+      "provenance_commit": "b69203eb51bdda46b9f67407b0c2fc7696d6cdf4",
+      "extends": "2.0.40",
+      "report_overrides": []
     }
   ]
 }
