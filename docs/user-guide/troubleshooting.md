@@ -132,7 +132,7 @@ what the `--output-dir` already contained. This run's files overwrite those with
 name. It is harmless when you meant to re-run a sample, and one fresh directory per sample
 avoids it.
 
-Up to 2.0.40, a sample with no Kestrel call logged five of these states as WARNINGs:
+Up to 2.0.40, a sample with no Kestrel call logged four of these states as WARNINGs (only one of the first two occurs per run):
 `Final processed DataFrame is empty`, `No insertion/deletion variants found`,
 `No Kestrel data found in pipeline summary`, `BED file does not exist or not provided` and
 `fastp output file not found`. Every run also logged `Output directory ... is non-empty;
