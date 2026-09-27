@@ -63,11 +63,16 @@ class IgvAbsence:
         reason: One of the ``IGV_*`` constants, or None when the view is built.
         level: The logging level of ``message``.
         message: The log line explaining the absence; empty when the view is built.
+        region_file_given: Whether a region file path was handed to the report.
+        region_file_from_stage: Whether that path is the Kestrel stage's own file. The
+            report names ``kestrel/output.bed`` and suggests a re-run only then.
     """
 
     reason: str | None
     level: int = logging.INFO
     message: str = ""
+    region_file_given: bool = False
+    region_file_from_stage: bool = False
 
     @property
     def build_view(self) -> bool:
@@ -81,6 +86,8 @@ def decide_igv_absence(
     bed_file: str | os.PathLike[str] | None,
     kestrel_state: str,
     kestrel_has_call: bool,
+    kestrel_no_call_recorded: bool,
+    bed_from_kestrel_stage: bool | None = None,
 ) -> IgvAbsence:
     """Decide whether a report gets an alignment view, and word the reason when it does not.
 
@@ -90,20 +97,29 @@ def decide_igv_absence(
         kestrel_state: :func:`~vntyper.scripts.summary_steps.get_step_state` for Kestrel.
         kestrel_has_call: Whether the Kestrel step holds at least one row that is not
             the empty-result placeholder.
+        kestrel_no_call_recorded: Whether the Kestrel step holds the empty-result
+            placeholder a run that genotyped and called nothing writes. Only that is
+            evidence of a no-call sample: a step with no rows at all recorded nothing,
+            and must not be told "this is expected".
+        bed_from_kestrel_stage: Whether ``bed_file`` is the Kestrel stage's own region
+            file (the pipeline's, or one ``vntyper report`` discovered) rather than one
+            the operator named. Only the stage's file can be left over by an earlier
+            run. None falls back to the path: :func:`is_kestrel_region_file`.
 
     Returns:
         IgvAbsence: ``reason`` None when the view should be built.
     """
     bed_exists = bed_file is not None and str(bed_file) != "" and os.path.exists(bed_file)
     kestrel_read = kestrel_state == STEP_READ
+    stage_owned = is_kestrel_region_file(bed_file) if bed_from_kestrel_stage is None else bed_from_kestrel_stage
 
     if report_igv == report_assets.REPORT_IGV_OFF:
         return _absence(
             IGV_SWITCHED_OFF,
             "--report-igv off: no alignment browser is produced for this run.",
         )
-    if kestrel_read and not kestrel_has_call:
-        if bed_exists and not is_kestrel_region_file(bed_file):
+    if kestrel_read and kestrel_no_call_recorded and not kestrel_has_call:
+        if bed_exists and not stage_owned:
             # `vntyper report --bed-file` naming the operator's own regions: their choice.
             return IgvAbsence(reason=None)
         if bed_exists:
@@ -121,17 +137,29 @@ def decide_igv_absence(
         )
     if bed_exists:
         return IgvAbsence(reason=None)
-    if kestrel_read:
-        where = f"its region file {bed_file} does not exist" if bed_file else "no region file was given"
-        return _absence(
-            IGV_REGION_FILE_MISSING,
-            f"No alignment view although Kestrel called a variant: {where}. The variant tables are unaffected. "
-            "Re-run the pipeline for this sample, or pass the file to `vntyper report --bed-file`.",
+    if kestrel_read and kestrel_has_call:
+        if not bed_file:
+            where, fix = "no region file was given", "pass one to `vntyper report --bed-file`"
+        elif stage_owned:
+            where, fix = (
+                f"its region file {bed_file} does not exist",
+                "re-run the pipeline for this sample, or pass a region file to `vntyper report --bed-file`",
+            )
+        else:
+            where, fix = f"the region file given, {bed_file}, does not exist", "check the --bed-file path"
+        return IgvAbsence(
+            reason=IGV_REGION_FILE_MISSING,
+            level=LOG_LEVELS[IGV_REGION_FILE_MISSING],
+            message=f"No alignment view although Kestrel called a variant: {where}. The variant tables are "
+            f"unaffected; to restore the view, {fix}.",
+            region_file_given=bool(bed_file),
+            region_file_from_stage=stage_owned,
         )
     return _absence(
         IGV_NO_KESTREL_RESULT,
-        f"No alignment view: this run's summary holds no readable Kestrel result (state: {kestrel_state}) "
-        "and no region file was found, so there is no position to draw. See the report's Kestrel section.",
+        f"No alignment view: this run's summary holds no readable Kestrel result (state: {kestrel_state}, "
+        f"{'no rows recorded' if kestrel_read else 'nothing read'}) and no region file was found, so there is "
+        "no position to draw. See the report's Kestrel section.",
     )
 
 

@@ -393,6 +393,7 @@ def generate_summary_report(
     config=None,
     sample_name=None,
     report_igv=report_assets.DEFAULT_REPORT_IGV,
+    bed_from_kestrel_stage=None,
 ):
     """
     Generates a summary report based on a pipeline summary JSON file.
@@ -427,6 +428,11 @@ def generate_summary_report(
             points the reader at the self-contained ``igv_report.html`` beside it.
             ``off`` produces no alignment browser at all. Reachable as
             ``--report-igv`` on both ``vntyper pipeline`` and ``vntyper report``.
+        bed_from_kestrel_stage (bool, optional): Whether ``bed_file`` is the Kestrel
+            stage's own ``kestrel/output.bed`` (True from the pipeline and from a BED
+            ``vntyper report`` discovered) or one the operator named (False). Only the
+            stage's file can be left over by an earlier run. None infers it from the
+            path; see :func:`~vntyper.scripts.igv_absence.decide_igv_absence`.
 
     Raises:
         ValueError: If config is not provided, an operator template directory lacks
@@ -650,6 +656,8 @@ def generate_summary_report(
         bed_file=bed_file,
         kestrel_state=kestrel_state,
         kestrel_has_call=not kestrel_df_raw.empty,
+        kestrel_no_call_recorded=bool(kestrel_rows) and all(is_empty_result_row(row) for row in kestrel_rows),
+        bed_from_kestrel_stage=bed_from_kestrel_stage,
     )
     if not igv_decision.build_view:
         logger.log(igv_decision.level, igv_decision.message)
@@ -966,6 +974,8 @@ def generate_summary_report(
         # Why there is no alignment view, when there is none: the template words the
         # panel from this, and the log line above was worded from the same decision.
         "igv_absence_reason": igv_decision.reason,
+        "igv_region_file_given": igv_decision.region_file_given,
+        "igv_region_file_from_stage": igv_decision.region_file_from_stage,
         "igv_bam_track_available": igv_bam_track_available,
         # One line for the Provenance block: which library, which digest, and where it
         # is. Built in the pure module because choosing the wording is presentation

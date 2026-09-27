@@ -107,12 +107,12 @@ def _render(output_dir: Path, **kwargs) -> str:
     """Render the report the way the pipeline does, and return its HTML."""
     log_file = output_dir / "pipeline.log"
     log_file.write_text("Pipeline execution started.\n", encoding="utf-8")
+    kwargs.setdefault("bed_file", str(output_dir / "kestrel" / "output.bed"))
     generate_summary_report(
         output_dir=str(output_dir),
         template_dir=str(TEMPLATE_DIR),
         report_file="summary_report.html",
         log_file=str(log_file),
-        bed_file=str(output_dir / "kestrel" / "output.bed"),
         bam_file=str(output_dir / "kestrel" / "output.bam"),
         config=load_config(None),
         **kwargs,
@@ -211,6 +211,39 @@ def test_a_run_with_no_kestrel_rows_at_all_still_warns(
     _render(_write_run(tmp_path, []))
 
     assert any("No Kestrel rows" in m for m in _report_records(caplog, logging.WARNING))
+
+
+def test_a_run_with_no_kestrel_rows_gets_no_reassurance_in_the_report(
+    tmp_path: Path, no_igv_generator: list[tuple]
+) -> None:
+    text = _visible_text(_render(_write_run(tmp_path, [])))
+
+    assert "No alignment view: this run has no readable Kestrel result." in text
+    assert "not a sign of a failed step" not in text
+
+
+def test_a_run_with_no_kestrel_step_names_that_in_the_panel(tmp_path: Path, no_igv_generator: list[tuple]) -> None:
+    text = _visible_text(_render(_write_run(tmp_path, None)))
+
+    assert "No alignment view: this run has no readable Kestrel result." in text
+    assert "No alignment visualisation is available for this sample." not in text
+
+
+def test_a_missing_operator_region_file_is_not_called_kestrel_output_bed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, no_igv_generator: list[tuple]
+) -> None:
+    run = _write_run(tmp_path, [CALL_ROW])
+    (run / "kestrel" / "output.bed").write_text("X-5\t66\t67\n", encoding="utf-8")
+    caplog.set_level(logging.WARNING)
+
+    text = _visible_text(
+        _render(run, bed_file=str(tmp_path / "operator" / "missing.bed"), bed_from_kestrel_stage=False)
+    )
+
+    assert "the region file given with --bed-file was not found" in text
+    assert "kestrel/output.bed" not in text.split("IGV Alignment")[-1].split("Reading key")[0]
+    [message] = [m for m in _report_records(caplog, logging.WARNING) if "alignment view" in m]
+    assert "operator/missing.bed" in message
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +353,11 @@ def test_decide_igv_absence(tmp_path: Path, mode, bed_exists, state, has_call, e
         bed.write_text("X-5\t66\t67\n", encoding="utf-8")
 
     decision = igv_absence.decide_igv_absence(
-        report_igv=mode, bed_file=str(bed), kestrel_state=state, kestrel_has_call=has_call
+        report_igv=mode,
+        bed_file=str(bed),
+        kestrel_state=state,
+        kestrel_has_call=has_call,
+        kestrel_no_call_recorded=state == summary_steps.STEP_READ and not has_call,
     )
 
     assert decision.reason == expected
@@ -337,9 +374,60 @@ def test_an_operator_region_file_is_drawn_even_for_a_negative_sample(tmp_path: P
         bed_file=str(bed),
         kestrel_state=summary_steps.STEP_READ,
         kestrel_has_call=False,
+        kestrel_no_call_recorded=True,
     )
 
     assert decision.build_view
+
+
+def test_an_operator_region_file_named_like_the_stage_file_is_still_drawn(tmp_path: Path) -> None:
+    """The path cannot say who owns the file; the caller does (Codex review of #343)."""
+    (tmp_path / "kestrel").mkdir()
+    bed = tmp_path / "kestrel" / "output.bed"
+    bed.write_text("X-5\t66\t67\n", encoding="utf-8")
+
+    decision = igv_absence.decide_igv_absence(
+        report_igv=report_assets.REPORT_IGV_EMBEDDED,
+        bed_file=str(bed),
+        kestrel_state=summary_steps.STEP_READ,
+        kestrel_has_call=False,
+        kestrel_no_call_recorded=True,
+        bed_from_kestrel_stage=False,
+    )
+
+    assert decision.build_view
+
+
+def test_a_kestrel_step_with_no_rows_is_not_told_it_is_expected(tmp_path: Path) -> None:
+    """Zero rows recorded nothing. Only the placeholder is evidence of a no-call sample."""
+    decision = igv_absence.decide_igv_absence(
+        report_igv=report_assets.REPORT_IGV_EMBEDDED,
+        bed_file=str(tmp_path / "kestrel" / "output.bed"),
+        kestrel_state=summary_steps.STEP_READ,
+        kestrel_has_call=False,
+        kestrel_no_call_recorded=False,
+    )
+
+    assert decision.reason == igv_absence.IGV_NO_KESTREL_RESULT
+    assert decision.level == logging.WARNING
+    assert "expected" not in decision.message
+    assert "no rows recorded" in decision.message
+
+
+def test_a_missing_operator_region_file_is_named_as_the_operators(tmp_path: Path) -> None:
+    decision = igv_absence.decide_igv_absence(
+        report_igv=report_assets.REPORT_IGV_EMBEDDED,
+        bed_file=str(tmp_path / "operator" / "missing.bed"),
+        kestrel_state=summary_steps.STEP_READ,
+        kestrel_has_call=True,
+        kestrel_no_call_recorded=False,
+        bed_from_kestrel_stage=False,
+    )
+
+    assert decision.reason == igv_absence.IGV_REGION_FILE_MISSING
+    assert "check the --bed-file path" in decision.message
+    assert "re-run the pipeline" not in decision.message
+    assert decision.region_file_given and not decision.region_file_from_stage
 
 
 @pytest.mark.parametrize(
@@ -356,6 +444,7 @@ def test_decide_igv_absence_treats_no_bed_path_as_missing() -> None:
         bed_file=None,
         kestrel_state=summary_steps.STEP_READ,
         kestrel_has_call=True,
+        kestrel_no_call_recorded=False,
     )
     assert decision.reason == igv_absence.IGV_REGION_FILE_MISSING
     assert decision.level == logging.WARNING

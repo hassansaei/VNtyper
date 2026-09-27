@@ -328,14 +328,19 @@ def test_each_mode_authors_its_own_state_in_the_markup(run_with_alignments: Path
 
 
 def test_a_run_with_no_alignment_session_says_so_without_a_script(tmp_path: Path) -> None:
-    """The fourth state, and the one every FASTQ-only run lands in."""
+    """The fourth state, said in the markup.
+
+    A summary with no steps has no Kestrel result either, so the panel now names that
+    (``igv_absence.IGV_NO_KESTREL_RESULT``) instead of the generic "no alignment session"
+    sentence, which read the same as a normal sample without a call.
+    """
     (tmp_path / "pipeline_summary.json").write_text(
         json.dumps({"version": "9.9.9", "input_files": {"bam": "s.bam"}, "steps": []}), encoding="utf-8"
     )
 
     html = _render(tmp_path)
 
-    assert "No alignment visualisation is available for this sample." in html
+    assert "No alignment view: this run has no readable Kestrel result." in html
     assert "is embedded in this file, compressed" not in html
 
 

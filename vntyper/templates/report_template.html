@@ -1845,10 +1845,26 @@
                     {% elif igv_absence_reason == "region_file_missing" %}
                         <p class="empty-state">
                             <strong>The alignment view could not be built.</strong>
+                            {% if igv_region_file_from_stage %}
                             Kestrel called a variant, but the region file that anchors the view
                             (<span class="mono">kestrel/output.bed</span>) was not found. The
                             variant tables above are complete without it; re-running the pipeline
                             for this sample restores the view.
+                            {% elif igv_region_file_given %}
+                            Kestrel called a variant, but the region file given with
+                            <span class="mono">--bed-file</span> was not found. The variant tables
+                            above are complete without it.
+                            {% else %}
+                            Kestrel called a variant, but no region file was given to anchor the
+                            view. The variant tables above are complete without it.
+                            {% endif %}
+                        </p>
+                    {% elif igv_absence_reason == "no_kestrel_result" %}
+                        <p class="empty-state">
+                            <strong>No alignment view: this run has no readable Kestrel result.</strong>
+                            The alignment view is drawn around a Kestrel call, and no Kestrel result
+                            was recorded for this run, so there is no position to show. This is not
+                            the same as a sample without a call; see the Kestrel section above.
                         </p>
                     {% elif not igv_session_available %}
                         <p class="empty-state">
