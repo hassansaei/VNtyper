@@ -1821,6 +1821,51 @@
                             alignment browser was produced. The variant tables above are
                             complete without it.
                         </p>
+                    {# The three reasons below are decided once, in `igv_absence.py`, which
+                       also words the log line - so the report and the log cannot disagree
+                       about why the panel is empty. The commonest is a sample with no
+                       Kestrel call, and it has to read as the normal state it is: its
+                       old wording ("this run produced no alignment session") sent a
+                       cohort user to ask whether their installation was broken. #}
+                    {% elif igv_absence_reason == "no_kestrel_call" %}
+                        <p class="empty-state">
+                            <strong>No alignment view: Kestrel called no variant in this sample.</strong>
+                            The alignment view is drawn around the position of a Kestrel call, so
+                            a sample without one has nothing to show. This is expected, and it is
+                            not a sign of a failed step or an incomplete installation.
+                        </p>
+                    {% elif igv_absence_reason == "stale_region_file" %}
+                        <p class="empty-state">
+                            <strong>No alignment view: Kestrel called no variant in this sample.</strong>
+                            A region file left in this output directory by an earlier run
+                            (<span class="mono">kestrel/output.bed</span>) was not used, because it
+                            names a position this run did not call. Use a fresh output directory
+                            per sample to avoid this.
+                        </p>
+                    {% elif igv_absence_reason == "region_file_missing" %}
+                        <p class="empty-state">
+                            <strong>The alignment view could not be built.</strong>
+                            {% if igv_region_file_from_stage %}
+                            Kestrel called a variant, but the region file that anchors the view
+                            (<span class="mono">kestrel/output.bed</span>) was not found. The
+                            variant tables above are complete without it; re-running the pipeline
+                            for this sample restores the view.
+                            {% elif igv_region_file_given %}
+                            Kestrel called a variant, but the region file given with
+                            <span class="mono">--bed-file</span> was not found. The variant tables
+                            above are complete without it.
+                            {% else %}
+                            Kestrel called a variant, but no region file was given to anchor the
+                            view. The variant tables above are complete without it.
+                            {% endif %}
+                        </p>
+                    {% elif igv_absence_reason == "no_kestrel_result" %}
+                        <p class="empty-state">
+                            <strong>No alignment view: this run has no readable Kestrel result.</strong>
+                            The alignment view is drawn around a Kestrel call, and no Kestrel result
+                            was recorded for this run, so there is no position to show. This is not
+                            the same as a sample without a call; see the Kestrel section above.
+                        </p>
                     {% elif not igv_session_available %}
                         <p class="empty-state">
                             <strong>No alignment visualisation is available for this sample.</strong>

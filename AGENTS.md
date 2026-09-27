@@ -129,13 +129,17 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     runs it before `run_pipeline`, so handler tests with synthetic configs stub it (#338).
   - `failure_help.py` — the troubleshooting URL, fix hints for known Kestrel errors, and the
     `VNtyper failed: ... Help:` line `run_pipeline` logs at CRITICAL after the traceback.
+  - `igv_absence.py` — whether a report gets an alignment view and, when it does not, why:
+    no Kestrel call (normal, logged at INFO), a `kestrel/output.bed` left by an earlier run,
+    a missing region file for a real call, or no Kestrel result. The log line and the
+    report's IGV panel are both worded from its one decision.
 
 `nomenclature_bam.py` separately owns XD parsing, resolved haplotype-record voting, and
 the `BamConsensus` interface; those BAM-facing responsibilities do not belong in the
 source-vocabulary helper. `reference_resolution_environment.py` separately owns CRAM-only
 process-environment pin/restore I/O.
 
-These twenty-one focused modules keep pure decisions independently testable; measure their
+These twenty-two focused modules keep pure decisions independently testable; measure their
 current branch coverage rather than assuming a fixed percentage. Put new pure logic there
 rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.

@@ -5,7 +5,9 @@ panel-shaped hole with no explanation in it, and the console entry saying why is
 somewhere a reader of an archived report will ever look. There are five states now and
 every one of them is authored:
 
-1. **no alignment session** - the run produced none;
+1. **no alignment view** - and ``igv_absence.py`` says which kind: Kestrel called no
+   variant (the normal state), a call lost its ``kestrel/output.bed``, an earlier run
+   left one behind, or the run produced no session at all;
 2. **``--report-igv off``** - the operator asked for none;
 3. **``--report-igv sidecar``** - the browser is the file beside this one;
 4. **``DecompressionStream`` missing** - the library is in this file and this engine
@@ -37,6 +39,8 @@ pytestmark = pytest.mark.browser
 #: that asks the template what it says agrees with whatever the template says, including
 #: with nothing at all.
 NO_SESSION = "No alignment visualisation is available for this sample."
+NO_CALL = "No alignment view: Kestrel called no variant in this sample."
+REGION_FILE_MISSING = "The alignment view could not be built."
 SWITCHED_OFF = "Alignment visualisation was switched off for this run."
 SIDECAR = "The alignment browser is a separate file."
 CANNOT_EXPAND = "This browser cannot expand the embedded alignment browser."
@@ -45,7 +49,16 @@ EXPANDING = "igv.js 3.0.2 is embedded in this file, compressed"
 
 #: Every authored heading, so each test can assert that the state it expects is the one
 #: the reader got *and* that no other state is showing beside it.
-ALL_STATES = (NO_SESSION, SWITCHED_OFF, SIDECAR, CANNOT_EXPAND, COULD_NOT_START, EXPANDING)
+ALL_STATES = (
+    NO_SESSION,
+    NO_CALL,
+    REGION_FILE_MISSING,
+    SWITCHED_OFF,
+    SIDECAR,
+    CANNOT_EXPAND,
+    COULD_NOT_START,
+    EXPANDING,
+)
 
 #: Take the global away before the document's own script runs. This is the only way to
 #: reach state 4 in a modern engine, and it is exactly what an engine from before 2023
@@ -85,17 +98,23 @@ def _assert_only_state(page: Page, expected: str) -> None:
     assert others == [], f"the panel also claims {others}, which are different facts about the same run"
 
 
-def test_a_run_with_no_alignment_session_says_so(
+def test_a_call_without_its_region_file_says_so(
     rendered_report: Path,
     open_report: Callable[..., Page],
 ) -> None:
-    """The shipped fixture: no BED, so no session. The commonest report there is."""
+    """The shipped fixture: three Kestrel calls and no BED, so the view could not be built.
+
+    This used to render the generic "no alignment session" sentence, the same words a
+    sample with no call got - so a lost region file and a normal negative read alike.
+    The no-call state is exercised against a real BAM in
+    ``test_real_embedded_alignment_view.py``.
+    """
     page = open_report(rendered_report, offline=True)
 
-    _assert_only_state(page, NO_SESSION)
+    _assert_only_state(page, REGION_FILE_MISSING)
 
 
-def test_a_run_with_no_alignment_session_says_so_with_no_script_at_all(
+def test_a_call_without_its_region_file_says_so_with_no_script_at_all(
     rendered_report: Path,
     browser,
 ) -> None:
@@ -110,7 +129,7 @@ def test_a_run_with_no_alignment_session_says_so_with_no_script_at_all(
         page = context.new_page()
         page.goto(rendered_report.as_uri(), wait_until="load")
 
-        assert NO_SESSION in _panel(page)
+        assert REGION_FILE_MISSING in _panel(page)
     finally:
         context.close()
 

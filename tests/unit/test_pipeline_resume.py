@@ -171,7 +171,7 @@ def test_warning_emitted_when_output_dir_non_empty_without_resume(
     with caplog.at_level(logging.WARNING):
         run_pipeline_under_harness(output_dir=output_dir, run_pipeline_kwargs={"resume": False})
 
-    assert any("is non-empty" in record.message for record in caplog.records)
+    assert any("already holds" in record.message for record in caplog.records)
 
 
 def test_no_warning_emitted_when_output_dir_empty_without_resume(
@@ -184,7 +184,91 @@ def test_no_warning_emitted_when_output_dir_empty_without_resume(
     with caplog.at_level(logging.WARNING):
         run_pipeline_under_harness(output_dir=output_dir, run_pipeline_kwargs={"resume": False})
 
-    assert not any("is non-empty" in record.message for record in caplog.records)
+    assert not any("already holds" in record.message for record in caplog.records)
+
+
+def test_no_warning_when_the_only_entry_is_this_runs_own_log(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`cli.py` opens `<output_dir>/pipeline.log` before `run_pipeline` looks.
+
+    So through the CLI the directory was never empty, and every run into a fresh
+    directory warned that prior results may be overwritten - one false WARNING per
+    sample in a cohort's logs.
+    """
+    output_dir = tmp_path / "fresh_run_dir"
+    output_dir.mkdir()
+    own_log = output_dir / "pipeline.log"
+    own_log.write_text("Pipeline execution started.\n", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            run_pipeline_kwargs={"resume": False, "log_file": str(own_log)},
+        )
+
+    # Both spellings: the old warning said "is non-empty", the new one "already holds".
+    assert not any("already holds" in record.message or "is non-empty" in record.message for record in caplog.records)
+
+
+def test_no_warning_when_the_only_entry_is_the_directory_holding_this_runs_log(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`--log-file run/logs/pipeline.log`: cli.py creates `logs/` too (Codex review of #343)."""
+    output_dir = tmp_path / "fresh_run_dir"
+    (output_dir / "logs").mkdir(parents=True)
+    own_log = output_dir / "logs" / "pipeline.log"
+    own_log.write_text("Pipeline execution started.\n", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            run_pipeline_kwargs={"resume": False, "log_file": str(own_log)},
+        )
+
+    assert not any("already holds" in record.message for record in caplog.records)
+
+
+def test_a_log_directory_that_also_holds_prior_files_still_warns(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    output_dir = tmp_path / "reused_run_dir"
+    (output_dir / "logs").mkdir(parents=True)
+    own_log = output_dir / "logs" / "pipeline.log"
+    own_log.write_text("Pipeline execution started.\n", encoding="utf-8")
+    (output_dir / "logs" / "old_run.log").touch()
+
+    with caplog.at_level(logging.WARNING):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            run_pipeline_kwargs={"resume": False, "log_file": str(own_log)},
+        )
+
+    assert any("already holds 1 entry from an earlier run (logs)" in record.message for record in caplog.records)
+
+
+def test_a_prior_result_beside_this_runs_own_log_still_warns(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    output_dir = tmp_path / "reused_run_dir"
+    output_dir.mkdir()
+    own_log = output_dir / "pipeline.log"
+    own_log.write_text("Pipeline execution started.\n", encoding="utf-8")
+    (output_dir / "summary_report.html").touch()
+
+    with caplog.at_level(logging.WARNING):
+        run_pipeline_under_harness(
+            output_dir=output_dir,
+            run_pipeline_kwargs={"resume": False, "log_file": str(own_log)},
+        )
+
+    [message] = [record.getMessage() for record in caplog.records if "already holds" in record.getMessage()]
+    assert "already holds 1 entry from an earlier run (summary_report.html)" in message
+    assert "pipeline.log" not in message
 
 
 def test_no_warning_emitted_when_resume_is_active(
@@ -203,7 +287,7 @@ def test_no_warning_emitted_when_resume_is_active(
             expect_failure=True,  # Fails due to missing prior summary, not warning
         )
 
-    assert not any("is non-empty; prior results may be overwritten" in record.message for record in caplog.records)
+    assert not any("already holds" in record.message for record in caplog.records)
 
 
 def test_resume_fatal_refusal_when_prior_summary_missing(tmp_path: Path) -> None:

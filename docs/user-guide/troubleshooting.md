@@ -78,6 +78,69 @@ Yes. `Coverage QC: FAIL` is a finding: genotyping continues and the report shows
 metric. A hard error is different. A step did not run, so no result is written, rather than
 showing a result that was never computed.
 
+## The report has no IGV alignment view
+
+**This is expected for every sample in which Kestrel called no variant.** It does not mean
+that a step failed or that the installation is incomplete. The alignment view is drawn
+around the position of a Kestrel call: `kestrel/output.bed` names that position, and it
+is written only when a variant passes the final filter. A sample with no call has no
+position to show, so it has no view. This has been the behaviour in every release since the view was
+introduced. Samples with a Kestrel call get the view.
+
+The report's alignment panel names the reason. In `pipeline.log` it is one INFO line:
+
+```text
+INFO - No alignment view for this sample: Kestrel called no variant, and the view is drawn
+around the position of a Kestrel call. This is expected for a sample without a call; ...
+```
+
+Versions up to 2.0.40 logged the same normal state as
+`WARNING - BED file does not exist or not provided. Skipping IGV report generation.`
+That warning needs no action **when the report states `Kestrel: negative`** (or says no
+variant was detected by Kestrel). Those versions printed the same line for a sample
+*with* a Kestrel call whose `kestrel/output.bed` was lost. If the report lists a Kestrel
+variant and still has no alignment view, re-run the sample.
+
+Three states are not normal, and each is logged as a WARNING that names what to do:
+
+| Log starts with | Meaning | Fix |
+| --- | --- | --- |
+| `No alignment view although Kestrel called a variant` | The call's region file is missing (the message names it) | Re-run the sample, or `vntyper report --bed-file <file>` |
+| `No alignment view: Kestrel called no variant in this run, but ... exists` | An earlier run into the same `--output-dir` left its `output.bed`; it was not used | Use a fresh `--output-dir` per sample |
+| `No alignment view: this run's summary holds no readable Kestrel result` | No Kestrel result, not even the no-call placeholder, was recorded | Check the Kestrel section of the report and `pipeline.log` |
+
+`--report-igv off` also produces no view. The report says it was switched off.
+`vntyper report --bed-file <file>` draws the view at the regions you name, with or without
+a Kestrel call.
+
+## Log messages that are normal on a successful run
+
+A successful run ends with `Pipeline finished successfully.` and exits 0. These INFO lines
+describe a sample in which Kestrel called no variant, or a stage the run did not need:
+
+| Message | Why |
+| --- | --- |
+| `Kestrel called no variant: no candidate passed the final filter.` | No candidate passed the Kestrel filters, so the empty-result placeholder is written |
+| `Kestrel called no variant: its VCF holds no insertion or deletion.` | The same, one step earlier |
+| `Kestrel called no variant for this sample; the report states a negative Kestrel result.` | The report reading that placeholder |
+| `No alignment view for this sample: Kestrel called no variant ...` | See [above](#the-report-has-no-igv-alignment-view) |
+| `No fastp quality metrics in this report: fastp runs only on FASTQ input ...` | BAM and CRAM input are not run through fastp |
+| `adVNTR module not included. Skipping adVNTR genotyping.` | adVNTR runs only with `--extra-modules advntr` |
+
+`WARNING - Output directory ... already holds N entries from an earlier run (...)` names
+what the `--output-dir` already contained. This run's files overwrite those with the same
+name. It is harmless when you meant to re-run a sample, and one fresh directory per sample
+avoids it.
+
+Up to 2.0.40, a sample with no Kestrel call logged four of these states as WARNINGs (only one of the first two occurs per run):
+`Final processed DataFrame is empty`, `No insertion/deletion variants found`,
+`No Kestrel data found in pipeline summary`, `BED file does not exist or not provided` and
+`fastp output file not found`. Every run also logged `Output directory ... is non-empty;
+prior results may be overwritten.`, even into a fresh directory, because the run's own
+`pipeline.log` was counted. None of these needs action, with two exceptions: the BED
+warning when the report lists a Kestrel variant (see above), and the fastp warning on
+**FASTQ** input, where fastp should have run.
+
 ## Running many samples on a cluster
 
 Run one sample per job, so one failure cannot stop the rest. Try a single sample
@@ -96,9 +159,15 @@ CRAM=$(sed -n "${SLURM_ARRAY_TASK_ID}p" crams.txt)
 SAMPLE=$(basename "$CRAM" .cram)
 vntyper pipeline --cram "$CRAM" \
     --reference-fasta /ref/Homo_sapiens_assembly38.fasta --reference-assembly hg38 \
-    --output-dir "/results/vntyper/$SAMPLE" --threads 4 --fast-mode
-echo -e "$SAMPLE\t$?" >> /results/vntyper/exit_status.tsv
+    --output-dir "/results/vntyper/$SAMPLE" --threads "$SLURM_CPUS_PER_TASK" --fast-mode
+status=$?
+echo -e "$SAMPLE\t$status" >> /results/vntyper/exit_status.tsv
+exit $status                   # so SLURM records a failed sample as FAILED
 ```
+
+Match `--threads` to `--cpus-per-task`. With several samples in one job, check each
+command's exit status. A `for` loop otherwise moves on silently, and the job's status is
+only that of the last sample.
 
 Then aggregate the sample directories with [`vntyper cohort`](cohort-analysis.md).
 

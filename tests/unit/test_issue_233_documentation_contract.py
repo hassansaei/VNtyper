@@ -52,11 +52,13 @@ def test_agents_inventory_includes_both_phase_1_focused_modules() -> None:
     layout = _section(page, "## Layout", "## Code style")
     normalized = " ".join(layout.split())
 
-    assert "These twenty-one focused modules" in normalized
+    assert "These twenty-two focused modules" in normalized
     # #338 added the Kestrel log contract and the Kestrel input preflight.
     assert "`kestrel_log_contract.py` — finding ERROR lines in the Kestrel call log" in normalized
     assert "`kestrel_input_preflight.py` — which files Kestrel needs" in normalized
     assert "`failure_help.py` — the troubleshooting URL" in normalized
+    # The negative-run diagnostics split the IGV-absence decision out of generate_report.
+    assert "`igv_absence.py` — whether a report gets an alignment view" in normalized
     assert "`nomenclature_evidence.py` — source-specific evidence-unit flags and the" in normalized
     assert "BAM thin-support configuration-key resolver" in normalized
     assert "`nomenclature_bam.py` separately owns XD parsing, resolved haplotype-record voting, and" in normalized

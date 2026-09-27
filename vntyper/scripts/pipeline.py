@@ -200,6 +200,31 @@ def _run_and_record_fastq_qc(
     logger.info("FASTQ quality control completed.")
 
 
+def _holds_only_own_log(entry: Path, own_log: Path | None) -> bool:
+    """Whether an output-directory entry is this run's own log, or only leads to it.
+
+    ``cli.py`` creates the log (and, for ``--log-file run/logs/pipeline.log``, its parent
+    directories) before the pipeline starts, so neither is evidence of an earlier run.
+
+    Args:
+        entry: One entry of the output directory.
+        own_log: The resolved path of this run's log file, or None.
+
+    Returns:
+        bool: True for the log itself, or a directory holding nothing but the path to it.
+    """
+    if own_log is None:
+        return False
+    resolved = entry.resolve()
+    if resolved == own_log:
+        return True
+    if not entry.is_dir() or resolved not in own_log.parents:
+        return False
+    return all(
+        path.resolve() == own_log or (path.is_dir() and path.resolve() in own_log.parents) for path in entry.rglob("*")
+    )
+
+
 def run_pipeline(
     bwa_reference,
     output_dir,
@@ -581,8 +606,23 @@ def run_pipeline(
                 additional_commands=advntr_additional_commands,
             )
         out_path = Path(output_dir)
-        if not resume and out_path.exists() and any(out_path.iterdir()):
-            logger.warning("Output directory %s is non-empty; prior results may be overwritten.", output_dir)
+        if not resume and out_path.exists():
+            # `cli.py` opens this run's own `pipeline.log` here before the pipeline starts,
+            # so it is not evidence of a prior run; counting it made every fresh run warn.
+            own_log = Path(log_file).resolve() if log_file else None
+            prior_entries = sorted(
+                entry.name for entry in out_path.iterdir() if not _holds_only_own_log(entry, own_log)
+            )
+            if prior_entries:
+                shown = ", ".join(prior_entries[:3]) + (", ..." if len(prior_entries) > 3 else "")
+                logger.warning(
+                    "Output directory %s already holds %d entr%s from an earlier run (%s); files this run "
+                    "writes will overwrite them. Use a fresh --output-dir per sample, or --resume to reuse them.",
+                    output_dir,
+                    len(prior_entries),
+                    "y" if len(prior_entries) == 1 else "ies",
+                    shown,
+                )
 
         out_path.mkdir(parents=True, exist_ok=True)
         if input_type == "FASTQ":
@@ -1401,6 +1441,7 @@ def run_pipeline(
             report_file,
             log_file,
             bed_file=bed_out,
+            bed_from_kestrel_stage=True,
             bam_file=bam_out,
             fasta_file=fasta_reference,
             flanking=config.get("default_values", {}).get("flanking", 50),

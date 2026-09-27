@@ -217,6 +217,10 @@ def handle_report(
     # (#167, REVIEW.md finding 1) -- without it, `vntyper report -o <run>` with
     # no `--input-dir` resolved no BED and therefore generated no IGV panel.
     args.bam_file = resolve_bam_file(args.output_dir, args.input_dir, args.bam_file)
+    # Only a BED this command discovered is the Kestrel stage's own, and only that one
+    # can be left over by an earlier run; a `--bed-file` is the operator's choice even
+    # when its path happens to end in `kestrel/output.bed`.
+    bed_from_kestrel_stage = args.bed_file is None
     args.bed_file = resolve_bed_file(args.output_dir, args.input_dir, args.bed_file)
 
     # The pipeline log to embed. `--log-file` wins; otherwise prefer the finished
@@ -247,6 +251,7 @@ def handle_report(
         report_file=args.report_file,
         log_file=log_file,
         bed_file=args.bed_file,
+        bed_from_kestrel_stage=bed_from_kestrel_stage,
         bam_file=args.bam_file,
         fasta_file=args.reference_fasta,
         flanking=args.flanking,

@@ -6,6 +6,19 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.41 (2026-09-27)
+
+### A sample with no Kestrel call no longer reads as a failed run
+
+A cohort user asked whether their installation was broken. Every sample with no call had no IGV view, and a CRAM run logged four or five WARNINGs, none of which needed action. The missing view is expected: it is drawn around a Kestrel call, as in every release since the view was introduced. The messages and the report now say so.
+
+- **No-call samples log at INFO**: `BED file does not exist or not provided`, `No Kestrel data found in pipeline summary`, `fastp output file not found` (BAM or CRAM input), and one of `No insertion/deletion variants found` or `Final processed DataFrame is empty` were WARNINGs on a sample with no call. Each is now an INFO line that names the cause. A FASTQ run that lost its fastp output still warns, and a summary with no Kestrel rows at all still warns.
+- **The IGV panel names its reason**: The report used to say only that "this run produced no alignment session". It now distinguishes a sample with no Kestrel call (expected, and only when the run recorded Kestrel's no-call result) from three states that are not normal: a call whose region file is missing (naming that file), a leftover `output.bed` from an earlier run, and no readable Kestrel result. A `--bed-file` given to `vntyper report` is never treated as a leftover. The report panel and the log line are both worded from one decision (`igv_absence.py`), so they cannot disagree.
+- **Leftover region file**: The Kestrel stage writes `kestrel/output.bed` only for a call, and nothing removed an old one. Re-running a sample that previously had a call into the same `--output-dir`, and getting no call this time, kept the old file, so the report drew an alignment view at a position the current run did not call. The stage now removes the file before it decides. A report re-rendered over such a directory ignores the file and says so.
+- **"Output directory ... is non-empty" on every run**: `vntyper pipeline` opens `<output-dir>/pipeline.log` before the pipeline checks whether the directory is empty, so the check always found that file, and every run warned that prior results may be overwritten, even into a fresh directory. The run's own log (and a directory holding only it) no longer counts. The warning now names what the directory already held.
+- **Provenance**: A report with no alignment view stated "igv.js … embedded in this file" in its Provenance section even though no library was written into it. It now states `not included (this report has no alignment view)`.
+- **Docs**: [Troubleshooting](../user-guide/troubleshooting.md#the-report-has-no-igv-alignment-view) explains when the view appears, and lists the log messages that are normal on a successful run. The FAQ no longer describes the view as read inspection for every sample. The SLURM example now exits with the sample's status, so a failed sample is recorded as a failed job.
+
 ## 2.0.40 (2026-09-24)
 
 ### adVNTR cutoff axes in `calibrate optimize` ([#269](https://github.com/hassansaei/VNtyper/issues/269))

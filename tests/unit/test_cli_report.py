@@ -306,6 +306,8 @@ def test_the_bam_and_bed_are_discovered_under_the_output_dir_alone(tmp_path, bou
     bound = bound_calls[0]
     assert bound.arguments["bam_file"] == bam
     assert bound.arguments["bed_file"] == bed
+    # Discovered, so it is the Kestrel stage's own file and may be judged stale.
+    assert bound.arguments["bed_from_kestrel_stage"] is True
 
 
 def test_the_input_dir_wins_over_the_output_dir_for_bam_and_bed(tmp_path, bound_calls) -> None:
@@ -347,6 +349,8 @@ def test_explicit_bam_and_bed_win_over_output_dir_discovery(tmp_path, bound_call
     bound = bound_calls[0]
     assert bound.arguments["bam_file"] == chosen_bam
     assert bound.arguments["bed_file"] == chosen_bed
+    # Named by the operator: never treated as a leftover, whatever its path.
+    assert bound.arguments["bed_from_kestrel_stage"] is False
 
 
 def test_nothing_anywhere_leaves_bam_bed_and_vcf_none_without_raising(tmp_path, bound_calls) -> None:
