@@ -581,8 +581,21 @@ def run_pipeline(
                 additional_commands=advntr_additional_commands,
             )
         out_path = Path(output_dir)
-        if not resume and out_path.exists() and any(out_path.iterdir()):
-            logger.warning("Output directory %s is non-empty; prior results may be overwritten.", output_dir)
+        if not resume and out_path.exists():
+            # `cli.py` opens this run's own `pipeline.log` here before the pipeline starts,
+            # so it is not evidence of a prior run; counting it made every fresh run warn.
+            own_log = Path(log_file).resolve() if log_file else None
+            prior_entries = sorted(entry.name for entry in out_path.iterdir() if entry.resolve() != own_log)
+            if prior_entries:
+                shown = ", ".join(prior_entries[:3]) + (", ..." if len(prior_entries) > 3 else "")
+                logger.warning(
+                    "Output directory %s already holds %d entr%s from an earlier run (%s); files this run "
+                    "writes will overwrite them. Use a fresh --output-dir per sample, or --resume to reuse them.",
+                    output_dir,
+                    len(prior_entries),
+                    "y" if len(prior_entries) == 1 else "ies",
+                    shown,
+                )
 
         out_path.mkdir(parents=True, exist_ok=True)
         if input_type == "FASTQ":
