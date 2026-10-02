@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.42 (2026-10-02)
+
 ### Quality, coverage and length warnings recalibrated on real exomes
 
 On 75 randomly drawn real exomes (GRCh38), 6.7% had a mean below the 100x threshold under 2.0.3, the only sample-quality warning that release had. Under 2.0.41, 24% carried a caution-toned grade or chip, and 80% did with `--estimate-vntr-length`. The thresholds below were re-derived from downsampling and simulation data, and the report wording was rewritten.
