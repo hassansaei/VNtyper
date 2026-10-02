@@ -899,8 +899,7 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
     shipped = [
         rule
         for rule in report_config["screening_summary_rules"]
-        if rule["conditions"]
-        == {"kestrel_result": "negative_subthreshold", "advntr_result": "none", "quality_metrics_pass": True}
+        if rule["conditions"] == {"kestrel_result": "negative_subthreshold", "advntr_result": "none"}
     ]
     observations = manifest["observation_sets"]
     overrides = observations[0]["report_overrides"]
@@ -1089,6 +1088,12 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
             "extends": "2.0.40",
             "report_overrides": [],
         },
+        {
+            "version": "2.0.42",
+            "provenance_commit": "22ef08be4b675835fdda26d49bdc4537d94069f8",
+            "extends": "2.0.41",
+            "report_overrides": observations[-1]["report_overrides"],
+        },
     ]
     assert len(shipped) == 1
     assert len(overrides) == 2
@@ -1097,6 +1102,17 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
     assert all(
         live_by_identity[identity]["report_assertions"] == [shipped[0]["message"]] for identity in expected_identities
     )
+    # 2.0.42 reworded every message for a call, so each real success that asserts one
+    # carries an override, and each override is what the live declaration now asserts.
+    reworded = observations[-1]["report_overrides"]
+    assert len(reworded) == 21
+    assert all(
+        row["report"][0].startswith("Kestrel called a frameshift variant with high precision.<br>") for row in reworded
+    )
+    assert all(
+        live_by_identity[(row["suite"], row["test_name"])]["report_assertions"] == row["report"] for row in reworded
+    )
+    assert expected_identities.isdisjoint({(row["suite"], row["test_name"]) for row in reworded})
 
 
 def test_bootstrap_seed_is_reconstructed_from_authoritative_git_history() -> None:
@@ -1130,6 +1146,14 @@ def test_bootstrap_seed_is_reconstructed_from_authoritative_git_history() -> Non
         for row in missing["contracts"]
         if (row["suite"], row["test_name"]) != ("bam_tests", "example_b178_hg19_subset_fast")
     ]
+    # Since 2.0.42 this success carries a report override. Drop it with the contract, or the
+    # dangling override is refused first and the missing identity is never reached.
+    for observation in missing["observation_sets"]:
+        observation["report_overrides"] = [
+            row
+            for row in observation["report_overrides"]
+            if (row["suite"], row["test_name"]) != ("bam_tests", "example_b178_hg19_subset_fast")
+        ]
     with pytest.raises(ValueError, match="missing authoritative identities"):
         module.validate_bootstrap_manifest(
             missing, historical, json.loads(Path("tests/test_data_config.json").read_text())
@@ -1201,5 +1225,5 @@ def test_final_manifest_activates_from_absent_base_without_mutating_historical_t
         live,
         live,
         historical_test_config=historical,
-        observation_version="2.0.41",
+        observation_version="2.0.42",
     )

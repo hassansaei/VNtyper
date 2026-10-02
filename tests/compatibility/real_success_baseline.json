@@ -3860,7 +3860,162 @@
       "provenance_commit": "b69203eb51bdda46b9f67407b0c2fc7696d6cdf4",
       "extends": "2.0.40",
       "report_overrides": []
+    },
+    {
+      "version": "2.0.42",
+      "provenance_commit": "22ef08be4b675835fdda26d49bdc4537d94069f8",
+      "extends": "2.0.41",
+      "report_overrides": [
+        {
+          "suite": "bam_tests",
+          "test_name": "example_b178_hg19_subset_fast",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "bam_tests",
+          "test_name": "example_a5c1_hg19_subset_fast",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "bam_tests",
+          "test_name": "example_66bf_hg19_subset_fast",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "bam_tests",
+          "test_name": "example_dfc3_hg19_subset_fast",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "bam_tests",
+          "test_name": "example_dfc3_GRCh37_fast",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "bam_tests",
+          "test_name": "example_dfc3_GRCh38_fast",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "bam_tests",
+          "test_name": "example_dfc3_hg38_ensembl_fast",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "advntr_tests",
+          "test_name": "example_a5c1_hg19_subset_advntr",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants).",
+            "At least one match was found between Kestrel and adVNTR results."
+          ]
+        },
+        {
+          "suite": "single_end_bam_tests",
+          "test_name": "example_b178_hg19_single_end",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "single_end_bam_tests",
+          "test_name": "example_b178_hg19_single_end_keep",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "single_end_bam_tests",
+          "test_name": "example_b178_hg19_single_end_delete",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "single_end_bam_tests",
+          "test_name": "example_b178_hg19_single_end_delete_overrides_keep",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "single_end_bam_tests",
+          "test_name": "example_b178_hg19_single_end_archive",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "advntr_tests",
+          "test_name": "example_b178_hg19_bwa_advntr",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants).",
+            "At least one match was found between Kestrel and adVNTR results."
+          ]
+        },
+        {
+          "suite": "fastq_tests",
+          "test_name": "example_6449_hg19_subset_fastq_shark",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "fastq_tests",
+          "test_name": "example_6449_hg19_subset_single_fastq",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "fastq_tests",
+          "test_name": "example_b178_hg19_subset_paired_fastq_no_shark",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "bam_tests",
+          "test_name": "example_b178_hg19_subset_default",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "cram_tests",
+          "test_name": "b178_hg19_original_derived_mixed",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "cram_tests",
+          "test_name": "b178_hg19_reference_compressed_mixed",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        },
+        {
+          "suite": "cram_tests",
+          "test_name": "b178_hg19_remapped_pure_paired",
+          "report": [
+            "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long\u2010read sequencing for other variants)."
+          ]
+        }
+      ]
     }
   ]
 }
-

@@ -56,7 +56,8 @@ def test_a_single_tier_policy_never_yields_caution(estimate, tier, codes) -> Non
 
     assert result["length_sensitivity_tier"] == tier
     assert result["length_estimation_warnings"] == codes
-    assert result["length_sensitivity_policy"]["caution_threshold"] is None
+    assert result["length_sensitivity_policy"] == SINGLE_TIER.as_dict()
+    assert SINGLE_TIER.as_dict()["caution_threshold"] is None
 
 
 def test_a_single_tier_summary_renders_and_a_recorded_two_tier_one_still_does() -> None:
