@@ -284,7 +284,10 @@ def test_a_half_initialised_limiter_is_refused_before_it_is_called(
 
     monkeypatch.setattr(FastAPILimiter, "redis", object(), raising=False)
     monkeypatch.setattr(FastAPILimiter, missing, None, raising=False)
-    request = SimpleNamespace(scope={"route": None, "path": "/jobs"})
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    request = Request({"type": "http", "method": "GET", "path": "/jobs", "headers": [], "query_string": b""})
 
     with pytest.raises(Exception, match="FastAPILimiter.init"):
-        asyncio.run(RateLimiter(times=1, seconds=1)(request, SimpleNamespace()))
+        asyncio.run(RateLimiter(times=1, seconds=1)(request, Response()))
