@@ -12,10 +12,13 @@ from vntyper.scripts.coverage_qc import (
     COVERAGE_QC_FAIL,
     COVERAGE_QC_NOT_EVALUATED,
     COVERAGE_QC_PASS,
+    COVERAGE_QC_REDUCED,
     REASON_MEAN,
+    REASON_MEAN_LOW,
     REASON_NOT_MEASURED,
     REASON_UNCOVERED,
     evaluate_coverage_qc,
+    resolve_low_mean_threshold,
 )
 
 pytestmark = pytest.mark.unit
@@ -119,6 +122,100 @@ def test_one_measured_metric_is_still_evaluated():
     assert evaluate_coverage_qc(250.0, None, 100, 50.0).status == COVERAGE_QC_PASS
     assert evaluate_coverage_qc(10.0, None, 100, 50.0).status == COVERAGE_QC_FAIL
     assert evaluate_coverage_qc(None, 90.0, 100, 50.0).status == COVERAGE_QC_FAIL
+
+
+# ---------------------------------------------------------------------------
+# Three levels: adequate, reduced, low
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mean", "status", "passed", "reasons"),
+    [
+        (100.0, COVERAGE_QC_PASS, True, ()),
+        (99.99, COVERAGE_QC_REDUCED, True, (REASON_MEAN,)),
+        (50.0, COVERAGE_QC_REDUCED, True, (REASON_MEAN,)),
+        (49.99, COVERAGE_QC_FAIL, False, (REASON_MEAN_LOW,)),
+        (0.0, COVERAGE_QC_FAIL, False, (REASON_MEAN_LOW,)),
+    ],
+)
+def test_a_mean_between_the_two_thresholds_is_reduced_and_still_passes(mean, status, passed, reasons):
+    """A real exome at 96x with 168x flank depth was reported as a failure.
+
+    Downsampling 28 confirmed positives still detected 67 of 69 variants between 50x and
+    100x, so that band qualifies a negative without failing the sample.
+    """
+    qc = evaluate_coverage_qc(mean, 5.0, 100, 50.0, low_mean_threshold=50)
+
+    assert (qc.status, qc.passed, qc.reasons) == (status, passed, reasons)
+
+
+def test_a_patchy_vntr_fails_at_a_reduced_mean_and_names_only_what_failed():
+    """Catch REDUCED masking the uncovered-fraction failure, or the mean being blamed for it."""
+    qc = evaluate_coverage_qc(75.0, 80.0, 100, 50.0, low_mean_threshold=50)
+
+    assert qc.status == COVERAGE_QC_FAIL
+    assert qc.reasons == (REASON_UNCOVERED,)
+
+
+def test_both_low_failures_are_reported_in_declaration_order():
+    qc = evaluate_coverage_qc(10.0, 90.0, 100, 50.0, low_mean_threshold=50)
+
+    assert qc.reasons == (REASON_MEAN_LOW, REASON_UNCOVERED)
+
+
+def test_a_reduced_mean_with_no_uncovered_figure_is_still_reduced():
+    assert evaluate_coverage_qc(75.0, None, 100, 50.0, low_mean_threshold=50).status == COVERAGE_QC_REDUCED
+
+
+@pytest.mark.parametrize("assembly", ["hg38", "GRCh38", "hg38_ensembl", "hg38_ncbi"])
+def test_the_reduced_band_applies_on_every_spelling_of_the_assembly_it_was_measured_on(assembly):
+    assert resolve_low_mean_threshold({}, assembly) == 50.0
+    assert resolve_low_mean_threshold({"mean_vntr_coverage_low": 60}, assembly) == 60.0
+
+
+@pytest.mark.parametrize("assembly", ["hg19", "GRCh37", "hg19_ensembl", None, "", "not-an-assembly"])
+def test_other_and_unknown_assemblies_keep_the_single_line(assembly):
+    """The GRCh37 window reads about 2.7 times higher for the same sample, so 50x there
+    is far less depth than the 50x that was measured. A GRCh37 negative at 75x failed
+    before this change and must still fail."""
+    assert resolve_low_mean_threshold({}, assembly) is None
+    low = resolve_low_mean_threshold({}, assembly)
+    assert evaluate_coverage_qc(75.0, 0.0, 100, 50.0, low_mean_threshold=low).status == COVERAGE_QC_FAIL
+
+
+def test_the_measured_assemblies_are_configurable():
+    thresholds = {"reduced_depth_assemblies": ["GRCh37", "GRCh38"]}
+
+    assert resolve_low_mean_threshold(thresholds, "hg19") == 50.0
+    assert resolve_low_mean_threshold({"reduced_depth_assemblies": []}, "hg38") is None
+
+
+@pytest.mark.parametrize("thresholds", [{"mean_vntr_coverage": 30}, {"mean_vntr_coverage_low": 100}])
+def test_a_low_threshold_not_below_the_adequate_one_leaves_no_reduced_band(thresholds):
+    """A replaced config can set the adequate threshold below the shipped low default."""
+    assert resolve_low_mean_threshold(thresholds, "hg38") is None
+
+
+def test_the_shipped_config_declares_the_band_for_grch38_only():
+    import json
+    from pathlib import Path
+
+    import vntyper
+
+    thresholds = json.loads((Path(vntyper.__file__).parent / "config.json").read_text())["thresholds"]
+
+    assert thresholds["mean_vntr_coverage_low"] == 50
+    assert thresholds["reduced_depth_assemblies"] == ["GRCh38"]
+    assert resolve_low_mean_threshold(thresholds, "hg38") == 50.0
+    assert resolve_low_mean_threshold(thresholds, "hg19") is None
+
+
+def test_without_a_low_threshold_the_single_line_is_unchanged():
+    """A direct caller that passes two thresholds gets the pre-existing verdict and reason."""
+    qc = evaluate_coverage_qc(75.0, 5.0, 100, 50.0)
+
+    assert (qc.status, qc.reasons) == (COVERAGE_QC_FAIL, (REASON_MEAN,))
 
 
 # ---------------------------------------------------------------------------

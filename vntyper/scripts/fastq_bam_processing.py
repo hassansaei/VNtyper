@@ -28,7 +28,7 @@ from vntyper.scripts.command_builders import (
     build_samtools_merge_command,
     build_threaded_samtools_index_argv,
 )
-from vntyper.scripts.coverage_qc import evaluate_coverage_qc
+from vntyper.scripts.coverage_qc import evaluate_coverage_qc, resolve_low_mean_threshold
 from vntyper.scripts.coverage_stats import (
     format_coverage_summary,
     parse_region_length,
@@ -324,6 +324,7 @@ def calculate_vntr_coverage(
     reference_path=None,
     index_path=None,
     assembly_config=None,
+    reference_assembly=None,
 ):
     """
     Calculate the coverage over the VNTR region using samtools depth and write a TSV summary.
@@ -342,6 +343,9 @@ def calculate_vntr_coverage(
         assembly_config (dict, optional): The ``bam_processing.assemblies`` entry for this
             run. Supplies ``vntr_array_coords``, without which the build-comparable columns
             are recorded as not-measured rather than computed (#222).
+        reference_assembly (str, optional): The run's declared assembly. The reduced depth
+            band applies only on the assemblies it was measured on; without this the
+            verdict keeps the single mean threshold.
 
     Returns:
         dict: Exactly the keys in :data:`~vntyper.scripts.coverage_stats.COVERAGE_COLUMNS`
@@ -458,6 +462,7 @@ def calculate_vntr_coverage(
             round(stats["percent_uncovered"], 2),
             thresholds.get("mean_vntr_coverage", 100),
             thresholds.get("percent_vntr_uncovered", 50.0),
+            low_mean_threshold=resolve_low_mean_threshold(thresholds, reference_assembly),
         )
         stats["coverage_qc"] = qc.status
 

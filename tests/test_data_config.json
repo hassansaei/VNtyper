@@ -788,7 +788,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -862,7 +862,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -936,7 +936,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1076,7 +1076,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1149,7 +1149,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1222,7 +1222,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1295,7 +1295,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1426,7 +1426,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1561,7 +1561,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1631,7 +1631,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1702,7 +1702,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1774,7 +1774,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -1843,7 +1843,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       }
     ],
@@ -1925,7 +1925,7 @@
           ]
         },
         "report_assertions": [
-          "Pathogenic frameshift variant detected by Kestrel with high precision and confirmed by adVNTR.<br>Quality metrics are acceptable.<br>Additional validation using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended.",
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants).",
           "At least one match was found between Kestrel and adVNTR results."
         ],
         "advntr_assertions": {
@@ -2035,7 +2035,7 @@
           ]
         },
         "report_assertions": [
-          "Pathogenic frameshift variant detected by Kestrel with high precision and confirmed by adVNTR.<br>Quality metrics are acceptable.<br>Additional validation using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended.",
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants).",
           "At least one match was found between Kestrel and adVNTR results."
         ],
         "advntr_assertions": {
@@ -2141,7 +2141,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -2207,7 +2207,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -2275,7 +2275,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       }
     ],
@@ -2345,7 +2345,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -2413,7 +2413,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       },
       {
@@ -2480,7 +2480,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
         ]
       }
     ]

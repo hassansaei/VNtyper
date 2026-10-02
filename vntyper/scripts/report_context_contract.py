@@ -43,6 +43,11 @@ DEPRECATED_KEYS = frozenset(
         # still passed, because a configured template may render them.
         "cross_match_message",
         "cross_match_is_positive",
+        # The masthead depth chip now takes its tone from `coverage_qc_tone`, which
+        # distinguishes a reduced depth from a failing one. A configured template may
+        # still derive a two-state tone from these.
+        "coverage_qc_measured",
+        "screening_state.quality_metrics_pass",
     }
 )
 

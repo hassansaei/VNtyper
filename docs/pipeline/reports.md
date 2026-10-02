@@ -28,7 +28,7 @@ If adVNTR was run, its results appear in a separate table showing VID, variant s
 
 **Screening Summary**
 
-The masthead displays sample metadata, computed result chips, and interpretive text. Chips indicate Kestrel status, adVNTR status, concordance, confidence grade, coverage QC, mean coverage, and flank depth. Unmatched configurations display `Screening rule: Not configured`. Vocabularies use standard tokens: **High precision**, **Not performed**, **Not assessable**, **Finding**, **Finding corroborated**, **No finding**, **PASS**, and **FAIL**.
+The masthead displays sample metadata, computed result chips, and interpretive text. Chips indicate Kestrel status, adVNTR status, concordance, confidence grade, VNTR depth, mean coverage, and flank depth. Unmatched configurations display `Screening rule: Not configured`. Vocabularies use standard tokens: **High precision**, **Not performed**, **Not assessable**, **Finding**, **Finding corroborated**, **No finding**, and for VNTR depth **Adequate**, **Reduced**, **Insufficient**, and **Not evaluated**.
 
 The **Confidence grade** chip conveys sample-level confidence from `confidence_grade_rules` in `report_config.json`:
 
@@ -42,9 +42,10 @@ The masthead prints no arbitrary verdict text. Styling reflects internal states 
 
 - Kestrel result category (High_Precision, Low_Precision, flagged variants, negative)
 - adVNTR result category (positive, negative, not performed)
-- Quality metric pass/fail thresholds
 
-Interpretive text explains whether orthogonal validation is recommended. Each message is tracked both verbatim (`message`) and as segmented units (`segments`).
+The message never states coverage. What the measured coverage means for the result is stated beneath it by the `coverage_notes` sentences of `report_config.json`, filled in with the measured figure and the threshold applied. Mean depth qualifies a result without a finding and never a call: a reduced depth adds one sentence, a failing depth adds a sentence and a follow-up and grades the result `No finding limited`. A region that is mostly uncovered is stated for every result and limits the grade of a call too, as does a run with no coverage measurement. A Kestrel candidate below the reporting floor is described in the message and in the Kestrel section, and does not change the grade. Every call ends with one sentence asking for orthogonal confirmation.
+
+Each message is tracked both verbatim (`message`) and as segmented units (`segments`).
 
 Stages that fail to produce readable results are treated as indeterminate rather than negative, withholding interpretive text and drawing the masthead in neutral style.
 
@@ -60,7 +61,7 @@ Quality metrics are evaluated across tools:
 
 | Metric | Source | Configured threshold | Evaluation rule |
 |--------|--------|----------------------|-----------------|
-| Mean VNTR coverage | samtools depth | `thresholds.mean_vntr_coverage` | measured >= configured value |
+| Mean VNTR coverage | samtools depth | `thresholds.mean_vntr_coverage`, `thresholds.mean_vntr_coverage_low` | adequate at >= the first; on GRCh38 reduced at >= the second and failing below it; elsewhere failing below the first |
 | Percent VNTR uncovered | samtools depth | `thresholds.percent_vntr_uncovered` | measured <= configured value |
 | Duplication rate | fastp | `thresholds.duplication_rate` | measured <= configured value |
 | Q20 rate | fastp | `thresholds.q20_rate` | measured >= configured value |
@@ -71,7 +72,7 @@ Each metric is displayed with a status indicator based on its configured thresho
 
 The passed-filter rate divides `filtering_result.passed_filter_reads` by `summary.before_filtering.total_reads`. Total reads must be non-negative integers. An absent `output.json` marks fastp metrics as unavailable; corrupt files raise `ValueError`.
 
-Coverage metrics determine the **Coverage QC** status (`PASS` or `FAIL`), written to `coverage_summary.tsv` as `coverage_qc` and exported to cohorts as `cov_coverage_qc`. A `FAIL` on mean coverage or uncovered percentage flags the run.
+Coverage metrics determine the **Coverage QC** status (`PASS`, `REDUCED` or `FAIL`), written to `coverage_summary.tsv` as `coverage_qc` and exported to cohorts as `cov_coverage_qc`. `REDUCED` applies on GRCh38 only: a mean between `thresholds.mean_vntr_coverage_low` and `thresholds.mean_vntr_coverage`; it passes. `FAIL` is a mean below the failing threshold or an uncovered percentage above its own. The mean's status indicator marks only a failing mean. See [Coverage thresholds](../user-guide/configuration.md#coverage-thresholds).
 
 **BAM Header Information**
 

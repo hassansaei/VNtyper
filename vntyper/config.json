@@ -11,9 +11,9 @@
   },
   "length_estimation": {
     "enabled": false,
-    "_comment_sensitivity": "typical_error_repeats is the packaged length model's leave-one-out RMSE (14.26 repeats on the 76-exome training set). It is a typical error, not an interval: only 55 of 76 leave-one-out residuals fall within +/-14, and the empirical 2.5/97.5% residual quantiles are -29.4/+28.2. The report words it as a typical error from report_config.json and never renders it as a bare '±'.",
+    "_comment_sensitivity": "typical_error_repeats is the packaged length model's leave-one-out RMSE (14.26 repeats on the 76-exome training set). It is a typical error, not an interval: only 55 of 76 leave-one-out residuals fall within +/-14, and the empirical 2.5/97.5% residual quantiles are -29.4/+28.2. The report words it as a typical error from report_config.json and never renders it as a bare '±'. caution_threshold: null disables the caution tier. It shipped as 110 until 2.0.41: 53 of 67 estimates in a sample of 75 real exomes exceeded that, and simulated detection between 110 and 150 true repeats is 26 of 27 for dupC, so the tier marked most samples for a small effect. The one remaining tier is high_threshold: above 150 true repeats simulated detection is 29 of 32 for dupC and 11 of 23 for other frameshifts.",
     "sensitivity": {
-      "caution_threshold": 110.0,
+      "caution_threshold": null,
       "high_threshold": 150.0,
       "typical_error_repeats": 14.3
     }
@@ -135,7 +135,10 @@
     "annotation_font_size": 14
   },
   "thresholds": {
+    "_comment_mean_vntr_coverage": "Two mean-depth lines over the VNTR window. At or above mean_vntr_coverage the depth is adequate. On the coordinate systems in reduced_depth_assemblies, a mean below it and at or above mean_vntr_coverage_low is REDUCED, which is recorded and still passes, and a mean below mean_vntr_coverage_low fails. On every other assembly a mean below mean_vntr_coverage fails, as it did through 2.0.41. Measured by downsampling 28 confirmed positive GRCh38 exomes to nine fractions with VNtyper 2.0.3 (252 runs, repeated measures of 28 samples): the variant was detected in 124 of 124 runs at 100x or more, 67 of 69 between 50x and 100x, and 35 of 59 below 50x. The two lines are a policy choice along that gradient, not change points. The band is limited to GRCh38 because the GRCh37 window reads about 2.7x higher for the same sample (see bam_processing).",
     "mean_vntr_coverage": 100,
+    "mean_vntr_coverage_low": 50,
+    "reduced_depth_assemblies": ["GRCh38"],
     "percent_vntr_uncovered": 50.0,
     "duplication_rate": 0.1,
     "q20_rate": 0.8,

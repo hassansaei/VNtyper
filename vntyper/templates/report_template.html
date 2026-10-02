@@ -370,11 +370,10 @@
             border-radius: var(--radius);
             background: var(--sunken);
             font-size: var(--step--1);
-            color: var(--state-caution);
+            color: var(--ink);
             font-weight: 600;
             line-height: 1.4;
         }
-        .vntr-length-card[data-length-tier="high"] .length-warning-badge { border-color: currentColor; }
         .length-typical-error {
             color: var(--ink-muted);
             font-weight: 400;
@@ -387,11 +386,7 @@
             margin-bottom: var(--s-6);
             break-inside: avoid;
         }
-        /* A border, not an inset shadow: printers drop shadows with background graphics. */
-        .vntr-length-card[data-length-tier] {
-            border-color: color-mix(in srgb, var(--state-caution) 55%, var(--hairline));
-        }
-        /* "Estimated" is a state, not a verdict; beside a caution it must not read as all-clear. */
+        /* "Estimated" is a state, not a verdict; beside a length note it must not read as all-clear. */
         .vntr-length-card[data-length-tier] .length-status-pill .chip-value { color: var(--ink); }
         .length-card-header {
             display: flex;
@@ -757,10 +752,6 @@
         .notice-warning { color: var(--state-finding); }
         .notice-warning::before { background: currentColor; }
         .notice-warning strong { color: var(--state-finding); }
-        /* A length caution is not a finding: it takes the caution tone, never the finding red. */
-        .notice-caution { color: var(--state-caution); }
-        .notice-caution::before { background: currentColor; }
-        .notice-caution strong { color: var(--state-caution); }
 
         /* --- prose keeps a measure ---------------------------------------------
            `--measure` was declared and reached three selectors. Everything else ran the
@@ -1151,12 +1142,23 @@
                         <p class="detail coverage-note">{{ coverage_not_measured_note }}</p>
                     {% endif %}
                     {#
-                      The length caution qualifies a result without a finding, so it sits
-                      with that result rather than at the foot of the masthead.
+                      What the measured coverage means for this result, in the figures
+                      and thresholds the verdict was evaluated on. A mean-depth sentence
+                      appears only beside a result without a finding; a mostly uncovered
+                      region is stated for every result.
+                    #}
+                    {% for coverage_note in coverage_notes %}
+                        <p class="detail coverage-note">{{ coverage_note }}</p>
+                    {% endfor %}
+                    {#
+                      The length note qualifies a result without a finding, so it sits
+                      with that result rather than at the foot of the masthead. It is a
+                      note, not a caution: 13 of 67 estimates in a sample of real exomes
+                      were this long, and an amber mark that common stops being read.
                     #}
                     {% if length_presentation and length_presentation.notice_text %}
                         <ul class="notices notices-verdict">
-                            <li class="notice notice-caution" role="note">
+                            <li class="notice notice-length" role="note">
                                 <span>
                                     <strong>{{ length_presentation.notice_prefix }}</strong>
                                     {{ length_presentation.notice_text }}
@@ -1276,11 +1278,8 @@
                             <span class="chip-value">{{ chip.value }}</span>
                         </li>
                     {% endfor %}
-                    <li class="chip" data-tone="
-                        {%- if not screening_state.quality_metrics_pass %}caution
-                        {%- elif coverage_qc_measured %}ok
-                        {%- else %}none{% endif %}">
-                        <span class="chip-label">Coverage QC</span>
+                    <li class="chip" data-tone="{{ coverage_qc_tone }}">
+                        <span class="chip-label">VNTR depth</span>
                         <span class="chip-value">{{ coverage_qc_text }}</span>
                     </li>
                     {% if not screening_state.matched_rule %}

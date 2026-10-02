@@ -746,6 +746,47 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
     assert stats["coverage_qc"] == "FAIL"
 
 
+@pytest.mark.parametrize(
+    ("depth", "thresholds", "assembly", "verdict"),
+    [
+        (75, None, "hg38", "REDUCED"),
+        (120, None, "hg38", "PASS"),
+        (40, None, "hg38", "FAIL"),
+        (75, None, "hg19", "FAIL"),
+        (75, None, None, "FAIL"),
+        (75, {"mean_vntr_coverage": 100, "mean_vntr_coverage_low": 80}, "hg38", "FAIL"),
+        (40, {"mean_vntr_coverage": 30}, "hg38", "PASS"),
+        (20, {"mean_vntr_coverage": 30}, "hg38", "FAIL"),
+    ],
+)
+def test_calculate_vntr_coverage_applies_the_reduced_band_only_where_it_was_measured(
+    tmp_path, depth, thresholds, assembly, verdict
+):
+    """The writer's verdict uses the configured low line on GRCh38, the shipped 50 when a
+    replaced config omits it, and the single line on any other or undeclared assembly."""
+    depth_file = tmp_path / "cov_vntr_coverage.txt"
+    config = CONFIG if thresholds is None else {**CONFIG, "thresholds": thresholds}
+
+    def fake_run_command(command, log_file, critical=False, cwd=None):
+        Path(log_file).write_text("")
+        depth_file.write_text("".join(f"chr1\t{155160500 + offset}\t{depth}\n" for offset in range(1501)))
+        return True
+
+    with patch.object(fastq_bam_processing, "run_command", fake_run_command):
+        stats = fastq_bam_processing.calculate_vntr_coverage(
+            bam_file="/data/sample.bam",
+            region="chr1:155160500-155162000",
+            threads=4,
+            config=config,
+            output_dir=str(tmp_path),
+            output_name="cov",
+            reference_assembly=assembly,
+        )
+
+    assert stats["coverage_qc"] == verdict
+    assert (tmp_path / "cov_summary.tsv").read_text().rstrip("\n").endswith(f"\t{verdict}")
+
+
 def test_an_empty_depth_file_aborts_the_coverage_stage(tmp_path):
     """
     A region that matched nothing must not become ``mean = 0``.

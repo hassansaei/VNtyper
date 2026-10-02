@@ -49,7 +49,7 @@ Embedded rendering requires browser support for `DecompressionStream` (Chrome 80
 
 ## Reading and printing the report
 
-The report header displays status chips for Kestrel, adVNTR, concordance, and Coverage QC alongside configured interpretive notes without generating verdict words. Screening provenance fields display pipeline execution states directly.
+The report header displays status chips for Kestrel, adVNTR, concordance, and VNTR depth alongside configured interpretive notes without generating verdict words. Screening provenance fields display pipeline execution states directly.
 
 Individual sample reports preserve all variant rows without filtering. Flags provide visual emphasis without removing call evidence.
 

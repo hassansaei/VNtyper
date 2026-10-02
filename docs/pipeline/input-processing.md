@@ -56,7 +56,7 @@ The pipeline measures per-base depth across the VNTR region using `samtools dept
 - **Standard deviation, min, max**: Metrics of coverage uniformity.
 - **Region length**: Total VNTR interval length in base pairs.
 - **Uncovered bases and percent uncovered**: Count and fraction of positions with zero read depth.
-- **Coverage QC**: Categorical `PASS` or `FAIL` evaluated against configured thresholds.
+- **Coverage QC**: Categorical `PASS`, `REDUCED` or `FAIL` evaluated against configured thresholds.
 
 Every statistic is computed across the entire region, not merely over covered bases. The `-a` flag forces `samtools depth` to emit every genomic position, including zero-depth sites. Truncated depth files are zero-padded to the full interval length before computing metrics. A sample with 30x depth across 10% of the VNTR yields a mean coverage of 3x, and minimum coverage is 0 whenever any base lacks coverage.
 

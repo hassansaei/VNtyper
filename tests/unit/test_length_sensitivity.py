@@ -15,9 +15,71 @@ POLICY = subject.LengthSensitivityPolicy(110.0, 150.0, 14.3)
 RAW = {"caution_threshold": 110.0, "high_threshold": 150.0, "typical_error_repeats": 14.3}
 
 
+SINGLE_TIER = subject.LengthSensitivityPolicy(None, 150.0, 14.3)
+
+
 def test_resolve_reads_the_shipped_default() -> None:
+    """The shipped policy has one tier: 110 was below the median real exome."""
     config = json.loads((Path(vntyper.__file__).parent / "config.json").read_text())
-    assert subject.resolve_length_sensitivity_policy(config) == POLICY
+    assert subject.resolve_length_sensitivity_policy(config) == SINGLE_TIER
+
+
+def test_a_null_caution_threshold_disables_that_tier_and_round_trips() -> None:
+    raw = {**RAW, "caution_threshold": None}
+
+    policy = subject.decode_length_sensitivity_policy(raw)
+
+    assert policy == SINGLE_TIER
+    assert policy.as_dict() == raw
+    assert subject.decode_length_sensitivity_policy(policy.as_dict()) == policy
+
+
+def test_the_caution_key_must_be_present_even_when_the_tier_is_disabled() -> None:
+    """The contract stays closed: an absent key is a malformed policy, not a disabled tier."""
+    with pytest.raises(ValueError, match="length sensitivity"):
+        subject.decode_length_sensitivity_policy({"high_threshold": 150.0, "typical_error_repeats": 14.3})
+
+
+@pytest.mark.parametrize(
+    ("estimate", "tier", "codes"),
+    [
+        (80.0, "below", []),
+        (130.0, "below", []),
+        (150.0, "below", []),
+        (150.1, "high", [subject.CAUTION_CODE, subject.HIGH_CODE]),
+    ],
+)
+def test_a_single_tier_policy_never_yields_caution(estimate, tier, codes) -> None:
+    fields = {"length_estimation_status": "estimated", "estimated_total_repeat_count": estimate}
+
+    result = subject.apply_length_sensitivity(fields, SINGLE_TIER)
+
+    assert result["length_sensitivity_tier"] == tier
+    assert result["length_estimation_warnings"] == codes
+    assert result["length_sensitivity_policy"]["caution_threshold"] is None
+
+
+def test_a_single_tier_summary_renders_and_a_recorded_two_tier_one_still_does() -> None:
+    """A summary recorded by 2.0.36-2.0.41 carries a numeric caution cutoff and a caution
+    tier; it must keep re-rendering beside summaries recorded with the tier disabled."""
+    new = {
+        **subject.apply_length_sensitivity(
+            {"length_estimation_status": "estimated", "estimated_total_repeat_count": 160.5}, SINGLE_TIER
+        ),
+        "length_model_source": "packaged-research",
+    }
+    old = {
+        **subject.apply_length_sensitivity(
+            {"length_estimation_status": "estimated", "estimated_total_repeat_count": 120.0}, POLICY
+        ),
+        "length_model_source": "packaged-research",
+    }
+
+    new_view = subject.build_sensitivity_view(new, WORDS, is_positive=False)
+    old_view = subject.build_sensitivity_view(old, WORDS, is_positive=False)
+
+    assert new_view is not None and new_view.tier == "high" and new_view.notice is not None
+    assert old_view is not None and old_view.tier == "caution" and old_view.badge is not None
 
 
 def test_resolve_without_block_is_none() -> None:

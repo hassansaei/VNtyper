@@ -44,7 +44,12 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from vntyper.scripts import report_assets
 from vntyper.scripts.artifact_names import ADVNTR_EVIDENCE_SNAPSHOT_RELATIVE
-from vntyper.scripts.coverage_qc import COVERAGE_QC_NOT_EVALUATED, evaluate_coverage_qc
+from vntyper.scripts.coverage_presentation import coverage_notes, coverage_qc_tone
+from vntyper.scripts.coverage_qc import (
+    COVERAGE_QC_NOT_EVALUATED,
+    evaluate_coverage_qc,
+    resolve_low_mean_threshold,
+)
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
 from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs, build_fastp_measurement
 from vntyper.scripts.igv_absence import decide_igv_absence
@@ -515,6 +520,10 @@ def generate_summary_report(
     # them - see AGENTS.md trap 5 on step names for the same "absent key, no section"
     # pattern.
     reference_assembly_requested = pipeline_summary.get("reference_assembly_requested")
+    # The reduced depth band applies only on the assemblies it was measured on, and the
+    # pipeline judged the run by its declared assembly; a summary that records none keeps
+    # the single mean threshold.
+    low_mean_vntr_cov_threshold = resolve_low_mean_threshold(thresholds, reference_assembly_requested)
     reference_key_used = pipeline_summary.get("reference_key_used")
     reference_path = pipeline_summary.get("reference_path")
     reference_source_effective = pipeline_summary.get("reference_source_effective")
@@ -577,6 +586,7 @@ def generate_summary_report(
         percent_vntr_uncovered,
         mean_vntr_cov_threshold,
         percent_vntr_uncovered_threshold,
+        low_mean_threshold=low_mean_vntr_cov_threshold,
     )
 
     # Three states, not two, for **both** algorithms. "Recorded" is not "produced a
@@ -752,7 +762,12 @@ def generate_summary_report(
         load_fastp_output(Path(output_dir) / "fastq_bam_processing/output.json", expected=fastq_qc_recorded)
     )
 
-    coverage_icon, coverage_color = threshold_icon(mean_vntr_coverage, mean_vntr_cov_threshold, higher_better=True)
+    # The cross marks a mean that fails the gate, so it is drawn against the low line: a
+    # REDUCED mean passes, and a red cross beside a passing sample contradicts the chip.
+    failing_mean_threshold = (
+        mean_vntr_cov_threshold if low_mean_vntr_cov_threshold is None else low_mean_vntr_cov_threshold
+    )
+    coverage_icon, coverage_color = threshold_icon(mean_for_qc, failing_mean_threshold, higher_better=True)
     uncovered_icon, uncovered_color = threshold_icon(
         percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False
     )
@@ -1069,6 +1084,7 @@ def generate_summary_report(
         "depth_counting_policy": shown(coverage["depth_counting_policy"]),
         "coverage_qc": coverage_qc.status,
         "coverage_qc_text": coverage_qc_word(coverage_qc.status),
+        "coverage_qc_tone": coverage_qc_tone(coverage_qc.status),
         # Let templates test measuredness without restating this presentation phrase.
         "not_calculated": NOT_CALCULATED,
         # Whether there was anything to judge. `quality_metrics_pass` stays True for a run
@@ -1117,6 +1133,21 @@ def generate_summary_report(
         # Additive and config-driven. Empty for a measured gate and for a config written
         # before the key existed; configured screening messages are never reworded.
         "coverage_not_measured_note": coverage_not_measured_note(report_config, coverage_qc),
+        # A coverage sentence qualifies a result. A state the run never established, or
+        # one with no configured message, is presented as no result at all, and a sentence
+        # saying "this result does not exclude a variant" beside it would assert one.
+        "coverage_notes": ()
+        if screening.emphasis == "indeterminate"
+        else coverage_notes(
+            report_config,
+            coverage_qc,
+            is_positive=screening.is_positive,
+            mean_vntr_coverage=mean_for_qc,
+            percent_vntr_uncovered=percent_vntr_uncovered,
+            mean_threshold=mean_vntr_cov_threshold,
+            low_mean_threshold=low_mean_vntr_cov_threshold,
+            percent_threshold=percent_vntr_uncovered_threshold,
+        ),
         # The state as words, computed in the pure module: a chip is the most compressed
         # thing the report says about a stage, so it is the one most easily misread as a
         # verdict, and none of these words may be one the run did not reach.

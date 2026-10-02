@@ -62,6 +62,8 @@ Controls tool paths, reference data, processing parameters, and quality threshol
   },
   "thresholds": {
     "mean_vntr_coverage": 100,
+    "mean_vntr_coverage_low": 50,
+    "reduced_depth_assemblies": ["GRCh38"],
     "percent_vntr_uncovered": 50.0,
     "duplication_rate": 0.1,
     "q20_rate": 0.8,
@@ -84,11 +86,36 @@ Controls tool paths, reference data, processing parameters, and quality threshol
 
 #### Coverage thresholds
 
-`mean_vntr_coverage` and `percent_vntr_uncovered` decide the report coverage QC verdict, and through it the `quality_metrics_pass` axis of the screening summary. The mean fails strictly below its threshold; the uncovered fraction fails strictly above its own, so a sample at exactly 100x and exactly 50.0% uncovered passes both. An unmeasured metric (such as a run omitting coverage calculation) does not fail the gate.
+`mean_vntr_coverage`, `mean_vntr_coverage_low`, `reduced_depth_assemblies` and `percent_vntr_uncovered` decide the coverage QC verdict:
+
+| Verdict | Condition | Report chip |
+|---------|-----------|-------------|
+| `PASS` | mean >= `mean_vntr_coverage` and uncovered <= `percent_vntr_uncovered` | VNTR depth: Adequate |
+| `REDUCED` | GRCh38 only: mean below `mean_vntr_coverage` and >= `mean_vntr_coverage_low`, uncovered within its threshold | VNTR depth: Reduced |
+| `FAIL` | mean below the failing threshold, or uncovered above `percent_vntr_uncovered` | VNTR depth: Insufficient |
+| `NOT_EVALUATED` | no coverage step ran | VNTR depth: Not evaluated |
+
+The failing threshold for the mean is `mean_vntr_coverage_low` (50) on the assemblies listed in `reduced_depth_assemblies`, and `mean_vntr_coverage` (100) on every other assembly and on a run whose assembly is not recorded. Comparisons are strict, so a sample at exactly 100x and exactly 50.0% uncovered is `PASS`, and a GRCh38 sample at exactly 50x is `REDUCED`. A configuration without the two new keys uses 50 and `["GRCh38"]`. If `mean_vntr_coverage_low` is not below `mean_vntr_coverage` there is no `REDUCED` band.
+
+`PASS` and `REDUCED` pass the gate (`quality_metrics_pass` is true); `FAIL` does not. What each verdict changes in the report:
+
+| Verdict | Result without a finding | Kestrel or adVNTR call |
+|---------|--------------------------|------------------------|
+| `REDUCED` | one sentence stating the mean and the threshold; grade `No finding` | nothing |
+| `FAIL` on the mean | a sentence stating the mean and the threshold applied, and a follow-up sentence; grade `No finding limited` | nothing |
+| `FAIL` on the uncovered fraction | a sentence stating the fraction and its limit, and a follow-up sentence; grade `No finding limited` | the same sentence; grade `Finding limited` |
+| `NOT_EVALUATED` | the not-measured note; grade `No finding limited` | the not-measured note; grade `Finding limited` |
+
+The sentences are the `coverage_notes` block of `report_config.json`. They are filled in with the measured figure and the threshold that was applied.
+
+The two mean thresholds are a policy choice along a measured gradient, not change points. Twenty-eight confirmed positive GRCh38 exomes were downsampled to nine fractions and run with VNtyper 2.0.3 (252 runs, repeated measures of 28 samples). The variant was detected in 124 of 124 runs at 100x or more, 67 of 69 runs between 50x and 100x, and 35 of 59 runs below 50x. Mean depth does not qualify a call: no false positive appeared in 1,200 simulated negative runs across six depth levels.
+
+!!! note "GRCh37 and hg19"
+    The `REDUCED` band is not applied on GRCh37. The GRCh37 window holds less of the repeat array, so its mean reads about 2.7 times higher for the same sample (see [Reference Assemblies](reference-assemblies.md)), and no downsampling data exists for it. A GRCh37 mean below 100x is `FAIL`, as before. A BAM that is detected as GRCh38 but run with the default `--reference-assembly hg19` is also judged on the single threshold; pass `--reference-assembly hg38` to apply the band.
 
 The report evaluates verdicts on rounded figures (two decimal places), preventing false failures beside matching boundaries.
 
-Since VNtyper 2.0.8 both keys are enforced. Previously, `percent_vntr_uncovered` drove only a color-coded indicator.
+Since VNtyper 2.0.8 the mean and the uncovered fraction are both enforced. Previously, `percent_vntr_uncovered` drove only a color-coded indicator. Through 2.0.41 the mean had one threshold, and a mean below 100x was `FAIL`.
 
 #### fastp report thresholds
 

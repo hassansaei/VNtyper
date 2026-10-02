@@ -65,7 +65,7 @@ The policy lives in the run configuration and is recorded next to the tier as
 
 ```json
 "length_estimation": {
-  "sensitivity": {"caution_threshold": 110.0, "high_threshold": 150.0, "typical_error_repeats": 14.3}
+  "sensitivity": {"caution_threshold": null, "high_threshold": 150.0, "typical_error_repeats": 14.3}
 }
 ```
 
@@ -83,7 +83,17 @@ records no tier. Report wording comes from the `length_sensitivity` block of
 Basis for the defaults, measured on the 76 PacBio-truth exomes with leave-one-out
 predictions:
 
-- 82% of samples have a true total above 110 repeats, so 110 is a caution, not a banner.
+- 82% of samples have a true total above 110 repeats, and 53 of 67 estimates (79%) in a
+  sample of 75 exomes from another cohort exceeded it. The caution tier at 110 shipped through 2.0.41
+  and marked most samples; `caution_threshold` is now `null`, which disables the tier.
+  The key must stay present. Set a number to restore the tier. A summary recorded with a
+  numeric caution cutoff keeps its recorded tier when re-rendered.
+- In the 400-sample simulation, detection by true total length was 73 of 73 at 110
+  repeats or fewer; between 110 and 150 it was 26 of 27 for dupC and 39 of 45 for other
+  frameshifts; above 150 it was 29 of 32 for dupC and 11 of 23 for other frameshifts.
+  Misses begin above 110 (the shortest missed array had 114 repeats) and are pronounced
+  above 150, mostly for variants other than dupC. These bins use the true length, and the
+  tier is applied to an estimate.
 - Predictions regress toward the mean (slope of prediction on truth 0.66): arrays above
   130 are under-estimated by about 12 repeats on average. The high trigger therefore sits
   below the length it targets: 150 on the estimate catches 7 of the 8 arrays truly above
@@ -98,7 +108,7 @@ predictions:
 
 #### Limits of the tier evidence
 
-- **The cutoffs were chosen on the numbers that describe them.** 110 and 150 were picked
+- **The cutoff was chosen on the numbers that describe it.** 150 was picked
   on the same 76 leave-one-out predictions that the figures above report. No held-out
   set confirms them.
 - **The high tier is imprecise.** At 150 on the estimate, the tier catches 7 of the 8

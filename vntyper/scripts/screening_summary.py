@@ -76,6 +76,7 @@ from vntyper.scripts.coverage_presentation import (
 )
 from vntyper.scripts.coverage_presentation import coverage_not_measured_note as _coverage_not_measured_note
 from vntyper.scripts.coverage_presentation import coverage_qc_word as _coverage_qc_word
+from vntyper.scripts.coverage_presentation import coverage_uncovered_exceeded as _coverage_uncovered_exceeded
 from vntyper.scripts.coverage_qc import CoverageQC
 from vntyper.scripts.summary_steps import STEP_ABSENT, STEP_READ, STEP_UNREADABLE
 
@@ -740,6 +741,7 @@ def build_screening_summary(
             "advntr_result": advntr_result,
             "quality_metrics_pass": quality_metrics_pass,
             "coverage_qc_status": coverage_qc.status,
+            "coverage_uncovered_exceeded": _coverage_uncovered_exceeded(coverage_qc),
             "kestrel_execution": kestrel_execution,
             "advntr_execution": advntr_execution,
             "cross_match_is_positive": cross_match_is_positive,

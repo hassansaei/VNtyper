@@ -838,21 +838,21 @@ def test_the_shipped_rule_table_is_loaded() -> None:
 
     40 until #266 added ``negative_subthreshold``, a sixth Kestrel state, and with it the
     8 rules the cartesian product requires. 50 since the two single-condition
-    ``unestablished`` entries (2026-08-27 code screen).
+    ``unestablished`` entries (2026-08-27 code screen). 26 since the coverage verdict left
+    the table: what the measured coverage means for a result is stated by
+    ``coverage_notes``, in the figures and thresholds the verdict was evaluated on, so
+    each of the 24 result states has one message.
     """
-    assert len(ALL_RULES) == 50
+    assert len(ALL_RULES) == 26
 
 
-def test_twelve_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
-    """Six Kestrel states times two coverage-QC states, derived from conditions.
-
-    Ten until #266's sixth Kestrel state.
-    """
+def test_six_rules_describe_an_advntr_stage_that_was_not_performed() -> None:
+    """One per Kestrel state."""
     assert ss.NOT_PERFORMED == "none"
 
     not_performed_rules = [rule for rule in ALL_RULES if rule["conditions"].get("advntr_result") == "none"]
 
-    assert len(not_performed_rules) == 12
+    assert len(not_performed_rules) == 6
 
 
 @pytest.mark.parametrize("rule", ALL_RULES, ids=rule_id)
@@ -1174,7 +1174,7 @@ class TestSubthresholdPromotion:
             kestrel_subthreshold=True,
         )
 
-        assert "rthogonal confirmation" in summary.text
+        assert "Confirm by an orthogonal method" in summary.text
 
     def test_its_chip_reads_as_words_and_is_not_toned_as_a_finding(self, report_config) -> None:
         """The chip is toned by an *independent* ``is_finding`` call site, so a fix to
@@ -1452,8 +1452,9 @@ def test_confidence_grade_not_established_on_unestablished_algorithm_results(rep
     assert rule_a is not None and rule_a["grade"] == "not-established"
 
 
-def test_confidence_grade_no_finding_limited_on_subthreshold_even_with_passing_coverage(report_config) -> None:
-    """A subthreshold candidate is no-finding-limited regardless of good coverage."""
+def test_confidence_grade_stays_no_finding_on_subthreshold_with_passing_coverage(report_config) -> None:
+    """A below-floor candidate is described in the Kestrel section and the message, and does
+    not limit the grade: about one real negative in five carries one."""
     summary = ss.build_screening_summary(
         pd.DataFrame(),
         pd.DataFrame(),
@@ -1463,11 +1464,11 @@ def test_confidence_grade_no_finding_limited_on_subthreshold_even_with_passing_c
         kestrel_subthreshold=True,
     )
     assert summary.kestrel_result == ss.SUBTHRESHOLD_RESULT
-    assert summary.confidence_grade == "no-finding-limited"
+    assert summary.confidence_grade == "no-finding"
 
 
 def test_confidence_grade_distinguishes_not_evaluated_from_pass(report_config) -> None:
-    """Coverage QC NOT_EVALUATED (which has passed=True) yields -limited grades."""
+    """Coverage QC NOT_EVALUATED (which has passed=True) limits a no-finding grade only."""
     qc_not_evaluated = CoverageQC(passed=True, status="NOT_EVALUATED", reasons=("not measured",))
 
     # Negative call + unmeasured coverage -> no-finding-limited
@@ -1491,6 +1492,130 @@ def test_confidence_grade_distinguishes_not_evaluated_from_pass(report_config) -
     )
     assert summary_finding.quality_metrics_pass is True
     assert summary_finding.confidence_grade == "finding-limited"
+
+
+REDUCED_QC = CoverageQC(passed=True, status="REDUCED", reasons=("mean_vntr_coverage",))
+LOW_QC = CoverageQC(passed=False, status="FAIL", reasons=("mean_vntr_coverage_low",))
+LEGACY_LOW_QC = CoverageQC(passed=False, status="FAIL", reasons=("mean_vntr_coverage",))
+PATCHY_QC = CoverageQC(passed=False, status="FAIL", reasons=("percent_vntr_uncovered",))
+UNMEASURED_QC = CoverageQC(passed=True, status="NOT_EVALUATED", reasons=("coverage_not_measured",))
+EVERY_QC = {
+    "pass": _passing(),
+    "reduced": REDUCED_QC,
+    "low": LOW_QC,
+    "legacy-low": LEGACY_LOW_QC,
+    "patchy": PATCHY_QC,
+    "unmeasured": UNMEASURED_QC,
+}
+NO_FINDING_GRADE = {
+    "pass": "no-finding",
+    "reduced": "no-finding",
+    "low": "no-finding-limited",
+    "legacy-low": "no-finding-limited",
+    "patchy": "no-finding-limited",
+    "unmeasured": "no-finding-limited",
+}
+FINDING_GRADE = {
+    "pass": "finding",
+    "reduced": "finding",
+    "low": "finding",
+    "legacy-low": "finding",
+    "patchy": "finding-limited",
+    "unmeasured": "finding-limited",
+}
+
+
+@pytest.mark.parametrize("coverage", sorted(EVERY_QC))
+@pytest.mark.parametrize("subthreshold", [False, True])
+@pytest.mark.parametrize("advntr_frame", [None, "negative"])
+def test_a_result_without_a_finding_is_limited_only_by_a_failing_or_unmeasured_coverage(
+    report_config, coverage, subthreshold, advntr_frame
+) -> None:
+    """A reduced depth and a below-floor candidate are each stated in words and limit
+    nothing; a failing verdict of either kind, and an unmeasured one, limit the grade."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(),
+        pd.DataFrame() if advntr_frame is None else pd.DataFrame(ADVNTR_FRAMES[advntr_frame]),
+        advntr_frame is not None,
+        EVERY_QC[coverage],
+        report_config,
+        kestrel_subthreshold=subthreshold,
+    )
+
+    assert summary.matched_rule is True
+    assert summary.confidence_grade == NO_FINDING_GRADE[coverage]
+
+
+@pytest.mark.parametrize("coverage", sorted(EVERY_QC))
+@pytest.mark.parametrize("kestrel_state", ["High_Precision", "Low_Precision"])
+def test_a_kestrel_call_is_limited_by_a_patchy_or_unmeasured_region_and_never_by_depth(
+    report_config, coverage, kestrel_state
+) -> None:
+    """No false positive appeared in 1,200 simulated negative runs across six depth
+    levels, and the precision tier already reflects the depth supporting a call."""
+    summary = ss.build_screening_summary(
+        pd.DataFrame(KESTREL_FRAMES[kestrel_state]), pd.DataFrame(), False, EVERY_QC[coverage], report_config
+    )
+
+    assert summary.confidence_grade == FINDING_GRADE[coverage]
+
+
+@pytest.mark.parametrize("coverage", sorted(EVERY_QC))
+@pytest.mark.parametrize("advntr_state", ["positive", "positive flagged"])
+@pytest.mark.parametrize("subthreshold", [False, True])
+def test_an_advntr_only_call_is_graded_like_a_kestrel_call(report_config, coverage, advntr_state, subthreshold) -> None:
+    summary = ss.build_screening_summary(
+        pd.DataFrame(),
+        pd.DataFrame(ADVNTR_FRAMES[advntr_state]),
+        True,
+        EVERY_QC[coverage],
+        report_config,
+        kestrel_subthreshold=subthreshold,
+    )
+
+    assert summary.confidence_grade == FINDING_GRADE[coverage]
+
+
+@pytest.mark.parametrize("coverage", sorted(EVERY_QC))
+def test_the_message_is_the_same_at_every_coverage(report_config, coverage) -> None:
+    """Coverage is stated by ``coverage_notes``; the result message never restates it."""
+    for kestrel_frame in (pd.DataFrame(), pd.DataFrame(KESTREL_FRAMES["High_Precision"])):
+        at_coverage = ss.build_screening_summary(
+            kestrel_frame, pd.DataFrame(), False, EVERY_QC[coverage], report_config
+        )
+        passing = ss.build_screening_summary(kestrel_frame, pd.DataFrame(), False, _passing(), report_config)
+
+        assert at_coverage.text == passing.text
+
+
+def test_no_shipped_message_states_a_coverage_verdict(report_config) -> None:
+    """A depth clause in a static message would state a threshold the run may not have
+    used; the old table carried six phrasings of one."""
+    for rule in report_config["screening_summary_rules"]:
+        assert "quality_metrics_pass" not in rule["conditions"]
+        assert "coverage_qc_status" not in rule["conditions"]
+        assert not any(word in rule["message"].lower() for word in ("quality metrics", "depth", "coverage"))
+
+
+@pytest.mark.parametrize("coverage", sorted(EVERY_QC))
+@pytest.mark.parametrize("cross_match", [False, True])
+def test_every_reachable_state_has_a_grade_rule_of_its_own(report_config, coverage, cross_match) -> None:
+    """The default grade is ``not-established``, so a state no rule covers is silently
+    graded as an unestablished run. Catch a new coverage status doing that."""
+    for state in reachable_states(report_config):
+        if "unestablished" in (state["kestrel_result"], state["advntr_result"]):
+            continue
+        qc = EVERY_QC[coverage]
+        current = {
+            **state,
+            "quality_metrics_pass": qc.passed,
+            "coverage_qc_status": qc.status,
+            "coverage_uncovered_exceeded": "percent_vntr_uncovered" in qc.reasons,
+            "kestrel_execution": ss.EXECUTION_PERFORMED,
+            "advntr_execution": ss.EXECUTION_PERFORMED,
+            "cross_match_is_positive": cross_match,
+        }
+        assert ss.find_confidence_grade_rule(report_config, current) is not None, current
 
 
 def test_confidence_grade_finding_corroborated_versus_finding(report_config) -> None:
