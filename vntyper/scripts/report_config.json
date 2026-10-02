@@ -519,21 +519,10 @@
           "positive",
           "positive flagged"
         ],
-        "coverage_qc_status": "NOT_EVALUATED"
-      },
-      "grade": "finding-limited"
-    },
-    {
-      "conditions": {
-        "kestrel_result": [
-          "negative",
-          "negative_subthreshold"
-        ],
-        "advntr_result": [
-          "positive",
-          "positive flagged"
-        ],
-        "coverage_uncovered_exceeded": true
+        "coverage_qc_status": [
+          "FAIL",
+          "NOT_EVALUATED"
+        ]
       },
       "grade": "finding-limited"
     },

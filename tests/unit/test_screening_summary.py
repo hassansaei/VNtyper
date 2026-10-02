@@ -1563,7 +1563,11 @@ def test_a_kestrel_call_is_limited_by_a_patchy_or_unmeasured_region_and_never_by
 @pytest.mark.parametrize("coverage", sorted(EVERY_QC))
 @pytest.mark.parametrize("advntr_state", ["positive", "positive flagged"])
 @pytest.mark.parametrize("subthreshold", [False, True])
-def test_an_advntr_only_call_is_graded_like_a_kestrel_call(report_config, coverage, advntr_state, subthreshold) -> None:
+def test_an_advntr_only_call_stays_limited_by_any_failing_coverage(
+    report_config, coverage, advntr_state, subthreshold
+) -> None:
+    """The evidence that depth does not weaken a call is for Kestrel. A real exome at 43x
+    with a flagged adVNTR-only call must not be graded a plain finding."""
     summary = ss.build_screening_summary(
         pd.DataFrame(),
         pd.DataFrame(ADVNTR_FRAMES[advntr_state]),
@@ -1573,7 +1577,8 @@ def test_an_advntr_only_call_is_graded_like_a_kestrel_call(report_config, covera
         kestrel_subthreshold=subthreshold,
     )
 
-    assert summary.confidence_grade == FINDING_GRADE[coverage]
+    expected = "finding" if coverage in ("pass", "reduced") else "finding-limited"
+    assert summary.confidence_grade == expected
 
 
 @pytest.mark.parametrize("coverage", sorted(EVERY_QC))
