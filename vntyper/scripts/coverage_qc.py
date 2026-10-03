@@ -34,6 +34,7 @@ Functions:
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -107,6 +108,19 @@ class MeanThresholds:
     low: float | None
 
 
+def _line(value: object, key: str) -> float:
+    """One configured depth line, or a ``ValueError`` naming its key.
+
+    Validated rather than coerced: a ``NaN`` line compares false against every mean, so
+    it would silently pass every sample.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        message = f"thresholds.{key} must be a finite, non-negative number; got {value!r}"
+        logger.error(message)
+        raise ValueError(message)
+    return float(value)
+
+
 def resolve_mean_thresholds(thresholds: Mapping[str, Any], reference_assembly: str | None) -> MeanThresholds:
     """Return the mean-depth lines for this run's assembly.
 
@@ -135,8 +149,15 @@ def resolve_mean_thresholds(thresholds: Mapping[str, Any], reference_assembly: s
     Returns:
         MeanThresholds: The lines to apply. ``low`` is ``None`` when the band does not
         apply or is empty because it is not below ``adequate``.
+
+    Raises:
+        ValueError: If a line that applies to this run is not a finite, non-negative
+            number, or the per-assembly block or its entry is not a mapping.
     """
-    single = MeanThresholds(adequate=float(thresholds.get("mean_vntr_coverage", DEFAULT_MEAN_THRESHOLD)), low=None)
+    single = MeanThresholds(
+        adequate=_line(thresholds.get("mean_vntr_coverage", DEFAULT_MEAN_THRESHOLD), "mean_vntr_coverage"),
+        low=None,
+    )
     if "mean_vntr_coverage_by_assembly" in thresholds:
         by_assembly = thresholds["mean_vntr_coverage_by_assembly"]
     elif "mean_vntr_coverage" in thresholds:
@@ -151,11 +172,22 @@ def resolve_mean_thresholds(thresholds: Mapping[str, Any], reference_assembly: s
         coordinate_system = get_coordinate_system(reference_assembly)
     except ValueError:
         return single
+    if not isinstance(by_assembly, Mapping):
+        message = "thresholds.mean_vntr_coverage_by_assembly must be a mapping of assembly to lines"
+        logger.error(message)
+        raise ValueError(message)
     lines = by_assembly.get(coordinate_system)
-    if not lines:
+    if lines is None:
         return single
-    adequate = float(lines["adequate"])
+    key = f"mean_vntr_coverage_by_assembly.{coordinate_system}"
+    if not isinstance(lines, Mapping) or "adequate" not in lines:
+        message = f"thresholds.{key} must be a mapping with an 'adequate' line"
+        logger.error(message)
+        raise ValueError(message)
+    adequate = _line(lines["adequate"], f"{key}.adequate")
     low = lines.get("low")
+    if low is not None:
+        low = _line(low, f"{key}.low")
     if low is not None and low >= adequate:
         logger.info(
             f"The low mean line for {coordinate_system} ({low}) is not below its adequate "

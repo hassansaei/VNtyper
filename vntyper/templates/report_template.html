@@ -1542,6 +1542,10 @@
         <div id="basicCoverageView" class="metrics">
             <p class="metric"><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }}
                 {{ mean_vntr_coverage_icon|safe }}
+                {%- if mean_vntr_coverage_recorded %}
+                <br><small>Recorded as {{ mean_vntr_coverage_recorded }} by VNtyper before 2.0.8,
+                which averaged covered bases only; shown here over the whole region.</small>
+                {%- endif %}
                 <br><small>Over {{ vntr_region_length }}
                 {%- if vntr_region_length != not_calculated %} bp{% endif %}, as this assembly represents the
                 region. <strong>Not comparable with another assembly's mean</strong> &mdash; the

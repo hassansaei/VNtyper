@@ -168,3 +168,12 @@ def test_a_malformed_notes_block_is_refused_rather_than_half_rendered(report_con
 
     with pytest.raises(ValueError, match="coverage_notes"):
         _notes({**report_config, "coverage_notes": block}, qc)
+
+
+def test_a_configured_line_is_printed_unrounded(report_config) -> None:
+    """A mean of 50.00 fails a line of 50.004; "50x (below 50x)" would contradict itself."""
+    qc = evaluate_coverage_qc(50.0, 0.0, 100, 50.0, low_mean_threshold=50.004)
+
+    notes = _notes(report_config, qc, mean=50.0, percent=0.0, low=50.004)
+
+    assert "(below 50.004x)" in notes[0]

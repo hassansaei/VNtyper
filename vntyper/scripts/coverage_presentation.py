@@ -128,6 +128,15 @@ def _shown(value: float) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
+def _threshold_shown(value: float) -> str:
+    """A configured line as the note prints it, never rounded.
+
+    Rounding a line to two decimals could print "50x (below 50x)" for a mean of 50.00
+    judged against 50.004.
+    """
+    return f"{value:.10g}"
+
+
 def coverage_notes(
     report_config: Mapping[str, Any],
     coverage_qc: CoverageQC,
@@ -185,14 +194,16 @@ def coverage_notes(
     notes: list[str] = []
     mean = "" if mean_vntr_coverage is None else _shown(mean_vntr_coverage)
     if coverage_uncovered_exceeded(coverage_qc) and percent_vntr_uncovered is not None:
-        notes.append(raw["uncovered"].format(percent=_shown(percent_vntr_uncovered), limit=_shown(percent_threshold)))
+        notes.append(
+            raw["uncovered"].format(percent=_shown(percent_vntr_uncovered), limit=_threshold_shown(percent_threshold))
+        )
     if not is_positive and mean_vntr_coverage is not None:
         if coverage_qc.status == COVERAGE_QC_REDUCED:
-            notes.append(raw["reduced_no_finding"].format(mean=mean, threshold=_shown(mean_threshold)))
+            notes.append(raw["reduced_no_finding"].format(mean=mean, threshold=_threshold_shown(mean_threshold)))
         elif REASON_MEAN_LOW in coverage_qc.reasons and low_mean_threshold is not None:
-            notes.append(raw["low_no_finding"].format(mean=mean, threshold=_shown(low_mean_threshold)))
+            notes.append(raw["low_no_finding"].format(mean=mean, threshold=_threshold_shown(low_mean_threshold)))
         elif coverage_qc.status == COVERAGE_QC_FAIL and REASON_MEAN in coverage_qc.reasons:
-            notes.append(raw["low_no_finding"].format(mean=mean, threshold=_shown(mean_threshold)))
+            notes.append(raw["low_no_finding"].format(mean=mean, threshold=_threshold_shown(mean_threshold)))
     if not is_positive and coverage_qc.status == COVERAGE_QC_FAIL:
         notes.append(raw["action_no_finding"])
     if notes:

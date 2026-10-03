@@ -1362,7 +1362,7 @@
           ]
         },
         "report_assertions": [
-          "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>adVNTR was not run."
+          "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.<br>adVNTR was not run."
         ]
       },
       {
@@ -1489,7 +1489,7 @@
           ]
         },
         "report_assertions": [
-          "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>adVNTR was not run."
+          "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.<br>adVNTR was not run."
         ]
       }
     ],

@@ -277,3 +277,29 @@ def test_a_pre_2_0_8_mean_is_corrected_before_it_is_judged():
     assert corrected == 90.0
     assert evaluate_coverage_qc(stored_mean, pct, 100, 50.0).status == COVERAGE_QC_PASS, "the stored figure is lenient"
     assert evaluate_coverage_qc(corrected, pct, 100, 50.0).status == COVERAGE_QC_FAIL, "the corrected figure is right"
+
+
+@pytest.mark.parametrize(
+    "thresholds",
+    [
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": float("nan"), "low": 50}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": "100", "low": 50}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": float("inf")}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": True}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": -1}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"low": 50}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": [100, 50]}},
+        {"mean_vntr_coverage_by_assembly": ["GRCh38"]},
+        {"mean_vntr_coverage": float("nan")},
+    ],
+)
+def test_a_malformed_line_is_refused_rather_than_passing_every_sample(thresholds):
+    """A NaN line compares false against every mean, so it would pass every sample."""
+    with pytest.raises(ValueError, match="thresholds"):
+        resolve_mean_thresholds(thresholds, "hg38")
+
+
+def test_an_empty_entry_is_refused_and_an_absent_one_falls_back():
+    with pytest.raises(ValueError, match="'adequate'"):
+        resolve_mean_thresholds({"mean_vntr_coverage_by_assembly": {"GRCh38": {}}}, "hg38")
+    assert resolve_mean_thresholds({"mean_vntr_coverage_by_assembly": {}}, "hg38") == SINGLE_LINE

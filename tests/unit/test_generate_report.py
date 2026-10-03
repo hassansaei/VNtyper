@@ -3453,6 +3453,9 @@ def test_a_pre_2_0_8_summary_is_judged_on_its_corrected_mean(tmp_path) -> None:
     html = render(tmp_path)
 
     assert _coverage_qc_cell(html) == "FAIL", "a pre-2.0.8 mean must be corrected before it is judged"
+    cell = re.search(r"<td>Mean Coverage</td>\s*<td>(.*?)</td>", html, re.DOTALL)
+    assert cell is not None and cell.group(1).strip().startswith("48"), "the judged figure is the one shown"
+    assert "Recorded as 80.0 by VNtyper before 2.0.8" in html
 
 
 def test_the_same_summary_recorded_by_this_version_is_taken_at_face_value(tmp_path) -> None:
@@ -3468,6 +3471,7 @@ def test_the_same_summary_recorded_by_this_version_is_taken_at_face_value(tmp_pa
     html = render(tmp_path)
 
     assert _coverage_qc_cell(html) == "PASS", "a current summary's mean is already region-wide"
+    assert "Recorded as" not in html
 
 
 # ---------------------------------------------------------------------------

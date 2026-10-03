@@ -1064,7 +1064,11 @@ def generate_summary_report(
         "header_warning": header_warning,
         "alignment_pipeline": alignment_pipeline,
         "assembly_contig": assembly_contig,
-        "mean_vntr_coverage": shown(coverage["mean"]),
+        # The figure the verdict, icon and notes judge. A pre-2.0.8 summary recorded the
+        # mean over covered bases only; showing that beside a note quoting the corrected
+        # region-wide mean put two unexplained depths in one report.
+        "mean_vntr_coverage": shown(mean_for_qc),
+        "mean_vntr_coverage_recorded": (shown(coverage["mean"]) if mean_for_qc != coverage["mean"] else None),
         "median_vntr_coverage": shown(coverage["median"]),
         "stdev_vntr_coverage": shown(coverage["stdev"]),
         "min_vntr_coverage": shown(coverage["min"]),

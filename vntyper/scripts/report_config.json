@@ -343,11 +343,11 @@
         "kestrel_result": "negative_subthreshold",
         "advntr_result": "positive"
       },
-      "message": "adVNTR called a variant; Kestrel did not.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
+      "message": "adVNTR called a variant; Kestrel did not.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
         "adVNTR called a variant; Kestrel did not.",
         "Kestrel found a candidate below its reporting threshold and did not call it.",
-        "Such candidates are common in samples without a variant (about 1 in 5).",
+        "Such candidates appear in 15–20% of real exomes without a Kestrel call.",
         "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
@@ -356,12 +356,12 @@
         "kestrel_result": "negative_subthreshold",
         "advntr_result": "positive flagged"
       },
-      "message": "adVNTR called a variant; Kestrel did not.<br>The adVNTR call is flagged; see the adVNTR table.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
+      "message": "adVNTR called a variant; Kestrel did not.<br>The adVNTR call is flagged; see the adVNTR table.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
         "adVNTR called a variant; Kestrel did not.",
         "The adVNTR call is flagged; see the adVNTR table.",
         "Kestrel found a candidate below its reporting threshold and did not call it.",
-        "Such candidates are common in samples without a variant (about 1 in 5).",
+        "Such candidates appear in 15–20% of real exomes without a Kestrel call.",
         "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
@@ -391,11 +391,11 @@
         "kestrel_result": "negative_subthreshold",
         "advntr_result": "negative"
       },
-      "message": "No variant called by Kestrel or adVNTR.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).",
+      "message": "No variant called by Kestrel or adVNTR.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.",
       "segments": [
         "No variant called by Kestrel or adVNTR.",
         "Kestrel found a candidate below its reporting threshold and did not call it.",
-        "Such candidates are common in samples without a variant (about 1 in 5)."
+        "Such candidates appear in 15–20% of real exomes without a Kestrel call."
       ]
     },
     {
@@ -403,11 +403,11 @@
         "kestrel_result": "negative_subthreshold",
         "advntr_result": "none"
       },
-      "message": "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>adVNTR was not run.",
+      "message": "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.<br>adVNTR was not run.",
       "segments": [
         "No variant called by Kestrel.",
         "Kestrel found a candidate below its reporting threshold and did not call it.",
-        "Such candidates are common in samples without a variant (about 1 in 5).",
+        "Such candidates appear in 15–20% of real exomes without a Kestrel call.",
         "adVNTR was not run."
       ]
     }
@@ -416,7 +416,7 @@
   "coverage_not_measured_note": "Note: VNTR depth was not measured in this run, so it was not checked.",
   "coverage_notes": {
     "reduced_no_finding": "Reduced VNTR depth: {mean}x (adequate from {threshold}x). A variant with a weak signal can be missed at this depth.",
-    "low_no_finding": "Insufficient VNTR depth: {mean}x (below {threshold}x). Variants are often missed at this depth, so this result does not rule one out.",
+    "low_no_finding": "Insufficient VNTR depth: {mean}x (below {threshold}x). A variant can be missed at this depth, so this result does not rule one out.",
     "uncovered": "{percent}% of the VNTR region has no reads (limit {limit}%). Check the alignment there before relying on this result.",
     "action_no_finding": "If a variant is still suspected, re‐sequence or test with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
   },
@@ -612,12 +612,12 @@
     },
     "caution": {
       "badge": "Over {threshold} repeats: detection may be less sensitive",
-      "help": "Both alleles together are estimated at over {threshold} repeats. Kestrel detects frameshifts less reliably as the array grows, and the estimate tends to understate very long arrays."
+      "help": "Both alleles together are estimated at over {threshold} repeats. Kestrel detects frameshifts less reliably as the array grows."
     },
     "high": {
       "badge": "Over {threshold} repeats: long array, lower sensitivity",
-      "help": "Both alleles together are estimated at over {threshold} repeats. In simulated arrays over 150 true repeats, Kestrel found 29 of 32 dupC variants and 11 of 23 other frameshifts. The estimate is typically off by about 14 repeats and understates very long arrays.",
-      "notice_not_positive": "The VNTR array is estimated at about {estimate} repeats (over {threshold}). In arrays this long, frameshifts other than dupC are often missed, so this result does not rule one out."
+      "help": "Both alleles together are estimated at over {threshold} repeats. In simulated arrays over 150 true repeats, Kestrel found 29 of 32 dupC variants and 11 of 23 other frameshifts.",
+      "notice_not_positive": "The VNTR array is estimated at about {estimate} repeats (over {threshold}). Detection is less sensitive in long arrays, mostly for frameshifts other than dupC, so this result does not rule one out."
     }
   }
 }

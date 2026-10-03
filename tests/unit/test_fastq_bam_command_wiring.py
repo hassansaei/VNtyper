@@ -1152,6 +1152,33 @@ def test_downsample_index_carries_the_thread_flag(tmp_path, monkeypatch):
     assert result.name == "sample_downsampled.sorted.bam"
 
 
+def test_the_advntr_precheck_judges_coverage_on_the_runs_assembly(tmp_path, monkeypatch):
+    """The precheck writes its own coverage summary and verdict; an hg19 run must be judged
+    on the GRCh37 lines there too, not on the fallback line."""
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"bam")
+    seen: list[dict] = []
+
+    def fake_coverage(**kwargs):
+        seen.append(kwargs)
+        return {"mean": 185.0}
+
+    monkeypatch.setattr(fastq_bam_processing, "calculate_vntr_coverage", fake_coverage)
+    monkeypatch.setattr(fastq_bam_processing, "get_region_string_with_fallback", lambda **kwargs: "chr1:1-2")
+
+    fastq_bam_processing.downsample_bam_if_needed(
+        bam_path=bam,
+        max_coverage=300,
+        reference_assembly="hg19",
+        threads=4,
+        config={"tools": {"samtools": "samtools"}},
+        coverage_dir=tmp_path,
+        coverage_prefix="advntr_precheck",
+    )
+
+    assert seen[0]["reference_assembly"] == "hg19"
+
+
 # ---------------------------------------------------------------------------
 # The slice index has exactly one consumer, and it is optional (#262)
 # ---------------------------------------------------------------------------

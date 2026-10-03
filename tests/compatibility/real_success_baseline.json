@@ -4019,14 +4019,14 @@
           "suite": "bam_tests",
           "test_name": "example_40cf_hg38_subset_default",
           "report": [
-            "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>adVNTR was not run."
+            "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15\u201320% of real exomes without a Kestrel call.<br>adVNTR was not run."
           ]
         },
         {
           "suite": "bam_tests",
           "test_name": "example_40cf_hg38_subset_fast_gdp_guard",
           "report": [
-            "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>adVNTR was not run."
+            "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15\u201320% of real exomes without a Kestrel call.<br>adVNTR was not run."
           ]
         },
         {

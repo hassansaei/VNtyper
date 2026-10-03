@@ -534,6 +534,7 @@ def downsample_bam_if_needed(
         config=config,
         output_dir=coverage_dir,
         output_name=coverage_prefix,
+        reference_assembly=reference_assembly,
     )["mean"]
 
     if current_coverage <= max_coverage:
