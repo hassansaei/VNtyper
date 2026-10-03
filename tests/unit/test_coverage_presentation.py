@@ -177,3 +177,12 @@ def test_a_configured_line_is_printed_unrounded(report_config) -> None:
     notes = _notes(report_config, qc, mean=50.0, percent=0.0, low=50.004)
 
     assert "(below 50.004x)" in notes[0]
+
+
+@pytest.mark.parametrize(("low", "shown"), [(50.000000004, "50.000000004"), (50.0, "50"), (145, "145")])
+def test_a_configured_line_round_trips_exactly(report_config, low, shown) -> None:
+    qc = evaluate_coverage_qc(49.0, 0.0, 100, 50.0, low_mean_threshold=low)
+
+    notes = _notes(report_config, qc, mean=49.0, percent=0.0, low=low)
+
+    assert f"(below {shown}x)" in notes[0]

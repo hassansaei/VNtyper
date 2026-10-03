@@ -131,10 +131,12 @@ def _shown(value: float) -> str:
 def _threshold_shown(value: float) -> str:
     """A configured line as the note prints it, never rounded.
 
-    Rounding a line to two decimals could print "50x (below 50x)" for a mean of 50.00
-    judged against 50.004.
+    Rounding a line at any precision could print "50x (below 50x)" for a mean of 50.00
+    judged against a line just above 50, so the line is printed as the shortest string
+    that round-trips to it, without a trailing ``.0``.
     """
-    return f"{value:.10g}"
+    shown = repr(float(value))
+    return shown.removesuffix(".0")
 
 
 def coverage_notes(

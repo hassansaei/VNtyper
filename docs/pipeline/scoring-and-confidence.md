@@ -145,7 +145,7 @@ First match wins. The chip shows each grade in words from `chip_labels`.
 | `not-established` (No result) | Execution failure (`kestrel_execution` or `advntr_execution == "failed"`), Kestrel not performed, or an unestablished result token | Genotyping incomplete; outcome undetermined. |
 | `no-finding-limited` (No finding, inconclusive) | Negative or subthreshold Kestrel result, no adVNTR call, coverage QC `FAIL` or `NOT_EVALUATED` | A result without a call that cannot rule a variant out. |
 | `no-finding` (No finding) | Negative or subthreshold Kestrel result, no adVNTR call, coverage QC `PASS` or `REDUCED` | A result without a call at adequate or reduced depth; a reduced depth adds a note. |
-| `finding-limited` (Finding, with caveats) | A flagged Kestrel call; an unflagged Kestrel call with coverage `NOT_EVALUATED` or more than half the region uncovered; an adVNTR-only call with coverage QC `FAIL` or `NOT_EVALUATED` | A call whose evidence is qualified by a flag or by missing coverage. Mean depth alone never limits a Kestrel call. |
+| `finding-limited` (Finding, with caveats) | A flagged Kestrel call; an unflagged Kestrel call with coverage `NOT_EVALUATED` or an uncovered percentage above `thresholds.percent_vntr_uncovered` (50% by default); an adVNTR-only call with coverage QC `FAIL` or `NOT_EVALUATED` | A call whose evidence is qualified by a flag or by missing coverage. Mean depth alone never limits a Kestrel call. |
 | `finding-corroborated` (Finding, corroborated) | Unflagged Kestrel call and positive cross-caller concordance (`cross_match_is_positive == True`) | Called by Kestrel and matched by adVNTR. |
 | `finding` (Finding) | Any other unflagged Kestrel call, or an adVNTR-only call with passing coverage | A call. |
 
