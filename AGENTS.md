@@ -40,6 +40,7 @@ Neither exists — use the commands above.
 | Type check | `make type-check` |
 | Fast tests (what CI runs) | `make test-unit` |
 | Browser tests (needs a browser engine) | `make test-browser` |
+| Golden tests (needs both explicit corpus roots) | `make test-golden` |
 | Inner loop (fail-fast) | `make test-fast` |
 | Unit coverage + floor | `make test-unit-cov` |
 | Scripts-only coverage proof | `make test-scripts-cov` |
@@ -50,9 +51,10 @@ Neither exists — use the commands above.
 | Docs preview | `make docs-serve` |
 | Docs build (CI-equivalent) | `make docs-build` |
 
-Always run `make check-all` before opening a PR. It gates on the **unit** tier only
-so it is runnable on a fresh clone; use `make check-full` when you also want the tiers
-that need the 1.1 GB Zenodo archive.
+Always run `make check-all` before opening a PR. It requires the **unit** tier and
+also runs golden when both corpus roots are set. With either root unset it visibly
+reports that golden was not run, so it remains runnable on a fresh clone. Use
+`make check-full` when you also want the tiers that need the 1.1 GB Zenodo archive.
 
 **If you changed anything under `.github/workflows/`, `make check-all` is not enough —
 run `make ci-local`.** It mirrors `ci-tests.yml` job for job (actionlint, format, lint,
@@ -379,8 +381,10 @@ limit.
   `pytest -m golden tests/golden`). It compares against a known-truth simulated cohort
   supplied through `VNTYPER_SIM_ROOT` and `VNTYPER_ADVNTR_ROOT`. Deselected collection
   is safe; selected golden execution requires both roots and fails without skipping if
-  either root is absent, missing, or incomplete. The tier deliberately remains outside
-  `make check-all`.
+  either root is absent, missing, or incomplete. `make test-golden` explicitly requires
+  both roots. `make check-all` calls `test-golden-if-configured`: both roots set runs
+  the tier and propagates any failure; either unset visibly reports that it was not run.
+  Standard CI does not provision these external corpora.
 - **Every new unit test file must declare `pytestmark = pytest.mark.unit`.** CI runs
   `pytest -m unit`, so an unmarked file silently never runs. This is enforced by
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;

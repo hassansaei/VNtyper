@@ -33,7 +33,7 @@ The golden tier therefore does not relabel those historical summaries. It assert
 
 Simulation `ground_truth.csv` supplies the independently derived canonical identity and displayed name. The paired adVNTR-root Kestrel result supplies motif context, depth, support, confidence, flag, and tier. The oracle binds the exact SHA-256 of that truth file and every selected historical summary/result file. It then invokes the real `vntyper calibrate extract` and `vntyper calibrate fit` CLI operations, independently verifies the installed checksum inventories and literal feature/baseline rows, and strictly resolves the fitted generated profile.
 
-Before evaluating the development grid, the gate proves the packaged neutral replay and the complete historical 400-member figures above. A one-member grid cannot contest the objective's ordering or tie-break; those are exercised by the objective's unit tests, not by this gate. The one-member finite development candidate is dominance enabled, record-count margin `1`, record share `0.5`, share margin `0.0`, and XD veto `disabled`; its deterministic generated-profile SHA-256 is `7fc772512eee789cd0a909fa939fd87305b4eb14a6769bcbf15b340afc7ce6f8`. That file is loadable only by explicit selection and does not replace the packaged default.
+Before evaluating the development grid, the gate proves the packaged neutral replay and the complete historical 400-member figures above. A one-member grid cannot contest the objective's ordering or tie-break; those are exercised by the objective's unit tests, not by this gate. The one-member finite development candidate is dominance enabled, record-count margin `1`, record share `0.5`, share margin `0.0`, and XD veto `disabled`. Its canonical fitted-content SHA-256, excluding only `profile_id` and `generated_metadata.generator_version`, is `0c241ebb2d1176b4a3c76d38c42676ea3aa7a80a4751dba70c3eaad7e2dec672`. The gate separately checks the installed generator version, the identity derived by the profile builder, and the attestation's binding to the full profile digest. That file is loadable only by explicit selection and does not replace the packaged default.
 
 The fixture persists the classification `previously-examined-development-simulation`, with `eligible_for_independent_validation=false` and `eligible_for_locked_evaluate=false`. It states explicitly that this is neither an independent external cohort nor custodian-locked heldout evidence.
 
@@ -59,7 +59,9 @@ Until that gate passes, there is no issue-closure claim and no calibration-drive
 ```bash
 : "${VNTYPER_SIM_ROOT:?set the simulation corpus root}"
 : "${VNTYPER_ADVNTR_ROOT:?set the paired adVNTR root}"
-pytest -m golden tests/golden -q -rs
+make test-golden
 ```
 
-A missing root or a skip is not evidence. The recorded verification must show both roots, 400 members, real `extract` plus `fit`, the fitted digest above, and zero skips. The historical schema-2 bridge is a development regression proof only; it is not a substitute for producing schema-3 artifacts prospectively under external custody.
+`make check-all` also runs this tier when both roots are set. With either root absent it visibly reports that the golden tier was not run; `make test-golden` always requires both. Supplied roots that are missing or incomplete fail the gate. Standard CI does not provision these external corpora, so this conditional local gate keeps configured pre-PR runs from omitting them.
+
+A missing root or a skip is not evidence. The recorded verification must show both roots, 400 members, real `extract` plus `fit`, the fitted-content digest above, and zero skips. The historical schema-2 bridge is a development regression proof only; it is not a substitute for producing schema-3 artifacts prospectively under external custody.
