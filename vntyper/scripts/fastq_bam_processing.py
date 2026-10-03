@@ -28,7 +28,7 @@ from vntyper.scripts.command_builders import (
     build_samtools_merge_command,
     build_threaded_samtools_index_argv,
 )
-from vntyper.scripts.coverage_qc import evaluate_coverage_qc
+from vntyper.scripts.coverage_qc import evaluate_coverage_qc, resolve_mean_thresholds
 from vntyper.scripts.coverage_stats import (
     format_coverage_summary,
     parse_region_length,
@@ -324,6 +324,7 @@ def calculate_vntr_coverage(
     reference_path=None,
     index_path=None,
     assembly_config=None,
+    reference_assembly=None,
 ):
     """
     Calculate the coverage over the VNTR region using samtools depth and write a TSV summary.
@@ -342,6 +343,9 @@ def calculate_vntr_coverage(
         assembly_config (dict, optional): The ``bam_processing.assemblies`` entry for this
             run. Supplies ``vntr_array_coords``, without which the build-comparable columns
             are recorded as not-measured rather than computed (#222).
+        reference_assembly (str, optional): The run's declared assembly. The reduced depth
+            band applies only on the assemblies it was measured on; without this the
+            verdict keeps the single mean threshold.
 
     Returns:
         dict: Exactly the keys in :data:`~vntyper.scripts.coverage_stats.COVERAGE_COLUMNS`
@@ -453,11 +457,13 @@ def calculate_vntr_coverage(
         # The `round` calls are the point: the verdict is evaluated on the same figures
         # `format_coverage_summary` is about to write, so the emitted column and the
         # report's recomputed screening axis cannot disagree at a boundary (#172).
+        mean_lines = resolve_mean_thresholds(thresholds, reference_assembly)
         qc = evaluate_coverage_qc(
             round(stats["mean"], 2),
             round(stats["percent_uncovered"], 2),
-            thresholds.get("mean_vntr_coverage", 100),
+            mean_lines.adequate,
             thresholds.get("percent_vntr_uncovered", 50.0),
+            low_mean_threshold=mean_lines.low,
         )
         stats["coverage_qc"] = qc.status
 
@@ -528,6 +534,7 @@ def downsample_bam_if_needed(
         config=config,
         output_dir=coverage_dir,
         output_name=coverage_prefix,
+        reference_assembly=reference_assembly,
     )["mean"]
 
     if current_coverage <= max_coverage:

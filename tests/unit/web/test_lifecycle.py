@@ -271,3 +271,23 @@ def test_application_registers_lifespan_without_deprecated_event_handlers(
     assert web_app.app.router.on_startup == []
     assert web_app.app.router.on_shutdown == []
     assert client.close_count == 1
+
+
+@pytest.mark.parametrize("missing", ["identifier", "http_callback"])
+def test_a_half_initialised_limiter_is_refused_before_it_is_called(
+    monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    """Redis set and the identifier or callback missing used to surface as
+    "'NoneType' object is not callable" from inside a request."""
+    from fastapi_limiter import FastAPILimiter
+    from fastapi_limiter.depends import RateLimiter
+
+    monkeypatch.setattr(FastAPILimiter, "redis", object(), raising=False)
+    monkeypatch.setattr(FastAPILimiter, missing, None, raising=False)
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    request = Request({"type": "http", "method": "GET", "path": "/jobs", "headers": [], "query_string": b""})
+
+    with pytest.raises(Exception, match="FastAPILimiter.init"):
+        asyncio.run(RateLimiter(times=1, seconds=1)(request, Response()))

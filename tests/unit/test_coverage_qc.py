@@ -12,10 +12,15 @@ from vntyper.scripts.coverage_qc import (
     COVERAGE_QC_FAIL,
     COVERAGE_QC_NOT_EVALUATED,
     COVERAGE_QC_PASS,
+    COVERAGE_QC_REDUCED,
+    DEFAULT_MEAN_THRESHOLDS_BY_ASSEMBLY,
     REASON_MEAN,
+    REASON_MEAN_LOW,
     REASON_NOT_MEASURED,
     REASON_UNCOVERED,
+    MeanThresholds,
     evaluate_coverage_qc,
+    resolve_mean_thresholds,
 )
 
 pytestmark = pytest.mark.unit
@@ -122,6 +127,137 @@ def test_one_measured_metric_is_still_evaluated():
 
 
 # ---------------------------------------------------------------------------
+# Three levels: adequate, reduced, low
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mean", "status", "passed", "reasons"),
+    [
+        (100.0, COVERAGE_QC_PASS, True, ()),
+        (99.99, COVERAGE_QC_REDUCED, True, (REASON_MEAN,)),
+        (50.0, COVERAGE_QC_REDUCED, True, (REASON_MEAN,)),
+        (49.99, COVERAGE_QC_FAIL, False, (REASON_MEAN_LOW,)),
+        (0.0, COVERAGE_QC_FAIL, False, (REASON_MEAN_LOW,)),
+    ],
+)
+def test_a_mean_between_the_two_thresholds_is_reduced_and_still_passes(mean, status, passed, reasons):
+    """A real exome at 96x with 168x flank depth was reported as a failure.
+
+    Downsampling 28 confirmed positives still detected 67 of 69 variants between 50x and
+    100x, so that band qualifies a negative without failing the sample.
+    """
+    qc = evaluate_coverage_qc(mean, 5.0, 100, 50.0, low_mean_threshold=50)
+
+    assert (qc.status, qc.passed, qc.reasons) == (status, passed, reasons)
+
+
+def test_a_patchy_vntr_fails_at_a_reduced_mean_and_names_only_what_failed():
+    """Catch REDUCED masking the uncovered-fraction failure, or the mean being blamed for it."""
+    qc = evaluate_coverage_qc(75.0, 80.0, 100, 50.0, low_mean_threshold=50)
+
+    assert qc.status == COVERAGE_QC_FAIL
+    assert qc.reasons == (REASON_UNCOVERED,)
+
+
+def test_both_low_failures_are_reported_in_declaration_order():
+    qc = evaluate_coverage_qc(10.0, 90.0, 100, 50.0, low_mean_threshold=50)
+
+    assert qc.reasons == (REASON_MEAN_LOW, REASON_UNCOVERED)
+
+
+def test_a_reduced_mean_with_no_uncovered_figure_is_still_reduced():
+    assert evaluate_coverage_qc(75.0, None, 100, 50.0, low_mean_threshold=50).status == COVERAGE_QC_REDUCED
+
+
+GRCH38_LINES = MeanThresholds(adequate=100.0, low=50.0)
+GRCH37_LINES = MeanThresholds(adequate=290.0, low=145.0)
+SINGLE_LINE = MeanThresholds(adequate=100.0, low=None)
+
+
+@pytest.mark.parametrize("assembly", ["hg38", "GRCh38", "hg38_ensembl", "hg38_ncbi"])
+def test_grch38_gets_its_lines_under_every_spelling(assembly):
+    assert resolve_mean_thresholds({}, assembly) == GRCH38_LINES
+
+
+@pytest.mark.parametrize("assembly", ["hg19", "GRCh37", "hg19_ensembl"])
+def test_grch37_lines_are_the_grch38_lines_scaled_by_the_measured_window_ratio(assembly):
+    """The same reads give a GRCh37 window mean 2.89 times higher and the same Kestrel
+    calls, so 290/145 on GRCh37 is the same depth as 100/50 on GRCh38."""
+    assert resolve_mean_thresholds({}, assembly) == GRCH37_LINES
+
+
+@pytest.mark.parametrize(
+    ("mean", "status"),
+    [
+        (300.0, COVERAGE_QC_PASS),
+        (290.0, COVERAGE_QC_PASS),
+        (185.92, COVERAGE_QC_REDUCED),
+        (145.0, COVERAGE_QC_REDUCED),
+        (144.99, COVERAGE_QC_FAIL),
+        (100.0, COVERAGE_QC_FAIL),
+    ],
+)
+def test_a_grch37_mean_is_judged_on_the_grch37_lines(mean, status):
+    """A GRCh37 mean of 100x stands for about 35x on GRCh38, and it fails."""
+    lines = resolve_mean_thresholds({}, "hg19")
+    assert evaluate_coverage_qc(mean, 0.0, lines.adequate, 50.0, low_mean_threshold=lines.low).status == status
+
+
+@pytest.mark.parametrize("assembly", [None, "", "not-an-assembly"])
+def test_an_unknown_assembly_gets_the_single_fallback_line(assembly):
+    assert resolve_mean_thresholds({}, assembly) == SINGLE_LINE
+
+
+def test_an_unlisted_assembly_gets_the_single_fallback_line():
+    thresholds = {"mean_vntr_coverage": 80, "mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": 50}}}
+
+    assert resolve_mean_thresholds(thresholds, "hg19") == MeanThresholds(adequate=80.0, low=None)
+    assert resolve_mean_thresholds(thresholds, "hg38") == GRCH38_LINES
+
+
+def test_an_operator_config_from_before_2_0_42_keeps_its_single_line_everywhere():
+    """``--config-path`` replaces the whole config. One that sets ``mean_vntr_coverage``
+    but has no per-assembly block was written for the single line, and keeps it."""
+    for assembly in ("hg38", "hg19", None):
+        assert resolve_mean_thresholds({"mean_vntr_coverage": 60}, assembly) == MeanThresholds(adequate=60.0, low=None)
+
+
+def test_an_entry_without_a_low_line_is_a_single_line():
+    thresholds = {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 120}}}
+
+    assert resolve_mean_thresholds(thresholds, "hg38") == MeanThresholds(adequate=120.0, low=None)
+
+
+@pytest.mark.parametrize("low", [100, 150])
+def test_a_low_line_not_below_the_adequate_one_leaves_no_reduced_band(low):
+    thresholds = {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": low}}}
+
+    assert resolve_mean_thresholds(thresholds, "hg38") == SINGLE_LINE
+
+
+def test_the_shipped_config_matches_the_code_defaults():
+    import json
+    from pathlib import Path
+
+    import vntyper
+
+    thresholds = json.loads((Path(vntyper.__file__).parent / "config.json").read_text())["thresholds"]
+
+    assert thresholds["mean_vntr_coverage"] == 100
+    assert thresholds["mean_vntr_coverage_by_assembly"] == DEFAULT_MEAN_THRESHOLDS_BY_ASSEMBLY
+    assert resolve_mean_thresholds(thresholds, "hg38") == GRCH38_LINES
+    assert resolve_mean_thresholds(thresholds, "hg19") == GRCH37_LINES
+
+
+def test_without_a_low_threshold_the_single_line_is_unchanged():
+    """A direct caller that passes two thresholds gets the pre-existing verdict and reason."""
+    qc = evaluate_coverage_qc(75.0, 5.0, 100, 50.0)
+
+    assert (qc.status, qc.reasons) == (COVERAGE_QC_FAIL, (REASON_MEAN,))
+
+
+# ---------------------------------------------------------------------------
 # Judging a summary written before the region-wide coverage change (#171)
 # ---------------------------------------------------------------------------
 
@@ -141,3 +277,29 @@ def test_a_pre_2_0_8_mean_is_corrected_before_it_is_judged():
     assert corrected == 90.0
     assert evaluate_coverage_qc(stored_mean, pct, 100, 50.0).status == COVERAGE_QC_PASS, "the stored figure is lenient"
     assert evaluate_coverage_qc(corrected, pct, 100, 50.0).status == COVERAGE_QC_FAIL, "the corrected figure is right"
+
+
+@pytest.mark.parametrize(
+    "thresholds",
+    [
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": float("nan"), "low": 50}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": "100", "low": 50}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": float("inf")}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": True}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": -1}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": {"low": 50}}},
+        {"mean_vntr_coverage_by_assembly": {"GRCh38": [100, 50]}},
+        {"mean_vntr_coverage_by_assembly": ["GRCh38"]},
+        {"mean_vntr_coverage": float("nan")},
+    ],
+)
+def test_a_malformed_line_is_refused_rather_than_passing_every_sample(thresholds):
+    """A NaN line compares false against every mean, so it would pass every sample."""
+    with pytest.raises(ValueError, match="thresholds"):
+        resolve_mean_thresholds(thresholds, "hg38")
+
+
+def test_an_empty_entry_is_refused_and_an_absent_one_falls_back():
+    with pytest.raises(ValueError, match="'adequate'"):
+        resolve_mean_thresholds({"mean_vntr_coverage_by_assembly": {"GRCh38": {}}}, "hg38")
+    assert resolve_mean_thresholds({"mean_vntr_coverage_by_assembly": {}}, "hg38") == SINGLE_LINE

@@ -18,9 +18,13 @@ SUPPORTED_SCHEMA_VERSIONS = {LEGACY_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION}
 _LEGACY_TOP_KEYS = {"schema_version", "contracts"}
 _OBSERVATION_TOP_KEYS = {"schema_version", "contracts", "observation_sets"}
 _OBSERVATION_SET_REQUIRED_KEYS = {"version", "provenance_commit", "extends", "report_overrides"}
-_OBSERVATION_SET_ALLOWED_KEYS = _OBSERVATION_SET_REQUIRED_KEYS | {"kestrel_overrides"}
+_OBSERVATION_SET_ALLOWED_KEYS = _OBSERVATION_SET_REQUIRED_KEYS | {"kestrel_overrides", "coverage_qc_overrides"}
 _REPORT_OVERRIDE_KEYS = {"suite", "test_name", "report"}
 _KESTREL_OVERRIDE_KEYS = {"suite", "test_name", "kestrel"}
+_COVERAGE_QC_OVERRIDE_KEYS = {"suite", "test_name", "coverage_qc"}
+#: The durable ``coverage_qc`` tokens. An override replaces this one coverage field only;
+#: every measured coverage figure stays pinned to the historical contract.
+_COVERAGE_QC_TOKENS = {"PASS", "REDUCED", "FAIL", "NOT_EVALUATED"}
 _PLAIN_RELEASE_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 
@@ -187,6 +191,26 @@ def _observation_sets(manifest: Manifest, identities: set[Identity]) -> list[dic
             _kestrel_assertions(k_override["kestrel"], f"{k_label}.kestrel")
             seen_k_overrides.add(identity)
 
+        c_overrides = observation.get("coverage_qc_overrides", [])
+        if not isinstance(c_overrides, list):
+            raise ValueError(f"observation_sets[{set_index}].coverage_qc_overrides must be a list")
+        seen_c_overrides: set[Identity] = set()
+        for c_index, raw_c_override in enumerate(c_overrides):
+            c_label = f"observation_sets[{set_index}].coverage_qc_overrides[{c_index}]"
+            c_override = _mapping(raw_c_override, c_label)
+            _exact_keys(c_override, _COVERAGE_QC_OVERRIDE_KEYS, c_label)
+            identity = (
+                _nonempty_string(c_override["suite"], f"{c_label}.suite"),
+                _nonempty_string(c_override["test_name"], f"{c_label}.test_name"),
+            )
+            if identity not in identities:
+                raise ValueError(f"{c_label} refers to unknown contract identity {identity}")
+            if identity in seen_c_overrides:
+                raise ValueError(f"duplicate coverage_qc override for {identity}")
+            if c_override["coverage_qc"] not in _COVERAGE_QC_TOKENS:
+                raise ValueError(f"{c_label}.coverage_qc must be one of {sorted(_COVERAGE_QC_TOKENS)}")
+            seen_c_overrides.add(identity)
+
         result.append(observation)
         seen_versions.add(version)
         previous_version = version
@@ -243,6 +267,12 @@ def effective_contracts(
         for k_override in observation.get("kestrel_overrides", []):
             identity = (k_override["suite"], k_override["test_name"])
             effective[identity]["outcomes"]["kestrel"] = copy.deepcopy(k_override["kestrel"])
+        for c_override in observation.get("coverage_qc_overrides", []):
+            identity = (c_override["suite"], c_override["test_name"])
+            coverage = effective[identity]["outcomes"].get("coverage")
+            if not isinstance(coverage, dict) or "coverage_qc" not in coverage:
+                raise ValueError(f"coverage_qc override for {identity} has no coverage_qc assertion to replace")
+            coverage["coverage_qc"] = {"value": c_override["coverage_qc"], "tolerance": None}
     return effective
 
 

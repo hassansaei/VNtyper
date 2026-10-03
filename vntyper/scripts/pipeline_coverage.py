@@ -82,6 +82,7 @@ def calculate_alignment_coverage(
             reference_path=plan.reference_path,
             index_path=plan.stable_index_path,
             assembly_config=_assembly_geometry(config, reference_assembly),
+            reference_assembly=reference_assembly,
         )
         if length_consumer is not None:
             length_consumer(plan)

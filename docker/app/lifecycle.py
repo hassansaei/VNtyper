@@ -59,6 +59,11 @@ def patch_fastapi_limiter() -> None:
 
         identifier = self.identifier or FastAPILimiter.identifier
         callback = self.callback or FastAPILimiter.http_callback
+        # Both are class attributes that `FastAPILimiter.init` assigns, and newer
+        # fastapi-limiter stubs type them optional. A limiter with redis set and either
+        # of these missing was only half initialised.
+        if identifier is None or callback is None:
+            raise Exception("You must call FastAPILimiter.init in startup event of fastapi!")
         rate_key = await identifier(request)
         key = f"{FastAPILimiter.prefix}:{rate_key}:{route_index}:{dep_index}"
         try:

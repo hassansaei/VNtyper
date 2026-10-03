@@ -2,7 +2,7 @@
 
 ## What input coverage do I need?
 
-A minimum of approximately **100x local coverage** over the MUC1 VNTR region is recommended for reliable variant detection. Whole-genome sequencing at 30x average depth typically yields sufficient VNTR coverage. Whole-exome sequencing coverage varies according to capture probe efficiency across the GC-rich MUC1 VNTR.
+A mean of **100x** over the MUC1 VNTR window on GRCh38 (290x on GRCh37, whose shorter window reads about 2.9 times higher) is recommended for reliable variant detection. Between 50x and 100x on GRCh38 a variant with a weak signal can be missed; below 50x variants are often missed. See [Coverage thresholds](../user-guide/configuration.md#coverage-thresholds). Whole-genome sequencing at 30x average depth typically yields sufficient VNTR coverage. Whole-exome sequencing coverage varies according to capture probe efficiency across the GC-rich MUC1 VNTR.
 
 ## BAM versus FASTQ: which is faster?
 

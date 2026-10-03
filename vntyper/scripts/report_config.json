@@ -92,630 +92,341 @@
     }
   },
   "cross_match": {
-    "not_assessable_message": "The cross-match comparison's result file is missing or could not be read; agreement between Kestrel and adVNTR was not assessed."
+    "not_assessable_message": "The Kestrel–adVNTR comparison could not be read, so their agreement was not checked."
   },
   "screening_summary_rules": [
     {
       "conditions": {
         "kestrel_result": "unestablished"
       },
-      "message": "The Kestrel screening state was not established: a value the Kestrel screening rules evaluate was absent or empty in the Kestrel result.<br>Note: this describes what could be evaluated, not the sample; no screening result is asserted.",
+      "message": "The Kestrel result could not be evaluated: a field the screening rules need is missing or empty.<br>No screening result is given for this sample.",
       "segments": [
-        "The Kestrel screening state was not established: a value the Kestrel screening rules evaluate was absent or empty in the Kestrel result.",
-        "Note: this describes what could be evaluated, not the sample; no screening result is asserted."
+        "The Kestrel result could not be evaluated: a field the screening rules need is missing or empty.",
+        "No screening result is given for this sample."
       ]
     },
     {
       "conditions": {
         "advntr_result": "unestablished"
       },
-      "message": "The adVNTR screening state was not established: a value the adVNTR screening rules evaluate was absent or empty in the adVNTR result.<br>Note: this describes what could be evaluated, not the sample; no screening result is asserted.",
+      "message": "The adVNTR result could not be evaluated: a field the screening rules need is missing or empty.<br>No screening result is given for this sample.",
       "segments": [
-        "The adVNTR screening state was not established: a value the adVNTR screening rules evaluate was absent or empty in the adVNTR result.",
-        "Note: this describes what could be evaluated, not the sample; no screening result is asserted."
+        "The adVNTR result could not be evaluated: a field the screening rules need is missing or empty.",
+        "No screening result is given for this sample."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "High_Precision",
-        "advntr_result": "positive",
-        "quality_metrics_pass": true
+        "advntr_result": "positive"
       },
-      "message": "Pathogenic frameshift variant detected by Kestrel with high precision and confirmed by adVNTR.<br>Quality metrics are acceptable.<br>Additional validation using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended.",
+      "message": "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Pathogenic frameshift variant detected by Kestrel with high precision and confirmed by adVNTR.",
-        "Quality metrics are acceptable.",
-        "Additional validation using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended."
+        "Kestrel called a frameshift variant with high precision.",
+        "adVNTR also called a variant.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "High_Precision",
-        "advntr_result": "positive",
-        "quality_metrics_pass": false
+        "advntr_result": "positive flagged"
       },
-      "message": "Pathogenic frameshift variant detected by Kestrel with high precision, but quality metrics are below threshold despite adVNTR confirmation.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant; its call is flagged.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Pathogenic frameshift variant detected by Kestrel with high precision, but quality metrics are below threshold despite adVNTR confirmation.",
-        "Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "Kestrel called a frameshift variant with high precision.",
+        "adVNTR also called a variant; its call is flagged.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "High_Precision",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": true
+        "advntr_result": "negative"
       },
-      "message": "Pathogenic frameshift variant detected by Kestrel with high precision, and adVNTR detected the variant with a flagged result.<br>Quality metrics are acceptable.<br>Review the flagged adVNTR result and validate using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants).",
+      "message": "Kestrel called a frameshift variant with high precision.<br>adVNTR did not call a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Pathogenic frameshift variant detected by Kestrel with high precision, and adVNTR detected the variant with a flagged result.",
-        "Quality metrics are acceptable.",
-        "Review the flagged adVNTR result and validate using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants)."
+        "Kestrel called a frameshift variant with high precision.",
+        "adVNTR did not call a variant.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "High_Precision",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": false
+        "advntr_result": "none"
       },
-      "message": "Pathogenic frameshift variant detected by Kestrel with high precision and adVNTR detected the variant with a flagged result, but quality metrics are below threshold.<br>Review the flagged adVNTR result; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Pathogenic frameshift variant detected by Kestrel with high precision and adVNTR detected the variant with a flagged result, but quality metrics are below threshold.",
-        "Review the flagged adVNTR result; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "High_Precision",
-        "advntr_result": "negative",
-        "quality_metrics_pass": true
-      },
-      "message": "Kestrel detected a high-precision pathogenic variant, but adVNTR did not confirm the variant despite acceptable quality metrics.<br>Re-assessment and validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is advised.",
-      "segments": [
-        "Kestrel detected a high-precision pathogenic variant, but adVNTR did not confirm the variant despite acceptable quality metrics.",
-        "Re-assessment and validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is advised."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "High_Precision",
-        "advntr_result": "negative",
-        "quality_metrics_pass": false
-      },
-      "message": "Kestrel detected a high-precision pathogenic variant, quality metrics are below threshold, and adVNTR did not confirm the variant.<br>Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended due to conflicting results.",
-      "segments": [
-        "Kestrel detected a high-precision pathogenic variant, quality metrics are below threshold, and adVNTR did not confirm the variant.",
-        "Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended due to conflicting results."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "High_Precision",
-        "advntr_result": "none",
-        "quality_metrics_pass": true
-      },
-      "message": "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing).",
-      "segments": [
-        "Kestrel detected a high-precision pathogenic variant.",
-        "Note: adVNTR genotyping was not performed.",
-        "It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "High_Precision",
-        "advntr_result": "none",
-        "quality_metrics_pass": false
-      },
-      "message": "Kestrel detected a high-precision pathogenic variant with quality metrics below threshold, and adVNTR genotyping was not performed.<br>Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
-      "segments": [
-        "Kestrel detected a high-precision pathogenic variant with quality metrics below threshold, and adVNTR genotyping was not performed.",
-        "Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "Kestrel called a frameshift variant with high precision.",
+        "adVNTR was not run.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "High_Precision_flagged",
-        "advntr_result": "positive",
-        "quality_metrics_pass": true
+        "advntr_result": "positive"
       },
-      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result, but adVNTR confirmed the variant.<br>Review the flagged result and validate using orthogonal methods (e.g., SNaPshot, long‐read sequencing).",
+      "message": "Kestrel called a frameshift variant with high precision.<br>The Kestrel call is flagged; see the Kestrel table.<br>adVNTR also called a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Kestrel detected a high-precision pathogenic variant with a flagged result, but adVNTR confirmed the variant.",
-        "Review the flagged result and validate using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        "Kestrel called a frameshift variant with high precision.",
+        "The Kestrel call is flagged; see the Kestrel table.",
+        "adVNTR also called a variant.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "High_Precision_flagged",
-        "advntr_result": "positive",
-        "quality_metrics_pass": false
+        "advntr_result": "positive flagged"
       },
-      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result and low-quality metrics, although adVNTR confirmed the variant.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "Kestrel called a frameshift variant with high precision.<br>The Kestrel call is flagged; see the Kestrel table.<br>adVNTR also called a variant; its call is flagged.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Kestrel detected a high-precision pathogenic variant with a flagged result and low-quality metrics, although adVNTR confirmed the variant.",
-        "Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "Kestrel called a frameshift variant with high precision.",
+        "The Kestrel call is flagged; see the Kestrel table.",
+        "adVNTR also called a variant; its call is flagged.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "High_Precision_flagged",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": true
+        "advntr_result": "negative"
       },
-      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result, and adVNTR detected the variant with a flagged result.<br>Review both flagged results and validate using orthogonal methods (e.g., SNaPshot, long‐read sequencing).",
+      "message": "Kestrel called a frameshift variant with high precision.<br>The Kestrel call is flagged; see the Kestrel table.<br>adVNTR did not call a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Kestrel detected a high-precision pathogenic variant with a flagged result, and adVNTR detected the variant with a flagged result.",
-        "Review both flagged results and validate using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        "Kestrel called a frameshift variant with high precision.",
+        "The Kestrel call is flagged; see the Kestrel table.",
+        "adVNTR did not call a variant.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "High_Precision_flagged",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": false
+        "advntr_result": "none"
       },
-      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result and low-quality metrics, and adVNTR detected the variant with a flagged result.<br>Review both flagged results; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "Kestrel called a frameshift variant with high precision.<br>The Kestrel call is flagged; see the Kestrel table.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Kestrel detected a high-precision pathogenic variant with a flagged result and low-quality metrics, and adVNTR detected the variant with a flagged result.",
-        "Review both flagged results; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "High_Precision_flagged",
-        "advntr_result": "negative",
-        "quality_metrics_pass": true
-      },
-      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result, but adVNTR did not confirm the variant despite acceptable quality metrics.<br>Re-assessment and validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is recommended.",
-      "segments": [
-        "Kestrel detected a high-precision pathogenic variant with a flagged result, but adVNTR did not confirm the variant despite acceptable quality metrics.",
-        "Re-assessment and validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "High_Precision_flagged",
-        "advntr_result": "negative",
-        "quality_metrics_pass": false
-      },
-      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result, quality metrics are below threshold, and adVNTR did not confirm the variant.<br>Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended due to conflicting results.",
-      "segments": [
-        "Kestrel detected a high-precision pathogenic variant with a flagged result, quality metrics are below threshold, and adVNTR did not confirm the variant.",
-        "Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended due to conflicting results."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "High_Precision_flagged",
-        "advntr_result": "none",
-        "quality_metrics_pass": true
-      },
-      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the finding using orthogonal methods (e.g., SNaPshot, long‐read sequencing).",
-      "segments": [
-        "Kestrel detected a high-precision pathogenic variant with a flagged result.",
-        "Note: adVNTR genotyping was not performed.",
-        "It is recommended to perform adVNTR and validate the finding using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "High_Precision_flagged",
-        "advntr_result": "none",
-        "quality_metrics_pass": false
-      },
-      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result and quality metrics below threshold, and adVNTR genotyping was not performed.<br>Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
-      "segments": [
-        "Kestrel detected a high-precision pathogenic variant with a flagged result and quality metrics below threshold, and adVNTR genotyping was not performed.",
-        "Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "Kestrel called a frameshift variant with high precision.",
+        "The Kestrel call is flagged; see the Kestrel table.",
+        "adVNTR was not run.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "Low_Precision",
-        "advntr_result": "positive",
-        "quality_metrics_pass": true
+        "advntr_result": "positive"
       },
-      "message": "Warning: Kestrel detected a pathogenic variant with low precision, and adVNTR confirmed the variant.<br>Validation using alternative methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended.",
+      "message": "Kestrel called a frameshift variant with low precision.<br>adVNTR also called a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Warning: Kestrel detected a pathogenic variant with low precision, and adVNTR confirmed the variant.",
-        "Validation using alternative methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended."
+        "Kestrel called a frameshift variant with low precision.",
+        "adVNTR also called a variant.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "Low_Precision",
-        "advntr_result": "positive",
-        "quality_metrics_pass": false
+        "advntr_result": "positive flagged"
       },
-      "message": "Warning: Kestrel detected a pathogenic variant with low precision and low-quality metrics, despite adVNTR confirmation.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "Kestrel called a frameshift variant with low precision.<br>adVNTR also called a variant; its call is flagged.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Warning: Kestrel detected a pathogenic variant with low precision and low-quality metrics, despite adVNTR confirmation.",
-        "Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "Kestrel called a frameshift variant with low precision.",
+        "adVNTR also called a variant; its call is flagged.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "Low_Precision",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": true
+        "advntr_result": "negative"
       },
-      "message": "Warning: Kestrel detected a pathogenic variant with low precision, and adVNTR detected the variant with a flagged result.<br>Review the flagged adVNTR result and validate using alternative methods (e.g., SNaPshot, long‐read sequencing).",
+      "message": "Kestrel called a frameshift variant with low precision.<br>adVNTR did not call a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Warning: Kestrel detected a pathogenic variant with low precision, and adVNTR detected the variant with a flagged result.",
-        "Review the flagged adVNTR result and validate using alternative methods (e.g., SNaPshot, long‐read sequencing)."
+        "Kestrel called a frameshift variant with low precision.",
+        "adVNTR did not call a variant.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "Low_Precision",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": false
+        "advntr_result": "none"
       },
-      "message": "Warning: Kestrel detected a pathogenic variant with low precision and low-quality metrics, and adVNTR detected the variant with a flagged result.<br>Review the flagged adVNTR result; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "Kestrel called a frameshift variant with low precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Warning: Kestrel detected a pathogenic variant with low precision and low-quality metrics, and adVNTR detected the variant with a flagged result.",
-        "Review the flagged adVNTR result; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "Low_Precision",
-        "advntr_result": "negative",
-        "quality_metrics_pass": true
-      },
-      "message": "Kestrel detected a pathogenic variant with low precision; however, adVNTR did not confirm the variant despite acceptable quality metrics.<br>Re-assessment and validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is advised.",
-      "segments": [
-        "Kestrel detected a pathogenic variant with low precision; however, adVNTR did not confirm the variant despite acceptable quality metrics.",
-        "Re-assessment and validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is advised."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "Low_Precision",
-        "advntr_result": "negative",
-        "quality_metrics_pass": false
-      },
-      "message": "Kestrel detected a pathogenic variant with low precision and low-quality metrics; adVNTR did not confirm the variant.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is recommended.",
-      "segments": [
-        "Kestrel detected a pathogenic variant with low precision and low-quality metrics; adVNTR did not confirm the variant.",
-        "Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "Low_Precision",
-        "advntr_result": "none",
-        "quality_metrics_pass": true
-      },
-      "message": "Kestrel detected a pathogenic variant with low precision.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using alternative methods (e.g., SNaPshot, long‐read sequencing).",
-      "segments": [
-        "Kestrel detected a pathogenic variant with low precision.",
-        "Note: adVNTR genotyping was not performed.",
-        "It is recommended to perform adVNTR and validate the result using alternative methods (e.g., SNaPshot, long‐read sequencing)."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "Low_Precision",
-        "advntr_result": "none",
-        "quality_metrics_pass": false
-      },
-      "message": "Kestrel detected a pathogenic variant with low precision and low-quality metrics.<br>Note: adVNTR genotyping was not performed.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
-      "segments": [
-        "Kestrel detected a pathogenic variant with low precision and low-quality metrics.",
-        "Note: adVNTR genotyping was not performed.",
-        "Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "Kestrel called a frameshift variant with low precision.",
+        "adVNTR was not run.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "Low_Precision_flagged",
-        "advntr_result": "positive",
-        "quality_metrics_pass": true
+        "advntr_result": "positive"
       },
-      "message": "Warning: Kestrel detected a pathogenic variant with low precision and a flagged result, and adVNTR confirmed the variant.<br>Review the flagged result and validate using alternative methods (e.g., SNaPshot, long‐read sequencing).",
+      "message": "Kestrel called a frameshift variant with low precision.<br>The Kestrel call is flagged; see the Kestrel table.<br>adVNTR also called a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Warning: Kestrel detected a pathogenic variant with low precision and a flagged result, and adVNTR confirmed the variant.",
-        "Review the flagged result and validate using alternative methods (e.g., SNaPshot, long‐read sequencing)."
+        "Kestrel called a frameshift variant with low precision.",
+        "The Kestrel call is flagged; see the Kestrel table.",
+        "adVNTR also called a variant.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "Low_Precision_flagged",
-        "advntr_result": "positive",
-        "quality_metrics_pass": false
+        "advntr_result": "positive flagged"
       },
-      "message": "Warning: Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics.<br>Despite adVNTR confirmation, further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "Kestrel called a frameshift variant with low precision.<br>The Kestrel call is flagged; see the Kestrel table.<br>adVNTR also called a variant; its call is flagged.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Warning: Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics.",
-        "Despite adVNTR confirmation, further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "Kestrel called a frameshift variant with low precision.",
+        "The Kestrel call is flagged; see the Kestrel table.",
+        "adVNTR also called a variant; its call is flagged.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "Low_Precision_flagged",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": true
+        "advntr_result": "negative"
       },
-      "message": "Warning: Kestrel detected a pathogenic variant with low precision and a flagged result, and adVNTR detected the variant with a flagged result.<br>Review both flagged results and validate using alternative methods (e.g., SNaPshot, long‐read sequencing).",
+      "message": "Kestrel called a frameshift variant with low precision.<br>The Kestrel call is flagged; see the Kestrel table.<br>adVNTR did not call a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Warning: Kestrel detected a pathogenic variant with low precision and a flagged result, and adVNTR detected the variant with a flagged result.",
-        "Review both flagged results and validate using alternative methods (e.g., SNaPshot, long‐read sequencing)."
+        "Kestrel called a frameshift variant with low precision.",
+        "The Kestrel call is flagged; see the Kestrel table.",
+        "adVNTR did not call a variant.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "Low_Precision_flagged",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": false
+        "advntr_result": "none"
       },
-      "message": "Warning: Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics, and adVNTR detected the variant with a flagged result.<br>Review both flagged results; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "Kestrel called a frameshift variant with low precision.<br>The Kestrel call is flagged; see the Kestrel table.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Warning: Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics, and adVNTR detected the variant with a flagged result.",
-        "Review both flagged results; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "Low_Precision_flagged",
-        "advntr_result": "negative",
-        "quality_metrics_pass": true
-      },
-      "message": "Kestrel detected a pathogenic variant with low precision and a flagged result, but adVNTR did not confirm the variant despite acceptable quality metrics.<br>Re-assessment and validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is advised.",
-      "segments": [
-        "Kestrel detected a pathogenic variant with low precision and a flagged result, but adVNTR did not confirm the variant despite acceptable quality metrics.",
-        "Re-assessment and validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is advised."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "Low_Precision_flagged",
-        "advntr_result": "negative",
-        "quality_metrics_pass": false
-      },
-      "message": "Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics; adVNTR did not confirm the variant.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is recommended.",
-      "segments": [
-        "Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics; adVNTR did not confirm the variant.",
-        "Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "Low_Precision_flagged",
-        "advntr_result": "none",
-        "quality_metrics_pass": true
-      },
-      "message": "Kestrel detected a pathogenic variant with low precision and a flagged result.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing).",
-      "segments": [
-        "Kestrel detected a pathogenic variant with low precision and a flagged result.",
-        "Note: adVNTR genotyping was not performed.",
-        "It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "Low_Precision_flagged",
-        "advntr_result": "none",
-        "quality_metrics_pass": false
-      },
-      "message": "Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics.<br>Note: adVNTR genotyping was not performed.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
-      "segments": [
-        "Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics.",
-        "Note: adVNTR genotyping was not performed.",
-        "Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "Kestrel called a frameshift variant with low precision.",
+        "The Kestrel call is flagged; see the Kestrel table.",
+        "adVNTR was not run.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "negative",
-        "advntr_result": "positive",
-        "quality_metrics_pass": true
+        "advntr_result": "positive"
       },
-      "message": "Pathogenic variant identified by adVNTR while Kestrel did not detect any variant.<br>Validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is recommended.",
+      "message": "adVNTR called a variant; Kestrel did not.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Pathogenic variant identified by adVNTR while Kestrel did not detect any variant.",
-        "Validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is recommended."
+        "adVNTR called a variant; Kestrel did not.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "negative",
-        "advntr_result": "positive",
-        "quality_metrics_pass": false
+        "advntr_result": "positive flagged"
       },
-      "message": "Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "adVNTR called a variant; Kestrel did not.<br>The adVNTR call is flagged; see the adVNTR table.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
       "segments": [
-        "Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant.",
-        "Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "adVNTR called a variant; Kestrel did not.",
+        "The adVNTR call is flagged; see the adVNTR table.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "positive"
+      },
+      "message": "adVNTR called a variant; Kestrel did not.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
+      "segments": [
+        "adVNTR called a variant; Kestrel did not.",
+        "Kestrel found a candidate below its reporting threshold and did not call it.",
+        "Such candidates appear in 15–20% of real exomes without a Kestrel call.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
+      ]
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative_subthreshold",
+        "advntr_result": "positive flagged"
+      },
+      "message": "adVNTR called a variant; Kestrel did not.<br>The adVNTR call is flagged; see the adVNTR table.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
+      "segments": [
+        "adVNTR called a variant; Kestrel did not.",
+        "The adVNTR call is flagged; see the adVNTR table.",
+        "Kestrel found a candidate below its reporting threshold and did not call it.",
+        "Such candidates appear in 15–20% of real exomes without a Kestrel call.",
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "negative",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": true
+        "advntr_result": "negative"
       },
-      "message": "Pathogenic variant identified by adVNTR with a flagged result, while Kestrel did not detect any variant.<br>Review the flagged adVNTR result and validate using alternative methods (e.g., SNaPshot, long‐read sequencing).",
+      "message": "No variant called by Kestrel or adVNTR.",
       "segments": [
-        "Pathogenic variant identified by adVNTR with a flagged result, while Kestrel did not detect any variant.",
-        "Review the flagged adVNTR result and validate using alternative methods (e.g., SNaPshot, long‐read sequencing)."
+        "No variant called by Kestrel or adVNTR."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "negative",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": false
+        "advntr_result": "none"
       },
-      "message": "Pathogenic variant identified by adVNTR with a flagged result and low-quality metrics, while Kestrel did not detect any variant.<br>Review the flagged adVNTR result; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "No variant called by Kestrel.<br>adVNTR was not run.",
       "segments": [
-        "Pathogenic variant identified by adVNTR with a flagged result and low-quality metrics, while Kestrel did not detect any variant.",
-        "Review the flagged adVNTR result; further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative",
-        "advntr_result": "negative",
-        "quality_metrics_pass": true
-      },
-      "message": "No variant detected by either genotyping method.<br>Quality metrics are acceptable.",
-      "segments": [
-        "No variant detected by either genotyping method.",
-        "Quality metrics are acceptable."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative",
-        "advntr_result": "negative",
-        "quality_metrics_pass": false
-      },
-      "message": "No variant detected by either genotyping method; however, quality metrics are below threshold.<br>Re-assessment of sample quality is recommended.",
-      "segments": [
-        "No variant detected by either genotyping method; however, quality metrics are below threshold.",
-        "Re-assessment of sample quality is recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative",
-        "advntr_result": "none",
-        "quality_metrics_pass": true
-      },
-      "message": "No variant detected.<br>Note: adVNTR genotyping was not performed.",
-      "segments": [
-        "No variant detected.",
-        "Note: adVNTR genotyping was not performed."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative",
-        "advntr_result": "none",
-        "quality_metrics_pass": false
-      },
-      "message": "No variant detected; however, quality metrics are below threshold.<br>Note: adVNTR genotyping was not performed.<br>Re-assessment of sample quality is recommended.",
-      "segments": [
-        "No variant detected; however, quality metrics are below threshold.",
-        "Note: adVNTR genotyping was not performed.",
-        "Re-assessment of sample quality is recommended."
-      ]
-    },
-{
-      "conditions": {
-        "kestrel_result": "negative_subthreshold",
-        "advntr_result": "positive",
-        "quality_metrics_pass": true
-      },
-      "message": "Pathogenic variant identified by adVNTR while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is recommended.",
-      "segments": [
-        "Pathogenic variant identified by adVNTR while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.",
-        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
-        "Orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is recommended."
+        "No variant called by Kestrel.",
+        "adVNTR was not run."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "negative_subthreshold",
-        "advntr_result": "positive",
-        "quality_metrics_pass": false
+        "advntr_result": "negative"
       },
-      "message": "Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
+      "message": "No variant called by Kestrel or adVNTR.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.",
       "segments": [
-        "Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.",
-        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
-        "Orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+        "No variant called by Kestrel or adVNTR.",
+        "Kestrel found a candidate below its reporting threshold and did not call it.",
+        "Such candidates appear in 15–20% of real exomes without a Kestrel call."
       ]
     },
     {
       "conditions": {
         "kestrel_result": "negative_subthreshold",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": true
+        "advntr_result": "none"
       },
-      "message": "Pathogenic variant identified by adVNTR with a flagged result, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Review the flagged adVNTR result and obtain orthogonal confirmation (e.g., SNaPshot, long‐read sequencing).",
+      "message": "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates appear in 15–20% of real exomes without a Kestrel call.<br>adVNTR was not run.",
       "segments": [
-        "Pathogenic variant identified by adVNTR with a flagged result, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.",
-        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
-        "Review the flagged adVNTR result and obtain orthogonal confirmation (e.g., SNaPshot, long‐read sequencing)."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative_subthreshold",
-        "advntr_result": "positive flagged",
-        "quality_metrics_pass": false
-      },
-      "message": "Pathogenic variant identified by adVNTR with a flagged result and low-quality metrics, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Review the flagged adVNTR result; orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is strongly recommended.",
-      "segments": [
-        "Pathogenic variant identified by adVNTR with a flagged result and low-quality metrics, while Kestrel called no variant. A Kestrel candidate below the reporting floor was identified and filtered out.",
-        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
-        "Review the flagged adVNTR result; orthogonal confirmation (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative_subthreshold",
-        "advntr_result": "negative",
-        "quality_metrics_pass": true
-      },
-      "message": "No variant called by either genotyping method. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Quality metrics are acceptable.",
-      "segments": [
-        "No variant called by either genotyping method. A Kestrel candidate below the reporting floor was identified and filtered out.",
-        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
-        "Quality metrics are acceptable."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative_subthreshold",
-        "advntr_result": "negative",
-        "quality_metrics_pass": false
-      },
-      "message": "No variant called by either genotyping method; quality metrics are below threshold. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Re-assessment of sample quality is recommended.",
-      "segments": [
-        "No variant called by either genotyping method; quality metrics are below threshold. A Kestrel candidate below the reporting floor was identified and filtered out.",
-        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
-        "Re-assessment of sample quality is recommended."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative_subthreshold",
-        "advntr_result": "none",
-        "quality_metrics_pass": true
-      },
-      "message": "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed.",
-      "segments": [
-        "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.",
-        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
-        "Note: adVNTR genotyping was not performed."
-      ]
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative_subthreshold",
-        "advntr_result": "none",
-        "quality_metrics_pass": false
-      },
-      "message": "No variant called by Kestrel; quality metrics are below threshold. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed.<br>Re-assessment of sample quality is recommended.",
-      "segments": [
-        "No variant called by Kestrel; quality metrics are below threshold. A Kestrel candidate below the reporting floor was identified and filtered out.",
-        "The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.",
-        "Note: adVNTR genotyping was not performed.",
-        "Re-assessment of sample quality is recommended."
+        "No variant called by Kestrel.",
+        "Kestrel found a candidate below its reporting threshold and did not call it.",
+        "Such candidates appear in 15–20% of real exomes without a Kestrel call.",
+        "adVNTR was not run."
       ]
     }
   ],
   "screening_summary_default": "The screening was negative (no valid Kestrel or adVNTR data).",
-  "coverage_not_measured_note": "Note: VNTR coverage was not measured for this run, so the coverage quality gate was not evaluated.",
+  "coverage_not_measured_note": "Note: VNTR depth was not measured in this run, so it was not checked.",
+  "coverage_notes": {
+    "reduced_no_finding": "Reduced VNTR depth: {mean}x (adequate from {threshold}x). A variant with a weak signal can be missed at this depth.",
+    "low_no_finding": "Insufficient VNTR depth: {mean}x (below {threshold}x). A variant can be missed at this depth, so this result does not rule one out.",
+    "uncovered": "{percent}% of the VNTR region has no reads (limit {limit}%). Check the alignment there before relying on this result.",
+    "action_no_finding": "If a variant is still suspected, re‐sequence or test with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
+  },
   "confidence_grade_rules": [
     {
       "conditions": {
-        "kestrel_execution": ["failed", "not-performed"]
+        "kestrel_execution": [
+          "failed",
+          "not-performed"
+        ]
       },
       "grade": "not-established"
     },
@@ -739,80 +450,129 @@
     },
     {
       "conditions": {
-        "kestrel_result": "negative_subthreshold",
-        "advntr_result": ["negative", "none"]
+        "kestrel_result": [
+          "negative",
+          "negative_subthreshold"
+        ],
+        "advntr_result": [
+          "negative",
+          "none"
+        ],
+        "coverage_qc_status": [
+          "FAIL",
+          "NOT_EVALUATED"
+        ]
       },
       "grade": "no-finding-limited"
     },
     {
       "conditions": {
-        "kestrel_result": "negative",
-        "advntr_result": ["negative", "none"],
-        "coverage_qc_status": ["FAIL", "NOT_EVALUATED"]
-      },
-      "grade": "no-finding-limited"
-    },
-    {
-      "conditions": {
-        "kestrel_result": "negative",
-        "advntr_result": ["negative", "none"],
-        "coverage_qc_status": "PASS"
+        "kestrel_result": [
+          "negative",
+          "negative_subthreshold"
+        ],
+        "advntr_result": [
+          "negative",
+          "none"
+        ],
+        "coverage_qc_status": [
+          "PASS",
+          "REDUCED"
+        ]
       },
       "grade": "no-finding"
     },
     {
       "conditions": {
-        "kestrel_result": ["High_Precision_flagged", "Low_Precision_flagged"]
+        "kestrel_result": [
+          "High_Precision_flagged",
+          "Low_Precision_flagged"
+        ]
       },
       "grade": "finding-limited"
     },
     {
       "conditions": {
-        "kestrel_result": ["High_Precision", "Low_Precision"],
-        "coverage_qc_status": ["FAIL", "NOT_EVALUATED"]
+        "kestrel_result": [
+          "High_Precision",
+          "Low_Precision"
+        ],
+        "coverage_qc_status": "NOT_EVALUATED"
       },
       "grade": "finding-limited"
     },
     {
       "conditions": {
-        "kestrel_result": "negative",
-        "advntr_result": ["positive", "positive flagged"],
-        "coverage_qc_status": ["FAIL", "NOT_EVALUATED"]
+        "kestrel_result": [
+          "High_Precision",
+          "Low_Precision"
+        ],
+        "coverage_uncovered_exceeded": true
       },
       "grade": "finding-limited"
     },
     {
       "conditions": {
-        "kestrel_result": "negative_subthreshold",
-        "advntr_result": ["positive", "positive flagged"],
-        "coverage_qc_status": ["FAIL", "NOT_EVALUATED"]
+        "kestrel_result": [
+          "negative",
+          "negative_subthreshold"
+        ],
+        "advntr_result": [
+          "positive",
+          "positive flagged"
+        ],
+        "coverage_qc_status": [
+          "FAIL",
+          "NOT_EVALUATED"
+        ]
       },
       "grade": "finding-limited"
     },
     {
       "conditions": {
-        "kestrel_result": ["High_Precision", "Low_Precision"],
-        "coverage_qc_status": "PASS",
+        "kestrel_result": [
+          "High_Precision",
+          "Low_Precision"
+        ],
         "cross_match_is_positive": true
       },
       "grade": "finding-corroborated"
     },
     {
       "conditions": {
-        "kestrel_result": ["High_Precision", "Low_Precision"],
-        "coverage_qc_status": "PASS"
+        "kestrel_result": [
+          "High_Precision",
+          "Low_Precision"
+        ]
       },
       "grade": "finding"
     },
     {
       "conditions": {
-        "kestrel_result": ["negative", "negative_subthreshold"],
-        "advntr_result": ["positive", "positive flagged"],
-        "coverage_qc_status": "PASS"
+        "kestrel_result": [
+          "negative",
+          "negative_subthreshold"
+        ],
+        "advntr_result": [
+          "positive",
+          "positive flagged"
+        ]
       },
       "grade": "finding"
     }
   ],
+  "chip_labels": {
+    "finding": "Finding",
+    "finding-corroborated": "Finding, corroborated",
+    "finding-limited": "Finding, with caveats",
+    "no-finding": "No finding",
+    "no-finding-limited": "No finding, inconclusive",
+    "not-established": "No result",
+    "High_Precision_flagged": "High precision, flagged",
+    "Low_Precision_flagged": "Low precision, flagged",
+    "positive flagged": "Positive, flagged",
+    "negative_subthreshold": "Negative, candidate below threshold"
+  },
   "confidence_grade_default": "not-established",
   "length_estimation": {
     "label": "Approximate total diploid VNTR repeat count",
@@ -845,19 +605,19 @@
   },
   "length_sensitivity": {
     "labels": {
-      "notice_prefix": "Caution:",
+      "notice_prefix": "Note:",
       "cohort_kpi_label": "Length Tier High",
       "cohort_kpi_detail": "{caution} caution · {assessed} with a length estimate",
       "typical_error": "(typical error ≈{error} repeats, leave-one-out RMSE; not an interval)"
     },
     "caution": {
-      "badge": "Above {threshold} repeats: detection sensitivity may be reduced",
-      "help": "The total VNTR array (both alleles) is estimated above {threshold} repeats. Kestrel's depth-ratio floor makes frameshift detection less sensitive as the array grows, and the estimate tends to under-state very long arrays."
+      "badge": "Over {threshold} repeats: detection may be less sensitive",
+      "help": "Both alleles together are estimated at over {threshold} repeats. Kestrel detects frameshifts less reliably as the array grows."
     },
     "high": {
-      "badge": "Above {threshold} repeats: detection sensitivity substantially reduced",
-      "help": "The total VNTR array (both alleles) is estimated above {threshold} repeats. Kestrel's depth-ratio floor makes frameshift detection substantially less sensitive at this length, and the estimate tends to under-state very long arrays.",
-      "notice_not_positive": "Estimated total VNTR length ({estimate} repeats) exceeds {threshold} repeats. Short-read detection sensitivity is substantially reduced for arrays this long; a result without a finding does not exclude a frameshift variant. Orthogonal long-read or minisequencing testing may resolve it."
+      "badge": "Over {threshold} repeats: long array, lower sensitivity",
+      "help": "Both alleles together are estimated at over {threshold} repeats. In simulated arrays over 150 true repeats, Kestrel found 29 of 32 dupC variants and 11 of 23 other frameshifts.",
+      "notice_not_positive": "The VNTR array is estimated at about {estimate} repeats (over {threshold}). Detection is less sensitive in long arrays, mostly for frameshifts other than dupC, so this result does not rule one out."
     }
   }
 }

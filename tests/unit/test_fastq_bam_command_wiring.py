@@ -746,6 +746,49 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
     assert stats["coverage_qc"] == "FAIL"
 
 
+@pytest.mark.parametrize(
+    ("depth", "thresholds", "assembly", "verdict"),
+    [
+        (75, None, "hg38", "REDUCED"),
+        (120, None, "hg38", "PASS"),
+        (40, None, "hg38", "FAIL"),
+        (75, None, "hg19", "FAIL"),
+        (144, None, "hg19", "FAIL"),
+        (200, None, "hg19", "REDUCED"),
+        (290, None, "hg19", "PASS"),
+        (75, None, None, "FAIL"),
+        (75, {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": 80}}}, "hg38", "FAIL"),
+        (40, {"mean_vntr_coverage": 30}, "hg38", "PASS"),
+        (20, {"mean_vntr_coverage": 30}, "hg38", "FAIL"),
+    ],
+)
+def test_calculate_vntr_coverage_applies_the_lines_of_the_runs_assembly(tmp_path, depth, thresholds, assembly, verdict):
+    """The writer's verdict uses the lines of the run's assembly (GRCh37's are 2.89 times
+    GRCh38's), a replaced config's single line, and the fallback line for an undeclared
+    assembly."""
+    depth_file = tmp_path / "cov_vntr_coverage.txt"
+    config = CONFIG if thresholds is None else {**CONFIG, "thresholds": thresholds}
+
+    def fake_run_command(command, log_file, critical=False, cwd=None):
+        Path(log_file).write_text("")
+        depth_file.write_text("".join(f"chr1\t{155160500 + offset}\t{depth}\n" for offset in range(1501)))
+        return True
+
+    with patch.object(fastq_bam_processing, "run_command", fake_run_command):
+        stats = fastq_bam_processing.calculate_vntr_coverage(
+            bam_file="/data/sample.bam",
+            region="chr1:155160500-155162000",
+            threads=4,
+            config=config,
+            output_dir=str(tmp_path),
+            output_name="cov",
+            reference_assembly=assembly,
+        )
+
+    assert stats["coverage_qc"] == verdict
+    assert (tmp_path / "cov_summary.tsv").read_text().rstrip("\n").endswith(f"\t{verdict}")
+
+
 def test_an_empty_depth_file_aborts_the_coverage_stage(tmp_path):
     """
     A region that matched nothing must not become ``mean = 0``.
@@ -1107,6 +1150,33 @@ def test_downsample_index_carries_the_thread_flag(tmp_path, monkeypatch):
         str(tmp_path / "sample_downsampled.sorted.bam"),
     ]
     assert result.name == "sample_downsampled.sorted.bam"
+
+
+def test_the_advntr_precheck_judges_coverage_on_the_runs_assembly(tmp_path, monkeypatch):
+    """The precheck writes its own coverage summary and verdict; an hg19 run must be judged
+    on the GRCh37 lines there too, not on the fallback line."""
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"bam")
+    seen: list[dict] = []
+
+    def fake_coverage(**kwargs):
+        seen.append(kwargs)
+        return {"mean": 185.0}
+
+    monkeypatch.setattr(fastq_bam_processing, "calculate_vntr_coverage", fake_coverage)
+    monkeypatch.setattr(fastq_bam_processing, "get_region_string_with_fallback", lambda **kwargs: "chr1:1-2")
+
+    fastq_bam_processing.downsample_bam_if_needed(
+        bam_path=bam,
+        max_coverage=300,
+        reference_assembly="hg19",
+        threads=4,
+        config={"tools": {"samtools": "samtools"}},
+        coverage_dir=tmp_path,
+        coverage_prefix="advntr_precheck",
+    )
+
+    assert seen[0]["reference_assembly"] == "hg19"
 
 
 # ---------------------------------------------------------------------------

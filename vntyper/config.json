@@ -11,9 +11,9 @@
   },
   "length_estimation": {
     "enabled": false,
-    "_comment_sensitivity": "typical_error_repeats is the packaged length model's leave-one-out RMSE (14.26 repeats on the 76-exome training set). It is a typical error, not an interval: only 55 of 76 leave-one-out residuals fall within +/-14, and the empirical 2.5/97.5% residual quantiles are -29.4/+28.2. The report words it as a typical error from report_config.json and never renders it as a bare '±'.",
+    "_comment_sensitivity": "typical_error_repeats is the packaged length model's leave-one-out RMSE (14.26 repeats on the 76-exome training set). It is a typical error, not an interval: only 55 of 76 leave-one-out residuals fall within +/-14, and the empirical 2.5/97.5% residual quantiles are -29.4/+28.2. The report words it as a typical error from report_config.json and never renders it as a bare '±'. caution_threshold: null disables the caution tier. It shipped as 110 until 2.0.41: 53 of 67 estimates in a sample of 75 real exomes exceeded that, and simulated detection between 110 and 150 true repeats is 26 of 27 for dupC, so the tier marked most samples for a small effect. The one remaining tier is high_threshold: above 150 true repeats simulated detection is 29 of 32 for dupC and 11 of 23 for other frameshifts.",
     "sensitivity": {
-      "caution_threshold": 110.0,
+      "caution_threshold": null,
       "high_threshold": 150.0,
       "typical_error_repeats": 14.3
     }
@@ -135,7 +135,12 @@
     "annotation_font_size": 14
   },
   "thresholds": {
+    "_comment_mean_vntr_coverage": "Mean depth over the VNTR window, judged against two lines per assembly in mean_vntr_coverage_by_assembly. At or above adequate the depth is adequate; between low and adequate it is REDUCED, which is recorded and still passes; below low it fails. GRCh38: downsampling 42 confirmed positive exomes (378 runs, repeated measures, VNtyper 2.0.3 and 2.0.42) detected the variant in 160 of 161 runs at 100x or more, 95 of 108 between 50x and 100x, and 48 of 109 below 50x. The lines are a policy choice along that gradient, not change points. GRCh37: the same reads realigned to both builds give a window mean 2.89 times higher on GRCh37 (median of 214 exomes, 5th-95th percentile 2.82-2.96) and identical Kestrel calls (326 of 326 paired runs), so its lines are the GRCh38 lines times 2.89. mean_vntr_coverage is the single line for a run whose assembly is unknown or not listed. A config without mean_vntr_coverage_by_assembly but with mean_vntr_coverage applies that single line on every assembly, as through 2.0.41.",
     "mean_vntr_coverage": 100,
+    "mean_vntr_coverage_by_assembly": {
+      "GRCh38": {"adequate": 100, "low": 50},
+      "GRCh37": {"adequate": 290, "low": 145}
+    },
     "percent_vntr_uncovered": 50.0,
     "duplication_rate": 0.1,
     "q20_rate": 0.8,

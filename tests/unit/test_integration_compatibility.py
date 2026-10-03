@@ -884,6 +884,14 @@ def test_manifest_contains_every_required_inactive_success_identity() -> None:
     assert {(row["suite"], row["test_name"]) for row in manifest["contracts"]} == CURRENT_IDENTITIES
 
 
+#: The #266 message for a subthreshold Kestrel negative without adVNTR, as shipped in 2.0.24.
+ISSUE_266_SUBTHRESHOLD_MESSAGE = (
+    "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out."
+    "<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a "
+    "sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed."
+)
+
+
 def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -> None:
     """Bind the exact two 40cf observations to unchanged history and report configuration."""
     manifest = json.loads(Path("tests/compatibility/real_success_baseline.json").read_text())
@@ -899,8 +907,7 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
     shipped = [
         rule
         for rule in report_config["screening_summary_rules"]
-        if rule["conditions"]
-        == {"kestrel_result": "negative_subthreshold", "advntr_result": "none", "quality_metrics_pass": True}
+        if rule["conditions"] == {"kestrel_result": "negative_subthreshold", "advntr_result": "none"}
     ]
     observations = manifest["observation_sets"]
     overrides = observations[0]["report_overrides"]
@@ -1089,13 +1096,42 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
             "extends": "2.0.40",
             "report_overrides": [],
         },
+        {
+            "version": "2.0.42",
+            "provenance_commit": "22ef08be4b675835fdda26d49bdc4537d94069f8",
+            "extends": "2.0.41",
+            "report_overrides": observations[-1]["report_overrides"],
+            "coverage_qc_overrides": [
+                {"suite": "bam_tests", "test_name": "example_7a61_hg19_subset_fast", "coverage_qc": "REDUCED"}
+            ],
+        },
     ]
     assert len(shipped) == 1
     assert len(overrides) == 2
     assert {(row["suite"], row["test_name"]) for row in overrides} == expected_identities
-    assert all(row["report"] == [shipped[0]["message"]] for row in overrides)
+    # History is immutable: 2.0.24 keeps the message as it was shipped then.
+    assert all(row["report"] == [ISSUE_266_SUBTHRESHOLD_MESSAGE] for row in overrides)
+    # 2.0.42 reworded every message for a call, the two #266 subthreshold messages and the
+    # plain Kestrel-only negative, so each real success that asserts one carries an
+    # override, and each override is what the live declaration now asserts.
+    reworded = observations[-1]["report_overrides"]
+    reworded_identities = {(row["suite"], row["test_name"]) for row in reworded}
+    assert len(reworded) == 24
+    assert expected_identities <= reworded_identities
     assert all(
-        live_by_identity[identity]["report_assertions"] == [shipped[0]["message"]] for identity in expected_identities
+        row["report"] == [shipped[0]["message"]]
+        for row in reworded
+        if (row["suite"], row["test_name"]) in expected_identities
+    )
+    assert (
+        sum(
+            row["report"][0].startswith("Kestrel called a frameshift variant with high precision.<br>")
+            for row in reworded
+        )
+        == 21
+    )
+    assert all(
+        live_by_identity[(row["suite"], row["test_name"])]["report_assertions"] == row["report"] for row in reworded
     )
 
 
@@ -1130,6 +1166,14 @@ def test_bootstrap_seed_is_reconstructed_from_authoritative_git_history() -> Non
         for row in missing["contracts"]
         if (row["suite"], row["test_name"]) != ("bam_tests", "example_b178_hg19_subset_fast")
     ]
+    # Since 2.0.42 this success carries a report override. Drop it with the contract, or the
+    # dangling override is refused first and the missing identity is never reached.
+    for observation in missing["observation_sets"]:
+        observation["report_overrides"] = [
+            row
+            for row in observation["report_overrides"]
+            if (row["suite"], row["test_name"]) != ("bam_tests", "example_b178_hg19_subset_fast")
+        ]
     with pytest.raises(ValueError, match="missing authoritative identities"):
         module.validate_bootstrap_manifest(
             missing, historical, json.loads(Path("tests/test_data_config.json").read_text())
@@ -1201,5 +1245,5 @@ def test_final_manifest_activates_from_absent_base_without_mutating_historical_t
         live,
         live,
         historical_test_config=historical,
-        observation_version="2.0.41",
+        observation_version="2.0.42",
     )

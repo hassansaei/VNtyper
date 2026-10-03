@@ -245,17 +245,20 @@ def _standard_length_summary(estimate: float, tier: str) -> dict[str, object]:
     return fields
 
 
-NOTICE_CAUTION = '<li class="notice notice-caution" role="note">'
+NOTICE_LENGTH = '<li class="notice notice-length" role="note">'
 BADGE = '<span class="length-warning-badge" role="status">'
 
 
-def test_high_length_tier_without_finding_renders_caution_banner_and_badge(tmp_path: Path) -> None:
+def test_high_length_tier_without_finding_renders_a_neutral_note_and_badge(tmp_path: Path) -> None:
+    """13 of 67 real exome estimates were this long, so the note carries no caution tone."""
     write_summary(tmp_path, **_standard_length_summary(160.5, "high"))
     html = render(tmp_path)
-    assert NOTICE_CAUTION in html
-    assert "Estimated total VNTR length (160.5 repeats) exceeds 150 repeats." in html
+    assert NOTICE_LENGTH in html
+    assert "notice-caution" not in html
+    assert "<strong>Note:</strong>" in html
+    assert "The VNTR array is estimated at about 160.5 repeats (over 150)." in html
     assert BADGE in html
-    assert "Above 150 repeats: detection sensitivity substantially reduced" in html
+    assert "Over 150 repeats: long array, lower sensitivity" in html
     assert "(typical error ≈14 repeats, leave-one-out RMSE; not an interval)" in html
     assert "± 14" not in html
 
@@ -268,7 +271,7 @@ def test_high_length_tier_with_finding_renders_badge_without_banner(tmp_path: Pa
         **_standard_length_summary(160.5, "high"),
     )
     html = render(tmp_path)
-    assert NOTICE_CAUTION not in html
+    assert NOTICE_LENGTH not in html
     assert "Estimated total VNTR length" not in html
     assert BADGE in html
 
@@ -276,15 +279,15 @@ def test_high_length_tier_with_finding_renders_badge_without_banner(tmp_path: Pa
 def test_caution_length_tier_renders_badge_only(tmp_path: Path) -> None:
     write_summary(tmp_path, **_standard_length_summary(120.0, "caution"))
     html = render(tmp_path)
-    assert NOTICE_CAUTION not in html
-    assert "Above 110 repeats: detection sensitivity may be reduced" in html
+    assert NOTICE_LENGTH not in html
+    assert "Over 110 repeats: detection may be less sensitive" in html
 
 
 def test_below_length_tier_renders_no_badge(tmp_path: Path) -> None:
     write_summary(tmp_path, **_standard_length_summary(95.0, "below"))
     html = render(tmp_path)
     assert BADGE not in html
-    assert NOTICE_CAUTION not in html
+    assert NOTICE_LENGTH not in html
     assert "(typical error ≈14 repeats, leave-one-out RMSE; not an interval)" in html
     assert "± 14" not in html
 
@@ -1865,7 +1868,7 @@ def test_a_negative_screening_is_not_styled_as_a_finding(tmp_path) -> None:
         tabular_step(summary_steps.STEP_ADVNTR, []),
     )
     html = render(tmp_path)
-    assert "No variant detected by either genotyping method" in screening_message(html)
+    assert "No variant called by Kestrel or adVNTR." in screening_message(html)
     assert masthead_state(html) == "no-finding"
 
 
@@ -2047,12 +2050,12 @@ def test_the_state_reaches_the_chip_row(positive_summary) -> None:
         "adVNTR",
         "Concordance",
         "Confidence grade",
-        "Coverage QC",
-        "Mean coverage",
+        "VNTR depth",
+        "Mean depth",
         "Flank depth",
     ]
     assert chip_value(html, "Kestrel") == "High precision"
-    assert chip_value(html, "Coverage QC") == "Pass"
+    assert chip_value(html, "VNTR depth") == "Adequate"
     assert chip_value(html, "Confidence grade") == "Finding"
 
 
@@ -2093,8 +2096,8 @@ def test_the_coverage_gate_is_chipped_as_unevaluated_rather_than_passing(tmp_pat
 
     html = render(tmp_path)
 
-    assert chip_value(html, "Coverage QC") == "Not evaluated"
-    assert chip_tone(html, "Coverage QC") == "none"
+    assert chip_value(html, "VNTR depth") == "Not evaluated"
+    assert chip_tone(html, "VNTR depth") == "none"
 
 
 def test_a_failing_coverage_gate_is_chipped_as_a_caution(tmp_path) -> None:
@@ -2106,8 +2109,179 @@ def test_a_failing_coverage_gate_is_chipped_as_a_caution(tmp_path) -> None:
 
     html = render(tmp_path)
 
-    assert chip_value(html, "Coverage QC") == "Fail"
-    assert re.search(r'<li class="chip" data-tone="\s*caution">\s*<span class="chip-label">Coverage QC', html)
+    assert chip_value(html, "VNTR depth") == "Insufficient"
+    assert chip_tone(html, "VNTR depth") == "caution"
+
+
+NEGATIVE_ROW = {**KESTREL_ROW, "Confidence": "Negative"}
+
+
+def coverage_note_texts(html: str) -> list[str]:
+    """The coverage sentences rendered under the verdict, in order."""
+    return [
+        " ".join(text.split())
+        for text in re.findall(r'<p class="detail coverage-note">(.*?)</p>', masthead(html), re.DOTALL)
+    ]
+
+
+def test_a_reduced_depth_is_chipped_without_a_caution_and_qualifies_the_negative(tmp_path) -> None:
+    """A real GRCh38 exome at 96x was chipped "Fail" and told to re-assess sample quality.
+
+    Between the two thresholds the chip says so in a word and carries no tone, the
+    negative is qualified in one sentence, and the grade stays a plain no-finding.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 96.24}]),
+        tabular_step(summary_steps.STEP_KESTREL, [NEGATIVE_ROW]),
+        reference_assembly_requested="hg38",
+    )
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "VNTR depth") == "Reduced"
+    assert chip_tone(html, "VNTR depth") == "none"
+    assert _coverage_qc_cell(html) == "REDUCED"
+    assert coverage_note_texts(html) == [
+        "Reduced VNTR depth: 96.24x (adequate from 100x). A variant with a weak signal can be missed at this depth."
+    ]
+    assert chip_value(html, "Confidence grade") == "No finding"
+
+
+@pytest.mark.parametrize(("assembly", "threshold"), [("hg19", "145x"), (None, "100x")])
+def test_a_low_mean_fails_on_grch37_lines_or_the_fallback_line(tmp_path, assembly, threshold) -> None:
+    """75x on GRCh37 is about 26x on GRCh38, below GRCh37's low line of 145x; a run with
+    no recorded assembly has only the single fallback line at 100x."""
+    top_level = {} if assembly is None else {"reference_assembly_requested": assembly}
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 75.0}]),
+        tabular_step(summary_steps.STEP_KESTREL, [NEGATIVE_ROW]),
+        **top_level,
+    )
+
+    html = render(tmp_path)
+
+    assert _coverage_qc_cell(html) == "FAIL"
+    assert chip_value(html, "VNTR depth") == "Insufficient"
+    assert chip_value(html, "Confidence grade") == "No finding, inconclusive"
+    assert coverage_note_texts(html)[0].startswith(f"Insufficient VNTR depth: 75x (below {threshold}).")
+
+
+@pytest.mark.parametrize(
+    ("thresholds", "word"),
+    [
+        ({"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": 80}}}, "Insufficient"),
+        ({}, "Reduced"),
+        ({"mean_vntr_coverage": 70}, "Adequate"),
+        ({"mean_vntr_coverage": 30}, "Adequate"),
+        ({"mean_vntr_coverage": 100}, "Insufficient"),
+    ],
+)
+def test_the_report_applies_the_configured_mean_thresholds(tmp_path, thresholds, word) -> None:
+    """`vntyper report` recomputes the verdict, so it must read the same lines as the
+    pipeline - including a replaced config from before 2.0.42 that sets only the single
+    line, which keeps it on every assembly."""
+    config = load_config(None)
+    shipped = {k: v for k, v in config["thresholds"].items() if k != "mean_vntr_coverage_by_assembly"}
+    config["thresholds"] = {**shipped, **thresholds} if thresholds else config["thresholds"]
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 75.0}]),
+        tabular_step(summary_steps.STEP_KESTREL, [NEGATIVE_ROW]),
+        reference_assembly_requested="hg38",
+    )
+
+    assert chip_value(render(tmp_path, config=config), "VNTR depth") == word
+
+
+def test_the_mean_icon_marks_only_a_failing_depth(tmp_path) -> None:
+    """A red cross beside a mean the gate passes contradicts the chip above it."""
+    for mean, failing in ((75.0, False), (30.0, True)):
+        target = tmp_path / str(mean)
+        target.mkdir()
+        write_summary(
+            target,
+            tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": mean}]),
+            tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+            reference_assembly_requested="hg38",
+        )
+        cell = re.search(r"<td>Mean Coverage</td>\s*<td>(.*?)</td>", render(target), re.DOTALL)
+        assert cell is not None
+        assert (report_formatting.WARNING_ICON in cell.group(1)) is failing
+
+
+def test_the_mean_icon_judges_a_pre_2_0_8_summary_on_its_corrected_mean(tmp_path) -> None:
+    """The icon used to judge the stored covered-bases mean while the verdict judged the
+    corrected one, so a stored 150 at 40% uncovered drew a tick beside a failing verdict."""
+    write_summary(
+        tmp_path,
+        tabular_step(
+            summary_steps.STEP_COVERAGE,
+            [
+                {
+                    k: v
+                    for k, v in {**COVERAGE_ROW, "mean": 150.0, "percent_uncovered": 40.0}.items()
+                    if k != "coverage_qc"
+                }
+            ],
+        ),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        version="2.0.7",
+    )
+
+    html = render(tmp_path)
+    cell = re.search(r"<td>Mean Coverage</td>\s*<td>(.*?)</td>", html, re.DOTALL)
+
+    assert _coverage_qc_cell(html) == "FAIL"
+    assert cell is not None and report_formatting.WARNING_ICON in cell.group(1)
+
+
+def test_a_mostly_uncovered_region_qualifies_a_finding_too(tmp_path) -> None:
+    """Depth does not weaken a call, but a region that is mostly uncovered is a gross
+    failure of the alignment and is stated, and graded, for every result."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 250.0, "percent_uncovered": 80.0}]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        reference_assembly_requested="hg38",
+    )
+
+    html = render(tmp_path)
+
+    assert coverage_note_texts(html) == [
+        "80% of the VNTR region has no reads (limit 50%). Check the alignment there before relying on this result."
+    ]
+    assert chip_value(html, "Confidence grade") == "Finding, with caveats"
+
+
+def test_an_unestablished_state_carries_no_coverage_sentence(tmp_path) -> None:
+    """ "This result does not exclude a variant" beside "No summary available" asserts a
+    result the run never reached."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 3.0}]),
+        reference_assembly_requested="hg38",
+    )
+
+    assert coverage_note_texts(render(tmp_path)) == []
+
+
+def test_a_finding_is_not_qualified_by_depth(tmp_path) -> None:
+    """Depth limits what a negative means; four of fourteen real positives at 69-87x were
+    graded "Finding limited" for it. The depth chip still says what was measured."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 3.0}]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        reference_assembly_requested="hg38",
+    )
+
+    html = render(tmp_path)
+
+    assert chip_value(html, "VNTR depth") == "Insufficient"
+    assert chip_value(html, "Confidence grade") == "Finding"
+    assert coverage_note_texts(html) == []
 
 
 def test_coverage_qc_context_keeps_record_and_presentation_vocabulary_separate(tmp_path) -> None:
@@ -2133,7 +2307,7 @@ def test_coverage_qc_context_keeps_record_and_presentation_vocabulary_separate(t
     )
     html = (tmp_path / "custom.html").read_text(encoding="utf-8")
 
-    assert html == "PASS|Pass|Not calculated"
+    assert html == "PASS|Adequate|Not calculated"
 
 
 def test_coverage_qc_chip_text_is_autoescaped(tmp_path, monkeypatch) -> None:
@@ -2195,10 +2369,9 @@ def test_the_configured_message_is_rendered_as_the_parts_it_was_authored_in(posi
     assert block.count('<p class="detail">') == 2
     assert "<br>" not in block
     assert screening_message(render(positive_summary)) == (
-        "Kestrel detected a high-precision pathogenic variant. "
-        "Note: adVNTR genotyping was not performed. "
-        "It is recommended to perform adVNTR and validate the result using orthogonal methods "
-        "(e.g., SNaPshot, long‐read sequencing)."
+        "Kestrel called a frameshift variant with high precision. "
+        "adVNTR was not run. "
+        "Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
     )
 
 
@@ -2208,12 +2381,7 @@ def test_every_configured_message_survives_the_split_into_the_report(tmp_path) -
     from vntyper.scripts.screening_summary import load_report_config, render_segments
 
     rules = load_report_config()["screening_summary_rules"]
-    rule = next(
-        r
-        for r in rules
-        if r["conditions"]
-        == {"kestrel_result": "High_Precision", "advntr_result": "none", "quality_metrics_pass": True}
-    )
+    rule = next(r for r in rules if r["conditions"] == {"kestrel_result": "High_Precision", "advntr_result": "none"})
     write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
 
     rendered = screening_message(render(tmp_path))
@@ -2262,7 +2430,7 @@ def test_the_template_no_longer_decides_emphasis_from_the_message_text() -> None
 
 
 def test_an_absent_advntr_step_says_it_was_not_performed(positive_summary) -> None:
-    assert "adVNTR genotyping was not performed." in render(positive_summary)
+    assert "adVNTR was not run." in render(positive_summary)
 
 
 def test_the_advntr_not_performed_state_is_worded_once(positive_summary) -> None:
@@ -2282,9 +2450,9 @@ def test_the_advntr_not_performed_state_is_worded_once(positive_summary) -> None
 
     assert "adVNTR genotyping was not performed for this sample." in text
     assert "or no adVNTR results are available" not in text, "one sentence per state, and no hedging between them"
-    assert text.count("adVNTR genotyping was not performed") == 2, (
-        "the report should say this exactly twice - once in the configured screening message and once "
-        f"in the adVNTR section - and says it {text.count('adVNTR genotyping was not performed')} times"
+    assert text.count("adVNTR was not run.") == 1, "the configured screening message says it once"
+    assert text.count("adVNTR genotyping was not performed") == 1, (
+        "the adVNTR section says it once; the configured message words it in its own short form"
     )
 
 
@@ -3270,11 +3438,11 @@ def test_an_unrecognised_pipeline_version_leaves_the_coverage_figures_alone() ->
 def test_a_pre_2_0_8_summary_is_judged_on_its_corrected_mean(tmp_path) -> None:
     """The whole legacy path, end to end through the rendered report.
 
-    A summary recorded by 2.0.7 carries a mean over *covered* positions. Stored 150.0 at
-    40% uncovered stands for a region-wide 90.0, which fails the 100x threshold - judging
-    the stored figure would pass it and print a QC verdict the data does not support.
+    A summary recorded by 2.0.7 carries a mean over *covered* positions. Stored 80.0 at
+    40% uncovered stands for a region-wide 48.0, which fails the 50x low threshold - judging
+    the stored figure would call it reduced and print a QC verdict the data does not support.
     """
-    legacy_row = {**COVERAGE_ROW, "mean": 150.0, "percent_uncovered": 40.0}
+    legacy_row = {**COVERAGE_ROW, "mean": 80.0, "percent_uncovered": 40.0}
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_COVERAGE, [legacy_row]),
@@ -3285,6 +3453,9 @@ def test_a_pre_2_0_8_summary_is_judged_on_its_corrected_mean(tmp_path) -> None:
     html = render(tmp_path)
 
     assert _coverage_qc_cell(html) == "FAIL", "a pre-2.0.8 mean must be corrected before it is judged"
+    cell = re.search(r"<td>Mean Coverage</td>\s*<td>(.*?)</td>", html, re.DOTALL)
+    assert cell is not None and cell.group(1).strip().startswith("48"), "the judged figure is the one shown"
+    assert "Recorded as 80.0 by VNtyper before 2.0.8" in html
 
 
 def test_the_same_summary_recorded_by_this_version_is_taken_at_face_value(tmp_path) -> None:
@@ -3300,6 +3471,7 @@ def test_the_same_summary_recorded_by_this_version_is_taken_at_face_value(tmp_pa
     html = render(tmp_path)
 
     assert _coverage_qc_cell(html) == "PASS", "a current summary's mean is already region-wide"
+    assert "Recorded as" not in html
 
 
 # ---------------------------------------------------------------------------
@@ -4484,8 +4656,8 @@ class TestSubthresholdNoteInTheReport:
 
         text = self.screening_text(render(tmp_path))
 
-        assert "below the reporting floor" in text
-        assert "not a call" in text
+        assert "below its reporting threshold" in text
+        assert "did not call it" in text
         assert "No variant detected" not in text
 
     def test_a_plain_negative_still_gets_the_plain_negative_message(self, tmp_path):
@@ -4500,8 +4672,8 @@ class TestSubthresholdNoteInTheReport:
 
         text = self.screening_text(render(tmp_path))
 
-        assert "below the reporting floor" not in text
-        assert "No variant detected" in text
+        assert "below its reporting threshold" not in text
+        assert text.startswith("No variant called by Kestrel.")
 
     def test_the_kestrel_section_does_not_contradict_the_note_beside_it(self, tmp_path):
         """`detected` and `called` are not synonyms. A section that says nothing was
@@ -4557,7 +4729,7 @@ class TestSubthresholdNoteInTheReport:
         chips = [
             match
             for match in re.finditer(r'<li class="chip" data-tone="([^"]*)">(.*?)</li>', html, re.DOTALL)
-            if "Negative subthreshold" in match.group(2)
+            if "Negative, candidate below threshold" in match.group(2)
         ]
 
         assert len(chips) == 1, "the chip must read as words, exactly once"
@@ -4638,8 +4810,8 @@ def test_confidence_grade_reaches_template_context_and_suppressed_on_older_confi
 def test_high_length_notice_sits_with_the_verdict_before_the_state_chips(tmp_path: Path) -> None:
     write_summary(tmp_path, **_standard_length_summary(160.5, "high"))
     html = render(tmp_path)
-    assert html.index(NOTICE_CAUTION) < html.index('<ul class="chips">')
-    assert html.count("Estimated total VNTR length") == 1
+    assert html.index(NOTICE_LENGTH) < html.index('<ul class="chips">')
+    assert html.count("The VNTR array is estimated at about") == 1
 
 
 def test_typical_error_follows_the_estimate_and_its_unit(tmp_path: Path) -> None:

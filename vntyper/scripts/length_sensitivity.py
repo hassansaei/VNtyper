@@ -1,9 +1,15 @@
-"""Two-tier sensitivity policy for the total MUC1 VNTR length estimate.
+"""Sensitivity policy for the total MUC1 VNTR length estimate.
 
 Short-read frameshift detection loses sensitivity as the total (diploid) array grows,
 because Kestrel's depth ratio scales as 1/array length. This module turns a recorded
 length estimate into a tier using a configured policy. It is pure: the pipeline applies
 it once at the summary merge point, and the report re-checks what was recorded.
+
+The policy has two cutoffs and the lower one is optional. The shipped configuration sets
+it to ``null``: 110 repeats is below the median real exome (53 of 67 estimates in a
+sample of 75 exomes exceeded it), and in the 400-sample simulation detection is 96% for dupC between 110 and 150 true
+repeats, so a tier there marked most samples for a small effect. A policy recorded with a
+numeric lower cutoff by an earlier release still decodes and tiers exactly as recorded.
 """
 
 from __future__ import annotations
@@ -33,17 +39,19 @@ _COMPLETE_FRAME_OFFSET: dict[object, float] = {None: 0.0, "complete": 0.0, "cano
 class LengthSensitivityPolicy:
     """Validated cutoffs (repeat units, strict ``>``) and the model's typical error.
 
+    ``caution_threshold`` is ``None`` when the policy has no caution tier.
+
     ``typical_error_repeats`` is the packaged model's leave-one-out RMSE (14.26 repeats on
     the 76-exome training set). It is a typical error, not an interval: only 55 of the 76
     leave-one-out residuals fall within +/-14, and the empirical 2.5/97.5% residual
     quantiles are -29.4/+28.2. The report therefore never renders it with a bare "±".
     """
 
-    caution_threshold: float
+    caution_threshold: float | None
     high_threshold: float
     typical_error_repeats: float
 
-    def as_dict(self) -> dict[str, float]:
+    def as_dict(self) -> dict[str, float | None]:
         """Return the policy as recorded in ``pipeline_summary.json``."""
         return {name: getattr(self, name) for name in _POLICY_FIELDS}
 
@@ -67,14 +75,20 @@ def decode_length_sensitivity_policy(raw: object) -> LengthSensitivityPolicy:
 
     Raises:
         ValueError: On missing or extra keys, non-numeric, non-finite or non-positive
-            values, or a caution cutoff not below the high cutoff.
+            values, or a caution cutoff not below the high cutoff. A ``null`` caution
+            cutoff is valid and disables that tier; the key must still be present.
     """
     if isinstance(raw, Mapping) and set(raw) == set(_LEGACY_FIELDS):
         raw = dict(zip(_POLICY_FIELDS, (raw[name] for name in _LEGACY_FIELDS), strict=True))
     if not isinstance(raw, Mapping) or set(raw) != set(_POLICY_FIELDS):
         raise ValueError("length sensitivity policy fields differ from the closed contract")
-    policy = LengthSensitivityPolicy(*(_positive(raw[name], name) for name in _POLICY_FIELDS))
-    if policy.caution_threshold >= policy.high_threshold:
+    caution = raw["caution_threshold"]
+    policy = LengthSensitivityPolicy(
+        None if caution is None else _positive(caution, "caution_threshold"),
+        _positive(raw["high_threshold"], "high_threshold"),
+        _positive(raw["typical_error_repeats"], "typical_error_repeats"),
+    )
+    if policy.caution_threshold is not None and policy.caution_threshold >= policy.high_threshold:
         raise ValueError("length sensitivity caution threshold must be below the high threshold")
     return policy
 
@@ -124,7 +138,7 @@ def classify_length_sensitivity(
     complete = _complete_tenth(estimate, convention)
     if complete > policy.high_threshold:
         return "high"
-    if complete > policy.caution_threshold:
+    if policy.caution_threshold is not None and complete > policy.caution_threshold:
         return "caution"
     return "below"
 
@@ -273,7 +287,8 @@ def build_sensitivity_view(
     if expected == "below":
         return SensitivityView(expected, None, None, None, typical_error, value)
     block = words[expected]
-    threshold = policy.high_threshold if expected == "high" else policy.caution_threshold
+    # `expected == "caution"` is only reachable with a numeric caution cutoff.
+    threshold = policy.high_threshold if expected == "high" else cast(float, policy.caution_threshold)
     shown = _count(_complete_tenth(cast(float, estimate), summary.get("length_count_convention")))
     values = {"threshold": _count(threshold), "estimate": shown}
     notice = block["notice_not_positive"].format(**values) if expected == "high" and not is_positive else None

@@ -277,3 +277,6 @@ def test_the_assembly_alias_is_resolved_before_the_geometry_is_looked_up():
         )
         assert seen["assembly_config"] is not None, f"{alias} resolved to no geometry"
         assert "vntr_array_coords" in seen["assembly_config"], alias
+        # The coverage verdict applies its reduced band by assembly, so the stage has to
+        # be told which one it is judging.
+        assert seen["reference_assembly"] == alias

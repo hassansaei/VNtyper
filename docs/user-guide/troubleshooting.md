@@ -75,7 +75,8 @@ If the FASTA lacks contigs named in the CRAM header, `pipeline.log` warns
 ## Does a sample that fails coverage QC still get a report?
 
 Yes. `Coverage QC: FAIL` is a finding: genotyping continues and the report shows the failed
-metric. A hard error is different. A step did not run, so no result is written, rather than
+metric. `REDUCED` (a mean between 50x and 100x on GRCh38, or 145x and 290x on GRCh37) is not a failure: it adds one
+sentence to a result without a finding. A hard error is different. A step did not run, so no result is written, rather than
 showing a result that was never computed.
 
 ## The report has no IGV alignment view

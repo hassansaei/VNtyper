@@ -62,6 +62,10 @@ Controls tool paths, reference data, processing parameters, and quality threshol
   },
   "thresholds": {
     "mean_vntr_coverage": 100,
+    "mean_vntr_coverage_by_assembly": {
+      "GRCh38": {"adequate": 100, "low": 50},
+      "GRCh37": {"adequate": 290, "low": 145}
+    },
     "percent_vntr_uncovered": 50.0,
     "duplication_rate": 0.1,
     "q20_rate": 0.8,
@@ -84,11 +88,42 @@ Controls tool paths, reference data, processing parameters, and quality threshol
 
 #### Coverage thresholds
 
-`mean_vntr_coverage` and `percent_vntr_uncovered` decide the report coverage QC verdict, and through it the `quality_metrics_pass` axis of the screening summary. The mean fails strictly below its threshold; the uncovered fraction fails strictly above its own, so a sample at exactly 100x and exactly 50.0% uncovered passes both. An unmeasured metric (such as a run omitting coverage calculation) does not fail the gate.
+`mean_vntr_coverage_by_assembly`, `mean_vntr_coverage` and `percent_vntr_uncovered` decide the coverage QC verdict. Each assembly has two lines for the mean, `adequate` and `low`:
+
+| Verdict | Condition | Report chip |
+|---------|-----------|-------------|
+| `PASS` | mean >= `adequate` and uncovered <= `percent_vntr_uncovered` | VNTR depth: Adequate |
+| `REDUCED` | mean below `adequate` and >= `low`, uncovered within its threshold | VNTR depth: Reduced |
+| `FAIL` | mean below `low`, or uncovered above `percent_vntr_uncovered` | VNTR depth: Insufficient |
+| `NOT_EVALUATED` | no coverage step ran | VNTR depth: Not evaluated |
+
+| Assembly | `adequate` | `low` |
+|----------|-----------|-------|
+| GRCh38 (hg38) | 100x | 50x |
+| GRCh37 (hg19) | 290x | 145x |
+| unknown or not listed | `mean_vntr_coverage` (100x) | none: below it is `FAIL` |
+
+Comparisons are strict, so a sample exactly on a line takes the better verdict, and exactly 50.0% uncovered passes. An entry without `low`, or with `low` not below `adequate`, has no `REDUCED` band. A configuration that has `mean_vntr_coverage` but no `mean_vntr_coverage_by_assembly` (one written before 2.0.42 and passed with `--config-path`) applies that single line on every assembly, as through 2.0.41.
+
+`PASS` and `REDUCED` pass the gate (`quality_metrics_pass` is true); `FAIL` does not. What each verdict changes in the report:
+
+| Verdict | Result without a finding | Kestrel or adVNTR call |
+|---------|--------------------------|------------------------|
+| `REDUCED` | one sentence stating the mean and the threshold; grade `No finding` | nothing |
+| `FAIL` on the mean | a sentence stating the mean and the threshold applied, and a follow-up sentence; grade `No finding, inconclusive` | nothing (an adVNTR-only call: grade `Finding, with caveats`) |
+| `FAIL` on the uncovered fraction | a sentence stating the fraction and its limit, and a follow-up sentence; grade `No finding, inconclusive` | the same sentence; grade `Finding, with caveats` |
+| `NOT_EVALUATED` | the not-measured note; grade `No finding, inconclusive` | the not-measured note; grade `Finding, with caveats` |
+
+The sentences are the `coverage_notes` block of `report_config.json`. They are filled in with the measured figure and the threshold that was applied.
+
+The lines are a policy choice along a measured gradient, not change points. Confirmed positive GRCh38 exomes were downsampled and re-run: 28 French exomes at nine fractions with VNtyper 2.0.3 (252 runs) and 14 Berlin exomes at nine fractions with 2.0.42 (126 runs). The variant was detected in 160 of 161 runs at 100x or more, 95 of 108 between 50x and 100x, and 48 of 109 below 50x. These are repeated measures of 42 samples, not independent tests, and detection depends on the sample as well as the depth: 9 of the 11 Berlin misses between 50x and 100x came from samples whose full-depth call was already low precision. Mean depth does not qualify a call: no false positive appeared in 1,200 simulated negative runs across six depth levels.
+
+!!! note "Why GRCh37 has its own lines"
+    The GRCh37 window holds about 13.5 repeat units against about 58 on GRCh38, so the same reads give a different mean. Realigning the same reads from 214 Berlin exomes to both builds gave a GRCh37 mean 2.89 times higher (5th–95th percentile 2.82–2.96), and Kestrel called the same variants on both builds in 326 of 326 paired runs. So in this experiment detection depended on the reads, not the build, and the GRCh37 lines are the GRCh38 lines times 2.89, rounded. The experiment remapped GRCh38 10-kb slices to chromosome 1 only, so it did not test reads that a native GRCh37 genome alignment would place elsewhere; treat the lines as a policy translation, not a GRCh37 calibration. Through 2.0.41 GRCh37 used 100x, which is about 35x on GRCh38. A BAM detected as GRCh38 but run with the default `--reference-assembly hg19` is judged on the GRCh37 lines; pass `--reference-assembly hg38`.
 
 The report evaluates verdicts on rounded figures (two decimal places), preventing false failures beside matching boundaries.
 
-Since VNtyper 2.0.8 both keys are enforced. Previously, `percent_vntr_uncovered` drove only a color-coded indicator.
+Since VNtyper 2.0.8 the mean and the uncovered fraction are both enforced. Previously, `percent_vntr_uncovered` drove only a color-coded indicator. Through 2.0.41 the mean had one threshold, and a mean below 100x was `FAIL`.
 
 #### fastp report thresholds
 
