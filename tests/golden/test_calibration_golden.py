@@ -26,7 +26,11 @@ pytestmark = pytest.mark.golden
 REPO_ROOT = Path(__file__).parents[2]
 PACKAGED_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
 PACKAGED_PROJECTION_SHA256 = "cfa5ec402a3a20096b76273c4347ff8b5975db942aa6dccf9f2d99474260236d"
-FITTED_PROFILE_SHA256 = "366416297936bdb9e9df2c460a700a13d916c64cc60d0fe78200a5cf73a2fefb"
+#: The fitted profile records ``generator_version``, so this digest moves with every
+#: package version even when the fit is unchanged: re-pin it at each release bump after
+#: confirming the profile differs only in ``generator_version`` and the ``profile_id``
+#: derived from it. Pinned for 2.0.42; 2.0.41 and 2.0.42 differ in nothing else.
+FITTED_PROFILE_SHA256 = "b09032e33ff5844a6494bfe9d64705913733da2a9132db42a92494745c15fd48"
 SOURCE_SHA256 = {
     "simulation/experiment1_dupC/ground_truth.csv": "007026c594f2182a4385aa49a9cd2892b5729c6e4c9b6441cb0e6e10b1458a73",
     "advntr/experiment1_dupC/pair_3000/mutated/pipeline_summary.json": (
