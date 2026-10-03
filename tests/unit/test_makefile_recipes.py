@@ -178,7 +178,7 @@ def test_scripts_coverage_target_is_isolated_and_fixed_at_88() -> None:
 
 def test_repository_coverage_thresholds_remain_independent() -> None:
     text = MAKEFILE.read_text(encoding="utf-8")
-    assert re.search(r"^COVERAGE_TARGET\s*\?=\s*86$", text, re.MULTILINE)
+    assert re.search(r"^COVERAGE_TARGET\s*\?=\s*91$", text, re.MULTILINE)
     assert re.search(r"^PATCH_COVERAGE_TARGET\s*\?=\s*80$", text, re.MULTILINE)
 
 

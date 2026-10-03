@@ -2,6 +2,7 @@
 # Standardized development commands
 
 .PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures docker-cram-fixtures test test-unit test-browser test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: test-golden test-golden-if-configured
 
 # Colors for output
 BLUE := \033[0;34m
@@ -32,6 +33,7 @@ help:
 	@echo "  make test                    - Run all tests (needs test data + Docker)"
 	@echo "  make test-unit               - Run unit tests only"
 	@echo "  make test-browser            - Run browser tests (needs a Playwright browser)"
+	@echo "  make test-golden             - Run golden tests (needs both explicit corpus roots)"
 	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
 	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
 	@echo "  make test-scripts-cov        - Measure scripts-only unit coverage"
@@ -45,7 +47,7 @@ help:
 	@echo "  make test-verbose            - Run tests with detailed output"
 	@echo ""
 	@echo "$(GREEN)Gates (run before opening a PR):$(RESET)"
-	@echo "  make check-all         - format + lint + mypy + unit tests"
+	@echo "  make check-all         - format + lint + mypy + unit tests; golden when configured"
 	@echo "  make ci-local          - everything ci-tests.yml runs, locally"
 	@echo "  make ci-local-uv       - replicate CI's uv install path in a temp venv"
 	@echo "  make ci-local-docker   - everything docker-build.yml runs, locally"
@@ -240,6 +242,20 @@ test-browser:
 	pytest tests/browser -m browser
 	@echo "$(GREEN)✓ Browser tests complete$(RESET)"
 
+# External corpora are not available on a fresh clone or standard CI runner.
+# An explicit run fails without roots; check-all runs it whenever both are supplied.
+test-golden:
+	@: "$${VNTYPER_SIM_ROOT:?set the simulation corpus root}" \
+		"$${VNTYPER_ADVNTR_ROOT:?set the paired adVNTR corpus root}"
+	python -m pytest -m golden tests/golden -q -rs
+
+test-golden-if-configured:
+	@if [ -n "$$VNTYPER_SIM_ROOT" ] && [ -n "$$VNTYPER_ADVNTR_ROOT" ]; then \
+		$(MAKE) --no-print-directory test-golden; \
+	else \
+		echo "Golden tier not run: set both VNTYPER_SIM_ROOT and VNTYPER_ADVNTR_ROOT to include it."; \
+	fi
+
 # Inner dev loop: last-failed first, stop at the first failure.
 test-fast:
 	@echo "$(BLUE)Running unit tests (fail-fast, last-failed first)...$(RESET)"
@@ -261,8 +277,8 @@ ci-local-integration-compatibility:
 #   TARGET     - COVERAGE_TARGET below, what we are striving for. Falling short warns,
 #                never fails.
 # scripts/coverage_gate.py reports both and prints the exact edit to raise the floor
-# whenever coverage climbs past it. The current branch-inclusive target/floor is 86%.
-COVERAGE_TARGET ?= 86
+# whenever coverage climbs past it. The current branch-inclusive target/floor is 91%.
+COVERAGE_TARGET ?= 91
 
 # The aggregate scripts-only proof keeps its fixed 88% bar and isolates its data file so
 # test-unit-cov remains the canonical coverage producer.
@@ -294,7 +310,7 @@ coverage-report:
 # AGENTS.md rule 1 ("touch a file, add tests for it") was unenforceable in CI. This gate
 # scores only the changed lines, so an untested new function fails its own PR no matter
 # what the repo total is doing. Keeping every PR at >= 80% is also how the
-# whole-repository average continues climbing toward its current 86% target.
+# whole-repository average continues climbing toward its current 91% target.
 #
 # Deliberately NOT a ratchet and deliberately NOT the same number as the floor: this is
 # an independently fixed 80% bar on new work.
@@ -445,14 +461,15 @@ build:
 all: format lint type-check test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-# check / check-all gate on the UNIT tier only, so they are runnable on a fresh clone.
+# check / check-all require only the UNIT tier, so they are runnable on a fresh clone.
+# check-all additionally runs golden when both external corpus roots are configured.
 # They used to depend on `test` (bare pytest), which pulls in the integration tier
 # (needs a 1.1 GB Zenodo download) and the docker tier (needs a daemon + image build)
 # - i.e. the documented pre-PR command could not actually be run.
 check: format-check type-check test-unit
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check-all: format-check lint type-check-all test-unit check-integration-compatibility
+check-all: format-check lint type-check-all test-unit check-integration-compatibility test-golden-if-configured
 	@echo "$(GREEN)✓ All checks passed (full suite)$(RESET)"
 
 # Opt-in gate that additionally runs the tiers needing test data / Docker.

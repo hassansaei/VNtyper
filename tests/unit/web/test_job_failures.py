@@ -77,15 +77,16 @@ def test_reader_does_not_follow_a_preflight_error_symlink(tmp_path: Path) -> Non
     assert read_preflight_failure(output) is None
 
 
-@pytest.mark.parametrize("entry_kind", ["fifo", "socket", "directory", "hardlink", "symlink"])
+@pytest.mark.parametrize("entry_kind", ["fifo", "socket", "socket-long-path", "directory", "hardlink", "symlink"])
 def test_reader_rejects_every_non_single_link_regular_artifact_without_blocking(
-    tmp_path: Path, entry_kind: str
+    tmp_path: Path, entry_kind: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Special files and aliases cannot block the worker or expose another inode."""
-    # Keep the socket pathname below Linux's AF_UNIX limit even when xdist adds
-    # its worker directory to pytest's temporary path.
     output = tmp_path / "o"
-    output.mkdir()
+    if entry_kind == "socket-long-path":
+        output = tmp_path / ("long-directory-" * 10) / "o"
+        assert len(os.fsencode(output / "preflight_error.json")) > 108
+    output.mkdir(parents=True)
     artifact = output / "preflight_error.json"
     protected = tmp_path / "protected.json"
     protected.write_text(json.dumps(_artifact()), encoding="utf-8")
@@ -101,9 +102,13 @@ def test_reader_rejects_every_non_single_link_regular_artifact_without_blocking(
 
         unblocker = threading.Thread(target=_release_blocking_reader)
         unblocker.start()
-    elif entry_kind == "socket":
+    elif entry_kind in {"socket", "socket-long-path"}:
         bound_socket = socket.socket(socket.AF_UNIX)
-        bound_socket.bind(str(artifact))
+        # AF_UNIX limits the supplied pathname, even when its directory is valid.
+        # A relative bind keeps it short regardless of TMPDIR or xdist nesting.
+        with monkeypatch.context() as patch:
+            patch.chdir(output)
+            bound_socket.bind(artifact.name)
     elif entry_kind == "directory":
         artifact.mkdir()
     elif entry_kind == "hardlink":

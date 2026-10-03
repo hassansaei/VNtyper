@@ -6,6 +6,16 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.43 (2026-10-03)
+
+### Release-independent golden checks and coverage ratchet
+
+- **Fitted-profile golden pin**: Pins the fitted content without the generator version and derived profile ID. The installed version, production-derived identity, and full digest attestation remain checked. A version bump passes; a fitted-value change fails.
+- **Configured golden gate**: `make test-golden` requires both external corpus roots. `make check-all` runs the golden tier when both are set and visibly reports when it cannot run it.
+- **Long temporary paths**: The special-file reader test binds its Unix socket by a short relative name, preserving the test with long `TMPDIR` and worker paths.
+- **Coverage ratchet**: Raises the branch-inclusive unit floor and independent advisory target to 91%, supported by 91.71% across Python 3.10–3.13. Patch coverage remains 80%; scripts-only coverage remains 88%.
+- **Research pipeline decisions**: No caller thresholds, result rows, or report messages changed.
+
 ## 2.0.42 (2026-10-03)
 
 ### Quality, coverage and length warnings recalibrated on real exomes

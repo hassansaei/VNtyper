@@ -18,19 +18,16 @@ from tests.golden.calibration_oracle import (
     materialize_development_fixture,
 )
 from tests.golden.identity_oracle import DisplayCounts
+from tests.support.calibration_profile_contract import assert_fitted_profile
 from vntyper.scripts.decision_profile import resolve_decision_profile
 from vntyper.scripts.run_configuration import resolve_run_configuration
+from vntyper.version import __version__
 
 pytestmark = pytest.mark.golden
 
 REPO_ROOT = Path(__file__).parents[2]
 PACKAGED_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
 PACKAGED_PROJECTION_SHA256 = "cfa5ec402a3a20096b76273c4347ff8b5975db942aa6dccf9f2d99474260236d"
-#: The fitted profile records ``generator_version``, so this digest moves with every
-#: package version even when the fit is unchanged: re-pin it at each release bump after
-#: confirming the profile differs only in ``generator_version`` and the ``profile_id``
-#: derived from it. Pinned for 2.0.42; 2.0.41 and 2.0.42 differ in nothing else.
-FITTED_PROFILE_SHA256 = "b09032e33ff5844a6494bfe9d64705913733da2a9132db42a92494745c15fd48"
 SOURCE_SHA256 = {
     "simulation/experiment1_dupC/ground_truth.csv": "007026c594f2182a4385aa49a9cd2892b5729c6e4c9b6441cb0e6e10b1458a73",
     "advntr/experiment1_dupC/pair_3000/mutated/pipeline_summary.json": (
@@ -477,11 +474,11 @@ def test_packaged_replay_precedes_fit_and_generated_profile_is_explicit_only(com
     calibration_oracle.verify_checksum_tree(candidate)
     assert attestation["baseline_reproduced"] is True
     assert attestation["accessed_roles"] == ["training", "policy-selection"]
-    assert profile.digest == FITTED_PROFILE_SHA256
-    assert attestation["profile_sha256"] == FITTED_PROFILE_SHA256
+    assert_fitted_profile(profile, generator_version=__version__)
+    assert attestation["profile_sha256"] == profile.digest
     assert profile.profile_kind == "generated"
     assert profile.source == "explicit-cli"
-    assert run.decision_profile.digest == FITTED_PROFILE_SHA256
+    assert run.decision_profile.digest == profile.digest
     assert packaged.decision_profile.digest == PACKAGED_PROFILE_SHA256
     assert packaged.decision_profile.profile_kind == "packaged"
     assert run.decision_profile.digest != packaged.decision_profile.digest
