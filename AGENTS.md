@@ -216,9 +216,9 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor: 86** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it only in a dedicated ratchet change after the rounded integer is sustained by the Python 3.10–3.13 matrix; never lower it to make a build pass. |
+| **Hard floor: 91** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it only in a dedicated ratchet change after the rounded integer is sustained by the Python 3.10–3.13 matrix; never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
-| **Target: 86%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+| **Target: 91%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
 
 **The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
 by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
@@ -232,6 +232,9 @@ the ratchet cannot catch that regression, because the number moves the wrong way
 `tests/unit/test_coverage_gate.py::test_branch_coverage_is_enabled` is the only thing
 that can.
 
+The Python 3.10–3.13 matrix at `e01c9a7` measured **91.71%** on every interpreter
+(CI run `37114994125`, 2026-10-03), supporting the dedicated integer ratchet to 91.
+
 The floor and the target now read the same number, and that is deliberate rather than a
 merge accident: they measure the same figure for different purposes, so the target stays
 a warning and keeps its headroom above the gate. Do not collapse them.
@@ -242,7 +245,7 @@ the rounded repository total enough to fail. `make patch-coverage` runs `diff-co
 the lines your branch changed and fails below 80%, so an untested new function fails its
 own PR regardless of what the repo total is doing. The patch bar remains independently
 fixed at 80%; making every PR meet it helps the whole-repository average climb toward the
-current 86% target.
+current 91% target.
 
 It scores against the **merge base**, so commits landing on `main` while your PR is open
 are never charged to you. A PR that only deletes code, only touches docs, or changes no
@@ -743,8 +746,8 @@ summary | release-summary | none | always records success, failure, skipped jobs
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:
-    `[tool.coverage.report].fail_under = 86` is the hard floor,
-    `COVERAGE_TARGET ?= 86` is advisory, `PATCH_COVERAGE_TARGET ?= 80` scores changed
+    `[tool.coverage.report].fail_under = 91` is the hard floor,
+    `COVERAGE_TARGET ?= 91` is advisory, `PATCH_COVERAGE_TARGET ?= 80` scores changed
     lines, and `SCRIPTS_COVERAGE_TARGET ?= 88` is the isolated pre-source proof. The
     existing `exclude_also` entry ignores only mechanical direct-execution bootstrap
     guards; callable `main(...)` functions, exit policy and substantive CLI branches

@@ -17,15 +17,16 @@ pytestmark = pytest.mark.unit
 # to prevent. When you legitimately raise the floor (use the number `make test-unit-cov`
 # prints, never the rounded TOTAL column), raise this literal in the same commit.
 #
-# 86 is a BRANCH-INCLUSIVE figure: `branch = true` was enabled in #196, taking the floor
+# The floor is a BRANCH-INCLUSIVE figure: `branch = true` was enabled in #196, taking it
 # from 70 to the 74.22% that run measured; splitting cohort_summary.py into five focused
 # modules took the same suite to 79.02%; and the fixes and tests of the gated phase took
 # it to 80.24%. Statement-only coverage is higher still, so the two measurements are not
 # interchangeable. Milestone 4's focused modules and failure-path tests first measured
 # 84.68% and moved the integer floor to 84; the completed input-safety closure measured
 # 86.23% and moved it to 86. See `test_branch_coverage_is_enabled` below for why the gap
-# has to be guarded.
-CURRENT_COVERAGE_FLOOR = 86.0
+# has to be guarded. The Python 3.10-3.13 matrix at e01c9a7 measured 91.71% on all
+# four interpreters (CI run 37114994125), supporting the dedicated integer ratchet to 91.
+CURRENT_COVERAGE_FLOOR = 91.0
 
 
 def test_unit_tier_has_the_reviewed_top_level_sys_path_insert_inventory() -> None:

@@ -277,8 +277,8 @@ ci-local-integration-compatibility:
 #   TARGET     - COVERAGE_TARGET below, what we are striving for. Falling short warns,
 #                never fails.
 # scripts/coverage_gate.py reports both and prints the exact edit to raise the floor
-# whenever coverage climbs past it. The current branch-inclusive target/floor is 86%.
-COVERAGE_TARGET ?= 86
+# whenever coverage climbs past it. The current branch-inclusive target/floor is 91%.
+COVERAGE_TARGET ?= 91
 
 # The aggregate scripts-only proof keeps its fixed 88% bar and isolates its data file so
 # test-unit-cov remains the canonical coverage producer.
@@ -310,7 +310,7 @@ coverage-report:
 # AGENTS.md rule 1 ("touch a file, add tests for it") was unenforceable in CI. This gate
 # scores only the changed lines, so an untested new function fails its own PR no matter
 # what the repo total is doing. Keeping every PR at >= 80% is also how the
-# whole-repository average continues climbing toward its current 86% target.
+# whole-repository average continues climbing toward its current 91% target.
 #
 # Deliberately NOT a ratchet and deliberately NOT the same number as the floor: this is
 # an independently fixed 80% bar on new work.
