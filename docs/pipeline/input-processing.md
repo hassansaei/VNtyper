@@ -62,7 +62,7 @@ Every statistic is computed across the entire region, not merely over covered ba
 
 ### Comparing Coverage Between Assemblies
 
-Mean VNTR coverage cannot be compared directly between GRCh37 and GRCh38. For the same sequencing library, published window mean depth is approximately 2.7-fold higher on GRCh37 (2.498 to 2.888 across paired fixtures). Across the repeat array alone, depth is roughly 4.3-fold higher on GRCh37 (4.257 to 4.339).
+Mean VNTR coverage cannot be compared directly between GRCh37 and GRCh38. For the same sequencing library, published window mean depth is approximately 2.9-fold higher on GRCh37 (median 2.89, 5th–95th percentile 2.82–2.96, over 214 exomes realigned to both builds; 2.498 to 2.888 across the seven paired fixtures). Across the repeat array alone, depth is roughly 4.3-fold higher on GRCh37 (4.257 to 4.339).
 
 This difference stems from reference structure: GRCh37 represents roughly 13.5 copies of the 60 bp unit, whereas GRCh38 contains approximately 58 copies. Concentrating identical read pools into one-fourth the reference sequence quadruples apparent depth.
 
@@ -73,7 +73,7 @@ Three metrics facilitate cross-assembly comparisons:
 
 When no array geometry applies to a run, these metrics are recorded as `NA` rather than `0`. Zero indicates an evaluated region with zero reads, whereas `NA` indicates unmeasured array metrics.
 
-Metrics are saved to `coverage_summary.tsv`. A mean coverage below the configured cutoff (default: 100x) or an uncovered fraction exceeding its cutoff (default: 50%) triggers a `FAIL` verdict in coverage QC.
+Metrics are saved to `coverage_summary.tsv`. Coverage QC judges the mean against lines set per assembly for this reason: 100x and 50x on GRCh38, 290x and 145x on GRCh37. A mean below the lower line, or an uncovered fraction above its cutoff (default: 50%), is `FAIL`; a mean between the lines is `REDUCED`. See [Coverage thresholds](../user-guide/configuration.md#coverage-thresholds).
 
 ## BAM Header Analysis
 

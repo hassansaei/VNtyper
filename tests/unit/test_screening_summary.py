@@ -27,6 +27,7 @@ assertion here pins the wording of a message, only which state gets one.
 import copy
 import itertools
 import logging
+from dataclasses import replace
 from unittest import mock
 
 import pandas as pd
@@ -880,25 +881,21 @@ def test_no_segment_carries_the_separator_it_was_split_on(rule) -> None:
         (
             0,
             {"kestrel_result": UNESTABLISHED_RESULT},
-            "The Kestrel screening state was not established: a value the Kestrel screening rules evaluate was "
-            "absent or empty in the Kestrel result.<br>Note: this describes what could be evaluated, not the sample; "
-            "no screening result is asserted.",
+            "The Kestrel result could not be evaluated: a field the screening rules need is missing or empty."
+            "<br>No screening result is given for this sample.",
             (
-                "The Kestrel screening state was not established: a value the Kestrel screening rules evaluate was "
-                "absent or empty in the Kestrel result.",
-                "Note: this describes what could be evaluated, not the sample; no screening result is asserted.",
+                "The Kestrel result could not be evaluated: a field the screening rules need is missing or empty.",
+                "No screening result is given for this sample.",
             ),
         ),
         (
             1,
             {"advntr_result": UNESTABLISHED_RESULT},
-            "The adVNTR screening state was not established: a value the adVNTR screening rules evaluate was absent "
-            "or empty in the adVNTR result.<br>Note: this describes what could be evaluated, not the sample; no "
-            "screening result is asserted.",
+            "The adVNTR result could not be evaluated: a field the screening rules need is missing or empty."
+            "<br>No screening result is given for this sample.",
             (
-                "The adVNTR screening state was not established: a value the adVNTR screening rules evaluate was "
-                "absent or empty in the adVNTR result.",
-                "Note: this describes what could be evaluated, not the sample; no screening result is asserted.",
+                "The adVNTR result could not be evaluated: a field the screening rules need is missing or empty.",
+                "No screening result is given for this sample.",
             ),
         ),
     ],
@@ -1159,8 +1156,8 @@ class TestSubthresholdPromotion:
         )
 
         assert summary.matched_rule is True
-        assert "below the reporting floor" in summary.text
-        assert "not a call" in summary.text
+        assert "below its reporting threshold" in summary.text
+        assert "did not call it" in summary.text
 
     def test_the_advntr_positive_combinations_recommend_orthogonal_confirmation(self, report_config) -> None:
         """@hassansaei on #266: a sample adVNTR calls where Kestrel has signal below its
@@ -1174,7 +1171,7 @@ class TestSubthresholdPromotion:
             kestrel_subthreshold=True,
         )
 
-        assert "Confirm by an orthogonal method" in summary.text
+        assert "Confirm with an independent method" in summary.text
 
     def test_its_chip_reads_as_words_and_is_not_toned_as_a_finding(self, report_config) -> None:
         """The chip is toned by an *independent* ``is_finding`` call site, so a fix to
@@ -1183,7 +1180,7 @@ class TestSubthresholdPromotion:
 
         chip = _chips(summary, report_config)[ss.KESTREL_LABEL]
 
-        assert chip.value == "Negative subthreshold"
+        assert chip.value == "Negative, candidate below threshold"
         assert chip.tone == ss.TONE_NONE
 
 
@@ -1309,6 +1306,46 @@ def test_supports_confidence_grade_predicate(report_config) -> None:
 def test_result_word_formats_both_hyphens_and_underscores(token: str, expected_word: str) -> None:
     """result_word turns underscores and hyphens into spaces and sentence-cases."""
     assert ss.result_word(token) == expected_word
+
+
+@pytest.mark.parametrize(
+    ("token", "expected_word"),
+    [
+        ("finding", "Finding"),
+        ("finding-corroborated", "Finding, corroborated"),
+        ("finding-limited", "Finding, with caveats"),
+        ("no-finding", "No finding"),
+        ("no-finding-limited", "No finding, inconclusive"),
+        ("not-established", "No result"),
+        ("High_Precision", "High precision"),
+        ("High_Precision_flagged", "High precision, flagged"),
+        ("negative_subthreshold", "Negative, candidate below threshold"),
+    ],
+)
+def test_the_shipped_chip_labels_name_each_token_in_plain_words(token, expected_word, report_config) -> None:
+    """A token the shipped ``chip_labels`` names reads as configured; one it does not
+    name keeps the mechanical form."""
+    assert ss.result_word(token, report_config["chip_labels"]) == expected_word
+
+
+@pytest.mark.parametrize("labels", [None, {}, {"finding": ""}, {"finding": 3}])
+def test_a_missing_or_unusable_label_falls_back_to_the_mechanical_word(labels) -> None:
+    assert ss.result_word("finding", labels) == "Finding"
+    chip = ss.grade_chip("finding", labels)
+    assert chip is not None
+    assert chip.value == "Finding"
+
+
+def test_state_chips_use_the_configured_labels(report_config) -> None:
+    summary = replace(
+        _summary(is_positive=False, matched_rule=True, kestrel_result="negative_subthreshold"),
+        confidence_grade="no-finding-limited",
+    )
+
+    chips = ss.state_chips(summary, report_config, cross_match_available=False, cross_match_is_positive=False)
+
+    assert chips[0].value == "Negative, candidate below threshold"
+    assert chips[-1].value == "No finding, inconclusive"
 
 
 @pytest.mark.parametrize(

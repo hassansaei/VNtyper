@@ -28,7 +28,7 @@ from vntyper.scripts.command_builders import (
     build_samtools_merge_command,
     build_threaded_samtools_index_argv,
 )
-from vntyper.scripts.coverage_qc import evaluate_coverage_qc, resolve_low_mean_threshold
+from vntyper.scripts.coverage_qc import evaluate_coverage_qc, resolve_mean_thresholds
 from vntyper.scripts.coverage_stats import (
     format_coverage_summary,
     parse_region_length,
@@ -457,12 +457,13 @@ def calculate_vntr_coverage(
         # The `round` calls are the point: the verdict is evaluated on the same figures
         # `format_coverage_summary` is about to write, so the emitted column and the
         # report's recomputed screening axis cannot disagree at a boundary (#172).
+        mean_lines = resolve_mean_thresholds(thresholds, reference_assembly)
         qc = evaluate_coverage_qc(
             round(stats["mean"], 2),
             round(stats["percent_uncovered"], 2),
-            thresholds.get("mean_vntr_coverage", 100),
+            mean_lines.adequate,
             thresholds.get("percent_vntr_uncovered", 50.0),
-            low_mean_threshold=resolve_low_mean_threshold(thresholds, reference_assembly),
+            low_mean_threshold=mean_lines.low,
         )
         stats["coverage_qc"] = qc.status
 

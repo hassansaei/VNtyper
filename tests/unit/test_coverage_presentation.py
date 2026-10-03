@@ -92,7 +92,7 @@ def test_a_reduced_depth_adds_one_sentence_to_a_result_without_a_finding(report_
     notes = _notes(report_config, qc, mean=96.24, percent=8.31)
 
     assert notes == (
-        "VNTR depth is reduced: mean 96.24x, below 100x. Detection is somewhat less sensitive at this depth.",
+        "Reduced VNTR depth: 96.24x (adequate from 100x). A variant with a weak signal can be missed at this depth.",
     )
 
 
@@ -103,9 +103,9 @@ def test_a_low_depth_names_the_threshold_that_was_applied_and_an_action(report_c
     banded = _notes(report_config, with_band, mean=42.9, percent=22.79)
     legacy = _notes(report_config, single_line, mean=75.0, percent=0.0, low=None)
 
-    assert banded[0].startswith("VNTR depth is low: mean 42.9x, below 50x.")
-    assert legacy[0].startswith("VNTR depth is low: mean 75x, below 100x."), "the single line is the threshold"
-    assert banded[-1] == legacy[-1] and "if a variant is suspected" in banded[-1]
+    assert banded[0].startswith("Insufficient VNTR depth: 42.9x (below 50x).")
+    assert legacy[0].startswith("Insufficient VNTR depth: 75x (below 100x)."), "the single line is the threshold"
+    assert banded[-1] == legacy[-1] and "If a variant is still suspected" in banded[-1]
     assert len(banded) == len(legacy) == 2
 
 
@@ -127,7 +127,7 @@ def test_a_mostly_uncovered_region_is_stated_for_every_result_and_never_as_low_d
     notes = _notes(report_config, qc, is_positive=is_positive, mean=250.0, percent=80.0)
 
     assert coverage_uncovered_exceeded(qc) is True
-    assert notes[0].startswith("80% of the VNTR region has no read coverage (limit 50%).")
+    assert notes[0].startswith("80% of the VNTR region has no reads (limit 50%).")
     assert not any("VNTR depth is" in note for note in notes)
     assert len(notes) == (1 if is_positive else 2)
 
@@ -137,7 +137,7 @@ def test_both_failures_are_both_stated_in_declaration_order(report_config) -> No
 
     notes = _notes(report_config, qc, mean=10.0, percent=90.0)
 
-    assert [note.split(" ")[0] for note in notes] == ["90%", "VNTR", "Re‐sequence"]
+    assert [note.split(" ")[0] for note in notes] == ["90%", "Insufficient", "If"]
 
 
 def test_a_passing_or_unmeasured_verdict_has_no_note(report_config) -> None:

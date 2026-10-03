@@ -409,3 +409,73 @@ def test_kestrel_overrides_validations() -> None:
     ]
     with pytest.raises(ValueError, match="must not be empty"):
         module.validate_observation_sets(manifest, {("bam_tests", "case-a")})
+
+
+def _contract_with_coverage_qc(value: str = "PASS") -> dict:
+    contract = _contract()
+    contract["outcomes"]["coverage"] = {
+        "mean": {"value": "185.92", "tolerance": None},
+        "coverage_qc": {"value": value, "tolerance": None},
+    }
+    return contract
+
+
+def test_effective_contracts_applies_coverage_qc_overrides_to_that_field_only() -> None:
+    """A changed verdict line moves the verdict, never a measured figure."""
+    module = _module()
+    assert module is not None
+    contract = _contract_with_coverage_qc()
+    original = copy.deepcopy(contract["outcomes"]["coverage"])
+    manifest = _v2(contract)
+    manifest["observation_sets"][0]["coverage_qc_overrides"] = [
+        {"suite": "bam_tests", "test_name": "case-a", "coverage_qc": "REDUCED"}
+    ]
+
+    effective = module.effective_contracts(manifest, {("bam_tests", "case-a"): contract}, VERSION)
+
+    assert contract["outcomes"]["coverage"] == original
+    assert effective[("bam_tests", "case-a")]["outcomes"]["coverage"] == {
+        "mean": {"value": "185.92", "tolerance": None},
+        "coverage_qc": {"value": "REDUCED", "tolerance": None},
+    }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ("not-a-list", "coverage_qc_overrides must be a list"),
+        ([{"suite": "unknown", "test_name": "unknown", "coverage_qc": "PASS"}], "refers to unknown contract identity"),
+        ([{"suite": "bam_tests", "test_name": "case-a", "coverage_qc": "GOOD"}], "coverage_qc must be one of"),
+        ([{"suite": "bam_tests", "test_name": "case-a", "coverage_qc": "PASS", "mean": "1"}], "extra keys"),
+        (
+            [
+                {"suite": "bam_tests", "test_name": "case-a", "coverage_qc": "PASS"},
+                {"suite": "bam_tests", "test_name": "case-a", "coverage_qc": "FAIL"},
+            ],
+            "duplicate coverage_qc override",
+        ),
+    ],
+)
+def test_coverage_qc_overrides_validations(overrides, message) -> None:
+    """Invalid coverage_qc_overrides shapes, tokens, and identities fail closed."""
+    module = _module()
+    assert module is not None
+    manifest = _v2(_contract_with_coverage_qc())
+    manifest["observation_sets"][0]["coverage_qc_overrides"] = overrides
+
+    with pytest.raises(ValueError, match=message):
+        module.validate_observation_sets(manifest, {("bam_tests", "case-a")})
+
+
+def test_a_coverage_qc_override_needs_a_coverage_qc_assertion_to_replace() -> None:
+    module = _module()
+    assert module is not None
+    contract = _contract()
+    contract["outcomes"].pop("coverage", None)
+    manifest = _v2(contract)
+    manifest["observation_sets"][0]["coverage_qc_overrides"] = [
+        {"suite": "bam_tests", "test_name": "case-a", "coverage_qc": "REDUCED"}
+    ]
+
+    with pytest.raises(ValueError, match="no coverage_qc assertion to replace"):
+        module.effective_contracts(manifest, {("bam_tests", "case-a"): contract}, VERSION)

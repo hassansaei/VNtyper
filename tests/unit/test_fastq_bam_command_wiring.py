@@ -753,17 +753,19 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
         (120, None, "hg38", "PASS"),
         (40, None, "hg38", "FAIL"),
         (75, None, "hg19", "FAIL"),
+        (144, None, "hg19", "FAIL"),
+        (200, None, "hg19", "REDUCED"),
+        (290, None, "hg19", "PASS"),
         (75, None, None, "FAIL"),
-        (75, {"mean_vntr_coverage": 100, "mean_vntr_coverage_low": 80}, "hg38", "FAIL"),
+        (75, {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": 80}}}, "hg38", "FAIL"),
         (40, {"mean_vntr_coverage": 30}, "hg38", "PASS"),
         (20, {"mean_vntr_coverage": 30}, "hg38", "FAIL"),
     ],
 )
-def test_calculate_vntr_coverage_applies_the_reduced_band_only_where_it_was_measured(
-    tmp_path, depth, thresholds, assembly, verdict
-):
-    """The writer's verdict uses the configured low line on GRCh38, the shipped 50 when a
-    replaced config omits it, and the single line on any other or undeclared assembly."""
+def test_calculate_vntr_coverage_applies_the_lines_of_the_runs_assembly(tmp_path, depth, thresholds, assembly, verdict):
+    """The writer's verdict uses the lines of the run's assembly (GRCh37's are 2.89 times
+    GRCh38's), a replaced config's single line, and the fallback line for an undeclared
+    assembly."""
     depth_file = tmp_path / "cov_vntr_coverage.txt"
     config = CONFIG if thresholds is None else {**CONFIG, "thresholds": thresholds}
 

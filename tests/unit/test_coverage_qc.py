@@ -13,12 +13,14 @@ from vntyper.scripts.coverage_qc import (
     COVERAGE_QC_NOT_EVALUATED,
     COVERAGE_QC_PASS,
     COVERAGE_QC_REDUCED,
+    DEFAULT_MEAN_THRESHOLDS_BY_ASSEMBLY,
     REASON_MEAN,
     REASON_MEAN_LOW,
     REASON_NOT_MEASURED,
     REASON_UNCOVERED,
+    MeanThresholds,
     evaluate_coverage_qc,
-    resolve_low_mean_threshold,
+    resolve_mean_thresholds,
 )
 
 pytestmark = pytest.mark.unit
@@ -168,36 +170,73 @@ def test_a_reduced_mean_with_no_uncovered_figure_is_still_reduced():
     assert evaluate_coverage_qc(75.0, None, 100, 50.0, low_mean_threshold=50).status == COVERAGE_QC_REDUCED
 
 
+GRCH38_LINES = MeanThresholds(adequate=100.0, low=50.0)
+GRCH37_LINES = MeanThresholds(adequate=290.0, low=145.0)
+SINGLE_LINE = MeanThresholds(adequate=100.0, low=None)
+
+
 @pytest.mark.parametrize("assembly", ["hg38", "GRCh38", "hg38_ensembl", "hg38_ncbi"])
-def test_the_reduced_band_applies_on_every_spelling_of_the_assembly_it_was_measured_on(assembly):
-    assert resolve_low_mean_threshold({}, assembly) == 50.0
-    assert resolve_low_mean_threshold({"mean_vntr_coverage_low": 60}, assembly) == 60.0
+def test_grch38_gets_its_lines_under_every_spelling(assembly):
+    assert resolve_mean_thresholds({}, assembly) == GRCH38_LINES
 
 
-@pytest.mark.parametrize("assembly", ["hg19", "GRCh37", "hg19_ensembl", None, "", "not-an-assembly"])
-def test_other_and_unknown_assemblies_keep_the_single_line(assembly):
-    """The GRCh37 window reads about 2.7 times higher for the same sample, so 50x there
-    is far less depth than the 50x that was measured. A GRCh37 negative at 75x failed
-    before this change and must still fail."""
-    assert resolve_low_mean_threshold({}, assembly) is None
-    low = resolve_low_mean_threshold({}, assembly)
-    assert evaluate_coverage_qc(75.0, 0.0, 100, 50.0, low_mean_threshold=low).status == COVERAGE_QC_FAIL
+@pytest.mark.parametrize("assembly", ["hg19", "GRCh37", "hg19_ensembl"])
+def test_grch37_lines_are_the_grch38_lines_scaled_by_the_measured_window_ratio(assembly):
+    """The same reads give a GRCh37 window mean 2.89 times higher and the same Kestrel
+    calls, so 290/145 on GRCh37 is the same depth as 100/50 on GRCh38."""
+    assert resolve_mean_thresholds({}, assembly) == GRCH37_LINES
 
 
-def test_the_measured_assemblies_are_configurable():
-    thresholds = {"reduced_depth_assemblies": ["GRCh37", "GRCh38"]}
+@pytest.mark.parametrize(
+    ("mean", "status"),
+    [
+        (300.0, COVERAGE_QC_PASS),
+        (290.0, COVERAGE_QC_PASS),
+        (185.92, COVERAGE_QC_REDUCED),
+        (145.0, COVERAGE_QC_REDUCED),
+        (144.99, COVERAGE_QC_FAIL),
+        (100.0, COVERAGE_QC_FAIL),
+    ],
+)
+def test_a_grch37_mean_is_judged_on_the_grch37_lines(mean, status):
+    """A GRCh37 mean of 100x stands for about 35x on GRCh38, and it fails."""
+    lines = resolve_mean_thresholds({}, "hg19")
+    assert evaluate_coverage_qc(mean, 0.0, lines.adequate, 50.0, low_mean_threshold=lines.low).status == status
 
-    assert resolve_low_mean_threshold(thresholds, "hg19") == 50.0
-    assert resolve_low_mean_threshold({"reduced_depth_assemblies": []}, "hg38") is None
+
+@pytest.mark.parametrize("assembly", [None, "", "not-an-assembly"])
+def test_an_unknown_assembly_gets_the_single_fallback_line(assembly):
+    assert resolve_mean_thresholds({}, assembly) == SINGLE_LINE
 
 
-@pytest.mark.parametrize("thresholds", [{"mean_vntr_coverage": 30}, {"mean_vntr_coverage_low": 100}])
-def test_a_low_threshold_not_below_the_adequate_one_leaves_no_reduced_band(thresholds):
-    """A replaced config can set the adequate threshold below the shipped low default."""
-    assert resolve_low_mean_threshold(thresholds, "hg38") is None
+def test_an_unlisted_assembly_gets_the_single_fallback_line():
+    thresholds = {"mean_vntr_coverage": 80, "mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": 50}}}
+
+    assert resolve_mean_thresholds(thresholds, "hg19") == MeanThresholds(adequate=80.0, low=None)
+    assert resolve_mean_thresholds(thresholds, "hg38") == GRCH38_LINES
 
 
-def test_the_shipped_config_declares_the_band_for_grch38_only():
+def test_an_operator_config_from_before_2_0_42_keeps_its_single_line_everywhere():
+    """``--config-path`` replaces the whole config. One that sets ``mean_vntr_coverage``
+    but has no per-assembly block was written for the single line, and keeps it."""
+    for assembly in ("hg38", "hg19", None):
+        assert resolve_mean_thresholds({"mean_vntr_coverage": 60}, assembly) == MeanThresholds(adequate=60.0, low=None)
+
+
+def test_an_entry_without_a_low_line_is_a_single_line():
+    thresholds = {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 120}}}
+
+    assert resolve_mean_thresholds(thresholds, "hg38") == MeanThresholds(adequate=120.0, low=None)
+
+
+@pytest.mark.parametrize("low", [100, 150])
+def test_a_low_line_not_below_the_adequate_one_leaves_no_reduced_band(low):
+    thresholds = {"mean_vntr_coverage_by_assembly": {"GRCh38": {"adequate": 100, "low": low}}}
+
+    assert resolve_mean_thresholds(thresholds, "hg38") == SINGLE_LINE
+
+
+def test_the_shipped_config_matches_the_code_defaults():
     import json
     from pathlib import Path
 
@@ -205,10 +244,10 @@ def test_the_shipped_config_declares_the_band_for_grch38_only():
 
     thresholds = json.loads((Path(vntyper.__file__).parent / "config.json").read_text())["thresholds"]
 
-    assert thresholds["mean_vntr_coverage_low"] == 50
-    assert thresholds["reduced_depth_assemblies"] == ["GRCh38"]
-    assert resolve_low_mean_threshold(thresholds, "hg38") == 50.0
-    assert resolve_low_mean_threshold(thresholds, "hg19") is None
+    assert thresholds["mean_vntr_coverage"] == 100
+    assert thresholds["mean_vntr_coverage_by_assembly"] == DEFAULT_MEAN_THRESHOLDS_BY_ASSEMBLY
+    assert resolve_mean_thresholds(thresholds, "hg38") == GRCH38_LINES
+    assert resolve_mean_thresholds(thresholds, "hg19") == GRCH37_LINES
 
 
 def test_without_a_low_threshold_the_single_line_is_unchanged():

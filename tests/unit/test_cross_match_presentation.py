@@ -67,7 +67,7 @@ def test_shipped_config_declares_the_unreadable_cross_match_message() -> None:
     message, is_positive, is_assessable = build_cross_match_summary(summary, config)
 
     assert message == config["cross_match"]["not_assessable_message"]
-    assert "not assessed" in message
+    assert "not checked" in message
     assert (is_positive, is_assessable) == (False, False)
 
 

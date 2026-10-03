@@ -184,9 +184,10 @@ KESTREL_ROWS: tuple[dict[str, Any], ...] = (
 )
 
 #: A well-covered sample, so nothing in the coverage section competes for the
-#: reader's attention with the table this tier is about.
+#: reader's attention with the table this tier is about. Adequate on either assembly:
+#: GRCh37's adequate line is 290x, because its window reads about 2.9 times higher.
 COVERAGE_ROW: dict[str, Any] = {
-    "mean": 250.0,
+    "mean": 350.0,
     "median": 248.0,
     "stdev": 12.5,
     "min": 100,

@@ -788,7 +788,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -862,7 +862,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -936,7 +936,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -988,7 +988,7 @@
           "region_length": "1501",
           "uncovered_bases": "0",
           "percent_uncovered": "0.00",
-          "coverage_qc": "PASS"
+          "coverage_qc": "REDUCED"
         },
         "pipeline_summary_assertions": {
           "steps": [
@@ -1003,7 +1003,7 @@
           ]
         },
         "report_assertions": [
-          "No variant detected.<br>Note: adVNTR genotyping was not performed."
+          "No variant called by Kestrel.<br>adVNTR was not run."
         ]
       },
       {
@@ -1076,7 +1076,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1149,7 +1149,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1222,7 +1222,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1295,7 +1295,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1362,7 +1362,7 @@
           ]
         },
         "report_assertions": [
-          "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed."
+          "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>adVNTR was not run."
         ]
       },
       {
@@ -1426,7 +1426,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1489,7 +1489,7 @@
           ]
         },
         "report_assertions": [
-          "No variant called by Kestrel. A Kestrel candidate below the reporting floor was identified and filtered out.<br>The subthreshold candidate is not a call; it is reported so that this result can be distinguished from a sample in which nothing was found at all.<br>Note: adVNTR genotyping was not performed."
+          "No variant called by Kestrel.<br>Kestrel found a candidate below its reporting threshold and did not call it.<br>Such candidates are common in samples without a variant (about 1 in 5).<br>adVNTR was not run."
         ]
       }
     ],
@@ -1561,7 +1561,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1631,7 +1631,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1702,7 +1702,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1774,7 +1774,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -1843,7 +1843,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       }
     ],
@@ -1925,7 +1925,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants).",
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
           "At least one match was found between Kestrel and adVNTR results."
         ],
         "advntr_assertions": {
@@ -2035,7 +2035,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants).",
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR also called a variant.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants.",
           "At least one match was found between Kestrel and adVNTR results."
         ],
         "advntr_assertions": {
@@ -2141,7 +2141,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -2207,7 +2207,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -2275,7 +2275,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       }
     ],
@@ -2345,7 +2345,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -2413,7 +2413,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       },
       {
@@ -2480,7 +2480,7 @@
           ]
         },
         "report_assertions": [
-          "Kestrel called a frameshift variant with high precision.<br>Note: adVNTR genotyping was not performed.<br>Confirm by an orthogonal method (e.g., SNaPshot for dupC, long‐read sequencing for other variants)."
+          "Kestrel called a frameshift variant with high precision.<br>adVNTR was not run.<br>Confirm with an independent method: SNaPshot for dupC, long‐read sequencing for other variants."
         ]
       }
     ]

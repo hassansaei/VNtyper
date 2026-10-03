@@ -64,7 +64,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Final, Literal
 
@@ -362,7 +362,7 @@ class StateChip:
     tone: str
 
 
-def result_word(result: str) -> str:
+def result_word(result: str, labels: Mapping[str, str] | None = None) -> str:
     """One computed result or grade token as a chip prints it.
 
     A pure transformation of the token rather than a lookup table, and deliberately: a
@@ -372,22 +372,32 @@ def result_word(result: str) -> str:
     ``High_Precision`` reads "High precision"; ``finding-corroborated`` reads "Finding
     corroborated"; nothing is composed, translated or interpreted.
 
+    ``report_config.json``'s ``chip_labels`` may name a token in plain words instead: the
+    mechanical form reads "No finding limited", which says nothing a reader can act on.
+    A token the map does not name keeps the mechanical form, so a new ``result`` still
+    renders.
+
     Args:
         result: A computed ``kestrel_result``, ``advntr_result``, or ``confidence_grade`` token.
+        labels: ``report_config.json``'s ``chip_labels``, or ``None``.
 
     Returns:
-        str: The same word, spaced and sentence-cased.
+        str: The configured label, or the token spaced and sentence-cased.
     """
+    label = (labels or {}).get(result)
+    if isinstance(label, str) and label:
+        return label
     return result.replace("_", " ").replace("-", " ").capitalize()
 
 
-def grade_chip(grade: str | None) -> StateChip | None:
+def grade_chip(grade: str | None, labels: Mapping[str, str] | None = None) -> StateChip | None:
     """One computed confidence grade as a masthead chip.
 
     Args:
         grade: The configured grade token (e.g., ``finding-corroborated``,
             ``no-finding``, ``not-established``), or None when confidence grade
             is not supported by the loaded configuration.
+        labels: ``report_config.json``'s ``chip_labels``, or ``None``.
 
     Returns:
         StateChip | None: The chip to render, or None if ``grade`` is None.
@@ -400,7 +410,7 @@ def grade_chip(grade: str | None) -> StateChip | None:
         tone = TONE_CAUTION
     else:
         tone = TONE_NONE
-    return StateChip(label=CONFIDENCE_GRADE_LABEL, value=result_word(grade), tone=tone)
+    return StateChip(label=CONFIDENCE_GRADE_LABEL, value=result_word(grade, labels), tone=tone)
 
 
 def algorithm_chip(
@@ -409,6 +419,7 @@ def algorithm_chip(
     result: str,
     default: str,
     non_finding: Sequence[str] = (),
+    labels: Mapping[str, str] | None = None,
 ) -> StateChip:
     """One algorithm's chip: what it called, or that it called nothing.
 
@@ -424,6 +435,7 @@ def algorithm_chip(
         result: The computed result token.
         default: The algorithm block's configured ``default``.
         non_finding: The block's configured ``non_finding_results``, if any.
+        labels: ``report_config.json``'s ``chip_labels``, or ``None``.
 
     Returns:
         StateChip: The chip to render.
@@ -433,7 +445,7 @@ def algorithm_chip(
     if execution != EXECUTION_PERFORMED:
         return StateChip(label=label, value=NOT_AVAILABLE_CHIP, tone=TONE_CAUTION)
     tone = TONE_FINDING if is_finding(result, default, non_finding) else TONE_NONE
-    return StateChip(label=label, value=result_word(result), tone=tone)
+    return StateChip(label=label, value=result_word(result, labels), tone=tone)
 
 
 def concordance_chip(
@@ -486,6 +498,9 @@ def state_chips(
     algorithm_logic = report_config.get("algorithm_logic", {})
     kestrel_logic = algorithm_logic.get("kestrel", {})
     advntr_logic = algorithm_logic.get("advntr", {})
+    labels = report_config.get("chip_labels")
+    if not isinstance(labels, Mapping):
+        labels = None
     chips = [
         algorithm_chip(
             KESTREL_LABEL,
@@ -493,6 +508,7 @@ def state_chips(
             summary.kestrel_result,
             kestrel_logic.get("default", FALLBACK_ALGORITHM_RESULT),
             kestrel_logic.get("non_finding_results", ()),
+            labels,
         ),
         algorithm_chip(
             ADVNTR_LABEL,
@@ -500,11 +516,12 @@ def state_chips(
             summary.advntr_result,
             advntr_logic.get("default", FALLBACK_ALGORITHM_RESULT),
             advntr_logic.get("non_finding_results", ()),
+            labels,
         ),
         concordance_chip(summary, cross_match_available, cross_match_is_positive),
     ]
     if summary.confidence_grade is not None:
-        chip = grade_chip(summary.confidence_grade)
+        chip = grade_chip(summary.confidence_grade, labels)
         if chip is not None:
             chips.append(chip)
     return chips

@@ -19,14 +19,15 @@ threshold of 100, but serialises as ``100.00``. Callers therefore round before c
 and the report prints no ``FAIL`` beside a displayed ``100.00``.
 
 **Three levels of depth, not two.** A single 100x pass/fail line called one real exome
-in seven a failure, while downsampling 28 confirmed positive hg38 exomes still detected
-67 of 69 variants between 50x and 100x and 124 of 124 above it; below 50x it was 35 of
-59. So on GRCh38 a mean between the two thresholds is ``REDUCED`` - recorded, shown, and
-still passing - and only a mean below the lower one fails. Other assemblies keep the
-single line: the band was not measured there.
+in seven a failure. Downsampling 42 confirmed positive GRCh38 exomes (378 runs) detected
+the variant in 160 of 161 runs at 100x or more, 95 of 108 between 50x and 100x, and 48
+of 109 below 50x. So a mean between the two lines is ``REDUCED`` - recorded, shown, and
+still passing - and only a mean below the lower one fails. The lines are set per
+assembly, because the window mean is not comparable across them; see
+:func:`resolve_mean_thresholds`.
 
 Functions:
-    resolve_low_mean_threshold: The lower threshold that applies to one run, if any
+    resolve_mean_thresholds: The mean-depth lines that apply to one run
     evaluate_coverage_qc: Two metrics and their thresholds to a verdict
 """
 
@@ -43,9 +44,9 @@ logger = logging.getLogger(__name__)
 COVERAGE_QC_PASS = "PASS"
 COVERAGE_QC_FAIL = "FAIL"
 
-#: The mean is below the adequate threshold and at or above the low one. It passes the
-#: gate: detection is slightly less sensitive at this depth, which qualifies a result
-#: without a finding and is no reason to distrust a call.
+#: The mean is below the adequate line and at or above the low one. It passes the gate:
+#: a weak variant signal can be missed at this depth, which qualifies a result without a
+#: finding and is no reason to distrust a call.
 COVERAGE_QC_REDUCED = "REDUCED"
 
 #: The verdict when there is nothing to judge. Distinct from ``PASS`` on purpose: a report
@@ -56,12 +57,16 @@ COVERAGE_QC_REDUCED = "REDUCED"
 #: - only the displayed status becomes honest.
 COVERAGE_QC_NOT_EVALUATED = "NOT_EVALUATED"
 
-#: Reason identifiers, named after the ``config.json`` threshold keys they come from so a
-#: consumer can look up the number that was applied.
-#: Shipped defaults for a configuration that omits the keys.
-DEFAULT_LOW_MEAN_THRESHOLD = 50
-DEFAULT_REDUCED_DEPTH_ASSEMBLIES: tuple[str, ...] = ("GRCh38",)
+#: Shipped defaults for a configuration that omits the keys. Keep in step with
+#: ``config.json``.
+DEFAULT_MEAN_THRESHOLD = 100
+DEFAULT_MEAN_THRESHOLDS_BY_ASSEMBLY: Mapping[str, Mapping[str, float]] = {
+    "GRCh38": {"adequate": 100, "low": 50},
+    "GRCh37": {"adequate": 290, "low": 145},
+}
 
+#: Reason identifiers. ``REASON_MEAN`` is a mean below the adequate line (``REDUCED``, or
+#: ``FAIL`` where no band applies); ``REASON_MEAN_LOW`` is a mean below the low line.
 REASON_MEAN = "mean_vntr_coverage"
 REASON_MEAN_LOW = "mean_vntr_coverage_low"
 REASON_UNCOVERED = "percent_vntr_uncovered"
@@ -88,45 +93,76 @@ class CoverageQC:
     reasons: tuple[str, ...]
 
 
-def resolve_low_mean_threshold(thresholds: Mapping[str, Any], reference_assembly: str | None) -> float | None:
-    """Return the low mean threshold that applies to this run, or ``None`` for a single line.
+@dataclass(frozen=True)
+class MeanThresholds:
+    """The mean-depth lines that apply to one run.
 
-    The reduced band was measured on the GRCh38 window only. The GRCh37 window holds less
-    of the repeat array, so its mean reads about 2.7 times higher for the same sample, and
-    50x there is far less depth than 50x on GRCh38. The band therefore applies only to the
-    coordinate systems named in ``thresholds.reduced_depth_assemblies``; every other run,
-    and one whose assembly is not recorded, keeps the single line at
-    ``thresholds.mean_vntr_coverage``.
+    Attributes:
+        adequate: A mean at or above this is adequate.
+        low: A mean below ``adequate`` and at or above this is ``REDUCED``; below it fails.
+            ``None`` means a single line: anything below ``adequate`` fails.
+    """
+
+    adequate: float
+    low: float | None
+
+
+def resolve_mean_thresholds(thresholds: Mapping[str, Any], reference_assembly: str | None) -> MeanThresholds:
+    """Return the mean-depth lines for this run's assembly.
+
+    The window mean is not comparable across assemblies: the GRCh37 window holds about
+    13.5 repeat units against about 58 on GRCh38, so the same reads give a GRCh37 mean
+    2.89 times higher (median over 214 exomes realigned to both builds; 5th-95th
+    percentile 2.82-2.96). Kestrel called the same variants on both builds in 326 of 326
+    paired runs, so detection depends on the reads, and the GRCh37 lines are the GRCh38
+    lines scaled by that ratio.
+
+    Three cases, in order:
+
+    1. ``thresholds.mean_vntr_coverage_by_assembly`` lists the run's coordinate system:
+       its ``adequate`` and optional ``low`` apply.
+    2. The block is absent but ``thresholds.mean_vntr_coverage`` is set: an operator's own
+       configuration written before 2.0.42 (``--config-path`` replaces the whole config).
+       Its single line applies on every assembly, as it did through 2.0.41.
+    3. Otherwise the shipped defaults apply. A run whose assembly is unknown, or not
+       listed, gets the single line at ``mean_vntr_coverage``.
 
     Args:
-        thresholds (Mapping[str, Any]): ``config.json``'s ``thresholds`` block. ``.get`` with
-            the shipped defaults throughout: ``--config-path`` replaces the whole config.
+        thresholds (Mapping[str, Any]): ``config.json``'s ``thresholds`` block.
         reference_assembly (str | None): The run's declared assembly, in any accepted
             spelling, or ``None`` when it is not known.
 
     Returns:
-        float | None: The low threshold, or ``None`` when the band does not apply or is
-        empty because the low threshold is not below the adequate one.
+        MeanThresholds: The lines to apply. ``low`` is ``None`` when the band does not
+        apply or is empty because it is not below ``adequate``.
     """
+    single = MeanThresholds(adequate=float(thresholds.get("mean_vntr_coverage", DEFAULT_MEAN_THRESHOLD)), low=None)
+    if "mean_vntr_coverage_by_assembly" in thresholds:
+        by_assembly = thresholds["mean_vntr_coverage_by_assembly"]
+    elif "mean_vntr_coverage" in thresholds:
+        return single
+    else:
+        by_assembly = DEFAULT_MEAN_THRESHOLDS_BY_ASSEMBLY
     if not reference_assembly:
-        return None
+        return single
     from vntyper.scripts.reference_registry import get_coordinate_system
 
     try:
         coordinate_system = get_coordinate_system(reference_assembly)
     except ValueError:
-        return None
-    if coordinate_system not in thresholds.get("reduced_depth_assemblies", DEFAULT_REDUCED_DEPTH_ASSEMBLIES):
-        return None
-    mean_threshold = thresholds.get("mean_vntr_coverage", 100)
-    low_mean_threshold = thresholds.get("mean_vntr_coverage_low", DEFAULT_LOW_MEAN_THRESHOLD)
-    if low_mean_threshold >= mean_threshold:
+        return single
+    lines = by_assembly.get(coordinate_system)
+    if not lines:
+        return single
+    adequate = float(lines["adequate"])
+    low = lines.get("low")
+    if low is not None and low >= adequate:
         logger.info(
-            f"thresholds.mean_vntr_coverage_low ({low_mean_threshold}) is not below "
-            f"thresholds.mean_vntr_coverage ({mean_threshold}); no reduced band applies."
+            f"The low mean line for {coordinate_system} ({low}) is not below its adequate "
+            f"line ({adequate}); no reduced band applies."
         )
-        return None
-    return float(low_mean_threshold)
+        low = None
+    return MeanThresholds(adequate=adequate, low=None if low is None else float(low))
 
 
 def evaluate_coverage_qc(
@@ -144,10 +180,10 @@ def evaluate_coverage_qc(
             (two decimal places). ``None`` when no coverage step ran.
         percent_vntr_uncovered (float | None): Percentage of the region at zero depth, as
             published. ``None`` when no coverage step ran.
-        mean_threshold (float): ``config.json``'s ``thresholds.mean_vntr_coverage``.
+        mean_threshold (float): The adequate line from :func:`resolve_mean_thresholds`.
         percent_threshold (float): ``config.json``'s ``thresholds.percent_vntr_uncovered``.
-        low_mean_threshold (float | None): ``config.json``'s
-            ``thresholds.mean_vntr_coverage_low``. A mean at or above it and below
+        low_mean_threshold (float | None): The low line from
+            :func:`resolve_mean_thresholds`. A mean at or above it and below
             ``mean_threshold`` is ``REDUCED`` and passes. ``None`` keeps the single
             pass/fail line at ``mean_threshold``.
 

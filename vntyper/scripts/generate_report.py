@@ -48,7 +48,7 @@ from vntyper.scripts.coverage_presentation import coverage_notes, coverage_qc_to
 from vntyper.scripts.coverage_qc import (
     COVERAGE_QC_NOT_EVALUATED,
     evaluate_coverage_qc,
-    resolve_low_mean_threshold,
+    resolve_mean_thresholds,
 )
 from vntyper.scripts.cross_match_presentation import build_cross_match_summary
 from vntyper.scripts.fastp_cutoffs import FastpJsonPayload, build_fastp_cutoffs, build_fastp_measurement
@@ -477,7 +477,6 @@ def generate_summary_report(
         message = "Config thresholds must be a dictionary."
         logger.error(message)
         raise ValueError(message)
-    mean_vntr_cov_threshold = thresholds.get("mean_vntr_coverage", 100)
     percent_vntr_uncovered_threshold = thresholds.get("percent_vntr_uncovered", 50.0)
     fastp_cutoffs = build_fastp_cutoffs(thresholds)
 
@@ -520,10 +519,12 @@ def generate_summary_report(
     # them - see AGENTS.md trap 5 on step names for the same "absent key, no section"
     # pattern.
     reference_assembly_requested = pipeline_summary.get("reference_assembly_requested")
-    # The reduced depth band applies only on the assemblies it was measured on, and the
-    # pipeline judged the run by its declared assembly; a summary that records none keeps
-    # the single mean threshold.
-    low_mean_vntr_cov_threshold = resolve_low_mean_threshold(thresholds, reference_assembly_requested)
+    # The mean-depth lines depend on the assembly, because the window mean does; the
+    # pipeline judged the run by its declared assembly, and a summary that records none
+    # gets the single fallback line.
+    mean_lines = resolve_mean_thresholds(thresholds, reference_assembly_requested)
+    mean_vntr_cov_threshold = mean_lines.adequate
+    low_mean_vntr_cov_threshold = mean_lines.low
     reference_key_used = pipeline_summary.get("reference_key_used")
     reference_path = pipeline_summary.get("reference_path")
     reference_source_effective = pipeline_summary.get("reference_source_effective")
