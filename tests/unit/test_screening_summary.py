@@ -1336,6 +1336,16 @@ def test_a_missing_or_unusable_label_falls_back_to_the_mechanical_word(labels) -
     assert chip.value == "Finding"
 
 
+@pytest.mark.parametrize("labels", [["finding"], "No finding", 3])
+def test_a_chip_labels_block_that_is_not_a_mapping_is_ignored(labels, report_config) -> None:
+    config = {**report_config, "chip_labels": labels}
+    summary = replace(_summary(is_positive=False, matched_rule=True), confidence_grade="no-finding-limited")
+
+    chips = ss.state_chips(summary, config, cross_match_available=False, cross_match_is_positive=False)
+
+    assert chips[-1].value == "No finding limited"
+
+
 def test_state_chips_use_the_configured_labels(report_config) -> None:
     summary = replace(
         _summary(is_positive=False, matched_rule=True, kestrel_result="negative_subthreshold"),
