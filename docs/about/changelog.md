@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.45 (2026-10-08)
+
 ### Allele names decided by the resolved haplotype
 
 A Kestrel result row is one edit of a haplotype written on one of many motif pairs, so it does not state which sequence was observed. The deepest haplotype record in `output.bam` does, and reconciliation now reads it. See [The resolved haplotype decides the sequence](../pipeline/nomenclature.md#the-resolved-haplotype-decides-the-sequence).
