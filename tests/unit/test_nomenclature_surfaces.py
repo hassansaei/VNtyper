@@ -2004,3 +2004,122 @@ def test_a_variant_can_be_added_by_editing_config_alone() -> None:
     )
     with mock.patch.object(nomenclature, "KNOWN_VARIANTS", extended):
         assert "Fictional" in nomenclature.confidence_note(call)
+
+
+def _write_haplotype_scenario(
+    directory: Path,
+    motifs: str,
+    reference: str,
+    alternate: str,
+    haplotype_unit: str | None,
+    *,
+    advntr_state: str = "I22_2_G_LEN1",
+    advntr_pos: str = "22",
+) -> tuple[Path, Path]:
+    """One Kestrel row named 59dupC on a diverging group, adVNTR beside it, and its haplotype.
+
+    Args:
+        directory: Empty directory for the two result files and ``output.bam``.
+        motifs: The pair the Kestrel row was written on.
+        reference: Kestrel REF at pair position 67.
+        alternate: Kestrel ALT at pair position 67.
+        haplotype_unit: Bases the resolved haplotype spells in the left-named unit,
+            or ``None`` to write no ``output.bam``.
+        advntr_state: adVNTR State on repeat unit 2.
+        advntr_pos: adVNTR position annotation.
+    """
+    directory.mkdir()
+    dup_c = make_molecular_identity((make_coding_edit(60, 59, "", "C"),))
+    kestrel, advntr = _write_identity_aware_outputs(directory, dup_c, advntr_state=advntr_state, advntr_pos=advntr_pos)
+    raw_key = json.dumps({"source": "kestrel", "values": [motifs, 67, reference, alternate]}, separators=(",", ":"))
+    frame = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
+    frame.loc[0, ["Motifs", "REF", "ALT", "Motif_fasta", "POS_fasta"]] = [motifs, reference, alternate, motifs, "67"]
+    frame.loc[0, ["__Identity_Raw_Representation_Key", "__Identity_Selected_Raw_Representation_Key"]] = raw_key
+    # As on real exomes: other representations of the same edit diverge and fail gates.
+    frame.loc[0, "__Identity_Equivalent_Representation_Count"] = "2"
+    frame.loc[0, "__Identity_Group_Blocking_Gates"] = '["motif_filter_pass"]'
+    frame.loc[0, "__Identity_Group_Context_Diverges"] = "true"
+    frame.to_csv(kestrel, sep="\t", index=False)
+    if haplotype_unit is not None:
+        pair = nomenclature.pair_sequence(motifs)
+        assert pair is not None
+        header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": motifs, "LN": len(pair)}]}
+        with pysam.AlignmentFile(str(directory / "output.bam"), "wb", header=header) as handle:
+            record = pysam.AlignedSegment(handle.header)
+            record.query_name = "resolved_haplotype"
+            record.reference_id = 0
+            record.reference_start = 60
+            record.mapping_quality = 255
+            # The aligner's exact placement is irrelevant: only the spelled bases are read.
+            record.cigarstring = f"8=1I{len(haplotype_unit) - 9}="
+            record.query_sequence = haplotype_unit
+            record.set_tag("XD", 40)
+            handle.write(record)
+        pysam.index(str(directory / "output.bam"))  # type: ignore[attr-defined]
+    return kestrel, advntr
+
+
+_X_UNIT_DUP_C = "TGGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC"
+_INS_G_UNIT = "TGCGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC"
+_G_UNIT_PLUS_G = "TGCGGGCGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC"
+
+
+def test_a_haplotype_spelling_the_name_on_x_lifts_representation_blockers_to_tier_a(tmp_path: Path) -> None:
+    """Divergence and gates of other pair references do not describe a verified molecule."""
+    unverified = _write_haplotype_scenario(tmp_path / "no_bam", "C-X", "G", "GG", None)
+    verified = _write_haplotype_scenario(tmp_path / "bam", "C-X", "G", "GG", _X_UNIT_DUP_C)
+
+    assert reconcile_caller_outputs(*unverified) is True
+    assert reconcile_caller_outputs(*verified) is True
+
+    before = pd.read_csv(unverified[0], sep="\t", dtype=str).loc[0]
+    after = pd.read_csv(verified[0], sep="\t", dtype=str).loc[0]
+    assert (before["Nomenclature"], before["Nomenclature_Tier"]) == ("59dupC", "B")
+    assert "motif-context-diverges" in before["Nomenclature_Flags"]
+    assert (after["Nomenclature"], after["Nomenclature_Tier"]) == ("59dupC", "A")
+    assert "motif-context-diverges" not in after["Nomenclature_Flags"]
+
+
+def test_a_haplotype_in_another_unit_context_keeps_the_agreed_name_at_tier_b(tmp_path: Path) -> None:
+    """Agreement on a name whose sequence the haplotype does not spell on X stays qualified."""
+    kestrel, advntr = _write_haplotype_scenario(tmp_path / "run", "C-X", "G", "GG", _G_UNIT_PLUS_G)
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str).loc[0]
+    assert (written["Nomenclature"], written["Nomenclature_Tier"]) == ("59dupC", "B")
+    assert "motif-context-diverges" in written["Nomenclature_Flags"]
+
+
+def test_a_disagreement_of_description_resolves_to_the_name_the_haplotype_spells(tmp_path: Path) -> None:
+    """Kestrel's S-motif row projects to 59dupC; its haplotype is X carrying adVNTR's 58_59insG."""
+    kestrel, advntr = _write_haplotype_scenario(
+        tmp_path / "run", "S-X", "G", "GG", _INS_G_UNIT, advntr_state="I23_2_C_LEN1", advntr_pos="23"
+    )
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    for path in (kestrel, advntr):
+        written = pd.read_csv(path, sep="\t", dtype=str).loc[0]
+        assert (written["Nomenclature"], written["Nomenclature_Tier"]) == ("58_59insG", "B")
+        assert "caller-disagreement" not in written["Nomenclature_Flags"]
+        assert nomenclature_annotate.HAPLOTYPE_CONCORDANCE_NOTE in written["Nomenclature_Note"]
+        # Each caller's own name stays visible beside the reconciled one.
+        assert (written["Nomenclature_Kestrel"], written["Nomenclature_adVNTR"]) == ("59dupC", "58_59insG")
+
+
+@pytest.mark.parametrize("haplotype_unit", [_G_UNIT_PLUS_G, _X_UNIT_DUP_C, None])
+def test_a_disagreement_stands_unless_the_haplotype_spells_only_the_advntr_name(
+    tmp_path: Path, haplotype_unit: str | None
+) -> None:
+    """Neither name, Kestrel's own name, or no haplotype at all: nothing is adopted."""
+    kestrel, advntr = _write_haplotype_scenario(
+        tmp_path / "run", "S-X", "G", "GG", haplotype_unit, advntr_state="I23_2_C_LEN1", advntr_pos="23"
+    )
+
+    assert reconcile_caller_outputs(kestrel, advntr) is True
+
+    written = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False).loc[0]
+    assert written["Nomenclature_Tier"] == "C"
+    assert "caller-disagreement" in written["Nomenclature_Flags"]
+    assert nomenclature_annotate.HAPLOTYPE_CONCORDANCE_NOTE not in written["Nomenclature_Note"]

@@ -209,6 +209,13 @@ def annotate_advntr_frame(
     return annotated
 
 
+#: Why a reconciled name can differ from the Kestrel name beside it without a disagreement flag.
+HAPLOTYPE_CONCORDANCE_NOTE = (
+    "Kestrel's resolved haplotype spells the sequence adVNTR named; the Kestrel record projected onto the "
+    "canonical unit names a different allele"
+)
+
+
 def append_decision_explanation(note: str, explanation: str) -> str:
     """Append one governed sentence without duplicating existing text."""
     if explanation in note:

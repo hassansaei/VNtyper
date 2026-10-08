@@ -223,6 +223,31 @@ def bind_bam_translation(
     return kestrel_translation
 
 
+def haplotype_carries_identity(unit_sequence: str, identity: MolecularIdentity, minimum_length: int) -> bool:
+    """Decide whether one resolved haplotype spells canonical X carrying ``identity``.
+
+    A Kestrel row is one edit of a haplotype that may differ from its assigned motif
+    elsewhere, so the row cannot say which sequence was observed; the haplotype
+    record can. A string found in edited X and absent from plain X necessarily spans
+    the edit, so no coordinate arithmetic is needed.
+
+    Args:
+        unit_sequence: Genomic-plus bases the haplotype places inside the affected
+            60-base repeat unit.
+        identity: The canonical identity being tested.
+        minimum_length: Shortest sequence accepted as evidence.
+
+    Returns:
+        ``True`` only when the sequence is long enough, occurs in X carrying the
+        identity, and does not occur in unedited X.
+    """
+    if len(unit_sequence) < minimum_length:
+        return False
+    canonical = _reverse_complement(CANONICAL_MUC1_X_CODING_UNIT)
+    alternate = _reverse_complement(_apply_identity(CANONICAL_MUC1_X_CODING_UNIT, identity))
+    return unit_sequence in alternate and unit_sequence not in canonical
+
+
 def resolve_coding_pair_edit(reference_unit: str, alternate_unit: str) -> MolecularIdentity | None:
     """Resolve one complete alternate X unit to its normalized canonical identity.
 

@@ -17,19 +17,24 @@ Research use only.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from vntyper.scripts.molecular_identity import IdentityTranslation
+from vntyper.scripts.molecular_identity import IdentityTranslation, MolecularIdentity
 from vntyper.scripts.molecular_identity_presentation import (
     IDENTITY_COLUMNS,
     persisted_identity_result_rows,
 )
 from vntyper.scripts.nomenclature import (
+    FLAG_CALLER_DISAGREEMENT,
+    FLAG_KNOWN_VARIANT,
+    FLAG_MOTIF_CONTEXT_DIVERGES,
+    FLAG_REPRESENTATION_ONLY,
     Nomenclature,
     from_advntr,
     from_kestrel,
@@ -51,6 +56,9 @@ from vntyper.scripts.nomenclature_bam_adapter import (
 )
 from vntyper.scripts.nomenclature_bam_adapter import (
     row_haplotype_call as _row_haplotype_call,
+)
+from vntyper.scripts.nomenclature_bam_adapter import (
+    row_locus as _row_locus,
 )
 from vntyper.scripts.nomenclature_bam_replay import (
     BamReplayArtifact,
@@ -76,6 +84,7 @@ from vntyper.scripts.nomenclature_dominance_runtime import (
     rows_carry_identity_metadata as _rows_carry_identity_metadata,
 )
 from vntyper.scripts.nomenclature_frame_presentation import (
+    HAPLOTYPE_CONCORDANCE_NOTE,
     NOMENCLATURE_COLUMNS,
     append_decision_explanation,
 )
@@ -414,6 +423,24 @@ def reconcile_caller_outputs(
         existing = supports.get("kestrel_vcf")
         supports["kestrel_vcf"] = depth if "kestrel_vcf" not in supports else _lesser(existing, depth)
 
+    # A row is one edit of a haplotype; only the haplotype says which sequence was seen.
+    haplotype_sequences = (
+        _haplotype_unit_sequences(kestrel_rows, kestrel_dir or kestrel_path.parent, decision_config)
+        if identity_aware
+        else [()] * len(kestrel_rows)
+    )
+    kestrel_identities = _kestrel_row_identities(kestrel_rows) if identity_aware else [None] * len(kestrel_rows)
+    haplotype_verified = [
+        _spells(sequences, identity, decision_config)
+        for sequences, identity in zip(haplotype_sequences, kestrel_identities, strict=True)
+    ]
+    for index, (call, verified) in enumerate(zip(vcf_calls, haplotype_verified, strict=True)):
+        if call is not None and verified:
+            # The observed sequence is X carrying this name, whatever motif the row was written on.
+            vcf_calls[index] = replace(
+                call, flags=tuple(flag for flag in call.flags if flag != FLAG_MOTIF_CONTEXT_DIVERGES)
+            )
+
     advntr_keep = [not _is_negative(row) for _, row in advntr.iterrows()]
     positive_advntr_rows = [row for (_, row), keep in zip(advntr.iterrows(), advntr_keep, strict=True) if keep]
     advntr_dispositions = [
@@ -477,6 +504,7 @@ def reconcile_caller_outputs(
         decision_config=decision_config,
         translation_component=identity_component,
         artifact_evidence=resolved_artifact_evidence,
+        haplotype_verified=haplotype_verified,
     )
     merged: Nomenclature | None
     if identity_inputs is None:
@@ -501,6 +529,20 @@ def reconcile_caller_outputs(
         # A delins is unrepresentable in Kestrel's VCF, so one seen in the
         # haplotype records is better evidence than the closest VCF shape.
         merged = refine(merged, bam_call)
+
+    haplotype_concordant = False
+    if identity_aware_result is not None and merged is not None and len(kestrel_rows) == 1:
+        adopted = _advntr_call_spelled_by_haplotype(
+            merged,
+            haplotype_sequences[0],
+            haplotype_verified[0],
+            identity_observations,
+            ordered_calls,
+            decision_config,
+        )
+        if adopted is not None:
+            merged, reconciled_identity = adopted
+            haplotype_concordant = True
 
     # Each row keeps its *own* caller's name. Broadcasting one joined string to every
     # row destroyed row identity: a file reporting two variants said both names on
@@ -581,6 +623,8 @@ def reconcile_caller_outputs(
             advntr=advntr_summary,
             decision_config=decision_config,
         )
+    if haplotype_concordant and merged is not None and FLAG_CALLER_DISAGREEMENT not in merged.flags:
+        cells["Nomenclature_Note"] = append_decision_explanation(cells["Nomenclature_Note"], HAPLOTYPE_CONCORDANCE_NOTE)
     if identity_inputs is not None:
         cells[RECONCILED_IDENTITY_COLUMN] = encode_reconciled_identity(reconciled_identity)
     if dominance_result is not None and dominance_result.decision.outcome != "not-applicable":
@@ -627,6 +671,102 @@ def reconcile_caller_outputs(
         assert dominance_result is not None
         return DominanceSeamOutcome(True, True, dominance_result.decision.outcome)
     return True
+
+
+def _haplotype_unit_sequences(
+    kestrel_rows: Sequence[pd.Series],
+    kestrel_dir: str | Path,
+    decision_config: NomenclatureDecisionConfig,
+) -> list[tuple[str, ...]]:
+    """Spell each row's deepest resolved haplotypes inside its affected repeat unit.
+
+    Args:
+        kestrel_rows: Positive Kestrel result rows.
+        kestrel_dir: Directory holding ``output.bam``.
+        decision_config: Explicit resolved nomenclature values for a run.
+
+    Returns:
+        The deepest sequences per row, empty where the BAM or the row cannot supply any.
+    """
+    rescuer = _open_rescuer(kestrel_dir, decision_config)
+    if rescuer is None:
+        return [()] * len(kestrel_rows)
+    sequences: list[tuple[str, ...]] = []
+    with rescuer:
+        for row in kestrel_rows:
+            locus = _row_locus(row)
+            if locus is None or any(pd.isna(row.get(field)) for field in ("REF", "ALT")):
+                sequences.append(())
+                continue
+            net_length = len(str(row["ALT"])) - len(str(row["REF"]))
+            sequences.append(rescuer.unit_sequences(*locus, net_length, decision_config.unit_length))
+    return sequences
+
+
+def _kestrel_row_identities(kestrel_rows: Sequence[pd.Series]) -> list[MolecularIdentity | None]:
+    """Return each row's persisted canonical identity, ``None`` where unresolved."""
+    from vntyper.scripts.identity_candidate_persistence import parse_selected_candidate_cells
+
+    return [parse_selected_candidate_cells(row).translation.identity for row in kestrel_rows]
+
+
+def _spells(
+    sequences: Sequence[str],
+    identity: MolecularIdentity | None,
+    decision_config: NomenclatureDecisionConfig,
+) -> bool:
+    """Whether a deepest haplotype is canonical X carrying ``identity``, at least two flanks long."""
+    from vntyper.scripts.molecular_identity_translation import haplotype_carries_identity
+
+    return identity is not None and any(
+        haplotype_carries_identity(sequence, identity, 2 * decision_config.bam_flank + 1) for sequence in sequences
+    )
+
+
+def _advntr_call_spelled_by_haplotype(
+    merged: Nomenclature,
+    sequences: Sequence[str],
+    kestrel_verified: bool,
+    identity_observations: Sequence[Any],
+    ordered_calls: Sequence[Nomenclature],
+    decision_config: NomenclatureDecisionConfig,
+) -> tuple[Nomenclature, MolecularIdentity] | None:
+    """Resolve a caller disagreement that is only a difference of description.
+
+    Kestrel projects its edit onto canonical X; when the variant sits in another
+    repeat unit that projection names a sequence the sample does not carry, while
+    Kestrel's own haplotype spells exactly what adVNTR named. Then both callers saw
+    one molecule, and adVNTR's name is the one that describes it.
+
+    Args:
+        merged: The reconciled call so far.
+        sequences: The Kestrel row's deepest haplotypes inside the affected unit.
+        kestrel_verified: Whether that haplotype spells Kestrel's own identity.
+        identity_observations: Typed observations of this reconciliation.
+        ordered_calls: Presentation calls the observations are bound to.
+        decision_config: Explicit resolved nomenclature values for a run.
+
+    Returns:
+        adVNTR's call as the reconciled result with its identity, never above tier
+        B; ``None`` unless the callers disagree and the haplotype spells exactly
+        one adVNTR identity and not Kestrel's.
+    """
+    if FLAG_CALLER_DISAGREEMENT not in merged.flags or kestrel_verified:
+        return None
+    spelled = {
+        observation.identity: ordered_calls[observation.presentation_call_index]
+        for observation in identity_observations
+        if observation.source == "advntr"
+        and observation.backs_identity
+        and observation.presentation_call_index is not None
+        and _spells(sequences, observation.identity, decision_config)
+    }
+    if len(spelled) != 1:
+        return None
+    ((identity, call),) = spelled.items()
+    flags = {*merged.flags, *call.flags} - {FLAG_CALLER_DISAGREEMENT, FLAG_KNOWN_VARIANT, FLAG_REPRESENTATION_ONLY}
+    flags.add(FLAG_KNOWN_VARIANT if call.name in decision_config.known_variants else FLAG_REPRESENTATION_ONLY)
+    return replace(call, tier="B", flags=tuple(sorted(flags)), source="reconciled"), identity
 
 
 def _lesser(left: int | None, right: int | None) -> int | None:

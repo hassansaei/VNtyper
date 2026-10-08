@@ -13,9 +13,9 @@ The explicit-root golden tier independently loads both the simulation and paired
 
 - 200 mutated members and 200 paired normal controls;
 - 374 public identity rows and 178 selected locus rows;
-- shipped displayed-name projection 154 displayed, 136 exact, and 18 wrong;
+- displayed-name projection recorded in the historical summaries: 154 displayed, 136 exact, and 18 wrong;
 - the frozen historical Phase 1 caller projection recorded in the selected historical summaries: Tier A 53/53/0, Tier B 101/83/18, Tier C 0/0/0, kept as the pre-identity reference;
-- the measured identity-policy projection of the current code on the same corpus: Tier A 0/0/0, Tier B 154/136/18, Tier C 0/0/0, pinned literally by `test_pr_a_measured_identity_policy_baseline_is_literal`: identity-keyed reconciliation deliberately keeps context-divergent evidence out of Tier A, so the total is unchanged while no name reaches Tier A on this corpus;
+- the measured identity-policy projection of the current code on the same corpus: 162 displayed, 151 exact, and 11 wrong; Tier A 90/90/0, Tier B 72/61/11, Tier C 0/0/0, pinned literally by `test_pr_a_measured_identity_policy_baseline_is_literal`. Context-divergent evidence stays out of Tier A, and divergence is now decided by the resolved haplotype: a name reaches Tier A only when Kestrel's deepest haplotype spells canonical X carrying it. The eight newly displayed names are caller disagreements of description, where that haplotype spells the sequence adVNTR named;
 - zero control findings;
 - packaged profile SHA-256 `0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1`; and
 - packaged projection SHA-256 `cfa5ec402a3a20096b76273c4347ff8b5975db942aa6dccf9f2d99474260236d`.

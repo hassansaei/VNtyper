@@ -15,6 +15,7 @@ from vntyper.scripts.molecular_identity import (
 )
 from vntyper.scripts.molecular_identity_translation import (
     bind_bam_translation,
+    haplotype_carries_identity,
     resolve_coding_pair_edit,
     translate_kestrel_representation,
 )
@@ -656,3 +657,32 @@ def test_boundary_insertion_resolves_when_matching_left_unit_suffix() -> None:
     # start = 61, end = 60 (gap = 60)
     half = _affected_half(61, 60, pair_sequence=pair, inserted=suffix, permit_boundary_insertions=True)
     assert half == 0
+
+
+_X_PLUS = "TGGGGGGGCGGTGGAGCCCGGGGCCGGCCTGGTGTCCGGGGCCGAGGTGACACCGTGGGC"
+
+
+@pytest.mark.parametrize(
+    ("unit_sequence", "edit", "expected"),
+    [
+        # X with one more G in the tract is 59dupC, and nothing else.
+        ("TGGGGGGGGCGGTGGAGCCCGGGGC", (60, 59, "", "C"), True),
+        ("TGGGGGGGGCGGTGGAGCCCGGGGC", (59, 58, "", "G"), False),
+        # The S-motif row Kestrel writes as `G>GG` spells 58_59insG on X, not 59dupC.
+        ("TGCGGGGGGCGGTGGAGCCCGGGGC", (59, 58, "", "G"), True),
+        ("TGCGGGGGGCGGTGGAGCCCGGGGC", (60, 59, "", "C"), False),
+        # An extra G in a G-type unit is neither name on X.
+        ("TGCGGGCGGCGGTGGAGCCCGGGGC", (60, 59, "", "C"), False),
+        ("TGCGGGCGGCGGTGGAGCCCGGGGC", (59, 58, "", "G"), False),
+        # Unedited X never counts, however long: it does not span the edit.
+        (_X_PLUS[10:50], (60, 59, "", "C"), False),
+        # Too short to be evidence even though it spans the edit.
+        ("TGGGGGGGGCGG", (60, 59, "", "C"), False),
+    ],
+)
+def test_a_haplotype_carries_an_identity_only_when_it_spells_edited_x(
+    unit_sequence: str, edit: tuple[int, int, str, str], expected: bool
+) -> None:
+    identity = make_molecular_identity((make_coding_edit(*edit),))
+
+    assert haplotype_carries_identity(unit_sequence, identity, 17) is expected

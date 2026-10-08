@@ -86,6 +86,7 @@ def production_identity_observations(
     decision_config: NomenclatureDecisionConfig,
     translation_component: Any = None,
     artifact_evidence: ArtifactEvidence,
+    haplotype_verified: Sequence[bool] | None = None,
 ) -> tuple[tuple[IdentityReconciliationObservation, ...], IdentityReconciliationPolicy] | None:
     """Build typed production observations or retain the deliberate legacy path.
 
@@ -99,6 +100,7 @@ def production_identity_observations(
         decision_config: Resolved immutable nomenclature policy.
         translation_component: Resolved identity translation authority.
         artifact_evidence: Verified governed adVNTR evidence.
+        haplotype_verified: Per Kestrel row, whether its haplotype spells its identity on X.
 
     Returns:
         Typed observations and policy, or ``None`` for legacy rows.
@@ -121,6 +123,7 @@ def production_identity_observations(
         frozenset(decision_config.known_variants),
         artifact_evidence=artifact_evidence,
         bam_translations=bam_translations,
+        haplotype_verified=haplotype_verified,
     )
     if observations is None:  # pragma: no cover - identity columns were established above
         raise ValueError("Current-run identity metadata unexpectedly selected the legacy path")
