@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.44 (2026-10-08)
+
 ### Report and log corrections from a four-sample exome review
 
 - **Tier C under caller disagreement**: when the two callers describe different events, the tier label reads `callers disagree` and its explanation says so. It no longer states that no coordinate could be computed. The genuine no-coordinate case keeps its wording.
