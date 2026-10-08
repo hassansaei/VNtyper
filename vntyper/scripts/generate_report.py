@@ -60,6 +60,7 @@ from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.profile_provenance import resolve_summary_profile
 from vntyper.scripts.report_formatting import (
     ADVNTR_CELL_FORMATS,
+    ADVNTR_COLUMN_HELP,
     ADVNTR_DISPLAY_CELL_FORMATS,
     ADVNTR_DISPLAY_COLUMNS,
     ADVNTR_DISPLAY_HEADINGS,
@@ -265,6 +266,26 @@ def load_pipeline_log(log_file):
     except Exception as e:
         logger.error("Failed to read pipeline log file: %s", e)
         return "Failed to load pipeline log."
+
+
+def redact_log_paths(content: str, output_dir: str | os.PathLike[str]) -> str:
+    """Shorten local path prefixes in the log copy embedded in the report.
+
+    The on-disk ``pipeline.log`` is untouched. The output directory goes first
+    because it usually sits under the home directory.
+
+    Args:
+        content: The pipeline log text.
+        output_dir: The run's output directory.
+
+    Returns:
+        str: The log with the output directory as ``<output_dir>`` and the home directory as ``~``.
+    """
+    for prefix, token in ((os.path.abspath(output_dir), "<output_dir>"), (os.path.expanduser("~"), "~")):
+        # A bare root (HOME=/ in some containers) would rewrite every path separator.
+        if prefix.rstrip(os.sep):
+            content = content.replace(prefix, token)
+    return content
 
 
 def build_kestrel_frames(kestrel_data):
@@ -650,7 +671,7 @@ def generate_summary_report(
     ]
     advntr_df = build_advntr_frame(advntr_rows)
 
-    pipeline_log_content = load_pipeline_log(log_file)
+    pipeline_log_content = redact_log_paths(load_pipeline_log(log_file), output_dir)
 
     # IGV report generation (if applicable). `off` skips it outright: the mode says
     # the run wants no alignment browser, and running `create_report` anyway would
@@ -848,6 +869,7 @@ def generate_summary_report(
             numeric=numeric_headings(ADVNTR_DISPLAY_CELL_FORMATS),
             essential=ADVNTR_ESSENTIAL_COLUMNS,
             caption="adVNTR variant calls, with the MUC1 name reconciled from both callers",
+            column_help=ADVNTR_COLUMN_HELP,
         )
         advntr_row_summary = row_count_statement(len(advntr_df), flagged_row_count(advntr_df), noun=ADVNTR_ROW_NOUN)
         advntr_folded_record = folded_record_html(advntr_display, ADVNTR_ESSENTIAL_COLUMNS, noun=ADVNTR_ROW_NOUN)
@@ -1000,11 +1022,9 @@ def generate_summary_report(
         # Two timestamps, labelled, because they are different facts. `report_date`
         # is `datetime.now()` at render, so re-running `vntyper report` over an
         # archived run restamped the only date on the page and the artefact
-        # silently claimed to be newer than the analysis (#242). Both carry a zone:
-        # the run time is UTC and this one is the rendering machine's local time,
-        # so printing them unqualified beside each other invites the reader to
-        # subtract them.
-        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
+        # silently claimed to be newer than the analysis (#242). Both are UTC in
+        # one format, so the two can be compared directly.
+        "report_date": format_run_timestamp(datetime.now(timezone.utc).isoformat()),
         "run_date": run_time_text,
         # The mapping is rendered by iterating it, not by branching on its shape:
         # the template tested for `fastq1 and fastq2` or `bam`, so the other two

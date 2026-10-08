@@ -46,7 +46,7 @@ Tiers govern emission rules for variant reporting:
 |---|---|---|
 | **A** | Two independent callers agree after normalisation, motif context matches the canonical unit, and each source meets its support threshold | Bare name, e.g. `59dupC` |
 | **B** | A variant name is resolved, but one or more Tier A conditions are unmet | Variant name annotated with Tier B and disqualifying flags |
-| **C** | Allele sequence cannot be resolved | `frameshift +1, allele undetermined` (no position at all) |
+| **C** | Allele sequence cannot be resolved, or the two callers each computed a name and the names describe different event classes | `frameshift +1, allele undetermined` (no position at all); under disagreement both caller names stay visible beside it |
 
 Tier B calls display the candidate name alongside explanatory flags. In benchmark testing of 200 samples, 129 had correct names computed, but only 46 met Tier A criteria. Suppressing accurate names discards actionable investigative evidence; the tier and flags explicitly document confidence.
 

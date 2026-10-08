@@ -71,6 +71,9 @@ from vntyper.scripts.fastp_cutoffs import (
 )
 from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMN_HELP, IDENTITY_COLUMNS
 from vntyper.scripts.nomenclature_presentation import (
+    ADVNTR_COLUMN_HELP as ADVNTR_COLUMN_HELP,
+)
+from vntyper.scripts.nomenclature_presentation import (
     COLUMN_HELP,
     tier_reason,
 )
@@ -955,6 +958,7 @@ def annotate_table_columns(
     numeric: frozenset[str] = frozenset(),
     essential: frozenset[str] = frozenset(),
     caption: str = "",
+    column_help: Mapping[str, str] | None = None,
 ) -> str:
     """Give every cell of a rendered results table its column's presentation.
 
@@ -987,6 +991,7 @@ def annotate_table_columns(
         headings: The display headings, in column order.
         numeric: Which of them hold numbers.
         caption: The table's name. Escaped here; not inserted when empty.
+        column_help: Table-specific heading explanations, consulted before the shared ones.
 
     Returns:
         str: The same table with per-column presentation, or ``""`` unchanged.
@@ -1041,7 +1046,9 @@ def annotate_table_columns(
         added = f' class="{" ".join(classes)}"' if classes else ""
         if tag == "th":
             added += ' scope="col"'
-            explanation = COLUMN_HELP.get(heading) or IDENTITY_COLUMN_HELP.get(heading)
+            explanation = (
+                (column_help or {}).get(heading) or COLUMN_HELP.get(heading) or IDENTITY_COLUMN_HELP.get(heading)
+            )
             if explanation:
                 added += f' title="{escape_html(explanation)}"'
         return f"<{tag}{attributes}{added}>"
@@ -1304,9 +1311,10 @@ def nomenclature_legend(*frames: pd.DataFrame) -> list[dict[str, str]]:
                 label, meaning = NOMENCLATURE_TIERS.get("B", ("", ""))
                 entries.append({"term": "Tier B", "label": label, "meaning": meaning})
         else:
-            label, meaning = NOMENCLATURE_TIERS.get(tier, ("", ""))
-            if meaning:
-                entries.append({"term": f"Tier {tier}", "label": label, "meaning": meaning})
+            # One entry per distinct wording: Tier C reads differently when the callers disagree.
+            for label, meaning in dict.fromkeys(tier_presentation(tier, flags) for flags, _ in tier_rows):
+                if meaning:
+                    entries.append({"term": f"Tier {tier}", "label": label, "meaning": meaning})
 
     has_any_withheld = any(
         (nomenclature.FLAG_ALLELE_UNREPRESENTABLE in f or "representation-limited" in f)

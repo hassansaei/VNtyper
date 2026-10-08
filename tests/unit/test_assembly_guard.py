@@ -206,6 +206,18 @@ def test_the_verdict_carries_the_chr1_length_it_reasoned_from(convention, assemb
     assert verdict.chr1_length == expected_length
 
 
+def test_a_recognised_chr1_length_is_looked_up_once(caplog):
+    """Detection logs at INFO, so resolving the same length twice printed it twice per run."""
+    with caplog.at_level("INFO", logger="vntyper.scripts.chromosome_utils"):
+        verdict = reconcile_assembly("hg38", [{"name": "chr1", "length": GRCH38_CHR1}])
+
+    assert verdict.status == STATUS_AGREE
+    assert verdict.coordinate_system == "GRCh38"
+    assert [r.getMessage() for r in caplog.records if "Assembly detected" in r.getMessage()] == [
+        "Assembly detected from chr1 length: GRCh38 (248,956,422 bp)"
+    ]
+
+
 def test_chr1_length_is_none_when_chr1_is_absent():
     verdict = reconcile_assembly("hg19", bam_contigs_without_chr1("ucsc"))
     assert verdict.chr1_length is None

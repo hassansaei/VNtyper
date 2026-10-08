@@ -187,6 +187,40 @@ def test_no_warning_emitted_when_output_dir_empty_without_resume(
     assert not any("already holds" in record.message for record in caplog.records)
 
 
+def test_no_warning_for_the_advntr_directory_this_run_creates_itself(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The adVNTR model snapshot creates `<output_dir>/advntr/` during startup.
+
+    Looking for prior content after that made every fresh adVNTR run warn about itself.
+    The harness stands in `fastq_bam_processing/` for adVNTR runs, so that is the one
+    entry a fresh directory may name here.
+    """
+    output_dir = tmp_path / "fresh_advntr_run_dir"
+
+    with caplog.at_level(logging.WARNING):
+        run_pipeline_under_harness(output_dir=output_dir, extra_modules=["advntr"])
+
+    assert (output_dir / "advntr").is_dir()
+    [message] = [record.getMessage() for record in caplog.records if "already holds" in record.getMessage()]
+    assert "already holds 1 entry from an earlier run (fastq_bam_processing)" in message
+
+
+def test_an_advntr_directory_left_by_an_earlier_run_still_warns(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    output_dir = tmp_path / "reused_advntr_run_dir"
+    (output_dir / "advntr").mkdir(parents=True)
+
+    with caplog.at_level(logging.WARNING):
+        run_pipeline_under_harness(output_dir=output_dir, extra_modules=["advntr"])
+
+    [message] = [record.getMessage() for record in caplog.records if "already holds" in record.getMessage()]
+    assert "already holds 2 entries from an earlier run (advntr, fastq_bam_processing)" in message
+
+
 def test_no_warning_when_the_only_entry_is_this_runs_own_log(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

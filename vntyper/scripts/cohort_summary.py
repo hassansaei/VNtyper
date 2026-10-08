@@ -67,6 +67,7 @@ from vntyper.scripts.nomenclature import (
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_assets import template_search_paths
 from vntyper.scripts.report_formatting import nomenclature_legend
+from vntyper.scripts.report_identity import format_run_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +338,7 @@ def generate_cohort_summary_report(
         raise
 
     context = {
-        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "report_date": format_run_timestamp(datetime.now(timezone.utc).isoformat()),
         "kestrel_positive": kestrel_html,
         "advntr_positive": advntr_html,
         "kestrel_plot_interactive": kestrel_plot_html,

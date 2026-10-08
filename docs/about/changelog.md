@@ -4,7 +4,16 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Report and log corrections from a four-sample exome review
+
+- **Tier C under caller disagreement**: when the two callers describe different events, the tier label reads `callers disagree` and its explanation says so. It no longer states that no coordinate could be computed. The genuine no-coordinate case keeps its wording.
+- **Column help**: the adVNTR table's `Position` is described as a position within the adVNTR repeat unit, not within the Kestrel motif pair. The Kestrel `Motif`, `Position` and `ALT` help now say that a row is one edit of a resolved haplotype in a 120 bp pair frame, so the four fields alone do not reconstruct the allele sequence.
+- **Times in UTC**: the render time of the sample and cohort reports is printed in UTC, as the run start already was.
+- **Embedded log paths**: the copy of the pipeline log inside the report replaces the output directory with `<output_dir>` and the home directory with `~`. `pipeline.log` on disk is unchanged.
+- **No false earlier-run warning**: a fresh `--extra-modules advntr` run no longer warns that its own `advntr/` directory came from an earlier run. A directory left by an earlier run still warns.
+- **Region-extract warning**: an indexed input whose header declares several contigs, holds reads on one and has no unmapped reads now logs one warning that depth and variant support are lower bounds. No result file or exit code changes.
+- **Assembly detection logged once**: the `Assembly detected from chr1 length` line is no longer written twice.
+- **Research pipeline decisions**: No caller thresholds, result rows, tiers or screening messages changed.
 
 ## 2.0.43 (2026-10-03)
 

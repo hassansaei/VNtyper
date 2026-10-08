@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from vntyper.scripts import nomenclature
 
 __all__ = [
+    "ADVNTR_COLUMN_HELP",
     "COLUMN_HELP",
     "KESTREL_BAM_SEMANTICS",
     "NOMENCLATURE_FLAG_MEANINGS",
@@ -132,13 +133,22 @@ COLUMN_HELP: dict[str, str] = {
     "Mean Coverage": "Mean read depth adVNTR measured over the locus. Not the region mean above.",
     "P-value": "adVNTR's significance for the call, to three significant figures.",
     "Repeat Unit": "The adVNTR repeat unit the call was made in.",
-    "Motif": "The MUC1 repeat motif this variant was annotated onto.",
+    "Motif": (
+        "The one MUC1 repeat motif the edit falls in, taken from Kestrel's left-right motif pair. The resolved "
+        "haplotype may differ from this motif at other bases."
+    ),
     "Motifs": "The raw left-right motif pair Kestrel emitted for the record.",
     "Variant": "The event class the caller reported.",
-    "Position": "Position within the 120 bp Kestrel motif pair, not a genomic coordinate.",
+    "Position": (
+        "Position within Kestrel's 120 bp motif pair, not a genomic coordinate and not an offset into the Motif "
+        "column alone. The pair is the right-named motif (1-60) followed by the left-named motif (61-120)."
+    ),
     "POS": "Position within the caller's own coordinate frame, not a genomic coordinate.",
     "REF": "The reference allele at the reported position.",
-    "ALT": "The alternate allele reported by the caller.",
+    "ALT": (
+        "The alternate allele of this one edit. A row is a single edit of a resolved haplotype that may differ "
+        "from the motif at other bases, so Motif, Position, REF and ALT alone do not reconstruct the allele sequence."
+    ),
     "Depth (Variant)": "Kestrel alternate-allele k-mer-path depth.",
     "Depth (Region)": "Kestrel total k-mer depth across the active region.",
     "Depth Score": (
@@ -179,6 +189,12 @@ COLUMN_HELP: dict[str, str] = {
     "MeanCoverage": "Mean read depth adVNTR measured over the locus.",
     "Pvalue": "adVNTR's significance for the call, to three significant figures.",
     "RU": "The adVNTR repeat unit the call was made in.",
+}
+
+#: adVNTR-table headings whose meaning differs from the Kestrel table's; consulted before COLUMN_HELP.
+ADVNTR_COLUMN_HELP: dict[str, str] = {
+    "Position": "Position within the adVNTR repeat unit named in the Repeat Unit column, not a genomic coordinate.",
+    "ALT": "The alternate allele reported by the caller.",
 }
 
 
@@ -253,6 +269,12 @@ def tier_presentation(
             "An allele was resolved in haplotype records, but its molecular class cannot be represented in "
             "Kestrel's VCF shape. The event is reported so it can be weighed, while the positional name is "
             "withheld.",
+        )
+    if tier == "C" and nomenclature.FLAG_CALLER_DISAGREEMENT in flags:
+        return (
+            "callers disagree",
+            "The two callers describe different events, so no single name is asserted. Each name a caller "
+            "computed is shown; the event and its net length change are stated without a position - not a negative.",
         )
     return NOMENCLATURE_TIERS.get(tier, ("", ""))
 

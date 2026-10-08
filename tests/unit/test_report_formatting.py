@@ -1473,6 +1473,50 @@ def test_advntr_undetermined_call_is_not_labeled_representation_limited() -> Non
     assert confidence_note(call) == ""
 
 
+def test_tier_c_from_caller_disagreement_does_not_claim_no_coordinate() -> None:
+    """Under caller disagreement Tier C says the callers differ, in the header and the key."""
+    row = {
+        "Nomenclature": "frameshift +1, allele undetermined",
+        "Nomenclature_Tier": "C",
+        "Nomenclature_Flags": "caller-disagreement",
+        "Nomenclature_Kestrel": "59dupC",
+        "Nomenclature_adVNTR": "58_59insG",
+    }
+    disagreeing = pd.DataFrame([row])
+    unplaced = pd.DataFrame([{**row, "Nomenclature_Flags": "sequence-undetermined"}])
+
+    identity = rf.variant_identity(disagreeing)
+    assert identity is not None
+    assert identity["tier_label"] == "callers disagree"
+    assert "different events" in identity["tier_meaning"]
+    assert "No coordinate could be computed" not in identity["tier_meaning"]
+    assert [(entry["label"], entry["meaning"]) for entry in rf.nomenclature_legend(disagreeing)][0] == (
+        identity["tier_label"],
+        identity["tier_meaning"],
+    )
+    # The genuine no-coordinate case keeps its wording.
+    unplaced_identity = rf.variant_identity(unplaced)
+    assert unplaced_identity is not None
+    assert unplaced_identity["tier_label"] == rf.NOMENCLATURE_TIERS["C"][0]
+    assert rf.nomenclature_legend(unplaced)[0]["meaning"] == rf.NOMENCLATURE_TIERS["C"][1]
+
+
+def test_kestrel_row_help_says_one_edit_in_a_pair_frame_and_advntr_position_differs() -> None:
+    """A Kestrel row is one edit in a 120 bp pair frame; the adVNTR Position is within its repeat unit."""
+    assert "do not reconstruct" in rf.COLUMN_HELP["ALT"]
+    assert "left-named motif (61-120)" in rf.COLUMN_HELP["Position"]
+    assert "may differ" in rf.COLUMN_HELP["Motif"]
+
+    markup = rf.annotate_table_columns(
+        "<table><thead><tr><th>Position</th><th>REF</th></tr></thead></table>",
+        ["Position", "REF"],
+        column_help=rf.ADVNTR_COLUMN_HELP,
+    )
+    assert f'title="{rf.ADVNTR_COLUMN_HELP["Position"]}">Position</th>' in markup
+    assert "Repeat Unit column" in markup
+    assert f'title="{rf.COLUMN_HELP["REF"]}">REF</th>' in markup
+
+
 def test_legacy_named_delins_retains_qualified_name_presentation() -> None:
     """Archived runs with explicit positional names (e.g. 55delinsAT) retain qualified name."""
     legacy_row = {
@@ -1656,7 +1700,7 @@ def test_presentation_names_each_current_evidence_unit_truthfully() -> None:
     )
     assert rf.COLUMN_HELP["Depth (Variant)"] == "Kestrel alternate-allele k-mer-path depth."
     assert rf.COLUMN_HELP["Depth (Region)"] == "Kestrel total k-mer depth across the active region."
-    assert rf.COLUMN_HELP["ALT"] == "The alternate allele reported by the caller."
+    assert rf.ADVNTR_COLUMN_HELP["ALT"] == "The alternate allele reported by the caller."
     assert rf.COLUMN_HELP["Supporting Reads"] == "Reads adVNTR counted in support of this call."
 
 
