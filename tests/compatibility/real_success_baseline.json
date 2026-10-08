@@ -4062,6 +4062,44 @@
       "provenance_commit": "d89b021e9e1b764bf6d99089e88ba3895c7c619c",
       "extends": "2.0.44",
       "report_overrides": []
+    },
+    {
+      "version": "2.0.46",
+      "provenance_commit": "b160e0833d87655f9b7f18654719a1ddc7ec264c",
+      "extends": "2.0.45",
+      "report_overrides": [],
+      "summary_steps_overrides": [
+        {
+          "suite": "cram_tests",
+          "test_name": "b178_hg19_original_derived_mixed",
+          "steps": [
+            "BAM Header Parsing",
+            "CRAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        {
+          "suite": "cram_tests",
+          "test_name": "b178_hg19_reference_compressed_mixed",
+          "steps": [
+            "BAM Header Parsing",
+            "CRAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        {
+          "suite": "cram_tests",
+          "test_name": "b178_hg19_remapped_pure_paired",
+          "steps": [
+            "BAM Header Parsing",
+            "CRAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        }
+      ]
     }
   ]
 }

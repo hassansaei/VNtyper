@@ -229,6 +229,21 @@ def test_a_cram_input_validates_with_the_working_directory(tmp_path: Path, monke
     assert _cwd_of(harness, "validate_bam_file") == expected
 
 
+def test_a_cram_run_parses_its_header_and_records_the_step(tmp_path: Path) -> None:
+    """#342: the header step was BAM-only, so every CRAM report said assembly "not recorded"."""
+    patient_dir = tmp_path / "patient"
+    patient_dir.mkdir()
+    cram = patient_dir / "in.cram"
+    cram.touch()
+    out = tmp_path / "run" / "out"
+
+    harness = run_pipeline_under_harness(out, bam=None, cram=str(cram))
+
+    assert harness.stages["parse_header_pipeline_info"].call_count == 1
+    steps = [step["step"] for step in json.loads((out / "pipeline_summary.json").read_text())["steps"]]
+    assert steps[:2] == ["BAM Header Parsing", "CRAM to FASTQ Conversion"]
+
+
 def test_validate_bam_file_receives_the_configured_samtools(tmp_path: Path) -> None:
     """F1: the pipeline binds config's samtools path into the validator callback."""
     config = copy.deepcopy(MINIMAL_CONFIG)
