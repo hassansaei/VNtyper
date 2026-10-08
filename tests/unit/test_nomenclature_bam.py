@@ -911,3 +911,36 @@ def test_refine_preserves_selected_delins_when_bam_reports_different_event() -> 
     assert refined.net_length == 1
     assert "caller-disagreement" in refined.flags
     assert refined.source == "kestrel_vcf"
+
+
+def test_unit_sequences_spell_the_deepest_haplotypes_with_the_call_length_change(tmp_path: Path) -> None:
+    """Records are chosen by net length change and depth, and clipped to the affected unit."""
+    bam = _write_bam(
+        tmp_path / "output.bam",
+        [
+            # Starts in the first unit: only its 31 bases from position 61 on belong to the second.
+            _HaplotypeRecordSpec("deep", 50, "20=1I20=", 9),
+            _HaplotypeRecordSpec("shallow", 60, "30=1I30=", 5),
+            # A deeper record with another length change is a different allele.
+            _HaplotypeRecordSpec("deletion", 60, "30=1D29=", 99),
+        ],
+    )
+    with BamRescuer(bam) as rescuer:
+        assert rescuer.unit_sequences("K-J", 67, 1, 60) == ("A" * 31,)
+        assert rescuer.unit_sequences("K-J", 67, -1, 60) == ("A" * 59,)
+        assert rescuer.unit_sequences("K-J", 67, 2, 60) == ()
+        assert rescuer.unit_sequences("missing", 67, 1, 60) == ()
+
+
+def test_equally_deep_haplotypes_are_all_returned(tmp_path: Path) -> None:
+    """One edit resolved in two downstream contexts has no single winner to prefer."""
+    bam = _write_bam(
+        tmp_path / "output.bam",
+        [_HaplotypeRecordSpec("a", 60, "30=1I30=", 9), _HaplotypeRecordSpec("b", 60, "10=1I20=", 9)],
+    )
+    with BamRescuer(bam) as rescuer:
+        assert set(rescuer.unit_sequences("K-J", 67, 1, 60)) == {"A" * 61, "A" * 31}
+
+
+def test_unit_sequences_are_empty_without_a_readable_bam(tmp_path: Path) -> None:
+    assert BamRescuer(tmp_path / "absent.bam").unit_sequences("K-J", 67, 1, 60) == ()

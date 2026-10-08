@@ -637,6 +637,54 @@ class BamRescuer:
         records, start, end = fetched
         return self._compatibility_consensus(records, start, end, contig, position)
 
+    def unit_sequences(self, contig: str, position: int, net_length: int, unit_length: int) -> tuple[str, ...]:
+        """Spell the deepest haplotypes carrying the call, inside the affected repeat unit.
+
+        Records are matched on the call's net length change, never on its position:
+        Kestrel may align the same sequence one base either side of the VCF anchor.
+
+        Args:
+            contig: Pair reference name from ``output.bed``.
+            position: 1-based locus position; selects which unit of the pair.
+            net_length: Net length change of the call.
+            unit_length: Length of one repeat unit of the pair reference.
+
+        Returns:
+            Genomic-plus query bases aligned inside that unit, one string per
+            distinct sequence at the greatest minimum k-mer depth; empty when the BAM
+            is unreadable or no record carries the length change. Equally deep
+            haplotypes are all returned: the same edit is routinely resolved in more
+            than one downstream motif context.
+        """
+        handle = self._open()
+        if handle is None:
+            return ()
+        unit_start = (position - 1) // unit_length * unit_length
+        try:
+            fetched = list(handle.fetch(contig, unit_start, unit_start + unit_length))
+        except (KeyError, ValueError) as error:
+            logger.debug("haplotype sequence skipped; %s:%s unavailable: %s", contig, position, error)
+            return ()
+        self.fetches += 1
+        deepest: dict[str, int] = {}
+        for record in fetched:
+            if record.cigartuples is None or record.query_sequence is None:
+                continue
+            if sum(n if op == 1 else -n for op, n in record.cigartuples if op in (1, 2)) != net_length:
+                continue
+            bases: list[str] = []
+            reference = record.reference_start
+            for query, aligned in record.get_aligned_pairs():
+                # An inserted base has no reference position; it belongs to the base before it.
+                reference = aligned if aligned is not None else reference
+                if query is not None and unit_start <= reference < unit_start + unit_length:
+                    bases.append(record.query_sequence[query])
+            sequence = "".join(bases)
+            depth = minimum_kmer_depth(record)
+            deepest[sequence] = max(deepest.get(sequence, -1), -1 if depth is None else depth)
+        top = max(deepest.values(), default=-1)
+        return tuple(sequence for sequence, depth in deepest.items() if depth == top)
+
     def rescue_with_identity_evidence(
         self,
         contig: str,

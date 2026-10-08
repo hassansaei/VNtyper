@@ -406,6 +406,7 @@ def build_identity_reconciliation_observations(
     *,
     artifact_evidence: ArtifactEvidence,
     bam_translations: Sequence[IdentityTranslation | None] | None = None,
+    haplotype_verified: Sequence[bool] | None = None,
 ) -> tuple[IdentityReconciliationObservation, ...] | None:
     """Adapt current caller rows to typed identity observations without I/O.
 
@@ -422,6 +423,10 @@ def build_identity_reconciliation_observations(
         bam_translations: Optional complete-candidate bindings for BAM calls. A
             binding remains Kestrel-internal evidence and does not create another
             caller or representation.
+        haplotype_verified: Per Kestrel row, whether its deepest resolved haplotype
+            spells canonical X carrying the row's identity. Divergence and gates
+            unioned over equivalent representations describe other pair references,
+            not the observed molecule, so a verified row carries neither.
 
     Returns:
         Typed observations, or ``None`` for a deliberate pre-A3 legacy artifact.
@@ -448,13 +453,16 @@ def build_identity_reconciliation_observations(
         raise ValueError("adVNTR identity context is misaligned with its display calls")
     if bam_translations is not None and len(bam_translations) != len(bam_calls):
         raise ValueError("BAM identity bindings are misaligned with BAM display calls")
+    if haplotype_verified is not None and len(haplotype_verified) != len(kestrel_rows):
+        raise ValueError("Haplotype verification is misaligned with Kestrel rows")
     if not isinstance(artifact_evidence, ArtifactEvidence):
         raise ValueError("Identity reconciliation requires verified adVNTR artifact evidence")
 
     observations: list[IdentityReconciliationObservation] = []
     presentation_call_index = 0
-    for row, call in zip(kestrel_rows, vcf_calls, strict=True):
+    for row_index, (row, call) in enumerate(zip(kestrel_rows, vcf_calls, strict=True)):
         persisted = parse_selected_candidate_cells(row)
+        verified = haplotype_verified is not None and haplotype_verified[row_index]
         row_key = RawRepresentationKey(
             "kestrel",
             (
@@ -473,8 +481,9 @@ def build_identity_reconciliation_observations(
         if call is None:
             continue
         translation = persisted.translation
-        if translation.identity is not None and translation.context_diverges != persisted.group_context_diverges:
-            translation = IdentityTranslation(translation.identity, "resolved", None, persisted.group_context_diverges)
+        context_diverges = persisted.group_context_diverges and not verified
+        if translation.identity is not None and translation.context_diverges != context_diverges:
+            translation = IdentityTranslation(translation.identity, "resolved", None, context_diverges)
         observations.append(
             _make_observation(
                 call,
@@ -482,7 +491,7 @@ def build_identity_reconciliation_observations(
                 known_variant_names,
                 kmer_depth=kmer_depth,
                 extra_flags=persisted.flags,
-                blocking_gates=persisted.blocking_gates,
+                blocking_gates=frozenset() if verified else persisted.blocking_gates,
                 presentation_call_index=presentation_call_index,
             )
         )

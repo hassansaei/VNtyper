@@ -44,7 +44,7 @@ Tiers govern emission rules for variant reporting:
 
 | Tier | Criteria | Output format |
 |---|---|---|
-| **A** | Two independent callers agree after normalisation, motif context matches the canonical unit, and each source meets its support threshold | Bare name, e.g. `59dupC` |
+| **A** | Two independent callers agree after normalisation, Kestrel's deepest resolved haplotype spells the canonical unit carrying the name, and each source meets its support threshold | Bare name, e.g. `59dupC` |
 | **B** | A variant name is resolved, but one or more Tier A conditions are unmet | Variant name annotated with Tier B and disqualifying flags |
 | **C** | Allele sequence cannot be resolved, or the two callers each computed a name and the names describe different event classes | `frameshift +1, allele undetermined` (no position at all); under disagreement both caller names stay visible beside it |
 
@@ -146,10 +146,21 @@ Runs snapshot governing evidence at `provenance/advntr_artifact_evidence.json` a
 
 Custom decision profiles can be selected via `--decision-profile`. Fixed safety thresholds remain constant across all profiles: BAM flank window 8, thin haplotype record support 3, Kestrel Tier A alternate k-mer-path depth 5, adVNTR Tier A sequencing read support 5.
 
+## The resolved haplotype decides the sequence
+
+A Kestrel result row is one edit of a resolved haplotype, written against one of many motif-pair references. The haplotype may differ from that motif at other bases, and the same edit is usually written on dozens of pairs, so neither the row nor the set of equivalent rows states which sequence was observed. The haplotype records in `output.bam` do. For each positive Kestrel row, the deepest record carrying the call's net length change is read inside the affected 60 bp unit, and one question is asked of it: does this sequence occur in the canonical unit carrying a given name, and not in the unedited canonical unit? A sequence that passes necessarily spans the edit. It must be at least twice the BAM flank plus one base long (17 by default).
+
+The answer is used twice:
+
+- **Tier A.** When the haplotype spells the canonical unit carrying the Kestrel name, `motif-context-diverges` and the gates unioned over equivalent representations no longer hold the name back: they describe other pair references, not the molecule. When it does not, both still apply.
+- **Disagreements of description.** When the callers disagree and the haplotype spells the canonical unit carrying the adVNTR name, and not the Kestrel name, both callers saw one molecule. The reconciled name is adVNTR's, never above Tier B, without `caller-disagreement`, and the note says why it differs from the Kestrel name beside it. A haplotype that spells neither name, or the Kestrel name, or more than one adVNTR name, changes nothing.
+
+On the 200-carrier development simulation this moved the projection from 154 displayed, 136 exact and 18 wrong to 162, 151 and 11, with 90 names at Tier A, all exact, and no control finding. That corpus is development evidence, not held-out validation.
+
 ## A known limitation
 
 Nomenclature names are projected onto the canonical unit. When the motif assigned by the caller diverges from the canonical unit, the projection may misstate the event word in Tier B calls (for example, reading a duplication as an insertion). Such variants carry `motif-context-diverges`, preventing promotion to Tier A. Positions and ambiguity intervals remain unaffected.
 
 ## What this does and does not fix
 
-Normalisation fixes description-level discrepancies where callers describe one allele in different coordinate systems. It cannot correct allele-level errors where a caller misidentifies the underlying sequence. Discrepant sequence calls receive Tier C (`allele undetermined`). Assigning variants to specific repeat unit copies within the array requires long-read sequencing.
+Normalisation fixes description-level discrepancies where callers describe one allele in different coordinate systems, and the haplotype check above resolves those where Kestrel's projection onto the canonical unit names another allele than its own haplotype spells. Neither can correct an allele-level error where a caller misidentifies the underlying sequence, and a variant in a repeat unit whose sequence is no single edit of the canonical unit has no name on it. Those receive Tier C (`allele undetermined`). Assigning variants to specific repeat unit copies within the array requires long-read sequencing.

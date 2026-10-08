@@ -294,15 +294,28 @@ DELINS_NO_KESTREL_RESULT_KEYS = frozenset(
     }
 )
 PAIR_4092_KEY = "experiment2_atypical/pair_4092"
-PRA_CURRENT_TIER_FINGERPRINT = "a5271e8eed5a69cc391e4f95dc276c6827b8f25d47601890b54d99c2035939ef"
+PRA_CURRENT_TIER_FINGERPRINT = "0f131b46a05e618ca565ed9d78401f62b3e2828da20feddb2bd92ad84d8d7f74"
+#: Disagreements of description that the Kestrel haplotype resolves to the adVNTR name.
+HAPLOTYPE_CONCORDANT_NEW_DISPLAY_KEYS = frozenset(
+    {
+        "experiment2_atypical/pair_4000",
+        "experiment2_atypical/pair_4006",
+        "experiment2_atypical/pair_4051",
+        "experiment2_atypical/pair_4052",
+        "experiment2_atypical/pair_4054",
+        "experiment2_atypical/pair_4055",
+        "experiment2_atypical/pair_4056",
+        "experiment2_atypical/pair_4064",
+    }
+)
 PRA_IDENTITY_OUTCOME_FINGERPRINT = "0b9b54eb0cf48a03b302a56c5170344228a471deaee628e1c48eac16a51cc9a3"
 PRA_PUBLIC_TRUTH_IDENTITY_FINGERPRINT = "bd8f8b56cf8d5516affcff6116b6509213ecfdd4e32d5bdaa7efed0c35369ce9"
 PRA_BAM_ELIGIBLE_FINGERPRINT = "0baf09e74569ed1e51710c8a2f844baab5ed015a96e32751a3f0a14d5f53b4b5"
 PRA_BAM_FETCH_FINGERPRINT = "ec9f859ab3c2ad78399ee373a708a15d8aa8b4c09b8a0f134a6f2420947fa72f"
 PRA_COMPLETE_BAM_FINGERPRINT = "a90dcdf5fa13873f29f272d30b7c7de3fe9b4ac39f9f0dad8b29e1dbf5d12839"
 PRA_PUBLIC_IDENTITY_QUARTET_FINGERPRINT = "960fe7316a7f5f1d4de684f6f5c4ef5510a965e63face10d504b4a2ac9d33e32"
-PRB_POLICY_STABLE_PUBLIC_FINGERPRINT = "b5344a0a1946c3d428ac1a6c8c648eec5182aa3dbcbe8e1ea1a93d9bb9027872"
-PRB_UNAFFECTED_PUBLIC_FINGERPRINT = "a5eeecd5def795b5cc4877ec96537525b8712319a2206f2a6e85aa06b36e1a91"
+PRB_POLICY_STABLE_PUBLIC_FINGERPRINT = "34be8ac286001bd662035c828ff4062af0e75eb4831b4d80cb51379acfc38dfd"
+PRB_UNAFFECTED_PUBLIC_FINGERPRINT = "32908722a4b33b34eea043bd038cb0d0a1cb259c13983f53e5a0cb07249e97fb"
 PRB_EXPECTED_EXPLANATION_FLAGS = {
     "experiment2_atypical/pair_4010/mutated": "known-variant",
     "experiment2_atypical/pair_4012/mutated": (
@@ -978,23 +991,29 @@ def test_pr_a_measured_identity_policy_baseline_is_literal(
 ) -> None:
     """Pin policy deltas separately from the frozen Phase-1 caller projection."""
     observed = uut_replay.corpus
-    expected_total = DisplayCounts(displayed=154, exact=136, wrong=18)
-    assert observed.total == corpus.total == expected_total
+    assert corpus.total == DisplayCounts(displayed=154, exact=136, wrong=18)
+    # The resolved haplotype decides what the row cannot: it lifts a name it spells on X
+    # to Tier A, and names a disagreement of description after the sequence both callers saw.
+    assert observed.total == DisplayCounts(displayed=162, exact=151, wrong=11)
     assert observed.by_tier == {
-        "A": DisplayCounts(0, 0, 0),
-        "B": expected_total,
+        "A": DisplayCounts(90, 90, 0),
+        "B": DisplayCounts(72, 61, 11),
         "C": DisplayCounts(0, 0, 0),
     }
-    assert {tier: len(keys) for tier, keys in observed.tier_keys.items()} == {"A": 0, "B": 154, "C": 0}
+    assert {tier: len(keys) for tier, keys in observed.tier_keys.items()} == {"A": 90, "B": 72, "C": 0}
     assert policy_projection_oracle.sample_sets_fingerprint(observed.tier_keys) == PRA_CURRENT_TIER_FINGERPRINT
-    assert frozenset().union(*observed.tier_keys.values()) == frozenset().union(*corpus.tier_keys.values())
+    assert (
+        frozenset().union(*observed.tier_keys.values())
+        == frozenset().union(*corpus.tier_keys.values()) | HAPLOTYPE_CONCORDANT_NEW_DISPLAY_KEYS
+    )
+    assert HAPLOTYPE_CONCORDANT_NEW_DISPLAY_KEYS.isdisjoint(frozenset().union(*corpus.tier_keys.values()))
     assert observed.control_findings == corpus.control_findings == 0
 
     assert observed.identity_on_truth_exact_names == IdentityCounts(resolved=241, exact=241, wrong=0)
     assert observed.identity_on_truth_exact_names_by_tier == {
-        "A": IdentityCounts(0, 0, 0),
-        "B": IdentityCounts(230, 230, 0),
-        "C": IdentityCounts(11, 11, 0),
+        "A": IdentityCounts(180, 180, 0),
+        "B": IdentityCounts(58, 58, 0),
+        "C": IdentityCounts(3, 3, 0),
     }
     assert {outcome: len(keys) for outcome, keys in observed.identity_outcome_keys.items()} == {
         "agreement": 98,

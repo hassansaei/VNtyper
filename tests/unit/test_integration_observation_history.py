@@ -1,4 +1,4 @@
-"""Immutable released observations and the unchanged 2.0.43 and 2.0.44 successors."""
+"""Immutable released observations and the unchanged 2.0.43 to 2.0.45 successors."""
 
 import copy
 import json
@@ -51,7 +51,7 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
     assert json.dumps(manifest["contracts"], sort_keys=True, separators=(",", ":")) == json.dumps(
         base["contracts"], sort_keys=True, separators=(",", ":")
     )
-    assert observations[:-2] == [
+    assert observations[:-3] == [
         {
             "version": "2.0.24",
             "provenance_commit": "f9e57f73e10d88d0c27cc4c4e8501c892594f0db",
@@ -228,7 +228,7 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
             "version": "2.0.42",
             "provenance_commit": "22ef08be4b675835fdda26d49bdc4537d94069f8",
             "extends": "2.0.41",
-            "report_overrides": observations[-3]["report_overrides"],
+            "report_overrides": observations[-4]["report_overrides"],
             "coverage_qc_overrides": [
                 {"suite": "bam_tests", "test_name": "example_7a61_hg19_subset_fast", "coverage_qc": "REDUCED"}
             ],
@@ -242,7 +242,7 @@ def test_issue_293_preserves_history_and_pins_the_shipped_report_observation() -
     # 2.0.42 reworded every message for a call, the two #266 subthreshold messages and the
     # plain Kestrel-only negative, so each real success that asserts one carries an
     # override, and each override is what the live declaration now asserts.
-    reworded = observations[-3]["report_overrides"]
+    reworded = observations[-4]["report_overrides"]
     reworded_identities = {(row["suite"], row["test_name"]) for row in reworded}
     assert len(reworded) == 24
     assert expected_identities <= reworded_identities
@@ -267,14 +267,14 @@ def test_release_2043_inherits_all_2042_outcomes_without_overrides() -> None:
     """A tooling-only release preserves every effective real-data expectation."""
     manifest = json.loads(Path("tests/compatibility/real_success_baseline.json").read_text())
     resources = json.loads(Path("tests/test_data_config.json").read_text())
-    assert manifest["observation_sets"][-2] == {
+    assert manifest["observation_sets"][-3] == {
         "version": "2.0.43",
         "provenance_commit": "19f3bc6edd447683f5d0f8eea6a76aeda4ec67dc",
         "extends": "2.0.42",
         "report_overrides": [],
     }
     current = copy.deepcopy(manifest)
-    current["observation_sets"].pop()
+    del current["observation_sets"][-2:]
     previous = copy.deepcopy(current)
     previous["observation_sets"].pop()
     assert effective_contracts(current, validate_manifest(current, resources), "2.0.43") == effective_contracts(
@@ -286,14 +286,33 @@ def test_release_2044_inherits_all_2043_outcomes_without_overrides() -> None:
     """A report-wording and logging release preserves every effective real-data expectation."""
     manifest = json.loads(Path("tests/compatibility/real_success_baseline.json").read_text())
     resources = json.loads(Path("tests/test_data_config.json").read_text())
-    assert manifest["observation_sets"][-1] == {
+    assert manifest["observation_sets"][-2] == {
         "version": "2.0.44",
         "provenance_commit": "7f035392f3efbd6055b39b80dddcd0cafde87ead",
         "extends": "2.0.43",
         "report_overrides": [],
     }
+    current = copy.deepcopy(manifest)
+    current["observation_sets"].pop()
+    previous = copy.deepcopy(current)
+    previous["observation_sets"].pop()
+    assert effective_contracts(current, validate_manifest(current, resources), "2.0.44") == effective_contracts(
+        previous, validate_manifest(previous, resources), "2.0.43"
+    )
+
+
+def test_release_2045_inherits_all_2044_outcomes_without_overrides() -> None:
+    """A nomenclature-reconciliation release preserves every effective real-data expectation."""
+    manifest = json.loads(Path("tests/compatibility/real_success_baseline.json").read_text())
+    resources = json.loads(Path("tests/test_data_config.json").read_text())
+    assert manifest["observation_sets"][-1] == {
+        "version": "2.0.45",
+        "provenance_commit": "d89b021e9e1b764bf6d99089e88ba3895c7c619c",
+        "extends": "2.0.44",
+        "report_overrides": [],
+    }
     previous = copy.deepcopy(manifest)
     previous["observation_sets"].pop()
-    assert effective_contracts(manifest, validate_manifest(manifest, resources), "2.0.44") == effective_contracts(
-        previous, validate_manifest(previous, resources), "2.0.43"
+    assert effective_contracts(manifest, validate_manifest(manifest, resources), "2.0.45") == effective_contracts(
+        previous, validate_manifest(previous, resources), "2.0.44"
     )
