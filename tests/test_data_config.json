@@ -2335,6 +2335,7 @@
         },
         "pipeline_summary_assertions": {
           "steps": [
+            "BAM Header Parsing",
             "CRAM to FASTQ Conversion",
             "Coverage Calculation",
             "Kestrel Genotyping"
@@ -2403,6 +2404,7 @@
         },
         "pipeline_summary_assertions": {
           "steps": [
+            "BAM Header Parsing",
             "CRAM to FASTQ Conversion",
             "Coverage Calculation",
             "Kestrel Genotyping"
@@ -2470,6 +2472,7 @@
         },
         "pipeline_summary_assertions": {
           "steps": [
+            "BAM Header Parsing",
             "CRAM to FASTQ Conversion",
             "Coverage Calculation",
             "Kestrel Genotyping"
