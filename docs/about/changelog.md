@@ -6,6 +6,13 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.47 (2026-10-09)
+
+### Concordance follows the reconciled name
+
+- **Resolved disagreements count as concordant**: since 2.0.45 a disagreement of description is reconciled to the allele both callers saw, but the report still printed `Concordance: No match` beside the agreed name. The chip came from the cross-match alone, which compares each caller's raw inserted or deleted bases in its own frame. It now also reads `Match` when reconciliation named adVNTR's allele on a Kestrel row at Tier A or B without `caller-disagreement`, and the grade is `Finding, corroborated` accordingly. The sentence then reads "Kestrel and adVNTR name one allele after reconciliation; their raw records are written differently."
+- **Unchanged**: `cross_match_results.tsv`, result rows, tiers and thresholds. A sample whose callers still disagree keeps `No match`.
+
 ## 2.0.46 (2026-10-08)
 
 ### CRAM runs record the header step
