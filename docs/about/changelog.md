@@ -29,12 +29,12 @@ A Kestrel result row is one edit of a haplotype written on one of many motif pai
 
 - **Tier A is reachable again**: a name both callers agree on reaches Tier A when Kestrel's deepest haplotype spells the canonical unit carrying it. `motif-context-diverges` and the gates unioned over equivalent representations then no longer apply, because they describe other pair references. On the development simulation 90 names reach Tier A, all 90 exact; through 2.0.44 none did.
 - **Disagreements of description are named**: when the callers disagree and that haplotype spells the canonical unit carrying the adVNTR name and not the Kestrel name, the reconciled name is adVNTR's at Tier B, without `caller-disagreement`, with a note stating the reason. Each caller's own name stays beside it. On the development simulation 26 disagreements resolve this way, all to the simulated allele.
-- **Measured projection**: 154 displayed, 136 exact, 18 wrong becomes 162, 151 and 11 on the 200 simulated carriers; no control gains a finding. On four real exomes a `59dupC` reaches Tier A, a `58_59insG` that Kestrel's projection named `59dupC` is named correctly, and a variant in a G-type unit that neither caller names correctly stays `allele undetermined`.
+- **Measured projection**: 154 displayed, 136 exact, 18 wrong becomes 162, 151 and 11 on the 200 simulated carriers; no control gains a finding.
 - **Unchanged**: detection, Kestrel and adVNTR thresholds, each caller's own name, the decision profile and screening messages. The corpus is development evidence, not held-out validation.
 
 ## 2.0.44 (2026-10-08)
 
-### Report and log corrections from a four-sample exome review
+### Report and log corrections
 
 - **Tier C under caller disagreement**: when the two callers describe different events, the tier label reads `callers disagree` and its explanation says so. It no longer states that no coordinate could be computed. The genuine no-coordinate case keeps its wording.
 - **Column help**: the adVNTR table's `Position` is described as a position within the adVNTR repeat unit, not within the Kestrel motif pair. The Kestrel `Motif`, `Position` and `ALT` help now say that a row is one edit of a resolved haplotype in a 120 bp pair frame, so the four fields alone do not reconstruct the allele sequence.

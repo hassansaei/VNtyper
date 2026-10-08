@@ -2035,7 +2035,7 @@ def _write_haplotype_scenario(
     frame = pd.read_csv(kestrel, sep="\t", dtype=str, keep_default_na=False)
     frame.loc[0, ["Motifs", "REF", "ALT", "Motif_fasta", "POS_fasta"]] = [motifs, reference, alternate, motifs, "67"]
     frame.loc[0, ["__Identity_Raw_Representation_Key", "__Identity_Selected_Raw_Representation_Key"]] = raw_key
-    # As on real exomes: other representations of the same edit diverge and fail gates.
+    # Other representations of the same edit diverge and fail gates.
     frame.loc[0, "__Identity_Equivalent_Representation_Count"] = "2"
     frame.loc[0, "__Identity_Group_Blocking_Gates"] = '["motif_filter_pass"]'
     frame.loc[0, "__Identity_Group_Context_Diverges"] = "true"
