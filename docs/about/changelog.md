@@ -6,6 +6,14 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.46 (2026-10-08)
+
+### CRAM runs record the header step
+
+- **Header parsing for CRAM input** (#342): `--cram` runs now record the `BAM Header Parsing` step from the header the assembly guard already read. The step was recorded for BAM input only, so every CRAM report printed `Assembly detected from BAM header: not recorded by this run`, the aligner warning was never evaluated, and `vntyper cohort` showed `N/A` for assembly and alignment pipeline. A CRAM summary now starts with `BAM Header Parsing`, and `fastq_bam_processing/pipeline_info.json` is written for CRAM as for BAM.
+- **Integration compatibility**: observation sets accept `summary_steps_overrides`, which replace a case's recorded step list and nothing else. The three CRAM contracts frozen since 2.0.11 are unchanged; the 2.0.46 observation states their new step list.
+- **Research pipeline decisions**: No caller thresholds, result rows, tiers or screening messages changed.
+
 ## 2.0.45 (2026-10-08)
 
 ### Allele names decided by the resolved haplotype

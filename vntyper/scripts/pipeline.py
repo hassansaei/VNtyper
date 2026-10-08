@@ -805,22 +805,22 @@ def run_pipeline(
                     donor_summary_path.unlink()
 
         if input_type in ["BAM", "CRAM"]:
-            if input_type == "BAM":
-                header_parse_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                # Re-read a failed guard from the same proven alignment view.
-                header = alignment_header or extract_bam_header(alignment_plan.view_path, config)
-                parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]), config)
-                header_parse_end = datetime.now(timezone.utc).replace(tzinfo=None)
-                record_step(
-                    summary,
-                    STEP_BAM_HEADER,
-                    str(Path(dirs["fastq_bam_processing"]) / "pipeline_info.json"),
-                    "json",
-                    "parse_header_pipeline_info(extracted header)",
-                    header_parse_start,
-                    header_parse_end,
-                    write_summary_path=summary_file_path,
-                )
+            header_parse_start = datetime.now(timezone.utc).replace(tzinfo=None)
+            # A CRAM header carries the same assembly and aligner lines and reads without a
+            # reference (#342). Re-read a failed guard from the same proven alignment view.
+            header = alignment_header or extract_bam_header(alignment_plan.view_path, config)
+            parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]), config)
+            header_parse_end = datetime.now(timezone.utc).replace(tzinfo=None)
+            record_step(
+                summary,
+                STEP_BAM_HEADER,
+                str(Path(dirs["fastq_bam_processing"]) / "pipeline_info.json"),
+                "json",
+                "parse_header_pipeline_info(extracted header)",
+                header_parse_start,
+                header_parse_end,
+                write_summary_path=summary_file_path,
+            )
 
             conversion_step = STEP_BAM_TO_FASTQ if input_type == "BAM" else STEP_CRAM_TO_FASTQ
             can_reuse_conversion = (

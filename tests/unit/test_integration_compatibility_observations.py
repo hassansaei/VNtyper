@@ -479,3 +479,77 @@ def test_a_coverage_qc_override_needs_a_coverage_qc_assertion_to_replace() -> No
 
     with pytest.raises(ValueError, match="no coverage_qc assertion to replace"):
         module.effective_contracts(manifest, {("bam_tests", "case-a"): contract}, VERSION)
+
+
+_CRAM_STEPS = ["CRAM to FASTQ Conversion", "Coverage Calculation", "Kestrel Genotyping"]
+
+
+def _contract_with_summary_steps() -> dict[str, Any]:
+    contract = _contract()
+    contract["outcomes"]["summary"] = {"steps": list(_CRAM_STEPS), "parsed_results": _CRAM_STEPS[1:]}
+    return contract
+
+
+def test_effective_contracts_applies_summary_steps_overrides_to_the_step_list_only() -> None:
+    """A release that records one more step moves the step list, never the frozen contract (#342)."""
+    module = _module()
+    assert module is not None
+    contract = _contract_with_summary_steps()
+    original = copy.deepcopy(contract["outcomes"]["summary"])
+    steps = ["BAM Header Parsing", *_CRAM_STEPS]
+    manifest = _v2(contract)
+    manifest["observation_sets"][0]["summary_steps_overrides"] = [
+        {"suite": "bam_tests", "test_name": "case-a", "steps": steps}
+    ]
+
+    effective = module.effective_contracts(manifest, {("bam_tests", "case-a"): contract}, VERSION)
+
+    assert contract["outcomes"]["summary"] == original
+    assert effective[("bam_tests", "case-a")]["outcomes"]["summary"] == {
+        "steps": steps,
+        "parsed_results": _CRAM_STEPS[1:],
+    }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ("not-a-list", "summary_steps_overrides must be a list"),
+        ([{"suite": "unknown", "test_name": "unknown", "steps": ["a"]}], "refers to unknown contract identity"),
+        ([{"suite": "bam_tests", "test_name": "case-a", "steps": []}], "non-empty list of distinct step names"),
+        ([{"suite": "bam_tests", "test_name": "case-a", "steps": "a"}], "non-empty list of distinct step names"),
+        ([{"suite": "bam_tests", "test_name": "case-a", "steps": ["a", "a"]}], "non-empty list of distinct step names"),
+        ([{"suite": "bam_tests", "test_name": "case-a", "steps": ["a", ""]}], "steps"),
+        ([{"suite": "bam_tests", "test_name": "case-a", "steps": ["a"], "parsed_results": []}], "extra keys"),
+        (
+            [
+                {"suite": "bam_tests", "test_name": "case-a", "steps": ["a"]},
+                {"suite": "bam_tests", "test_name": "case-a", "steps": ["b"]},
+            ],
+            "duplicate summary_steps override",
+        ),
+    ],
+)
+def test_summary_steps_overrides_validations(overrides, message) -> None:
+    """Invalid summary_steps_overrides shapes, step lists, and identities fail closed."""
+    module = _module()
+    assert module is not None
+    manifest = _v2(_contract_with_summary_steps())
+    manifest["observation_sets"][0]["summary_steps_overrides"] = overrides
+
+    with pytest.raises(ValueError, match=message):
+        module.validate_observation_sets(manifest, {("bam_tests", "case-a")})
+
+
+def test_a_summary_steps_override_needs_a_recorded_step_list_to_replace() -> None:
+    module = _module()
+    assert module is not None
+    contract = _contract()
+    contract["outcomes"].pop("summary", None)
+    manifest = _v2(contract)
+    manifest["observation_sets"][0]["summary_steps_overrides"] = [
+        {"suite": "bam_tests", "test_name": "case-a", "steps": ["a"]}
+    ]
+
+    with pytest.raises(ValueError, match="no recorded step list to replace"):
+        module.effective_contracts(manifest, {("bam_tests", "case-a"): contract}, VERSION)
