@@ -2937,6 +2937,10 @@ def test_embedded_log_paths_are_shortened_output_dir_first(monkeypatch) -> None:
     assert generate_report.redact_log_paths(log, "/home/someone/runs/s1") == (
         "wrote <output_dir>/kestrel/output.vcf using ~/ref/hg19.fa"
     )
+    # A sibling that merely shares the prefix is another directory and keeps its own name.
+    assert generate_report.redact_log_paths(
+        "/home/someone/runs/s10/a /home/someone-else/b", "/home/someone/runs/s1"
+    ) == ("~/runs/s10/a /home/someone-else/b")
     # A bare-root home must not rewrite every separator.
     monkeypatch.setenv("HOME", "/")
     assert generate_report.redact_log_paths("/data/x", "/out") == "/data/x"

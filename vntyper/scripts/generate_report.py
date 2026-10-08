@@ -284,7 +284,8 @@ def redact_log_paths(content: str, output_dir: str | os.PathLike[str]) -> str:
     for prefix, token in ((os.path.abspath(output_dir), "<output_dir>"), (os.path.expanduser("~"), "~")):
         # A bare root (HOME=/ in some containers) would rewrite every path separator.
         if prefix.rstrip(os.sep):
-            content = content.replace(prefix, token)
+            # Whole path components only: `/runs/s1` must not rewrite the sibling `/runs/s10`.
+            content = re.sub(re.escape(prefix) + r"(?![\w.-])", token, content)
     return content
 
 
