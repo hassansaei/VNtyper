@@ -11,6 +11,7 @@ import pytest
 
 from vntyper.scripts.alignment_preflight import choose_unmapped_scan, run_preflight
 from vntyper.scripts.alignment_preflight_logs import preflight_log_paths
+from vntyper.scripts.alignment_scan import region_extract_warning
 
 pytestmark = pytest.mark.unit
 
@@ -48,6 +49,49 @@ def test_clean_idxstats_selects_the_indexed_scan(tmp_path: Path) -> None:
         scan = choose_unmapped_scan("/run/view.cram", config, 4, str(tmp_path), "sample")
 
     assert scan == "indexed"
+
+
+REGION_EXTRACT_IDXSTATS = "chr1\t248956422\t5448\t0\nchr2\t242193529\t0\t0\n*\t0\t0\t0\n"
+
+
+@pytest.mark.parametrize(
+    ("idxstats", "expected"),
+    [
+        (
+            REGION_EXTRACT_IDXSTATS,
+            "Input holds reads on a single contig (chr1) of 2 declared and no unmapped reads: it looks like a "
+            "region extract. VNtyper also uses unmapped reads, so depth and variant support here are lower "
+            "bounds; prefer the full BAM/CRAM.",
+        ),
+        ("chr1\t248956422\t5448\t0\nchr2\t242193529\t9\t0\n*\t0\t0\t0\n", None),  # reads on two contigs
+        ("chr1\t248956422\t5448\t0\nchr2\t242193529\t0\t0\n*\t0\t0\t80\n", None),  # unplaced reads kept
+        ("chr1\t248956422\t5448\t3\nchr2\t242193529\t0\t0\n*\t0\t0\t0\n", None),  # placed-unmapped kept
+        ("chr1\t248956422\t5448\t0\n*\t0\t0\t0\n", None),  # single-contig reference
+        ("chr1\t248956422\t0\t0\nchr2\t242193529\t0\t0\n*\t0\t0\t0\n", None),  # no reads at all
+        ("chr1\t20000\tsix\t0\n", None),  # malformed
+    ],
+)
+def test_region_extract_warning_needs_one_contig_with_reads_and_no_unmapped(
+    idxstats: str, expected: str | None
+) -> None:
+    assert region_extract_warning(idxstats) == expected
+
+
+def test_a_region_extract_is_warned_about_once_without_changing_the_scan(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with (
+        patch(
+            "vntyper.scripts.alignment_preflight.capture_command",
+            side_effect=[(True, REGION_EXTRACT_IDXSTATS), (True, "0\n")],
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        scan = choose_unmapped_scan("/run/view.bam", {}, 4, str(tmp_path), "sample", file_format="bam")
+
+    assert scan == "indexed"
+    [record] = [r for r in caplog.records if "region extract" in r.getMessage()]
+    assert record.levelname == "WARNING"
 
 
 def test_zero_placed_cram_with_incomplete_literal_star_fetch_selects_stream(tmp_path: Path) -> None:

@@ -17,6 +17,29 @@ logger = logging.getLogger(__name__)
 CaptureCommand = Callable[[str, str], tuple[bool, str]]
 
 
+def region_extract_warning(idxstats_text: str) -> str | None:
+    """Describe an input that looks like a region extract, from idxstats alone.
+
+    Args:
+        idxstats_text: Complete output of ``samtools idxstats``.
+
+    Returns:
+        The warning when more than one contig is declared, mapped reads sit on exactly
+        one of them and no read is unmapped; otherwise ``None``, also for malformed output.
+    """
+    if parse_idxstats(idxstats_text) != (0, 0):
+        return None
+    rows = [line.split("\t") for line in idxstats_text.splitlines()[:-1]]
+    with_reads = [row[0] for row in rows if int(row[2]) > 0]
+    if len(rows) < 2 or len(with_reads) != 1:
+        return None
+    return (
+        f"Input holds reads on a single contig ({with_reads[0]}) of {len(rows)} declared and no unmapped reads: "
+        "it looks like a region extract. VNtyper also uses unmapped reads, so depth and variant support here "
+        "are lower bounds; prefer the full BAM/CRAM."
+    )
+
+
 def select_unmapped_scan(
     view_path: str,
     config: dict,
@@ -73,4 +96,7 @@ def select_unmapped_scan(
         indexed_count_exit_ok=indexed_count_exit_ok,
     )
     logger.info(f"Selected {scan} unmapped-read scan: {reason}")
+    extract_warning = region_extract_warning(output) if exit_ok else None
+    if extract_warning:
+        logger.warning(extract_warning)
     return scan

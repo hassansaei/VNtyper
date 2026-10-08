@@ -2929,6 +2929,23 @@ def test_empty_present_fastp_json_raises_before_report_output(tmp_path: Path, ca
     assert not (tmp_path / "summary_report.html").exists()
 
 
+def test_embedded_log_paths_are_shortened_output_dir_first(monkeypatch) -> None:
+    """The embedded log copy shows neither the home directory nor the absolute output directory."""
+    monkeypatch.setenv("HOME", "/home/someone")
+    log = "wrote /home/someone/runs/s1/kestrel/output.vcf using /home/someone/ref/hg19.fa"
+
+    assert generate_report.redact_log_paths(log, "/home/someone/runs/s1") == (
+        "wrote <output_dir>/kestrel/output.vcf using ~/ref/hg19.fa"
+    )
+    # A sibling that merely shares the prefix is another directory and keeps its own name.
+    assert generate_report.redact_log_paths(
+        "/home/someone/runs/s10/a /home/someone-else/b", "/home/someone/runs/s1"
+    ) == ("~/runs/s10/a /home/someone-else/b")
+    # A bare-root home must not rewrite every separator.
+    monkeypatch.setenv("HOME", "/")
+    assert generate_report.redact_log_paths("/data/x", "/out") == "/data/x"
+
+
 def test_pipeline_log_failure_returns_failure_message(monkeypatch, caplog) -> None:
     """A log read failure differs from an absent log and remains visible to the user."""
     monkeypatch.setattr(generate_report.os.path, "exists", lambda _path: True)
@@ -4291,8 +4308,8 @@ def test_the_run_time_and_the_render_time_are_both_shown(tmp_path) -> None:
     html = render(tmp_path)
 
     assert _labeled_value(html, "Pipeline run started") == "2020-01-02 03:04:05 UTC"
-    # Both carry a zone, so a reader can subtract one from the other.
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S+", _labeled_value(html, "This report rendered"))
+    # Both are UTC, never the rendering machine's local zone, so one can be subtracted from the other.
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC", _labeled_value(html, "This report rendered"))
 
 
 def test_re_rendering_an_archived_run_does_not_restamp_the_run_time(tmp_path) -> None:

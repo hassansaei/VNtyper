@@ -211,13 +211,12 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
     # from. Detection is fed a single synthesised contig rather than the raw list
     # so that contig order can never influence the verdict; the length -> build
     # table stays in chromosome_utils, which remains the one place that knows it.
+    # `_recognised_builds` does that lookup once per length; its answer is reused here
+    # because detection logs at INFO and a second call printed the build twice.
     chr1_length = chr1_lengths[0] if len(chr1_lengths) == 1 else None
-    if chr1_length is None:
-        detected_build = UNKNOWN
-    else:
-        detected_build = detect_assembly_from_chr1_length([{"name": "chr1", "length": chr1_length}]) or UNKNOWN
-
     recognised = _recognised_builds(chr1_lengths)
+    detected_build = recognised[0][1] if chr1_length is not None and recognised else UNKNOWN
+
     if len({build for _, build in recognised}) > 1:
         # The header contradicts itself. Decided before the declared/detected
         # comparison because no declaration can reconcile it: there is no build
