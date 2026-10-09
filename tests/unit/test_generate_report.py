@@ -2741,6 +2741,44 @@ def test_the_cross_match_state_is_computed_from_the_rows(rows, expected) -> None
     assert is_assessable is True
 
 
+_RECONCILED_ROW = {
+    "Nomenclature": "58_59insG",
+    "Nomenclature_Tier": "B",
+    "Nomenclature_Flags": "known-variant;motif-context-diverges",
+    "Nomenclature_Kestrel": "59dupC",
+    "Nomenclature_adVNTR": "58_59insG",
+}
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({}, True),
+        # Each condition that must hold for two differently written records to count as one allele.
+        ({"Nomenclature_Flags": "caller-disagreement;known-variant"}, False),
+        ({"Nomenclature_Tier": "C", "Nomenclature": "frameshift +1, allele undetermined"}, False),
+        ({"Nomenclature": "59dupC"}, False),
+        ({"Nomenclature_Kestrel": ""}, False),
+        ({"Nomenclature_adVNTR": "", "Nomenclature": ""}, False),
+    ],
+)
+def test_callers_reconciled_to_one_allele_are_concordant_despite_differing_raw_records(changes, expected) -> None:
+    """A resolved disagreement must not sit beside a "No match" chip."""
+    summary = {
+        "steps": [
+            tabular_step(summary_steps.STEP_KESTREL, [{**_RECONCILED_ROW, **changes}]),
+            tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "No"}]),
+        ]
+    }
+
+    message, is_positive, is_assessable = generate_report.build_cross_match_summary(
+        summary, generate_report.load_report_config()
+    )
+
+    assert (is_positive, is_assessable) == (expected, True)
+    assert ("after reconciliation" in message) is expected
+
+
 def test_a_missing_cross_match_step_is_neither_positive_nor_worded() -> None:
     """No step, no section - and the flag must not default to the emphasised state."""
     assert generate_report.build_cross_match_summary({"steps": []}, generate_report.load_report_config()) == (
