@@ -540,12 +540,13 @@ def test_successful_rerun_removes_every_stale_slice_index_before_regenerating_th
     index_candidates = tuple(Path(path) for path in index_candidate_names(str(sliced_bam), "bam"))
     stale_index = run_dir / stale_index_name
     stale_index.write_bytes(b"prior-patient-index")
-    stale_inode = stale_index.stat().st_ino
     commands: list[str] = []
 
     def regenerate_default_index(command, log_file, critical=False, cwd=None):
         commands.append(command)
         if len(commands) == 1:
+            # Removal is proven here, before regeneration. An inode comparison afterwards
+            # cannot prove it: the filesystem may give the new file the freed number.
             assert all(not os.path.lexists(candidate) for candidate in index_candidates)
             (run_dir / "output_sliced.bam.partial").write_bytes(b"fresh-slice")
             index_candidates[0].write_bytes(b"fresh-default-bai")
@@ -566,8 +567,6 @@ def test_successful_rerun_removes_every_stale_slice_index_before_regenerating_th
 
     assert len(commands) == 2
     assert index_candidates[0].read_bytes() == b"fresh-default-bai"
-    if stale_index == index_candidates[0]:
-        assert index_candidates[0].stat().st_ino != stale_inode
     assert all(not candidate.exists() for candidate in index_candidates[1:])
 
 
