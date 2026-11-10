@@ -192,6 +192,36 @@ def _identity_from_summary(sample_dir: Path, fallback: str) -> str:
     return fallback
 
 
+def _directories_with_summary(root: Path) -> list[Path]:
+    """Every directory below ``root`` that holds a ``pipeline_summary.json``.
+
+    ``Path.rglob`` was used here and dropped completed samples without a word: before
+    Python 3.13 it does not descend into symlinked directories, and it swallows the
+    ``OSError`` of a directory it cannot list. A cohort directory of symlinks to the
+    per-sample outputs, or one unreadable sample directory, lost those samples silently.
+    This walk follows symlinks (each real directory once, so a link cycle terminates) and
+    logs every directory it cannot read, so a completed sample is found or named.
+    """
+
+    def unreadable(error: OSError) -> None:
+        logger.warning(
+            f"Cannot read {error.filename} while looking for {PIPELINE_SUMMARY_FILENAME}; "
+            f"any sample below it is NOT in this cohort: {error.strerror or error}"
+        )
+
+    found: list[Path] = []
+    visited: set[Path] = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True, onerror=unreadable):
+        real = Path(dirpath).resolve()
+        if real in visited:
+            dirnames[:] = []
+            continue
+        visited.add(real)
+        if PIPELINE_SUMMARY_FILENAME in filenames:
+            found.append(Path(dirpath))
+    return found
+
+
 def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[DiscoveredSample]:
     """Find the samples one already-resolved input root contains.
 
@@ -228,8 +258,7 @@ def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[Dis
         ]
 
     samples: list[DiscoveredSample] = []
-    for summary_file_path in root.rglob(PIPELINE_SUMMARY_FILENAME):
-        sample_dir = summary_file_path.parent
+    for sample_dir in _directories_with_summary(root):
         logger.info(f"Found {PIPELINE_SUMMARY_FILENAME} in {sample_dir}")
         samples.append(
             DiscoveredSample(

@@ -99,6 +99,37 @@ def test_a_parent_directory_is_searched_recursively(tmp_path) -> None:
     assert [found.directory for found in dirs] == [two, one]
 
 
+def test_a_symlinked_sample_directory_under_a_parent_is_found(tmp_path) -> None:
+    """`Path.rglob` does not follow directory symlinks before Python 3.13, so a cohort
+    directory of links to the per-sample outputs used to lose those samples silently."""
+    real = _write_summary(tmp_path / "elsewhere" / "linked_sample")
+    plain = _write_summary(tmp_path / "cohort" / "plain_sample")
+    (tmp_path / "cohort" / "linked_sample").symlink_to(real, target_is_directory=True)
+    (tmp_path / "cohort" / "loop").symlink_to(tmp_path / "cohort", target_is_directory=True)
+
+    dirs, _ = discover_sample_directories([str(tmp_path / "cohort")])
+
+    assert [found.identity for found in dirs] == ["linked_sample", "plain_sample"]
+    assert dirs[1].directory == plain
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs POSIX permissions as non-root")
+def test_an_unreadable_directory_under_a_parent_is_reported_not_skipped_silently(tmp_path, caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="vntyper.scripts.cohort_inputs")
+    _write_summary(tmp_path / "cohort" / "readable")
+    locked = tmp_path / "cohort" / "locked"
+    _write_summary(locked / "sample")
+    locked.chmod(0)
+    try:
+        dirs, _ = discover_sample_directories([str(tmp_path / "cohort")])
+    finally:
+        locked.chmod(0o755)
+
+    assert [found.identity for found in dirs] == ["readable"]
+    assert f"Cannot read {locked}" in caplog.text
+    assert "NOT in this cohort" in caplog.text
+
+
 def test_a_directory_that_is_itself_a_sample_is_not_also_searched(tmp_path) -> None:
     """The recursive search is the `else` branch, so a sample directory containing
     further samples contributes only itself."""
