@@ -310,6 +310,7 @@ def test_open_directory_closes_after_fstat_failure_without_masking_it(
     directory_identity = (directory_metadata.st_dev, directory_metadata.st_ino)
     real_open = pipeline_job_workspace.os.open
     real_close = pipeline_job_workspace.os.close
+    real_fstat = pipeline_job_workspace.os.fstat
     opened: list[int] = []
     closes: list[int] = []
 
@@ -318,8 +319,12 @@ def test_open_directory_closes_after_fstat_failure_without_masking_it(
         opened.append(descriptor)
         return descriptor
 
-    def failing_fstat(_descriptor: int):
-        raise OSError("directory fstat failed")
+    # Fail only the descriptor under test: pytest >= 9.2 calls os.fstat on its own
+    # capture file after the call phase, before monkeypatch teardown.
+    def failing_fstat(descriptor: int):
+        if descriptor in opened:
+            raise OSError("directory fstat failed")
+        return real_fstat(descriptor)
 
     def failing_close(descriptor: int) -> None:
         closes.append(descriptor)
@@ -356,6 +361,7 @@ def test_open_file_closes_after_fstat_failure_without_masking_it(
     parent_descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
     real_open = pipeline_job_workspace.os.open
     real_close = pipeline_job_workspace.os.close
+    real_fstat = pipeline_job_workspace.os.fstat
     opened: list[int] = []
     closes: list[int] = []
 
@@ -364,8 +370,12 @@ def test_open_file_closes_after_fstat_failure_without_masking_it(
         opened.append(descriptor)
         return descriptor
 
-    def failing_fstat(_descriptor: int):
-        raise OSError("file fstat failed")
+    # Fail only the descriptor under test: pytest >= 9.2 calls os.fstat on its own
+    # capture file after the call phase, before monkeypatch teardown.
+    def failing_fstat(descriptor: int):
+        if descriptor in opened:
+            raise OSError("file fstat failed")
+        return real_fstat(descriptor)
 
     def failing_close(descriptor: int) -> None:
         closes.append(descriptor)

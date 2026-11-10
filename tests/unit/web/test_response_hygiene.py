@@ -101,8 +101,15 @@ def _cohort_with_one_result(client, fake_redis, tmp_path: Path) -> str:
 def _send_response(response) -> bytes:
     """Run one response as ASGI and return its body bytes."""
     messages = []
+    request_sent = False
 
     async def receive():
+        # A connected client sends nothing after its request, so a further receive blocks.
+        # Returning at once made Starlette >= 1.x's disconnect listener spin forever.
+        nonlocal request_sent
+        if request_sent:
+            await asyncio.Event().wait()
+        request_sent = True
         return {"type": "http.request", "body": b"", "more_body": False}
 
     async def send(message):
@@ -422,12 +429,18 @@ def test_cohort_download_removes_the_archive_when_the_send_fails(
         "server": ("testserver", 80),
     }
 
+    request_sent = False
+
     async def receive():
-        """Return the (empty) request body.
+        """Return the (empty) request body, then block like a connected client.
 
         Returns:
             dict: A single complete `http.request` message.
         """
+        nonlocal request_sent
+        if request_sent:
+            await asyncio.Event().wait()
+        request_sent = True
         return {"type": "http.request", "body": b"", "more_body": False}
 
     async def send(message):
