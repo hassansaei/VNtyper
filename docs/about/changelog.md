@@ -4,9 +4,32 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+### Vrbacká 2025 citation and published variant names (decision profile revision 3)
+
+- **Corrected DOI** (#352): every Vrbacká et al. 2025 citation in `known_variants` cited `doi:10.1101/2024.11.14.623419`, an unrelated preprint. It now cites `doi:10.1101/2025.09.06.673538`.
+- **Published names** (#353): three entries were shifted one base 5' by a MucOneUp convention before 0.50.0. `53_54insG` and `53_54insA` become `54_55insG` and `54_55insA`; `57_58insG`, the same allele as `58_59insG`, is removed and `58_59insG` cites Olinger 2020 and Vrbacká 2025; `54dupG`, not in the paper's Table 1, is removed.
+- **Decision profile revision 3**: `known_variants` decides Tier A eligibility, so the packaged profile moves to revision 3. Summaries recorded with revision 2 (2.0.1 to 2.0.47) are still accepted by `vntyper cohort`.
+- **Research pipeline decisions**: A call named `57_58insG`, `53_54insG`, `53_54insA` or `54dupG` is now `representation-of-caller-call` instead of `known-variant` and cannot reach Tier A. On the development simulation 37 rows change only their nomenclature flags and note; no name, tier or call changes. Caller thresholds and screening messages are unchanged.
+
+### Web service: job timing, job summary and keyed pseudonyms
+
+- **Job timing** (#355): `/job-status/{id}/` also returns `submitted_at`, `started_at` and `completed_at` (ISO 8601 UTC, `null` when not recorded).
+- **`GET /job-summary/{id}/`** (#355): returns the run's own `pipeline_summary.json` from the result archive, with the same identifier check, rate limit, file-safety rules and retention as `/download/`.
+- **Keyed pseudonyms** (#355): the usage-statistics caller hash and the donation sample pseudonym are HMAC-SHA256 under `PSEUDONYM_SECRET`. Set one stable value on the API and every worker; unset, each process uses a random key and logs a warning, so unique-user counts overcount. Existing hashes and pseudonyms do not carry over.
+
+### Cohort discovery and input errors
+
+- **Symlinked and unreadable sample directories** (#357): `vntyper cohort` follows directory symlinks below an input root (each real directory once) and logs every directory it cannot read. Before Python 3.13 the recursive search skipped both without a word, so completed samples were missing from the exports.
+- **Empty input layout** (#358): an input with no reads in the target region and no unmapped reads now fails with a message saying so and what to check (region coverage, `--reference-assembly`, a blank or failed library), instead of claiming that reads would be dropped.
+- **Research pipeline decisions**: No caller thresholds, result rows, tiers or screening messages changed.
+
+### Test suite
+
+- **Host- and dependency-independent web tests** (#359): the API tests no longer depend on the host's free disk, and stay green on pytest 9.2 and Starlette 1.10 (an fstat patch leaked into pytest's capture, and an ASGI test client never yielded to Starlette's disconnect listener).
+
 ### Grade and subthreshold state in machine-readable outputs
 
-- **`pipeline_summary.json`**: records `confidence_grade`, the grade the report prints, and `subthreshold_signal` with `state` (`negative_subthreshold` or `none`), `best_depth_score`, `event_count` and `support_count`. The report computes both and re-anchors the summary before rendering, so the printed integrity digest covers them. `vntyper report` never rewrites a supplied summary.
+- **`pipeline_summary.json`** (#356): records `confidence_grade`, the grade the report prints, and `subthreshold_signal` with `state` (`negative_subthreshold` or `none`), `best_depth_score`, `event_count` and `support_count`. The report computes both and re-anchors the summary before rendering, so the printed integrity digest covers them. `vntyper report` never rewrites a supplied summary.
 - **Support count for the subthreshold note**: the signal now carries the alternate-allele read support of the strongest below-floor candidate. A no-call run with a note writes the numbers to `kestrel/subthreshold_signal.json`; the `##` line in `kestrel_result.tsv` is unchanged.
 - **Cohort statistics**: `cohort_stats.csv`, `.tsv` and `.json` append `confidence_grade`, `subthreshold_state`, `subthreshold_best_depth_score`, `subthreshold_event_count` and `subthreshold_support_count` after the existing columns. Summaries written before this release give empty cells.
 - **Research pipeline decisions**: No caller thresholds, result rows, tiers, grades or screening messages changed. A subthreshold candidate is not a call.
