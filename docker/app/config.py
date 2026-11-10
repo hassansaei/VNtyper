@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 from urllib.parse import quote
 
 
@@ -262,3 +263,41 @@ def build_redis_url(host: str, port: int, db: int, password: str | None = None) 
     if not password:
         return f"redis://{host}:{port}/{db}"
     return f"redis://:{quote(password, safe='')}@{host}:{port}/{db}"
+
+
+# ---------------------------------------------------------------------------
+# Pseudonymisation key
+#
+# The usage-statistics caller hash and the donation sample pseudonym are keyed
+# HMAC-SHA256 digests. Without a server-side key, sha256("<ip>-<agent>") can be
+# reversed by enumerating IPv4 space, so the key is never a source-tree default.
+# ---------------------------------------------------------------------------
+
+PSEUDONYM_SECRET_ENV_VAR = "PSEUDONYM_SECRET"
+_EPHEMERAL_PSEUDONYM_KEY = secrets.token_bytes(32)
+_warned_ephemeral_key = False
+
+
+def pseudonym_key() -> bytes:
+    """Return the HMAC key for pseudonymous hashes.
+
+    When ``PSEUDONYM_SECRET`` is unset this falls back to a random key generated
+    once per process and logs a warning. That can never leak an address, but hashes
+    no longer match across processes or restarts, so unique-user counts overcount.
+    Every API and worker process must be given the same value.
+
+    Returns:
+        bytes: The configured secret, or this process's random key.
+    """
+    global _warned_ephemeral_key
+    configured = os.environ.get(PSEUDONYM_SECRET_ENV_VAR)
+    if configured:
+        return configured.encode()
+    if not _warned_ephemeral_key:
+        _warned_ephemeral_key = True
+        logging.getLogger(__name__).warning(
+            "%s is not set; using a random per-process key. Pseudonymous hashes will not match "
+            "across processes or restarts, so unique-user counts will overcount.",
+            PSEUDONYM_SECRET_ENV_VAR,
+        )
+    return _EPHEMERAL_PSEUDONYM_KEY

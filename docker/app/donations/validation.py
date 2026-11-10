@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import tempfile
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from vntyper.scripts.report_integrity import verify_report_integrity
+
+from ..config import pseudonym_key
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +36,12 @@ ALLOWED_EXTENSIONS = {".json", ".tsv", ".csv", ".txt", ".html", ".log", ".bed", 
 
 
 def pseudonymize_sample_name(sample_name: str) -> str:
-    """Derive an irreversible 16-character hexadecimal pseudonym from a sample name."""
-    salt = "vntyper_donation_pseudonym_salt"
-    h = hashlib.sha256(f"{salt}:{sample_name.strip()}".encode())
+    """Derive a 16-character hexadecimal pseudonym from a sample name.
+
+    Keyed with the server-side pseudonym secret; the old public salt let anyone
+    recompute the pseudonym of a guessed sample name.
+    """
+    h = hmac.new(pseudonym_key(), f"donation:{sample_name.strip()}".encode(), hashlib.sha256)
     return f"sample_{h.hexdigest()[:16]}"
 
 
