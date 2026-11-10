@@ -168,7 +168,19 @@ def route_converted_fastqs(
         logger.error(msg)
         raise ValueError(msg)
 
-    if layout == "empty" or stranded or not 1 <= len(consumed) <= 4:
+    if layout == "empty":
+        # Nothing was dropped: the target-region slice plus the unmapped reads held no reads.
+        msg = (
+            "FASTQ layout 'empty': the input has no reads in the target region (MUC1 by default) and no "
+            "unmapped reads, so there is nothing to genotype. Check that the file covers MUC1 "
+            "(e.g. `samtools view -c <input> <region>`), that --reference-assembly matches the "
+            "alignment, and whether the sample is a blank or failed library. "
+            f"Produced FASTQs: {details}"
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if stranded or not 1 <= len(consumed) <= 4:
         msg = f"FASTQ layout '{layout}' cannot be consumed without dropping reads. Produced FASTQs: {details}"
         logger.error(msg)
         raise ValueError(msg)
