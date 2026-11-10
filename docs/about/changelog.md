@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.48 (2026-11-10)
+
 ### Vrbacká 2025 citation and published variant names (decision profile revision 3)
 
 - **Corrected DOI** (#352): every Vrbacká et al. 2025 citation in `known_variants` cited `doi:10.1101/2024.11.14.623419`, an unrelated preprint. It now cites `doi:10.1101/2025.09.06.673538`.
@@ -16,6 +20,7 @@ All notable changes to VNtyper 2 are documented on this page.
 - **Job timing** (#355): `/job-status/{id}/` also returns `submitted_at`, `started_at` and `completed_at` (ISO 8601 UTC, `null` when not recorded).
 - **`GET /job-summary/{id}/`** (#355): returns the run's own `pipeline_summary.json` from the result archive, with the same identifier check, rate limit, file-safety rules and retention as `/download/`.
 - **Keyed pseudonyms** (#355): the usage-statistics caller hash and the donation sample pseudonym are HMAC-SHA256 under `PSEUDONYM_SECRET`. Set one stable value on the API and every worker; unset, each process uses a random key and logs a warning, so unique-user counts overcount. Existing hashes and pseudonyms do not carry over.
+- **Research pipeline decisions**: No caller thresholds, result rows, tiers or screening messages changed. `docker/app` only.
 
 ### Cohort discovery and input errors
 
