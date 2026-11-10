@@ -52,8 +52,8 @@ from vntyper.scripts.run_configuration import resolve_run_configuration
 pytestmark = pytest.mark.golden
 
 PACKAGE_PROFILES = Path(__file__).parents[2] / "vntyper" / "profiles"
-PR_B_DECISION_PROJECTION_SHA256 = "cfa5ec402a3a20096b76273c4347ff8b5975db942aa6dccf9f2d99474260236d"
-PACKAGED_DECISION_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
+PR_B_DECISION_PROJECTION_SHA256 = "009d343156d62606340419c60a95007f9fe4f601a235dc0cdbf1bd0e257e8b54"
+PACKAGED_DECISION_PROFILE_SHA256 = "af348669f9ac46a4e298729bc08cdfb16692a8b240bda72ce658901d43629c0a"
 
 
 @dataclass(frozen=True)
@@ -1089,7 +1089,7 @@ def test_packaged_profile_provenance_and_pr_b_projection_are_frozen(corpus: Gold
         resolved.digest,
     ) == (
         "vntyper-packaged-default",
-        "2",
+        "3",
         "packaged",
         "package",
         PACKAGED_DECISION_PROFILE_SHA256,

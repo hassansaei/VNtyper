@@ -77,7 +77,7 @@ class DevelopmentCalibrationFixture:
     source_bindings: tuple[SourceArtifactBinding, ...]
 
 
-_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
+_PROFILE_SHA256 = "af348669f9ac46a4e298729bc08cdfb16692a8b240bda72ce658901d43629c0a"
 _IDENTITY = "MUC1-X-60-coding-v1|60|59|-|C"
 _DISPLAY_NAME = "59dupC"
 _SOURCE_MEMBERS = (

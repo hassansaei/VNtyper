@@ -281,7 +281,7 @@ def build_decision_profile(projection: dict[str, object]) -> dict[str, object]:
     return {
         "schema_version": 1,
         "profile_id": "vntyper-packaged-default",
-        "profile_revision": "2",
+        "profile_revision": "3",
         "profile_kind": "packaged",
         "generated_metadata": None,
         "inventory": inventory,

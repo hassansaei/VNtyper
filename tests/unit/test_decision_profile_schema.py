@@ -26,7 +26,7 @@ PACKAGE_ROOT = Path(__file__).parents[2] / "vntyper"
 PROFILE_PATH = PACKAGE_ROOT / "profiles" / "decision_profile.json"
 DIGEST_PATH = PACKAGE_ROOT / "profiles" / "decision_profile.sha256"
 PROJECTION_PATH = PACKAGE_ROOT / "profiles" / "decision_projection.json"
-EXPECTED_PACKAGED_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
+EXPECTED_PACKAGED_PROFILE_SHA256 = "af348669f9ac46a4e298729bc08cdfb16692a8b240bda72ce658901d43629c0a"
 
 
 def _packaged_profile() -> dict[str, object]:
@@ -121,7 +121,7 @@ def test_every_inventory_leaf_has_exactly_one_validation_class() -> None:
     assert observed == {member.value for member in ValidationClass}
     assert all(isinstance(field["class"], str) for field in inventory.values())
     assert Counter(field["class"] for field in inventory.values()) == {
-        ValidationClass.FIXED_SAFETY.value: 173,
+        ValidationClass.FIXED_SAFETY.value: 171,
         ValidationClass.EXPLICIT_CUSTOM.value: 69,
         ValidationClass.GENERATED_MUTABLE.value: 6,
     }
