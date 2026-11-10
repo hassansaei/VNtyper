@@ -29,7 +29,7 @@ def _profile(version: str = "2.0.42", minimum_share: float = 0.5) -> ResolvedDec
             "minimum_record_share_margin": 0.0,
             "xd_veto": "disabled",
         },
-        dataset_manifest_hash="fcbcf50db55b2b915296ca44d41628fd1599ba81cdf555cf55da918fd7562e9f",
+        dataset_manifest_hash="f1a9ffff82c126b1f5fe1bc629722cef9e030ec168b3b971ff7f101fb4c5ff91",
         partition_manifest_hash="2a520f9c8cd989def64bca26d2886e2beddc277e2dd780d522554349d210a758",
         seed=295,
         objective="lexicographic-safety-v1",

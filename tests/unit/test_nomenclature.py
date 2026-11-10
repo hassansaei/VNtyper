@@ -33,6 +33,11 @@ SIM_ROOT = os.environ.get("VNTYPER_SIM_ROOT")
 #: definitions. ``insG_pos54`` is the reason this is keyed by motif and not by
 #: mutation alone: one edit takes two different correct names depending on the unit
 #: it landed on.
+#:
+#: The snapshot under ``VNTYPER_SIM_ROOT`` predates MucOneUp 0.50.0, which placed
+#: ``insG_pos58``, ``insG_pos54`` and ``insA_pos54`` one base 5' of the published
+#: alleles (#353). These names are correct for what that snapshot simulated, not
+#: literature alleles; the published names are pinned in the Vrbacka test below.
 EXPECTED: dict[tuple[str, str], str] = {
     ("dupC", "X"): "59dupC",
     ("insCCCC", "X"): "56_59dupCCCC",
@@ -130,6 +135,56 @@ def test_round_trip_names_every_simulator_edit(mutation: str, symbol: str, defin
     expected = EXPECTED.get((mutation, symbol))
     if expected is not None:
         assert name == expected, f"{mutation}/{symbol}"
+
+
+# ---------------------------------------------------------------------------
+# Published alleles: Vrbacka et al. 2025, Table 1
+# ---------------------------------------------------------------------------
+
+VRBACKA_2025 = "Vrbacka et al. 2025, doi:10.1101/2025.09.06.673538"
+
+#: Units as published in the paper's repeat dictionary,
+#: github.com/pristanna/muc1repeats/blob/74a8bab/repeat_dictionary.py.
+VRBACKA_UNITS = {
+    "X": "GCCCACGGTGTCACCTCGGCCCCGGACACCAGGCCGGCCCCGGGCTCCACCGCCCCCCCA",
+    "A": "GCCCACGGTGTCACCTCGGCCCCGGAGAGCAGGCCGGCCCCGGGCTCCACCGCGCCCGCA",
+    "B": "GCCCACGGTGTCACCTCGGCCCCGGAGAGCAGGCCGGCCCCGGGCTCCACCGCCCCCCCA",
+    "E": "GCCCACGGTGTCACCTCGGCCCCGGACACCAGGCCCGCCCCGGGCTCCACCGCGCCCGCA",
+    "bJ": "GCCCACGGTGTCACCTCGGCCCCGGACACCAGGCCCGCCCCGGGCTCCACCGCCCCCGCA",
+    "aH": "GCCCACGGTGTCACCTCGGCCCCGGAGAGCAGGCCGGCCCCGGGCTCCACCGCCTCCCCA",
+}
+
+
+@pytest.mark.parametrize(
+    "unit,after,inserted,published",
+    [
+        ("X", 59, "C", "59dupC"),
+        ("X", 55, "CCCC", "56_59dupCCCC"),
+        ("A", 22, "C", "23dupC"),
+        ("E", 22, "C", "23dupC"),
+        ("B", 58, "G", "58_59insG"),
+        ("X", 58, "G", "58_59insG"),
+        ("bJ", 54, "G", "54_55insG"),
+        ("aH", 54, "A", "54_55insA"),
+    ],
+)
+def test_vrbacka_table_1_alleles_are_named_as_published_and_known(
+    unit: str, after: int, inserted: str, published: str
+) -> None:
+    """Each published allele, on its published unit, gets the paper's name, and that
+    name is a known variant citing the paper's DOI (#352, #353)."""
+    from vntyper.scripts.nomenclature import KNOWN_VARIANTS
+
+    assert name_edit(VRBACKA_UNITS[unit], after + 1, after, inserted) == published
+    assert VRBACKA_2025 in KNOWN_VARIANTS[published] or published == "59dupC"
+
+
+def test_no_known_variant_carries_a_name_the_literature_does_not_use() -> None:
+    """The one-base-5' names came from a simulator bug, not from a publication (#353)."""
+    from vntyper.scripts.nomenclature import KNOWN_VARIANTS
+
+    assert not {"57_58insG", "53_54insG", "53_54insA", "54dupG"} & set(KNOWN_VARIANTS)
+    assert not any("2024.11.14.623419" in citation for citation in KNOWN_VARIANTS.values())
 
 
 # ---------------------------------------------------------------------------

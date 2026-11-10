@@ -52,8 +52,8 @@ from vntyper.scripts.run_configuration import resolve_run_configuration
 pytestmark = pytest.mark.golden
 
 PACKAGE_PROFILES = Path(__file__).parents[2] / "vntyper" / "profiles"
-PR_B_DECISION_PROJECTION_SHA256 = "cfa5ec402a3a20096b76273c4347ff8b5975db942aa6dccf9f2d99474260236d"
-PACKAGED_DECISION_PROFILE_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
+PR_B_DECISION_PROJECTION_SHA256 = "009d343156d62606340419c60a95007f9fe4f601a235dc0cdbf1bd0e257e8b54"
+PACKAGED_DECISION_PROFILE_SHA256 = "af348669f9ac46a4e298729bc08cdfb16692a8b240bda72ce658901d43629c0a"
 
 
 @dataclass(frozen=True)
@@ -315,7 +315,10 @@ PRA_BAM_FETCH_FINGERPRINT = "ec9f859ab3c2ad78399ee373a708a15d8aa8b4c09b8a0f134a6
 PRA_COMPLETE_BAM_FINGERPRINT = "a90dcdf5fa13873f29f272d30b7c7de3fe9b4ac39f9f0dad8b29e1dbf5d12839"
 PRA_PUBLIC_IDENTITY_QUARTET_FINGERPRINT = "960fe7316a7f5f1d4de684f6f5c4ef5510a965e63face10d504b4a2ac9d33e32"
 PRB_POLICY_STABLE_PUBLIC_FINGERPRINT = "34be8ac286001bd662035c828ff4062af0e75eb4831b4d80cb51379acfc38dfd"
-PRB_UNAFFECTED_PUBLIC_FINGERPRINT = "32908722a4b33b34eea043bd038cb0d0a1cb259c13983f53e5a0cb07249e97fb"
+# Decision profile revision 3 (#352, #353): 37 rows change only Nomenclature_Flags/Note (known-variant to
+# representation-of-caller-call for the shifted MucOneUp names, and the corrected Vrbacka DOI); no
+# Nomenclature, Nomenclature_Tier or call changes. The policy-stable fingerprint above is unchanged.
+PRB_UNAFFECTED_PUBLIC_FINGERPRINT = "6b6308619711dc6892c9b6b00ae762a3068b406878dc8649025a1c8bdd028018"
 PRB_EXPECTED_EXPLANATION_FLAGS = {
     "experiment2_atypical/pair_4010/mutated": "known-variant",
     "experiment2_atypical/pair_4012/mutated": (
@@ -1089,7 +1092,7 @@ def test_packaged_profile_provenance_and_pr_b_projection_are_frozen(corpus: Gold
         resolved.digest,
     ) == (
         "vntyper-packaged-default",
-        "2",
+        "3",
         "packaged",
         "package",
         PACKAGED_DECISION_PROFILE_SHA256,

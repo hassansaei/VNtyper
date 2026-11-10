@@ -64,16 +64,14 @@
   },
   "known_variants": {
     "59dupC": "Kirby et al. 2013, PMID:23396133",
-    "56_59dupCCCC": "Vrbacka et al. 2025, doi:10.1101/2024.11.14.623419",
-    "58_59insG": "Olinger et al. 2020, PMID:32647000",
+    "56_59dupCCCC": "Vrbacka et al. 2025, doi:10.1101/2025.09.06.673538",
+    "58_59insG": "Olinger et al. 2020, PMID:32647000; Vrbacka et al. 2025, doi:10.1101/2025.09.06.673538",
     "60dupA": "Olinger et al. 2020, PMID:32647000",
     "54_56delinsAT": "Olinger et al. 2020, PMID:32647000",
     "1_5delGCCCA": "Saei et al. 2023, PMID:37456840",
     "30_31insCAGGCCGGCCCCGGGCTCCGGACAC": "Saei et al. 2023, PMID:37456840",
-    "23dupC": "Vrbacka et al. 2025, doi:10.1101/2024.11.14.623419",
-    "57_58insG": "Vrbacka et al. 2025, doi:10.1101/2024.11.14.623419",
-    "53_54insG": "Vrbacka et al. 2025, doi:10.1101/2024.11.14.623419",
-    "54dupG": "Vrbacka et al. 2025, doi:10.1101/2024.11.14.623419",
-    "53_54insA": "Vrbacka et al. 2025, doi:10.1101/2024.11.14.623419"
+    "23dupC": "Vrbacka et al. 2025, doi:10.1101/2025.09.06.673538",
+    "54_55insG": "Vrbacka et al. 2025, doi:10.1101/2025.09.06.673538",
+    "54_55insA": "Vrbacka et al. 2025, doi:10.1101/2025.09.06.673538"
   }
 }

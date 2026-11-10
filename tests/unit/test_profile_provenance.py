@@ -490,12 +490,54 @@ def test_failed_atomic_snapshot_leaves_no_destination_or_temporary_file(tmp_path
     assert list(destination.parent.iterdir()) == []
 
 
-def test_verify_profile_snapshot_accepts_historical_revision_1_packaged_profile(tmp_path: Path) -> None:
+_KNOWN = "/components/nomenclature/known_variants/"
+_OLD_VRBACKA = "Vrbacka et al. 2025, doi:10.1101/2024.11.14.623419"
+
+
+def _historical_revision_2() -> dict:
+    """Rebuild the revision-2 packaged profile (2.0.47) from revision 3.
+
+    Revision 3 changed only the Vrbacka 2025 known variants (#352, #353).
+    """
     from vntyper.scripts.canonical_json import load_strict_json_object
+
+    rev2 = load_strict_json_object(load_packaged_decision_profile().canonical_bytes)
+    assert rev2["profile_revision"] == "3"
+    rev2["profile_revision"] = "2"
+    inventory = rev2["inventory"]
+    for name in ("54_55insG", "54_55insA"):
+        del inventory[_KNOWN + name]
+    for name in ("23dupC", "56_59dupCCCC", "57_58insG", "53_54insG", "54dupG", "53_54insA"):
+        inventory[_KNOWN + name] = {"class": "fixed-safety", "value": _OLD_VRBACKA}
+    inventory[_KNOWN + "58_59insG"] = {"class": "fixed-safety", "value": "Olinger et al. 2020, PMID:32647000"}
+    return rev2
+
+
+def test_verify_profile_snapshot_accepts_historical_revision_2_packaged_profile(tmp_path: Path) -> None:
+    """Runs made with 2.0.47 recorded revision 2; a later cohort must still verify them."""
+    from vntyper.scripts.profile_provenance import HISTORICAL_REVISION_2_PACKAGED_SHA256
+
+    raw = canonical_json_bytes(_historical_revision_2())
+    assert hashlib.sha256(raw).hexdigest() == HISTORICAL_REVISION_2_PACKAGED_SHA256
+    snapshot = tmp_path / "provenance" / "decision_profile.json"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_bytes(raw)
+    provenance = DecisionProfileProvenance(
+        profile_id="vntyper-packaged-default",
+        profile_revision="2",
+        profile_kind="packaged",
+        source="package",
+        sha256=HISTORICAL_REVISION_2_PACKAGED_SHA256,
+        snapshot_path=str(snapshot),
+    )
+
+    assert verify_profile_snapshot(provenance, snapshot) == provenance
+
+
+def test_verify_profile_snapshot_accepts_historical_revision_1_packaged_profile(tmp_path: Path) -> None:
     from vntyper.scripts.profile_provenance import HISTORICAL_REVISION_1_PACKAGED_SHA256
 
-    packaged = load_packaged_decision_profile()
-    rev1 = load_strict_json_object(packaged.canonical_bytes)
+    rev1 = _historical_revision_2()
     rev1["profile_revision"] = "1"
     del rev1["inventory"]["/components/kestrel/confidence_assignment/reporting_floor"]
 

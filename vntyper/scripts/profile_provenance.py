@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 
 LEGACY_DECISION_PROFILE_REVISION = "decision profile not recorded by legacy run"
 HISTORICAL_REVISION_1_PACKAGED_SHA256 = "be6329fb12107a1b6b65e425257be6233c7e2115e299e941c12a63a6a6d59718"
+# Revision 2 shipped through 2.0.47; revision 3 renamed the Vrbacka 2025 known variants (#352, #353).
+HISTORICAL_REVISION_2_PACKAGED_SHA256 = "0b13d07370491b3ea773e65144891cb30caebcae70b0ef98feb0f2c5ccd2f4a1"
+_HISTORICAL_PACKAGED_SHA256 = {
+    "1": HISTORICAL_REVISION_1_PACKAGED_SHA256,
+    "2": HISTORICAL_REVISION_2_PACKAGED_SHA256,
+}
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _PROFILE_FIELDS = frozenset(
@@ -320,8 +326,9 @@ def verify_profile_snapshot(
     if provenance.source == "package":
         validate_complete_inventory(document)
         packaged = load_packaged_decision_profile()
-        if document.get("profile_revision") == "1":
-            if actual_digest != HISTORICAL_REVISION_1_PACKAGED_SHA256:
+        historical_digest = _HISTORICAL_PACKAGED_SHA256.get(str(document.get("profile_revision")))
+        if historical_digest is not None:
+            if actual_digest != historical_digest:
                 raise ValueError("recorded package-source snapshot does not match the checked-in packaged profile")
         elif raw != packaged.canonical_bytes:
             raise ValueError("recorded package-source snapshot does not match the checked-in packaged profile")
