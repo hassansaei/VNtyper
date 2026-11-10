@@ -568,7 +568,9 @@ def _subthreshold_note(output_dir, config, filter_columns=FILTER_COLUMNS):
             "No confidence_assignment.reporting_floor in the Kestrel config; no subthreshold note will be written."
         )
         return None
-    signal = detect_from_file(os.path.join(output_dir, "kestrel_pre_result.tsv"), filter_columns, floor)
+    signal = detect_from_file(
+        os.path.join(output_dir, "kestrel_pre_result.tsv"), filter_columns, floor, config.get("alt_filtering")
+    )
     if signal is None:
         return None
     note = format_note(signal, template)

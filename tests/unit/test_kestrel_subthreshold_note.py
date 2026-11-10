@@ -177,6 +177,16 @@ class TestTheNoteHelper:
 
         assert kg._subthreshold_note(str(tmp_path), self.config()) is None
 
+    def test_it_describes_a_dupc_row_below_the_floor(self, tmp_path: Path):
+        """The shipped GG threshold equals the floor, so a weak dupC fails the ALT gate too."""
+        pre_result(tmp_path / "kestrel_pre_result.tsv", [{"ALT": "GG", "alt_filter_pass": False}])
+        config = self.config() | {"alt_filtering": {"gg_alt_value": "GG", "gg_depth_score_threshold": 0.00469}}
+
+        note = kg._subthreshold_note(str(tmp_path), config)
+
+        assert note is not None
+        assert "0.0031" in note
+
     def test_disabling_it_restores_the_previous_output_exactly(self, tmp_path: Path):
         pre_result(tmp_path / "kestrel_pre_result.tsv", [{}])
 
