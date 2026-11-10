@@ -241,8 +241,10 @@ def test_empty_layout_failure_names_every_file_with_zero_records(tmp_path: Path)
         route_converted_fastqs(produced, config={})
 
     message = str(exc_info.value)
-    assert "empty" in message
-    assert "cannot be consumed without dropping reads" in message
+    assert message.startswith("FASTQ layout 'empty': the input has no reads in the target region")
+    assert "--reference-assembly" in message
+    # No read is dropped when there are none, so the stranding wording would mislead.
+    assert "cannot be consumed without dropping reads" not in message
     assert "mate outputs are inconsistent" not in message
     for path in produced:
         assert path in message
