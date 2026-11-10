@@ -75,7 +75,7 @@ from vntyper.scripts.run_configuration import (
     resolve_compatibility_component,
     resolve_compatibility_runtime_component,
 )
-from vntyper.scripts.subthreshold import detect_from_file, format_note
+from vntyper.scripts.subthreshold import detect_from_file, format_note, write_signal
 from vntyper.scripts.utils import load_config, run_command
 
 # Modularized functions for variant parsing/scoring/confidence
@@ -571,7 +571,10 @@ def _subthreshold_note(output_dir, config, filter_columns=FILTER_COLUMNS):
     signal = detect_from_file(os.path.join(output_dir, "kestrel_pre_result.tsv"), filter_columns, floor)
     if signal is None:
         return None
-    return format_note(signal, template)
+    note = format_note(signal, template)
+    if note is not None:
+        write_signal(signal, output_dir)
+    return note
 
 
 def process_kestrel_output(

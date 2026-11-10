@@ -33,7 +33,7 @@ from vntyper.scripts.fastq_bam_processing import (
     process_bam_to_fastq,
     process_fastq,
 )
-from vntyper.scripts.generate_report import generate_summary_report
+from vntyper.scripts.generate_report import generate_summary_report, load_pipeline_summary
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.length_sensitivity import resolve_length_sensitivity_policy
 
@@ -1449,7 +1449,10 @@ def run_pipeline(
             vcf_file=vcf_file,  # Can be .gz, .vcf, or None - handled gracefully
             config=config,
             report_igv=report_igv,
+            record_exports=True,
         )
+        # The report added confidence_grade and subthreshold_signal and re-anchored.
+        summary.update(load_pipeline_summary(summary_file_path))
         logger.info(f"Summary report generated: {report_file}")
 
         donor_summary_path = Path(output_dir) / "pipeline_summary.donor.json"

@@ -35,6 +35,7 @@ from vntyper.scripts import (
     report_assets,
     report_context_contract,
     report_formatting,
+    report_integrity,
     subthreshold,
     summary,
     summary_steps,
@@ -4860,6 +4861,56 @@ def test_confidence_grade_reaches_template_context_and_suppressed_on_older_confi
     html_stripped = render(tmp_path)
     assert captured["screening_state"]["confidence_grade"] is None
     assert "Confidence grade" not in chip_labels(html_stripped)
+
+
+class TestRecordedScreeningExports:
+    """``record_exports`` puts the report's grade and subthreshold state into the summary."""
+
+    def test_a_call_records_its_grade_and_no_subthreshold_state(self, positive_summary):
+        html = render(positive_summary, record_exports=True)
+
+        recorded = json.loads((positive_summary / "pipeline_summary.json").read_text(encoding="utf-8"))
+        assert recorded["confidence_grade"] == "finding"
+        assert recorded["subthreshold_signal"] == {
+            "state": "none",
+            "best_depth_score": None,
+            "event_count": 0,
+            "support_count": None,
+        }
+        # Re-anchored before rendering: the printed digest covers the new keys and verifies.
+        assert recorded["report_integrity"]["report_integrity_digest"] in html
+        assert report_integrity.verify_report_integrity(positive_summary)["valid"] is True
+
+    def test_a_subthreshold_negative_records_the_numbers_beside_its_note(self, tmp_path):
+        write_summary(
+            tmp_path,
+            tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+            kestrel_step_with_comments([], ["VNtyper Kestrel result", SUBTHRESHOLD_NOTE]),
+            input_files={"bam": "sample.bam"},
+        )
+        (tmp_path / "kestrel").mkdir()
+        subthreshold.write_signal(
+            subthreshold.SubthresholdSignal(events=1, rows=4, best_depth_score=0.0031, floor=0.00469, support_count=6),
+            tmp_path / "kestrel",
+        )
+
+        render(tmp_path, record_exports=True)
+
+        recorded = json.loads((tmp_path / "pipeline_summary.json").read_text(encoding="utf-8"))
+        assert recorded["confidence_grade"] == "no-finding"
+        assert recorded["subthreshold_signal"] == {
+            "state": "negative_subthreshold",
+            "best_depth_score": 0.0031,
+            "event_count": 1,
+            "support_count": 6,
+        }
+
+    def test_a_rerendered_report_leaves_the_supplied_summary_untouched(self, positive_summary):
+        before = (positive_summary / "pipeline_summary.json").read_bytes()
+
+        render(positive_summary)
+
+        assert (positive_summary / "pipeline_summary.json").read_bytes() == before
 
 
 def test_high_length_notice_sits_with_the_verdict_before_the_state_chips(tmp_path: Path) -> None:

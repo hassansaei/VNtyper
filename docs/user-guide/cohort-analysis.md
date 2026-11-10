@@ -117,7 +117,7 @@ Outputs written to the destination directory:
 | `cohort_call_frequency.tsv` | Cohort call frequency summary in TSV |
 | `cohort_call_frequency.json` | Cohort call frequency summary in JSON |
 
-`cohort_stats_*` exports sample runtime, version, assembly, alignment details, and coverage metrics prefixed with `cov_` (including `cov_mean`, `cov_percent_uncovered`, and `cov_coverage_qc`).
+`cohort_stats_*` exports sample runtime, version, assembly, alignment details, and coverage metrics prefixed with `cov_` (including `cov_mean`, `cov_percent_uncovered`, and `cov_coverage_qc`), followed by `confidence_grade`, `subthreshold_state`, `subthreshold_best_depth_score`, `subthreshold_event_count` and `subthreshold_support_count` from each sample's `pipeline_summary.json` (empty for summaries written before these fields existed).
 
 ## HTML Report Contents
 

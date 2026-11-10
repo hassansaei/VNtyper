@@ -120,6 +120,7 @@ import pytest
 
 from vntyper.cli import load_config
 from vntyper.scripts import cohort_summary
+from vntyper.scripts.cohort_summary_parsing import SCREENING_EXPORT_COLUMNS
 from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_BAM_HEADER, STEP_COVERAGE, STEP_KESTREL
 
 pytestmark = pytest.mark.unit
@@ -1118,6 +1119,48 @@ def test_cohort_preserves_each_samples_own_advntr_evidence_revision(tmp_path) ->
         "artifact-evidence revision not recorded",
     ]
     assert stats["advntr_evidence_assertion"].tolist() == [ASSERTION, ""]
+
+
+def test_cohort_stats_append_each_samples_screening_exports(tmp_path) -> None:
+    """The grade and subthreshold state are read from each summary and appended last."""
+    cohort_root = _cohort_on_disk(tmp_path / "cohort")
+    summary_path = cohort_root / "sample_one" / "pipeline_summary.json"
+    summary_document = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary_document["confidence_grade"] = "no-finding"
+    summary_document["subthreshold_signal"] = {
+        "state": "negative_subthreshold",
+        "best_depth_score": 0.0041,
+        "event_count": 2,
+        "support_count": 7,
+    }
+    summary_path.write_text(json.dumps(summary_document), encoding="utf-8")
+    output_dir = tmp_path / "out"
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(cohort_root)],
+        output_dir=str(output_dir),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        additional_formats="csv,tsv,json",
+    )
+
+    csv = pd.read_csv(output_dir / "cohort_stats.csv")
+    tsv = pd.read_csv(output_dir / "cohort_stats.tsv", sep="\t")
+    records = json.loads((output_dir / "cohort_stats.json").read_text(encoding="utf-8"))
+
+    exports = list(SCREENING_EXPORT_COLUMNS)
+    assert list(csv.columns[-len(exports) :]) == exports
+    assert list(tsv.columns) == list(csv.columns)
+    by_sample = {record["Sample"]: record for record in records}
+    assert {key: by_sample["sample_one"][key] for key in exports} == {
+        "confidence_grade": "no-finding",
+        "subthreshold_state": "negative_subthreshold",
+        "subthreshold_best_depth_score": 0.0041,
+        "subthreshold_event_count": 2,
+        "subthreshold_support_count": 7,
+    }
+    # A summary written before the fields existed contributes empty cells, not a guess.
+    assert all(by_sample["sample_two"][key] is None for key in exports)
 
 
 def test_an_unreadable_discovered_sample_remains_in_both_denominators(tmp_path) -> None:

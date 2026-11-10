@@ -4,7 +4,12 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Grade and subthreshold state in machine-readable outputs
+
+- **`pipeline_summary.json`**: records `confidence_grade`, the grade the report prints, and `subthreshold_signal` with `state` (`negative_subthreshold` or `none`), `best_depth_score`, `event_count` and `support_count`. The report computes both and re-anchors the summary before rendering, so the printed integrity digest covers them. `vntyper report` never rewrites a supplied summary.
+- **Support count for the subthreshold note**: the signal now carries the alternate-allele read support of the strongest below-floor candidate. A no-call run with a note writes the numbers to `kestrel/subthreshold_signal.json`; the `##` line in `kestrel_result.tsv` is unchanged.
+- **Cohort statistics**: `cohort_stats.csv`, `.tsv` and `.json` append `confidence_grade`, `subthreshold_state`, `subthreshold_best_depth_score`, `subthreshold_event_count` and `subthreshold_support_count` after the existing columns. Summaries written before this release give empty cells.
+- **Research pipeline decisions**: No caller thresholds, result rows, tiers, grades or screening messages changed. A subthreshold candidate is not a call.
 
 ## 2.0.47 (2026-10-09)
 

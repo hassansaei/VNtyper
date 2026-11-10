@@ -30,6 +30,7 @@ from typing import Any
 import pandas as pd
 
 from vntyper.scripts.cohort_profiles import PROFILE_EXPORT_COLUMNS
+from vntyper.scripts.cohort_summary_parsing import SCREENING_EXPORT_COLUMNS
 from vntyper.scripts.molecular_identity_presentation import IDENTITY_COLUMNS
 from vntyper.scripts.report_formatting import confidence_html, escaped_table_html, is_empty_result_row
 
@@ -293,8 +294,9 @@ def additional_stats_frame(additional_stats_list: list[dict[str, Any]]) -> pd.Da
         coverage_df = additional_stats_df["coverage"].apply(pd.Series)
         coverage_df = coverage_df.add_prefix("cov_")
         additional_stats_df = pd.concat([additional_stats_df.drop(columns=["coverage"]), coverage_df], axis=1)
-    # Reorder columns to place "Sample" first if it exists
-    if "Sample" in additional_stats_df.columns:
-        cols = ["Sample"] + [col for col in additional_stats_df.columns if col != "Sample"]
-        additional_stats_df = additional_stats_df[cols]
+    # "Sample" first, the screening exports last, everything else where it was.
+    last = [col for col in SCREENING_EXPORT_COLUMNS if col in additional_stats_df.columns]
+    first = ["Sample"] if "Sample" in additional_stats_df.columns else []
+    middle = [col for col in additional_stats_df.columns if col not in (*first, *last)]
+    additional_stats_df = additional_stats_df[first + middle + last]
     return additional_stats_df
