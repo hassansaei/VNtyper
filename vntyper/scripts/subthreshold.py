@@ -21,6 +21,13 @@ Three properties are load-bearing:
   ``kestrel_config.json`` declares an artifact (#174) and its ``Depth_Score`` may be
   excellent. Calling that "subthreshold" would say *weak signal* where the truth is
   *strong signal, deliberately discarded*.
+* **A depth-driven ALT verdict is still a depth verdict.** ``alt_filter_pass`` also fails a
+  dupC row (``ALT == alt_filtering.gg_alt_value``) whose ``Depth_Score`` is below
+  ``gg_depth_score_threshold``; shipped, that threshold *is* the reporting floor, so every
+  dupC candidate below the floor fails two gates. Given ``alt_filtering``, such a row is
+  eligible when its ALT failure is explainable by depth alone -- an excluded ALT never is.
+  A dupC row at or above the floor that fails only a stricter custom GG threshold is not
+  subthreshold: it is not below the reporting floor.
 * **Every gate verdict must be explicit.** See :func:`_verdict`: "not True" and "False"
   are different claims, and only an explicit one counts in either direction.
 * **Events, not rows.** The pre-result carries the same event against many motif contexts
@@ -36,10 +43,10 @@ from __future__ import annotations
 import json
 import logging
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pandas as pd
 
@@ -47,6 +54,9 @@ logger = logging.getLogger(__name__)
 
 #: The one gate whose failure -- alone -- defines a subthreshold candidate.
 DEPTH_GATE: Final[str] = "depth_confidence_pass"
+
+#: The gate a dupC row also fails on depth alone; see :func:`_alt_failed_on_depth_only`.
+ALT_GATE: Final[str] = "alt_filter_pass"
 
 #: The prefix every emitted note carries, so the report can find it among the ``##``
 #: banner lines without matching on prose.
@@ -171,10 +181,36 @@ def _explicitly(frame: pd.DataFrame, column: str, wanted: bool) -> pd.Series:
     return pd.Series([verdict is wanted for verdict in verdicts], index=frame.index, dtype=bool)
 
 
+def _alt_failed_on_depth_only(frame: pd.DataFrame, alt_filtering: Mapping[str, Any]) -> pd.Series:
+    """Rows whose ALT gate failure is the GG depth rule and nothing else.
+
+    Recomputed from the row's own ALT and Depth_Score with the same rule
+    `variant_parsing.filter_by_alt_values_and_finalize` applies, so an excluded ALT (which
+    fails whatever its depth) is never mistaken for a weak dupC.
+
+    Args:
+        frame: The pre-filter frame.
+        alt_filtering: ``kestrel_config.json``'s ``alt_filtering`` section.
+
+    Returns:
+        pd.Series: A boolean mask.
+    """
+    gg = alt_filtering.get("gg_alt_value", "GG")
+    excluded = list(alt_filtering.get("exclude_alts", []) or [])
+    try:
+        threshold = float(alt_filtering["gg_depth_score_threshold"])
+    except (KeyError, TypeError, ValueError):
+        return pd.Series(False, index=frame.index)
+    scores = pd.to_numeric(frame["Depth_Score"], errors="coerce")
+    alts = frame["ALT"].astype(str)
+    return (alts == gg) & ~alts.isin(excluded) & (scores < threshold)
+
+
 def detect(
     frame: pd.DataFrame,
     gate_columns: Sequence[str],
     floor: float,
+    alt_filtering: Mapping[str, Any] | None = None,
 ) -> SubthresholdSignal | None:
     """Reduce a pre-filter frame to its subthreshold signal, or to nothing.
 
@@ -186,6 +222,9 @@ def detect(
             `kestrel_genotyping.FILTER_COLUMNS` cannot silently widen eligibility here.
         floor: The reporting floor, for the record. It decides nothing -- the decision is
             the gate's, already made upstream by `calculate_depth_score_and_assign_confidence`.
+        alt_filtering: The Kestrel ``alt_filtering`` config. When given, a row failing
+            :data:`ALT_GATE` stays eligible if that failure is the GG depth rule alone.
+            When None, :data:`ALT_GATE` is required to pass like any structural gate.
 
     Returns:
         SubthresholdSignal | None: The signal, or None when no row is eligible or the frame
@@ -211,7 +250,10 @@ def detect(
     for column in gate_columns:
         if column == DEPTH_GATE:
             continue
-        mask &= _explicitly(frame, column, True)
+        passed = _explicitly(frame, column, True)
+        if column == ALT_GATE and alt_filtering is not None:
+            passed |= _explicitly(frame, column, False) & _alt_failed_on_depth_only(frame, alt_filtering)
+        mask &= passed
     # Explicitly False, not "not True": see :func:`_verdict`.
     mask &= _explicitly(frame, DEPTH_GATE, False)
 
@@ -253,6 +295,7 @@ def detect_from_file(
     path: str | Path,
     gate_columns: Sequence[str],
     floor: float,
+    alt_filtering: Mapping[str, Any] | None = None,
 ) -> SubthresholdSignal | None:
     """:func:`detect`, reading the frame from a written ``kestrel_pre_result.tsv``.
 
@@ -265,6 +308,7 @@ def detect_from_file(
         path: Path to ``kestrel_pre_result.tsv``.
         gate_columns: As :func:`detect`.
         floor: As :func:`detect`.
+        alt_filtering: As :func:`detect`.
 
     Returns:
         SubthresholdSignal | None: The signal, or None.
@@ -283,7 +327,7 @@ def detect_from_file(
         # and `UnicodeDecodeError` (a non-UTF-8 one), each of which subclasses it.
         logger.warning("Could not read %s for the subthreshold note: %s", location, error)
         return None
-    return detect(frame, gate_columns, floor)
+    return detect(frame, gate_columns, floor, alt_filtering)
 
 
 def format_note(signal: SubthresholdSignal, template: str) -> str | None:

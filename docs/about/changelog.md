@@ -27,6 +27,11 @@ All notable changes to VNtyper 2 are documented on this page.
 
 - **Host- and dependency-independent web tests** (#359): the API tests no longer depend on the host's free disk, and stay green on pytest 9.2 and Starlette 1.10 (an fstat patch leaked into pytest's capture, and an ASGI test client never yielded to Starlette's disconnect listener).
 
+### Subthreshold note covers dupC candidates
+
+- **dupC below the floor** (#362, #363): a dupC row (`ALT == alt_filtering.gg_alt_value`) below the reporting floor also fails `alt_filter_pass`, because the shipped `gg_depth_score_threshold` equals the floor, so it never qualified for the subthreshold note. Such a row now qualifies when its ALT failure is the GG depth rule alone. Those no-call samples now carry the note and the `negative_subthreshold` state. Excluded ALTs and artifact-flagged rows stay ineligible. A dupC row at or above the floor that fails only a stricter custom GG threshold is not subthreshold.
+- **Research pipeline decisions**: No caller thresholds, calls, result rows or tiers changed. A subthreshold candidate is not a call.
+
 ### Grade and subthreshold state in machine-readable outputs
 
 - **`pipeline_summary.json`** (#356): records `confidence_grade`, the grade the report prints, and `subthreshold_signal` with `state` (`negative_subthreshold` or `none`), `best_depth_score`, `event_count` and `support_count`. The report computes both and re-anchors the summary before rendering, so the printed integrity digest covers them. `vntyper report` never rewrites a supplied summary.

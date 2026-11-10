@@ -90,6 +90,58 @@ class TestEligibility:
         assert signal.best_depth_score == pytest.approx(0.002)
 
 
+class TestDupcBelowTheFloor:
+    """A dupC row below the floor also fails ``alt_filter_pass`` on depth alone, because the
+    shipped ``gg_depth_score_threshold`` equals the reporting floor."""
+
+    ALT_FILTERING = {"gg_alt_value": "GG", "gg_depth_score_threshold": FLOOR, "exclude_alts": ["CT"]}
+
+    def dupc(self, **row: Any) -> pd.DataFrame:
+        return frame([{"ALT": "GG", "alt_filter_pass": False, "Depth_Score": 0.002} | row])
+
+    def test_a_dupc_row_failing_only_on_depth_is_subthreshold(self):
+        signal = st.detect(self.dupc(), GATES, FLOOR, self.ALT_FILTERING)
+
+        assert signal is not None
+        assert signal.best_depth_score == pytest.approx(0.002)
+
+    def test_it_survives_the_file_entry(self, tmp_path: Path):
+        path = tmp_path / "kestrel_pre_result.tsv"
+        self.dupc().to_csv(path, sep="\t", index=False)
+
+        assert st.detect_from_file(path, GATES, FLOOR, self.ALT_FILTERING) is not None
+
+    def test_without_alt_filtering_the_alt_gate_stays_strict(self):
+        assert st.detect(self.dupc(), GATES, FLOOR) is None
+
+    def test_an_excluded_alt_is_never_subthreshold(self):
+        excluded = {**self.ALT_FILTERING, "exclude_alts": ["GG"]}
+
+        assert st.detect(self.dupc(), GATES, FLOOR, excluded) is None
+        assert st.detect(frame([{"ALT": "CT", "alt_filter_pass": False}]), GATES, FLOOR, self.ALT_FILTERING) is None
+
+    def test_an_artifact_flagged_dupc_is_not_subthreshold(self):
+        assert st.detect(self.dupc(flag_filter_pass=False), GATES, FLOOR, self.ALT_FILTERING) is None
+
+    def test_a_non_gg_row_failing_the_alt_gate_is_unchanged(self):
+        assert st.detect(frame([{"alt_filter_pass": False}]), GATES, FLOOR, self.ALT_FILTERING) is None
+        assert st.detect(frame([{}]), GATES, FLOOR, self.ALT_FILTERING) is not None
+
+    def test_a_stricter_custom_gg_threshold(self):
+        """Above the floor but below a stricter GG threshold: the depth gate passes, so the
+        row is not below the reporting floor and is not subthreshold. Below both, it is."""
+        strict = {**self.ALT_FILTERING, "gg_depth_score_threshold": 0.01}
+
+        between = self.dupc(Depth_Score=0.006, **{st.DEPTH_GATE: True})
+        assert st.detect(between, GATES, FLOOR, strict) is None
+        assert st.detect(self.dupc(), GATES, FLOOR, strict) is not None
+
+    def test_an_unreadable_gg_threshold_keeps_the_alt_gate_strict(self):
+        broken = {**self.ALT_FILTERING, "gg_depth_score_threshold": "high"}
+
+        assert st.detect(self.dupc(), GATES, FLOOR, broken) is None
+
+
 class TestCounting:
     def test_events_counts_distinct_pos_ref_alt_not_rows(self):
         """The same event against several motif contexts is one event."""
