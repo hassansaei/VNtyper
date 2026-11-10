@@ -19,11 +19,14 @@ the union here.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from redis.typing import EncodableT, FieldT
+
+from .config import pseudonym_key
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +45,11 @@ def client_hash(client_ip: str | None, user_agent: str | None) -> str:
         user_agent: The caller's user agent, or None when the task was given none.
 
     Returns:
-        The hex SHA-256 digest of ``"<ip>-<agent>"``.
+        The hex HMAC-SHA256 of ``"<ip>-<agent>"`` under the server-side
+        pseudonym key (`config.pseudonym_key`); unkeyed SHA-256 of an IPv4
+        address is reversible by enumeration.
     """
-    return hashlib.sha256(f"{client_ip}-{user_agent}".encode()).hexdigest()
+    return hmac.new(pseudonym_key(), f"{client_ip}-{user_agent}".encode(), hashlib.sha256).hexdigest()
 
 
 def started_usage_record(

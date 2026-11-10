@@ -2185,7 +2185,7 @@ def test_a_pipeline_job_writes_the_shared_started_usage_record(
     _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
 
     assert _started_usage_mapping(redis_mocks.usage, "usage:job-1") == {
-        "user_hash": hashlib.sha256(b"127.0.0.1-pytest").hexdigest(),
+        "user_hash": usage_records.client_hash("127.0.0.1", "pytest"),
         "timestamp": "2026-09-05T12:30:45+00:00",
         "job_id": "job-1",
         "status": "started",
@@ -2222,7 +2222,7 @@ def test_a_cohort_job_writes_the_shared_started_usage_record_with_its_cohort(
     )
 
     assert _started_usage_mapping(redis_mocks.usage, "usage:analysis") == {
-        "user_hash": hashlib.sha256(b"10.0.0.1-pytest").hexdigest(),
+        "user_hash": usage_records.client_hash("10.0.0.1", "pytest"),
         "timestamp": "2026-09-05T12:30:45+00:00",
         "job_id": "analysis",
         "status": "started",

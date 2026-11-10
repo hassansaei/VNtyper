@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -5,6 +6,7 @@ import tempfile
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Literal, cast
@@ -32,7 +34,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from . import admission
 from .admission_http import reserve_or_refuse, total_file_bytes_or_refuse
-from .archive_delivery import OwnedFileResponse, write_owned_zip_member
+from .archive_delivery import OwnedFileResponse, open_owned_regular, write_owned_zip_member
 from .cohorts import (
     ALIAS_DESCRIPTION,
     COHORT_PASSPHRASE_HEADER,
@@ -62,7 +64,7 @@ from .donations import (
 )
 from .identifiers import canonical_id
 from .job_failures import stored_preflight_message
-from .job_lookup import stored_task_id
+from .job_lookup import job_timing, stored_task_id, submitted_at_key
 from .job_workspace import job_workspace
 from .lifecycle import AsyncRedisClient, close_rate_limiter_client, initialize_rate_limiter, probe_tool_version
 from .request_limits import RequestSizeLimitMiddleware
@@ -702,6 +704,7 @@ def run_vntyper(
 
         # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
         redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds
+        redis_client.set(submitted_at_key(job_id), datetime.now(timezone.utc).isoformat(), ex=604800)
 
         # Add the task ID to a Redis list to track the queue
         redis_client.rpush("vntyper_job_queue", task.id)
@@ -713,6 +716,11 @@ class JobStatusResponse(BaseModel):
     job_id: str = Field(..., description="Unique identifier for the job.")
     status: str = Field(..., description="Current status of the job.")
     error: str | None = Field(default=None, description="Error message if the job failed.")
+    submitted_at: str | None = Field(default=None, description="When the job was accepted (ISO 8601 UTC).")
+    started_at: str | None = Field(default=None, description="When a worker started the job (ISO 8601 UTC).")
+    completed_at: str | None = Field(
+        default=None, description="When the job finished, successfully or not (ISO 8601 UTC)."
+    )
 
 
 @router.get(
@@ -756,21 +764,22 @@ def get_job_status(job_id: str):
 
     status = task_result.status
     logger.info(f"Job {job_id} (Task ID: {task_id}) status queried: {status}")
+    timing = job_timing(redis_client, redis_usage_client, job_id, task_result)
 
     if status == "PENDING":
-        return JobStatusResponse(job_id=job_id, status="pending")
+        return JobStatusResponse(job_id=job_id, status="pending", **timing)
     elif status == "STARTED":
-        return JobStatusResponse(job_id=job_id, status="started")
+        return JobStatusResponse(job_id=job_id, status="started", **timing)
     elif status == "SUCCESS":
-        return JobStatusResponse(job_id=job_id, status="completed")
+        return JobStatusResponse(job_id=job_id, status="completed", **timing)
     elif status == "FAILURE":
         # Log the task's own exception, return a generic message: the detail is
         # operator-facing, and this endpoint is unauthenticated.
         logger.error(f"Job {job_id} (Task ID: {task_id}) failed: {type(task_result.info).__name__}: {task_result.info}")
         error = stored_preflight_message(redis_usage_client, job_id) or JOB_FAILURE_MESSAGE
-        return JobStatusResponse(job_id=job_id, status="failed", error=error)
+        return JobStatusResponse(job_id=job_id, status="failed", error=error, **timing)
     else:
-        return JobStatusResponse(job_id=job_id, status=status.lower())
+        return JobStatusResponse(job_id=job_id, status=status.lower(), **timing)
 
 
 @router.get(
@@ -822,6 +831,42 @@ def download_result(job_id: str):
         logger.info(f"Serving zip file {zip_path}")
         return response
     raise HTTPException(status_code=404, detail="File not found")
+
+
+# A pipeline summary is a few kB; refuse to inflate anything implausibly large.
+MAX_SUMMARY_BYTES = 10 * 1024 * 1024
+
+
+@router.get(
+    "/job-summary/{job_id}/",
+    tags=["Job Management"],
+    dependencies=[Depends(high_rate_limiter)],
+    summary="Get the pipeline summary of a completed VNtyper job",
+    description=(
+        "Return the `pipeline_summary.json` from a completed job's result archive, so a client "
+        "can show coverage QC, confidence and version fields without downloading the ZIP. "
+        "Available for exactly as long as `/download/{job_id}/`.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_HIGH_TIMES} requests per {settings.RATE_LIMIT_HIGH_SECONDS} seconds."
+    ),
+    responses={404: {"description": "Summary not found."}},
+)
+def job_summary(job_id: str):
+    """Return the job's pipeline summary, read from the archive `/download/` serves."""
+    job_id = require_job_id(job_id, detail="File not found")
+    zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
+    try:
+        descriptor, _ = open_owned_regular(zip_path)
+        with os.fdopen(descriptor, "rb") as handle, zipfile.ZipFile(handle) as archive:
+            member = next(
+                (info for info in archive.infolist() if info.filename.endswith("pipeline_summary.json")), None
+            )
+            if member is None or member.file_size > MAX_SUMMARY_BYTES:
+                raise ValueError("no usable pipeline_summary.json in archive")
+            summary = json.loads(archive.read(member))
+    except (OSError, ValueError, zipfile.BadZipFile):  # JSONDecodeError is a ValueError
+        logger.warning(f"Summary not found or unreadable: {zip_path}")
+        raise HTTPException(status_code=404, detail="File not found") from None
+    return JSONResponse(summary)
 
 
 @router.get(
@@ -1252,6 +1297,7 @@ def run_cohort_analysis(
 
     # Store the mapping for job status checking
     redis_client.set(analysis_job_id, task.id, ex=604800)  # 7 days TTL
+    redis_client.set(submitted_at_key(analysis_job_id), datetime.now(timezone.utc).isoformat(), ex=604800)
     redis_client.rpush("vntyper_job_queue", task.id)
 
     return {

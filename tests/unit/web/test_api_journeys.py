@@ -187,7 +187,16 @@ def test_job_journey_from_submission_to_download(
     _report_celery_status(monkeypatch, web_app, "PENDING")
     status = client.get(f"/job-status/{job_id}/")
     assert status.status_code == 200
-    assert status.json() == {"job_id": job_id, "status": "pending", "error": None}
+    body = status.json()
+    assert {k: body[k] for k in ("job_id", "status", "error", "started_at", "completed_at")} == {
+        "job_id": job_id,
+        "status": "pending",
+        "error": None,
+        "started_at": None,
+        "completed_at": None,
+    }
+    # The submission instant is recorded when the job is accepted.
+    assert body["submitted_at"].endswith("+00:00")
 
     queued = client.get("/job-queue/", params={"job_id": job_id})
     assert queued.status_code == 200
