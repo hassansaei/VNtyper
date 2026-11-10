@@ -10,7 +10,7 @@ from vntyper.scripts.canonical_json import canonical_sha256, load_strict_json_ob
 from vntyper.scripts.decision_profile import ResolvedDecisionProfile
 
 # Only generator_version and its derived profile_id vary with a package release.
-FITTED_CONTENT_SHA256 = "ea57719f85a4851dd5b9f5e4ba920fed770a41f3bbfca17dc1d9db20da3e957c"
+FITTED_CONTENT_SHA256 = "bf88e5ade317319c64be737dbd6a7c2d9ac19e75c534ef5f7b1a934d0fc3fe1d"
 
 
 def assert_fitted_profile(profile: ResolvedDecisionProfile, *, generator_version: str) -> None:
