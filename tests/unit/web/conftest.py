@@ -109,6 +109,12 @@ def web_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_redis) -> Iter
     monkeypatch.setattr(app_main, "DEFAULT_HANDOFF_SPOOL_DIR", str(tmp_path / "handoff"), raising=False)
     monkeypatch.setattr(app_main, "DEFAULT_OUTPUT_DIR", str(tmp_path / "output"))
 
+    # Admission compares reservations with the host's real free space, so a busy /tmp
+    # turned journeys into 503s. Tests that exercise capacity patch this again.
+    from app import admission
+
+    monkeypatch.setattr(admission, "observe_free_bytes", lambda paths: tuple(1 << 50 for _ in paths))
+
     for attr in ("run_vntyper_job", "run_cohort_analysis_job"):
         task = MagicMock()
         task.delay.return_value = SimpleNamespace(id="task-1")
