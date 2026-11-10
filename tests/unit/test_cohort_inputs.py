@@ -48,6 +48,7 @@ from vntyper.scripts.cohort_inputs import (
     load_pipeline_summary_for_sample,
     parse_pipeline_summary,
 )
+from vntyper.scripts.cohort_summary_parsing import SCREENING_EXPORT_COLUMNS
 from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
     STEP_BAM_HEADER,
@@ -539,6 +540,7 @@ def test_the_four_consumed_steps_are_read_out_of_a_summary() -> None:
         "assembly": "hg38",
         "pipeline": "bwa-mem",
         "coverage": {"mean": "31.2"},
+        **dict.fromkeys(SCREENING_EXPORT_COLUMNS),
     }
 
 
@@ -611,7 +613,14 @@ def test_an_empty_summary_yields_the_documented_defaults() -> None:
 
     assert kestrel == []
     assert advntr == []
-    assert stats == {"runtime": "N/A", "version": "N/A", "assembly": "N/A", "pipeline": "N/A", "coverage": {}}
+    assert stats == {
+        "runtime": "N/A",
+        "version": "N/A",
+        "assembly": "N/A",
+        "pipeline": "N/A",
+        "coverage": {},
+        **dict.fromkeys(SCREENING_EXPORT_COLUMNS),
+    }
 
 
 def test_cohort_loader_verifies_recorded_advntr_evidence_from_each_sample_snapshot(tmp_path: Path) -> None:

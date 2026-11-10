@@ -672,6 +672,17 @@ def test_the_kestrel_igv_inputs_are_rebuilt_from_a_literal(tmp_path: Path) -> No
     assert kwargs["vcf_file"] == str(out / "kestrel" / f"{PIPELINE_BASENAME}_indel.vcf")
 
 
+def test_the_pipeline_report_records_the_screening_exports(tmp_path: Path) -> None:
+    """Only the pipeline's own report writes ``confidence_grade`` into the summary.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    harness = run_pipeline_under_harness(tmp_path / "out")
+
+    assert harness.kwargs("generate_summary_report")["record_exports"] is True
+
+
 def test_the_compressed_vcf_wins_when_both_exist(tmp_path: Path) -> None:
     """The other half of ``_select_best_vcf_file``'s literal pair.
 

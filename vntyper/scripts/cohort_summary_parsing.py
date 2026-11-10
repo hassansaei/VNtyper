@@ -23,6 +23,16 @@ from vntyper.scripts.molecular_identity_presentation import identity_compatible_
 from vntyper.scripts.report_formatting import is_empty_result_row
 from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_BAM_HEADER, STEP_COVERAGE, STEP_KESTREL
 
+#: The screening fields a sample's summary carries, flattened. Appended last
+#: in ``cohort_stats`` so existing columns keep their positions.
+SCREENING_EXPORT_COLUMNS: tuple[str, ...] = (
+    "confidence_grade",
+    "subthreshold_state",
+    "subthreshold_best_depth_score",
+    "subthreshold_event_count",
+    "subthreshold_support_count",
+)
+
 
 def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[dict], dict[str, Any]]:
     """Extract the cohort's three inputs from one parsed ``pipeline_summary.json``.
@@ -36,7 +46,8 @@ def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[di
     Returns:
         tuple[list[dict], list[dict], dict[str, Any]]: The Kestrel rows, the adVNTR
         rows, and the per-sample statistics (``runtime``, ``version``, ``assembly``,
-        ``pipeline``, ``coverage``, plus length estimation stats if recorded).
+        ``pipeline``, ``coverage``, plus length estimation stats if recorded, then
+        :data:`SCREENING_EXPORT_COLUMNS`).
 
     Raises:
         ValueError: If ``pipeline_start`` or ``pipeline_end`` is present but is not an
@@ -109,6 +120,12 @@ def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[di
         if tier not in TIERS:
             raise ValueError(f"unknown length sensitivity tier: {tier!r}")
         additional_stats["length_sensitivity_tier"] = tier
+
+    # Absent from older summaries; those samples carry empty cells.
+    signal = summary.get("subthreshold_signal") or {}
+    additional_stats["confidence_grade"] = summary.get("confidence_grade")
+    for key in ("state", "best_depth_score", "event_count", "support_count"):
+        additional_stats[f"subthreshold_{key}"] = signal.get(key)
 
     return kestrel_data, advntr_data, additional_stats
 

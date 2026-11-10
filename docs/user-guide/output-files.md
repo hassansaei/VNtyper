@@ -16,6 +16,7 @@ results/
 ├── kestrel/
 │   ├── kestrel_result.tsv       # Final genotyping result
 │   ├── kestrel_pre_result.tsv   # Pre-filter variants (all candidates)
+│   ├── subthreshold_signal.json # Below-floor candidate in numbers (no-call runs with a note only)
 │   ├── output.vcf               # Raw Kestrel VCF
 │   ├── output_indel.vcf         # Filtered INDEL VCF
 │   ├── output_indel.vcf.gz      # Compressed INDEL VCF (if bcftools available)
@@ -237,6 +238,26 @@ Key fields:
 Molecular-identity records are additive to summary schema 2 without altering schema versioning. Current summaries record the packaged selection policy as
 `decision_policy: legacy-selection-v1`. Older summaries lacking this key remain
 supported and are marked as unrecorded.
+
+The pipeline also records the report's screening outcome, so it need not be re-derived:
+
+```json
+{
+  "confidence_grade": "no-finding",
+  "subthreshold_signal": {
+    "state": "negative_subthreshold",
+    "best_depth_score": 0.0031,
+    "event_count": 1,
+    "support_count": 6
+  }
+}
+```
+
+`confidence_grade` is the grade the report prints. `subthreshold_signal.state` is
+`negative_subthreshold` when Kestrel called nothing but recorded a candidate below the
+reporting floor, and `none` otherwise; `support_count` is the alternate-allele read support of
+the strongest such candidate. A subthreshold candidate is not a call. `vntyper report` never
+writes these keys into a summary it is given.
 
 ### Flattened summary tables
 

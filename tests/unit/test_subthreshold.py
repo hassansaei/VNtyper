@@ -396,3 +396,71 @@ class TestFindNote:
     def test_it_returns_the_first_marked_line(self):
         first = f"{st.NOTE_MARKER} first"
         assert st.find_note([first, f"{st.NOTE_MARKER} second"]) == first
+
+
+class TestSupportCount:
+    def test_it_is_the_alt_support_of_the_strongest_row(self):
+        rows = [
+            {"Depth_Score": 0.001, st.SUPPORT_COLUMN: 3},
+            {"POS": 61, "Depth_Score": 0.004, st.SUPPORT_COLUMN: 9},
+        ]
+
+        signal = st.detect(frame(rows), GATES, FLOOR)
+
+        assert signal is not None
+        assert signal.support_count == 9
+
+    def test_it_is_none_without_the_column(self):
+        signal = st.detect(frame([{}]), GATES, FLOOR)
+
+        assert signal is not None
+        assert signal.support_count is None
+
+    def test_it_is_none_when_the_cell_is_not_a_number(self):
+        signal = st.detect(frame([{st.SUPPORT_COLUMN: "None"}]), GATES, FLOOR)
+
+        assert signal is not None
+        assert signal.support_count is None
+
+
+class TestSummaryRecord:
+    SIGNAL = st.SubthresholdSignal(events=2, rows=5, best_depth_score=0.004, floor=FLOOR, support_count=9)
+
+    def test_a_subthreshold_state_reads_the_recorded_numbers(self, tmp_path: Path):
+        st.write_signal(self.SIGNAL, tmp_path)
+
+        assert st.summary_record("negative_subthreshold", tmp_path) == {
+            "state": "negative_subthreshold",
+            "best_depth_score": 0.004,
+            "event_count": 2,
+            "support_count": 9,
+        }
+
+    def test_no_state_ignores_a_sidecar_an_earlier_run_left(self, tmp_path: Path):
+        st.write_signal(self.SIGNAL, tmp_path)
+
+        assert st.summary_record("none", tmp_path) == {
+            "state": "none",
+            "best_depth_score": None,
+            "event_count": 0,
+            "support_count": None,
+        }
+
+    @pytest.mark.parametrize("payload", [None, "not json", '{"events": 1}', '{"events": "x", "best_depth_score": 1}'])
+    def test_a_missing_or_malformed_sidecar_keeps_the_state_without_numbers(self, tmp_path: Path, payload):
+        if payload is not None:
+            (tmp_path / st.SIGNAL_FILENAME).write_text(payload, encoding="utf-8")
+
+        record = st.summary_record("negative_subthreshold", tmp_path)
+
+        assert record == {
+            "state": "negative_subthreshold",
+            "best_depth_score": None,
+            "event_count": 0,
+            "support_count": None,
+        }
+
+    def test_a_write_failure_costs_the_sidecar_not_the_run(self, tmp_path: Path):
+        st.write_signal(self.SIGNAL, tmp_path / "absent")
+
+        assert not (tmp_path / "absent").exists()

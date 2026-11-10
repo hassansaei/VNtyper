@@ -33,9 +33,11 @@ subthreshold candidate is not a call.
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Final
 
@@ -54,6 +56,13 @@ DEPTH_GATE: Final[str] = "depth_confidence_pass"
 #: not load the same configuration file. Only the human sentence after it is configurable,
 #: in ``kestrel_config.json``'s ``subthreshold_note.template``.
 NOTE_MARKER: Final[str] = "Subthreshold candidate:"
+
+#: The sidecar beside ``kestrel_result.tsv`` that keeps the signal in numbers, so
+#: ``pipeline_summary.json`` need not parse the configurable sentence back.
+SIGNAL_FILENAME: Final[str] = "subthreshold_signal.json"
+
+#: The pre-result column holding a row's alternate-allele read support.
+SUPPORT_COLUMN: Final[str] = "Estimated_Depth_AlternateVariant"
 
 #: Columns the signal is computed from, beyond the gates themselves.
 _REQUIRED_COLUMNS: Final[tuple[str, ...]] = ("Depth_Score", "POS", "REF", "ALT")
@@ -76,12 +85,15 @@ class SubthresholdSignal:
         best_depth_score: The highest ``Depth_Score`` among the eligible rows, i.e. how
             close the strongest suppressed candidate came to the floor.
         floor: The reporting floor it fell below.
+        support_count: Alternate-allele read support of the row with the best
+            ``Depth_Score``, or None when the pre-result does not carry it.
     """
 
     events: int
     rows: int
     best_depth_score: float
     floor: float
+    support_count: int | None = None
 
 
 def _verdict(value: object) -> bool | None:
@@ -217,11 +229,15 @@ def detect(
         return None
 
     events = usable[["POS", "REF", "ALT"]].astype(str).drop_duplicates()
+    support = float("nan")
+    if SUPPORT_COLUMN in usable.columns:
+        support = float(pd.to_numeric(usable[SUPPORT_COLUMN], errors="coerce")[scores.idxmax()])
     signal = SubthresholdSignal(
         events=int(len(events)),
         rows=int(len(usable)),
         best_depth_score=float(scores.max()),
         floor=float(floor),
+        support_count=None if math.isnan(support) else int(support),
     )
     logger.info(
         "Subthreshold signal: %d event(s) over %d row(s), best Depth_Score %g, floor %g.",
@@ -307,6 +323,47 @@ def format_note(signal: SubthresholdSignal, template: str) -> str | None:
         logger.error("subthreshold_note.template is not renderable (%s); no note will be written.", error)
         return None
     return " ".join(rendered.split())
+
+
+def write_signal(signal: SubthresholdSignal, output_dir: str | Path) -> None:
+    """Record the signal as :data:`SIGNAL_FILENAME` beside the note it belongs to.
+
+    Args:
+        signal: The signal the note was rendered from.
+        output_dir: The Kestrel output directory.
+    """
+    try:
+        (Path(output_dir) / SIGNAL_FILENAME).write_text(json.dumps(asdict(signal), indent=4) + "\n", encoding="utf-8")
+    except OSError as error:
+        # An annotation: losing it must never cost a result.
+        logger.warning("Could not write %s: %s", SIGNAL_FILENAME, error)
+
+
+def summary_record(state: str, kestrel_dir: str | Path) -> dict[str, object]:
+    """The ``subthreshold_signal`` mapping ``pipeline_summary.json`` carries.
+
+    Args:
+        state: The Kestrel screening result when it is the subthreshold state, else ``"none"``.
+        kestrel_dir: The Kestrel output directory holding :data:`SIGNAL_FILENAME`.
+
+    Returns:
+        dict: ``state``, ``best_depth_score``, ``event_count`` and ``support_count``. The
+        numbers are read only for a subthreshold state, so a sidecar an earlier run left
+        behind can never describe a sample that has no note.
+    """
+    record: dict[str, object] = {"state": state, "best_depth_score": None, "event_count": 0, "support_count": None}
+    if state == "none":
+        return record
+    try:
+        saved = json.loads((Path(kestrel_dir) / SIGNAL_FILENAME).read_text(encoding="utf-8"))
+        record.update(
+            best_depth_score=float(saved["best_depth_score"]),
+            event_count=int(saved["events"]),
+            support_count=None if saved.get("support_count") is None else int(saved["support_count"]),
+        )
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        logger.warning("No readable %s for the subthreshold record: %s", SIGNAL_FILENAME, error)
+    return record
 
 
 def find_note(comments: Iterable[str] | None) -> str | None:

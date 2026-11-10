@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from vntyper.scripts.cohort_summary_parsing import parse_pipeline_summary
+from vntyper.scripts.cohort_summary_parsing import SCREENING_EXPORT_COLUMNS, parse_pipeline_summary
 
 pytestmark = pytest.mark.unit
 
@@ -19,6 +19,7 @@ def test_parse_pipeline_summary_empty() -> None:
         "assembly": "N/A",
         "pipeline": "N/A",
         "coverage": {},
+        **dict.fromkeys(SCREENING_EXPORT_COLUMNS),
     }
 
 
@@ -125,3 +126,25 @@ def test_cohort_report_shows_length_tier_kpi_only_when_assessed(tmp_path) -> Non
 def test_unknown_cohort_tier_is_rejected() -> None:
     with pytest.raises(ValueError, match="length sensitivity tier"):
         parse_pipeline_summary({"estimated_total_repeat_count": 120.0, "length_sensitivity_tier": "severe"})
+
+
+def test_screening_exports_are_flattened_into_the_statistics() -> None:
+    summary = {
+        "confidence_grade": "not-established",
+        "subthreshold_signal": {
+            "state": "negative_subthreshold",
+            "best_depth_score": 0.0041,
+            "event_count": 2,
+            "support_count": 7,
+        },
+    }
+
+    _, _, stats = parse_pipeline_summary(summary)
+
+    assert {column: stats[column] for column in SCREENING_EXPORT_COLUMNS} == {
+        "confidence_grade": "not-established",
+        "subthreshold_state": "negative_subthreshold",
+        "subthreshold_best_depth_score": 0.0041,
+        "subthreshold_event_count": 2,
+        "subthreshold_support_count": 7,
+    }

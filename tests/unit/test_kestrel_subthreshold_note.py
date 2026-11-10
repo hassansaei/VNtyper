@@ -13,6 +13,7 @@ output directory.
 """
 
 import csv
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -147,6 +148,22 @@ class TestTheNoteHelper:
         assert note is not None
         assert note.startswith(st.NOTE_MARKER)
         assert "0.0031" in note
+
+    def test_the_note_is_recorded_beside_it_in_numbers(self, tmp_path: Path):
+        pre_result(tmp_path / "kestrel_pre_result.tsv", [{}])
+
+        kg._subthreshold_note(str(tmp_path), self.config())
+
+        saved = json.loads((tmp_path / st.SIGNAL_FILENAME).read_text(encoding="utf-8"))
+        assert saved["events"] == 1
+        assert saved["best_depth_score"] == pytest.approx(0.0031)
+
+    def test_no_note_writes_no_numbers(self, tmp_path: Path):
+        pre_result(tmp_path / "kestrel_pre_result.tsv", [{st.DEPTH_GATE: True}])
+
+        kg._subthreshold_note(str(tmp_path), self.config())
+
+        assert not (tmp_path / st.SIGNAL_FILENAME).exists()
 
     def test_it_is_silent_when_nothing_is_eligible(self, tmp_path: Path):
         pre_result(tmp_path / "kestrel_pre_result.tsv", [{st.DEPTH_GATE: True}])

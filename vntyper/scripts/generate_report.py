@@ -106,7 +106,9 @@ from vntyper.scripts.report_identity import (
     recorded_or_not,
     resolve_sample_name,
 )
+from vntyper.scripts.report_integrity import anchor_pipeline_summary
 from vntyper.scripts.screening_summary import (
+    SUBTHRESHOLD_RESULT,
     algorithm_state_text,
     build_screening_summary,
     coverage_not_measured_note,
@@ -120,7 +122,8 @@ from vntyper.scripts.screening_summary import (
 # These five names are matched by exact string comparison against what pipeline.py
 # records. A typo does not fail - it silently drops a report section (AGENTS.md
 # trap 5), so they are named, never spelled out.
-from vntyper.scripts.subthreshold import find_note
+from vntyper.scripts.subthreshold import find_note, summary_record
+from vntyper.scripts.summary import write_summary
 from vntyper.scripts.summary_steps import (
     STEP_ABSENT,
     STEP_ADVNTR,
@@ -421,6 +424,7 @@ def generate_summary_report(
     sample_name=None,
     report_igv=report_assets.DEFAULT_REPORT_IGV,
     bed_from_kestrel_stage=None,
+    record_exports=False,
 ):
     """
     Generates a summary report based on a pipeline summary JSON file.
@@ -460,6 +464,10 @@ def generate_summary_report(
             ``vntyper report`` discovered) or one the operator named (False). Only the
             stage's file can be left over by an earlier run. None infers it from the
             path; see :func:`~vntyper.scripts.igv_absence.decide_igv_absence`.
+        record_exports (bool, optional): Write ``confidence_grade`` and
+            ``subthreshold_signal`` into ``pipeline_summary.json`` and re-anchor it before
+            rendering. True only from the pipeline; ``vntyper report`` never rewrites a
+            supplied summary.
 
     Raises:
         ValueError: If config is not provided, an operator template directory lacks
@@ -912,6 +920,13 @@ def generate_summary_report(
         cross_match_is_positive=cross_match_is_positive,
     )
     logger.debug("Summary text generated: %s", screening.text)
+    if record_exports:
+        subthreshold_state = screening.kestrel_result if screening.kestrel_result == SUBTHRESHOLD_RESULT else "none"
+        pipeline_summary["confidence_grade"] = screening.confidence_grade
+        pipeline_summary["subthreshold_signal"] = summary_record(subthreshold_state, Path(output_dir) / "kestrel")
+        # Re-anchored before rendering, so the digest the report prints covers these keys.
+        anchor_pipeline_summary(pipeline_summary, output_dir)
+        write_summary(pipeline_summary, summary_file_path)
     length_presentation = build_length_presentation(
         pipeline_summary,
         report_config,
