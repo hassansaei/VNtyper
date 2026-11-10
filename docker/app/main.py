@@ -857,9 +857,11 @@ def job_summary(job_id: str):
     try:
         descriptor, _ = open_owned_regular(zip_path)
         with os.fdopen(descriptor, "rb") as handle, zipfile.ZipFile(handle) as archive:
-            member = next(
-                (info for info in archive.infolist() if info.filename.endswith("pipeline_summary.json")), None
-            )
+            # The run's own summary is the shallowest one; a module may archive others below it.
+            candidates = [
+                info for info in archive.infolist() if info.filename.rsplit("/", 1)[-1] == "pipeline_summary.json"
+            ]
+            member = min(candidates, key=lambda info: info.filename.count("/"), default=None)
             if member is None or member.file_size > MAX_SUMMARY_BYTES:
                 raise ValueError("no usable pipeline_summary.json in archive")
             summary = json.loads(archive.read(member))

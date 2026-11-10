@@ -30,6 +30,19 @@ def test_returns_the_summary_from_the_result_archive(client, web_app) -> None:
     assert response.json() == SUMMARY
 
 
+def test_prefers_the_run_summary_over_nested_or_lookalike_members(client, web_app) -> None:
+    _archive(
+        web_app,
+        {
+            f"{JOB_ID}/advntr/pipeline_summary.json": b'{"nested": true}',
+            f"{JOB_ID}/old_pipeline_summary.json": b'{"lookalike": true}',
+            f"{JOB_ID}/pipeline_summary.json": json.dumps(SUMMARY).encode(),
+        },
+    )
+
+    assert client.get(f"/job-summary/{JOB_ID}/").json() == SUMMARY
+
+
 @pytest.mark.parametrize(
     "members",
     [None, {"x.log": b"no summary"}, {"pipeline_summary.json": b"{not json"}],
