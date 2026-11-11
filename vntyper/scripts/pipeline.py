@@ -6,7 +6,7 @@ import sys
 import tempfile
 import timeit
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -45,7 +45,7 @@ from vntyper.scripts.pipeline_advntr_cleanup import (
     validate_pipeline_log_outside_advntr_preflight,
     validate_pipeline_log_outside_selected_advntr_model,
 )
-from vntyper.scripts.pipeline_advntr_execution import execute_advntr_genotype
+from vntyper.scripts.pipeline_advntr_execution import execute_advntr_genotype, overlap_thread_budget
 from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight, plan_valid_advntr_preflight
 from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
 from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext, prepare_advntr_run_context
@@ -1183,6 +1183,7 @@ def run_pipeline(
         # adVNTR reads only the sliced BAM and Kestrel only the FASTQs, so the adVNTR process
         # runs beside Kestrel instead of after it. Its output is still parsed after Kestrel.
         advntr_future = None
+        kestrel_threads = threads
         advntr_reusable = bool(
             "advntr" in extra_modules
             and resume
@@ -1243,6 +1244,8 @@ def run_pipeline(
                         coverage_prefix="advntr_precheck",
                     )
                 advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                # Side by side the two stages share --threads rather than each taking all of it.
+                thread_budget = overlap_thread_budget(threads)
                 advntr_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vntyper-advntr")
                 advntr_future = advntr_pool.submit(
                     execute_advntr_genotype,
@@ -1252,12 +1255,16 @@ def run_pipeline(
                     alignment=sorted_bam,
                     output=dirs["advntr"],
                     cwd=project_root,
-                    threads=threads,
+                    threads=thread_budget[0] if thread_budget else threads,
                     additional_commands=advntr_additional_commands,
                     background=calibration_background,
                     invoke=run_advntr,
                 )
                 advntr_pool.shutdown(wait=False)
+                if thread_budget is None:
+                    wait([advntr_future])
+                else:
+                    kestrel_threads = thread_budget[1]
         if (
             resume
             and prior_summary
@@ -1282,7 +1289,7 @@ def run_pipeline(
                 summary=summary,
                 summary_file_path=summary_file_path,
                 runner=run_kestrel,
-                threads=threads,
+                threads=kestrel_threads,
                 resolved_component=run_configuration.kestrel,
                 nomenclature_component=run_configuration.nomenclature,
                 dominance_component=run_configuration.dominance,

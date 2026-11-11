@@ -17,6 +17,22 @@ from vntyper.scripts.run_configuration import RunConfiguration, cast_mapping
 logger = logging.getLogger(__name__)
 
 
+def overlap_thread_budget(threads: int) -> tuple[int, int] | None:
+    """Split ``--threads`` between adVNTR and Kestrel when the two run side by side.
+
+    Args:
+        threads: The pipeline's ``--threads``.
+
+    Returns:
+        ``(advntr_threads, kestrel_threads)`` summing to ``threads``, or None below two
+        threads, where the stages cannot share the budget and must run one after another.
+    """
+    if threads < 2:
+        return None
+    advntr_threads = threads // 2
+    return advntr_threads, threads - advntr_threads
+
+
 def execute_advntr_genotype(
     *,
     configuration: RunConfiguration,
