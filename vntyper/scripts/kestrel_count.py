@@ -81,10 +81,13 @@ def allocate_count_threads(threads: int) -> tuple[int, int, int]:
     pipeline already reads ``-@ N`` as "N *additional* threads", so a budget that
     silently multiplied would be doubly surprising.
 
-    The k-mer stage takes the largest share because it is the measured bottleneck:
-    raising ``-d`` from 1 to 4 while leaving ``-t`` at KAnalyze's own default of 4 took
-    the count step from 31.72 s to 16.62 s. Every measured configuration also used
-    ``-d : -l`` of 2 : 1, which is preserved here.
+    The split stage is the measured bottleneck once the input is large enough to need
+    threads. On a 2.1 M-read-pair FASTQ set (identical IKC bytes in every run), ``-d 4
+    -l 2 -t 2`` took 13.4 s and ``-d 3 -l 4 -t 1`` 10.1 s; at four threads ``-d 2 -l 1
+    -t 1`` took 22.7 s and ``-d 1 -l 2 -t 1`` 14.9 s. ``-t`` and ``-d`` barely moved the
+    wall time, and ``-l`` beyond four gained nothing while adding about 0.6 GB of heap
+    per split thread, so split takes half the budget up to four, sort one, and the k-mer
+    stage the rest.
 
     Args:
         threads: The run's total thread budget.
@@ -100,10 +103,8 @@ def allocate_count_threads(threads: int) -> tuple[int, int, int]:
             a bug, and flooring it silently would hide that.
     """
     budget = _positive_int(threads, "threads")
-    # Split and sort take a quarter each and the k-mer stage takes the remainder, so
-    # the three sum to exactly the budget above the floors rather than approximately.
-    split_threads = max(1, budget // 4)
-    sort_threads = max(1, budget // 4)
+    split_threads = min(4, max(1, budget // 2))
+    sort_threads = 1
     kmer_threads = max(1, budget - split_threads - sort_threads)
     return kmer_threads, split_threads, sort_threads
 

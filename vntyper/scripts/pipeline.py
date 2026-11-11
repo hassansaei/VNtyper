@@ -6,6 +6,7 @@ import sys
 import tempfile
 import timeit
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -225,6 +226,11 @@ def _holds_only_own_log(entry: Path, own_log: Path | None) -> bool:
     )
 
 
+def _fingerprint_if_file(path: str | None) -> str | None:
+    """Return the SHA-256 fingerprint of ``path``, or None when it is not a regular file."""
+    return fingerprint_file(Path(path)) if path and Path(path).is_file() else None
+
+
 def run_pipeline(
     bwa_reference,
     output_dir,
@@ -396,9 +402,6 @@ def run_pipeline(
             *length_operator_paths,
             *caller_operator_paths,
         )
-        canonical_input_files, input_fingerprints = build_canonical_inputs_and_fingerprints(
-            input_type, fastq1, fastq2, bam, cram, bed_file
-        )
 
         analysis_settings = build_analysis_settings(
             reference_assembly=reference_assembly,
@@ -427,11 +430,15 @@ def run_pipeline(
         elif input_type == "CRAM" and reference_fasta:
             effective_reference_path = str(Path(os.path.join(project_root, reference_fasta)).resolve())
 
-        effective_reference_fingerprint = (
-            fingerprint_file(Path(effective_reference_path))
-            if effective_reference_path and Path(effective_reference_path).is_file()
-            else None
+        # A whole-file SHA-256 of an exome BAM or a genome FASTA takes seconds to tens of
+        # seconds and only feeds the summary. hashlib releases the GIL, so hashing runs
+        # beside the samtools preflight instead of in front of it.
+        fingerprint_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vntyper-fingerprint")
+        inputs_future = fingerprint_pool.submit(
+            build_canonical_inputs_and_fingerprints, input_type, fastq1, fastq2, bam, cram, bed_file
         )
+        reference_future = fingerprint_pool.submit(_fingerprint_if_file, effective_reference_path)
+        fingerprint_pool.shutdown(wait=False)
 
         shark_reference_path = None
         shark_reference_fingerprint = None
@@ -511,6 +518,8 @@ def run_pipeline(
                 logger.error(msg)
                 raise ValueError(msg)
 
+            canonical_input_files, input_fingerprints = inputs_future.result()
+            effective_reference_fingerprint = reference_future.result()
             refusals = resume_refusals(
                 prior_summary,
                 version=VERSION,
@@ -725,11 +734,12 @@ def run_pipeline(
             bwa_reference_source=reference_source_effective,
             alignment_plan=alignment_plan,
         )
-        if input_type == "CRAM" and reference_provenance.path:
+        if input_type == "CRAM" and reference_provenance.path and reference_provenance.path != effective_reference_path:
             effective_reference_path = reference_provenance.path
-            effective_reference_fingerprint = (
-                fingerprint_file(Path(effective_reference_path)) if Path(effective_reference_path).is_file() else None
-            )
+            effective_reference_fingerprint = _fingerprint_if_file(effective_reference_path)
+        else:
+            effective_reference_fingerprint = reference_future.result()
+        canonical_input_files, input_fingerprints = inputs_future.result()
 
         summary = start_summary(
             version=VERSION,

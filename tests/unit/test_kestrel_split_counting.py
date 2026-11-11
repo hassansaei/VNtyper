@@ -121,14 +121,14 @@ def test_kestrel_is_no_longer_given_the_fastq_operands(tmp_path, monkeypatch):
 
 
 def test_the_thread_budget_reaches_the_count_command(tmp_path, monkeypatch):
-    """--threads 8 allocates -d4 -l2 -t2; the call step stays single-threaded."""
+    """--threads 8 allocates -d3 -l4 -t1; the call step stays single-threaded."""
     run_command, commands = _recorder(tmp_path)
     monkeypatch.setattr(kg, "run_command", run_command)
     _stub_postprocessing(monkeypatch)
 
     _run_kestrel(tmp_path, threads=8)
 
-    assert "-d 4 -l 2 -t 2" in commands[0]
+    assert "-d 3 -l 4 -t 1" in commands[0]
 
 
 def test_the_call_step_takes_serial_gc_and_the_count_step_does_not(tmp_path, monkeypatch):
