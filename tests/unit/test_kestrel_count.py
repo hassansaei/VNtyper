@@ -68,7 +68,7 @@ def test_the_count_command_mirrors_the_defaults_kestrel_would_have_used():
     """
     assert _command() == (
         "java -Xmx12g -jar k/kanalyze.jar count -k 20 -c kmercount:5 --minsize 15 "
-        "-m ikc -d 4 -l 2 -t 2 --temploc /out -o /out/kmer_20/kestrel_kmers.ikc "
+        "-m ikc -d 3 -l 4 -t 1 --temploc /out -o /out/kmer_20/kestrel_kmers.ikc "
         "/a_R1.fastq.gz /a_R2.fastq.gz"
     )
 
@@ -195,12 +195,13 @@ def test_an_invalid_thread_count_is_rejected(bad):
         (1, (1, 1, 1)),
         (2, (1, 1, 1)),
         (3, (1, 1, 1)),
-        (4, (2, 1, 1)),
-        (6, (4, 1, 1)),
-        (8, (4, 2, 2)),
-        (12, (6, 3, 3)),
-        (16, (8, 4, 4)),
-        (32, (16, 8, 8)),
+        (4, (1, 2, 1)),
+        (5, (2, 2, 1)),
+        (6, (2, 3, 1)),
+        (8, (3, 4, 1)),
+        (12, (7, 4, 1)),
+        (16, (11, 4, 1)),
+        (32, (27, 4, 1)),
     ],
 )
 def test_the_budget_is_allocated_across_the_three_stages(threads: int, expected: tuple[int, int, int]):
@@ -234,19 +235,16 @@ def test_the_allocation_never_exceeds_the_budget_above_two_threads(threads: int)
     assert sum(allocate_count_threads(threads)) <= threads
 
 
-@pytest.mark.parametrize("threads", [4, 8, 16, 32])
-def test_the_kmer_stage_gets_the_largest_share(threads: int):
-    """It is the measured bottleneck, and the plan had this backwards.
+@pytest.mark.parametrize(("threads", "split"), [(4, 2), (6, 3), (8, 4), (16, 4), (32, 4)])
+def test_the_split_stage_gets_half_the_budget_up_to_four(threads: int, split: int):
+    """Split is the measured bottleneck, and past four it buys only heap.
 
-    Raising ``-d`` from 1 to 4 while leaving ``-t`` at its default of 4 took the count
-    step from 31.72 s to 16.62 s, so the k-mer stage -- not sort -- is what the budget
-    should buy. An allocation that gave sort half the budget would hand ``--threads 4``
-    fewer sort workers than stock KAnalyze uses by default, for no gain elsewhere.
+    On 2.1 M read pairs ``-d 4 -l 2 -t 2`` took 13.4 s and ``-d 3 -l 4 -t 1`` 10.1 s; at
+    four threads ``-d 2 -l 1 -t 1`` took 22.7 s and ``-d 1 -l 2 -t 1`` 14.9 s, every run
+    writing the same IKC bytes. ``-l`` 6 to 15 stayed at 9.5 to 10 s with about 0.6 GB
+    more heap per split thread.
     """
-    kmer, split, sort = allocate_count_threads(threads)
-
-    assert kmer >= split
-    assert kmer >= sort
+    assert allocate_count_threads(threads)[1] == split
 
 
 def test_a_thread_budget_below_one_is_rejected_rather_than_silently_floored():

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import timeit
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -225,6 +226,11 @@ def _holds_only_own_log(entry: Path, own_log: Path | None) -> bool:
     )
 
 
+def _fingerprint_if_file(path: str | None) -> str | None:
+    """Return the SHA-256 fingerprint of ``path``, or None when it is not a regular file."""
+    return fingerprint_file(Path(path)) if path and Path(path).is_file() else None
+
+
 def run_pipeline(
     bwa_reference,
     output_dir,
@@ -396,9 +402,6 @@ def run_pipeline(
             *length_operator_paths,
             *caller_operator_paths,
         )
-        canonical_input_files, input_fingerprints = build_canonical_inputs_and_fingerprints(
-            input_type, fastq1, fastq2, bam, cram, bed_file
-        )
 
         analysis_settings = build_analysis_settings(
             reference_assembly=reference_assembly,
@@ -427,11 +430,15 @@ def run_pipeline(
         elif input_type == "CRAM" and reference_fasta:
             effective_reference_path = str(Path(os.path.join(project_root, reference_fasta)).resolve())
 
-        effective_reference_fingerprint = (
-            fingerprint_file(Path(effective_reference_path))
-            if effective_reference_path and Path(effective_reference_path).is_file()
-            else None
+        # A whole-file SHA-256 of an exome BAM or a genome FASTA takes seconds to tens of
+        # seconds and only feeds the summary. hashlib releases the GIL, so hashing runs
+        # beside the samtools preflight instead of in front of it.
+        fingerprint_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vntyper-fingerprint")
+        inputs_future = fingerprint_pool.submit(
+            build_canonical_inputs_and_fingerprints, input_type, fastq1, fastq2, bam, cram, bed_file
         )
+        reference_future = fingerprint_pool.submit(_fingerprint_if_file, effective_reference_path)
+        fingerprint_pool.shutdown(wait=False)
 
         shark_reference_path = None
         shark_reference_fingerprint = None
@@ -511,6 +518,8 @@ def run_pipeline(
                 logger.error(msg)
                 raise ValueError(msg)
 
+            canonical_input_files, input_fingerprints = inputs_future.result()
+            effective_reference_fingerprint = reference_future.result()
             refusals = resume_refusals(
                 prior_summary,
                 version=VERSION,
@@ -725,11 +734,12 @@ def run_pipeline(
             bwa_reference_source=reference_source_effective,
             alignment_plan=alignment_plan,
         )
-        if input_type == "CRAM" and reference_provenance.path:
+        if input_type == "CRAM" and reference_provenance.path and reference_provenance.path != effective_reference_path:
             effective_reference_path = reference_provenance.path
-            effective_reference_fingerprint = (
-                fingerprint_file(Path(effective_reference_path)) if Path(effective_reference_path).is_file() else None
-            )
+            effective_reference_fingerprint = _fingerprint_if_file(effective_reference_path)
+        else:
+            effective_reference_fingerprint = reference_future.result()
+        canonical_input_files, input_fingerprints = inputs_future.result()
 
         summary = start_summary(
             version=VERSION,
@@ -1170,6 +1180,84 @@ def run_pipeline(
             write_summary_path=summary_file_path,
         )
 
+        # adVNTR reads only the sliced BAM and Kestrel only the FASTQs, so the adVNTR process
+        # runs beside Kestrel instead of after it. Its output is still parsed after Kestrel.
+        advntr_future = None
+        advntr_reusable = bool(
+            "advntr" in extra_modules
+            and resume
+            and prior_summary
+            and compatibility.advntr_model_matches
+            and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir)
+        )
+        if "advntr" in extra_modules and not advntr_reusable and advntr_context is not None:
+            try:
+                from vntyper.modules.advntr.advntr_genotyping import (
+                    advntr_output_extension,
+                    process_advntr_output,
+                    run_advntr,
+                )
+                from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
+            except ImportError as exc:
+                logger.error(f"adVNTR module import failed: {exc}")
+                sys.exit(1)
+
+            for stage_rel in (
+                "output_adVNTR_result.tsv",
+                "output_adVNTR.tsv",
+                "output_adVNTR.vcf",
+                "cross_match_results.tsv",
+                "output_advntr.log",
+            ):
+                invalidate_advntr_artifact(Path(dirs["advntr"]) / stage_rel)
+
+            advntr_settings = run_configuration.advntr.get("settings")
+            if not isinstance(advntr_settings, Mapping):
+                raise ValueError("resolved adVNTR settings must be a mapping")
+            # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
+            # this run's parser. Both supported producer names and the derived result
+            # were already invalidated immediately after input-ownership validation.
+            output_ext = advntr_output_extension(advntr_settings)
+
+            max_cov = module_args.get("advntr", {}).get("max_coverage")
+            sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
+            if sorted_bam and sorted_bam.exists():
+                sorted_bai = Path(f"{sorted_bam}.bai")
+                if sorted_bam.stat().st_size > 0 and (not sorted_bai.exists() or sorted_bai.stat().st_size == 0):
+                    logger.info("Rebuilding missing or empty sliced BAM index for adVNTR: %s", sorted_bai)
+                    index_cmd = f"{config['tools']['samtools']} index -@ {threads} {sorted_bam}"
+                    run_command(
+                        index_cmd,
+                        str(Path(dirs["fastq_bam_processing"]) / "reindex_sliced_bam.log"),
+                        critical=False,
+                    )
+                if max_cov:
+                    logger.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
+                    sorted_bam = downsample_bam_if_needed(
+                        bam_path=sorted_bam,
+                        max_coverage=max_cov,
+                        reference_assembly=reference_assembly,
+                        threads=threads,
+                        config=config,
+                        coverage_dir=dirs["coverage"],
+                        coverage_prefix="advntr_precheck",
+                    )
+                advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                advntr_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vntyper-advntr")
+                advntr_future = advntr_pool.submit(
+                    execute_advntr_genotype,
+                    configuration=run_configuration,
+                    native_context=advntr_context,
+                    config=config,
+                    alignment=sorted_bam,
+                    output=dirs["advntr"],
+                    cwd=project_root,
+                    threads=threads,
+                    additional_commands=advntr_additional_commands,
+                    background=calibration_background,
+                    invoke=run_advntr,
+                )
+                advntr_pool.shutdown(wait=False)
         if (
             resume
             and prior_summary
@@ -1236,81 +1324,14 @@ def run_pipeline(
                 advntr_model["genomic_interval"],
             )
 
-            if (
-                resume
-                and prior_summary
-                and compatibility.advntr_model_matches
-                and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir)
-            ):
+            if advntr_reusable:
                 logger.info("Reusing previous %s step results.", STEP_ADVNTR)
                 record_reused_stage(summary, prior_summary, STEP_ADVNTR, output_root=output_dir)
                 write_summary(summary, summary_file_path)
 
             else:
-                try:
-                    from vntyper.modules.advntr.advntr_genotyping import (
-                        advntr_output_extension,
-                        process_advntr_output,
-                        run_advntr,
-                    )
-                    from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
-                except ImportError as exc:
-                    logger.error(f"adVNTR module import failed: {exc}")
-                    sys.exit(1)
-
-                for stage_rel in (
-                    "output_adVNTR_result.tsv",
-                    "output_adVNTR.tsv",
-                    "output_adVNTR.vcf",
-                    "cross_match_results.tsv",
-                    "output_advntr.log",
-                ):
-                    invalidate_advntr_artifact(Path(dirs["advntr"]) / stage_rel)
-
-                advntr_settings = run_configuration.advntr.get("settings")
-                if not isinstance(advntr_settings, Mapping):
-                    raise ValueError("resolved adVNTR settings must be a mapping")
-                # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
-                # this run's parser. Both supported producer names and the derived result
-                # were already invalidated immediately after input-ownership validation.
-                output_ext = advntr_output_extension(advntr_settings)
-
-                max_cov = module_args.get("advntr", {}).get("max_coverage")
-                sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
-                if sorted_bam and sorted_bam.exists():
-                    sorted_bai = Path(f"{sorted_bam}.bai")
-                    if sorted_bam.stat().st_size > 0 and (not sorted_bai.exists() or sorted_bai.stat().st_size == 0):
-                        logger.info("Rebuilding missing or empty sliced BAM index for adVNTR: %s", sorted_bai)
-                        index_cmd = f"{config['tools']['samtools']} index -@ {threads} {sorted_bam}"
-                        run_command(
-                            index_cmd,
-                            str(Path(dirs["fastq_bam_processing"]) / "reindex_sliced_bam.log"),
-                            critical=False,
-                        )
-                    if max_cov:
-                        logger.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
-                        sorted_bam = downsample_bam_if_needed(
-                            bam_path=sorted_bam,
-                            max_coverage=max_cov,
-                            reference_assembly=reference_assembly,
-                            threads=threads,
-                            config=config,
-                            coverage_dir=dirs["coverage"],
-                            coverage_prefix="advntr_precheck",
-                        )
-                    advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                    advntr_status = execute_advntr_genotype(
-                        configuration=run_configuration,
-                        native_context=advntr_context,
-                        config=config,
-                        alignment=sorted_bam,
-                        output=dirs["advntr"],
-                        cwd=project_root,
-                        threads=threads,
-                        additional_commands=advntr_additional_commands,
-                        background=calibration_background,
-                        invoke=run_advntr,
-                    )
+                if advntr_future is not None:
+                    advntr_status = advntr_future.result()
                     if advntr_status != 0:
                         msg = f"adVNTR genotyping returned non-zero status {advntr_status}; result parsing was not attempted."
                         logger.error(msg)
