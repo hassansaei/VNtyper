@@ -6,7 +6,7 @@ import sys
 import tempfile
 import timeit
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -45,7 +45,7 @@ from vntyper.scripts.pipeline_advntr_cleanup import (
     validate_pipeline_log_outside_advntr_preflight,
     validate_pipeline_log_outside_selected_advntr_model,
 )
-from vntyper.scripts.pipeline_advntr_execution import execute_advntr_genotype, overlap_thread_budget
+from vntyper.scripts.pipeline_advntr_execution import execute_advntr_genotype
 from vntyper.scripts.pipeline_advntr_preflight import plan_advntr_preflight, plan_valid_advntr_preflight
 from vntyper.scripts.pipeline_advntr_preflight import select_advntr_reference as select_advntr_reference
 from vntyper.scripts.pipeline_advntr_run_context import AdvntrRunContext, prepare_advntr_run_context
@@ -1180,91 +1180,6 @@ def run_pipeline(
             write_summary_path=summary_file_path,
         )
 
-        # adVNTR reads only the sliced BAM and Kestrel only the FASTQs, so the adVNTR process
-        # runs beside Kestrel instead of after it. Its output is still parsed after Kestrel.
-        advntr_future = None
-        kestrel_threads = threads
-        advntr_reusable = bool(
-            "advntr" in extra_modules
-            and resume
-            and prior_summary
-            and compatibility.advntr_model_matches
-            and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir)
-        )
-        if "advntr" in extra_modules and not advntr_reusable and advntr_context is not None:
-            try:
-                from vntyper.modules.advntr.advntr_genotyping import (
-                    advntr_output_extension,
-                    process_advntr_output,
-                    run_advntr,
-                )
-                from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
-            except ImportError as exc:
-                logger.error(f"adVNTR module import failed: {exc}")
-                sys.exit(1)
-
-            for stage_rel in (
-                "output_adVNTR_result.tsv",
-                "output_adVNTR.tsv",
-                "output_adVNTR.vcf",
-                "cross_match_results.tsv",
-                "output_advntr.log",
-            ):
-                invalidate_advntr_artifact(Path(dirs["advntr"]) / stage_rel)
-
-            advntr_settings = run_configuration.advntr.get("settings")
-            if not isinstance(advntr_settings, Mapping):
-                raise ValueError("resolved adVNTR settings must be a mapping")
-            # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
-            # this run's parser. Both supported producer names and the derived result
-            # were already invalidated immediately after input-ownership validation.
-            output_ext = advntr_output_extension(advntr_settings)
-
-            max_cov = module_args.get("advntr", {}).get("max_coverage")
-            sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
-            if sorted_bam and sorted_bam.exists():
-                sorted_bai = Path(f"{sorted_bam}.bai")
-                if sorted_bam.stat().st_size > 0 and (not sorted_bai.exists() or sorted_bai.stat().st_size == 0):
-                    logger.info("Rebuilding missing or empty sliced BAM index for adVNTR: %s", sorted_bai)
-                    index_cmd = f"{config['tools']['samtools']} index -@ {threads} {sorted_bam}"
-                    run_command(
-                        index_cmd,
-                        str(Path(dirs["fastq_bam_processing"]) / "reindex_sliced_bam.log"),
-                        critical=False,
-                    )
-                if max_cov:
-                    logger.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
-                    sorted_bam = downsample_bam_if_needed(
-                        bam_path=sorted_bam,
-                        max_coverage=max_cov,
-                        reference_assembly=reference_assembly,
-                        threads=threads,
-                        config=config,
-                        coverage_dir=dirs["coverage"],
-                        coverage_prefix="advntr_precheck",
-                    )
-                advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                # Side by side the two stages share --threads rather than each taking all of it.
-                thread_budget = overlap_thread_budget(threads)
-                advntr_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vntyper-advntr")
-                advntr_future = advntr_pool.submit(
-                    execute_advntr_genotype,
-                    configuration=run_configuration,
-                    native_context=advntr_context,
-                    config=config,
-                    alignment=sorted_bam,
-                    output=dirs["advntr"],
-                    cwd=project_root,
-                    threads=thread_budget[0] if thread_budget else threads,
-                    additional_commands=advntr_additional_commands,
-                    background=calibration_background,
-                    invoke=run_advntr,
-                )
-                advntr_pool.shutdown(wait=False)
-                if thread_budget is None:
-                    wait([advntr_future])
-                else:
-                    kestrel_threads = thread_budget[1]
         if (
             resume
             and prior_summary
@@ -1289,7 +1204,7 @@ def run_pipeline(
                 summary=summary,
                 summary_file_path=summary_file_path,
                 runner=run_kestrel,
-                threads=kestrel_threads,
+                threads=threads,
                 resolved_component=run_configuration.kestrel,
                 nomenclature_component=run_configuration.nomenclature,
                 dominance_component=run_configuration.dominance,
@@ -1331,14 +1246,81 @@ def run_pipeline(
                 advntr_model["genomic_interval"],
             )
 
-            if advntr_reusable:
+            if (
+                resume
+                and prior_summary
+                and compatibility.advntr_model_matches
+                and step_is_reusable(prior_summary, STEP_ADVNTR, output_dir)
+            ):
                 logger.info("Reusing previous %s step results.", STEP_ADVNTR)
                 record_reused_stage(summary, prior_summary, STEP_ADVNTR, output_root=output_dir)
                 write_summary(summary, summary_file_path)
 
             else:
-                if advntr_future is not None:
-                    advntr_status = advntr_future.result()
+                try:
+                    from vntyper.modules.advntr.advntr_genotyping import (
+                        advntr_output_extension,
+                        process_advntr_output,
+                        run_advntr,
+                    )
+                    from vntyper.modules.advntr.advntr_result_io import invalidate_advntr_artifact
+                except ImportError as exc:
+                    logger.error(f"adVNTR module import failed: {exc}")
+                    sys.exit(1)
+
+                for stage_rel in (
+                    "output_adVNTR_result.tsv",
+                    "output_adVNTR.tsv",
+                    "output_adVNTR.vcf",
+                    "cross_match_results.tsv",
+                    "output_advntr.log",
+                ):
+                    invalidate_advntr_artifact(Path(dirs["advntr"]) / stage_rel)
+
+                advntr_settings = run_configuration.advntr.get("settings")
+                if not isinstance(advntr_settings, Mapping):
+                    raise ValueError("resolved adVNTR settings must be a mapping")
+                # Shared with run_advntr, which builds the path adVNTR writes. Resolve it for
+                # this run's parser. Both supported producer names and the derived result
+                # were already invalidated immediately after input-ownership validation.
+                output_ext = advntr_output_extension(advntr_settings)
+
+                max_cov = module_args.get("advntr", {}).get("max_coverage")
+                sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
+                if sorted_bam and sorted_bam.exists():
+                    sorted_bai = Path(f"{sorted_bam}.bai")
+                    if sorted_bam.stat().st_size > 0 and (not sorted_bai.exists() or sorted_bai.stat().st_size == 0):
+                        logger.info("Rebuilding missing or empty sliced BAM index for adVNTR: %s", sorted_bai)
+                        index_cmd = f"{config['tools']['samtools']} index -@ {threads} {sorted_bam}"
+                        run_command(
+                            index_cmd,
+                            str(Path(dirs["fastq_bam_processing"]) / "reindex_sliced_bam.log"),
+                            critical=False,
+                        )
+                    if max_cov:
+                        logger.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
+                        sorted_bam = downsample_bam_if_needed(
+                            bam_path=sorted_bam,
+                            max_coverage=max_cov,
+                            reference_assembly=reference_assembly,
+                            threads=threads,
+                            config=config,
+                            coverage_dir=dirs["coverage"],
+                            coverage_prefix="advntr_precheck",
+                        )
+                    advntr_start = datetime.now(timezone.utc).replace(tzinfo=None)
+                    advntr_status = execute_advntr_genotype(
+                        configuration=run_configuration,
+                        native_context=advntr_context,
+                        config=config,
+                        alignment=sorted_bam,
+                        output=dirs["advntr"],
+                        cwd=project_root,
+                        threads=threads,
+                        additional_commands=advntr_additional_commands,
+                        background=calibration_background,
+                        invoke=run_advntr,
+                    )
                     if advntr_status != 0:
                         msg = f"adVNTR genotyping returned non-zero status {advntr_status}; result parsing was not attempted."
                         logger.error(msg)

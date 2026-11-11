@@ -98,16 +98,3 @@ def test_calibrated_stage_rechecks_native_assets_and_passes_all_selected_argumen
             invoke=invoke,
         )
     invoke.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ("threads", "expected"),
-    [(1, None), (2, (1, 1)), (3, (1, 2)), (4, (2, 2)), (8, (4, 4)), (9, (4, 5)), (32, (16, 16))],
-)
-def test_side_by_side_stages_never_exceed_the_thread_budget(threads, expected):
-    """adVNTR beside Kestrel shares --threads; one thread cannot be shared, so it runs serially."""
-    budget = module().overlap_thread_budget(threads)
-
-    assert budget == expected
-    if budget is not None:
-        assert sum(budget) == threads and min(budget) >= 1
