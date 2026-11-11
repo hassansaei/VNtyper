@@ -6,6 +6,14 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
+## 2.0.49 (2026-11-11)
+
+### Runtime
+
+- **k-mer counting threads** (#365): KAnalyze's split stage, the bottleneck on larger inputs, now gets half of `--threads` (at most 4); the total never exceeds `--threads` and the k-mer count file is byte-identical for every split. On an exclusive Xeon E5-2667 v4 node with a 1.25 GB BAM, normal mode runs 13% faster at 8 threads and 31% faster at 4; KAnalyze peak memory rises from 3.3 to 5.6 GB at 8 threads, inside the existing 12 GB Java heap.
+- **Input fingerprint in the background** (#365): the SHA-256 of the input (and of the reference for FASTQ/CRAM) is computed while samtools prepares the input, instead of before it. A CRAM reference is no longer hashed twice. Fast mode on the same BAM runs 25% faster, and with code-adVNTR 18% faster.
+- **Research pipeline decisions**: No caller thresholds, result rows, tiers or screening messages changed; 427 output files on the test BAMs and all 232 paired cluster runs match 2.0.48.
+
 ## 2.0.48 (2026-11-10)
 
 ### Vrbacká 2025 citation and published variant names (decision profile revision 3)
