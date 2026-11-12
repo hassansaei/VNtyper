@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.50 (2026-11-12)
+
 ### Web service: anonymous research donations
 
 - **Donation schema `vntyper-donation/2`**: `POST /donations/` takes a JSON record of enums, bins and booleans (no file, no run ID, no sample name, no hashes), refuses extra fields (422), non-JSON bodies (415), bodies over 2 KB (413) and answers 403 while `ENABLE_DONATIONS` is off. The response is `{"status": "recorded"}`; no identifier is returned or stored.
