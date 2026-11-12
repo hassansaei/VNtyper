@@ -105,11 +105,14 @@ def test_started_record_round_trips_through_a_real_redis_hash() -> None:
     assert store.hgetall("usage:job-1") == record
 
 
-def test_donation_pseudonym_is_keyed_with_the_server_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The old public salt let anyone recompute a guessed sample's pseudonym."""
-    from app.donations import pseudonymize_sample_name
+def test_missing_secret_is_an_error_in_production(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """Production must not run on a per-process key unnoticed; dev only warns."""
+    from app import config
 
-    keyed = pseudonymize_sample_name(" sample-1 ")
-    assert keyed == f"sample_{_keyed(b'donation:sample-1')[:16]}"
-    monkeypatch.setenv("PSEUDONYM_SECRET", "another-secret")
-    assert pseudonymize_sample_name("sample-1") != keyed
+    monkeypatch.delenv("PSEUDONYM_SECRET")
+    for environment, level in (("production", "ERROR"), ("development", "WARNING")):
+        monkeypatch.setenv("ENVIRONMENT", environment)
+        monkeypatch.setattr(config, "_warned_ephemeral_key", False)
+        caplog.clear()
+        config.pseudonym_key()
+        assert [r.levelname for r in caplog.records if "PSEUDONYM_SECRET" in r.getMessage()] == [level]

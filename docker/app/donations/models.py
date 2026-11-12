@@ -1,13 +1,38 @@
-"""Pydantic models for anonymous research data donation."""
+"""The anonymous research donation record (schema ``vntyper-donation/2``).
+
+Every field is an enum, a bin or a boolean built in the browser from the donor's own
+result files. Nothing here can name a run, a file, a sample or a precise time, and any
+field outside this list is refused.
+"""
 
 from __future__ import annotations
 
-import re
-from typing import Literal
+from typing import Literal, get_args
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CONTROLLED_KITS = [
+SCHEMA = "vntyper-donation/2"
+
+DepthBin = Literal[
+    "<20", "20-40", "40-60", "60-80", "80-100", "100-150", "150-200", "200-300", "300-500", ">=500", "NA"
+]
+DepthScoreBin = Literal[
+    "<0.002",
+    "0.002-0.004",
+    "0.004-0.0045",
+    "0.0045-0.00469",
+    "0.00469-0.005",
+    "0.005-0.00515",
+    "0.00515-0.006",
+    "0.006-0.008",
+    "0.008-0.01",
+    "0.01-0.02",
+    "0.02-0.05",
+    "0.05-0.1",
+    ">=0.1",
+]
+# Copied verbatim from the frontend's donate.html kit list.
+Kit = Literal[
     "Twist Exome 2.0",
     "Twist Comprehensive Exome",
     "Twist Human Core Exome",
@@ -21,132 +46,42 @@ CONTROLLED_KITS = [
     "WGS (standard)",
     "Other",
 ]
+Truth = Literal["confirmed_positive", "confirmed_negative", "unconfirmed"]
 
-CONTROLLED_PLATFORMS = [
-    "Illumina NovaSeq 6000",
-    "Illumina NovaSeq X / X Plus",
-    "Illumina NextSeq 500 / 550",
-    "Illumina NextSeq 1000 / 2000",
-    "Illumina HiSeq 2500 / 4000",
-    "Illumina MiSeq",
-    "Element AVITI",
-    "Ultima UG100",
-    "PacBio Revio / Sequel IIe",
-    "Oxford Nanopore PromethION / MinION",
-    "Other",
-]
-
-CONTROLLED_CONFIRMATIONS = [
-    "Sanger sequencing",
-    "ddPCR / digital PCR",
-    "Long-read sequencing (PacBio / ONT)",
-    "Mass spectrometry",
-    "Targeted amplicon NGS",
-    "None / Research only",
-]
-
-HPO_REGEX = re.compile(r"^HP:\d{7}$")
-COARSE_DATE_REGEX = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+KITS: tuple[str, ...] = get_args(Kit)
+TRUTHS: tuple[str, ...] = get_args(Truth)
 
 
-class DonationMetadata(BaseModel):
-    """Metadata supplied alongside a stripped VNtyper result archive."""
+class Donation(BaseModel):
+    """One donated result. Strict: no coercion, no extra fields."""
 
-    consent: bool = Field(
-        ...,
-        description="Explicit informed consent under GDPR Art. 9 for anonymous scientific data donation.",
-    )
-    kit: str = Field(..., description="Target capture kit or library preparation kit.")
-    sequencing_platform: str = Field(..., description="Sequencing instrument/platform used.")
-    phenotype_hpo: list[str] = Field(
-        default_factory=list,
-        description="List of Human Phenotype Ontology (HPO) terms (e.g., HP:0000112).",
-    )
-    positive_call: bool = Field(
-        ...,
-        description="Whether the sample has a positive finding for MUC1 VNTR mutation.",
-    )
-    confirmation_method: str | None = Field(
-        None,
-        description="Method used to confirm the mutation. Required when positive_call is True.",
-    )
-    depth_counting_policy: str = Field(
-        default="vntr_flank_mean_depth",
-        description="Depth counting policy used (e.g., vntr_flank_mean_depth).",
-    )
-    sex: Literal["XX", "XY", "other", "unknown"] | None = Field(
-        None,
-        description="Chromosomal/genetic sex (coarse category only).",
-    )
-    collection_month: str | None = Field(
-        None,
-        description="Coarse date of sample collection in YYYY-MM format. No day or time permitted.",
-    )
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, populate_by_name=True)
 
-    @field_validator("consent")
-    @classmethod
-    def validate_consent(cls, v: bool) -> bool:
-        if not v:
-            raise ValueError("Explicit consent under GDPR Art. 9 is required to donate data.")
-        return v
+    schema_: Literal["vntyper-donation/2"] = Field(alias="schema")
+    vntyper_version: str = Field(pattern=r"^\d+\.\d+\.\d+$", max_length=20)
+    coverage_qc: Literal["PASS", "REDUCED", "FAIL", "NA"]
+    flank_depth_bin: DepthBin
+    array_depth_bin: DepthBin
+    kestrel_call: bool
+    kestrel_flagged: bool
+    kestrel_confidence: Literal["High_Precision", "Low_Precision", "none"]
+    depth_score_bin: DepthScoreBin | None
+    variant_class: Literal["none", "dupC", "other"]
+    kit: Kit
+    platform_class: Literal["illumina_short", "other_short", "long_read"]
+    truth: Truth
+    confirmation_class: Literal["orthogonal_short", "long_read", "none"]
+    referral: Literal["suspected_adtkd", "unexplained_ckd", "other"] | None = None
 
-    @field_validator("collection_month")
-    @classmethod
-    def validate_coarse_date(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if not COARSE_DATE_REGEX.match(v):
-            raise ValueError("Collection date must be in YYYY-MM format (e.g. 2024-05). Exact days are not permitted.")
-        return v
-
-    @field_validator("phenotype_hpo")
-    @classmethod
-    def validate_hpo_terms(cls, terms: list[str]) -> list[str]:
-        cleaned = []
-        for t in terms:
-            t_str = str(t).strip().upper()
-            if not t_str:
-                continue
-            if not HPO_REGEX.match(t_str):
-                raise ValueError(f"Invalid HPO term '{t}'. Must match format HP:XXXXXXX.")
-            cleaned.append(t_str)
-        return cleaned
-
-    @field_validator("confirmation_method")
-    @classmethod
-    def validate_confirmation(cls, v: str | None, info) -> str | None:
-        positive = info.data.get("positive_call")
-        if positive and (not v or not v.strip()):
-            raise ValueError("Confirmation method is required for positive donations.")
-        return v
-
-
-class DonationResponse(BaseModel):
-    status: str = "accepted"
-    donation_id: str
-    run_id: str
-    tool_version: str
-    message: str = "Donation accepted and verified successfully. Thank you for contributing to ADTKD research!"
-
-
-class KitAggregate(BaseModel):
-    total_samples: int
-    positive_count: int
-    negative_count: int
-    negative_power_sufficient: bool = Field(
-        ...,
-        description="Whether negative arm power is sufficient (n >= 5) to establish kit-specific thresholds.",
-    )
-    mean_coverage: float | None = None
-
-
-class DonationAggregatesResponse(BaseModel):
-    """Aggregate statistics for data donations with strict minimum cell-size suppression."""
-
-    total_donations: int
-    positive_count: int
-    negative_count: int
-    by_kit: dict[str, KitAggregate]
-    by_platform: dict[str, int]
-    top_hpo_terms: dict[str, int]
-    minimum_cell_size_threshold: int = 5
+    @model_validator(mode="after")
+    def _consistent(self) -> Donation:
+        no_row = not self.kestrel_call and not self.kestrel_flagged
+        if no_row and self.depth_score_bin is not None:
+            raise ValueError("depth_score_bin must be null when there is neither a call nor a flagged call")
+        if self.kestrel_call and self.depth_score_bin is None:
+            raise ValueError("depth_score_bin is required when kestrel_call is true")
+        if (self.variant_class == "none") == self.kestrel_call:
+            raise ValueError("variant_class must be 'none' exactly when kestrel_call is false")
+        if (self.confirmation_class == "none") != (self.truth == "unconfirmed"):
+            raise ValueError("confirmation_class must be 'none' exactly when truth is 'unconfirmed'")
+        return self
