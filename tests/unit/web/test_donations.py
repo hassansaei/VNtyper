@@ -172,15 +172,23 @@ def test_no_hidden_cell_can_be_recovered_from_the_total(cells: list[int]) -> Non
         assert v is None or v == 0 or v >= (K_SENSITIVE if c == "0" else K_DEFAULT)
 
 
-def test_aggregates_are_suppressed_counts_only(client: TestClient, repo) -> None:
-    for _ in range(3):
-        _post(client, VALID)
+def _in_closed_quarter(monkeypatch: pytest.MonkeyPatch, client: TestClient, payload: dict, n: int) -> None:
+    from app.donations import repository
+
+    current = repository.received_quarter()
+    monkeypatch.setattr(repository, "received_quarter", lambda: "2000-Q1")
+    for _ in range(n):
+        _post(client, payload)
+    monkeypatch.setattr(repository, "received_quarter", lambda: current)
+
+
+def test_aggregates_are_suppressed_counts_only(client: TestClient, repo, monkeypatch) -> None:
+    _in_closed_quarter(monkeypatch, client, VALID, 3)
     small = client.get("/donations/aggregates/").json()
     assert small["total"] is None
     assert all(v is None for name in ("by_truth", "by_kestrel_call", "by_kit") for v in small[name].values())
 
-    for _ in range(12):
-        _post(client, NEGATIVE)
+    _in_closed_quarter(monkeypatch, client, NEGATIVE, 12)
     agg = client.get("/donations/aggregates/").json()
     assert agg["total"] == 15
     # 3 positives sit under k=10, so the 12 unconfirmed hide with them; zeros stay visible.
@@ -188,6 +196,46 @@ def test_aggregates_are_suppressed_counts_only(client: TestClient, repo) -> None
     assert agg["by_kestrel_call"] == {"true": None, "false": None}
     assert agg["by_kit"]["Twist Exome 2.0"] == 15
     assert not any(isinstance(v, list) for v in agg.values())
+
+
+def test_aggregates_ignore_the_open_quarter(client: TestClient, repo, monkeypatch) -> None:
+    """Donations of the running quarter cannot be isolated by polling before and after."""
+    _in_closed_quarter(monkeypatch, client, NEGATIVE, 20)
+    before = client.get("/donations/aggregates/").json()
+    for _ in range(20):
+        _post(client, VALID)
+    assert client.get("/donations/aggregates/").json() == before
+    assert before["total"] == 20
+
+
+def _v1_db(tmp_path, rows: int) -> str:
+    path = str(tmp_path / "v1.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE donations (id TEXT, run_id TEXT)")
+    conn.executemany("INSERT INTO donations VALUES (?, ?)", [(str(i), "r") for i in range(rows)])
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _tables(path: str) -> set[str]:
+    conn = sqlite3.connect(path)
+    names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    return names
+
+
+def test_empty_v1_table_is_dropped(tmp_path) -> None:
+    path = _v1_db(tmp_path, 0)
+    DonationRepository(db_url=path)
+    assert _tables(path) == {"donations_v2"}
+
+
+def test_v1_table_with_rows_is_kept_with_an_error(tmp_path, caplog) -> None:
+    path = _v1_db(tmp_path, 2)
+    DonationRepository(db_url=path)
+    assert _tables(path) == {"donations", "donations_v2"}
+    assert [r.levelname for r in caplog.records if "Legacy table" in r.getMessage()] == ["ERROR"]
 
 
 def test_donation_requests_log_no_address_agent_or_payload(client: TestClient, repo, web_app, caplog) -> None:

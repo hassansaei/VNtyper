@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from collections import Counter
@@ -11,6 +12,8 @@ from typing import Any
 from ..config import settings
 from .models import KITS, SCHEMA, TRUTHS, Donation
 
+logger = logging.getLogger(__name__)
+
 K_DEFAULT = 5
 # Cells that count confirmed positives or tool calls describe a rare disease.
 K_SENSITIVE = 10
@@ -18,10 +21,8 @@ K_SENSITIVE = 10
 # Whitelist columns, in Donation field order; `schema` is implied by the table name.
 COLUMNS = tuple(name for name in Donation.model_json_schema()["properties"] if name != "schema")
 
-# The v1 table held run IDs, content digests and microsecond timestamps; it is dropped,
-# not migrated. `id` is random and never leaves the server.
+# `id` is random and never leaves the server.
 CREATE_SQL = [
-    "DROP TABLE IF EXISTS donations",
     """CREATE TABLE IF NOT EXISTS donations_v2 (
         id TEXT PRIMARY KEY,
         received_quarter TEXT NOT NULL,
@@ -80,6 +81,26 @@ class DonationRepository:
         self._is_postgres = url.startswith(("postgresql://", "postgres://"))
         self._param = "%s" if self._is_postgres else "?"
         self._execute(CREATE_SQL)
+        self._drop_v1_table_if_empty()
+
+    def _drop_v1_table_if_empty(self) -> None:
+        """Drop the v1 table (run IDs, digests, exact timestamps) only when it holds nothing."""
+        exists_sql = (
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'donations'"
+            if self._is_postgres
+            else "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'donations'"
+        )
+        if not self._execute([exists_sql])[0][0]:
+            return
+        rows = self._execute(["SELECT COUNT(*) FROM donations"])[0][0]
+        if rows:
+            logger.error(
+                "Legacy table 'donations' holds %d pseudonymous v1 rows and was left in place. "
+                "Export or delete them manually, then drop the table.",
+                rows,
+            )
+        else:
+            self._execute(["DROP TABLE donations"])
 
     def _connect(self) -> Any:
         if self._is_postgres:
@@ -107,8 +128,13 @@ class DonationRepository:
         self._execute([sql], (str(uuid.uuid4()), received_quarter(), *(values[c] for c in COLUMNS)))
 
     def get_aggregates(self) -> dict[str, Any]:
+        # Closed quarters only: a live count would reveal each new donation by differencing.
         rows = self._execute(
-            ["SELECT kit, truth, kestrel_call, COUNT(*) FROM donations_v2 GROUP BY kit, truth, kestrel_call"]
+            [
+                f"SELECT kit, truth, kestrel_call, COUNT(*) FROM donations_v2 WHERE received_quarter < {self._param} "
+                "GROUP BY kit, truth, kestrel_call"
+            ],
+            (received_quarter(),),
         )
         by_kit: Counter[str] = Counter()
         by_truth: Counter[str] = Counter()
