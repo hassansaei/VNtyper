@@ -4,7 +4,13 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Web service: anonymous research donations
+
+- **Donation schema `vntyper-donation/2`**: `POST /donations/` takes a JSON record of enums, bins and booleans (no file, no run ID, no sample name, no hashes), refuses extra fields (422), non-JSON bodies (415), bodies over 2 KB (413) and answers 403 while `ENABLE_DONATIONS` is off. The response is `{"status": "recorded"}`; no identifier is returned or stored.
+- **Storage**: rows go to `donations_v2` with the whitelisted fields, a server-side `received_quarter` and a random key. The v1 `donations` table, the archive validation and the integrity check on donated ZIPs are removed. With donations enabled the API refuses to start without a reachable `POSTGRES_URL` instead of falling back to an in-memory store.
+- **Aggregates**: `/donations/aggregates/` returns counts only, `null` below k=5 (k=10 for confirmed positives and tool calls), with complementary suppression.
+- **Logging**: the API drops uvicorn access-log lines for `/donations/`, and a rate-limited donation request is logged without the client address. In production a missing `PSEUDONYM_SECRET` is now logged as an ERROR at startup of the API and every worker.
+- **Research pipeline decisions**: No caller thresholds, result rows, tiers or screening messages changed. `docker/app` only.
 
 ## 2.0.49 (2026-11-11)
 

@@ -1,265 +1,164 @@
-"""Repository layer for storing and aggregating anonymous data donations."""
+"""Storage and k-suppressed aggregates for anonymous research donations."""
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
 from ..config import settings
+from .models import KITS, SCHEMA, TRUTHS, Donation
 
 logger = logging.getLogger(__name__)
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS donations (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL,
-    tool_version TEXT NOT NULL,
-    sample_hash TEXT NOT NULL,
-    decision_files_digest TEXT NOT NULL,
-    report_integrity_digest TEXT NOT NULL,
-    kit TEXT NOT NULL,
-    sequencing_platform TEXT NOT NULL,
-    phenotype_hpo TEXT NOT NULL,
-    positive_call BOOLEAN NOT NULL,
-    confirmation_method TEXT,
-    depth_counting_policy TEXT NOT NULL,
-    mean_coverage REAL,
-    flank_mean_depth REAL,
-    sex TEXT,
-    collection_month TEXT,
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_donations_kit ON donations (kit);
-CREATE INDEX IF NOT EXISTS idx_donations_platform ON donations (sequencing_platform);
-CREATE INDEX IF NOT EXISTS idx_donations_run_id ON donations (run_id);
-"""
+K_DEFAULT = 5
+# Cells that count confirmed positives or tool calls describe a rare disease.
+K_SENSITIVE = 10
+
+# Whitelist columns, in Donation field order; `schema` is implied by the table name.
+COLUMNS = tuple(name for name in Donation.model_json_schema()["properties"] if name != "schema")
+
+# `id` is random and never leaves the server.
+CREATE_SQL = [
+    """CREATE TABLE IF NOT EXISTS donations_v2 (
+        id TEXT PRIMARY KEY,
+        received_quarter TEXT NOT NULL,
+        vntyper_version TEXT NOT NULL,
+        coverage_qc TEXT NOT NULL,
+        flank_depth_bin TEXT NOT NULL,
+        array_depth_bin TEXT NOT NULL,
+        kestrel_call BOOLEAN NOT NULL,
+        kestrel_flagged BOOLEAN NOT NULL,
+        kestrel_confidence TEXT NOT NULL,
+        depth_score_bin TEXT,
+        variant_class TEXT NOT NULL,
+        kit TEXT NOT NULL,
+        platform_class TEXT NOT NULL,
+        truth TEXT NOT NULL,
+        confirmation_class TEXT NOT NULL,
+        referral TEXT
+    )""",
+]
+
+
+def received_quarter(now: datetime | None = None) -> str:
+    """Return the current UTC quarter as ``YYYY-Qn``, the finest time a row keeps."""
+    now = now or datetime.now(timezone.utc)
+    return f"{now.year}-Q{(now.month - 1) // 3 + 1}"
+
+
+def suppress(counts: dict[str, int], k: dict[str, int]) -> dict[str, int | None]:
+    """Hide cells below their k, then hide more until the hidden set cannot be recovered.
+
+    Primary suppression hides each non-zero cell under its threshold (a zero names nobody).
+    Complementary suppression then hides the next smallest non-zero cells until at least
+    two are hidden and they sum to at least the largest threshold among them, so
+    ``total - visible`` never pins down a single small cell.
+    """
+    hidden = {c for c, n in counts.items() if 0 < n < k.get(c, K_DEFAULT)}
+
+    def recoverable() -> bool:
+        need = max(k.get(c, K_DEFAULT) for c in hidden)
+        return len(hidden) < 2 or sum(counts[c] for c in hidden) < need
+
+    while hidden and recoverable():
+        spare = [c for c in counts if c not in hidden and counts[c] > 0]
+        if not spare:
+            break
+        hidden.add(min(spare, key=lambda c: counts[c]))
+    return {c: None if c in hidden else n for c, n in counts.items()}
 
 
 class DonationRepository:
     def __init__(self, db_url: str | None = None) -> None:
-        self.db_url = db_url or settings.POSTGRES_URL
-        self._is_postgres = bool(
-            self.db_url and (self.db_url.startswith("postgresql://") or self.db_url.startswith("postgres://"))
-        )
-        self._init_db()
+        url = db_url or settings.POSTGRES_URL
+        if not url:
+            raise RuntimeError("Donations are enabled but POSTGRES_URL is not set; refusing to use a throwaway store.")
+        self.db_url: str = url
+        self._is_postgres = url.startswith(("postgresql://", "postgres://"))
+        self._param = "%s" if self._is_postgres else "?"
+        self._execute(CREATE_SQL)
+        self._drop_v1_table_if_empty()
 
-    def _get_connection(self):
+    def _drop_v1_table_if_empty(self) -> None:
+        """Drop the v1 table (run IDs, digests, exact timestamps) only when it holds nothing."""
+        exists_sql = (
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'donations'"
+            if self._is_postgres
+            else "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'donations'"
+        )
+        if not self._execute([exists_sql])[0][0]:
+            return
+        rows = self._execute(["SELECT COUNT(*) FROM donations"])[0][0]
+        if rows:
+            logger.error(
+                "Legacy table 'donations' holds %d pseudonymous v1 rows and was left in place. "
+                "Export or delete them manually, then drop the table.",
+                rows,
+            )
+        else:
+            self._execute(["DROP TABLE donations"])
+
+    def _connect(self) -> Any:
         if self._is_postgres:
             import psycopg
 
             return psycopg.connect(self.db_url)
-        else:
-            # Default to SQLite (in memory or local file if url specified)
-            sqlite_path = ":memory:"
-            if self.db_url and not self.db_url.startswith(("postgres://", "postgresql://")):
-                sqlite_path = self.db_url
-            conn = sqlite3.connect(sqlite_path)
-            conn.row_factory = sqlite3.Row
-            return conn
+        return sqlite3.connect(self.db_url)  # a file path; tests use this
 
-    def _init_db(self) -> None:
-        try:
-            conn = self._get_connection()
-            try:
-                cur = conn.cursor()
-                try:
-                    if self._is_postgres:
-                        cur.execute(CREATE_TABLE_SQL)
-                    else:
-                        cur.executescript(CREATE_TABLE_SQL)
-                    conn.commit()
-                finally:
-                    cur.close()
-            finally:
-                conn.close()
-            logger.info("Donation database initialized successfully.")
-        except (sqlite3.Error, OSError, RuntimeError, ValueError, ImportError) as e:
-            logger.warning("Could not initialize donation database: %s", e)
-
-    def save_donation(self, data: dict[str, Any]) -> str:
-        donation_id = str(uuid.uuid4())
-        created_at = datetime.now(timezone.utc).isoformat()
-        hpo_json = json.dumps(data.get("phenotype_hpo", []))
-
-        params = (
-            donation_id,
-            data["run_id"],
-            data["tool_version"],
-            data["sample_hash"],
-            data["decision_files_digest"],
-            data["report_integrity_digest"],
-            data["kit"],
-            data["sequencing_platform"],
-            hpo_json,
-            bool(data["positive_call"]),
-            data.get("confirmation_method"),
-            data.get("depth_counting_policy", "vntr_flank_mean_depth"),
-            data.get("mean_coverage"),
-            data.get("flank_mean_depth"),
-            data.get("sex"),
-            data.get("collection_month"),
-            created_at,
-        )
-
-        insert_sql = (
-            """
-        INSERT INTO donations (
-            id, run_id, tool_version, sample_hash, decision_files_digest,
-            report_integrity_digest, kit, sequencing_platform, phenotype_hpo,
-            positive_call, confirmation_method, depth_counting_policy,
-            mean_coverage, flank_mean_depth, sex, collection_month, created_at
-        ) VALUES (
-            %s, %s, %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, %s, %s,
-            %s, %s, %s, %s, %s
-        )
-        """
-            if self._is_postgres
-            else """
-        INSERT INTO donations (
-            id, run_id, tool_version, sample_hash, decision_files_digest,
-            report_integrity_digest, kit, sequencing_platform, phenotype_hpo,
-            positive_call, confirmation_method, depth_counting_policy,
-            mean_coverage, flank_mean_depth, sex, collection_month, created_at
-        ) VALUES (
-            ?, ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?,
-            ?, ?, ?, ?, ?
-        )
-        """
-        )
-
-        conn = self._get_connection()
+    def _execute(self, statements: list[str], params: tuple[Any, ...] = ()) -> list[Any]:
+        conn = self._connect()
         try:
             cur = conn.cursor()
-            try:
-                cur.execute(insert_sql, params)
-                conn.commit()
-            finally:
-                cur.close()
+            for sql in statements:
+                cur.execute(sql, params) if params else cur.execute(sql)
+            rows = cur.fetchall() if cur.description else []
+            conn.commit()
+            return list(rows)
         finally:
             conn.close()
 
-        return donation_id
+    def save(self, donation: Donation) -> None:
+        values = donation.model_dump(exclude={"schema_"})
+        cols = ("id", "received_quarter", *COLUMNS)
+        sql = f"INSERT INTO donations_v2 ({', '.join(cols)}) VALUES ({', '.join([self._param] * len(cols))})"
+        self._execute([sql], (str(uuid.uuid4()), received_quarter(), *(values[c] for c in COLUMNS)))
 
-    def get_aggregates(self, min_cell_size: int = 5) -> dict[str, Any]:
-        """Aggregate donation records enforcing cell-size suppression and negative power checks."""
-        conn = self._get_connection()
-        try:
-            cur = conn.cursor()
-            try:
-                # Total counts
-                cur.execute("SELECT COUNT(*), SUM(CASE WHEN positive_call THEN 1 ELSE 0 END) FROM donations")
-                row = cur.fetchone()
-                total = row[0] if row else 0
-                pos_count = row[1] if row and row[1] is not None else 0
-                neg_count = total - pos_count
-
-                # By kit
-                cur.execute("""
-                    SELECT
-                        kit,
-                        COUNT(*) as cnt,
-                        SUM(CASE WHEN positive_call THEN 1 ELSE 0 END) as pos_cnt,
-                        SUM(CASE WHEN NOT positive_call THEN 1 ELSE 0 END) as neg_cnt,
-                        AVG(mean_coverage) as avg_cov
-                    FROM donations
-                    GROUP BY kit
-                """)
-                kit_rows = cur.fetchall()
-
-                # By platform
-                cur.execute("SELECT sequencing_platform, COUNT(*) FROM donations GROUP BY sequencing_platform")
-                platform_rows = cur.fetchall()
-
-                # HPO terms
-                cur.execute("SELECT phenotype_hpo FROM donations")
-                hpo_rows = cur.fetchall()
-            finally:
-                cur.close()
-        finally:
-            conn.close()
-
-        by_kit: dict[str, Any] = {}
-        suppressed_kit_count = 0
-        suppressed_kit_pos = 0
-        suppressed_kit_neg = 0
-
-        for r in kit_rows:
-            kit_name = r[0]
-            cnt = r[1]
-            pos = r[2] if r[2] is not None else 0
-            neg = r[3] if r[3] is not None else 0
-            cov = float(r[4]) if r[4] is not None else None
-
-            if cnt < min_cell_size:
-                suppressed_kit_count += cnt
-                suppressed_kit_pos += pos
-                suppressed_kit_neg += neg
-            else:
-                by_kit[kit_name] = {
-                    "total_samples": cnt,
-                    "positive_count": pos,
-                    "negative_count": neg,
-                    "negative_power_sufficient": (neg >= min_cell_size),
-                    "mean_coverage": round(cov, 2) if cov is not None else None,
-                }
-
-        if suppressed_kit_count > 0:
-            by_kit["Other (<5 samples)"] = {
-                "total_samples": suppressed_kit_count,
-                "positive_count": suppressed_kit_pos,
-                "negative_count": suppressed_kit_neg,
-                "negative_power_sufficient": (suppressed_kit_neg >= min_cell_size),
-                "mean_coverage": None,
-            }
-
-        by_platform: dict[str, int] = {}
-        suppressed_plat_count = 0
-        for r in platform_rows:
-            plat_name = r[0]
-            cnt = r[1]
-            if cnt < min_cell_size:
-                suppressed_plat_count += cnt
-            else:
-                by_platform[plat_name] = cnt
-
-        if suppressed_plat_count > 0:
-            by_platform["Other (<5 samples)"] = suppressed_plat_count
-
-        # Count HPO terms
-        hpo_counts: dict[str, int] = {}
-        for r in hpo_rows:
-            raw = r[0]
-            if raw:
-                try:
-                    terms = json.loads(raw)
-                    for t in terms:
-                        hpo_counts[t] = hpo_counts.get(t, 0) + 1
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-        # Minimum cell size filter for HPO
-        filtered_hpo = {k: v for k, v in hpo_counts.items() if v >= min_cell_size}
-
+    def get_aggregates(self) -> dict[str, Any]:
+        # Closed quarters only: a live count would reveal each new donation by differencing.
+        rows = self._execute(
+            [
+                f"SELECT kit, truth, kestrel_call, COUNT(*) FROM donations_v2 WHERE received_quarter < {self._param} "
+                "GROUP BY kit, truth, kestrel_call"
+            ],
+            (received_quarter(),),
+        )
+        by_kit: Counter[str] = Counter()
+        by_truth: Counter[str] = Counter()
+        by_call: Counter[str] = Counter()
+        for kit, truth, call, n in rows:
+            by_kit[kit] += n
+            by_truth[truth] += n
+            by_call["true" if call else "false"] += n
+        total = sum(by_kit.values())
+        tables = {
+            "by_truth": suppress({t: by_truth[t] for t in TRUTHS}, {"confirmed_positive": K_SENSITIVE}),
+            "by_kestrel_call": suppress({c: by_call[c] for c in ("true", "false")}, {"true": K_SENSITIVE}),
+            "by_kit": suppress({kt: by_kit[kt] for kt in KITS}, {}),
+        }
+        if total < K_DEFAULT:
+            tables = {name: dict.fromkeys(cells) for name, cells in tables.items()}
         return {
-            "total_donations": total,
-            "positive_count": pos_count,
-            "negative_count": neg_count,
-            "by_kit": by_kit,
-            "by_platform": by_platform,
-            "top_hpo_terms": filtered_hpo,
-            "minimum_cell_size_threshold": min_cell_size,
+            "schema": SCHEMA,
+            "k": {"default": K_DEFAULT, "sensitive": K_SENSITIVE},
+            "total": total if total >= K_DEFAULT else None,
+            **tables,
         }
 
 
-# Singleton repository instance
 _repo_instance: DonationRepository | None = None
 
 

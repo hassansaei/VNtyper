@@ -8,7 +8,7 @@ from celery.schedules import crontab
 from celery.signals import beat_init, celeryd_init
 from kombu import Queue
 
-from .config import build_redis_url, get_redis_password, require_redis_password
+from .config import build_redis_url, get_redis_password, pseudonym_key, require_redis_password
 
 # Configure logging for Celery
 logging.basicConfig(level=logging.INFO)
@@ -90,3 +90,4 @@ def check_redis_password(**_kwargs) -> None:
         require_redis_password()
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
+    pseudonym_key()  # workers write the usage hash: log the missing secret at startup

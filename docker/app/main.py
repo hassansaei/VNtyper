@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 from uuid import uuid4
 
 import redis
@@ -45,23 +45,15 @@ from .cohorts import (
     preferred_passphrase,
     resolve_cohort,
 )
-from .config import build_redis_url, get_redis_password, require_redis_password, settings
+from .config import build_redis_url, get_redis_password, pseudonym_key, require_redis_password, settings
 from .docs_theme import (
     API_DESCRIPTION,
     API_SUMMARY,
     API_TAGS_METADATA,
     render_custom_swagger_ui_html,
 )
-from .donations import (
-    CONTROLLED_CONFIRMATIONS,
-    CONTROLLED_KITS,
-    CONTROLLED_PLATFORMS,
-    DonationAggregatesResponse,
-    DonationMetadata,
-    DonationResponse,
-    get_donation_repo,
-    validate_donation_archive,
-)
+from .donations import SCHEMA as DONATION_SCHEMA
+from .donations import Donation, get_donation_repo
 from .identifiers import canonical_id
 from .job_failures import stored_preflight_message
 from .job_lookup import job_timing, stored_task_id, submitted_at_key
@@ -75,6 +67,9 @@ from .utils import MAX_PASSPHRASE_BYTES, client_host
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
+
+# A donation must not leave a timestamped access-log line that could be joined to an address.
+logging.getLogger("uvicorn.access").addFilter(lambda record: "/donations/" not in str(record.args))
 
 
 # Define valid reference assembly options
@@ -157,6 +152,9 @@ async def startup_event() -> AsyncRedisClient:
             closing any Redis client already created.
     """
     redis_password = require_redis_password()
+    pseudonym_key()  # logs an ERROR now, not on first use, when production runs without the secret
+    if settings.ENABLE_DONATIONS:
+        get_donation_repo()  # fail closed: no database means no donations, never a throwaway store
     rate_limit_redis_url = build_redis_url(REDIS_HOST, REDIS_PORT, RATE_LIMITING_REDIS_DB, redis_password)
     redis_rate_limit = await initialize_rate_limiter(rate_limit_redis_url)
 
@@ -1309,131 +1307,69 @@ def run_cohort_analysis(
 
 
 # ----------------------------------------------------------------------
-# Feature: Data Donation Endpoints (Issue #93)
+# Feature: Anonymous research data donation (schema vntyper-donation/2)
+#
+# The browser sends a fixed, binned JSON record and no file. Nothing about the request
+# (address, agent, payload, exact time) is logged or stored; see the access-log filter
+# above and the 429 handler below.
 # ----------------------------------------------------------------------
+DONATION_MAX_BYTES = 2048
+
+
+def _require_donations() -> None:
+    if not settings.ENABLE_DONATIONS:
+        raise HTTPException(status_code=403, detail="Data donation is disabled on this server.")
+
+
 @router.get(
     "/donations/status/",
     tags=["Research Data Donations"],
     dependencies=[Depends(simple_rate_limiter)],
-    summary="Get Data Donation status and controlled vocabularies",
+    summary="Get Data Donation status",
 )
 def get_donation_status():
-    """Returns the operational status of the data donation endpoint and controlled vocabularies."""
-    return {
-        "enabled": settings.ENABLE_DONATIONS,
-        "controlled_vocabularies": {
-            "kits": CONTROLLED_KITS,
-            "platforms": CONTROLLED_PLATFORMS,
-            "confirmations": CONTROLLED_CONFIRMATIONS,
-        },
-    }
+    """Whether donations are accepted, and the payload schema they must follow."""
+    return {"enabled": settings.ENABLE_DONATIONS, "schema": DONATION_SCHEMA}
 
 
 @router.post(
     "/donations/",
     tags=["Research Data Donations"],
-    dependencies=[Depends(high_rate_limiter)],
-    summary="Submit anonymous research data donation",
-    response_model=DonationResponse,
+    dependencies=[Depends(_require_donations), Depends(high_rate_limiter)],
+    status_code=201,
+    summary="Submit an anonymous research donation",
+    openapi_extra={
+        "requestBody": {"required": True, "content": {"application/json": {"schema": Donation.model_json_schema()}}}
+    },
 )
-async def submit_donation(
-    archive: UploadFile = File(..., description="Stripped result ZIP archive"),
-    consent: bool = Form(..., description="Explicit GDPR Art. 9 consent"),
-    kit: str = Form(..., description="Target capture kit"),
-    sequencing_platform: str = Form(..., description="Sequencing platform"),
-    positive_call: bool = Form(..., description="Positive finding (True/False)"),
-    phenotype_hpo: str | None = Form(None, description="Comma-separated or JSON list of HPO terms"),
-    confirmation_method: str | None = Form(None, description="Confirmation method if positive"),
-    sex: Literal["XX", "XY", "other", "unknown"] | None = Form(None, description="Coarse sex: XX, XY, other, unknown"),
-    collection_month: str | None = Form(None, description="Coarse collection date (YYYY-MM)"),
-    depth_counting_policy: str = Form("vntr_flank_mean_depth", description="Depth counting policy"),
-):
-    """
-    Submits a client-side stripped VNtyper result archive for anonymous research donation.
-    Enforces GDPR Art. 9 explicit consent, cryptographic integrity check via report anchor,
-    and server-side re-validation of raw data stripping.
-    """
-    if not settings.ENABLE_DONATIONS:
-        raise HTTPException(
-            status_code=503,
-            detail="Data donation is currently disabled on this server.",
-        )
-
-    import json
-
-    hpo_list: list[str] = []
-    if phenotype_hpo:
-        phenotype_hpo_str = phenotype_hpo.strip()
-        if phenotype_hpo_str.startswith("["):
-            try:
-                hpo_list = json.loads(phenotype_hpo_str)
-            except (json.JSONDecodeError, TypeError):
-                hpo_list = [t.strip() for t in phenotype_hpo_str.strip("[]").split(",") if t.strip()]
-        else:
-            hpo_list = [t.strip() for t in phenotype_hpo_str.split(",") if t.strip()]
-
+async def submit_donation(request: Request) -> dict[str, str]:
+    """Store one binned, enumerated donation record. Returns no identifier of any kind."""
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="Content-Type must be application/json.")
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > DONATION_MAX_BYTES:
+            raise HTTPException(status_code=413, detail=f"Donation body exceeds {DONATION_MAX_BYTES} bytes.")
     try:
-        meta = DonationMetadata(
-            consent=consent,
-            kit=kit,
-            sequencing_platform=sequencing_platform,
-            positive_call=positive_call,
-            confirmation_method=confirmation_method,
-            phenotype_hpo=hpo_list,
-            sex=sex or None,
-            collection_month=collection_month or None,
-            depth_counting_policy=depth_counting_policy,
-        )
-    except (ValidationError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-
-    archive_bytes = await archive.read()
-    if not archive_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded archive is empty.")
-
-    try:
-        validated_data = validate_donation_archive(archive_bytes)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    record = {
-        **validated_data,
-        "kit": meta.kit,
-        "sequencing_platform": meta.sequencing_platform,
-        "positive_call": meta.positive_call,
-        "confirmation_method": meta.confirmation_method,
-        "phenotype_hpo": meta.phenotype_hpo,
-        "sex": meta.sex,
-        "collection_month": meta.collection_month,
-        "depth_counting_policy": meta.depth_counting_policy,
-    }
-
-    donation_repo = get_donation_repo()
-    donation_id = donation_repo.save_donation(record)
-
-    return DonationResponse(
-        donation_id=donation_id,
-        run_id=validated_data["run_id"],
-        tool_version=validated_data["tool_version"],
-    )
+        donation = Donation.model_validate_json(body)
+    except ValidationError as exc:
+        # Echo the error locations only, never the submitted values.
+        detail = exc.errors(include_url=False, include_context=False, include_input=False)
+        raise HTTPException(status_code=422, detail=detail) from None
+    get_donation_repo().save(donation)
+    return {"status": "recorded"}
 
 
 @router.get(
     "/donations/aggregates/",
     tags=["Research Data Donations"],
-    dependencies=[Depends(simple_rate_limiter)],
-    summary="Get aggregated donation statistics",
-    response_model=DonationAggregatesResponse,
+    dependencies=[Depends(_require_donations), Depends(simple_rate_limiter)],
+    summary="Get k-suppressed donation counts",
 )
 def get_donation_aggregates():
-    """Returns aggregated donation metrics with minimum-cell-size suppression (n < 5) and negative arm power verification."""
-    if not settings.ENABLE_DONATIONS:
-        raise HTTPException(
-            status_code=503,
-            detail="Data donation is currently disabled on this server.",
-        )
-    donation_repo = get_donation_repo()
-    return donation_repo.get_aggregates(min_cell_size=5)
+    """Counts only, with small cells and their complements returned as null. Never rows."""
+    return get_donation_repo().get_aggregates()
 
 
 # Include the router in the FastAPI app
@@ -1447,7 +1383,9 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     """
     if exc.status_code == 429:
         # Customize the error message for rate limit exceeded
-        logger.warning(f"Rate limit exceeded for IP: {client_host(request)}")
+        # The donation path stays unlinkable: no address next to its timestamp.
+        where = "the donation endpoint" if "/donations/" in request.url.path else f"IP: {client_host(request)}"
+        logger.warning(f"Rate limit exceeded for {where}")
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": "Rate limit exceeded. Please try again later."},
