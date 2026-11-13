@@ -603,3 +603,41 @@ def test_docker_cram_fixture_target_is_phony_and_builds_only_without_candidate_o
     assert candidate.returncode == 0
     assert "docker build" not in candidate.stdout
     assert "vntyper:issue-233" in candidate.stdout
+
+
+def _shard_files(shard: int) -> list[str]:
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-s", "unit-test-shard-files", f"SHARD={shard}", "COVERAGE_SHARDS=4"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.split()
+
+
+def test_coverage_shards_partition_every_unit_test_file() -> None:
+    """CI's coverage is the union of four shards, so no file may be dropped or doubled."""
+    shards = [_shard_files(k) for k in (1, 2, 3, 4)]
+    every = sorted(
+        str(path.relative_to(REPO_ROOT))
+        for path in (REPO_ROOT / "tests" / "unit").rglob("*.py")
+        if path.name.startswith("test_") or path.name.endswith("_test.py")
+    )
+    flat = [name for shard in shards for name in shard]
+    assert all(shards)
+    assert len(flat) == len(set(flat))
+    assert sorted(flat) == every
+
+
+@pytest.mark.parametrize("shard", ["0", "5", ""])
+def test_coverage_shard_outside_range_is_rejected(shard: str) -> None:
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-s", "unit-test-shard-files", f"SHARD={shard}", "COVERAGE_SHARDS=4"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""

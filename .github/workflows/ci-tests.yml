@@ -147,6 +147,9 @@ jobs:
       # separate on purpose, see the comment on the target in the Makefile.
       - run: make type-check-all
 
+  # Plain (untraced) tests across the supported interpreters. A PR runs the oldest and
+  # newest, 3.10 and 3.13: syntax and stdlib breakage shows at the ends of the range.
+  # Every push to main runs all four. Coverage comes from the `coverage` shards below.
   test-unit:
     name: Unit Tests (Python ${{ matrix.python-version }})
     needs: changes
@@ -154,9 +157,7 @@ jobs:
     # Pinned rather than ubuntu-latest so a runner-image rollover cannot change the
     # toolchain underneath a green build without a commit.
     runs-on: ubuntu-24.04
-    # Branch-inclusive coverage over the complete unit matrix exceeded the old
-    # 10-minute ceiling after the schema-3/profile suites landed. The timeout is a
-    # dead-run guard, not a performance target; keep enough room for the patch gate.
+    # A dead-run guard, not a performance target.
     timeout-minutes: 20
     permissions:
       contents: read
@@ -164,11 +165,11 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
+        # Main pushes keep all four: they are the exact-SHA evidence the release reads.
+        exclude: ${{ github.event_name == 'pull_request' && fromJSON('[{"python-version":"3.11"},{"python-version":"3.12"}]') || fromJSON('[]') }}
     steps:
-      # fetch-depth: 0, not the default 1. The patch-coverage step below scores the diff
-      # against the MERGE BASE with origin/main, and a shallow clone has no merge base to
-      # find - `git merge-base` fails and the gate errors out instead of scoring. Full
-      # history costs a few seconds on a repo this size.
+      # Full history: test_integration_compatibility.py and
+      # test_integration_observation_history.py `git show` historical commits.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -194,21 +195,110 @@ jobs:
           echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
       - run: uv pip install -e .[dev]
 
-      # Enforces the coverage floor as well as the tests. tests/unit/test_marker_hygiene.py
-      # additionally fails the build if any unit test file is missing its `unit` marker.
-      # Coverage tracing roughly doubles the suite's runtime, so on a PR only the 3.12 leg
-      # (the one the patch gate reads coverage.xml from) measures it; the other three run
-      # the same tests uninstrumented. Every push to main still measures all four.
-      - name: Run unit tests with coverage floor
-        if: github.event_name == 'push' || matrix.python-version == '3.12'
-        run: make test-unit-cov
-
+      # tests/unit/test_marker_hygiene.py fails the build if any unit test file is
+      # missing its `unit` marker.
       - name: Run unit tests
-        if: github.event_name == 'pull_request' && matrix.python-version != '3.12'
         run: make test-unit
 
+  # `make test-unit-cov`, split four ways. Branch tracing makes the suite ~3.5x slower,
+  # so one traced job was the whole critical path (~16 min). Each shard traces a
+  # round-robin quarter of the unit files; `coverage-gate` combines them. 3.12 is the
+  # interpreter the Docker image ships (conda/environment_vntyper.yml).
+  coverage:
+    name: Unit coverage (shard ${{ matrix.shard }}/4)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      # Full history: test_integration_compatibility.py and
+      # test_integration_observation_history.py `git show` historical commits.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      - name: Ensure the uv environment is on PATH
+        run: |
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
+      - run: uv pip install -e .[dev]
+
+      - name: Run this shard's unit tests with coverage
+        run: make test-unit-cov-shard SHARD=${{ matrix.shard }} COVERAGE_SHARDS=4
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: .coverage.shard-${{ matrix.shard }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # Combines the four shards and runs the gates `make test-unit-cov` runs locally: the
+  # coverage floor, then the patch gate on the same coverage.xml. A failing test in any
+  # shard fails that shard, which skips this job and fails `ci-success`.
+  coverage-gate:
+    name: Coverage gate
+    needs: [changes, coverage]
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # fetch-depth: 0, not the default 1. The patch-coverage step below scores the diff
+      # against the MERGE BASE with origin/main, and a shallow clone has no merge base to
+      # find - `git merge-base` fails and the gate errors out instead of scoring. Full
+      # history costs a few seconds on a repo this size.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      - name: Ensure the uv environment is on PATH
+        run: |
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
+      - run: uv pip install -e .[dev]
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: coverage-shard-*
+          path: coverage-shards
+          merge-multiple: true
+
+      - name: Combine shards and enforce the coverage floor
+        run: |
+          set -euo pipefail
+          test "$(find coverage-shards -name '.coverage.shard-*' | wc -l)" -eq 4
+          make test-unit-cov-combine COVERAGE_SHARD_DIR=coverage-shards
+
       - name: Check real integration compatibility
-        if: matrix.python-version == '3.12'
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_REF: ${{ github.base_ref }}
@@ -234,20 +324,18 @@ jobs:
       # point, so it has never once failed a PR for shipping untested code. This one
       # scores the diff and nothing else.
       #
-      # It reuses the coverage.xml the step above already wrote, so it costs one
+      # It reuses the coverage.xml the combine step already wrote, so it costs one
       # `diff-cover` invocation and no second test run.
       #
-      # Conditions, both load-bearing:
+      # Condition, load-bearing:
       #   * pull_request only - a push to main is being compared against itself, so
       #     there is no diff to score.
-      #   * one interpreter only - the score is identical on all four, and running it
-      #     across the matrix would turn one failure into four identical ones.
       #
       # A PR that only deletes code, only touches docs, or changes no measured Python
       # has no scoreable lines; diff-cover reports "No lines with coverage information"
       # and exits 0. Verified, not assumed.
       - name: Coverage of changed lines (patch coverage)
-        if: github.event_name == 'pull_request' && matrix.python-version == '3.12'
+        if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
         run: make patch-coverage PATCH_COVERAGE_BASE="origin/$BASE_REF"
@@ -292,7 +380,7 @@ jobs:
     name: CI Success
     # THE required status check. Keep this the only one, so job-level `if:` filtering
     # never leaves a required check pending.
-    needs: [changes, lint, typecheck, test-unit, docs]
+    needs: [changes, lint, typecheck, test-unit, coverage, coverage-gate, docs]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()

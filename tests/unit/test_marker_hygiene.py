@@ -59,8 +59,14 @@ def test_every_unit_file_is_selected_by_the_unit_marker(request: pytest.FixtureR
         Path(str(item.fspath)).resolve() for item in request.session.items if str(item.fspath).endswith(".py")
     }
 
+    # Judge only the files this run was asked to collect: CI's coverage shards each pass
+    # a quarter of the files, while `make test-unit` passes all of tests/unit.
+    invoked = request.config.invocation_params.dir
+    roots = [(invoked / arg.split("::")[0]).resolve() for arg in request.config.args]
     unmarked = []
     for path in sorted(UNIT_DIR.rglob("test_*.py")):
+        if not any(path.resolve() == root or root in path.resolve().parents for root in roots):
+            continue
         if path.resolve() in selected_files:
             continue
         if _DEFINES_TESTS.search(path.read_text(encoding="utf-8")):

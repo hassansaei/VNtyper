@@ -288,7 +288,7 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert "~5000 statements" not in agents
     assert "three untested lines moved it 0.03" not in agents
     assert "dedicated ratchet change" in normalized_agents
-    assert "sustained by the Python 3.10–3.13 matrix" in normalized_agents
+    assert "sustained on `main` by CI's combined 3.12 coverage" in normalized_agents
     # `docs/` is strictly the published site. Planning artifacts remain in the
     # untracked `.planning/` workspace.
     assert not any(line.startswith("exclude_docs:") for line in mkdocs.splitlines()), (
