@@ -166,7 +166,7 @@ rather than back in the file it came from.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
   Its `python_version`, ruff's `target-version` and `requires-python` are pinned to the
   same floor, and `tests/unit/test_version_consistency.py` fails the build if they drift.
-- **Code must run on Python 3.10** (`requires-python = ">=3.10"`, CI matrix 3.10–3.13).
+- **Code must run on Python 3.10** (`requires-python = ">=3.10"`, CI matrix 3.10–3.13; a PR runs the two ends).
   Your local interpreter is newer, so 3.11+ syntax can pass locally and break CI.
   PEP 604 (`X | None`) and PEP 585 (`list[str]`) are both available at this floor.
 - Google-style docstrings (`Args:` / `Returns:` / `Raises:`) on public functions.
@@ -216,7 +216,7 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor: 91** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it only in a dedicated ratchet change after the rounded integer is sustained by the Python 3.10–3.13 matrix; never lower it to make a build pass. |
+| **Hard floor: 91** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it only in a dedicated ratchet change after the rounded integer is sustained on `main` by CI's combined 3.12 coverage; never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
 | **Target: 91%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
 
@@ -274,7 +274,7 @@ values, not just that the call returned.
 
 `make test-unit-cov` reports both and prints the candidate edit when local coverage crosses
 an integer. Raise the floor only in a dedicated ratchet change after that integer is
-sustained by the Python 3.10–3.13 matrix. Never lower the floor to make a build pass — add
+sustained on `main` by CI's combined 3.12 coverage. Never lower the floor to make a build pass — add
 the test instead. The gap between the two is real work, and rule 2 explains why it exists.
 
 **When raising the floor, use the number `make test-unit-cov` prints — never the `TOTAL`
@@ -435,12 +435,14 @@ limit.
 - PRs are **not** squashed — every commit becomes permanent history. Keep them clean.
 - Copilot and Sourcery AI review PRs. The established pattern is a follow-up commit
   addressing their comments, not a force-push.
-- CI gates on PRs: `make lint`, `make type-check-all`, `make test-unit` across 3.10–3.13,
+- CI gates on PRs: `make lint`, `make type-check-all`, `make test-unit` on 3.10 and 3.13, sharded coverage,
   plus a Docker image build and quick Docker tests. PR path filters remain, while every
   push to `main` is treated as substantive and runs both required-check workflows.
-  On a PR only the 3.12 leg runs `make test-unit-cov` (floor + patch gate); the other
-  three run `make test-unit` uncovered. Every `main` push measures coverage on all four,
-  which is the matrix evidence the floor ratchet reads. The lint job also runs
+  Plain `make test-unit` runs on 3.10 and 3.13 for a PR and on all four for a `main`
+  push (the exact-SHA release evidence). Coverage is `make test-unit-cov` split four
+  ways on 3.12, the image's interpreter: `coverage` runs `make test-unit-cov-shard
+  SHARD=k` per shard, and `coverage-gate` runs `make test-unit-cov-combine`, the floor,
+  the patch gate and the integration-compatibility check. The lint job also runs
   `make format-check`.
 
 ## Release workflow

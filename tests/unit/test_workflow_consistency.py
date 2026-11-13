@@ -208,29 +208,47 @@ def test_makefile_base_inputs_mirror_every_hash_input() -> None:
 def test_unit_coverage_matrix_and_patch_coverage_version_are_fixed() -> None:
     workflow = (WORKFLOWS / "ci-tests.yml").read_text(encoding="utf-8")
     parsed = yaml.safe_load(workflow)
+    jobs = parsed["jobs"]
     assert "python-version: ['3.10', '3.11', '3.12', '3.13']" in workflow
-    assert "run: make test-unit-cov" in workflow
-    assert "matrix.python-version == '3.12'" in workflow
     assert "PATCH_COVERAGE_BASE" in workflow
     assert "`mypy vntyper/ docker/app/ scripts/`" in workflow
-    assert parsed["jobs"]["test-unit"]["timeout-minutes"] == 20
-    # Every leg runs the suite exactly once, and every main push measures coverage on all four.
-    runs = {
-        s["run"]: s.get("if")
-        for s in parsed["jobs"]["test-unit"]["steps"]
-        if s.get("run") in {"make test-unit-cov", "make test-unit"}
-    }
-    assert runs == {
-        "make test-unit-cov": "github.event_name == 'push' || matrix.python-version == '3.12'",
-        "make test-unit": "github.event_name == 'pull_request' && matrix.python-version != '3.12'",
-    }
+    assert jobs["test-unit"]["timeout-minutes"] == 20
+
+    # Plain legs: a PR drops only the middle versions; a main push runs all four.
+    matrix = jobs["test-unit"]["strategy"]["matrix"]
+    assert matrix["exclude"] == (
+        "${{ github.event_name == 'pull_request' && "
+        """fromJSON('[{"python-version":"3.11"},{"python-version":"3.12"}]') || fromJSON('[]') }}"""
+    )
+    assert [s["run"] for s in jobs["test-unit"]["steps"] if s.get("name") == "Run unit tests"] == ["make test-unit"]
+
+    # Coverage: four shards on the image's interpreter, then one combine gate that every
+    # shard must feed, and CI Success needs both.
+    coverage = jobs["coverage"]
+    assert coverage["strategy"]["matrix"]["shard"] == [1, 2, 3, 4]
+    assert "make test-unit-cov-shard SHARD=${{ matrix.shard }} COVERAGE_SHARDS=4" in workflow
+    assert {
+        s["with"]["python-version"]
+        for job in ("coverage", "coverage-gate")
+        for s in jobs[job]["steps"]
+        if "setup-uv" in s.get("uses", "")
+    } == {"3.12"}
+    gate = jobs["coverage-gate"]
+    assert gate["needs"] == ["changes", "coverage"]
+    gate_runs = "\n".join(str(s.get("run", "")) for s in gate["steps"])
+    assert "-eq 4" in gate_runs
+    assert "make test-unit-cov-combine COVERAGE_SHARD_DIR=coverage-shards" in gate_runs
+    patch = [s for s in gate["steps"] if "PATCH_COVERAGE_BASE" in str(s.get("run", ""))]
+    assert len(patch) == 1 and patch[0]["if"] == "github.event_name == 'pull_request'"
+    assert {"coverage", "coverage-gate"} <= set(jobs["ci-success"]["needs"])
 
 
 def _compatibility_step() -> dict[str, object]:
     workflow = yaml.safe_load((WORKFLOWS / "ci-tests.yml").read_text(encoding="utf-8"))
     matches = [
         step
-        for step in workflow["jobs"]["test-unit"]["steps"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
         if step.get("name") == "Check real integration compatibility"
     ]
     assert len(matches) == 1
@@ -297,7 +315,7 @@ git merge-base --is-ancestor "$base" HEAD
 def test_integration_compatibility_workflow_step_is_single_strict_and_full_history() -> None:
     """Catch duplicate/soft checker execution or a checkout that cannot prove ancestry."""
     step = _compatibility_step()
-    assert step["if"] == "matrix.python-version == '3.12'"
+    assert "if" not in step
     assert step["env"] == {
         "EVENT_NAME": "${{ github.event_name }}",
         "PR_BASE_REF": "${{ github.base_ref }}",
@@ -308,7 +326,7 @@ def test_integration_compatibility_workflow_step_is_single_strict_and_full_histo
     assert "continue-on-error" not in step
     assert "|| true" not in run
     workflow = yaml.safe_load((WORKFLOWS / "ci-tests.yml").read_text(encoding="utf-8"))
-    checkout = workflow["jobs"]["test-unit"]["steps"][0]
+    checkout = workflow["jobs"]["coverage-gate"]["steps"][0]
     assert checkout["with"]["fetch-depth"] == 0
 
 

@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures docker-cram-fixtures test test-unit test-browser test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures docker-cram-fixtures test test-unit test-browser test-fast test-unit-cov unit-test-shard-files test-unit-cov-shard test-unit-cov-combine test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 .PHONY: test-golden test-golden-if-configured
 
 # Colors for output
@@ -295,6 +295,30 @@ test-unit-cov:
 	pytest -m unit tests/unit -n $(PYTEST_WORKERS) --dist worksteal -o log_cli=false -o log_file="" --cov --cov-report=term-missing --cov-report=xml
 	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Unit coverage complete$(RESET)"
+
+# test-unit-cov split across CI runners: tracing makes the suite ~3.5x slower, so CI runs
+# it as COVERAGE_SHARDS parallel jobs and gates on the combined data. SHARD=k takes every
+# COVERAGE_SHARDS-th unit test file of the sorted list (round robin spreads the slow
+# calibration files) and writes an ungated .coverage.shard-k. test-unit-cov-combine merges
+# the shards from COVERAGE_SHARD_DIR and runs the same gate as test-unit-cov.
+# tests/unit/test_makefile_recipes.py proves the shards partition the file list.
+COVERAGE_SHARDS ?= 4
+COVERAGE_SHARD_DIR ?= .
+
+unit-test-shard-files:
+	@test "$(SHARD)" -ge 1 && test "$(SHARD)" -le $(COVERAGE_SHARDS) || { echo "SHARD must be 1..$(COVERAGE_SHARDS)" >&2; exit 2; }
+	@find tests/unit \( -name 'test_*.py' -o -name '*_test.py' \) | LC_ALL=C sort | awk -v k=$(SHARD) -v n=$(COVERAGE_SHARDS) '(NR - 1) % n == k - 1'
+
+test-unit-cov-shard:
+	@files="$$($(MAKE) --no-print-directory -s unit-test-shard-files)" && test -n "$$files" && \
+	COVERAGE_FILE=.coverage.shard-$(SHARD) pytest -m unit -n $(PYTEST_WORKERS) --dist worksteal -o log_cli=false -o log_file="" \
+		--cov --cov-report= --cov-fail-under=0 $$files
+
+test-unit-cov-combine:
+	coverage combine $(COVERAGE_SHARD_DIR)
+	coverage report --fail-under=0 --skip-covered --skip-empty
+	coverage xml --fail-under=0
+	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 
 test-scripts-cov:
 	@tmp_dir="$$(mktemp -d)" || exit $$?; test -n "$$tmp_dir" || exit 1; coverage_file="$$tmp_dir/.coverage"; \

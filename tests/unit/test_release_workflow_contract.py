@@ -308,11 +308,19 @@ def test_main_push_forces_every_substantive_ci_and_docker_scope_true() -> None:
     assert "github.event_name == 'push'" in docker["jobs"]["changes"]["outputs"]["image"]
     assert "steps.filter.outputs.image == 'true'" in docker["jobs"]["changes"]["outputs"]["image"]
 
-    assert {ci["jobs"][job]["if"] for job in ("lint", "typecheck", "test-unit")} == {
+    assert {ci["jobs"][job]["if"] for job in ("lint", "typecheck", "test-unit", "coverage", "coverage-gate")} == {
         "needs.changes.outputs.python == 'true'"
     }
     assert ci["jobs"]["docs"]["if"] == "needs.changes.outputs.docs == 'true'"
-    assert set(ci["jobs"]["ci-success"]["needs"]) == {"changes", "lint", "typecheck", "test-unit", "docs"}
+    assert set(ci["jobs"]["ci-success"]["needs"]) == {
+        "changes",
+        "lint",
+        "typecheck",
+        "test-unit",
+        "coverage",
+        "coverage-gate",
+        "docs",
+    }
     assert docker["jobs"]["base-status"]["if"] == "needs.changes.outputs.image == 'true'"
     assert "needs.changes.outputs.image == 'true'" in docker["jobs"]["build-and-test"]["if"]
     assert set(docker["jobs"]["docker-success"]["needs"]) == {
