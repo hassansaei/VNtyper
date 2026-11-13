@@ -147,7 +147,7 @@ LABEL org.opencontainers.image.title="VNtyper base" \
       org.opencontainers.image.description="Conda environments, adVNTR and reference genomes for VNtyper" \
       org.opencontainers.image.vendor="VNtyper Project" \
       org.opencontainers.image.licenses="BSD-3-Clause" \
-      org.opencontainers.image.source="https://github.com/hassansaei/VNtyper" \
+      org.opencontainers.image.source="https://github.com/vntyper-org/VNtyper" \
       com.vntyper.type="bioinformatics" \
       com.vntyper.build="base"
 

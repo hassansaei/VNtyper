@@ -591,7 +591,7 @@ BASE_INPUTS := conda docker/Dockerfile.base docker/requirements-web.txt \
 ci-local-docker: lint-docker
 	@if git rev-parse --verify -q origin/main >/dev/null 2>&1 && \
 	    ! git diff --quiet origin/main -- $(BASE_INPUTS) 2>/dev/null; then \
-		if [ "$(DOCKER_BASE_IMAGE)" = "ghcr.io/hassansaei/vntyper-base:latest" ]; then \
+		if [ "$(DOCKER_BASE_IMAGE)" = "ghcr.io/vntyper-org/vntyper-base:latest" ]; then \
 			echo "$(RED)You changed a base image input, but DOCKER_BASE_IMAGE still points at the published :latest.$(RESET)"; \
 			echo "  CI will build a new base from your changes; this would not. Run:"; \
 			echo "    make docker-build-base"; \
@@ -620,7 +620,7 @@ DOCKER_FIXTURE_IMAGE = $(or $(strip $(VNTYPER_TEST_IMAGE)),$(DOCKER_IMAGE))
 # BASE_IMAGE defaults to the published ghcr base, so `make docker-build` alone works
 # and just pulls it. Build the base locally only when you are changing conda/**,
 # the reference config, or Dockerfile.base itself.
-DOCKER_BASE_IMAGE ?= ghcr.io/hassansaei/vntyper-base:latest
+DOCKER_BASE_IMAGE ?= ghcr.io/vntyper-org/vntyper-base:latest
 
 docker-build-base:
 	@echo "$(BLUE)Building base image (conda envs + adVNTR + references)...$(RESET)"

@@ -22,7 +22,7 @@ VNtyper 2 requires the following external tools on your system:
     Use the provided environment file to create a Conda environment with all dependencies (including external binaries):
 
     ```bash
-    git clone https://github.com/hassansaei/vntyper.git
+    git clone https://github.com/vntyper-org/VNtyper.git
     cd vntyper
 
     # Create the environment
@@ -45,7 +45,7 @@ VNtyper 2 requires the following external tools on your system:
     Pull the current image from GitHub Container Registry:
 
     ```bash
-    docker pull ghcr.io/hassansaei/vntyper:latest
+    docker pull ghcr.io/vntyper-org/vntyper:latest
     ```
 
     Released images are published to GHCR as `latest` (the newest release), the
@@ -57,7 +57,7 @@ VNtyper 2 requires the following external tools on your system:
     Or build from source:
 
     ```bash
-    git clone https://github.com/hassansaei/VNtyper.git
+    git clone https://github.com/vntyper-org/VNtyper.git
     cd VNtyper
     DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t vntyper:latest .
     ```
@@ -67,7 +67,7 @@ VNtyper 2 requires the following external tools on your system:
     Install directly from GitHub:
 
     ```bash
-    pip install git+https://github.com/hassansaei/VNtyper.git
+    pip install git+https://github.com/vntyper-org/VNtyper.git
     ```
 
 === "From Source"
@@ -75,7 +75,7 @@ VNtyper 2 requires the following external tools on your system:
     Clone the repository and install in editable mode:
 
     ```bash
-    git clone https://github.com/hassansaei/vntyper.git
+    git clone https://github.com/vntyper-org/VNtyper.git
     cd vntyper
     pip install -e .
     ```
@@ -115,7 +115,7 @@ vntyper --version
 To install with development dependencies (Ruff linter, pytest, mypy):
 
 ```bash
-git clone https://github.com/hassansaei/vntyper.git
+git clone https://github.com/vntyper-org/VNtyper.git
 cd vntyper
 pip install -e .[dev]
 ```
@@ -126,4 +126,4 @@ Run the test suite to verify everything works:
 make test-unit
 ```
 
-See the [Contributing Guide](https://github.com/hassansaei/VNtyper/blob/main/CONTRIBUTING.md) for full development setup instructions.
+See the [Contributing Guide](https://github.com/vntyper-org/VNtyper/blob/main/CONTRIBUTING.md) for full development setup instructions.

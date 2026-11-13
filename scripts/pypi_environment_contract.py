@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NoReturn
 
-ISSUE_URL = "https://github.com/hassansaei/VNtyper/issues/236"
+ISSUE_URL = "https://github.com/vntyper-org/VNtyper/issues/236"
 DEPLOYMENT_BRANCH_POLICY_KEYS = {"protected_branches", "custom_branch_policies"}
 
 

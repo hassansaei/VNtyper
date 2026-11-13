@@ -142,10 +142,10 @@ docs = [
 
 [project.urls]
 Homepage = "https://vntyper.org/"
-Documentation = "https://hassansaei.github.io/VNtyper/"
-Repository = "https://github.com/hassansaei/VNtyper"
-Issues = "https://github.com/hassansaei/VNtyper/issues"
-Changelog = "https://hassansaei.github.io/VNtyper/about/changelog/"
+Documentation = "https://vntyper-org.github.io/VNtyper/"
+Repository = "https://github.com/vntyper-org/VNtyper"
+Issues = "https://github.com/vntyper-org/VNtyper/issues"
+Changelog = "https://vntyper-org.github.io/VNtyper/about/changelog/"
 
 [project.scripts]
 vntyper = "vntyper.cli:main"

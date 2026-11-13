@@ -200,7 +200,7 @@ app = FastAPI(
     },
     license_info={
         "name": "BSD 3-Clause License",
-        "url": "https://github.com/hassansaei/vntyper/blob/main/LICENSE",
+        "url": "https://github.com/vntyper-org/VNtyper/blob/main/LICENSE",
     },
     root_path="/api",
     docs_url=None,

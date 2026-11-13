@@ -1,8 +1,8 @@
 # Caller and VNTR length calibration
 
 The explicit `callers` and `length` targets extend `vntyper calibrate` for issues
-[#269](https://github.com/hassansaei/VNtyper/issues/269) and
-[#332](https://github.com/hassansaei/VNtyper/issues/332). Omitting `--target` retains
+[#269](https://github.com/vntyper-org/VNtyper/issues/269) and
+[#332](https://github.com/vntyper-org/VNtyper/issues/332). Omitting `--target` retains
 [dominance calibration](calibrate.md) for the existing extract/fit/validate/evaluate
 operations. Strict caller-policy activation requires a separately approved portable
 bundle. Standard length estimation and development cohort comparisons are described below.
@@ -120,7 +120,7 @@ predictions:
 - **Transfer between cohorts is asymmetric.** Trained on the German cohort and applied to
   the French one, MAE is 10.1. Trained on the French cohort and applied to the German
   one, MAE is 27.1 with R² −0.69. See
-  [#336](https://github.com/hassansaei/VNtyper/issues/336).
+  [#336](https://github.com/vntyper-org/VNtyper/issues/336).
 - **Out-of-range input still gets an estimate.** Features outside the training range add
   an extrapolation warning, but the estimate and its tier are still reported. The model
   contract binds no assay or aligner, so nothing stops other input from being scored.
@@ -272,7 +272,7 @@ filtered out.
 ### Which caller is searched
 
 `vntyper calibrate optimize` searches Kestrel axes, adVNTR axes, or both
-([#269](https://github.com/hassansaei/VNtyper/issues/269)).
+([#269](https://github.com/vntyper-org/VNtyper/issues/269)).
 
 - `--caller kestrel` (the default) searches the Kestrel axes against Kestrel calls. The
   default axis is `depth_floor_linked`.

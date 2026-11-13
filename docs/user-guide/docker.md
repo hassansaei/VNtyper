@@ -7,7 +7,7 @@ VNtyper 2 provides pre-built Docker images with all dependencies included.
 Pull the latest released image from GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/hassansaei/vntyper:latest
+docker pull ghcr.io/vntyper-org/vntyper:latest
 ```
 
 Released images are published to GHCR as `latest` (the newest release), the immutable `vX.Y.Z` and `X.Y.Z` tags naming one exact release, and the moving `X` and `X.Y` series tags. Pin `vX.Y.Z` for a reproducible run. The `main` tag is rolling and tracks the default branch. Docker Hub artifacts are legacy, frozen, and unsupported.
@@ -15,7 +15,7 @@ Released images are published to GHCR as `latest` (the newest release), the immu
 ## Build from Source
 
 ```bash
-git clone https://github.com/hassansaei/VNtyper.git
+git clone https://github.com/vntyper-org/VNtyper.git
 cd VNtyper
 DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t vntyper:latest .
 ```
@@ -33,7 +33,7 @@ docker run -w /opt/vntyper --rm \
     --user $(id -u):$(id -g) \
     -v /path/to/input:/opt/vntyper/input \
     -v /path/to/output:/opt/vntyper/output \
-    ghcr.io/hassansaei/vntyper:latest \
+    ghcr.io/vntyper-org/vntyper:latest \
     vntyper pipeline --bam /opt/vntyper/input/sample.bam \
     -o /opt/vntyper/output/sample/
 ```
@@ -65,7 +65,7 @@ docker run -w /opt/vntyper --rm \
         --user $(id -u):$(id -g) \
         -v "$PWD/data":/opt/vntyper/input \
         -v "$PWD/results":/opt/vntyper/output \
-        ghcr.io/hassansaei/vntyper:latest \
+        ghcr.io/vntyper-org/vntyper:latest \
         vntyper pipeline --cram /opt/vntyper/input/sample.cram \
         -o /opt/vntyper/output/sample/
     ```
@@ -73,9 +73,9 @@ docker run -w /opt/vntyper --rm \
 ## Verify Installation
 
 ```bash
-docker run --rm ghcr.io/hassansaei/vntyper:latest vntyper --version
-docker run --rm ghcr.io/hassansaei/vntyper:latest samtools --version
-docker run --rm ghcr.io/hassansaei/vntyper:latest java -version
+docker run --rm ghcr.io/vntyper-org/vntyper:latest vntyper --version
+docker run --rm ghcr.io/vntyper-org/vntyper:latest samtools --version
+docker run --rm ghcr.io/vntyper-org/vntyper:latest java -version
 ```
 
 ## Health Checks
@@ -128,7 +128,7 @@ docker run -d -p 8000:8000 \
     -v /path/to/input:/opt/vntyper/input \
     -v vntyper_handoff_spool:/opt/vntyper/handoff \
     -v vntyper_result_store:/opt/vntyper/output \
-    ghcr.io/hassansaei/vntyper:latest
+    ghcr.io/vntyper-org/vntyper:latest
 ```
 
 Submit an analysis job:
@@ -153,7 +153,7 @@ curl -O "http://localhost:8000/download/sample.zip"
 Convert the container image to an Apptainer SIF:
 
 ```bash
-apptainer pull docker://ghcr.io/hassansaei/vntyper:latest
+apptainer pull docker://ghcr.io/vntyper-org/vntyper:latest
 ```
 
 Run with Apptainer:

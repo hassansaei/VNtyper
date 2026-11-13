@@ -236,7 +236,7 @@ else:
         "FAKE_FIXTURE": str(fixture_path),
         "GH_TOKEN": "test-token",
         "GITHUB_OUTPUT": str(tmp_path / "github-output"),
-        "GITHUB_REPOSITORY": "hassansaei/VNtyper",
+        "GITHUB_REPOSITORY": "vntyper-org/VNtyper",
         "MUTATION_LOG": str(tmp_path / "mutation.log"),
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "RELEASE_API_ATTEMPTS": "3",
@@ -249,7 +249,7 @@ else:
         "SHORT_SHA": "a" * 7,
         "SOURCE_DIGEST": "sha256:" + "b" * 64,
         "VERSION": "2.0.10",
-        "IMAGE": "ghcr.io/hassansaei/vntyper",
+        "IMAGE": "ghcr.io/vntyper-org/vntyper",
     }
 
 
@@ -448,7 +448,7 @@ def test_docker_build_digest_steps_execute_descriptor_parser_for_base_and_pushed
     """Both Docker workflow shell sites must reduce descriptor JSON to one canonical digest."""
     docker = _workflow("docker-build.yml")
     digest = "sha256:" + "b" * 64
-    image = "ghcr.io/hassansaei/vntyper"
+    image = "ghcr.io/vntyper-org/vntyper"
     base_image = f"{image}-base"
     base_tag = "base-deadbeefdeadbeef"
     fixture = {
@@ -764,7 +764,7 @@ def test_current_container_commands_use_a_published_release_alias() -> None:
     # Every reference is checked, not just one per block, and only the alias the
     # examples actually use is accepted: a syntactically valid tag is not evidence that
     # the release workflow publishes it.
-    reference = re.compile(r"ghcr\.io/hassansaei/vntyper:([A-Za-z0-9._-]+)")
+    reference = re.compile(r"ghcr\.io/vntyper-org/vntyper:([A-Za-z0-9._-]+)")
     for path in surfaces:
         text = path.read_text(encoding="utf-8")
         normalized = " ".join(text.lower().split())
@@ -1257,7 +1257,7 @@ def test_evidence_download_requires_exact_repo_outside_checkout_and_workflow_sup
             "download",
             "41",
             "--repo",
-            "hassansaei/VNtyper",
+            "vntyper-org/VNtyper",
             "-n",
             "evidence",
             "-D",
@@ -1646,8 +1646,8 @@ def _successful_evidence_fixture(**evidence_overrides: object) -> dict[str, Any]
         },
         "downloads": {"41": evidence},
         "docker": {
-            f"ghcr.io/hassansaei/vntyper@{digest}": {"digest": digest, "image": image},
-            "ghcr.io/hassansaei/vntyper:sha-aaaaaaa": {"digest": digest, "image": image},
+            f"ghcr.io/vntyper-org/vntyper@{digest}": {"digest": digest, "image": image},
+            "ghcr.io/vntyper-org/vntyper:sha-aaaaaaa": {"digest": digest, "image": image},
         },
     }
 
@@ -1683,7 +1683,7 @@ def test_evidence_step_selects_fallback_run_and_exports_exact_digest_identity(tm
     output = (tmp_path / "github-output").read_text().splitlines()
     digest = "sha256:" + "b" * 64
     assert output[:-1] == [
-        f"source_ref=ghcr.io/hassansaei/vntyper@{digest}",
+        f"source_ref=ghcr.io/vntyper-org/vntyper@{digest}",
         f"source_digest={digest}",
         f"source_revision={'a' * 40}",
         "source_version=2.0.10",
@@ -1703,7 +1703,7 @@ def test_evidence_step_selects_fallback_run_and_exports_exact_digest_identity(tm
     ]
     assert output[-1].startswith("evidence_summary_json=")
     assert json.loads((tmp_path / "validated-image.json").read_text()) == {
-        "source_ref": f"ghcr.io/hassansaei/vntyper@{digest}",
+        "source_ref": f"ghcr.io/vntyper-org/vntyper@{digest}",
         "source_digest": digest,
         "source_revision": "a" * 40,
         "source_version": "2.0.10",
@@ -1712,7 +1712,7 @@ def test_evidence_step_selects_fallback_run_and_exports_exact_digest_identity(tm
     }
     summary = json.loads((tmp_path / "evidence-summary.json").read_text(encoding="utf-8"))
     assert summary["state"] == "verified"
-    assert summary["source_ref"] == f"ghcr.io/hassansaei/vntyper@{digest}"
+    assert summary["source_ref"] == f"ghcr.io/vntyper-org/vntyper@{digest}"
     assert summary["evidence_contract_version"] == 1
     assert summary["short_tag_collision"] is False
     assert summary["selected_run"]["html_url"] == "https://github.test/runs/41"
@@ -1750,7 +1750,7 @@ def test_evidence_step_rejects_wrong_contract_digest_revision_and_version(
 def test_evidence_step_rejects_registry_digest_mismatch(tmp_path: Path) -> None:
     """A registry manifest digest cannot differ from the evidence provenance digest."""
     fixture = _successful_evidence_fixture()
-    immutable_ref = f"ghcr.io/hassansaei/vntyper@{'sha256:' + 'b' * 64}"
+    immutable_ref = f"ghcr.io/vntyper-org/vntyper@{'sha256:' + 'b' * 64}"
     fixture["docker"][immutable_ref]["digest"] = "sha256:" + "c" * 64
     publish = _workflow("publish-pypi.yml")
     env = _release_runtime(tmp_path, fixture)
@@ -1767,7 +1767,7 @@ def test_evidence_step_reports_short_prefix_collision_without_substitution(tmp_p
     """A colliding short tag is allowed only after immutable evidence has been validated."""
     fixture = _successful_evidence_fixture()
     other_sha = "a" * 7 + "d" * 33
-    short_ref = "ghcr.io/hassansaei/vntyper:sha-aaaaaaa"
+    short_ref = "ghcr.io/vntyper-org/vntyper:sha-aaaaaaa"
     fixture["docker"][short_ref] = {
         "digest": "sha256:" + "d" * 64,
         "image": {
@@ -1868,7 +1868,7 @@ def _promotion_fixture(
     inspect_failures: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     """Return registry observations for executable promotion-step tests."""
-    image = "ghcr.io/hassansaei/vntyper"
+    image = "ghcr.io/vntyper-org/vntyper"
     source_digest = "sha256:" + "b" * 64
     source_record = {
         "digest": source_digest,
@@ -1929,7 +1929,7 @@ def test_promotion_executes_five_digest_copies_and_rerun_converges_to_noops(tmp_
     """A complete rerun must observe the five prior writes and perform no new mutations."""
     publish = _workflow("publish-pypi.yml")
     env = _release_runtime(tmp_path, _promotion_fixture())
-    source = f"ghcr.io/hassansaei/vntyper@{'sha256:' + 'b' * 64}"
+    source = f"ghcr.io/vntyper-org/vntyper@{'sha256:' + 'b' * 64}"
 
     first = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
 
@@ -2000,7 +2000,7 @@ def test_transient_inspection_cannot_hide_and_overwrite_existing_alias(
     expected_returncode: int,
 ) -> None:
     """A retry must reveal immutable conflicts and newer floating aliases before planning writes."""
-    image = "ghcr.io/hassansaei/vntyper"
+    image = "ghcr.io/vntyper-org/vntyper"
     source_digest = "sha256:" + "b" * 64
     existing_digest = "sha256:" + "c" * 64
     other_aliases = {
@@ -2045,7 +2045,7 @@ def test_ambiguous_alias_inspection_failure_aborts_before_every_registry_write(
     failure_stderr: str,
 ) -> None:
     """Only an authoritative registry not-found response may be treated as an absent alias."""
-    image = "ghcr.io/hassansaei/vntyper"
+    image = "ghcr.io/vntyper-org/vntyper"
     hidden_alias = f"{image}:latest"
     fixture = _promotion_fixture(
         inspect_failures={hidden_alias: {"times": 3, "stderr": failure_stderr}},
@@ -2063,14 +2063,14 @@ def test_ambiguous_alias_inspection_failure_aborts_before_every_registry_write(
 
 def test_authoritative_registry_404_may_plan_create_after_bounded_retries(tmp_path: Path) -> None:
     """An explicit registry 404 remains the only failed inspection that proves alias absence."""
-    image = "ghcr.io/hassansaei/vntyper"
+    image = "ghcr.io/vntyper-org/vntyper"
     fixture = _promotion_fixture(
         inspect_failures={
             f"{image}:latest": {
                 "times": 3,
                 "stderr": (
                     "unexpected status from HEAD request to "
-                    "https://ghcr.io/v2/hassansaei/vntyper/manifests/latest: 404 Not Found"
+                    "https://ghcr.io/v2/vntyper-org/vntyper/manifests/latest: 404 Not Found"
                 ),
             }
         },
@@ -2101,7 +2101,7 @@ def test_promotion_converges_after_every_completed_alias_prefix(tmp_path: Path, 
         ordered[completed_prefix:]
     )
     registry = json.loads((tmp_path / "fake-fixture.json").read_text())["docker"]
-    assert all(registry[f"ghcr.io/hassansaei/vntyper:{alias}"]["digest"] == digest for alias in ordered)
+    assert all(registry[f"ghcr.io/vntyper-org/vntyper:{alias}"]["digest"] == digest for alias in ordered)
 
 
 def test_newer_floating_alias_emits_a_notice_without_writes(tmp_path: Path) -> None:
@@ -2188,7 +2188,7 @@ def test_manual_alias_dry_run_executes_one_untagged_probe_and_zero_writes(tmp_pa
     assert "--dry-run" in records[0]
     assert "--prefer-index=false" in records[0]
     assert "--tag" not in records[0]
-    assert records[0][-1] == f"ghcr.io/hassansaei/vntyper@{'sha256:' + 'b' * 64}"
+    assert records[0][-1] == f"ghcr.io/vntyper-org/vntyper@{'sha256:' + 'b' * 64}"
     assert (tmp_path / "mutation.log").read_text() == ""
     output_name, encoded = (tmp_path / "github-output").read_text().strip().split("=", maxsplit=1)
     assert output_name == "dry_run_alias_summary_json"
@@ -2218,12 +2218,12 @@ def test_manual_alias_dry_run_fails_when_any_alias_conflicts(tmp_path: Path) -> 
     assert len(records) == 1
     assert "--dry-run" in records[0]
     assert "--tag" not in records[0]
-    assert records[0][-1] == f"ghcr.io/hassansaei/vntyper@{source_digest}"
+    assert records[0][-1] == f"ghcr.io/vntyper-org/vntyper@{source_digest}"
 
 
 def test_manual_alias_inspection_aborts_on_non_authoritative_failure_before_dry_run_probe(tmp_path: Path) -> None:
     """Dry-run planning must not describe an uncertain registry observation as absence."""
-    image = "ghcr.io/hassansaei/vntyper"
+    image = "ghcr.io/vntyper-org/vntyper"
     fixture = _promotion_fixture(
         inspect_failures={
             f"{image}:latest": {
@@ -2253,7 +2253,7 @@ def test_missing_credential_executable_aborts_both_modes_before_create_or_probe(
     step: str,
 ) -> None:
     """A local credential failure containing ``not found`` never proves manifest absence."""
-    image = "ghcr.io/hassansaei/vntyper"
+    image = "ghcr.io/vntyper-org/vntyper"
     fixture = _promotion_fixture(
         inspect_failures={
             f"{image}:latest": {
@@ -2281,15 +2281,15 @@ def test_missing_credential_executable_aborts_both_modes_before_create_or_probe(
     "failure_stderr",
     (
         (
-            "HEAD https://ghcr.io/v2/hassansaei/vntyper/manifests/latest failed\n"
+            "HEAD https://ghcr.io/v2/vntyper-org/vntyper/manifests/latest failed\n"
             "unexpected status from token request: 404 Not Found"
         ),
         (
             "unexpected status from HEAD request to "
-            "https://ghcr.io/v2/hassansaei/vntyper/manifests/unrelated: 404 Not Found"
+            "https://ghcr.io/v2/vntyper-org/vntyper/manifests/unrelated: 404 Not Found"
         ),
         "manifest unknown: not found",
-        "ghcr.io/hassansaei/vntyper:latest:\nmanifest unknown",
+        "ghcr.io/vntyper-org/vntyper:latest:\nmanifest unknown",
     ),
 )
 @pytest.mark.parametrize(
@@ -2303,7 +2303,7 @@ def test_hostile_unbound_absence_output_retries_then_aborts_before_create_or_pro
     step: str,
 ) -> None:
     """Cross-line, wrong-manifest, and unbound statuses cannot authorize a registry operation."""
-    image = "ghcr.io/hassansaei/vntyper"
+    image = "ghcr.io/vntyper-org/vntyper"
     reference = f"{image}:latest"
     fixture = _promotion_fixture(
         inspect_failures={reference: {"times": 3, "stderr": failure_stderr}},
@@ -2453,7 +2453,7 @@ def test_release_summary_renders_all_provenance_and_handles_partial_invalid_stat
         "run": {"id": 41, "attempt": 3},
         "artifact": {"id": 501, "name": "docker-release-evidence"},
         "evidence_contract_version": 1,
-        "source_ref": "ghcr.io/hassansaei/vntyper@sha256:" + "b" * 64,
+        "source_ref": "ghcr.io/vntyper-org/vntyper@sha256:" + "b" * 64,
         "digest": "sha256:" + "b" * 64,
         "revision": "a" * 40,
         "version": "2.0.10",

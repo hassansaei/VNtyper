@@ -25,7 +25,7 @@ Thank you for considering contributing to **VNtyper**! Your contributions help m
 
 If you find a bug in **VNtyper**, please help us by creating a new issue:
 
-1. **Check for Existing Issues**: Before submitting a new bug report, please search the [Issues](https://github.com/hassansaei/VNtyper/issues) to see if it has already been reported.
+1. **Check for Existing Issues**: Before submitting a new bug report, please search the [Issues](https://github.com/vntyper-org/VNtyper/issues) to see if it has already been reported.
 2. **Open a New Issue**: If you don’t find an existing report, click on the `New Issue` button.
 3. **Use a Clear Title**: Provide a short, descriptive title of the bug.
 4. **Describe the Bug**:
@@ -41,7 +41,7 @@ By reporting bugs promptly and clearly, you help us investigate and resolve them
 
 We welcome ideas to improve **VNtyper**! To suggest a new feature or enhancement:
 
-1. **Check for Existing Requests**: Search the [Issues](https://github.com/hassansaei/VNtyper/issues) for similar feature requests.
+1. **Check for Existing Requests**: Search the [Issues](https://github.com/vntyper-org/VNtyper/issues) for similar feature requests.
 2. **Open a New Issue**: If the idea is not already discussed, click `New Issue`.
 3. **Use a Descriptive Title**: Clearly state what feature or improvement you would like to see.
 4. **Provide Details**:

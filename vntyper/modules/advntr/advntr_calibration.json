@@ -2,7 +2,7 @@
   "_comment": "Provenance for adVNTR flagging rules that are not governed recurrent-State evidence. The Polymorphic_Call inventory and its evidence live only in the verified advntr_artifact_evidence.json artifact (#267). Production code never reads this calibration file. Research use only.",
   "other_rules": {
     "Repeat_Unit_7": {
-      "source": "hassansaei/VNtyper#267 (2026-08-24)",
+      "source": "vntyper-org/VNtyper#267 (2026-08-24)",
       "status": "confirmed_artifact",
       "rationale": "The owner: RU7 'is a well-known artifact - it shows up frequently in negative samples, and occasionally in positive samples alongside the real pathogenic variant.' Keep flagged. Note separately that RU7, the 48 bp unit, does not occur in GRCh38 at all, so on that assembly the rule flags against a unit the reference does not contain."
     },

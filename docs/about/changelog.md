@@ -4,7 +4,9 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+### Repository home
+
+- **Moved to `vntyper-org`**: the code repository, GitHub Pages docs, and GHCR images now live under [vntyper-org/VNtyper](https://github.com/vntyper-org/VNtyper). Clone from `https://github.com/vntyper-org/VNtyper.git`, pull `ghcr.io/vntyper-org/vntyper:latest`, and use [the org docs site](https://vntyper-org.github.io/VNtyper/). Historical `ghcr.io/hassansaei/vntyper` tags from 2.0.13 and earlier are unchanged. Author credits and `@hassansaei` review notes are unchanged.
 
 ## 2.0.50 (2026-11-12)
 

@@ -14,7 +14,7 @@ API_DESCRIPTION = """Genotyping pipeline for *MUC1* Variable Number Tandem Repea
 
 | Feature | Details | Action / Reference |
 | :--- | :--- | :--- |
-| **Pipeline** | K-mer haplotype assembly via Kestrel and optional profile-HMM repeat counting | [VNtyper 2 Repository](https://github.com/hassansaei/vntyper) |
+| **Pipeline** | K-mer haplotype assembly via Kestrel and optional profile-HMM repeat counting | [VNtyper 2 Repository](https://github.com/vntyper-org/VNtyper) |
 | **Workflow** | Submit alignment files, monitor task execution, and retrieve results | `POST /run-job/` → `GET /download/` |
 | **Cohorts** | Passphrase-protected sample grouping for joint multi-sample genotyping | `POST /create-cohort/` |
 | **Data Retention** | Automatic purging of uploaded files and result archives after 3 days | 3-day retention policy |

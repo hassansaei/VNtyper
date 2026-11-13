@@ -116,7 +116,7 @@ jobs:
       - name: Check out VNtyper at the pinned builder commit
         uses: actions/checkout@v7
         with:
-          repository: hassansaei/VNtyper
+          repository: vntyper-org/VNtyper
           ref: ${{ inputs.source_commit }}
           path: builder
 
@@ -243,7 +243,7 @@ jobs:
 
           | | |
           |---|---|
-          | Builder | hassansaei/VNtyper@${BUILDER_SHA} |
+          | Builder | vntyper-org/VNtyper@${BUILDER_SHA} |
           | Spec | ${RELEASE_SPEC_PATH} @ ${DATA_SHA} |
 
           Every archive carries its own release-manifest.json and BUILD_INFO.json, and
@@ -298,7 +298,7 @@ jobs:
           {
             echo "### Reference bundle ${RELEASE_TAG}"
             echo ""
-            echo "- Builder: hassansaei/VNtyper@${BUILDER_SHA}"
+            echo "- Builder: vntyper-org/VNtyper@${BUILDER_SHA}"
             echo "- Data:    ${DATA_SHA}"
             echo ""
             if [ -f dist/SHA256SUMS ]; then

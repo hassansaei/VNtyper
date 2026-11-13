@@ -23,13 +23,13 @@ every published reference bundle now live in
 [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data) rather than in this
 repository. `vntyper install-references` downloads the versioned, checksummed release that
 repository publishes by default; see
-[Reference Setup](https://hassansaei.github.io/VNtyper/getting-started/reference-setup/)
+[Reference Setup](https://vntyper-org.github.io/VNtyper/getting-started/reference-setup/)
 (or `docs/getting-started/reference-setup.md` in this repository) for the trust model, and
 `vntyper/scripts/install_references_config.json` for the exact digests VNtyper pins.
 
 `--from-source` still rebuilds those same references locally from their original upstream
 hosts, and it is what the `berntpopp/vntyper-data` build workflow itself runs -- see that
-flag in [install-references](https://hassansaei.github.io/VNtyper/cli/install-references/)
+flag in [install-references](https://vntyper-org.github.io/VNtyper/cli/install-references/)
 or `docs/cli/install-references.md` here.
 
 ## 2. BAM/FASTQ Pseudonymization and Anonymization
@@ -367,7 +367,7 @@ Edit `reference/pseudonymize_config.json` to enable/disable aligners or modify s
 
 `vntyper install-references -d reference/` (with no flags) fetches the published,
 BWA-indexed bundle from `berntpopp/vntyper-data` -- see
-[Reference Setup](https://hassansaei.github.io/VNtyper/getting-started/reference-setup/).
+[Reference Setup](https://vntyper-org.github.io/VNtyper/getting-started/reference-setup/).
 That default path only ever produces a BWA index, so remapping with `bwa-mem2`, `minimap2`,
 `bowtie2` or DRAGMAP needs `--from-source`, which builds every reference locally instead:
 

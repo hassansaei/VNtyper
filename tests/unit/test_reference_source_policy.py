@@ -62,8 +62,9 @@ def _is_allowed(url: str) -> bool:
     return any(parsed.hostname == hostname and parsed.path.startswith(prefix) for hostname, prefix in ALLOWED_SOURCES)
 
 
-#: The code repository. Nothing under it may be a reference-data source.
-CODE_REPOSITORY = "hassansaei/VNtyper"
+#: Code repositories. Nothing under either may be a reference-data source.
+#: The pre-transfer owner is kept so a URL cannot quietly slide back there.
+CODE_REPOSITORIES = ("vntyper-org/VNtyper", "hassansaei/VNtyper")
 
 
 def _config() -> dict:
@@ -92,7 +93,7 @@ def test_no_reference_file_is_sourced_from_the_code_repository():
     removed. Re-introducing one would not necessarily 404 -- it might resolve to a stale copy
     and install quietly wrong data.
     """
-    offenders = [url for url in _every_url(_config()) if CODE_REPOSITORY in url]
+    offenders = [url for url in _every_url(_config()) if any(repo in url for repo in CODE_REPOSITORIES)]
 
     assert offenders == [], f"reference data must not be hosted in the code repository: {offenders}"
 

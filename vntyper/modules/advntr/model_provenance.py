@@ -407,7 +407,7 @@ def require_compatible_advntr(model: dict[str, Any], advntr_version: tuple[int, 
             f"{model['path']} is a v1 adVNTR model. On GRCh38 it describes "
             f"{model['window_bp']} bp of a 3,525 bp repeat array, so adVNTR would see "
             f"part of the locus and miss variants outside it "
-            f"(hassansaei/VNtyper#268). {_REINSTALL}"
+            f"(vntyper-org/VNtyper#268). {_REINSTALL}"
         )
 
     if advntr_version is None or advntr_version < SPAN_AWARE_ADVNTR:

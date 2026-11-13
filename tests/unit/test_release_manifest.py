@@ -60,7 +60,7 @@ def test_manifest_descriptor_rejects_missing_malformed_and_non_sha256_identity(p
         "",
         "not-json",
         (
-            "Name:      ghcr.io/hassansaei/vntyper:main\n"
+            "Name:      ghcr.io/vntyper-org/vntyper:main\n"
             "MediaType: application/vnd.docker.distribution.manifest.v2+json\n"
             f"Digest:    {DIGEST}\n"
         ),

@@ -8,14 +8,14 @@ A production-ready Docker container for **VNtyper**, built as two images:
 | `docker/Dockerfile` | the VNtyper application and the FastAPI app | every commit (~3 min) |
 
 Splitting them keeps the per-commit build small: the expensive layers are published
-once to `ghcr.io/hassansaei/vntyper-base` and reused.
+once to `ghcr.io/vntyper-org/vntyper-base` and reused.
 
 ## **Building the Docker Image**
 
 ### **Quick Start**
 
 ```bash
-git clone https://github.com/hassansaei/VNtyper.git
+git clone https://github.com/vntyper-org/VNtyper.git
 cd VNtyper
 
 # Builds the application on the published base image (pulls the base, ~3 min)
@@ -26,7 +26,7 @@ Equivalently, by hand:
 
 ```bash
 DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile \
-  --build-arg BASE_IMAGE=ghcr.io/hassansaei/vntyper-base:latest \
+  --build-arg BASE_IMAGE=ghcr.io/vntyper-org/vntyper-base:latest \
   -t vntyper:latest .
 ```
 
@@ -56,13 +56,13 @@ prose, not as an installation source.
 
 ```bash
 # Latest released image from GitHub Container Registry
-docker pull ghcr.io/hassansaei/vntyper:latest
+docker pull ghcr.io/vntyper-org/vntyper:latest
 ```
 
 ### **Generate Apptainer Image**
 
 ```bash
-apptainer pull docker://ghcr.io/hassansaei/vntyper:latest
+apptainer pull docker://ghcr.io/vntyper-org/vntyper:latest
 ```
 
 ## **Testing the Build**
@@ -98,13 +98,13 @@ pytest tests/docker/test_docker_pipeline.py::test_docker_container_health -v
 
 ```bash
 # Check VNtyper version
-docker run --rm ghcr.io/hassansaei/vntyper:latest vntyper --version
+docker run --rm ghcr.io/vntyper-org/vntyper:latest vntyper --version
 
 # Check Java runtime
-docker run --rm ghcr.io/hassansaei/vntyper:latest java -version
+docker run --rm ghcr.io/vntyper-org/vntyper:latest java -version
 
 # Check bioinformatics tools
-docker run --rm ghcr.io/hassansaei/vntyper:latest samtools --version
+docker run --rm ghcr.io/vntyper-org/vntyper:latest samtools --version
 ```
 
 ## **Configuration**
@@ -142,7 +142,7 @@ Run docker interactively:
    docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    ghcr.io/hassansaei/vntyper:latest \
+    ghcr.io/vntyper-org/vntyper:latest \
     vntyper pipeline --bam /local/input/folder/filename.bam \
     -o /local/output/folder/filename/
 ```
@@ -168,7 +168,7 @@ docker run -d -p 8000:8000 \
     -v /local/input/folder/:/opt/vntyper/input \
     -v vntyper_handoff_spool:/opt/vntyper/handoff \
     -v vntyper_result_store:/opt/vntyper/output \
-    ghcr.io/hassansaei/vntyper:latest
+    ghcr.io/vntyper-org/vntyper:latest
 ```
 
 The API and its worker must mount the same named handoff and result volumes. The

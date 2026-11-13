@@ -10,7 +10,7 @@ authors:
   - family-names: "Popp"
     given-names: "Bernt"
     orcid: "https://orcid.org/0000-0002-3679-1081"
-repository-code: "https://github.com/hassansaei/VNtyper"
+repository-code: "https://github.com/vntyper-org/VNtyper"
 url: "https://vntyper.org"
 license: BSD-3-Clause
 version: "2.0.50"

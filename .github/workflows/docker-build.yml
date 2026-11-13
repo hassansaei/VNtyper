@@ -398,7 +398,7 @@ jobs:
       - id: registry-digest
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
-          IMAGE: ghcr.io/hassansaei/vntyper
+          IMAGE: ghcr.io/vntyper-org/vntyper
           VERSION: ${{ steps.package.outputs.version }}
         run: |
           set -euo pipefail

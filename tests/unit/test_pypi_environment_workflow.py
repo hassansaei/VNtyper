@@ -15,8 +15,8 @@ pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "publish-pypi.yml"
-ISSUE_URL = "https://github.com/hassansaei/VNtyper/issues/236"
-ENVIRONMENT_ENDPOINT = "repos/hassansaei/VNtyper/environments/pypi"
+ISSUE_URL = "https://github.com/vntyper-org/VNtyper/issues/236"
+ENVIRONMENT_ENDPOINT = "repos/vntyper-org/VNtyper/environments/pypi"
 POLICIES_ENDPOINT = f"{ENVIRONMENT_ENDPOINT}/deployment-branch-policies"
 CUSTOM_RULES_ENDPOINT = f"{ENVIRONMENT_ENDPOINT}/deployment_protection_rules"
 #: Where the PyPI environment contract has to be written down for a maintainer to find it.
@@ -105,7 +105,7 @@ print(json.dumps(payloads[endpoint]))
             "FAKE_GH_FAILED_ENDPOINT": failed_endpoint,
             "FAKE_GH_PAYLOADS": str(payloads_path),
             "GH_TOKEN": "fake-token",
-            "GITHUB_REPOSITORY": "hassansaei/VNtyper",
+            "GITHUB_REPOSITORY": "vntyper-org/VNtyper",
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "RUNNER_TEMP": str(tmp_path),
         },

@@ -326,4 +326,4 @@ If Docker tests fail but local integration tests pass:
 3. Try rebuilding image: `docker build -f docker/Dockerfile -t vntyper:test .`
 4. Check logs: `tests/pytest.log`
 
-For issues, report at: https://github.com/hassansaei/VNtyper/issues
+For issues, report at: https://github.com/vntyper-org/VNtyper/issues

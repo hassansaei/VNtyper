@@ -16,7 +16,7 @@
 #   docker build -f docker/Dockerfile --build-arg BASE_IMAGE=vntyper-base:local -t vntyper:local .
 # =============================================================================
 
-ARG BASE_IMAGE=ghcr.io/hassansaei/vntyper-base:latest
+ARG BASE_IMAGE=ghcr.io/vntyper-org/vntyper-base:latest
 
 FROM ${BASE_IMAGE} AS runtime
 
@@ -24,9 +24,9 @@ LABEL org.opencontainers.image.title="VNtyper" \
       org.opencontainers.image.description="VNtyper 2 - MUC1 VNTR genotyping pipeline for ADTKD-MUC1" \
       org.opencontainers.image.vendor="VNtyper Project" \
       org.opencontainers.image.licenses="BSD-3-Clause" \
-      org.opencontainers.image.source="https://github.com/hassansaei/VNtyper" \
-      org.opencontainers.image.url="https://github.com/hassansaei/VNtyper" \
-      org.opencontainers.image.documentation="https://hassansaei.github.io/VNtyper/" \
+      org.opencontainers.image.source="https://github.com/vntyper-org/VNtyper" \
+      org.opencontainers.image.url="https://github.com/vntyper-org/VNtyper" \
+      org.opencontainers.image.documentation="https://vntyper-org.github.io/VNtyper/" \
       com.vntyper.type="bioinformatics" \
       com.vntyper.pipeline="genotyping" \
       com.vntyper.build="app"

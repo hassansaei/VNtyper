@@ -13,7 +13,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 #: The published troubleshooting page. Every new operator-facing failure message links it.
-TROUBLESHOOTING_URL = "https://hassansaei.github.io/VNtyper/user-guide/troubleshooting/"
+TROUBLESHOOTING_URL = "https://vntyper-org.github.io/VNtyper/user-guide/troubleshooting/"
 
 #: Known Kestrel ERROR texts and what to do about each, checked in order. Each marker is
 #: a substring of the message the pinned Kestrel 1.0.1 logs, measured against the jar.

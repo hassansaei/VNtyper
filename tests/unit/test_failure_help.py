@@ -19,7 +19,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_the_help_link_is_the_published_troubleshooting_page():
-    assert TROUBLESHOOTING_URL == "https://hassansaei.github.io/VNtyper/user-guide/troubleshooting/"
+    assert TROUBLESHOOTING_URL == "https://vntyper-org.github.io/VNtyper/user-guide/troubleshooting/"
 
 
 def test_the_troubleshooting_page_the_link_points_at_exists():

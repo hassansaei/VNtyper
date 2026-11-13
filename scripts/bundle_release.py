@@ -1022,7 +1022,7 @@ def build_info(tag: str, data_sha: str, builder_sha: str, observed: dict[str, st
     return {
         "release_tag": tag,
         "generated_at": now,
-        "builder_repository": "hassansaei/VNtyper",
+        "builder_repository": "vntyper-org/VNtyper",
         "builder_commit": builder_sha,
         "data_commit": data_sha,
         "bwa_version": observed["bwa_version"],
@@ -1224,7 +1224,7 @@ def build(args: argparse.Namespace) -> int:
         {
             "release_tag": args.tag,
             "generated_at": now,
-            "builder_repository": "hassansaei/VNtyper",
+            "builder_repository": "vntyper-org/VNtyper",
             "builder_commit": args.builder_sha,
             "data_commit": args.data_sha,
             "assets": records,

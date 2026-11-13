@@ -8,7 +8,7 @@ Unit tests for the new functions:
 These functions are part of the Issue #136 fix implementation.
 
 References:
-    - Issue #136: https://github.com/hassansaei/VNtyper/issues/136
+    - Issue #136: https://github.com/vntyper-org/VNtyper/issues/136
     - PR #140 code review
     - Streamlined implementation plan (Day 5)
 """

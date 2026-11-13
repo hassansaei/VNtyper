@@ -203,7 +203,7 @@ for key, path in missing:
 `vntyper pipeline` runs the same check for the files Kestrel needs (both JARs and both
 motif FASTAs) before it reads any input, and stops with the path it tried and the working
 directory it resolved against. That matters because the pinned Kestrel exits 0 even when
-it cannot read its reference. Since [#338](https://github.com/hassansaei/VNtyper/issues/338)
+it cannot read its reference. Since [#338](https://github.com/vntyper-org/VNtyper/issues/338)
 VNtyper also reads Kestrel's log and treats any logged error as a failed run, never as a
 negative result.
 

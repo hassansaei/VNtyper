@@ -1,8 +1,8 @@
 # VNtyper 2 - A Pipeline to genotype the MUC1-VNTR
 
-[![CI Tests](https://github.com/hassansaei/VNtyper/actions/workflows/ci-tests.yml/badge.svg)](https://github.com/hassansaei/VNtyper/actions/workflows/ci-tests.yml)
-[![Docker Build](https://github.com/hassansaei/VNtyper/actions/workflows/docker-build.yml/badge.svg)](https://github.com/hassansaei/VNtyper/actions/workflows/docker-build.yml)
-[![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)](https://github.com/hassansaei/VNtyper/actions/workflows/ci-tests.yml)
+[![CI Tests](https://github.com/vntyper-org/VNtyper/actions/workflows/ci-tests.yml/badge.svg)](https://github.com/vntyper-org/VNtyper/actions/workflows/ci-tests.yml)
+[![Docker Build](https://github.com/vntyper-org/VNtyper/actions/workflows/docker-build.yml/badge.svg)](https://github.com/vntyper-org/VNtyper/actions/workflows/docker-build.yml)
+[![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)](https://github.com/vntyper-org/VNtyper/actions/workflows/ci-tests.yml)
 [![PyPI version](https://img.shields.io/pypi/v/vntyper.svg?color=blue)](https://pypi.org/project/vntyper/)
 [![Python versions](https://img.shields.io/pypi/pyversions/vntyper.svg)](https://pypi.org/project/vntyper/)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
@@ -41,7 +41,7 @@ VNtyper 2 uses modern Python packaging with `pyproject.toml` and can be installe
 Installing via Conda or Mamba provides the complete environment including external bioinformatics binaries (`bwa`, `samtools`, `fastp`, `bcftools`, and Java 11 for Kestrel):
 
 ```bash
-git clone https://github.com/hassansaei/VNtyper.git
+git clone https://github.com/vntyper-org/VNtyper.git
 cd VNtyper
 mamba env create -f conda/environment_vntyper.yml
 conda activate vntyper
@@ -75,7 +75,7 @@ vntyper install-references --output-dir reference   # run from the repository ro
 
 This downloads and verifies the pre-built reference bundle with SHA-256 checksums.
 
-> **Run `vntyper pipeline` from the repository root too.** Every tool and reference path in `vntyper/config.json` is relative to the working directory, so the defaults expect `./reference/` and `./vntyper/dependencies/kestrel/`. A job script should `cd` into the checkout first. If a file is missing, the pipeline stops before reading any input and names the path it tried. See [Troubleshooting](https://hassansaei.github.io/VNtyper/user-guide/troubleshooting/).
+> **Run `vntyper pipeline` from the repository root too.** Every tool and reference path in `vntyper/config.json` is relative to the working directory, so the defaults expect `./reference/` and `./vntyper/dependencies/kestrel/`. A job script should `cd` into the checkout first. If a file is missing, the pipeline stops before reading any input and names the path it tried. See [Troubleshooting](https://vntyper-org.github.io/VNtyper/user-guide/troubleshooting/).
 
 ---
 
@@ -150,12 +150,12 @@ Docker image for VNtyper 2 is provided and can be pulled and used as follows. Re
 #### Docker
 
 ```bash
-docker pull ghcr.io/hassansaei/vntyper:latest
+docker pull ghcr.io/vntyper-org/vntyper:latest
 
 docker run --user $(id -u):$(id -g) -w /opt/vntyper --rm \
     -v /local/inputs/:/opt/vntyper/input \
     -v /local/results/:/opt/vntyper/output \
-    ghcr.io/hassansaei/vntyper:latest \
+    ghcr.io/vntyper-org/vntyper:latest \
     vntyper pipeline \
     --bam /opt/vntyper/input/sample.bam \
     -o /opt/vntyper/output/sample/
@@ -166,7 +166,7 @@ docker run --user $(id -u):$(id -g) -w /opt/vntyper --rm \
 #### Apptainer / Singularity
 
 ```bash
-apptainer pull docker://ghcr.io/hassansaei/vntyper:latest
+apptainer pull docker://ghcr.io/vntyper-org/vntyper:latest
 
 apptainer run --pwd /opt/vntyper \
     -B /local/inputs/:/opt/vntyper/input \
@@ -280,7 +280,7 @@ VNtyper 2 relies on several tools and Python libraries. Ensure that the followin
 All dependencies are pre-packaged in `conda/environment_vntyper.yml` and in our Docker containers.
 
 > [!NOTE]
-> VNtyper is for **research use only**. Documentation and guides: [https://hassansaei.github.io/VNtyper/](https://hassansaei.github.io/VNtyper/).
+> VNtyper is for **research use only**. Documentation and guides: [https://vntyper-org.github.io/VNtyper/](https://vntyper-org.github.io/VNtyper/).
 
 ---
 
@@ -336,4 +336,4 @@ If you use VNtyper 2 in your research, please cite:
 
 ## License & Contributing
 
-VNtyper is licensed under the [BSD 3-Clause License](LICENSE). Contributions are welcome; please see [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). For questions or issues, please open an [issue on GitHub](https://github.com/hassansaei/VNtyper/issues).
+VNtyper is licensed under the [BSD 3-Clause License](LICENSE). Contributions are welcome; please see [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). For questions or issues, please open an [issue on GitHub](https://github.com/vntyper-org/VNtyper/issues).

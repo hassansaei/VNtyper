@@ -4,7 +4,7 @@ Thank you for contributing to VNtyper 2. Contributions help improve tools for th
 
 ## Reporting Bugs
 
-Before submitting a bug report, search existing [GitHub Issues](https://github.com/hassansaei/VNtyper/issues) to verify the defect has not been logged.
+Before submitting a bug report, search existing [GitHub Issues](https://github.com/vntyper-org/VNtyper/issues) to verify the defect has not been logged.
 
 When filing an issue, provide:
 
@@ -16,7 +16,7 @@ When filing an issue, provide:
 
 ## Suggesting Features
 
-Feature proposals are welcomed. Open a [new issue](https://github.com/hassansaei/VNtyper/issues/new) describing:
+Feature proposals are welcomed. Open a [new issue](https://github.com/vntyper-org/VNtyper/issues/new) describing:
 
 - The proposed functionality and use case.
 - Relevant scientific literature or pipeline context.
@@ -148,7 +148,7 @@ Closes #42
     make check-all
     ```
 
-4. Push to your fork and submit a pull request against `hassansaei/VNtyper:main`.
+4. Push to your fork and submit a pull request against `vntyper-org/VNtyper:main`.
 5. Describe the problem solved and reference related issues (e.g. `Closes #123`).
 6. Address review feedback constructively.
 

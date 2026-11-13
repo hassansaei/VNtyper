@@ -14,7 +14,7 @@ import yaml
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = "ghcr.io/hassansaei/vntyper"
+IMAGE = "ghcr.io/vntyper-org/vntyper"
 SOURCE_DIGEST = "sha256:" + "b" * 64
 OTHER_DIGEST = "sha256:" + "c" * 64
 MAIN_PUSH_GUARD = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"

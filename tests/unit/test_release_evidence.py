@@ -69,7 +69,7 @@ def _artifact() -> dict[str, object]:
 
 def _validated_image(short_tag_collision: bool = False) -> dict[str, object]:
     return {
-        "source_ref": f"ghcr.io/hassansaei/vntyper@{DIGEST}",
+        "source_ref": f"ghcr.io/vntyper-org/vntyper@{DIGEST}",
         "source_digest": DIGEST,
         "source_revision": SHA,
         "source_version": VERSION,
@@ -434,7 +434,7 @@ def test_summary_reports_verified_only_when_every_phase_is_available() -> None:
 
     assert summary["state"] == "verified"
     assert summary["image"] == {"available": True, "revision": SHA, "version": VERSION}
-    assert summary["source_ref"] == f"ghcr.io/hassansaei/vntyper@{DIGEST}"
+    assert summary["source_ref"] == f"ghcr.io/vntyper-org/vntyper@{DIGEST}"
     assert summary["evidence_contract_version"] == 1
     assert summary["short_tag_collision"] is True
 
@@ -465,7 +465,7 @@ def test_cli_validates_image_and_writes_complete_provenance_outputs(tmp_path: Pa
             "--short-digest",
             DIGEST,
             "--image",
-            "ghcr.io/hassansaei/vntyper",
+            "ghcr.io/vntyper-org/vntyper",
             "--selected-run",
             str(selected_run_path),
             "--selected-artifact",
@@ -479,7 +479,7 @@ def test_cli_validates_image_and_writes_complete_provenance_outputs(tmp_path: Pa
 
     assert result == 0
     assert output_path.read_text(encoding="utf-8").splitlines() == [
-        f"source_ref=ghcr.io/hassansaei/vntyper@{DIGEST}",
+        f"source_ref=ghcr.io/vntyper-org/vntyper@{DIGEST}",
         f"source_digest={DIGEST}",
         f"source_revision={SHA}",
         f"source_version={VERSION}",

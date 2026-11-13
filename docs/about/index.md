@@ -11,7 +11,7 @@ The tool combines mapping-free k-mer analysis (Kestrel) with optional alignment-
 ## Key Resources
 
 Project Home
-:   [github.com/hassansaei/VNtyper](https://github.com/hassansaei/VNtyper)
+:   [github.com/vntyper-org/VNtyper](https://github.com/vntyper-org/VNtyper)
 
 Web Server
 :   [vntyper.org](https://vntyper.org)
@@ -26,7 +26,7 @@ License
 
 If you encounter a problem or have a question, please open an issue on the GitHub repository:
 
-:   [github.com/hassansaei/VNtyper/issues](https://github.com/hassansaei/VNtyper/issues)
+:   [github.com/vntyper-org/VNtyper/issues](https://github.com/vntyper-org/VNtyper/issues)
 
 Before opening a new issue, search existing issues to check if your question has already been addressed.
 

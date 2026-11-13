@@ -61,4 +61,4 @@ cluster.
 
 ## Where can I get help?
 
-Open an issue on [GitHub](https://github.com/hassansaei/VNtyper/issues). Search open and resolved issues before creating new tickets.
+Open an issue on [GitHub](https://github.com/vntyper-org/VNtyper/issues). Search open and resolved issues before creating new tickets.

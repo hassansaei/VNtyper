@@ -43,7 +43,7 @@ The pinned Kestrel 1.0.1 exits 0 even after a fatal error, so VNtyper reads its 
 
 These are never reported as a negative. Some of them leave an empty VCF behind, and an
 empty VCF would otherwise read as "no variant found"
-([#338](https://github.com/hassansaei/VNtyper/issues/338)).
+([#338](https://github.com/vntyper-org/VNtyper/issues/338)).
 
 ## "Kestrel produced no usable VCF for any configured k-mer size"
 

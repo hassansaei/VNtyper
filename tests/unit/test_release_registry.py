@@ -24,36 +24,36 @@ def _classifier() -> Callable[[str, str], Literal["absent", "ambiguous"]]:
     (
         (
             "unexpected status from HEAD request to "
-            "https://ghcr.io/v2/hassansaei/vntyper/manifests/latest: 404 Not Found",
+            "https://ghcr.io/v2/vntyper-org/vntyper/manifests/latest: 404 Not Found",
             "absent",
         ),
-        ("ghcr.io/hassansaei/vntyper:latest: manifest unknown", "absent"),
-        ("ghcr.io/hassansaei/vntyper:latest: NOT-FOUND", "absent"),
+        ("ghcr.io/vntyper-org/vntyper:latest: manifest unknown", "absent"),
+        ("ghcr.io/vntyper-org/vntyper:latest: NOT-FOUND", "absent"),
         ("manifest unknown: not found", "ambiguous"),
         (
             "unexpected status from HEAD request to "
-            "https://ghcr.io/v2/hassansaei/vntyper/manifests/other: 404 Not Found",
+            "https://ghcr.io/v2/vntyper-org/vntyper/manifests/other: 404 Not Found",
             "ambiguous",
         ),
         (
             "unexpected status from HEAD request to "
-            "https://ghcr.io/v2/hassansaei/vntyper/manifests/latest-evil: 404 Not Found",
+            "https://ghcr.io/v2/vntyper-org/vntyper/manifests/latest-evil: 404 Not Found",
             "ambiguous",
         ),
         (
-            "HEAD https://ghcr.io/v2/hassansaei/vntyper/manifests/latest failed\ntoken endpoint: 404 Not Found",
+            "HEAD https://ghcr.io/v2/vntyper-org/vntyper/manifests/latest failed\ntoken endpoint: 404 Not Found",
             "ambiguous",
         ),
         (
-            "ghcr.io/hassansaei/vntyper:latest:\nmanifest unknown",
+            "ghcr.io/vntyper-org/vntyper:latest:\nmanifest unknown",
             "ambiguous",
         ),
         (
-            'ghcr.io/hassansaei/vntyper:latest: error getting credentials: executable file not found in $PATH, out: ""',
+            'ghcr.io/vntyper-org/vntyper:latest: error getting credentials: executable file not found in $PATH, out: ""',
             "ambiguous",
         ),
         (
-            "ghcr.io/hassansaei/vntyper:latest: 401 Unauthorized: manifest unknown",
+            "ghcr.io/vntyper-org/vntyper:latest: 401 Unauthorized: manifest unknown",
             "ambiguous",
         ),
     ),
@@ -65,19 +65,19 @@ def test_manifest_absence_requires_one_exact_reference_bound_to_its_status(
     """Removing exact-reference or same-line status binding changes a literal verdict."""
     classify_manifest_absence = _classifier()
 
-    assert classify_manifest_absence("ghcr.io/hassansaei/vntyper:latest", error_text) == expected
+    assert classify_manifest_absence("ghcr.io/vntyper-org/vntyper:latest", error_text) == expected
 
 
 @pytest.mark.parametrize(
     "reference",
     (
-        "docker.io/hassansaei/vntyper:latest",
-        "https://ghcr.io/hassansaei/vntyper:latest",
+        "docker.io/vntyper-org/vntyper:latest",
+        "https://ghcr.io/vntyper-org/vntyper:latest",
         "ghcr.io/HassanSaei/vntyper:latest",
-        "ghcr.io/hassansaei/vntyper",
-        "ghcr.io/hassansaei/vntyper:latest/extra",
-        "ghcr.io/hassansaei/vntyper:latest\n404 Not Found",
-        "ghcr.io/hassansaei/vntyper:latest\rmanifest unknown",
+        "ghcr.io/vntyper-org/vntyper",
+        "ghcr.io/vntyper-org/vntyper:latest/extra",
+        "ghcr.io/vntyper-org/vntyper:latest\n404 Not Found",
+        "ghcr.io/vntyper-org/vntyper:latest\rmanifest unknown",
     ),
 )
 def test_manifest_absence_rejects_malformed_or_multiline_requested_references(reference: str) -> None:
@@ -92,8 +92,8 @@ def test_manifest_absence_treats_malformed_error_records_as_ambiguous() -> None:
 
     assert (
         classify_manifest_absence(
-            "ghcr.io/hassansaei/vntyper:latest",
-            "ghcr.io/hassansaei/vntyper:latest:\x00 404 Not Found",
+            "ghcr.io/vntyper-org/vntyper:latest",
+            "ghcr.io/vntyper-org/vntyper:latest:\x00 404 Not Found",
         )
         == "ambiguous"
     )
@@ -102,8 +102,8 @@ def test_manifest_absence_treats_malformed_error_records_as_ambiguous() -> None:
 @pytest.mark.parametrize(
     ("reference", "error_bytes"),
     (
-        ("ghcr.io/hassansaei/vntyper:latest\nspoof", b"404 Not Found"),
-        ("ghcr.io/hassansaei/vntyper:latest", b"\xff"),
+        ("ghcr.io/vntyper-org/vntyper:latest\nspoof", b"404 Not Found"),
+        ("ghcr.io/vntyper-org/vntyper:latest", b"\xff"),
     ),
 )
 def test_classifier_cli_rejects_malformed_inputs(
@@ -126,5 +126,5 @@ def test_classifier_cli_rejects_an_unreadable_error_path(
 ) -> None:
     module = importlib.import_module("scripts.release_registry")
 
-    assert module.main(["classify-absence", "ghcr.io/hassansaei/vntyper:latest", str(tmp_path / "missing")]) == 2
+    assert module.main(["classify-absence", "ghcr.io/vntyper-org/vntyper:latest", str(tmp_path / "missing")]) == 2
     assert "release registry classification failed" in capsys.readouterr().err

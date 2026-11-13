@@ -49,7 +49,7 @@ confidence-scored variant calls from BAM, CRAM, or FASTQ input.
 
 ```bash
 # Recommended: install with all binary dependencies via Conda
-git clone https://github.com/hassansaei/vntyper.git
+git clone https://github.com/vntyper-org/VNtyper.git
 cd vntyper
 conda env create -f conda/environment_vntyper.yml
 conda activate vntyper
