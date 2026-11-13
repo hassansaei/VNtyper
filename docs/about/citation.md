@@ -73,3 +73,7 @@ If you enable the adVNTR module, please also cite:
 The SHARK module in VNtyper 2 is a re-implementation of the SHARK concept. If you enable it, please cite the original method:
 
 > Denti L, Pirola Y, Monti M, et al. SHARK: Fishing relevant reads in an RNA-Seq sample. *Bioinformatics*. 2021;37(4):464-472. doi:[10.1093/bioinformatics/btaa779](https://doi.org/10.1093/bioinformatics/btaa779)
+
+## Software Archive (Zenodo)
+
+Every release is archived on Zenodo under the concept DOI [10.5281/zenodo.19744166](https://doi.org/10.5281/zenodo.19744166), which always resolves to the latest version. `CITATION.cff` in the repository carries the same DOI and feeds GitHub's "Cite this repository" button.

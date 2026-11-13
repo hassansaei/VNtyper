@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+### Documentation
+
+- **README**: rewritten to the install, quick start, containers, citing and license essentials (339 to 127 lines); the PyPI install note and bcftools prerequisite move to [Installation](../getting-started/installation.md) and the Zenodo concept DOI to [Citation](citation.md).
+
 ### Repository home
 
 - **Moved to `vntyper-org`**: the code repository, GitHub Pages docs, and GHCR images now live under [vntyper-org/VNtyper](https://github.com/vntyper-org/VNtyper). Clone from `https://github.com/vntyper-org/VNtyper.git`, pull `ghcr.io/vntyper-org/vntyper:latest`, and use [the org docs site](https://vntyper-org.github.io/VNtyper/). Historical `ghcr.io/hassansaei/vntyper` tags from 2.0.13 and earlier are unchanged. Author credits and `@hassansaei` review notes are unchanged.
