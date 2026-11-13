@@ -214,6 +214,16 @@ def test_unit_coverage_matrix_and_patch_coverage_version_are_fixed() -> None:
     assert "PATCH_COVERAGE_BASE" in workflow
     assert "`mypy vntyper/ docker/app/ scripts/`" in workflow
     assert parsed["jobs"]["test-unit"]["timeout-minutes"] == 20
+    # Every leg runs the suite exactly once, and every main push measures coverage on all four.
+    runs = {
+        s["run"]: s.get("if")
+        for s in parsed["jobs"]["test-unit"]["steps"]
+        if s.get("run") in {"make test-unit-cov", "make test-unit"}
+    }
+    assert runs == {
+        "make test-unit-cov": "github.event_name == 'push' || matrix.python-version == '3.12'",
+        "make test-unit": "github.event_name == 'pull_request' && matrix.python-version != '3.12'",
+    }
 
 
 def _compatibility_step() -> dict[str, object]:

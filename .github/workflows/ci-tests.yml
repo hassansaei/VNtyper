@@ -196,8 +196,16 @@ jobs:
 
       # Enforces the coverage floor as well as the tests. tests/unit/test_marker_hygiene.py
       # additionally fails the build if any unit test file is missing its `unit` marker.
+      # Coverage tracing roughly doubles the suite's runtime, so on a PR only the 3.12 leg
+      # (the one the patch gate reads coverage.xml from) measures it; the other three run
+      # the same tests uninstrumented. Every push to main still measures all four.
       - name: Run unit tests with coverage floor
+        if: github.event_name == 'push' || matrix.python-version == '3.12'
         run: make test-unit-cov
+
+      - name: Run unit tests
+        if: github.event_name == 'pull_request' && matrix.python-version != '3.12'
+        run: make test-unit
 
       - name: Check real integration compatibility
         if: matrix.python-version == '3.12'
