@@ -11,9 +11,13 @@ VNtyper 2 requires the following external tools on your system:
 | BWA         | 0.7.18+         | Read alignment                   |
 | samtools    | 1.20+           | BAM/CRAM manipulation            |
 | fastp       | 0.23+           | FASTQ quality control            |
+| bcftools    | 1.15+           | VCF compression (optional)       |
 
 !!! warning "External tools required"
-    External tools (BWA, samtools, fastp, Java 11) must be installed separately when using pip or source installation. The Docker image and Conda environment bundle all dependencies.
+    External tools (BWA, samtools, fastp, bcftools, Java 11) must be installed separately when using pip or source installation. The Docker image and Conda environment bundle all dependencies.
+
+The Python dependencies (`pandas`, `numpy`, `biopython`, `pysam`, `regex`, `jinja2`,
+`igv-reports`, `plotly`, `rfc8785`) install with the package.
 
 ## Install VNtyper 2
 
@@ -64,7 +68,19 @@ VNtyper 2 requires the following external tools on your system:
 
 === "pip"
 
-    Install directly from GitHub:
+    Install the released package from PyPI:
+
+    ```bash
+    pip install vntyper
+    ```
+
+    The `report`, `cohort` and `calibrate` subcommands are pure Python and work
+    immediately after `pip install`. The `pipeline` subcommand runs external binaries
+    (`bwa`, `samtools`, `fastp`, `bcftools`, and Java 11 for Kestrel); install them on
+    your `PATH` yourself, for example from system packages, HPC environment modules or
+    an existing Conda environment.
+
+    Or install the development version directly from GitHub:
 
     ```bash
     pip install git+https://github.com/vntyper-org/VNtyper.git

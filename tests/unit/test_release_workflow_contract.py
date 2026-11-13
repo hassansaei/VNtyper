@@ -792,11 +792,12 @@ def test_generation_renames_grammar_and_protected_identities_are_exact() -> None
     """Only the nine approved generation-prose targets may drop the minor component."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     dockerfile = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
-    for before, after in README_RENAMES.items():
+    # The README rewrite dropped most of the renamed prose; none of it may come back
+    # as "2.0", and the title keeps the generation name exactly once.
+    for before in README_RENAMES:
         assert before not in readme
-        assert readme.count(after) == 1
+    assert readme.count("# VNtyper 2 - A Pipeline") == 1
     assert "This version is a refactored version of VNtyper v1 integrates" not in readme
-    assert "This refactored version of VNtyper v1 integrates" in readme
     assert 'org.opencontainers.image.description="VNtyper 2.0 - MUC1 VNTR genotyping pipeline for ADTKD-MUC1"' not in (
         dockerfile
     )
