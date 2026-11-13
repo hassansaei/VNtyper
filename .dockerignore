@@ -89,7 +89,7 @@ tests/benchmark/
 # Bioinformatics Data Files (CRITICAL - Saves 143GB+)
 # =============================================================================
 # Reference data is no longer a build input. docker/Dockerfile.base's `refs` stage fetches
-# the published, checksummed bundle from berntpopp/vntyper-data at build time instead of
+# the published, checksummed bundle from vntyper-org/vntyper-data at build time instead of
 # reading it out of the build context, so nothing under reference/ needs to reach the
 # daemon. Exclude the whole tree: a local checkout can have several GB installed there by
 # `vntyper install-references`, and sending it as build context would only slow every

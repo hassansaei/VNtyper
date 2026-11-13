@@ -5,8 +5,8 @@ VNtyper 2 requires reference files before running the pipeline. The `install-ref
 ## Where the references come from
 
 By default, `install-references` fetches a published, checksummed reference release from
-[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data) (currently
-[`refs-v1`](https://github.com/berntpopp/vntyper-data/releases/tag/refs-v1)) instead of
+[`vntyper-org/vntyper-data`](https://github.com/vntyper-org/vntyper-data) (currently
+[`refs-v1`](https://github.com/vntyper-org/vntyper-data/releases/tag/refs-v1)) instead of
 downloading and building each reference from six different upstream hosts. The release
 publishes six genome bundles (`hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ensembl`,
 `hg38_ensembl`, representing the physical files the eight `--reference-assembly` labels resolve to; see
@@ -34,7 +34,7 @@ NCBI, Ensembl) rather than fetching the bundle. It is slower because it download
 up to six chromosome FASTAs itself, and it needs four seed files that VNtyper itself does
 not carry: `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `vntr_db_advntr_v2.zip`, and
 `filter_config.json`. All four are fetched automatically from
-[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data)'s `seeds/` directory
+[`vntyper-org/vntyper-data`](https://github.com/vntyper-org/vntyper-data)'s `seeds/` directory
 (pinned to an immutable commit in `install_references_config.json`, never a mutable branch)
 when they are not already present in the output directory. A seed staged there ahead of
 time wins over a download, allowing the release build workflow to stage all four first
@@ -100,7 +100,7 @@ Download all supported physical references, including NCBI and Ensembl naming:
 vntyper install-references -d reference --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl
 ```
 
-Rebuild from upstream sources instead of the published bundle (slower; fetches the four MUC1/adVNTR seed files from `berntpopp/vntyper-data` unless already staged):
+Rebuild from upstream sources instead of the published bundle (slower; fetches the four MUC1/adVNTR seed files from `vntyper-org/vntyper-data` unless already staged):
 
 ```bash
 vntyper install-references -d reference --from-source
@@ -114,9 +114,9 @@ files that were downloaded), and knowing which is which matters when a tree is i
 | File | How it is produced | From |
 | --- | --- | --- |
 | `alignment/chr1.<assembly>.fa` (×6) | downloaded | UCSC, NCBI RefSeq, Ensembl |
-| `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa` | downloaded (seeds) | `berntpopp/vntyper-data`, pinned by commit |
-| `filter_config.json` | downloaded (seed): **`--from-source` only**, see below | `berntpopp/vntyper-data`, pinned by commit |
-| `vntr_db_advntr_v2/*.db` | downloaded | `berntpopp/vntyper-data` |
+| `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa` | downloaded (seeds) | `vntyper-org/vntyper-data`, pinned by commit |
+| `filter_config.json` | downloaded (seed): **`--from-source` only**, see below | `vntyper-org/vntyper-data`, pinned by commit |
+| `vntr_db_advntr_v2/*.db` | downloaded | `vntyper-org/vntyper-data` |
 | **`muc1_region_hg19.fa`** | **derived** | `samtools faidx chr1.hg19.fa chr1:155158000-155163000` |
 | **`muc1_region_hg38.fa`** | **derived** | `samtools faidx chr1.hg38.fa chr1:155184000-155194000` |
 | **`All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`** | **derived** | merged from `MUC1_motifs_Rev_com.fa` + `filter_config.json` |
@@ -127,7 +127,7 @@ and they are not staged beside it. Only `--from-source`, which builds that FASTA
 downloads it. This distinction governs `--derive-only` below.
 
 Reference **bytes** are hosted outside this repository: VNtyper seeds in
-[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data), and genomes at UCSC,
+[`vntyper-org/vntyper-data`](https://github.com/vntyper-org/vntyper-data), and genomes at UCSC,
 NCBI, and Ensembl. Verification remains local: every source URL, expected
 checksum, derivation rule, and exact coordinate boundary is defined in
 `vntyper/scripts/install_references_config.json`. Hosting moved; the digests that

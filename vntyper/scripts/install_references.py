@@ -842,7 +842,7 @@ def _preflight_literal_seeds(install_config: dict[str, Any], output_dir: Path) -
     Requiring it here too would reject a fresh, unstaged ``output_dir`` that is about to
     succeed. In the shipped config every literal-derivation seed, including
     ``filter_config.json``, now has a download source (a pinned commit under
-    ``berntpopp/vntyper-data``'s ``seeds/``), so this preflight passes for a fresh,
+    ``vntyper-org/vntyper-data``'s ``seeds/``), so this preflight passes for a fresh,
     unstaged ``output_dir`` too - it only still raises for a seed that names no download
     source at all in whatever ``install_config`` a caller supplies.
 
@@ -2021,7 +2021,7 @@ def main(
             release bundle. This is the path the bundle build workflow itself runs.
             Defaults to False, which now takes `install_from_bundle`'s path rather than
             the legacy per-section download this replaced: references come from a
-            versioned release in ``berntpopp/vntyper-data``, not from six third-party
+            versioned release in ``vntyper-org/vntyper-data``, not from six third-party
             hosts at install time.
         release_spec_path (Optional[Path]): Release builds only - take every source URL
             and digest from this file rather than from the shipped install config.

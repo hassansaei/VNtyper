@@ -1,7 +1,7 @@
 name: Build reference bundles
 
 # Builds a versioned reference bundle and publishes it as a DRAFT release in the
-# CALLING repository (berntpopp/vntyper-data).
+# CALLING repository (vntyper-org/vntyper-data).
 #
 # It lives here rather than in the data repository for the reason phentrieve does the
 # same: the builder is software and belongs with the software. The data repository pins

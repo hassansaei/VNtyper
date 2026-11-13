@@ -4,7 +4,7 @@
 > `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `filter_config.json`,
 > `generate_vntr_reference.py` and `vntr_db_advntr.zip` - no longer live in this
 > directory. They moved to
-> [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data)'s `seeds/`
+> [`vntyper-org/vntyper-data`](https://github.com/vntyper-org/vntyper-data)'s `seeds/`
 > directory, alongside the release spec that pins their digests. `reference/` (this
 > directory) now populates at runtime from that repository's published bundle via
 > `vntyper install-references`; only this README and the two pseudonymization scripts
@@ -20,7 +20,7 @@
 The pairwise MUC1 motif generation (`generate_vntr_reference.py`, `filter_config.json`),
 the curation history of the adVNTR databases, and the source-of-truth build tooling for
 every published reference bundle now live in
-[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data) rather than in this
+[`vntyper-org/vntyper-data`](https://github.com/vntyper-org/vntyper-data) rather than in this
 repository. `vntyper install-references` downloads the versioned, checksummed release that
 repository publishes by default; see
 [Reference Setup](https://vntyper-org.github.io/VNtyper/getting-started/reference-setup/)
@@ -28,7 +28,7 @@ repository publishes by default; see
 `vntyper/scripts/install_references_config.json` for the exact digests VNtyper pins.
 
 `--from-source` still rebuilds those same references locally from their original upstream
-hosts, and it is what the `berntpopp/vntyper-data` build workflow itself runs -- see that
+hosts, and it is what the `vntyper-org/vntyper-data` build workflow itself runs -- see that
 flag in [install-references](https://vntyper-org.github.io/VNtyper/cli/install-references/)
 or `docs/cli/install-references.md` here.
 
@@ -366,7 +366,7 @@ Edit `reference/pseudonymize_config.json` to enable/disable aligners or modify s
 #### Reference Index Installation with install_references.py
 
 `vntyper install-references -d reference/` (with no flags) fetches the published,
-BWA-indexed bundle from `berntpopp/vntyper-data` -- see
+BWA-indexed bundle from `vntyper-org/vntyper-data` -- see
 [Reference Setup](https://vntyper-org.github.io/VNtyper/getting-started/reference-setup/).
 That default path only ever produces a BWA index, so remapping with `bwa-mem2`, `minimap2`,
 `bowtie2` or DRAGMAP needs `--from-source`, which builds every reference locally instead:
@@ -458,7 +458,7 @@ The script automatically scans BAM headers and read groups to extract forbidden 
 The curation history of the adVNTR databases (`hg19_muc1.db`, `hg38_muc1.db` -- built by
 removing all non-MUC1 entries from the hg19 database and adding the MUC1 entry to the hg38
 database where it was missing, at the start position found via UCSC BLAT) now lives in
-[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data), which builds and
+[`vntyper-org/vntyper-data`](https://github.com/vntyper-org/vntyper-data), which builds and
 publishes both databases as part of the `muc1` release bundle. `vntyper install-references`
 installs both unconditionally, regardless of which genome assemblies are selected with
 `--references`.

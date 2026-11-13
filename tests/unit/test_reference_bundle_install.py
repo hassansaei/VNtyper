@@ -1,7 +1,7 @@
 """`install-references`'s default path: fetch the published, checksummed release bundle.
 
 Milestone 5 replaces the six-third-party-host download with a fetch of one immutable
-GitHub release (`berntpopp/vntyper-data`, tag `refs-v1`). `install_from_bundle` is the
+GitHub release (`vntyper-org/vntyper-data`, tag `refs-v1`). `install_from_bundle` is the
 function that does it: for every selected genome plus the always-installed common
 asset, it downloads `https://github.com/{repository}/releases/download/{release_tag}/
 {asset}`, verifies the bytes against the SHA-256 committed in

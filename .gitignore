@@ -168,7 +168,7 @@ cython_debug/
 /tmp/
 /download/
 
-# Reference data now comes from berntpopp/vntyper-data as a published, checksummed
+# Reference data now comes from vntyper-org/vntyper-data as a published, checksummed
 # release bundle (`vntyper install-references`), not from tracked files - see AGENTS.md
 # trap 10. Ignore everything install-references populates into reference/, keeping only
 # the provenance scripts and docs that stay tracked.

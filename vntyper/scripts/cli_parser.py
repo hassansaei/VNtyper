@@ -479,7 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
             "published bundle. Slower (downloads and BWA-indexes six chromosome FASTAs) "
             "and it needs four seed files (MUC1_motifs_Rev_com.fa, code-adVNTR_RUs.fa, "
             "vntr_db_advntr.zip, filter_config.json), fetched automatically into the "
-            "output directory from berntpopp/vntyper-data unless already staged there - "
+            "output directory from vntyper-org/vntyper-data unless already staged there - "
             "which is what the bundle build workflow does before running this same path."
         ),
     )

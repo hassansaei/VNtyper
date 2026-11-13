@@ -86,7 +86,7 @@ Specific check boundaries:
 
 ## Installing References
 
-Install reference bundles before executing the pipeline. Standard runs download pre-indexed, checksummed releases from [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data):
+Install reference bundles before executing the pipeline. Standard runs download pre-indexed, checksummed releases from [`vntyper-org/vntyper-data`](https://github.com/vntyper-org/vntyper-data):
 
 ```bash
 vntyper install-references -d reference

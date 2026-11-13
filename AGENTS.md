@@ -623,7 +623,7 @@ summary | release-summary | none | always records success, failure, skipped jobs
     tested PR code and a cached layer could serve an arbitrarily stale checkout.)
 
     `reference/**` is **not** a base input, and has not been since milestone 5: reference
-    data comes from a published, checksummed bundle in `berntpopp/vntyper-data` rather
+    data comes from a published, checksummed bundle in `vntyper-org/vntyper-data` rather
     than from tracked files, and `reference/` holds only `README.md`, `pseudonymize.py`
     and `pseudonymize_config.json`. Changing a reference byte now means publishing a new
     bundle release and updating the `asset`/`asset_sha256` pins in

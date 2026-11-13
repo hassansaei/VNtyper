@@ -1,6 +1,6 @@
 """Where reference data may come from, as a config-shape invariant (#253).
 
-**VNtyper-owned seed bytes are hosted in `berntpopp/vntyper-data`, not in the code
+**VNtyper-owned seed bytes are hosted in `vntyper-org/vntyper-data`, not in the code
 repository.** That is the milestone-5 design: reference data comes from a published,
 checksummed bundle rather than from tracked files, and `reference/` keeps only
 `README.md`, `pseudonymize.py` and `pseudonymize_config.json`.
@@ -42,12 +42,12 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "vntyper" / "scripts" / "ins
 #: this project's data repository, and the three upstream genome providers.
 #:
 #: Matched against the parsed hostname, never as a substring of the whole URL. A substring
-#: test accepts ``https://evil.invalid/raw.githubusercontent.com/berntpopp/vntyper-data/x``,
+#: test accepts ``https://evil.invalid/raw.githubusercontent.com/vntyper-org/vntyper-data/x``,
 #: whose host is ``evil.invalid`` and whose allowed-looking part is just path. That is the
 #: shape of the mistake this file exists to catch, so it must not be the shape of the check.
 ALLOWED_SOURCES = (
-    ("raw.githubusercontent.com", "/berntpopp/vntyper-data/"),
-    ("github.com", "/berntpopp/vntyper-data/"),
+    ("raw.githubusercontent.com", "/vntyper-org/vntyper-data/"),
+    ("github.com", "/vntyper-org/vntyper-data/"),
     ("hgdownload.soe.ucsc.edu", "/"),
     ("ftp.ncbi.nlm.nih.gov", "/"),
     ("ftp.ensembl.org", "/"),
@@ -108,10 +108,10 @@ def test_every_source_url_names_an_allowed_host():
 @pytest.mark.parametrize(
     "url",
     [
-        "https://evil.invalid/raw.githubusercontent.com/berntpopp/vntyper-data/seeds/x.fa",
+        "https://evil.invalid/raw.githubusercontent.com/vntyper-org/vntyper-data/seeds/x.fa",
         "https://hgdownload.soe.ucsc.edu.evil.invalid/goldenPath/hg19/chr1.fa.gz",
         "https://raw.githubusercontent.com/someone-else/vntyper-data/seeds/x.fa",
-        "http://raw.githubusercontent.com.evil.invalid/berntpopp/vntyper-data/x",
+        "http://raw.githubusercontent.com.evil.invalid/vntyper-org/vntyper-data/x",
     ],
 )
 def test_a_lookalike_url_is_not_an_allowed_host(url):
