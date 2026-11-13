@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.51 (2026-11-13)
+
 ### Documentation
 
 - **README**: rewritten to the install, quick start, containers, citing and license essentials (339 to 127 lines); the PyPI install note and bcftools prerequisite move to [Installation](../getting-started/installation.md) and the Zenodo concept DOI to [Citation](citation.md).
