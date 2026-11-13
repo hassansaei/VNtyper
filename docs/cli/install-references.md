@@ -2,7 +2,7 @@
 
 Download and configure reference files required by VNtyper 2.
 
-By default, this command downloads verified pre-built bundles from [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data). See [Reference Setup](../getting-started/reference-setup.md) for verification details and `--from-source` requirements.
+By default, this command downloads verified pre-built bundles from [`vntyper-org/vntyper-data`](https://github.com/vntyper-org/vntyper-data). See [Reference Setup](../getting-started/reference-setup.md) for verification details and `--from-source` requirements.
 
 ## Synopsis
 

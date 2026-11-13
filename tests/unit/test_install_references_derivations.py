@@ -2276,7 +2276,7 @@ class TestShippedConfig:
 
     def test_the_bundle_pointer_names_the_common_asset_and_its_digest(self):
         bundle = _shipped_config()["bundle"]
-        assert bundle["repository"] == "berntpopp/vntyper-data"
+        assert bundle["repository"] == "vntyper-org/vntyper-data"
         assert bundle["release_tag"] == "refs-v2"
         assert bundle["common_asset"] == "vntyper-references-refs-v2-muc1.tar.gz"
         assert bundle["common_asset_sha256"]

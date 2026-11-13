@@ -103,7 +103,7 @@ def test_base_hash_covers_everything_that_changes_the_base() -> None:
     content, and they were in none of the five mirrors of this list.
 
     `reference/**` itself is deliberately absent from `required`: milestone 5 moved
-    reference data to a published, checksummed bundle in berntpopp/vntyper-data, so
+    reference data to a published, checksummed bundle in vntyper-org/vntyper-data, so
     `reference/` (now holding only `README.md`, `pseudonymize.py` and
     `pseudonymize_config.json`) no longer changes what the `refs` stage installs. The
     bundle pin (`install_references_config.json`'s asset/asset_sha256 fields) is already

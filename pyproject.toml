@@ -253,7 +253,7 @@ exclude = [
     "dist",
     "*.egg-info",
     # `reference/` is no longer a base-image content-hash input (AGENTS.md trap 10) - all
-    # reference data now comes from berntpopp/vntyper-data, and the directory holds only
+    # reference data now comes from vntyper-org/vntyper-data, and the directory holds only
     # `README.md`, `pseudonymize.py` and `pseudonymize_config.json`. It stays excluded
     # here for a narrower reason: it is not in `RUFF_PATHS` (`vntyper/ docker/app/ tests/
     # scripts/ docs/`), and the Makefile's INVARIANT comment above `RUFF_PATHS` requires

@@ -27,7 +27,7 @@ on:
       - 'vntyper/scripts/reference_provenance.py'
       - 'vntyper/dependencies/advntr/**'
       # reference/** left this list at milestone 5: reference data now comes from a
-      # published, checksummed bundle in berntpopp/vntyper-data rather than tracked
+      # published, checksummed bundle in vntyper-org/vntyper-data rather than tracked
       # files, so it can no longer change what the refs stage installs. The bundle pin
       # (asset and asset_sha256 in install_references_config.json, already above) is
       # what now triggers a rebuild when a reference byte changes.

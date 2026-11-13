@@ -24,7 +24,7 @@
 # missing from the hash: three config-declared files were dropped from the image
 # without changing the tag, so nothing rebuilt. `reference/**` itself is no longer in
 # this list: milestone 5 moved reference data to a published, checksummed bundle in
-# berntpopp/vntyper-data, so nothing under the tracked `reference/` directory (which now
+# vntyper-org/vntyper-data, so nothing under the tracked `reference/` directory (which now
 # holds only README.md, pseudonymize.py and pseudonymize_config.json) can change what
 # the `refs` stage below installs. The bundle pin - `asset`/`asset_sha256` inside
 # vntyper/scripts/install_references_config.json, already in this list - is what
@@ -91,7 +91,7 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
 # =============================================================================
 # Stage: refs - reference genomes and BWA indexes
 # =============================================================================
-# Fetches the published, checksummed reference bundle from berntpopp/vntyper-data
+# Fetches the published, checksummed reference bundle from vntyper-org/vntyper-data
 # instead of downloading six genomes from UCSC/NCBI/Ensembl and BWA-indexing them here -
 # the single most expensive step in the old build, and the main reason this image is
 # separated from the per-commit one. Gated on only the installer inputs below, so a
