@@ -61,7 +61,16 @@ jobs:
               - 'vntyper/**'
               - 'docker/**'
               - 'conda/**'
-              - 'tests/**'
+              # Only what the Docker tiers import or read: .dockerignore keeps tests/
+              # out of the image, so a unit/golden/browser-only change cannot alter it.
+              - 'tests/*'
+              - 'tests/docker/**'
+              - 'tests/support/**'
+              # This job's own runners: the make targets, pytest config and helpers.
+              - 'Makefile'
+              - 'pytest.ini'
+              - 'scripts/download_test_data.py'
+              - 'scripts/release_manifest.py'
               - 'pyproject.toml'
               # .dockerignore decides what reaches the build context, so a change to
               # it can alter the image without touching any other path here.

@@ -438,7 +438,10 @@ limit.
 - CI gates on PRs: `make lint`, `make type-check-all`, `make test-unit` across 3.10–3.13,
   plus a Docker image build and quick Docker tests. PR path filters remain, while every
   push to `main` is treated as substantive and runs both required-check workflows.
-  Formatting is *not* gated in CI — run `make format-check` yourself.
+  On a PR only the 3.12 leg runs `make test-unit-cov` (floor + patch gate); the other
+  three run `make test-unit` uncovered. Every `main` push measures coverage on all four,
+  which is the matrix evidence the floor ratchet reads. The lint job also runs
+  `make format-check`.
 
 ## Release workflow
 
