@@ -16,6 +16,7 @@ No unreleased changes.
 
 - **Moved to `vntyper-org`**: the code repository, GitHub Pages docs, and GHCR images now live under [vntyper-org/VNtyper](https://github.com/vntyper-org/VNtyper). Clone from `https://github.com/vntyper-org/VNtyper.git`, pull `ghcr.io/vntyper-org/vntyper:latest`, and use [the org docs site](https://vntyper-org.github.io/VNtyper/). Historical `ghcr.io/hassansaei/vntyper` tags from 2.0.13 and earlier are unchanged. Author credits and `@hassansaei` review notes are unchanged.
 - **Reference data moved to `vntyper-org`**: `install-references` now fetches bundles and seeds from [vntyper-org/vntyper-data](https://github.com/vntyper-org/vntyper-data). Bundle and seed checksums are unchanged, and the old `berntpopp/vntyper-data` URLs redirect.
+- **adVNTR fork moved to `vntyper-org`**: `install_advntr.sh` now clones [vntyper-org/adVNTR](https://github.com/vntyper-org/adVNTR) at the same pinned commit (`6e854d8`), so the installed adVNTR is unchanged; the old `berntpopp/adVNTR` URL redirects.
 
 ## 2.0.50 (2026-11-12)
 

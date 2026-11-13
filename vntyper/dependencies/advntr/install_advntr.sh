@@ -70,7 +70,7 @@ fi
 INSTALL_DIR=${INSTALL_DIR:-"$PWD/adVNTR"}
 OVERWRITE=false
 CONDA_ENV=${CONDA_ENV:-""}
-GIT_REPO=${GIT_REPO:-"https://github.com/berntpopp/adVNTR.git"}
+GIT_REPO=${GIT_REPO:-"https://github.com/vntyper-org/adVNTR.git"}
 GIT_BRANCH=${GIT_BRANCH:-"main"}
 GIT_COMMIT=${GIT_COMMIT:-""}
 
