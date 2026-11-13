@@ -100,7 +100,7 @@ def test_the_branch_is_the_forks_default():
 
 
 def test_the_pinned_repository_is_the_fork_the_evidence_came_from():
-    assert _cfg_value("GIT_REPO") == "https://github.com/berntpopp/adVNTR.git"
+    assert _cfg_value("GIT_REPO") == "https://github.com/vntyper-org/adVNTR.git"
 
 
 # Everything above reads the cfg, which is data. Nothing here greps the *installer* text:

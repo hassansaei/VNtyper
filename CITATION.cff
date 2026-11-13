@@ -13,8 +13,8 @@ authors:
 repository-code: "https://github.com/vntyper-org/VNtyper"
 url: "https://vntyper.org"
 license: BSD-3-Clause
-version: "2.0.50"
-date-released: '2026-11-12'
+version: "2.0.51"
+date-released: '2026-11-13'
 doi: "10.5281/zenodo.19744166"
 identifiers:
   - type: doi
